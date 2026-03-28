@@ -323,6 +323,30 @@ describe("afterPack", () => {
       );
     });
 
+    it("should pass when dlopen throws not a valid Win32 application", async () => {
+      mockExistsSync.mockReturnValue(true);
+      process.dlopen = (() => {
+        throw new Error("not a valid Win32 application");
+      }) as typeof process.dlopen;
+
+      await afterPack(createContext("win32", "/build/win"));
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)"
+      );
+    });
+
+    it("should warn when dlopen throws a non-Error object", async () => {
+      mockExistsSync.mockReturnValue(true);
+      process.dlopen = (() => {
+        throw "unexpected string error";
+      }) as typeof process.dlopen;
+
+      await afterPack(createContext("linux", "/build/linux"));
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ABI probe inconclusive"));
+    });
+
     it("should warn but continue on inconclusive probe (e.g. missing DLL)", async () => {
       mockExistsSync.mockReturnValue(true);
       process.dlopen = (() => {
