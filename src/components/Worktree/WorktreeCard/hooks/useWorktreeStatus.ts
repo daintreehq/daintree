@@ -83,7 +83,7 @@ export function useWorktreeStatus({
     if (!worktree.branch || worktree.isDetached) {
       branchLabel = worktree.name;
     } else if (isMainOnStandardBranch) {
-      branchLabel = `${worktree.name} [${worktree.branch}]`;
+      branchLabel = worktree.branch;
     } else {
       branchLabel = worktree.branch;
     }
