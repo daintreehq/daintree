@@ -5,7 +5,6 @@ import {
   FolderOpen,
   Check,
   AlertCircle,
-  Loader2,
   ChevronsUpDown,
   Search,
   UserPlus,
@@ -13,6 +12,7 @@ import {
   Info,
   ChevronDown,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { WorktreeIcon } from "@/components/icons";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
@@ -556,7 +556,7 @@ export function NewWorktreeDialog({
       <AppDialog.Body>
         {loading ? (
           <div className="flex items-center justify-center py-12">
-            <Loader2 className="w-6 h-6 animate-spin text-canopy-accent" />
+            <Spinner size="xl" className="text-canopy-accent" />
             <span className="ml-2 text-sm text-canopy-text/60">Loading branches...</span>
           </div>
         ) : (
@@ -835,9 +835,9 @@ export function NewWorktreeDialog({
                         aria-expanded={prefixPickerOpen}
                       />
                       {isCheckingBranch && (
-                        <Loader2
-                          className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-canopy-text/40 pointer-events-none"
-                          aria-hidden="true"
+                        <Spinner
+                          size="md"
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-canopy-text/40 pointer-events-none"
                         />
                       )}
                     </div>
@@ -948,9 +948,9 @@ export function NewWorktreeDialog({
                       disabled={isPending}
                     />
                     {isGeneratingPath && (
-                      <Loader2
-                        className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-canopy-text/40 pointer-events-none"
-                        aria-hidden="true"
+                      <Spinner
+                        size="md"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-canopy-text/40 pointer-events-none"
                       />
                     )}
                   </div>
@@ -1249,7 +1249,7 @@ export function NewWorktreeDialog({
             >
               {isPending ? (
                 <>
-                  <Loader2 className="animate-spin" />
+                  <Spinner />
                   Creating...
                 </>
               ) : creationError ? (

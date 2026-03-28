@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { AlertTriangle, RotateCw, ExternalLink, Settings, WandSparkles } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
 import { useTerminalStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
@@ -601,7 +602,7 @@ export function DevPreviewPane({
         <div className="relative flex-1 min-h-0 bg-surface-canvas">
           {isRestarting || status === "starting" || status === "installing" ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg">
-              <div className="w-12 h-12 border-2 border-status-info border-t-transparent rounded-full animate-spin mb-4" />
+              <Spinner size="2xl" className="text-status-info mb-4" />
               <p className="text-sm text-canopy-text/60">
                 {isRestarting ? "Restarting" : status === "installing" ? "Installing" : "Starting"}
                 ...

@@ -97,7 +97,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
         {/* Working indicator */}
         {isWorking && (
           <Loader2
-            className="w-3 h-3 animate-spin"
+            className="w-3 h-3 animate-spin motion-reduce:animate-none"
             style={{ color: brandColor }}
             aria-hidden="true"
           />

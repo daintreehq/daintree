@@ -12,7 +12,8 @@ import {
   UI_EXIT_EASING,
   getUiTransitionDuration,
 } from "@/lib/animationUtils";
-import { X, Loader2 } from "lucide-react";
+import { X } from "lucide-react";
+import { Spinner } from "./Spinner";
 import { Button } from "./button";
 
 type DialogSize = "sm" | "md" | "lg" | "xl" | "2xl" | "4xl" | "6xl";
@@ -380,7 +381,7 @@ AppDialog.Footer = function AppDialogFooter({
           disabled={secondaryAction.disabled || secondaryAction.loading}
           className="text-canopy-text/70 hover:text-canopy-text"
         >
-          {secondaryAction.loading && <Loader2 className="animate-spin" />}
+          {secondaryAction.loading && <Spinner />}
           {secondaryAction.label}
         </Button>
       )}
@@ -390,7 +391,7 @@ AppDialog.Footer = function AppDialogFooter({
           onClick={primaryAction.onClick}
           disabled={primaryAction.disabled || primaryAction.loading}
         >
-          {primaryAction.loading && <Loader2 className="animate-spin" />}
+          {primaryAction.loading && <Spinner />}
           {primaryAction.label}
         </Button>
       )}

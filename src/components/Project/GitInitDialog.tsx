@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Check, AlertCircle, Loader2 } from "lucide-react";
+import { Check, AlertCircle } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { WorktreeIcon } from "@/components/icons";
 import { projectClient } from "@/clients";
 import type { GitInitProgressEvent } from "@shared/types/ipc/gitInit";
@@ -122,7 +123,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
 
   const getStepIcon = (event: GitInitProgressEvent) => {
     if (event.status === "start") {
-      return <Loader2 className="h-4 w-4 animate-spin text-status-info" />;
+      return <Spinner size="md" className="text-status-info" />;
     } else if (event.status === "success") {
       return <Check className="h-4 w-4 text-status-success" />;
     } else if (event.status === "error") {
@@ -148,7 +149,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
         <div className="rounded-lg bg-muted/50 p-4 min-h-[200px] max-h-[400px] overflow-y-auto font-mono text-sm">
           {progressEvents.length === 0 && isInitializing && (
             <div className="flex items-center gap-2 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Spinner size="md" />
               <span>Starting initialization...</span>
             </div>
           )}

@@ -9,12 +9,12 @@ import {
   RefreshCw,
   CheckSquare,
   Square,
-  Loader2,
   AlertTriangle,
   GitBranch,
   GitPullRequest,
   FileIcon,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { FileStageRow } from "./FileStageRow";
 import { CommitPanel } from "./CommitPanel";
 import { FileDiffModal } from "../FileDiffModal";
@@ -566,7 +566,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
               /* Base-branch diff panel */
               baseBranchLoading ? (
                 <div className="flex items-center justify-center py-12">
-                  <Loader2 className="w-5 h-5 text-canopy-text/40 animate-spin" />
+                  <Spinner size="lg" className="text-canopy-text/40" />
                 </div>
               ) : baseBranchError ? (
                 <div className="p-4 text-xs text-status-error">
@@ -632,7 +632,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
               <>
                 {loading && !status ? (
                   <div className="flex items-center justify-center py-12">
-                    <Loader2 className="w-5 h-5 text-canopy-text/40 animate-spin" />
+                    <Spinner size="lg" className="text-canopy-text/40" />
                   </div>
                 ) : loadError ? (
                   <div className="p-4 text-xs text-status-error">

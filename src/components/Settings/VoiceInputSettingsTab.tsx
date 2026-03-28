@@ -11,13 +11,13 @@ import {
   Shield,
   Check,
   AlertCircle,
-  Loader2,
   ExternalLink,
   Sparkles,
   ChevronDown,
   ChevronUp,
   AlignLeft,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
@@ -494,7 +494,7 @@ function ApiKeyRow({
           variant="outline"
           className="text-canopy-text border-canopy-border hover:bg-canopy-border"
         >
-          {validation === "testing" ? <Loader2 className="animate-spin w-3.5 h-3.5" /> : "Save"}
+          {validation === "testing" ? <Spinner size="sm" /> : "Save"}
         </Button>
         {value && (
           <Button
@@ -611,7 +611,7 @@ function MicPermissionRow({
                   className="text-canopy-text border-canopy-border hover:bg-canopy-border"
                 >
                   {isRequesting ? (
-                    <Loader2 className="animate-spin w-3.5 h-3.5" />
+                    <Spinner size="sm" />
                   ) : (
                     <>
                       <Mic className="w-3.5 h-3.5" />

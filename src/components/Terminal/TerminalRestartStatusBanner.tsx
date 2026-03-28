@@ -1,5 +1,6 @@
 import React from "react";
-import { AlertTriangle, Loader2, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, RotateCcw, X } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import type { RestartBannerVariant } from "./restartStatus";
 
@@ -21,7 +22,7 @@ function TerminalRestartStatusBannerComponent({
     case "auto-restarting":
       return (
         <div className="flex items-center gap-2 px-3 py-1.5 text-xs text-canopy-text/60 bg-canopy-accent/5 border-b border-canopy-border shrink-0">
-          <Loader2 className="h-3 w-3 animate-spin text-canopy-accent" />
+          <Spinner size="xs" className="text-canopy-accent" />
           <span>Auto-restarting…</span>
         </div>
       );

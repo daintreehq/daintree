@@ -23,7 +23,6 @@ import {
   PanelLeftOpen,
   PanelLeftClose,
   Check,
-  Loader2,
   ChevronsUpDown,
   Globe,
   Leaf,
@@ -34,6 +33,7 @@ import {
   Ellipsis,
   GitBranch,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { CopyTreeIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
@@ -1009,13 +1009,7 @@ export function Toolbar({
                     isCopyingTree ? "Copying…" : treeCopied ? "Context Copied" : "Copy Context"
                   }
                 >
-                  {isCopyingTree ? (
-                    <Loader2 className="animate-spin motion-reduce:animate-none" />
-                  ) : treeCopied ? (
-                    <Check />
-                  ) : (
-                    <CopyTreeIcon />
-                  )}
+                  {isCopyingTree ? <Spinner /> : treeCopied ? <Check /> : <CopyTreeIcon />}
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="font-medium">

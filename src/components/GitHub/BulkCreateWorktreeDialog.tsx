@@ -1,14 +1,7 @@
 import { useCallback, useReducer, useRef, useMemo, useEffect } from "react";
 import PQueue from "p-queue";
-import {
-  Loader2,
-  Check,
-  AlertTriangle,
-  UserPlus,
-  Play,
-  ChevronsUpDown,
-  RotateCcw,
-} from "lucide-react";
+import { Check, AlertTriangle, UserPlus, Play, ChevronsUpDown, RotateCcw } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { WorktreeIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -833,7 +826,7 @@ export function BulkCreateWorktreeDialog({
         <AppDialog.Title
           icon={
             isExecuting ? (
-              <Loader2 className="w-5 h-5 text-canopy-accent animate-spin" />
+              <Spinner size="lg" className="text-canopy-accent" />
             ) : isDone ? (
               failedCount > 0 ? (
                 <AlertTriangle className="w-5 h-5 text-status-warning" />
@@ -1069,7 +1062,7 @@ export function BulkCreateWorktreeDialog({
                     >
                       <div className="mt-0.5 shrink-0">
                         {isInProgress ? (
-                          <Loader2 className="w-4 h-4 animate-spin text-canopy-accent" />
+                          <Spinner size="md" className="text-canopy-accent" />
                         ) : itemStatus?.stage === "succeeded" ? (
                           <Check className="w-4 h-4 text-status-success" />
                         ) : itemStatus?.stage === "failed" ? (
