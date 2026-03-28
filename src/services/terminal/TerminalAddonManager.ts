@@ -6,6 +6,8 @@ import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { FileLinksAddon } from "./FileLinksAddon";
 
+const IMAGE_ADDON_OPTIONS = { pixelLimit: 2_000_000, storageLimit: 8 };
+
 export interface TerminalAddons {
   fitAddon: FitAddon;
   serializeAddon: SerializeAddon;
@@ -28,7 +30,7 @@ export function setupTerminalAddons(
   terminal.loadAddon(fitAddon);
   terminal.loadAddon(serializeAddon);
 
-  const imageAddon = new ImageAddon();
+  const imageAddon = new ImageAddon(IMAGE_ADDON_OPTIONS);
   terminal.loadAddon(imageAddon);
 
   const searchAddon = new SearchAddon();
@@ -54,7 +56,7 @@ export function setupTerminalAddons(
 }
 
 export function createImageAddon(terminal: Terminal): ImageAddon {
-  const addon = new ImageAddon();
+  const addon = new ImageAddon(IMAGE_ADDON_OPTIONS);
   terminal.loadAddon(addon);
   return addon;
 }
