@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isCanopyEnvEnabled } from "@/utils/env";
-import { TelemetryConsentStep } from "./TelemetryConsentStep";
 import { AgentSelectionStep } from "@/components/Setup/AgentSelectionStep";
 import { AgentSetupWizard } from "@/components/Setup/AgentSetupWizard";
-import { ThemeSelectionStep } from "./ThemeSelectionStep";
+import { WelcomeStep } from "./WelcomeStep";
 import { OnboardingProgressIndicator } from "./OnboardingProgressIndicator";
 import type { OnboardingState } from "@shared/types";
 import type { CliAvailability } from "@shared/types";
@@ -16,13 +15,8 @@ const LEGACY_KEYS = {
   firstRunToast: "canopy:first-run-toast",
 } as const;
 
-type OnboardingStep = "themeSelection" | "telemetry" | "agentSelection" | "agentSetup";
-const STEP_ORDER: OnboardingStep[] = [
-  "themeSelection",
-  "telemetry",
-  "agentSelection",
-  "agentSetup",
-];
+type OnboardingStep = "welcome" | "agentSelection" | "agentSetup";
+const STEP_ORDER: OnboardingStep[] = ["welcome", "agentSelection", "agentSetup"];
 
 interface OnboardingFlowProps {
   availability: CliAvailability;
@@ -42,6 +36,7 @@ export function OnboardingFlow({
   const [state, setState] = useState<OnboardingState | null>(null);
   const [currentStep, setCurrentStep] = useState<OnboardingStep | null>(null);
   const [agentSetupIds, setAgentSetupIds] = useState<string[]>([]);
+  const [telemetryEnabled, setTelemetryEnabled] = useState(false);
   const [manualWizardOpen, setManualWizardOpen] = useState(false);
   const flowStartTimeRef = useRef<number>(0);
   const completedRef = useRef(false);
@@ -174,25 +169,19 @@ export function OnboardingFlow({
     [onComplete]
   );
 
-  // Theme selection handlers
-  const handleThemeSelectionContinue = useCallback(async () => {
-    await advanceStep("themeSelection");
-  }, [advanceStep]);
+  // Welcome step handlers
+  const handleWelcomeContinue = useCallback(async () => {
+    await window.electron.privacy.setTelemetryLevel(telemetryEnabled ? "errors" : "off");
+    await window.electron.telemetry.markPromptShown();
+    await advanceStep("welcome");
+  }, [advanceStep, telemetryEnabled]);
 
-  const handleThemeSelectionSkip = useCallback(async () => {
-    trackOnboarding("onboarding_step_skipped", { step: "themeSelection" });
-    await advanceStep("themeSelection");
+  const handleWelcomeSkip = useCallback(async () => {
+    trackOnboarding("onboarding_step_skipped", { step: "welcome" });
+    await window.electron.privacy.setTelemetryLevel("off");
+    await window.electron.telemetry.markPromptShown();
+    await advanceStep("welcome");
   }, [advanceStep]);
-
-  // Telemetry step handlers
-  const handleTelemetryDismiss = useCallback(
-    async (enabled: boolean) => {
-      await window.electron.privacy.setTelemetryLevel(enabled ? "errors" : "off");
-      await window.electron.telemetry.markPromptShown();
-      await advanceStep("telemetry");
-    },
-    [advanceStep]
-  );
 
   // Agent selection handlers
   const handleAgentSelectionContinue = useCallback(
@@ -255,16 +244,14 @@ export function OnboardingFlow({
     <>
       <OnboardingProgressIndicator currentIndex={currentStepIndex} total={STEP_ORDER.length} />
 
-      {currentStep === "themeSelection" && (
-        <ThemeSelectionStep
+      {currentStep === "welcome" && (
+        <WelcomeStep
           isOpen
-          onContinue={handleThemeSelectionContinue}
-          onSkip={handleThemeSelectionSkip}
+          telemetryEnabled={telemetryEnabled}
+          onTelemetryChange={setTelemetryEnabled}
+          onContinue={handleWelcomeContinue}
+          onSkip={handleWelcomeSkip}
         />
-      )}
-
-      {currentStep === "telemetry" && (
-        <TelemetryConsentStep isOpen onDismiss={handleTelemetryDismiss} />
       )}
 
       {currentStep === "agentSelection" && (

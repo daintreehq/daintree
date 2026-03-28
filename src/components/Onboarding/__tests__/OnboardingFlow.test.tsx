@@ -55,29 +55,14 @@ vi.mock("@/utils/env", () => ({
   isCanopyEnvEnabled: () => false,
 }));
 
-vi.mock("../ThemeSelectionStep", () => ({
-  ThemeSelectionStep: vi.fn(
-    ({ onContinue, onSkip }: { onContinue: () => void; onSkip: () => void }) => (
-      <div data-testid="theme-selection-step">
-        <button data-testid="theme-continue" onClick={onContinue}>
-          Continue
-        </button>
-        <button data-testid="theme-skip" onClick={onSkip}>
-          Skip
-        </button>
-      </div>
-    )
-  ),
-}));
-
-vi.mock("../TelemetryConsentStep", () => ({
-  TelemetryConsentStep: vi.fn(({ onDismiss }: { onDismiss: (enabled: boolean) => void }) => (
-    <div data-testid="telemetry-step">
-      <button data-testid="accept" onClick={() => onDismiss(true)}>
-        Accept
+vi.mock("../WelcomeStep", () => ({
+  WelcomeStep: vi.fn(({ onContinue, onSkip }: { onContinue: () => void; onSkip: () => void }) => (
+    <div data-testid="welcome-step">
+      <button data-testid="welcome-continue" onClick={onContinue}>
+        Continue
       </button>
-      <button data-testid="decline" onClick={() => onDismiss(false)}>
-        Decline
+      <button data-testid="welcome-skip" onClick={onSkip}>
+        Skip
       </button>
     </div>
   )),
@@ -121,7 +106,7 @@ describe("OnboardingFlow progress indicator", () => {
     onboardingMock.get.mockResolvedValue({ ...defaultOnboardingState });
   });
 
-  it("renders progress indicator with 4 dots on first step", async () => {
+  it("renders progress indicator with 3 dots on first step", async () => {
     const { baseElement } = await act(async () => {
       return render(<OnboardingFlow {...defaultProps} />);
     });
@@ -137,7 +122,7 @@ describe("OnboardingFlow progress indicator", () => {
       '[data-testid="onboarding-progress"]'
     )!;
     const dots = indicator.querySelectorAll('[data-testid^="progress-dot-"]');
-    expect(dots).toHaveLength(4);
+    expect(dots).toHaveLength(3);
     expect(dots[0]?.getAttribute("aria-current")).toBe("step");
     expect(dots[1]?.getAttribute("aria-current")).toBeNull();
   });
@@ -151,9 +136,9 @@ describe("OnboardingFlow progress indicator", () => {
       expect(trackMock).toHaveBeenCalledWith("onboarding_step_viewed", expect.any(Object));
     });
 
-    // Advance from theme selection to telemetry
+    // Advance from welcome to agentSelection
     await act(async () => {
-      getByTestId("theme-continue").click();
+      getByTestId("welcome-continue").click();
     });
 
     await vi.waitFor(() => {
@@ -175,12 +160,9 @@ describe("OnboardingFlow progress indicator", () => {
       expect(trackMock).toHaveBeenCalled();
     });
 
-    // Complete the flow: theme → telemetry → skip agent selection
+    // Complete the flow: welcome → skip agent selection
     await act(async () => {
-      getByTestId("theme-continue").click();
-    });
-    await act(async () => {
-      getByTestId("accept").click();
+      getByTestId("welcome-continue").click();
     });
     await vi.waitFor(() => {
       expect(getByTestId("agent-selection-step")).toBeTruthy();
@@ -214,7 +196,7 @@ describe("OnboardingFlow progress indicator", () => {
     const srText = baseElement.ownerDocument
       .querySelector('[data-testid="onboarding-progress"]')!
       .querySelector(".sr-only");
-    expect(srText?.textContent).toBe("Step 1 of 4");
+    expect(srText?.textContent).toBe("Step 1 of 3");
   });
 });
 
@@ -237,13 +219,13 @@ describe("OnboardingFlow telemetry tracking", () => {
     // Wait for hydration and step_viewed event
     await vi.waitFor(() => {
       expect(trackMock).toHaveBeenCalledWith("onboarding_step_viewed", {
-        step: "themeSelection",
+        step: "welcome",
         stepIndex: 0,
       });
     });
   });
 
-  it("emits onboarding_step_skipped when theme selection is skipped", async () => {
+  it("emits onboarding_step_skipped when welcome step is skipped", async () => {
     const { getByTestId } = await act(async () => {
       return render(<OnboardingFlow {...defaultProps} />);
     });
@@ -255,11 +237,11 @@ describe("OnboardingFlow telemetry tracking", () => {
     trackMock.mockClear();
 
     await act(async () => {
-      getByTestId("theme-skip").click();
+      getByTestId("welcome-skip").click();
     });
 
     expect(trackMock).toHaveBeenCalledWith("onboarding_step_skipped", {
-      step: "themeSelection",
+      step: "welcome",
     });
   });
 
@@ -273,21 +255,16 @@ describe("OnboardingFlow telemetry tracking", () => {
       expect(trackMock).toHaveBeenCalledWith("onboarding_step_viewed", expect.any(Object));
     });
 
-    // Advance through theme selection
+    // Advance through welcome
     await act(async () => {
-      getByTestId("theme-continue").click();
-    });
-
-    // Accept telemetry to advance to agent selection
-    await act(async () => {
-      getByTestId("accept").click();
+      getByTestId("welcome-continue").click();
     });
 
     // Wait for agent selection step to render
     await vi.waitFor(() => {
       expect(trackMock).toHaveBeenCalledWith("onboarding_step_viewed", {
         step: "agentSelection",
-        stepIndex: 2,
+        stepIndex: 1,
       });
     });
 
@@ -313,14 +290,9 @@ describe("OnboardingFlow telemetry tracking", () => {
       expect(trackMock).toHaveBeenCalled();
     });
 
-    // Continue from theme selection
+    // Continue from welcome
     await act(async () => {
-      getByTestId("theme-continue").click();
-    });
-
-    // Accept telemetry
-    await act(async () => {
-      getByTestId("accept").click();
+      getByTestId("welcome-continue").click();
     });
 
     // Wait for agent selection
@@ -336,7 +308,7 @@ describe("OnboardingFlow telemetry tracking", () => {
     await vi.waitFor(() => {
       expect(trackMock).toHaveBeenCalledWith(
         "onboarding_completed",
-        expect.objectContaining({ totalSteps: 4 })
+        expect.objectContaining({ totalSteps: 3 })
       );
     });
   });
@@ -355,7 +327,7 @@ describe("OnboardingFlow telemetry tracking", () => {
     unmount();
 
     expect(trackMock).toHaveBeenCalledWith("onboarding_abandoned", {
-      lastStep: "themeSelection",
+      lastStep: "welcome",
       lastStepIndex: 0,
     });
   });
@@ -370,14 +342,9 @@ describe("OnboardingFlow telemetry tracking", () => {
       expect(trackMock).toHaveBeenCalled();
     });
 
-    // Continue from theme selection
+    // Continue from welcome
     await act(async () => {
-      getByTestId("theme-continue").click();
-    });
-
-    // Accept telemetry
-    await act(async () => {
-      getByTestId("accept").click();
+      getByTestId("welcome-continue").click();
     });
 
     // Wait for agent selection
@@ -398,6 +365,44 @@ describe("OnboardingFlow telemetry tracking", () => {
     unmount();
 
     expect(trackMock).not.toHaveBeenCalledWith("onboarding_abandoned", expect.any(Object));
+  });
+
+  it("calls setTelemetryLevel and markPromptShown on welcome continue", async () => {
+    const { getByTestId } = await act(async () => {
+      return render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await vi.waitFor(() => {
+      expect(trackMock).toHaveBeenCalled();
+    });
+
+    await act(async () => {
+      getByTestId("welcome-continue").click();
+    });
+
+    await vi.waitFor(() => {
+      expect(privacyMock.setTelemetryLevel).toHaveBeenCalledWith("off");
+      expect(telemetryMock.markPromptShown).toHaveBeenCalled();
+    });
+  });
+
+  it("calls setTelemetryLevel('off') and markPromptShown on welcome skip", async () => {
+    const { getByTestId } = await act(async () => {
+      return render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await vi.waitFor(() => {
+      expect(trackMock).toHaveBeenCalled();
+    });
+
+    await act(async () => {
+      getByTestId("welcome-skip").click();
+    });
+
+    await vi.waitFor(() => {
+      expect(privacyMock.setTelemetryLevel).toHaveBeenCalledWith("off");
+      expect(telemetryMock.markPromptShown).toHaveBeenCalled();
+    });
   });
 });
 
@@ -434,10 +439,7 @@ describe("OnboardingFlow agent setup persistence", () => {
 
     // Advance to agent selection
     await act(async () => {
-      getByTestId("theme-continue").click();
-    });
-    await act(async () => {
-      getByTestId("accept").click();
+      getByTestId("welcome-continue").click();
     });
 
     await vi.waitFor(() => {
@@ -485,10 +487,7 @@ describe("OnboardingFlow agent setup persistence", () => {
 
     // Advance to agent selection
     await act(async () => {
-      getByTestId("theme-continue").click();
-    });
-    await act(async () => {
-      getByTestId("accept").click();
+      getByTestId("welcome-continue").click();
     });
 
     await vi.waitFor(() => {
@@ -538,6 +537,22 @@ describe("OnboardingFlow agent setup persistence", () => {
     // Should fall back to agentSelection since no IDs were persisted
     await vi.waitFor(() => {
       expect(getByTestId("agent-selection-step")).toBeTruthy();
+    });
+  });
+
+  it("falls back to welcome step when resuming with legacy step name", async () => {
+    onboardingMock.get.mockResolvedValue({
+      ...defaultOnboardingState,
+      currentStep: "themeSelection",
+    });
+
+    const { getByTestId } = await act(async () => {
+      return render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    // Old "themeSelection" step not in new STEP_ORDER → falls back to STEP_ORDER[0] ("welcome")
+    await vi.waitFor(() => {
+      expect(getByTestId("welcome-step")).toBeTruthy();
     });
   });
 });
