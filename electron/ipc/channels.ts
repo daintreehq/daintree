@@ -496,6 +496,9 @@ export const CHANNELS = {
   DEMO_ENCODE: "demo:encode",
   DEMO_ENCODE_PROGRESS: "demo:encode:progress",
 
+  // Plugin channels
+  PLUGIN_LIST: "plugin:list",
+
   // Workflow approval channels
   WORKFLOW_RESOLVE_APPROVAL: "workflow:resolve-approval",
   WORKFLOW_LIST_PENDING_APPROVALS: "workflow:list-pending-approvals",
