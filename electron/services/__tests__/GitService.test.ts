@@ -167,6 +167,30 @@ describe("GitService", () => {
       expect(result).toBe("NO_CHANGES");
     });
 
+    it("returns empty file list without calling git when branch1 equals branch2", async () => {
+      const service = new GitService(tempDir);
+      const result = await service.compareWorktrees("main", "main");
+
+      expect(gitClientMock.raw).not.toHaveBeenCalled();
+      expect(result).toEqual({ branch1: "main", branch2: "main", files: [] });
+    });
+
+    it("returns empty file list without calling git when branch1 equals branch2 with useMergeBase", async () => {
+      const service = new GitService(tempDir);
+      const result = await service.compareWorktrees("main", "main", undefined, true);
+
+      expect(gitClientMock.raw).not.toHaveBeenCalled();
+      expect(result).toEqual({ branch1: "main", branch2: "main", files: [] });
+    });
+
+    it("returns NO_CHANGES without calling git when branch1 equals branch2 with filePath", async () => {
+      const service = new GitService(tempDir);
+      const result = await service.compareWorktrees("main", "main", "src/app.ts");
+
+      expect(gitClientMock.raw).not.toHaveBeenCalled();
+      expect(result).toBe("NO_CHANGES");
+    });
+
     it("uses three-dot range for per-file diff when useMergeBase is true", async () => {
       gitClientMock.raw.mockResolvedValue("diff --git a/src/app.ts b/src/app.ts\n+new line");
 
