@@ -1,0 +1,6 @@
+{
+  "permissions": {
+    "allow": ["Read(**)", "Glob(**)", "Grep(**)", "LS(**)", "WebFetch(**)"],
+    "deny": ["Write(**)", "Edit(**)", "MultiEdit(**)", "Bash(**)"]
+  }
+}
