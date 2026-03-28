@@ -152,10 +152,9 @@ describe("UrlDetector", () => {
         expect(result.url).toBe("http://localhost:4000/");
       });
 
-      it("does not detect IPv6 bracket notation URLs", () => {
+      it("detects IPv6 bracket notation URLs", () => {
         const result = detector.scanOutput("Server: http://[::1]:3000", "");
-        // TODO: IPv6 bracket format not currently supported by regex
-        expect(result.url).toBeNull();
+        expect(result.url).toBe("http://[::1]:3000/");
       });
     });
 
