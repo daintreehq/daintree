@@ -195,6 +195,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
 
   useEffect(() => {
     if (diffMode === "base-branch" && status?.currentBranch === mainBranch) {
+      baseBranchRequestRef.current++;
       setDiffMode("working-tree");
       setBaseBranchFiles(null);
       setBaseBranchError(null);

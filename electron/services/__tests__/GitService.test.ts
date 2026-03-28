@@ -175,6 +175,14 @@ describe("GitService", () => {
       expect(result).toEqual({ branch1: "main", branch2: "main", files: [] });
     });
 
+    it("returns empty file list without calling git when branch1 equals branch2 with useMergeBase", async () => {
+      const service = new GitService(tempDir);
+      const result = await service.compareWorktrees("main", "main", undefined, true);
+
+      expect(gitClientMock.raw).not.toHaveBeenCalled();
+      expect(result).toEqual({ branch1: "main", branch2: "main", files: [] });
+    });
+
     it("returns NO_CHANGES without calling git when branch1 equals branch2 with filePath", async () => {
       const service = new GitService(tempDir);
       const result = await service.compareWorktrees("main", "main", "src/app.ts");
