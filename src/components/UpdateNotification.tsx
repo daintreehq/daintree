@@ -74,7 +74,7 @@ export function UpdateNotification() {
           "rounded-[var(--radius-sm)] border",
           "px-3 py-2.5 pr-10",
           "text-sm text-canopy-text",
-          "shadow-[0_4px_12px_rgba(0,0,0,0.2)]",
+          "shadow-[var(--theme-shadow-floating)]",
           "transition-[transform,opacity] duration-300 ease-out",
           isVisible ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0",
           "bg-[color-mix(in_oklab,var(--color-canopy-accent)_12%,transparent)]",
