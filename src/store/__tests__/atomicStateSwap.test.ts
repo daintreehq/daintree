@@ -200,6 +200,25 @@ describe("atomic swap: detach then clear sequence", () => {
     vi.useRealTimers();
   });
 
+  it("detachTerminalsForProjectSwitch is a no-op with empty terminals", () => {
+    useTerminalStore.getState().detachTerminalsForProjectSwitch();
+
+    expect(terminalInstanceService.suppressResizesDuringProjectSwitch).toHaveBeenCalledWith([], 10_000);
+    expect(terminalInstanceService.detachForProjectSwitch).not.toHaveBeenCalled();
+    expect(useTerminalStore.getState().terminals).toEqual([]);
+  });
+
+  it("clearTerminalStoreForSwitch is idempotent", () => {
+    seedTerminals();
+
+    useTerminalStore.getState().clearTerminalStoreForSwitch();
+    expect(useTerminalStore.getState().terminals).toEqual([]);
+
+    // Second call should not throw or change state
+    useTerminalStore.getState().clearTerminalStoreForSwitch();
+    expect(useTerminalStore.getState().terminals).toEqual([]);
+  });
+
   it("preserves terminal state after detach, then clears on explicit call", () => {
     seedTerminals();
 

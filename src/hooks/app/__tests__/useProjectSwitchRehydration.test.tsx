@@ -398,6 +398,31 @@ describe("useProjectSwitchRehydration", () => {
     expect(setWorktreeLoadErrorMock).not.toHaveBeenCalled();
   });
 
+  it("clears terminal store before calling hydrateAppState (atomic swap)", async () => {
+    const callOrder: string[] = [];
+    storeMocks.clearTerminalStoreForSwitch.mockImplementation(() => {
+      callOrder.push("clearTerminalStoreForSwitch");
+    });
+    hydrateAppStateMock.mockImplementation(() => {
+      callOrder.push("hydrateAppState");
+      return Promise.resolve();
+    });
+
+    renderHook(() => useProjectSwitchRehydration());
+
+    onSwitchHandler?.({
+      switchId: "switch-atomic",
+      project: { id: "project-atomic", name: "Project Atomic" },
+    });
+
+    await vi.waitFor(() => {
+      expect(finishProjectSwitchMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(storeMocks.clearTerminalStoreForSwitch).toHaveBeenCalledOnce();
+    expect(callOrder).toEqual(["clearTerminalStoreForSwitch", "hydrateAppState"]);
+  });
+
   it("calls setWorktreeLoadError when worktreeLoadError is present in switch payload", async () => {
     hydrateAppStateMock.mockResolvedValue(undefined);
 
