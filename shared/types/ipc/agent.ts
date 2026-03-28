@@ -52,6 +52,8 @@ export interface AgentStateChangePayload {
   confidence: number;
   /** Why the agent is waiting (only present when state is "waiting") */
   waitingReason?: WaitingReason;
+  /** Extracted session cost in dollars (only present when state is "completed") */
+  sessionCost?: number;
 }
 
 /** Agent detected payload */

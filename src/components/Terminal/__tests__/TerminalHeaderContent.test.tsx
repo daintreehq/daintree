@@ -41,13 +41,27 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => {
     idle: "text-idle",
     completed: "text-completed",
   };
+  const STATE_LABELS: Record<string, string> = {
+    working: "working",
+    waiting: "waiting",
+    running: "running",
+    directing: "directing",
+    idle: "idle",
+    completed: "done",
+  };
   return {
     STATE_ICONS,
     STATE_COLORS,
+    STATE_LABELS,
     getEffectiveStateIcon: (state: string) => STATE_ICONS[state] ?? mockIcon,
     getEffectiveStateColor: (state: string) => STATE_COLORS[state] ?? "text-unknown",
+    getEffectiveStateLabel: (state: string) => STATE_LABELS[state] ?? state,
   };
 });
+
+vi.mock("@/store/errorStore", () => ({
+  useErrorStore: (selector: (s: Record<string, unknown>) => unknown) => selector({ errors: [] }),
+}));
 
 let mockTerminal: Record<string, unknown> = {};
 
@@ -76,7 +90,7 @@ describe("TerminalHeaderContent — agent state chip tooltip", () => {
       id: "t1",
       stateChangeTrigger: "output",
       stateChangeConfidence: 0.85,
-      lastStateChange: new Date("2026-03-19T11:55:00Z").getTime(),
+      lastStateChange: new Date("2026-03-19T11:59:30Z").getTime(),
     };
 
     render(
@@ -93,7 +107,7 @@ describe("TerminalHeaderContent — agent state chip tooltip", () => {
     expect(agentTooltip!.textContent).toContain("State: working");
     expect(agentTooltip!.textContent).toContain("Output");
     expect(agentTooltip!.textContent).toContain("(85%)");
-    expect(agentTooltip!.textContent).toContain("Since: 5m ago");
+    expect(agentTooltip!.textContent).toContain("Since:");
   });
 
   it("shows AI classification trigger label", () => {

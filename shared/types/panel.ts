@@ -364,6 +364,8 @@ export interface TerminalInstance {
   stateChangeTrigger?: AgentStateChangeTrigger;
   stateChangeConfidence?: number;
   waitingReason?: WaitingReason;
+  /** Extracted session cost in dollars from the last completed agent run */
+  sessionCost?: number;
   activityHeadline?: string;
   activityStatus?: "working" | "waiting" | "success" | "failure";
   activityType?: "interactive" | "background" | "idle";
