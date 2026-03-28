@@ -67,6 +67,7 @@ export interface ProjectSwitcherPaletteProps {
   onDeleteGroup?: (groupId: string) => void;
   onMoveGroupUp?: (groupId: string) => void;
   onMoveGroupDown?: (groupId: string) => void;
+  onHoverProject?: (project: SearchableProject) => void;
 }
 
 interface ProjectListItemProps {
@@ -78,6 +79,7 @@ interface ProjectListItemProps {
   onCloseProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
+  onHoverProject?: (project: SearchableProject) => void;
 }
 
 function ProjectListItem({
@@ -89,6 +91,7 @@ function ProjectListItem({
   onCloseProject,
   onLocateProject,
   onTogglePinProject,
+  onHoverProject,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0 && !project.isMissing;
 
@@ -98,6 +101,7 @@ function ProjectListItem({
       role="option"
       aria-selected={index === selectedIndex}
       aria-disabled={project.isMissing || undefined}
+      onMouseEnter={onHoverProject ? () => onHoverProject(project) : undefined}
       className={cn(
         "group relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
         project.isActive
@@ -634,6 +638,7 @@ interface ProjectListContentProps {
   onDeleteGroup?: (groupId: string) => void;
   onMoveGroupUp?: (groupId: string) => void;
   onMoveGroupDown?: (groupId: string) => void;
+  onHoverProject?: (project: SearchableProject) => void;
 }
 
 function ProjectListContent({
@@ -654,6 +659,7 @@ function ProjectListContent({
   onDeleteGroup,
   onMoveGroupUp,
   onMoveGroupDown,
+  onHoverProject,
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -707,6 +713,7 @@ function ProjectListContent({
             onCloseProject={onCloseProject}
             onLocateProject={onLocateProject}
             onTogglePinProject={onTogglePinProject}
+            onHoverProject={onHoverProject}
           />
         </div>
         {onAssignProjectToGroup && onCreateGroup && onRemoveProjectFromGroup && (
@@ -829,6 +836,7 @@ function ProjectListContent({
                   onCloseProject={onCloseProject}
                   onLocateProject={onLocateProject}
                   onTogglePinProject={onTogglePinProject}
+                  onHoverProject={onHoverProject}
                 />
               </div>
             ))}
@@ -924,6 +932,7 @@ interface ProjectPaletteInnerProps {
   onDeleteGroup?: (groupId: string) => void;
   onMoveGroupUp?: (groupId: string) => void;
   onMoveGroupDown?: (groupId: string) => void;
+  onHoverProject?: (project: SearchableProject) => void;
 }
 
 function ProjectPaletteInner({
@@ -952,6 +961,7 @@ function ProjectPaletteInner({
   onDeleteGroup,
   onMoveGroupUp,
   onMoveGroupDown,
+  onHoverProject,
 }: ProjectPaletteInnerProps) {
   const projectSwitcherShortcut = useKeybindingDisplay("project.switcherPalette");
 
@@ -1052,6 +1062,7 @@ function ProjectPaletteInner({
           onDeleteGroup={onDeleteGroup}
           onMoveGroupUp={onMoveGroupUp}
           onMoveGroupDown={onMoveGroupDown}
+          onHoverProject={onHoverProject}
         />
       </AppPaletteDialog.Body>
 
@@ -1215,6 +1226,7 @@ function ModalContent({
           onDeleteGroup={innerProps.onDeleteGroup}
           onMoveGroupUp={innerProps.onMoveGroupUp}
           onMoveGroupDown={innerProps.onMoveGroupDown}
+          onHoverProject={innerProps.onHoverProject}
         />
       </div>
     </div>,
@@ -1295,6 +1307,7 @@ function DropdownContent({
           onDeleteGroup={innerProps.onDeleteGroup}
           onMoveGroupUp={innerProps.onMoveGroupUp}
           onMoveGroupDown={innerProps.onMoveGroupDown}
+          onHoverProject={innerProps.onHoverProject}
         />
       </PopoverContent>
     </Popover>
@@ -1333,6 +1346,7 @@ export function ProjectSwitcherPalette({
   onDeleteGroup,
   onMoveGroupUp,
   onMoveGroupDown,
+  onHoverProject,
 }: ProjectSwitcherPaletteProps) {
   const hasRunningProcesses = removeConfirmProject
     ? removeConfirmProject.processCount > 0 ||
@@ -1368,6 +1382,7 @@ export function ProjectSwitcherPalette({
         onDeleteGroup={onDeleteGroup}
         onMoveGroupUp={onMoveGroupUp}
         onMoveGroupDown={onMoveGroupDown}
+        onHoverProject={onHoverProject}
       >
         {children}
       </DropdownContent>
@@ -1397,6 +1412,7 @@ export function ProjectSwitcherPalette({
         onDeleteGroup={onDeleteGroup}
         onMoveGroupUp={onMoveGroupUp}
         onMoveGroupDown={onMoveGroupDown}
+        onHoverProject={onHoverProject}
       />
     );
 
