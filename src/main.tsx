@@ -10,6 +10,11 @@ import { ensureTerminalFontLoaded } from "./config/terminalFont";
 import { initStoreOrchestrator } from "./store/rendererStoreOrchestrator";
 import { registerRendererGlobalErrorHandlers } from "./utils/rendererGlobalErrorHandlers";
 import { renderBootstrapError } from "./utils/renderBootstrapError";
+import {
+  onCaughtError,
+  onUncaughtError,
+  onRecoverableError,
+} from "./utils/reactRootErrorCallbacks";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupOrchestrator: (() => void) | undefined;
@@ -26,7 +31,11 @@ async function bootstrap() {
   const { default: App } = await import("./App");
 
   const rootEl = document.getElementById("root")!;
-  createRoot(rootEl).render(
+  createRoot(rootEl, {
+    onCaughtError,
+    onUncaughtError,
+    onRecoverableError,
+  }).render(
     <StrictMode>
       <App />
     </StrictMode>
