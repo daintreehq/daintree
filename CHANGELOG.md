@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.5.3] - 2026-03-28
+
+### Features
+
+- Move notes storage from project directory to user data (#4399)
+- Use first line of note content as display title instead of date-based default (#4397)
+- Unify scroll indicator pill design across terminal and worktree sidebar (#4409)
+- Disable text selection on app chrome for native feel (#4313)
+- Add PtyPauseCoordinator for coordinated PTY flow control (#4384)
+- Add Chromium GPU memory flags to reduce VRAM usage (#4365)
+- Update logo to R5 design and rebrand to #36CE94
+- Add Liquid Glass .icon bundle for macOS 26+
+
+### Bug Fixes
+
+- Fix EPIPE crash caused by console.log in CSP handler
+- Fix notes losing content and disappearing after closing palette (#4396)
+- Prevent loading flash during notes background revalidation (#4398)
+- Fix notes debounced save flushing before auto-delete (#4396)
+- Fix IME composition guard dropping Enter key after voice input (#4356)
+- Fix grid arrow-key navigation using wrong column when moving up/down (#4297)
+- Fix ReviewHub fatal git error when comparing same branch (#4352)
+- Fix quit warning counting trashed agent panels as still running (#4350)
+- Fix task assignment triggers dropped when orchestrator lock is held (#4366)
+- Close SQLite connection explicitly during shutdown (#4354)
+- Abort voice correction fetch on timeout via AbortSignal (#4359)
+- Constrain dropdown and context menu height to available viewport space (#4239)
+- Configure ImageAddon with memory-safe defaults (#4363)
+- Revert privacy settings UI on IPC failure and show error toast (#4386)
+- Add accessible names to GitHub settings token input and buttons (#4388)
+- Add dialog accessibility to CrossWorktreeDiff modal (#4385)
+- Suppress update error notifications for automatic checks (#4370)
+- Add cursor-pointer to Button component and crash modal buttons (#4266)
+- Clarify crash modal button and privacy warning text (#4264)
+- Prevent dark-mode color-scheme inheritance into browser webview (#4351)
+- Polish empty state spacing, recipe summary, and tip contrast (#4406)
+- Fix agent state machine: add completed to waiting valid transitions (#4358)
+- Suppress unhandled rejection in macOS editor open fallback (#4362)
+- Add \_retried guard to getProjectHealth recursive call (#4353)
+- Tone down hybrid input bar styling and fix bottom radius leak
+
+### Performance
+
+- Reduce V8 heap limits and remove --optimize-for-size (#4364)
+
+---
+
 ## [0.5.2] - 2026-03-27
 
 ### Features
