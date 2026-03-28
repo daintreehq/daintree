@@ -288,13 +288,55 @@ describe("globalErrorHandlers", () => {
       expect(sentPayload.dismissed).toBe(false);
     });
 
-    it("does NOT call app.exit, app.relaunch, recordCrash, or persist errors", () => {
+    it("does NOT call app.exit or app.relaunch", () => {
       rejectionHandler(new Error("rejected"));
 
       expect(appMock.exit).not.toHaveBeenCalled();
       expect(appMock.relaunch).not.toHaveBeenCalled();
-      expect(crashRecoveryMock.recordCrash).not.toHaveBeenCalled();
-      expect(storeMock.set).not.toHaveBeenCalled();
+    });
+
+    it("calls CrashRecoveryService.recordCrash with the reason", () => {
+      const reason = new Error("rejected");
+      rejectionHandler(reason);
+
+      expect(crashRecoveryMock.recordCrash).toHaveBeenCalledWith(reason);
+    });
+
+    it("persists error to pendingErrors store with UNHANDLED_REJECTION payload", () => {
+      rejectionHandler(new Error("rejected"));
+
+      expect(storeMock.set).toHaveBeenCalledWith(
+        "pendingErrors",
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "unknown",
+            message: expect.stringContaining("rejected"),
+            source: "main-process",
+            isTransient: false,
+            dismissed: false,
+            fromPreviousSession: true,
+            recoveryHint: expect.stringContaining("degraded state"),
+          }),
+        ])
+      );
+    });
+
+    it("persists error when store.get returns undefined", () => {
+      storeMock.get.mockReturnValue(undefined);
+      rejectionHandler(new Error("rejected"));
+
+      expect(storeMock.set).toHaveBeenCalledWith(
+        "pendingErrors",
+        expect.arrayContaining([expect.objectContaining({ fromPreviousSession: true })])
+      );
+    });
+
+    it("does not throw when recordCrash throws", () => {
+      crashRecoveryMock.recordCrash.mockImplementation(() => {
+        throw new Error("record failed");
+      });
+
+      expect(() => rejectionHandler(new Error("rejected"))).not.toThrow();
     });
 
     it("handles non-Error rejection reasons", () => {

@@ -121,7 +121,19 @@ export function registerGlobalErrorHandlers(): void {
       // silent
     }
 
+    try {
+      getCrashRecoveryService().recordCrash(reason);
+    } catch {
+      // silent
+    }
+
     const appError = buildFatalAppError("UNHANDLED_REJECTION", reason);
+
+    try {
+      persistPendingError(appError);
+    } catch {
+      // silent
+    }
 
     try {
       notifyRenderer(appError);
