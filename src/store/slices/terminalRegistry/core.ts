@@ -630,9 +630,12 @@ export const createCorePanelActions = (
               stateChangeTrigger: trigger,
               stateChangeConfidence: confidence,
               waitingReason: agentState === "waiting" ? waitingReason : undefined,
-              ...(agentState === "completed" && sessionCost != null
-                ? { sessionCost }
-                : {}),
+              sessionCost:
+                agentState === "completed" && sessionCost != null
+                  ? sessionCost
+                  : agentState === "working"
+                    ? undefined
+                    : t.sessionCost,
             }
           : t
       );
