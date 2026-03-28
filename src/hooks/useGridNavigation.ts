@@ -82,9 +82,11 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     return () => observer.disconnect();
   }, [containerSelector]);
 
-  // Derive visual grid groups (one cell per tab group), matching ContentGrid
+  // Derive visual grid groups (one cell per tab group), matching ContentGrid.
+  // tabGroups + terminals are intentional deps: getTabGroups reads both internally.
   const gridGroups = useMemo(
     () => getTabGroups("grid", activeWorktreeId ?? undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [getTabGroups, activeWorktreeId, tabGroups, terminals]
   );
 
@@ -220,6 +222,7 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
         : group.panelIds[0];
       return resolvedId ? [resolvedId] : [];
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getTabGroups, activeWorktreeId, tabGroups, terminals]);
 
   const findByIndex = useCallback(
