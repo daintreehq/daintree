@@ -67,6 +67,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   const {
     notes,
     isLoading,
+    isInitialized,
     initialize,
     createNote,
     deleteNote,
@@ -134,6 +135,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     notes,
     visibleNotes: search.visibleNotes,
     isLoading,
+    isInitialized,
     isSearching: search.isSearching,
     lastSelectedNoteId,
     setLastSelectedNoteId,
