@@ -749,7 +749,7 @@ Thumbs.db
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        throw new Error("Parent directory does not exist");
+        throw new Error("Parent directory does not exist", { cause: err });
       }
       throw err;
     }
