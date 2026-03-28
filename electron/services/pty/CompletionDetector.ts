@@ -6,10 +6,7 @@ export interface CompletionDetectionResult {
   extractedCost?: number;
 }
 
-const COST_PATTERNS = [
-  /Total cost:\s+\$(?<cost>[\d.]+)/,
-  /\$(?<cost>\d+\.\d+)\s*·\s*\d+\s*tokens/,
-];
+const COST_PATTERNS = [/Total cost:\s+\$(?<cost>[\d.]+)/, /\$(?<cost>\d+\.\d+)\s*·\s*\d+\s*tokens/];
 
 export function extractCostFromLines(lines: string[]): number | undefined {
   for (const line of lines) {

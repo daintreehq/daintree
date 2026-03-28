@@ -151,20 +151,19 @@ function TerminalHeaderContentComponent({
 
     const effectiveColor = getEffectiveStateColor(agentState, waitingReason);
 
-    const chipStyle =
-      isStalled
-        ? "bg-[color-mix(in_oklab,var(--color-status-warning)_15%,transparent)] border-status-warning/40"
-        : agentState === "working"
-          ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
-          : agentState === "directing"
-            ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
-            : agentState === "running"
-              ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-status-info/40"
-              : agentState === "completed"
-                ? "bg-[color-mix(in_oklab,var(--color-status-success)_15%,transparent)] border-status-success/40"
-                : agentState === "waiting" && waitingReason === "prompt"
-                  ? "bg-[color-mix(in_oklab,var(--color-status-warning)_15%,transparent)] border-status-warning/40"
-                  : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
+    const chipStyle = isStalled
+      ? "bg-[color-mix(in_oklab,var(--color-status-warning)_15%,transparent)] border-status-warning/40"
+      : agentState === "working"
+        ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
+        : agentState === "directing"
+          ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
+          : agentState === "running"
+            ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-status-info/40"
+            : agentState === "completed"
+              ? "bg-[color-mix(in_oklab,var(--color-status-success)_15%,transparent)] border-status-success/40"
+              : agentState === "waiting" && waitingReason === "prompt"
+                ? "bg-[color-mix(in_oklab,var(--color-status-warning)_15%,transparent)] border-status-warning/40"
+                : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
 
     const headline = activity?.headline?.trim() || `Agent ${agentState}`;
     const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
@@ -179,7 +178,9 @@ function TerminalHeaderContentComponent({
                 className={cn(
                   "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
                   chipStyle,
-                  isStalled ? "text-status-warning animate-pulse motion-reduce:animate-none" : effectiveColor
+                  isStalled
+                    ? "text-status-warning animate-pulse motion-reduce:animate-none"
+                    : effectiveColor
                 )}
                 role="status"
                 aria-label={`Agent state: ${isStalled ? "stalled" : stateLabel}`}
@@ -212,9 +213,7 @@ function TerminalHeaderContentComponent({
               )}
               <span>
                 State: {isStalled ? "stalled" : stateLabel}
-                {showStateDuration && (
-                  <> · {formatElapsedDuration(tick - lastStateChange!)}</>
-                )}
+                {showStateDuration && <> · {formatElapsedDuration(tick - lastStateChange!)}</>}
                 {stateChangeTrigger && <> · {TRIGGER_LABELS[stateChangeTrigger]}</>}
                 {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
               </span>

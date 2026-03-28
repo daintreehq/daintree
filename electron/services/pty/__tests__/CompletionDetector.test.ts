@@ -116,23 +116,13 @@ describe("detectCompletion", () => {
     });
 
     it("returns undefined cost when no cost line present", () => {
-      const result = detectCompletion(
-        ["Total duration (API):  1m 2s"],
-        claudePatterns,
-        0.9,
-        6
-      );
+      const result = detectCompletion(["Total duration (API):  1m 2s"], claudePatterns, 0.9, 6);
       expect(result.isCompletion).toBe(true);
       expect(result.extractedCost).toBeUndefined();
     });
 
     it("handles $0.00 cost correctly", () => {
-      const result = detectCompletion(
-        ["Total cost:            $0.00"],
-        claudePatterns,
-        0.9,
-        6
-      );
+      const result = detectCompletion(["Total cost:            $0.00"], claudePatterns, 0.9, 6);
       expect(result.isCompletion).toBe(true);
       expect(result.extractedCost).toBe(0);
     });
