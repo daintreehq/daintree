@@ -169,4 +169,8 @@ describe("color system contract", () => {
     const themeBlock = indexCss.match(/@theme\s+inline\s*\{[\s\S]*?\}/)?.[0] ?? "";
     expect(themeBlock).toMatch(/--color-accent-foreground:\s*var\(--accent-foreground\)/);
   });
+
+  it("sets color-scheme: normal on webview elements to prevent dark-mode inheritance", () => {
+    expect(indexCss).toMatch(/webview\s*\{[^}]*color-scheme:\s*normal/s);
+  });
 });
