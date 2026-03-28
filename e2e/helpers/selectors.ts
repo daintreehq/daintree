@@ -174,7 +174,7 @@ export const SEL = {
   },
   firstRun: {
     themeTitle: 'text="Choose your theme"',
-    telemetryDialog: '[role="dialog"][aria-label="Crash reporting consent"]',
+    telemetryDialog: 'role=dialog[name="Help improve Canopy"]',
     agentTitle: 'text="Choose your AI agents"',
     agentSetupTitle: 'text="Agent Setup"',
   },

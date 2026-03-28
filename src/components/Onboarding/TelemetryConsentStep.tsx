@@ -1,65 +1,37 @@
-import { forwardRef } from "react";
-import { Shield, X } from "lucide-react";
+import { Shield } from "lucide-react";
+import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 
 interface TelemetryConsentStepProps {
+  isOpen: boolean;
   onDismiss: (enabled: boolean) => void;
 }
 
-export const TelemetryConsentStep = forwardRef<HTMLHeadingElement, TelemetryConsentStepProps>(
-  function TelemetryConsentStep({ onDismiss }, ref) {
-    return (
-      <div
-        className={cn(
-          "fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-md",
-          "bg-surface border border-canopy-border rounded-[var(--radius-lg)] shadow-[var(--theme-shadow-floating)] p-4"
-        )}
-        role="dialog"
-        aria-label="Crash reporting consent"
-      >
-        <div className="flex items-start gap-3">
-          <Shield className="w-5 h-5 text-canopy-accent shrink-0 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <h3
-              ref={ref}
-              tabIndex={-1}
-              className="text-sm font-semibold text-canopy-text mb-1 focus:outline-hidden"
-            >
-              Help improve Canopy
-            </h3>
-            <p className="text-xs text-canopy-text/70 mb-3">
-              Send anonymous crash reports when something goes wrong. No file contents, credentials,
-              or personal data are ever collected.
-            </p>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void onDismiss(true)}
-                className="flex-1"
-              >
-                Enable
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void onDismiss(false)}
-                className="flex-1"
-              >
-                Disable
-              </Button>
-            </div>
-          </div>
-          <button
-            onClick={() => void onDismiss(false)}
-            aria-label="Dismiss"
-            className="text-canopy-text/40 hover:text-canopy-text transition-colors shrink-0"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-    );
-  }
-);
+export function TelemetryConsentStep({ isOpen, onDismiss }: TelemetryConsentStepProps) {
+  return (
+    <AppDialog isOpen={isOpen} onClose={() => void onDismiss(false)} size="sm" dismissible>
+      <AppDialog.Header>
+        <AppDialog.Title icon={<Shield className="w-5 h-5 text-canopy-accent" />}>
+          Help improve Canopy
+        </AppDialog.Title>
+        <AppDialog.CloseButton />
+      </AppDialog.Header>
+
+      <AppDialog.Body>
+        <p className="text-sm text-canopy-text/70">
+          Send anonymous crash reports when something goes wrong. No file contents, credentials, or
+          personal data are ever collected.
+        </p>
+      </AppDialog.Body>
+
+      <AppDialog.Footer>
+        <Button variant="outline" onClick={() => void onDismiss(false)} className="flex-1">
+          Disable
+        </Button>
+        <Button onClick={() => void onDismiss(true)} className="flex-1">
+          Enable
+        </Button>
+      </AppDialog.Footer>
+    </AppDialog>
+  );
+}
