@@ -4,10 +4,11 @@ import { WorktreeRemovedError } from "../../utils/errorTypes.js";
 
 const mockGetWorktreeChangesWithStats = vi.fn();
 const mockInvalidateGitStatusCache = vi.fn();
+const mockGitRaw = vi.fn();
 
 vi.mock("../../utils/hardenedGit.js", () => ({
   createHardenedGit: vi.fn(() => ({
-    raw: vi.fn(),
+    raw: (...args: unknown[]) => mockGitRaw(...args),
     log: vi.fn().mockResolvedValue({ latest: null }),
   })),
   validateCwd: vi.fn(),
@@ -245,6 +246,84 @@ describe("WorktreeMonitor", () => {
     expect(monitor.isMainWorktree).toBe(false);
     monitor.isMainWorktree = true;
     expect(monitor.isMainWorktree).toBe(true);
+  });
+
+  describe("ahead/behind upstream tracking", () => {
+    const CLEAN_CHANGES = {
+      worktreeId: "/test/worktree",
+      rootPath: "/test",
+      changes: [],
+      changedFileCount: 0,
+      lastUpdated: Date.now(),
+    };
+
+    it("includes aheadCount and behindCount in snapshot when upstream is configured", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+      mockGitRaw.mockResolvedValue("3\t1\n");
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.aheadCount).toBe(3);
+      expect(snapshot.behindCount).toBe(1);
+
+      monitor.stop();
+    });
+
+    it("leaves counts undefined when no upstream is configured", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+      mockGitRaw.mockRejectedValue(
+        new Error("fatal: no upstream configured for branch 'test-branch'")
+      );
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.aheadCount).toBeUndefined();
+      expect(snapshot.behindCount).toBeUndefined();
+
+      monitor.stop();
+    });
+
+    it("leaves counts undefined on detached HEAD (no branch)", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+      mockGitRaw.mockResolvedValue("0\t0\n");
+
+      const detachedWorktree: Worktree = {
+        ...TEST_WORKTREE,
+        branch: undefined,
+      };
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(detachedWorktree, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.aheadCount).toBeUndefined();
+      expect(snapshot.behindCount).toBeUndefined();
+      expect(mockGitRaw).not.toHaveBeenCalledWith(expect.arrayContaining(["rev-list"]));
+
+      monitor.stop();
+    });
+
+    it("reports zero counts when branch is in sync with upstream", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+      mockGitRaw.mockResolvedValue("0\t0\n");
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.aheadCount).toBe(0);
+      expect(snapshot.behindCount).toBe(0);
+
+      monitor.stop();
+    });
   });
 
   describe("watcher retry", () => {

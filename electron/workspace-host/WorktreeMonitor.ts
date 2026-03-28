@@ -70,6 +70,10 @@ export class WorktreeMonitor {
   private hasPlanFile: boolean = false;
   private planFilePath: string | undefined;
 
+  // Upstream tracking state
+  private aheadCount: number | undefined;
+  private behindCount: number | undefined;
+
   // Issue/PR state
   private _issueNumber: number | undefined;
   private prNumber: number | undefined;
@@ -363,6 +367,8 @@ export class WorktreeMonitor {
       lifecycleStatus: this._lifecycleStatus,
       hasPlanFile: this.hasPlanFile || undefined,
       planFilePath: this.planFilePath,
+      aheadCount: this.aheadCount,
+      behindCount: this.behindCount,
     };
 
     return ensureSerializable(snapshot) as WorktreeSnapshot;
@@ -710,6 +716,8 @@ export class WorktreeMonitor {
 
       const noteData = await this.noteReader.read();
 
+      const upstreamCounts = await this.fetchUpstreamCounts();
+
       const detectedPlanFile = PLAN_FILE_CANDIDATES.find((candidate) =>
         existsSync(pathJoin(this.path, candidate))
       );
@@ -722,8 +730,17 @@ export class WorktreeMonitor {
         noteData?.content !== this.aiNote || noteData?.timestamp !== this.aiNoteTimestamp;
       const planChanged =
         nextHasPlanFile !== this.hasPlanFile || nextPlanFilePath !== this.planFilePath;
+      const upstreamChanged =
+        upstreamCounts.ahead !== this.aheadCount || upstreamCounts.behind !== this.behindCount;
 
-      if (!stateChanged && !noteChanged && !branchChanged && !planChanged && !forceRefresh) {
+      if (
+        !stateChanged &&
+        !noteChanged &&
+        !branchChanged &&
+        !planChanged &&
+        !upstreamChanged &&
+        !forceRefresh
+      ) {
         return;
       }
 
@@ -775,6 +792,8 @@ export class WorktreeMonitor {
       this.aiNoteTimestamp = noteData?.timestamp;
       this.hasPlanFile = nextHasPlanFile;
       this.planFilePath = nextPlanFilePath;
+      this.aheadCount = upstreamCounts.ahead;
+      this.behindCount = upstreamCounts.behind;
       this._hasInitialStatus = true;
 
       this.emitUpdate();
@@ -837,6 +856,27 @@ export class WorktreeMonitor {
       }
     } catch {
       // Silently ignore extraction errors
+    }
+  }
+
+  private async fetchUpstreamCounts(): Promise<{
+    ahead: number | undefined;
+    behind: number | undefined;
+  }> {
+    if (!this._branch) {
+      return { ahead: undefined, behind: undefined };
+    }
+
+    try {
+      const git = createHardenedGit(this.path);
+      const output = await git.raw(["rev-list", "--left-right", "--count", "HEAD...@{u}"]);
+      const [aheadStr, behindStr] = output.trim().split(/\s+/);
+      return {
+        ahead: parseInt(aheadStr, 10) || 0,
+        behind: parseInt(behindStr, 10) || 0,
+      };
+    } catch {
+      return { ahead: undefined, behind: undefined };
     }
   }
 
