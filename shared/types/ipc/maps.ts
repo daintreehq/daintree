@@ -1290,6 +1290,14 @@ export interface IpcInvokeMap {
     args: [];
     result: void;
   };
+  "update:get-channel": {
+    args: [];
+    result: "stable" | "nightly";
+  };
+  "update:set-channel": {
+    args: [channel: "stable" | "nightly"];
+    result: "stable" | "nightly";
+  };
 
   // Agent Capabilities channels
   "agent-capabilities:get-registry": {

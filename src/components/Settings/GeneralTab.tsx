@@ -12,6 +12,7 @@ import {
   Keyboard,
   Info,
   ExternalLink,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CanopyIcon } from "@/components/icons";
@@ -100,6 +101,8 @@ export function GeneralTab({
   const [cliCheckFailed, setCliCheckFailed] = useState(false);
   const [agentSettings, setAgentSettings] = useState<AgentSettings | null>(null);
   const [shortcuts, setShortcuts] = useState<ShortcutCategory[]>([]);
+  const [updateChannel, setUpdateChannel] = useState<"stable" | "nightly" | null>(null);
+  const [channelSaving, setChannelSaving] = useState(false);
   const isMountedRef = useRef(true);
 
   const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
@@ -112,6 +115,30 @@ export function GeneralTab({
       isMountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    window.electron.update
+      .getChannel()
+      .then((ch) => {
+        if (isMountedRef.current) setUpdateChannel(ch);
+      })
+      .catch(() => {
+        if (isMountedRef.current) setUpdateChannel("stable");
+      });
+  }, []);
+
+  const handleChannelChange = async (channel: "stable" | "nightly") => {
+    if (channelSaving || channel === updateChannel) return;
+    setChannelSaving(true);
+    try {
+      const result = await window.electron.update.setChannel(channel);
+      if (isMountedRef.current) setUpdateChannel(result);
+    } catch (error) {
+      console.error("Failed to set update channel:", error);
+    } finally {
+      if (isMountedRef.current) setChannelSaving(false);
+    }
+  };
 
   useEffect(() => {
     let settled = false;
@@ -390,6 +417,37 @@ export function GeneralTab({
                   </button>
                 )}
               </div>
+            )}
+          </SettingsSection>
+
+          <SettingsSection
+            icon={RefreshCw}
+            title="Update Channel"
+            description="Choose between stable releases and nightly builds."
+            id="general-update-channel"
+          >
+            <div className="flex gap-2">
+              {(["stable", "nightly"] as const).map((ch) => (
+                <button
+                  key={ch}
+                  disabled={channelSaving || updateChannel === null}
+                  onClick={() => void handleChannelChange(ch)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-all capitalize",
+                    updateChannel === ch
+                      ? "bg-canopy-accent/10 border border-canopy-accent text-canopy-accent"
+                      : "border border-canopy-border hover:bg-tint/5 text-canopy-text/70"
+                  )}
+                >
+                  {ch}
+                </button>
+              ))}
+            </div>
+            {updateChannel === "nightly" && (
+              <p className="text-xs text-status-warning/80">
+                Nightly builds may contain unstable features. You can switch back to stable at any
+                time.
+              </p>
             )}
           </SettingsSection>
 

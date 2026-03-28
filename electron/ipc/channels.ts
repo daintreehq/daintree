@@ -327,6 +327,8 @@ export const CHANNELS = {
   UPDATE_DOWNLOADED: "update:downloaded",
   UPDATE_QUIT_AND_INSTALL: "update:quit-and-install",
   UPDATE_CHECK_FOR_UPDATES: "update:check-for-updates",
+  UPDATE_GET_CHANNEL: "update:get-channel",
+  UPDATE_SET_CHANNEL: "update:set-channel",
 
   SLASH_COMMANDS_LIST: "slash-commands:list",
 

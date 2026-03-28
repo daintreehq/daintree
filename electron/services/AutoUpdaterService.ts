@@ -5,8 +5,11 @@ import electronUpdater from "electron-updater";
 import type { UpdateInfo, ProgressInfo } from "electron-updater";
 import { CHANNELS } from "../ipc/channels.js";
 import { getCrashRecoveryService } from "./CrashRecoveryService.js";
+import { store } from "../store.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+const STABLE_FEED_URL = "https://updates.canopyide.com/releases/";
+const NIGHTLY_FEED_URL = "https://updates.canopyide.com/nightly/";
 const { autoUpdater } = electronUpdater;
 
 class AutoUpdaterService {
@@ -21,6 +24,15 @@ class AutoUpdaterService {
   private errorHandler: ((err: Error) => void) | null = null;
   private progressHandler: ((progress: ProgressInfo) => void) | null = null;
   private downloadedHandler: ((info: UpdateInfo) => void) | null = null;
+
+  private configureFeedForChannel(channel: "stable" | "nightly"): void {
+    autoUpdater.setFeedURL({
+      provider: "generic",
+      url: channel === "nightly" ? NIGHTLY_FEED_URL : STABLE_FEED_URL,
+      channel: channel === "nightly" ? "nightly" : "latest",
+    });
+    autoUpdater.allowDowngrade = true;
+  }
 
   private sendToWindow(channel: string, payload: unknown): void {
     if (this.window && !this.window.isDestroyed() && !this.window.webContents.isDestroyed()) {
@@ -105,6 +117,9 @@ class AutoUpdaterService {
       autoUpdater.autoDownload = true;
       autoUpdater.autoInstallOnAppQuit = true;
 
+      const initialChannel = store.get("updateChannel") ?? "stable";
+      this.configureFeedForChannel(initialChannel);
+
       this.checkingHandler = () => {
         console.log("[MAIN] Checking for update...");
       };
@@ -180,6 +195,18 @@ class AutoUpdaterService {
         this.checkForUpdatesManually();
       });
 
+      ipcMain.handle(CHANNELS.UPDATE_GET_CHANNEL, () => {
+        return store.get("updateChannel") ?? "stable";
+      });
+
+      ipcMain.handle(CHANNELS.UPDATE_SET_CHANNEL, (_event, channel: unknown) => {
+        const validated: "stable" | "nightly" = channel === "nightly" ? "nightly" : "stable";
+        store.set("updateChannel", validated);
+        this.configureFeedForChannel(validated);
+        this.updateDownloaded = false;
+        return validated;
+      });
+
       this.runUpdateCheck("Initial");
 
       this.checkInterval = setInterval(() => {
@@ -233,6 +260,18 @@ class AutoUpdaterService {
 
     try {
       ipcMain.removeHandler(CHANNELS.UPDATE_CHECK_FOR_UPDATES);
+    } catch {
+      // Handler may not have been registered
+    }
+
+    try {
+      ipcMain.removeHandler(CHANNELS.UPDATE_GET_CHANNEL);
+    } catch {
+      // Handler may not have been registered
+    }
+
+    try {
+      ipcMain.removeHandler(CHANNELS.UPDATE_SET_CHANNEL);
     } catch {
       // Handler may not have been registered
     }

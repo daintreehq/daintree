@@ -64,7 +64,7 @@ describe("General tab search index subtab metadata", () => {
   });
 
   it("overview entries map to overview subtab", () => {
-    const overviewIds = ["general-about", "general-system-status"];
+    const overviewIds = ["general-about", "general-system-status", "general-update-channel"];
     for (const id of overviewIds) {
       const entry = SETTINGS_SEARCH_INDEX.find((e) => e.id === id);
       expect(entry?.subtab).toBe("overview");

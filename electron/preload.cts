@@ -1916,6 +1916,11 @@ const api: ElectronAPI = {
     quitAndInstall: () => _unwrappingInvoke(CHANNELS.UPDATE_QUIT_AND_INSTALL),
 
     checkForUpdates: () => _unwrappingInvoke(CHANNELS.UPDATE_CHECK_FOR_UPDATES),
+
+    getChannel: () => _unwrappingInvoke(CHANNELS.UPDATE_GET_CHANNEL),
+
+    setChannel: (channel: "stable" | "nightly") =>
+      _unwrappingInvoke(CHANNELS.UPDATE_SET_CHANNEL, channel),
   },
 
   // Gemini API

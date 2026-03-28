@@ -205,6 +205,17 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ["agents", "cli", "available", "status", "check", "ready"],
   },
   {
+    id: "general-update-channel",
+    tab: "general",
+    tabLabel: "General",
+    subtab: "overview",
+    subtabLabel: "Overview",
+    section: "Update Channel",
+    title: "Update Channel",
+    description: "Switch between stable and nightly update channels",
+    keywords: ["update", "channel", "stable", "nightly", "releases"],
+  },
+  {
     id: "general-hibernation",
     tab: "general",
     tabLabel: "General",

@@ -21,11 +21,18 @@ const windowMock = vi.hoisted(() => ({
 const autoUpdaterMock = vi.hoisted(() => ({
   autoDownload: false,
   autoInstallOnAppQuit: false,
+  allowDowngrade: false,
   on: vi.fn(),
   off: vi.fn(),
   checkForUpdatesAndNotify: vi.fn(),
   checkForUpdates: vi.fn(),
   quitAndInstall: vi.fn(),
+  setFeedURL: vi.fn(),
+}));
+
+const storeMock = vi.hoisted(() => ({
+  get: vi.fn(() => undefined),
+  set: vi.fn(),
 }));
 
 const cleanupOnExitMock = vi.hoisted(() => vi.fn());
@@ -49,6 +56,10 @@ vi.mock("electron", () => ({
 vi.mock("electron-updater", () => ({
   default: { autoUpdater: autoUpdaterMock },
   autoUpdater: autoUpdaterMock,
+}));
+
+vi.mock("../../store.js", () => ({
+  store: storeMock,
 }));
 
 import type { BrowserWindow } from "electron";
@@ -398,6 +409,108 @@ describe("AutoUpdaterService", () => {
 
       expect(autoUpdaterMock.on).toHaveBeenCalled();
       expect(autoUpdaterMock.checkForUpdatesAndNotify).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("update channel", () => {
+    it("reads channel from store and calls setFeedURL with stable URL when no stored channel", () => {
+      storeMock.get.mockReturnValue(undefined);
+      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+
+      expect(autoUpdaterMock.setFeedURL).toHaveBeenCalledWith({
+        provider: "generic",
+        url: "https://updates.canopyide.com/releases/",
+        channel: "latest",
+      });
+      expect(autoUpdaterMock.allowDowngrade).toBe(true);
+    });
+
+    it("uses nightly URL when stored channel is nightly", () => {
+      storeMock.get.mockReturnValue("nightly");
+      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+
+      expect(autoUpdaterMock.setFeedURL).toHaveBeenCalledWith({
+        provider: "generic",
+        url: "https://updates.canopyide.com/nightly/",
+        channel: "nightly",
+      });
+    });
+
+    it("calls setFeedURL before initial update check", () => {
+      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+
+      const setFeedOrder = autoUpdaterMock.setFeedURL.mock.invocationCallOrder[0];
+      const checkOrder = autoUpdaterMock.checkForUpdatesAndNotify.mock.invocationCallOrder[0];
+      expect(setFeedOrder).toBeLessThan(checkOrder);
+    });
+
+    it("IPC UPDATE_GET_CHANNEL returns persisted channel", () => {
+      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+
+      const getChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_GET_CHANNEL
+      )![1];
+
+      storeMock.get.mockReturnValue("nightly");
+      expect(getChannelHandler()).toBe("nightly");
+    });
+
+    it("IPC UPDATE_SET_CHANNEL persists new channel and reconfigures feed", () => {
+      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+      autoUpdaterMock.setFeedURL.mockClear();
+
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1];
+
+      const result = setChannelHandler(null, "nightly");
+      expect(result).toBe("nightly");
+      expect(storeMock.set).toHaveBeenCalledWith("updateChannel", "nightly");
+      expect(autoUpdaterMock.setFeedURL).toHaveBeenCalledWith({
+        provider: "generic",
+        url: "https://updates.canopyide.com/nightly/",
+        channel: "nightly",
+      });
+    });
+
+    it("IPC UPDATE_SET_CHANNEL coerces unknown value to stable", () => {
+      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1];
+
+      expect(setChannelHandler(null, "bogus")).toBe("stable");
+      expect(storeMock.set).toHaveBeenCalledWith("updateChannel", "stable");
+    });
+
+    it("UPDATE_SET_CHANNEL clears updateDownloaded flag", () => {
+      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+
+      const downloadedHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-downloaded"
+      )![1];
+      downloadedHandler({ version: "2.0.0" });
+
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1];
+      setChannelHandler(null, "nightly");
+
+      const quitHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_QUIT_AND_INSTALL
+      )![1];
+      quitHandler();
+
+      expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
+    });
+
+    it("dispose removes UPDATE_GET_CHANNEL and UPDATE_SET_CHANNEL handlers", () => {
+      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+      autoUpdaterService.dispose();
+
+      expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.UPDATE_GET_CHANNEL);
+      expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.UPDATE_SET_CHANNEL);
     });
   });
 });

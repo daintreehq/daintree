@@ -904,6 +904,8 @@ export interface ElectronAPI {
     onUpdateDownloaded(callback: (info: { version: string }) => void): () => void;
     quitAndInstall(): Promise<void>;
     checkForUpdates(): Promise<void>;
+    getChannel(): Promise<"stable" | "nightly">;
+    setChannel(channel: "stable" | "nightly"): Promise<"stable" | "nightly">;
   };
   gemini: {
     /** Get Gemini config status (exists, alternate buffer enabled) */

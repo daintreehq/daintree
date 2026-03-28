@@ -173,6 +173,7 @@ export interface StoreSchema {
     };
   };
   shortcutHintCounts: Record<string, number>;
+  updateChannel: "stable" | "nightly";
 }
 
 const storeOptions = {
@@ -283,6 +284,7 @@ const storeOptions = {
       },
     },
     shortcutHintCounts: {},
+    updateChannel: "stable" as const,
   },
   cwd: process.env.CANOPY_USER_DATA,
 };
