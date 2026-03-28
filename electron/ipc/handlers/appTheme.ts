@@ -2,7 +2,16 @@ import { ipcMain, dialog, BrowserWindow, nativeTheme } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { parseAppThemeFile } from "../../utils/appThemeImporter.js";
-import type { AppThemeConfig, ColorVisionMode } from "../../../shared/types/appTheme.js";
+import { resolveAppTheme, normalizeAppColorScheme } from "../../../shared/theme/index.js";
+import { typedSend } from "../utils.js";
+import type {
+  AppThemeConfig,
+  AppColorScheme,
+  ColorVisionMode,
+} from "../../../shared/types/appTheme.js";
+
+const DEFAULT_DARK_SCHEME = "daintree";
+const DEFAULT_LIGHT_SCHEME = "bondi";
 
 function getAppThemeConfig(): AppThemeConfig {
   const config = store.get("appTheme");
@@ -18,14 +27,27 @@ function getAppThemeConfig(): AppThemeConfig {
     return config as AppThemeConfig;
   }
 
-  const defaultSchemeId = nativeTheme.shouldUseDarkColors ? "daintree" : "bondi";
+  const defaultSchemeId = nativeTheme.shouldUseDarkColors
+    ? DEFAULT_DARK_SCHEME
+    : DEFAULT_LIGHT_SCHEME;
   return {
     ...(config && typeof config === "object" && !Array.isArray(config) ? config : {}),
     colorSchemeId: defaultSchemeId,
   } as AppThemeConfig;
 }
 
-export function registerAppThemeHandlers(): () => void {
+function parseCustomSchemes(config: AppThemeConfig): AppColorScheme[] {
+  if (typeof config.customSchemes !== "string" || !config.customSchemes.trim()) return [];
+  try {
+    const parsed = JSON.parse(config.customSchemes);
+    if (Array.isArray(parsed)) return parsed.map((s: AppColorScheme) => normalizeAppColorScheme(s));
+  } catch {
+    // Malformed custom schemes
+  }
+  return [];
+}
+
+export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void {
   const handlers: Array<() => void> = [];
 
   const handleAppThemeGet = async () => {
@@ -105,6 +127,89 @@ export function registerAppThemeHandlers(): () => void {
   };
   ipcMain.handle(CHANNELS.APP_THEME_IMPORT, handleAppThemeImport);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_THEME_IMPORT));
+
+  // Follow system handlers
+  const handleSetFollowSystem = async (_event: Electron.IpcMainInvokeEvent, enabled: boolean) => {
+    if (typeof enabled !== "boolean") return;
+    const current = getAppThemeConfig();
+    store.set("appTheme", { ...current, followSystem: enabled } satisfies AppThemeConfig);
+  };
+  ipcMain.handle(CHANNELS.APP_THEME_SET_FOLLOW_SYSTEM, handleSetFollowSystem);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_THEME_SET_FOLLOW_SYSTEM));
+
+  const handleSetPreferredDarkScheme = async (
+    _event: Electron.IpcMainInvokeEvent,
+    schemeId: string
+  ) => {
+    if (typeof schemeId !== "string" || !schemeId.trim()) return;
+    const current = getAppThemeConfig();
+    store.set("appTheme", {
+      ...current,
+      preferredDarkSchemeId: schemeId.trim(),
+    } satisfies AppThemeConfig);
+  };
+  ipcMain.handle(CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME, handleSetPreferredDarkScheme);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME));
+
+  const handleSetPreferredLightScheme = async (
+    _event: Electron.IpcMainInvokeEvent,
+    schemeId: string
+  ) => {
+    if (typeof schemeId !== "string" || !schemeId.trim()) return;
+    const current = getAppThemeConfig();
+    store.set("appTheme", {
+      ...current,
+      preferredLightSchemeId: schemeId.trim(),
+    } satisfies AppThemeConfig);
+  };
+  ipcMain.handle(CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME, handleSetPreferredLightScheme);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME));
+
+  // nativeTheme listener for auto-switching
+  let appearanceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const handleNativeThemeUpdated = () => {
+    if (appearanceTimer !== null) clearTimeout(appearanceTimer);
+    appearanceTimer = setTimeout(() => {
+      appearanceTimer = null;
+
+      const config = getAppThemeConfig();
+      if (!config.followSystem) return;
+
+      const isDark = nativeTheme.shouldUseDarkColors;
+      const schemeId = isDark
+        ? (config.preferredDarkSchemeId ?? DEFAULT_DARK_SCHEME)
+        : (config.preferredLightSchemeId ?? DEFAULT_LIGHT_SCHEME);
+
+      store.set("appTheme", { ...config, colorSchemeId: schemeId } satisfies AppThemeConfig);
+
+      const win = mainWindow ?? BrowserWindow.getAllWindows()[0];
+      if (!win || win.isDestroyed()) return;
+
+      typedSend(win, "app-theme:system-appearance-changed", { isDark, schemeId });
+
+      const customSchemes = parseCustomSchemes(config);
+      const scheme = resolveAppTheme(schemeId, customSchemes);
+      win.setBackgroundColor(scheme.tokens["surface-canvas"]);
+
+      if (process.platform === "win32") {
+        win.setTitleBarOverlay({
+          color: scheme.tokens["surface-canvas"],
+          symbolColor: "#a1a1aa",
+          height: 36,
+        });
+      }
+    }, 300);
+  };
+
+  nativeTheme.on("updated", handleNativeThemeUpdated);
+  handlers.push(() => {
+    nativeTheme.removeListener("updated", handleNativeThemeUpdated);
+    if (appearanceTimer !== null) {
+      clearTimeout(appearanceTimer);
+      appearanceTimer = null;
+    }
+  });
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

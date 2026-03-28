@@ -568,6 +568,10 @@ const CHANNELS = {
   APP_THEME_SET_CUSTOM_SCHEMES: "app-theme:set-custom-schemes",
   APP_THEME_IMPORT: "app-theme:import",
   APP_THEME_SET_COLOR_VISION_MODE: "app-theme:set-color-vision-mode",
+  APP_THEME_SET_FOLLOW_SYSTEM: "app-theme:set-follow-system",
+  APP_THEME_SET_PREFERRED_DARK_SCHEME: "app-theme:set-preferred-dark-scheme",
+  APP_THEME_SET_PREFERRED_LIGHT_SCHEME: "app-theme:set-preferred-light-scheme",
+  APP_THEME_SYSTEM_APPEARANCE_CHANGED: "app-theme:system-appearance-changed",
 
   // Telemetry channels
   TELEMETRY_GET: "telemetry:get",
@@ -2043,6 +2047,19 @@ const api: ElectronAPI = {
 
     setColorVisionMode: (mode: ColorVisionMode) =>
       _unwrappingInvoke(CHANNELS.APP_THEME_SET_COLOR_VISION_MODE, mode),
+
+    setFollowSystem: (enabled: boolean) =>
+      _unwrappingInvoke(CHANNELS.APP_THEME_SET_FOLLOW_SYSTEM, enabled),
+
+    setPreferredDarkScheme: (schemeId: string) =>
+      _unwrappingInvoke(CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME, schemeId),
+
+    setPreferredLightScheme: (schemeId: string) =>
+      _unwrappingInvoke(CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME, schemeId),
+
+    onSystemAppearanceChanged: (
+      callback: (payload: { isDark: boolean; schemeId: string }) => void
+    ) => _typedOn(CHANNELS.APP_THEME_SYSTEM_APPEARANCE_CHANGED, callback),
   },
 
   telemetry: {

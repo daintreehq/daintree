@@ -8,11 +8,17 @@ interface AppThemeState {
   selectedSchemeId: string;
   customSchemes: AppColorScheme[];
   colorVisionMode: ColorVisionMode;
+  followSystem: boolean;
+  preferredDarkSchemeId: string;
+  preferredLightSchemeId: string;
   setSelectedSchemeId: (id: string) => void;
   addCustomScheme: (scheme: AppColorScheme) => void;
   removeCustomScheme: (id: string) => void;
   injectTheme: (scheme: AppColorScheme) => void;
   setColorVisionMode: (mode: ColorVisionMode) => void;
+  setFollowSystem: (enabled: boolean) => void;
+  setPreferredDarkSchemeId: (id: string) => void;
+  setPreferredLightSchemeId: (id: string) => void;
 }
 
 function injectSchemeToDOM(scheme: AppColorScheme): void {
@@ -28,6 +34,9 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
   selectedSchemeId: DEFAULT_APP_SCHEME_ID,
   customSchemes: [],
   colorVisionMode: "default" as ColorVisionMode,
+  followSystem: false,
+  preferredDarkSchemeId: "daintree",
+  preferredLightSchemeId: "bondi",
 
   setSelectedSchemeId: (id) => {
     const { customSchemes } = useAppThemeStore.getState();
@@ -62,6 +71,10 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     set({ colorVisionMode: mode });
     applyColorVisionMode(document.documentElement, mode);
   },
+
+  setFollowSystem: (enabled) => set({ followSystem: enabled }),
+  setPreferredDarkSchemeId: (id) => set({ preferredDarkSchemeId: id }),
+  setPreferredLightSchemeId: (id) => set({ preferredLightSchemeId: id }),
 }));
 
 export { injectSchemeToDOM };
