@@ -23,6 +23,7 @@ export function terminalToSnapshot(t: TerminalInstance): TerminalSnapshot {
     title: t.title,
     worktreeId: t.worktreeId,
     location: t.location === "trash" || t.location === "background" ? "grid" : t.location,
+    ...(t.extensionState !== undefined && { extensionState: t.extensionState }),
   };
 
   if (t.kind === "dev-preview") {

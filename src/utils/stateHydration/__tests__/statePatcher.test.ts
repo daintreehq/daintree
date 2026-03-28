@@ -475,6 +475,31 @@ describe("buildArgsForNonPtyRecreation", () => {
     );
     expect(result.devCommand).toBe("npm run dev");
   });
+
+  it("forwards extensionState from saved data", () => {
+    const extState = { activeTab: "stats", zoom: 1.5 };
+    const result = buildArgsForNonPtyRecreation(
+      {
+        id: "ext-1",
+        kind: "my-plugin",
+        title: "Plugin",
+        location: "grid",
+        extensionState: extState,
+      },
+      "my-plugin",
+      "/project"
+    );
+    expect(result.extensionState).toEqual(extState);
+  });
+
+  it("passes undefined extensionState when not present in saved data", () => {
+    const result = buildArgsForNonPtyRecreation(
+      { id: "b1", kind: "browser", title: "Browser", location: "grid" },
+      "browser",
+      "/project"
+    );
+    expect(result.extensionState).toBeUndefined();
+  });
 });
 
 describe("buildArgsForOrphanedTerminal", () => {

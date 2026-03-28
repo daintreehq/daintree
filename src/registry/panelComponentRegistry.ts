@@ -18,6 +18,7 @@ export interface PanelComponentProps {
   onRestore?: () => void;
   gridPanelCount?: number;
   isTrashing?: boolean;
+  extensionState?: Record<string, unknown>;
   [key: string]: unknown;
 }
 

@@ -166,6 +166,7 @@ export interface HydrationOptions {
     agentSessionId?: string;
     agentLaunchFlags?: string[];
     agentModelId?: string;
+    extensionState?: Record<string, unknown>;
     restore?: boolean;
     bypassLimits?: boolean;
   }) => Promise<string>;

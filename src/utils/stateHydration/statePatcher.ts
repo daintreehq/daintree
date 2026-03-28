@@ -38,6 +38,7 @@ export interface AddTerminalArgs {
   agentSessionId?: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  extensionState?: Record<string, unknown>;
   restore?: boolean;
   bypassLimits?: boolean;
 }
@@ -67,6 +68,7 @@ export interface SavedTerminalData {
   agentSessionId?: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  extensionState?: Record<string, unknown>;
 }
 
 interface BackendTerminalData {
@@ -341,6 +343,7 @@ export function buildArgsForNonPtyRecreation(
     devCommand,
     devPreviewConsoleOpen: kind === "dev-preview" ? saved.devPreviewConsoleOpen : undefined,
     exitBehavior: saved.exitBehavior,
+    extensionState: saved.extensionState,
   };
 }
 

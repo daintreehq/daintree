@@ -105,6 +105,8 @@ export interface TerminalSnapshot {
   agentState?: AgentState;
   /** Timestamp of last agent state change */
   lastStateChange?: number;
+  /** Opaque state bag for extension panels — survives the save/restore round-trip */
+  extensionState?: Record<string, unknown>;
   // Note: Tab membership is now stored in ProjectState.tabGroups, not on terminals
 }
 

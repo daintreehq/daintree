@@ -180,6 +180,8 @@ interface BasePanelData {
   worktreeId?: string;
   /** Whether the panel pane is currently visible in the viewport */
   isVisible?: boolean;
+  /** Opaque state bag for extension panels — survives the save/restore round-trip */
+  extensionState?: Record<string, unknown>;
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 
@@ -424,6 +426,8 @@ export interface TerminalInstance {
   startedAt?: number;
   /** Exit code from the last process exit */
   exitCode?: number;
+  /** Opaque state bag for extension panels — survives the save/restore round-trip */
+  extensionState?: Record<string, unknown>;
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 

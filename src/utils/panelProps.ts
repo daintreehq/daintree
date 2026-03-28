@@ -81,6 +81,9 @@ export function buildPanelProps({
     spawnError: terminal.spawnError,
     detectedProcessId: terminal.detectedProcessId,
 
+    // Extension state
+    extensionState: terminal.extensionState,
+
     // Browser-specific
     initialUrl: terminal.browserUrl || "http://localhost:3000",
 

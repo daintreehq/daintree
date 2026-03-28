@@ -222,6 +222,7 @@ export const createCorePanelActions = (
           location,
           isVisible: location === "grid",
           runtimeStatus,
+          extensionState: options.extensionState,
           type: "terminal" as const,
           cwd: "",
           cols: 80,
@@ -461,6 +462,7 @@ export const createCorePanelActions = (
         agentSessionId: options.agentSessionId,
         agentLaunchFlags: options.agentLaunchFlags,
         agentModelId: options.agentModelId,
+        extensionState: options.extensionState,
         spawnedBy: options.spawnedBy,
         startedAt: Date.now(),
         // Dev-preview specific fields

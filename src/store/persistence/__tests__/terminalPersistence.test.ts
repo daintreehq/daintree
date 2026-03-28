@@ -422,6 +422,71 @@ describe("TerminalPersistence", () => {
     });
   });
 
+  describe("extension state", () => {
+    it("persists extensionState for extension panels through snapshot round-trip", async () => {
+      const client = createMockProjectClient();
+      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+
+      const extensionPanel = createMockTerminal({
+        id: "ext-1",
+        kind: "my-plugin",
+        title: "My Plugin",
+        extensionState: { activeTab: "overview", zoom: 1.5 },
+        location: "grid",
+      });
+
+      persistence.save([extensionPanel], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const savedTerminals = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      expect(savedTerminals).toHaveLength(1);
+      expect(savedTerminals[0]).toEqual(
+        expect.objectContaining({
+          id: "ext-1",
+          kind: "my-plugin",
+          extensionState: { activeTab: "overview", zoom: 1.5 },
+        })
+      );
+    });
+
+    it("omits extensionState from snapshot when undefined", async () => {
+      const client = createMockProjectClient();
+      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+
+      const terminal = createMockTerminal({ id: "no-ext", kind: "browser" });
+
+      persistence.save([terminal], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const savedTerminals = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      expect(savedTerminals[0]).not.toHaveProperty("extensionState");
+    });
+
+    it("persists extensionState for PTY panels", async () => {
+      const client = createMockProjectClient();
+      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+
+      const ptyPanel = createMockTerminal({
+        id: "pty-ext",
+        kind: "terminal",
+        type: "terminal",
+        cwd: "/test",
+        extensionState: { config: true },
+      });
+
+      persistence.save([ptyPanel], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const savedTerminals = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      expect(savedTerminals[0]).toEqual(
+        expect.objectContaining({
+          id: "pty-ext",
+          extensionState: { config: true },
+        })
+      );
+    });
+  });
+
   describe("dev-preview panels", () => {
     it("persists config but not runtime state for dev-preview panels", async () => {
       const client = createMockProjectClient();

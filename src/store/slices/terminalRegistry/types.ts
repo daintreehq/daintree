@@ -79,6 +79,8 @@ export interface AddTerminalOptions {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** Opaque state bag for extension panels — survives the save/restore round-trip */
+  extensionState?: Record<string, unknown>;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
   /** Bypass rate limiter during session restore (consumes main-process quota) */
