@@ -325,6 +325,7 @@ describe("project action hardening", () => {
       "project.saveSettings",
       "project.detectRunners",
       "project.getStats",
+      "project.cloneRepo",
       "project.settings.open",
     ]);
   });
