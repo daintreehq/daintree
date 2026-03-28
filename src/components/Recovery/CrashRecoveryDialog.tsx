@@ -357,7 +357,7 @@ export function CrashRecoveryDialog({
                   {copied
                     ? "Copied!"
                     : privacyWarningShown
-                      ? "Copy & open GitHub"
+                      ? "Copy & report on GitHub"
                       : "Report this crash"}
                 </Button>
               </div>
@@ -367,7 +367,8 @@ export function CrashRecoveryDialog({
                   className="text-xs text-status-warning/90 bg-status-warning/10 rounded px-2 py-1.5"
                   data-testid="privacy-warning"
                 >
-                  Crash info may include file paths. Click again to copy and open GitHub Issues.
+                  Crash info may include file paths. Click again to copy to clipboard and open
+                  GitHub Issues. You'll need to paste the info into the form.
                 </p>
               )}
             </div>

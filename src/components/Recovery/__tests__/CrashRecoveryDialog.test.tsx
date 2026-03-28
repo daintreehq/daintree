@@ -292,6 +292,11 @@ describe("CrashRecoveryDialog", () => {
     fireEvent.click(screen.getByTestId("details-toggle"));
     fireEvent.click(screen.getByTestId("report-button"));
     expect(screen.getByTestId("privacy-warning")).toBeTruthy();
+    expect(screen.getByTestId("privacy-warning").textContent).toContain("copy to clipboard");
+    expect(screen.getByTestId("privacy-warning").textContent).toContain(
+      "You'll need to paste the info into the form"
+    );
+    expect(screen.getByTestId("report-button").textContent).toContain("Copy & report on GitHub");
 
     fireEvent.click(screen.getByTestId("report-button"));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
