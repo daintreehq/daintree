@@ -12,6 +12,8 @@ const GIT_WORKTREE_CHANGES_CACHE = new Cache<string, WorktreeChanges>({
   defaultTTL: 15000, // 15s to cover 10s background polling + margin
 });
 
+const inFlightWorktreeChanges = new Map<string, Promise<WorktreeChanges>>();
+
 export function invalidateWorktreeCache(cwd: string): void {
   GIT_WORKTREE_CHANGES_CACHE.invalidate(cwd);
 }
@@ -197,20 +199,25 @@ export async function getWorktreeChangesWithStats(
         changes: cached.changes.map((change) => ({ ...change })),
       };
     }
-  }
 
-  const MAX_FILES_FOR_NUMSTAT = 100;
-  try {
-    await fs.access(cwd);
-  } catch (accessError) {
-    const nodeError = accessError as NodeJS.ErrnoException;
-    if (nodeError.code === "ENOENT") {
-      throw new WorktreeRemovedError(cwd, nodeError);
+    const inFlight = inFlightWorktreeChanges.get(cwd);
+    if (inFlight) {
+      return inFlight;
     }
-    throw accessError;
   }
 
-  try {
+  const fetchPromise = (async () => {
+    const MAX_FILES_FOR_NUMSTAT = 100;
+    try {
+      await fs.access(cwd);
+    } catch (accessError) {
+      const nodeError = accessError as NodeJS.ErrnoException;
+      if (nodeError.code === "ENOENT") {
+        throw new WorktreeRemovedError(cwd, nodeError);
+      }
+      throw accessError;
+    }
+
     const git: SimpleGit = createHardenedGit(cwd);
     const status: StatusResult = await git.status();
     const gitRoot = realpathSync((await git.revparse(["--show-toplevel"])).trim());
@@ -425,6 +432,14 @@ export async function getWorktreeChangesWithStats(
 
     GIT_WORKTREE_CHANGES_CACHE.set(cwd, result, cacheTTL);
     return result;
+  })();
+
+  if (!forceRefresh) {
+    inFlightWorktreeChanges.set(cwd, fetchPromise);
+  }
+
+  try {
+    return await fetchPromise;
   } catch (error) {
     if (error instanceof WorktreeRemovedError) {
       throw error;
@@ -444,5 +459,9 @@ export async function getWorktreeChangesWithStats(
     const gitError = new GitError("Failed to get git worktree changes", { cwd }, cause);
     logError("Git worktree changes operation failed", gitError, { cwd });
     throw gitError;
+  } finally {
+    if (inFlightWorktreeChanges.get(cwd) === fetchPromise) {
+      inFlightWorktreeChanges.delete(cwd);
+    }
   }
 }
