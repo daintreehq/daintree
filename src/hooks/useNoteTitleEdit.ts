@@ -73,7 +73,7 @@ export function useNoteTitleEdit({
   const handleRenameNote = useCallback(
     async (note: NoteListItem, newTitle: string) => {
       const trimmedTitle = newTitle.trim();
-      if (!trimmedTitle || trimmedTitle === note.title) {
+      if (trimmedTitle === note.title) {
         setEditingNoteId(null);
         return;
       }
@@ -130,7 +130,7 @@ export function useNoteTitleEdit({
     }
 
     const trimmedTitle = headerTitleEdit.trim();
-    if (!trimmedTitle || trimmedTitle === selectedNote.title) {
+    if (trimmedTitle === selectedNote.title) {
       setIsEditingHeaderTitle(false);
       return;
     }

@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { getNoteDisplayTitle } from "@/lib/noteTitleDisplay";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import type { NoteListItem as NoteListItemType } from "@/clients/notesClient";
 import type { UseNoteTitleEditReturn } from "@/hooks/useNoteTitleEdit";
@@ -51,7 +52,8 @@ export function NoteListItemRow({
           <input
             ref={isEditing ? titleEdit.titleInputRef : null}
             type="text"
-            value={isEditing ? titleEdit.editingTitle : note.title}
+            value={isEditing ? titleEdit.editingTitle : getNoteDisplayTitle(note)}
+            placeholder="Untitled"
             readOnly={!isEditing}
             onChange={(e) => {
               if (isEditing) titleEdit.setEditingTitle(e.target.value);

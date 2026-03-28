@@ -1,12 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { NoteListItem, NoteMetadata } from "@/clients/notesClient";
 
-const DEFAULT_TITLE_PATTERN = /^Note \d{1,2}\/\d{1,2}\/\d{4}( \(\d+\))?$/;
-
-export function isDefaultTitle(title: string): boolean {
-  return DEFAULT_TITLE_PATTERN.test(title);
-}
-
 interface UseNoteActionsOptions {
   isOpen: boolean;
   notes: NoteListItem[];
@@ -187,7 +181,7 @@ export function useNoteActions({
 
   const shouldAutoDelete = useCallback((note: NoteListItem | null, content: string): boolean => {
     if (!note) return false;
-    return !content.trim() && isDefaultTitle(note.title);
+    return !content.trim() && !note.title.trim();
   }, []);
 
   const deleteIfAutoDeleteable = useCallback(
@@ -228,20 +222,7 @@ export function useNoteActions({
   const handleCreateNote = useCallback(
     async (customTitle?: string) => {
       try {
-        let noteTitle: string;
-
-        if (customTitle) {
-          noteTitle = customTitle.trim();
-        } else {
-          const baseTitle = `Note ${new Date().toLocaleDateString()}`;
-          noteTitle = baseTitle;
-          let suffix = 1;
-          const existingTitles = new Set(notes.map((n) => n.title));
-          while (existingTitles.has(noteTitle)) {
-            suffix++;
-            noteTitle = `${baseTitle} (${suffix})`;
-          }
-        }
+        const noteTitle = customTitle ? customTitle.trim() : "";
 
         const content = await createNote(noteTitle, "project");
         setQuery("");
@@ -274,7 +255,6 @@ export function useNoteActions({
       }
     },
     [
-      notes,
       createNote,
       refresh,
       setLastSelectedNoteId,

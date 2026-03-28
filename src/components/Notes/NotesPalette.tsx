@@ -46,6 +46,7 @@ import { useNoteTitleEdit } from "@/hooks/useNoteTitleEdit";
 import { useNoteActions } from "@/hooks/useNoteActions";
 import { NoteListItemRow } from "./NoteListItem";
 import { NotesPaletteFooter } from "./NotesPaletteFooter";
+import { getNoteDisplayTitle } from "@/lib/noteTitleDisplay";
 
 interface NotesPaletteProps {
   isOpen: boolean;
@@ -110,7 +111,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       try {
         await addTerminal({
           kind: "notes",
-          title: selectedNote.title,
+          title: getNoteDisplayTitle(selectedNote),
           cwd: "",
           worktreeId: activeWorktreeId ?? undefined,
           notePath: selectedNote.path,
@@ -397,8 +398,9 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                               value={
                                 titleEdit.isEditingHeaderTitle
                                   ? titleEdit.headerTitleEdit
-                                  : selectedNote.title
+                                  : getNoteDisplayTitle(selectedNote)
                               }
+                              placeholder="Untitled"
                               readOnly={!titleEdit.isEditingHeaderTitle}
                               onChange={(e) => {
                                 if (titleEdit.isEditingHeaderTitle)
@@ -597,7 +599,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       <ConfirmDialog
         isOpen={!!actions.deleteConfirmNote}
         title="Delete Note"
-        description={`Are you sure you want to delete "${actions.deleteConfirmNote?.title}"? This action cannot be undone.`}
+        description={`Are you sure you want to delete "${actions.deleteConfirmNote ? getNoteDisplayTitle(actions.deleteConfirmNote) : ""}"? This action cannot be undone.`}
         confirmLabel="Delete"
         cancelLabel="Cancel"
         variant="destructive"
