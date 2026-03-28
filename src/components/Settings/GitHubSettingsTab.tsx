@@ -207,6 +207,8 @@ export function GitHubSettingsTab() {
               placeholder={
                 githubConfig?.hasToken ? "Enter new token to replace" : "ghp_... or github_pat_..."
               }
+              aria-label="GitHub personal access token"
+              autoComplete="new-password"
               className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors"
               disabled={isValidating || isTesting}
             />
@@ -215,13 +217,15 @@ export function GitHubSettingsTab() {
               disabled={isTesting || isValidating || !githubToken.trim()}
               variant="outline"
               size="sm"
+              aria-label="Test token"
+              aria-busy={isTesting}
               className="min-w-[70px] text-canopy-text border-canopy-border hover:bg-canopy-border"
             >
               {isTesting ? (
-                <Loader2 className="animate-spin" />
+                <Loader2 className="animate-spin" aria-hidden="true" />
               ) : (
                 <>
-                  <FlaskConical />
+                  <FlaskConical aria-hidden="true" />
                   Test
                 </>
               )}
@@ -230,9 +234,11 @@ export function GitHubSettingsTab() {
               onClick={handleSaveToken}
               disabled={isValidating || isTesting || !githubToken.trim()}
               size="sm"
+              aria-label="Save token"
+              aria-busy={isValidating}
               className="min-w-[70px]"
             >
-              {isValidating ? <Loader2 className="animate-spin" /> : "Save"}
+              {isValidating ? <Loader2 className="animate-spin" aria-hidden="true" /> : "Save"}
             </Button>
             {githubConfig?.hasToken && (
               <Button
