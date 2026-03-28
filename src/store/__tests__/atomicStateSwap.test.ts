@@ -203,7 +203,10 @@ describe("atomic swap: detach then clear sequence", () => {
   it("detachTerminalsForProjectSwitch is a no-op with empty terminals", () => {
     useTerminalStore.getState().detachTerminalsForProjectSwitch();
 
-    expect(terminalInstanceService.suppressResizesDuringProjectSwitch).toHaveBeenCalledWith([], 10_000);
+    expect(terminalInstanceService.suppressResizesDuringProjectSwitch).toHaveBeenCalledWith(
+      [],
+      10_000
+    );
     expect(terminalInstanceService.detachForProjectSwitch).not.toHaveBeenCalled();
     expect(useTerminalStore.getState().terminals).toEqual([]);
   });
