@@ -37,8 +37,10 @@ interface UseNoteActionsOptions {
   setIsEditingHeaderTitle: (v: boolean) => void;
   setHeaderTitleEdit: (title: string) => void;
   headerTitleInputRef: React.RefObject<HTMLInputElement | null>;
+  // Flush + content access from editor
+  flushSave: () => Promise<void>;
+  getLatestContent: () => string;
   // Current state from hooks
-  noteContent: string;
   editingNoteId: string | null;
   isEditingHeaderTitle: boolean;
   showCreateItem: boolean;
@@ -85,7 +87,8 @@ export function useNoteActions({
   setIsEditingHeaderTitle,
   setHeaderTitleEdit,
   headerTitleInputRef,
-  noteContent,
+  flushSave,
+  getLatestContent,
   editingNoteId,
   isEditingHeaderTitle,
   selectedNote,
@@ -136,21 +139,17 @@ export function useNoteActions({
     if (lastSelectedNoteId) {
       const noteToRestore = visibleNotes.find((n) => n.id === lastSelectedNoteId);
       if (noteToRestore) {
-        if (isDefaultTitle(noteToRestore.title) && !noteToRestore.preview) {
-          setLastSelectedNoteId(null);
-        } else {
-          const index = visibleNotes.indexOf(noteToRestore);
-          setSelectedNote(noteToRestore);
-          setSelectedIndex(index >= 0 ? index : 0);
-          hasRestoredRef.current = true;
-          return;
-        }
+        const index = visibleNotes.indexOf(noteToRestore);
+        setSelectedNote(noteToRestore);
+        setSelectedIndex(index >= 0 ? index : 0);
+        hasRestoredRef.current = true;
+        return;
       } else {
         setLastSelectedNoteId(null);
       }
     }
 
-    const fallback = visibleNotes.find((n) => !(isDefaultTitle(n.title) && !n.preview));
+    const fallback = visibleNotes[0];
     if (fallback) {
       const idx = visibleNotes.indexOf(fallback);
       setSelectedNote(fallback);
@@ -209,15 +208,21 @@ export function useNoteActions({
   const handleSelectNote = useCallback(
     async (note: NoteListItem, index: number) => {
       if (selectedNote && selectedNote.id !== note.id) {
-        await deleteIfAutoDeleteable(selectedNote, noteContent);
+        await flushSave();
+        await deleteIfAutoDeleteable(selectedNote, getLatestContent());
       }
       setSelectedNote(note);
       setSelectedIndex(index);
-      if (!isDefaultTitle(note.title) || note.preview) {
-        setLastSelectedNoteId(note.id);
-      }
+      setLastSelectedNoteId(note.id);
     },
-    [selectedNote, noteContent, deleteIfAutoDeleteable, setLastSelectedNoteId, setSelectedNote]
+    [
+      selectedNote,
+      flushSave,
+      getLatestContent,
+      deleteIfAutoDeleteable,
+      setLastSelectedNoteId,
+      setSelectedNote,
+    ]
   );
 
   const handleCreateNote = useCallback(
@@ -362,9 +367,11 @@ export function useNoteActions({
           if (selectedNote) {
             e.preventDefault();
             e.stopPropagation();
-            deleteIfAutoDeleteable(selectedNote, noteContent).then(() => {
-              setSelectedNote(null);
-            });
+            flushSave()
+              .then(() => deleteIfAutoDeleteable(selectedNote, getLatestContent()))
+              .then(() => {
+                setSelectedNote(null);
+              });
           }
           break;
       }
@@ -375,7 +382,8 @@ export function useNoteActions({
       visibleNotes,
       selectedIndex,
       selectedNote,
-      noteContent,
+      flushSave,
+      getLatestContent,
       showCreateItem,
       trimmedQuery,
       handleCreateNote,
@@ -387,10 +395,11 @@ export function useNoteActions({
 
   const handleClose = useCallback(async () => {
     if (selectedNote) {
-      await deleteIfAutoDeleteable(selectedNote, noteContent);
+      await flushSave();
+      await deleteIfAutoDeleteable(selectedNote, getLatestContent());
     }
     onClose();
-  }, [selectedNote, noteContent, deleteIfAutoDeleteable, onClose]);
+  }, [selectedNote, flushSave, getLatestContent, deleteIfAutoDeleteable, onClose]);
 
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
