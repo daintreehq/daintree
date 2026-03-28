@@ -94,6 +94,20 @@ const signalShutdownMock = vi.hoisted(() => ({
 
 vi.mock("../signalShutdownState.js", () => signalShutdownMock);
 
+const dbMaintenanceMock = vi.hoisted(() => ({
+  dispose: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("../../services/DatabaseMaintenanceService.js", () => ({
+  getDatabaseMaintenanceService: vi.fn(() => dbMaintenanceMock),
+}));
+
+const closeSharedDbMock = vi.hoisted(() => ({
+  closeSharedDb: vi.fn(),
+}));
+
+vi.mock("../../services/persistence/db.js", () => closeSharedDbMock);
+
 const isSmokeTestMock = vi.hoisted(() => ({ value: false }));
 
 vi.mock("../../setup/environment.js", () => ({
@@ -267,6 +281,72 @@ describe("registerShutdownHandler", () => {
 
     await vi.waitFor(() => {
       expect(appMock.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  describe("SQLite connection close", () => {
+    it("calls closeSharedDb after DatabaseMaintenanceService.dispose", async () => {
+      const callOrder: string[] = [];
+      dbMaintenanceMock.dispose.mockImplementation(async () => {
+        callOrder.push("dispose");
+      });
+      closeSharedDbMock.closeSharedDb.mockImplementation(() => {
+        callOrder.push("closeSharedDb");
+      });
+
+      const { beforeQuitCb } = await setup({
+        getMainWindow: vi.fn(() => null),
+      });
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(callOrder).toEqual(["dispose", "closeSharedDb"]);
+    });
+
+    it("still calls closeSharedDb and exits when dispose fails", async () => {
+      dbMaintenanceMock.dispose.mockRejectedValue(new Error("dispose boom"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { beforeQuitCb } = await setup({
+        getMainWindow: vi.fn(() => null),
+      });
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(closeSharedDbMock.closeSharedDb).toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[MAIN] Database maintenance dispose failed:",
+        expect.any(Error)
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("still exits when closeSharedDb throws", async () => {
+      closeSharedDbMock.closeSharedDb.mockImplementation(() => {
+        throw new Error("close boom");
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { beforeQuitCb } = await setup({
+        getMainWindow: vi.fn(() => null),
+      });
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[MAIN] Failed to close SQLite connection:",
+        expect.any(Error)
+      );
+      warnSpy.mockRestore();
     });
   });
 

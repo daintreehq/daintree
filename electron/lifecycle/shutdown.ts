@@ -17,6 +17,7 @@ import { mcpServerService } from "../services/McpServerService.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
+import { closeSharedDb } from "../services/persistence/db.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { isSignalShutdown } from "./signalShutdownState.js";
 
@@ -187,6 +188,12 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           await getDatabaseMaintenanceService().dispose();
         } catch (error) {
           console.warn("[MAIN] Database maintenance dispose failed:", error);
+        }
+
+        try {
+          closeSharedDb();
+        } catch (error) {
+          console.warn("[MAIN] Failed to close SQLite connection:", error);
         }
       });
 
