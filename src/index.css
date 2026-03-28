@@ -1915,6 +1915,10 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-radius: var(--radius-md);
   }
 
+  webview {
+    color-scheme: normal;
+  }
+
   [data-dragging="true"] webview,
   [data-dragging="true"] iframe {
     pointer-events: none !important;
