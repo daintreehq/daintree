@@ -176,21 +176,21 @@ describe("useWorktreeStatus — branchLabel", () => {
     };
   }
 
-  it("returns 'name [branch]' for main worktree on standard branch (main)", () => {
+  it("returns branch name for main worktree on standard branch (main)", () => {
     const s = getStatus({ isMainWorktree: true, name: "canopy", branch: "main" });
-    expect(s.branchLabel).toBe("canopy [main]");
+    expect(s.branchLabel).toBe("main");
     expect(s.isMainOnStandardBranch).toBe(true);
   });
 
-  it("returns 'name [branch]' for main worktree on standard branch (develop)", () => {
+  it("returns branch name for main worktree on standard branch (develop)", () => {
     const s = getStatus({ isMainWorktree: true, name: "canopy", branch: "develop" });
-    expect(s.branchLabel).toBe("canopy [develop]");
+    expect(s.branchLabel).toBe("develop");
     expect(s.isMainOnStandardBranch).toBe(true);
   });
 
   it("handles case-insensitive standard branch matching", () => {
     const s = getStatus({ isMainWorktree: true, name: "canopy", branch: "Develop" });
-    expect(s.branchLabel).toBe("canopy [Develop]");
+    expect(s.branchLabel).toBe("Develop");
     expect(s.isMainOnStandardBranch).toBe(true);
   });
 
@@ -238,7 +238,7 @@ describe("useWorktreeStatus — branchLabel", () => {
   it("recognizes master and dev as standard branches", () => {
     for (const branch of ["master", "dev"]) {
       const s = getStatus({ isMainWorktree: true, name: "canopy", branch });
-      expect(s.branchLabel).toBe(`canopy [${branch}]`);
+      expect(s.branchLabel).toBe(branch);
       expect(s.isMainOnStandardBranch).toBe(true);
     }
   });
