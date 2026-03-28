@@ -120,7 +120,7 @@ export function useNoteSearch({
     if (cached) {
       setSearchResults(cached.notes);
       setIsSearching(false);
-    } else {
+    } else if (searchResults.length === 0) {
       setIsSearching(true);
     }
 

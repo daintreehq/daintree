@@ -248,7 +248,7 @@ describe("useNoteSearch", () => {
     expect(notesClient.search).toHaveBeenCalledWith("");
   });
 
-  it("shows loading state for uncached query", async () => {
+  it("keeps stale results visible for uncached query (no loading flash)", async () => {
     const notes = [makeNote()];
     vi.mocked(notesClient.search).mockResolvedValue({ notes, query: "" });
 
@@ -259,20 +259,40 @@ describe("useNoteSearch", () => {
       await vi.advanceTimersByTimeAsync(150);
     });
     expect(result.current.isSearching).toBe(false);
+    expect(result.current.searchResults).toEqual(notes);
 
-    // Change to a new uncached query
+    // Change to a new uncached query — stale results should remain visible
     vi.mocked(notesClient.search).mockResolvedValue({ notes: [], query: "new-query" });
     await act(async () => {
       result.current.setQuery("new-query");
     });
 
-    // Should show loading for the new uncached query
+    // Stale results visible, no loading flash
+    expect(result.current.isSearching).toBe(false);
+    expect(result.current.searchResults).toEqual(notes);
+
+    // After revalidation, new results replace stale ones
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    expect(result.current.isSearching).toBe(false);
+    expect(result.current.searchResults).toEqual([]);
+  });
+
+  it("shows loading state on initial open with empty cache", async () => {
+    vi.mocked(notesClient.search).mockResolvedValue({ notes: [makeNote()], query: "" });
+
+    const { result } = renderHook(() => useNoteSearch(defaultProps()));
+
+    // First open with cold cache — should show loading
     expect(result.current.isSearching).toBe(true);
+    expect(result.current.searchResults).toEqual([]);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(150);
     });
     expect(result.current.isSearching).toBe(false);
+    expect(result.current.searchResults).toHaveLength(1);
   });
 
   it("background revalidation updates results in-place", async () => {
@@ -339,7 +359,53 @@ describe("useNoteSearch", () => {
     vi.mocked(notesClient.search).mockClear();
     rerender({ ...props, isOpen: true });
 
-    // Cache was cleared, so should show loading again
-    expect(result.current.isSearching).toBe(true);
+    // Cache was cleared but stale results still in state — no loading flash
+    expect(result.current.isSearching).toBe(false);
+  });
+
+  it("keeps stale results visible during background revalidation after onUpdated", async () => {
+    let onUpdatedCallback: ((payload: NoteUpdatedPayload) => void) | null = null;
+    vi.mocked(notesClient.onUpdated).mockImplementation((cb) => {
+      onUpdatedCallback = cb;
+      return vi.fn();
+    });
+
+    const originalNotes = [makeNote({ id: "original" })];
+    vi.mocked(notesClient.search).mockResolvedValue({ notes: originalNotes, query: "" });
+
+    const props = defaultProps();
+    const { result, rerender } = renderHook(
+      (p: ReturnType<typeof defaultProps>) => useNoteSearch(p),
+      { initialProps: props }
+    );
+
+    // Initial load
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    expect(result.current.searchResults).toEqual(originalNotes);
+    expect(result.current.isSearching).toBe(false);
+
+    // Trigger onUpdated — clears cache and calls refresh
+    const updatedNotes = [makeNote({ id: "updated" })];
+    vi.mocked(notesClient.search).mockResolvedValue({ notes: updatedNotes, query: "" });
+
+    act(() => {
+      onUpdatedCallback?.({ notePath: "/notes/n1.md", title: "Test Note", action: "updated" });
+    });
+
+    // Simulate refresh by passing new notes prop
+    rerender({ ...props, notes: updatedNotes });
+
+    // Stale results should still be visible — no loading flash
+    expect(result.current.isSearching).toBe(false);
+    expect(result.current.searchResults).toEqual(originalNotes);
+
+    // After background revalidation, fresh results arrive
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    expect(result.current.searchResults).toEqual(updatedNotes);
+    expect(result.current.isSearching).toBe(false);
   });
 });
