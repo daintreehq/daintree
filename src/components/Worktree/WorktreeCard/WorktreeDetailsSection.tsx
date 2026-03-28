@@ -6,7 +6,8 @@ import { cn } from "@/lib/utils";
 import { ActivityLight } from "../ActivityLight";
 import { LiveTimeAgo } from "../LiveTimeAgo";
 import { WorktreeDetails } from "../WorktreeDetails";
-import { ChevronRight, GitCommitHorizontal, Loader2 } from "lucide-react";
+import { ChevronRight, GitCommitHorizontal } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import type { ComputedSubtitle } from "./hooks/useWorktreeStatus";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -108,7 +109,7 @@ export function WorktreeDetailsSection({
             <span className="text-xs truncate min-w-0 flex-1">
               {isLifecycleRunning && lifecycleLabel ? (
                 <span className="flex items-center gap-1.5 text-text-secondary">
-                  <Loader2 className="w-3 h-3 animate-spin shrink-0" aria-hidden="true" />
+                  <Spinner size="xs" className="shrink-0" />
                   <span className="truncate">{lifecycleLabel}</span>
                 </span>
               ) : lifecycleLabel &&

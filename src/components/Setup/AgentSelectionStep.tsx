@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { useAgentSettingsStore } from "@/store";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { AGENT_REGISTRY, AGENT_IDS } from "@/config/agents";
-import { TreeDeciduous, Loader2 } from "lucide-react";
+import { TreeDeciduous } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 
 const AGENT_DESCRIPTIONS: Record<string, string> = {
   claude: "Deep refactoring, architecture, and complex reasoning",
@@ -90,7 +91,7 @@ export function AgentSelectionStep({ isOpen, onContinue, onSkip }: AgentSelectio
 
           {isLoading ? (
             <div className="flex items-center justify-center py-8">
-              <Loader2 className="w-5 h-5 animate-spin text-canopy-text/40" />
+              <Spinner size="lg" className="text-canopy-text/40" />
             </div>
           ) : (
             <div className="space-y-2">

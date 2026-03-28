@@ -4,6 +4,7 @@ import { useHasBeenVisible } from "@/hooks/useHasBeenVisible";
 import { useWebviewEviction } from "@/hooks/useWebviewEviction";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { AlertTriangle, ExternalLink } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { useTerminalStore } from "@/store";
 import type { BrowserHistory } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
@@ -746,7 +747,7 @@ export function BrowserPane({
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
               {isLoading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg z-10">
-                  <div className="w-8 h-8 border-2 border-status-info border-t-transparent rounded-full animate-spin" />
+                  <Spinner size="2xl" className="text-status-info" />
                 </div>
               )}
               {findInPage.isOpen && <FindBar find={findInPage} />}

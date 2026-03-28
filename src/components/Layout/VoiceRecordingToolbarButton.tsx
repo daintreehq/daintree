@@ -1,4 +1,5 @@
-import { Loader2, Mic } from "lucide-react";
+import { Mic } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -72,7 +73,7 @@ export function VoiceRecordingToolbarButton({
             aria-label={tooltipTitle}
           >
             {status === "finishing" ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Spinner size="md" />
             ) : (
               <div className="relative">
                 <Mic className="h-4 w-4" />

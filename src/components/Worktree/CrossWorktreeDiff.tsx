@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { GitCompare, FileIcon, Loader2, AlertCircle } from "lucide-react";
+import { GitCompare, FileIcon, AlertCircle } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -198,7 +199,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           <div className="flex-1 overflow-y-auto">
             {loading && (
               <div className="flex items-center justify-center gap-2 p-6 text-text-muted text-sm">
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <Spinner size="md" />
                 Comparing…
               </div>
             )}
@@ -250,7 +251,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           )}
           {selectedFile && fileDiffLoading && (
             <div className="flex items-center justify-center gap-2 h-full text-text-muted text-sm">
-              <Loader2 className="w-4 h-4 animate-spin" />
+              <Spinner size="md" />
               Loading diff…
             </div>
           )}

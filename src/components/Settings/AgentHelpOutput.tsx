@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Copy, RefreshCw, Loader2 } from "lucide-react";
+import { Copy, RefreshCw } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { agentHelpClient } from "@/clients";
 import { cliAvailabilityClient } from "@/clients";
 import type { AgentHelpResult } from "@shared/types/ipc/agent";
@@ -192,7 +193,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
 
       {isLoading && (
         <div className="flex items-center justify-center py-8">
-          <Loader2 size={20} className="animate-spin text-canopy-text/40" />
+          <Spinner size="lg" className="text-canopy-text/40" />
         </div>
       )}
 
