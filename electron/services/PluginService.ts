@@ -25,7 +25,6 @@ export class PluginService {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
-    this.initialized = true;
 
     let entries: import("fs").Dirent[];
     try {
@@ -33,6 +32,7 @@ export class PluginService {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         console.log("[PluginService] No plugins directory found, skipping");
+        this.initialized = true;
         return;
       }
       throw err;
@@ -48,6 +48,7 @@ export class PluginService {
       }
     }
 
+    this.initialized = true;
     console.log(`[PluginService] Loaded ${loaded} plugin(s) from ${this.pluginsRoot}`);
   }
 
@@ -133,6 +134,11 @@ export class PluginService {
       }
     }
 
+    if (this.plugins.has(manifest.name)) {
+      console.warn(
+        `[PluginService] Duplicate plugin name "${manifest.name}" in ${dirName}, overwriting previous`
+      );
+    }
     this.plugins.set(manifest.name, plugin);
     return plugin;
   }

@@ -165,6 +165,7 @@ describe("PluginService", () => {
       name: "escape-test",
       version: "1.0.0",
       main: "../evil.js",
+      renderer: "dist/renderer.js",
     });
 
     const service = new PluginService(tmpDir);
@@ -172,8 +173,12 @@ describe("PluginService", () => {
 
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(1);
-    // resolvedMain should not be set since path escapes
-    expect(plugins[0]).not.toHaveProperty("resolvedMain");
+    // Valid renderer should be resolved, but escaping main should not
+    expect(plugins[0].resolvedRenderer).toBe(
+      path.join(tmpDir, "escape-test", "dist", "renderer.js")
+    );
+    // The plugin loads but main is silently rejected (no import attempted)
+    expect(plugins[0].manifest.main).toBe("../evil.js");
   });
 
   it("resolves valid renderer entry path", async () => {
@@ -207,5 +212,63 @@ describe("PluginService", () => {
     expect(plugins).toHaveLength(1);
     // listPlugins returns LoadedPluginInfo which doesn't have resolvedMain
     expect(Object.keys(plugins[0])).not.toContain("resolvedMain");
+  });
+
+  it("rejects manifest with empty name", async () => {
+    await writePlugin("empty-name", { name: "", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    expect(service.listPlugins()).toEqual([]);
+  });
+
+  it("rejects manifest with path-traversal name", async () => {
+    await writePlugin("evil-name", { name: "../evil", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    expect(service.listPlugins()).toEqual([]);
+  });
+
+  it("rejects panel with invalid ID characters", async () => {
+    await writePlugin("bad-panel", {
+      name: "bad-panel",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "../../hack", name: "Hack", iconId: "x", color: "#000" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    expect(service.listPlugins()).toEqual([]);
+  });
+
+  it("warns on duplicate plugin names and keeps the last one", async () => {
+    await writePlugin("dir-a", { name: "same-name", version: "1.0.0", description: "first" });
+    await writePlugin("dir-b", { name: "same-name", version: "2.0.0", description: "second" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(plugins[0].manifest.name).toBe("same-name");
+  });
+
+  it("allows retry after non-ENOENT initialize failure", async () => {
+    const badRoot = path.join(tmpDir, "unreadable");
+    await fs.mkdir(badRoot);
+    await writePlugin("good", { name: "good", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+
+    // First call succeeds
+    await service.initialize();
+    expect(service.listPlugins()).toHaveLength(1);
+
+    // Second call is no-op (already initialized)
+    await service.initialize();
+    expect(service.listPlugins()).toHaveLength(1);
   });
 });
