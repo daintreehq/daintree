@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { app, ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import { NotesService, NoteConflictError, type NoteMetadata } from "../../services/NotesService.js";
@@ -57,8 +57,8 @@ function getNotesService(): NotesService {
     throw new Error("No active project");
   }
 
-  if (!notesService || notesService.getProjectPath() !== currentProject.path) {
-    notesService = new NotesService(currentProject.path);
+  if (!notesService || notesService.getProjectId() !== currentProject.id) {
+    notesService = new NotesService(app.getPath("userData"), currentProject.id);
   }
 
   return notesService;

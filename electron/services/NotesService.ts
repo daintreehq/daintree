@@ -49,14 +49,16 @@ export class NoteConflictError extends Error {
 }
 
 export class NotesService {
-  private projectPath: string;
+  private userDataPath: string;
+  private projectId: string;
 
-  constructor(projectPath: string) {
-    this.projectPath = projectPath;
+  constructor(userDataPath: string, projectId: string) {
+    this.userDataPath = userDataPath;
+    this.projectId = projectId;
   }
 
   private getNotesDir(): string {
-    return path.join(this.projectPath, ".canopy", "notes");
+    return path.join(this.userDataPath, "notes", this.projectId);
   }
 
   private validatePath(notePath: string): string {
@@ -89,31 +91,6 @@ export class NotesService {
   async ensureNotesDir(): Promise<void> {
     const notesDir = this.getNotesDir();
     await fs.mkdir(notesDir, { recursive: true });
-    await this.ensureGitignore();
-  }
-
-  private async ensureGitignore(): Promise<void> {
-    const gitignorePath = path.join(this.projectPath, ".gitignore");
-    const canopyNotesEntry = ".canopy/notes/";
-
-    try {
-      let content = "";
-      try {
-        content = await fs.readFile(gitignorePath, "utf-8");
-      } catch {
-        // File doesn't exist, will create
-      }
-
-      if (!content.includes(canopyNotesEntry)) {
-        const newEntry =
-          content.endsWith("\n") || content === ""
-            ? `${canopyNotesEntry}\n`
-            : `\n${canopyNotesEntry}\n`;
-        await fs.appendFile(gitignorePath, newEntry, "utf-8");
-      }
-    } catch (error) {
-      console.error("[NotesService] Failed to update .gitignore:", error);
-    }
   }
 
   private extractPreview(content: string, maxLength: number = 100): string {
@@ -395,11 +372,7 @@ export class NotesService {
     await resilientUnlink(absolutePath);
   }
 
-  getProjectPath(): string {
-    return this.projectPath;
-  }
-
-  setProjectPath(projectPath: string): void {
-    this.projectPath = projectPath;
+  getProjectId(): string {
+    return this.projectId;
   }
 }

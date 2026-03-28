@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { NotesService, NoteConflictError, type NoteMetadata } from "../NotesService.js";
 
+const projectId = "test-project-id";
+
 function makeMetadata(overrides: Partial<NoteMetadata> = {}): NoteMetadata {
   return {
     id: "note-1",
@@ -15,27 +17,37 @@ function makeMetadata(overrides: Partial<NoteMetadata> = {}): NoteMetadata {
 }
 
 describe("NotesService", () => {
-  let projectDir: string;
+  let userDataDir: string;
   let service: NotesService;
 
   beforeEach(async () => {
-    projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-notes-service-"));
-    service = new NotesService(projectDir);
+    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-notes-service-"));
+    service = new NotesService(userDataDir, projectId);
   });
 
   afterEach(async () => {
-    await fs.rm(projectDir, { recursive: true, force: true });
+    await fs.rm(userDataDir, { recursive: true, force: true });
   });
 
-  it("adds .canopy/notes entry to .gitignore only once", async () => {
-    await service.create("First note", "project");
-    await service.create("Second note", "project");
+  it("stores notes under userData/notes/projectId, not in project directory", async () => {
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-project-"));
+    try {
+      await service.create("Test note", "project");
 
-    const gitignorePath = path.join(projectDir, ".gitignore");
-    const content = await fs.readFile(gitignorePath, "utf8");
-    const matches = content.match(/\.canopy\/notes\//g) ?? [];
+      const notesDir = path.join(userDataDir, "notes", projectId);
+      const files = await fs.readdir(notesDir);
+      expect(files.length).toBe(1);
+      expect(files[0]).toMatch(/\.md$/);
 
-    expect(matches).toHaveLength(1);
+      // Ensure no .canopy directory was created in any project-like dir
+      const canopyExists = await fs
+        .access(path.join(projectDir, ".canopy"))
+        .then(() => true)
+        .catch(() => false);
+      expect(canopyExists).toBe(false);
+    } finally {
+      await fs.rm(projectDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects mixed-separator traversal paths in write/read/delete", async () => {
@@ -98,7 +110,7 @@ describe("NotesService", () => {
 
   it("skips malformed note files during list/search without crashing", async () => {
     const created = await service.create("Search me", "project");
-    const notesDir = path.join(projectDir, ".canopy", "notes");
+    const notesDir = path.join(userDataDir, "notes", projectId);
     await fs.writeFile(path.join(notesDir, "bad.md"), "---\nfoo: [\n---\ncontent", "utf8");
 
     const listed = await service.list();
@@ -110,7 +122,7 @@ describe("NotesService", () => {
 
   it("skips files with invalid note metadata schema", async () => {
     const created = await service.create("Healthy note", "project");
-    const notesDir = path.join(projectDir, ".canopy", "notes");
+    const notesDir = path.join(userDataDir, "notes", projectId);
     await fs.writeFile(
       path.join(notesDir, "invalid-metadata.md"),
       "---\nid: invalid\nscope: project\ncreatedAt: nope\n---\nbody",
@@ -142,7 +154,7 @@ describe("NotesService", () => {
   });
 
   it("handles scalar string tags in YAML frontmatter", async () => {
-    const notesDir = path.join(projectDir, ".canopy", "notes");
+    const notesDir = path.join(userDataDir, "notes", projectId);
     await fs.mkdir(notesDir, { recursive: true });
     await fs.writeFile(
       path.join(notesDir, "scalar-tag.md"),
@@ -170,7 +182,7 @@ describe("NotesService", () => {
   });
 
   it("normalizes scalar tags when reading a note", async () => {
-    const notesDir = path.join(projectDir, ".canopy", "notes");
+    const notesDir = path.join(userDataDir, "notes", projectId);
     await fs.mkdir(notesDir, { recursive: true });
     await fs.writeFile(
       path.join(notesDir, "scalar-read.md"),
@@ -186,7 +198,7 @@ describe("NotesService", () => {
     const metadata = makeMetadata({ tags: [] });
     await service.write("no-tags.md", "body", metadata);
 
-    const raw = await fs.readFile(path.join(projectDir, ".canopy", "notes", "no-tags.md"), "utf8");
+    const raw = await fs.readFile(path.join(userDataDir, "notes", projectId, "no-tags.md"), "utf8");
     expect(raw).not.toContain("tags:");
   });
 });
