@@ -172,6 +172,18 @@ export interface OnboardingState {
   checklist: ChecklistState;
 }
 
+/** Serializable toast payload sent from main process to renderer via IPC. */
+export interface MainProcessToastPayload {
+  type: "success" | "error" | "info" | "warning";
+  title?: string;
+  message: string;
+  action?: {
+    label: string;
+    /** IPC channel to invoke when the action button is clicked */
+    ipcChannel: string;
+  };
+}
+
 // IPC Contract Maps
 
 /** Maps IPC channels to their args/result types for type-safe invoke/handle */
@@ -1775,6 +1787,7 @@ export interface IpcEventMap {
   // Notification events
   "notification:update": { waitingCount: number };
   "notification:watch-navigate": { panelId: string; panelTitle: string; worktreeId?: string };
+  "notification:show-toast": MainProcessToastPayload;
 
   // Auto-update events
   "update:available": { version: string };

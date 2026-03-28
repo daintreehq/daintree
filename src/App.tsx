@@ -39,6 +39,7 @@ import { useHibernationNotifications } from "./hooks/useHibernationNotifications
 import { useDiskSpaceWarnings } from "./hooks/useDiskSpaceWarnings";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { useUpdateListener } from "./hooks/useUpdateListener";
+import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener";
 import { useWorkflowListener } from "./hooks/useWorkflowListener";
 import { useActionPalette } from "./hooks/useActionPalette";
 import { useQuickSwitcher } from "./hooks/useQuickSwitcher";
@@ -1134,6 +1135,7 @@ function App() {
   useWatchedPanelNotifications();
   const reEntrySummary = useReEntrySummary();
   useUpdateListener();
+  useMainProcessToastListener();
   useWorkflowListener();
   useMcpBridge();
   const { homeDir } = useHomeDir();

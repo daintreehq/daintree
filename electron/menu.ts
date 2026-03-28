@@ -202,23 +202,31 @@ export function createApplicationMenu(
           click: async () => {
             try {
               const status = await CliInstallService.install();
-              await dialog.showMessageBox({
-                type: "info",
-                title: "CLI Installed",
-                message: "Canopy CLI installed successfully.",
-                detail: `The \`canopy\` command is now available at:\n${status.path}\n\nRun \`canopy .\` in any terminal to open that directory in Canopy.`,
-                buttons: ["OK"],
-              });
+              if (
+                mainWindow &&
+                !mainWindow.isDestroyed() &&
+                !mainWindow.webContents.isDestroyed()
+              ) {
+                mainWindow.webContents.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+                  type: "success",
+                  title: "CLI Installed",
+                  message: `The \`canopy\` command is now available at ${status.path}`,
+                });
+              }
               createApplicationMenu(mainWindow, cliAvailabilityService);
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);
-              await dialog.showMessageBox({
-                type: "error",
-                title: "CLI Installation Failed",
-                message: "Failed to install the Canopy CLI.",
-                detail: message,
-                buttons: ["OK"],
-              });
+              if (
+                mainWindow &&
+                !mainWindow.isDestroyed() &&
+                !mainWindow.webContents.isDestroyed()
+              ) {
+                mainWindow.webContents.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+                  type: "error",
+                  title: "CLI Installation Failed",
+                  message,
+                });
+              }
             }
           },
         },
