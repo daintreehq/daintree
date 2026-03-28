@@ -7,6 +7,7 @@ import {
   Download,
   Newspaper,
   ExternalLink,
+  GitBranch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CanopyIcon } from "@/components/icons";
@@ -35,6 +36,7 @@ const SHORTCUT_TIPS: { label: string; actionId: string }[] = [
 export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const addProject = useProjectStore((state) => state.addProject);
   const openCreateFolderDialog = useProjectStore((state) => state.openCreateFolderDialog);
+  const openCloneRepoDialog = useProjectStore((state) => state.openCloneRepoDialog);
 
   const projects = useProjectStore((state) => state.projects);
   const switchProject = useProjectStore((state) => state.switchProject);
@@ -101,6 +103,10 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
             <Button size="lg" variant="outline" onClick={openCreateFolderDialog}>
               <FolderPlus />
               Create Project
+            </Button>
+            <Button size="lg" variant="outline" onClick={openCloneRepoDialog}>
+              <GitBranch />
+              Clone Repository
             </Button>
             <Button
               size="lg"

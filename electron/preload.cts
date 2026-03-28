@@ -1186,6 +1186,22 @@ const api: ElectronAPI = {
       return () => ipcRenderer.removeListener(CHANNELS.PROJECT_INIT_GIT_PROGRESS, listener);
     },
 
+    cloneRepo: (
+      options: import("../shared/types/ipc/gitClone.js").CloneRepoOptions
+    ): Promise<import("../shared/types/ipc/gitClone.js").CloneRepoResult> =>
+      _unwrappingInvoke(CHANNELS.PROJECT_CLONE_REPO, options),
+
+    onCloneProgress: (
+      callback: (event: import("../shared/types/ipc/gitClone.js").CloneRepoProgressEvent) => void
+    ) => {
+      const listener = (
+        _event: unknown,
+        data: import("../shared/types/ipc/gitClone.js").CloneRepoProgressEvent
+      ) => callback(data);
+      ipcRenderer.on(CHANNELS.PROJECT_CLONE_PROGRESS, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.PROJECT_CLONE_PROGRESS, listener);
+    },
+
     getRecipes: (projectId: string): Promise<TerminalRecipe[]> =>
       _unwrappingInvoke(CHANNELS.PROJECT_GET_RECIPES, projectId),
 

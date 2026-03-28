@@ -14,6 +14,11 @@ import type {
   GitInitResult,
   GitInitProgressEvent,
 } from "@shared/types/ipc/gitInit";
+import type {
+  CloneRepoOptions,
+  CloneRepoResult,
+  CloneRepoProgressEvent,
+} from "@shared/types/ipc/gitClone";
 
 let inflight: Promise<Project | null> | null = null;
 let cachedResult: Project | null = null;
@@ -150,6 +155,14 @@ export const projectClient = {
 
   onInitGitProgress: (callback: (event: GitInitProgressEvent) => void): (() => void) => {
     return window.electron.project.onInitGitProgress(callback);
+  },
+
+  cloneRepo: (options: CloneRepoOptions): Promise<CloneRepoResult> => {
+    return window.electron.project.cloneRepo(options);
+  },
+
+  onCloneProgress: (callback: (event: CloneRepoProgressEvent) => void): (() => void) => {
+    return window.electron.project.onCloneProgress(callback);
   },
 
   getRecipes: (projectId: string): Promise<TerminalRecipe[]> => {

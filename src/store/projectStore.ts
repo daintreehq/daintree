@@ -41,6 +41,7 @@ interface ProjectState {
   onboardingWizardOpen: boolean;
   onboardingProjectId: string | null;
   createFolderDialogOpen: boolean;
+  cloneRepoDialogOpen: boolean;
 
   loadProjects: () => Promise<void>;
   getCurrentProject: () => Promise<void>;
@@ -68,6 +69,9 @@ interface ProjectState {
   openOnboardingWizard: (projectId: string) => void;
   openCreateFolderDialog: () => void;
   closeCreateFolderDialog: () => void;
+  openCloneRepoDialog: () => void;
+  closeCloneRepoDialog: () => void;
+  handleCloneSuccess: (clonedPath: string) => Promise<void>;
 }
 
 function getProjectOpenErrorMessage(error: unknown): string {
@@ -170,6 +174,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   onboardingWizardOpen: false,
   onboardingProjectId: null,
   createFolderDialogOpen: false,
+  cloneRepoDialogOpen: false,
   error: null,
 
   addProjectByPath: async (path) => {
@@ -848,6 +853,19 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   createProjectFolder: async (parentPath, folderName) => {
     const newFolderPath = await projectClient.createFolder(parentPath, folderName);
     await get().addProjectByPath(newFolderPath);
+  },
+
+  openCloneRepoDialog: () => {
+    set({ cloneRepoDialogOpen: true });
+  },
+
+  closeCloneRepoDialog: () => {
+    set({ cloneRepoDialogOpen: false });
+  },
+
+  handleCloneSuccess: async (clonedPath: string) => {
+    get().closeCloneRepoDialog();
+    await get().addProjectByPath(clonedPath);
   },
 });
 

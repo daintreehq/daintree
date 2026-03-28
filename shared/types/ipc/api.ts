@@ -103,6 +103,7 @@ import type { RetryAction, AppError, RetryProgressPayload } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
 import type { ProjectCloseResult, ProjectStats, BulkProjectStats } from "./project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
+import type { CloneRepoOptions, CloneRepoResult, CloneRepoProgressEvent } from "./gitClone.js";
 import type {
   RepositoryStats,
   ProjectHealthData,
@@ -407,6 +408,10 @@ export interface ElectronAPI {
     initGitGuided(options: GitInitOptions): Promise<GitInitResult>;
     /** Subscribe to git init progress events */
     onInitGitProgress(callback: (event: GitInitProgressEvent) => void): () => void;
+    /** Clone a git repository from a URL */
+    cloneRepo(options: CloneRepoOptions): Promise<CloneRepoResult>;
+    /** Subscribe to clone progress events */
+    onCloneProgress(callback: (event: CloneRepoProgressEvent) => void): () => void;
     getRecipes(projectId: string): Promise<TerminalRecipe[]>;
     saveRecipes(projectId: string, recipes: TerminalRecipe[]): Promise<void>;
     addRecipe(projectId: string, recipe: TerminalRecipe): Promise<void>;
