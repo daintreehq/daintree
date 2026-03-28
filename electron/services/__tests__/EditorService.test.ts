@@ -4,6 +4,11 @@ const fsMock = vi.hoisted(() => ({
   statSync: vi.fn<(path: string) => { isFile: () => boolean }>(),
 }));
 
+const execaMock = vi.hoisted(() => {
+  const fn = vi.fn();
+  return { execa: fn };
+});
+
 vi.mock("fs", () => ({
   default: fsMock,
   ...fsMock,
@@ -16,6 +21,10 @@ vi.mock("os", () => ({
 
 vi.mock("electron", () => ({
   shell: { openPath: vi.fn() },
+}));
+
+vi.mock("execa", () => ({
+  execa: execaMock.execa,
 }));
 
 const originalPlatform = process.platform;
@@ -199,5 +208,108 @@ describe("EditorService.discover", () => {
       expect(editor.available).toBe(false);
       expect(editor.executablePath).toBeUndefined();
     }
+  });
+});
+
+describe("EditorService.openFile", () => {
+  let originalPATH: string | undefined;
+  let originalVISUAL: string | undefined;
+  let originalEDITOR: string | undefined;
+
+  function makeChild(overrides: { throwOnCatch?: boolean } = {}) {
+    const child = {
+      unref: vi.fn(),
+      catch: vi.fn(),
+    };
+    if (overrides.throwOnCatch) {
+      execaMock.execa.mockImplementation(() => {
+        throw new Error("spawn ENOENT");
+      });
+    } else {
+      execaMock.execa.mockReturnValue(child);
+    }
+    return child;
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    originalPATH = process.env.PATH;
+    originalVISUAL = process.env.VISUAL;
+    originalEDITOR = process.env.EDITOR;
+    process.env.PATH = "";
+    delete process.env.VISUAL;
+    delete process.env.EDITOR;
+    fsMock.statSync.mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+    process.env.PATH = originalPATH;
+    if (originalVISUAL !== undefined) process.env.VISUAL = originalVISUAL;
+    else delete process.env.VISUAL;
+    if (originalEDITOR !== undefined) process.env.EDITOR = originalEDITOR;
+    else delete process.env.EDITOR;
+  });
+
+  async function loadOpenFile() {
+    const mod = await import("../EditorService.js");
+    return mod.openFile;
+  }
+
+  it("macOS fallback calls launchEditor with 'open' and suppresses async rejection", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const child = makeChild();
+
+    const openFile = await loadOpenFile();
+    await openFile("/absolute/path/file.ts");
+
+    expect(execaMock.execa).toHaveBeenCalledWith("open", ["/absolute/path/file.ts"], {
+      detached: true,
+      stdio: "ignore",
+      cleanup: false,
+    });
+    expect(child.unref).toHaveBeenCalled();
+    expect(child.catch).toHaveBeenCalledWith(expect.any(Function));
+
+    const { shell } = await import("electron");
+    expect(shell.openPath).not.toHaveBeenCalled();
+  });
+
+  it("macOS fallback falls through to shell.openPath when open throws", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    makeChild({ throwOnCatch: true });
+
+    const { shell } = await import("electron");
+    vi.mocked(shell.openPath).mockResolvedValue("");
+
+    const openFile = await loadOpenFile();
+    await openFile("/absolute/path/file.ts");
+
+    expect(shell.openPath).toHaveBeenCalledWith("/absolute/path/file.ts");
+  });
+
+  it("non-darwin skips macOS fallback and uses shell.openPath", async () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+
+    const { shell } = await import("electron");
+    vi.mocked(shell.openPath).mockResolvedValue("");
+
+    const openFile = await loadOpenFile();
+    await openFile("/absolute/path/file.ts");
+
+    expect(execaMock.execa).not.toHaveBeenCalledWith("open", expect.anything(), expect.anything());
+    expect(shell.openPath).toHaveBeenCalledWith("/absolute/path/file.ts");
+  });
+
+  it("rejects non-absolute paths before reaching execa or shell", async () => {
+    const openFile = await loadOpenFile();
+    await expect(openFile("relative/path.ts")).rejects.toThrow("Only absolute paths are allowed");
+    expect(execaMock.execa).not.toHaveBeenCalled();
+
+    const { shell } = await import("electron");
+    expect(shell.openPath).not.toHaveBeenCalled();
   });
 });
