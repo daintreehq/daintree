@@ -10,10 +10,6 @@ const ipcMainMock = vi.hoisted(() => ({
   removeHandler: vi.fn(),
 }));
 
-const dialogMock = vi.hoisted(() => ({
-  showMessageBox: vi.fn().mockResolvedValue({ response: 1 }),
-}));
-
 const windowMock = vi.hoisted(() => ({
   isDestroyed: vi.fn(() => false),
   webContents: {
@@ -48,7 +44,6 @@ vi.mock("../CrashRecoveryService.js", () => ({
 vi.mock("electron", () => ({
   app: appMock,
   ipcMain: ipcMainMock,
-  dialog: dialogMock,
 }));
 
 vi.mock("electron-updater", () => ({
@@ -83,7 +78,6 @@ describe("AutoUpdaterService", () => {
     fsMock.readFileSync.mockReturnValue("");
     autoUpdaterMock.checkForUpdatesAndNotify.mockResolvedValue(undefined);
     autoUpdaterMock.checkForUpdates.mockResolvedValue(undefined);
-    dialogMock.showMessageBox.mockResolvedValue({ response: 1 });
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -199,14 +193,12 @@ describe("AutoUpdaterService", () => {
       expect(() => autoUpdaterService.checkForUpdatesManually()).not.toThrow();
     });
 
-    it("shows up-to-date dialog on update-not-available for manual checks", async () => {
+    it("sends in-app toast on update-not-available for manual checks", () => {
       autoUpdaterService.checkForUpdatesManually();
       notAvailableHandler({});
 
-      await Promise.resolve();
-
-      expect(dialogMock.showMessageBox).toHaveBeenCalledWith(
-        expect.anything(),
+      expect(windowMock.webContents.send).toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
         expect.objectContaining({
           type: "info",
           title: "No Updates Available",
@@ -214,74 +206,50 @@ describe("AutoUpdaterService", () => {
       );
     });
 
-    it("does not show dialog on update-not-available for automatic checks", async () => {
-      // Do NOT call checkForUpdatesManually — simulate an automatic check
+    it("does not send toast on update-not-available for automatic checks", () => {
       notAvailableHandler({});
 
-      await Promise.resolve();
-
-      expect(dialogMock.showMessageBox).not.toHaveBeenCalled();
+      expect(windowMock.webContents.send).not.toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
+        expect.anything()
+      );
     });
 
-    it("shows error dialog with retry on error event for manual checks", async () => {
-      dialogMock.showMessageBox.mockResolvedValue({ response: 1 }); // Cancel
-
+    it("sends error toast with retry action on error event for manual checks", () => {
       autoUpdaterService.checkForUpdatesManually();
       errorHandler(new Error("network error"));
 
-      await Promise.resolve();
-
-      expect(dialogMock.showMessageBox).toHaveBeenCalledWith(
-        expect.anything(),
+      expect(windowMock.webContents.send).toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
         expect.objectContaining({
           type: "error",
           title: "Update Failed",
-          buttons: ["Retry", "Cancel"],
+          action: expect.objectContaining({
+            label: "Retry",
+            ipcChannel: CHANNELS.UPDATE_CHECK_FOR_UPDATES,
+          }),
         })
       );
-      // No renderer IPC — the native dialog is sufficient for manual errors
-      expect(windowMock.webContents.send).not.toHaveBeenCalledWith(
-        "update:error",
-        expect.anything()
-      );
     });
 
-    it("does not show error dialog for automatic check errors", async () => {
-      // Automatic check error — no manual flag
+    it("does not send error toast for automatic check errors", () => {
       errorHandler(new Error("network error"));
 
-      await Promise.resolve();
-
-      expect(dialogMock.showMessageBox).not.toHaveBeenCalled();
       expect(windowMock.webContents.send).not.toHaveBeenCalledWith(
-        "update:error",
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
         expect.anything()
       );
     });
 
-    it("retries when user clicks Retry in error dialog", async () => {
-      dialogMock.showMessageBox.mockResolvedValue({ response: 0 }); // Retry
-
+    it("resets isManualCheck flag when update-available fires", () => {
       autoUpdaterService.checkForUpdatesManually();
-      errorHandler(new Error("transient error"));
-
-      await Promise.resolve();
-
-      // checkForUpdates should have been called twice: once for the initial manual check,
-      // once more after clicking Retry
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(2);
-    });
-
-    it("resets isManualCheck flag when update-available fires", async () => {
-      autoUpdaterService.checkForUpdatesManually();
-      // Simulate update-available clearing the flag
       availableHandler({ version: "2.0.0" });
-      // Then a subsequent automatic not-available should NOT show dialog
       notAvailableHandler({});
 
-      await Promise.resolve();
-
-      expect(dialogMock.showMessageBox).not.toHaveBeenCalled();
+      expect(windowMock.webContents.send).not.toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
+        expect.anything()
+      );
     });
   });
 

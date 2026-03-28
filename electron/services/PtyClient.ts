@@ -25,7 +25,7 @@
  * - Multiple services need to interact (composition root in main.ts)
  */
 
-import { utilityProcess, UtilityProcess, dialog, app, MessagePortMain } from "electron";
+import { utilityProcess, UtilityProcess, app, MessagePortMain } from "electron";
 import { EventEmitter } from "events";
 import path from "path";
 import os from "os";
@@ -121,29 +121,6 @@ function classifyCrash(code: number | null, signal: string | null): CrashType {
     return "UNKNOWN_CRASH";
   }
   return "CLEAN_EXIT";
-}
-
-function getCrashMessage(crashType: CrashType, code: number | null): string {
-  switch (crashType) {
-    case "OUT_OF_MEMORY":
-      return (
-        `The terminal backend crashed due to memory exhaustion (code ${code}). ` +
-        `This can happen with high-throughput terminal output. ` +
-        `Consider reducing output volume or splitting tasks.`
-      );
-    case "ASSERTION_FAILURE":
-      return (
-        `The terminal backend crashed due to an internal assertion failure (code ${code}). ` +
-        `This may indicate a bug. Please report this issue.`
-      );
-    case "SIGNAL_TERMINATED":
-      return (
-        `The terminal backend was terminated by a signal (code ${code}). ` +
-        `Terminals may need to be restarted.`
-      );
-    default:
-      return `The terminal backend crashed (code ${code}). Terminals may need to be restarted.`;
-  }
 }
 
 export class PtyClient extends EventEmitter {
@@ -408,18 +385,6 @@ export class PtyClient extends EventEmitter {
       } else {
         console.error("[PtyClient] Max restart attempts reached, giving up");
         this.emit("host-crash", code);
-
-        if (this.config.showCrashDialog) {
-          const crashMessage = getCrashMessage(crashType, code);
-          dialog
-            .showMessageBox({
-              type: "error",
-              title: "Terminal Service Crashed",
-              message: crashMessage,
-              buttons: ["OK"],
-            })
-            .catch(console.error);
-        }
       }
     });
 
