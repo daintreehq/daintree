@@ -107,6 +107,19 @@ exports.default = async function afterPack(context) {
     console.log(`[afterPack] Native binary verified: ${nativeBinaryPath}`);
 
     if (electronPlatformName === "darwin") {
+      // Inject pre-compiled Assets.car for macOS 26+ Liquid Glass icon.
+      // The .car was compiled from build/AppIcon.icon via actool on a machine
+      // with Xcode 26, so CI runners don't need Xcode installed.
+      const assetsCar = path.join(__dirname, "..", "build", "icon-compiled", "Assets.car");
+      if (fs.existsSync(assetsCar)) {
+        const resourcesDir = path.join(appOutDir, `${appName}.app`, "Contents/Resources");
+        const dest = path.join(resourcesDir, "Assets.car");
+        fs.copyFileSync(assetsCar, dest);
+        console.log(`[afterPack] Injected Assets.car into ${dest}`);
+      } else {
+        console.log("[afterPack] No pre-compiled Assets.car found, skipping Liquid Glass icon");
+      }
+
       console.log("[afterPack] Native modules will be signed during code signing phase");
     }
   }
