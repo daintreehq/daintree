@@ -137,4 +137,140 @@ describe("CliInstallService", () => {
       path: "/usr/local/bin/canopy",
     });
   });
+
+  describe("AppImage mode (Linux)", () => {
+    const APPIMAGE_PATH = "/home/test/Canopy-x86_64.AppImage";
+    const WRAPPER_DIR = "/home/test/.local/share/canopy";
+    const WRAPPER_PATH = path.join(WRAPPER_DIR, "canopy-cli.sh");
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "linux", writable: true });
+      process.env.APPIMAGE = APPIMAGE_PATH;
+      appMock.app.isPackaged = true;
+      fsMock.symlinkSync.mockReset();
+    });
+
+    afterEach(() => {
+      delete process.env.APPIMAGE;
+      delete process.env.XDG_DATA_HOME;
+    });
+
+    it("generates a stable wrapper and symlinks to it instead of the FUSE mount path", async () => {
+      fsMock.existsSync.mockImplementation(
+        (target) => target === WRAPPER_PATH || target === "/usr/local/bin"
+      );
+
+      const { install } = await import("../CliInstallService.js");
+      const result = await install();
+
+      expect(fsMock.mkdirSync).toHaveBeenCalledWith(WRAPPER_DIR, { recursive: true });
+      expect(fsMock.writeFileSync).toHaveBeenCalledWith(
+        WRAPPER_PATH,
+        expect.stringContaining(APPIMAGE_PATH),
+        { mode: 0o755 }
+      );
+      expect(fsMock.symlinkSync).toHaveBeenCalledWith(WRAPPER_PATH, "/usr/local/bin/canopy");
+      expect(result).toEqual({
+        installed: true,
+        upToDate: true,
+        path: "/usr/local/bin/canopy",
+      });
+    });
+
+    it("shell-escapes AppImage paths containing single quotes", async () => {
+      process.env.APPIMAGE = "/home/test/it's a Canopy.AppImage";
+      fsMock.existsSync.mockImplementation(
+        (target) => target === WRAPPER_PATH || target === "/usr/local/bin"
+      );
+
+      const { install } = await import("../CliInstallService.js");
+      await install();
+
+      const writeCall = fsMock.writeFileSync.mock.calls.find(
+        (call) => call[0] === WRAPPER_PATH
+      );
+      expect(writeCall).toBeDefined();
+      const content = writeCall![1] as string;
+      expect(content).toContain("it'\\''s a Canopy");
+    });
+
+    it("respects XDG_DATA_HOME override", async () => {
+      process.env.XDG_DATA_HOME = "/custom/data";
+      const customWrapperDir = "/custom/data/canopy";
+      const customWrapperPath = path.join(customWrapperDir, "canopy-cli.sh");
+
+      fsMock.existsSync.mockImplementation(
+        (target) => target === customWrapperPath || target === "/usr/local/bin"
+      );
+
+      const { install } = await import("../CliInstallService.js");
+      await install();
+
+      expect(fsMock.mkdirSync).toHaveBeenCalledWith(customWrapperDir, { recursive: true });
+      expect(fsMock.writeFileSync).toHaveBeenCalledWith(
+        customWrapperPath,
+        expect.stringContaining(APPIMAGE_PATH),
+        { mode: 0o755 }
+      );
+    });
+
+    it("reports up-to-date when symlink points to stable wrapper path", async () => {
+      fsMock.existsSync.mockImplementation(
+        (target) => target === "/usr/local/bin/canopy"
+      );
+      fsMock.lstatSync.mockImplementation((targetPath) => ({
+        isSymbolicLink: () => targetPath === "/usr/local/bin/canopy",
+      }));
+      fsMock.realpathSync.mockImplementation((targetPath) => {
+        if (targetPath === "/usr/local/bin/canopy") return WRAPPER_PATH;
+        return targetPath;
+      });
+
+      const { getStatus } = await import("../CliInstallService.js");
+      const status = getStatus();
+
+      expect(status).toEqual({
+        installed: true,
+        upToDate: true,
+        path: "/usr/local/bin/canopy",
+      });
+    });
+
+    it("does not use AppImage path when APPIMAGE env is not set (deb regression guard)", async () => {
+      delete process.env.APPIMAGE;
+
+      const PACKAGED_SOURCE = path.join("/mock-resources", "canopy-cli.sh");
+      Object.defineProperty(process, "resourcesPath", {
+        value: "/mock-resources",
+        writable: true,
+        configurable: true,
+      });
+      fsMock.existsSync.mockImplementation(
+        (target) => target === PACKAGED_SOURCE || target === "/usr/local/bin"
+      );
+
+      const { install } = await import("../CliInstallService.js");
+      const result = await install();
+
+      expect(fsMock.symlinkSync).toHaveBeenCalledWith(PACKAGED_SOURCE, "/usr/local/bin/canopy");
+      expect(result.path).toBe("/usr/local/bin/canopy");
+    });
+
+    it("wrapper content includes --cli-path argument forwarding", async () => {
+      fsMock.existsSync.mockImplementation(
+        (target) => target === WRAPPER_PATH || target === "/usr/local/bin"
+      );
+
+      const { install } = await import("../CliInstallService.js");
+      await install();
+
+      const writeCall = fsMock.writeFileSync.mock.calls.find(
+        (call) => call[0] === WRAPPER_PATH
+      );
+      const content = writeCall![1] as string;
+      expect(content).toContain("#!/usr/bin/env bash");
+      expect(content).toContain("--cli-path");
+      expect(content).toContain("set -euo pipefail");
+    });
+  });
 });
