@@ -45,6 +45,8 @@ export interface NotifyPayload {
   coalesce?: CoalesceOptions;
   /** When false, the history entry exists but does not increment the unread badge. Defaults to true. */
   countable?: boolean;
+  /** When true, the notification bypasses the startup quiet period gate */
+  urgent?: boolean;
 }
 
 interface CoalesceEntry {
@@ -57,6 +59,20 @@ const _activeCoalesced = new Map<string, CoalesceEntry>();
 
 export function _resetCoalesceMap(): void {
   _activeCoalesced.clear();
+}
+
+let _quietUntil = 0;
+
+export function setStartupQuietPeriod(durationMs: number): void {
+  _quietUntil = Date.now() + durationMs;
+}
+
+export function getQuietPeriodRemaining(): number {
+  return Math.max(0, _quietUntil - Date.now());
+}
+
+export function _setQuietUntil(ts: number): void {
+  _quietUntil = ts;
 }
 
 /**
@@ -97,6 +113,7 @@ export function notify(payload: NotifyPayload): string {
     }));
 
   const notificationsEnabled = useNotificationSettingsStore.getState().enabled;
+  const isQuiet = !payload.urgent && Date.now() < _quietUntil;
 
   if (placement === "grid-bar") {
     const entryId = historyMessage
@@ -105,12 +122,12 @@ export function notify(payload: NotifyPayload): string {
           title,
           message: historyMessage,
           correlationId,
-          seenAsToast: true,
+          seenAsToast: !isQuiet,
           countable: payload.countable,
           actions: historyActions.length > 0 ? historyActions : undefined,
         })
       : undefined;
-    if (!notificationsEnabled) return "";
+    if (!notificationsEnabled || isQuiet) return "";
     return useNotificationStore.getState().addNotification({
       ...payload,
       priority,
@@ -129,13 +146,13 @@ export function notify(payload: NotifyPayload): string {
         title,
         message: historyMessage,
         correlationId,
-        seenAsToast: notificationsEnabled && shouldToast,
+        seenAsToast: !isQuiet && notificationsEnabled && shouldToast,
         countable: payload.countable,
         actions: historyActions.length > 0 ? historyActions : undefined,
       })
     : undefined;
 
-  if (!notificationsEnabled) return "";
+  if (!notificationsEnabled || isQuiet) return "";
 
   if (shouldNative && historyMessage && typeof window !== "undefined") {
     window.electron?.notification?.showNative?.({

@@ -3,16 +3,30 @@ import { createPortal } from "react-dom";
 import { Download, RefreshCw, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUpdateStore } from "@/store/updateStore";
+import { getQuietPeriodRemaining } from "@/lib/notify";
 
 import { Button } from "@/components/ui/button";
 
 export function UpdateNotification() {
   const { status, version, progress, dismissed, dismiss } = useUpdateStore();
   const [isVisible, setIsVisible] = useState(false);
+  const [startupQuiet, setStartupQuiet] = useState(() => getQuietPeriodRemaining() > 0);
   const dismissTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  useEffect(() => {
+    const remaining = getQuietPeriodRemaining();
+    if (remaining <= 0) {
+      setStartupQuiet(false);
+      return;
+    }
+    const id = setTimeout(() => setStartupQuiet(false), remaining);
+    return () => clearTimeout(id);
+  }, []);
+
   const shouldShow =
-    !dismissed && (status === "available" || status === "downloading" || status === "downloaded");
+    !dismissed &&
+    !startupQuiet &&
+    (status === "available" || status === "downloading" || status === "downloaded");
 
   useEffect(() => {
     if (dismissTimerRef.current) {

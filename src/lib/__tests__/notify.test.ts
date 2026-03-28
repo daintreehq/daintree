@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { notify, _resetCoalesceMap } from "../notify";
+import { notify, _resetCoalesceMap, _setQuietUntil } from "../notify";
 import { useNotificationStore } from "../../store/notificationStore";
 import { useNotificationHistoryStore } from "../../store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "../../store/notificationSettingsStore";
@@ -21,6 +21,7 @@ describe("notify()", () => {
     useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
     useNotificationSettingsStore.setState({ enabled: true, hydrated: true });
     _resetCoalesceMap();
+    _setQuietUntil(0);
     mockShowNative.mockClear();
   });
 
@@ -635,6 +636,150 @@ describe("notify()", () => {
 
       expect(secondUpdatedAt).toBeDefined();
       expect(secondUpdatedAt).toBeGreaterThanOrEqual(firstUpdatedAt!);
+    });
+  });
+
+  describe("startup quiet period — suppresses toasts and native during boot", () => {
+    it("suppresses toast for focused + high during quiet period", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+      const now = 1000;
+      Date.now = () => now;
+      _setQuietUntil(6000);
+
+      notify({ type: "success", message: "Suppressed", priority: "high" });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      Date.now = realDateNow;
+    });
+
+    it("suppresses OS native notification for watch during quiet period", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+      Date.now = () => 1000;
+      _setQuietUntil(6000);
+
+      notify({ type: "warning", message: "Agent waiting", priority: "watch" });
+
+      expect(mockShowNative).not.toHaveBeenCalled();
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      Date.now = realDateNow;
+    });
+
+    it("still adds history entry during quiet period", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+      Date.now = () => 1000;
+      _setQuietUntil(6000);
+
+      notify({ type: "success", message: "Quiet entry", priority: "high" });
+
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+      expect(useNotificationHistoryStore.getState().entries[0].message).toBe("Quiet entry");
+      Date.now = realDateNow;
+    });
+
+    it("marks history as seenAsToast: false during quiet period", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+      Date.now = () => 1000;
+      _setQuietUntil(6000);
+
+      notify({ type: "success", message: "Unseen", priority: "high" });
+
+      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(false);
+      Date.now = realDateNow;
+    });
+
+    it("increments unreadCount during quiet period", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+      Date.now = () => 1000;
+      _setQuietUntil(6000);
+
+      notify({ type: "success", message: "Missed", priority: "high" });
+
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+      Date.now = realDateNow;
+    });
+
+    it("urgent: true bypasses the quiet period gate", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+      Date.now = () => 1000;
+      _setQuietUntil(6000);
+
+      notify({ type: "error", message: "PTY failed", priority: "high", urgent: true });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      Date.now = realDateNow;
+    });
+
+    it("resumes normal routing after quiet period expires", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+
+      Date.now = () => 1000;
+      _setQuietUntil(6000);
+      notify({ type: "success", message: "During quiet", priority: "high" });
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+
+      Date.now = () => 7000;
+      notify({ type: "success", message: "After quiet", priority: "high" });
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+
+      Date.now = realDateNow;
+    });
+
+    it("returns empty string during quiet period", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+      Date.now = () => 1000;
+      _setQuietUntil(6000);
+
+      const id = notify({ type: "success", message: "Quiet", priority: "high" });
+
+      expect(id).toBe("");
+      Date.now = realDateNow;
+    });
+
+    it("suppresses grid-bar placement during quiet period", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+      Date.now = () => 1000;
+      _setQuietUntil(6000);
+
+      notify({ type: "info", message: "Grid bar quiet", placement: "grid-bar" });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(false);
+      Date.now = realDateNow;
+    });
+
+    it("urgent grid-bar notifications bypass quiet period", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+      Date.now = () => 1000;
+      _setQuietUntil(6000);
+
+      notify({ type: "error", message: "Urgent bar", placement: "grid-bar", urgent: true });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      Date.now = realDateNow;
+    });
+
+    it("watch priority with urgent: true shows native during quiet period", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+      Date.now = () => 1000;
+      _setQuietUntil(6000);
+
+      notify({ type: "warning", message: "Urgent watch", priority: "watch", urgent: true });
+
+      expect(mockShowNative).toHaveBeenCalledOnce();
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      Date.now = realDateNow;
     });
   });
 });
