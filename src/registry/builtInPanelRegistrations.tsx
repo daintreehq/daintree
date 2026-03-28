@@ -3,7 +3,7 @@
  * Called once at app startup to register terminal, agent, browser, and notes panels.
  */
 import { Suspense, lazy } from "react";
-import { Loader2 } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { registerPanelComponent } from "./panelComponentRegistry";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -21,7 +21,7 @@ const LazyDevPreviewPane = lazy(() =>
 function PanelLoadingFallback() {
   return (
     <div className="flex h-full w-full items-center justify-center">
-      <Loader2 className="h-5 w-5 animate-spin text-canopy-text/30" />
+      <Spinner size="lg" className="text-canopy-text/30" />
     </div>
   );
 }

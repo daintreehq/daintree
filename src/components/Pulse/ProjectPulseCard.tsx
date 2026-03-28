@@ -4,7 +4,6 @@ import type { PulseRangeDays, ProjectPulse, ProjectHealthData } from "@shared/ty
 import { usePulseStore, useProjectStore } from "@/store";
 import { cn } from "@/lib/utils";
 import {
-  Loader2,
   AlertCircle,
   RefreshCw,
   Activity,
@@ -21,6 +20,7 @@ import {
   Github,
   WifiOff,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { PulseHeatmap } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
 import { useProjectHealth } from "@/hooks/useProjectHealth";
@@ -407,7 +407,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
               role="status"
               aria-live="polite"
             >
-              <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
+              <Spinner size="xs" />
               <span className="text-xs">
                 Retrying ({retryCount}/{MAX_RETRIES})...
               </span>
@@ -433,7 +433,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-status-success" />
           <span className="text-sm font-medium text-canopy-text/90">{title}</span>
-          {isLoading && <Loader2 className="w-3 h-3 animate-spin text-canopy-text/55" />}
+          {isLoading && <Spinner size="xs" className="text-canopy-text/55" />}
         </div>
 
         <div className="flex items-center gap-2">

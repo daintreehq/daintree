@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useDeferredValue } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { Loader2 } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import type { CommandManifestEntry, CommandCategory } from "@shared/types/commands";
 
 interface CommandPickerProps {
@@ -165,7 +165,7 @@ export function CommandPicker({
         itemIdPrefix="command"
         renderBody={() => (
           <div className="flex flex-col items-center justify-center py-8 space-y-2">
-            <Loader2 className="h-6 w-6 animate-spin text-canopy-text/40" />
+            <Spinner size="xl" className="text-canopy-text/40" />
             <p className="text-sm text-canopy-text/50">Loading commands...</p>
           </div>
         )}

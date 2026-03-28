@@ -5,7 +5,8 @@ import { CommandPicker } from "./CommandPicker";
 import { CommandBuilder } from "./CommandBuilder";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
-import { Loader2, AlertCircle } from "lucide-react";
+import { AlertCircle } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import type { CommandManifestEntry, CommandContext, CommandResult } from "@shared/types/commands";
 
 interface CommandPickerHostProps {
@@ -108,7 +109,7 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
           </AppDialog.Header>
           <AppDialog.Body>
             <div className="flex flex-col items-center justify-center py-8 space-y-4">
-              <Loader2 className="h-8 w-8 animate-spin text-canopy-accent" />
+              <Spinner size="2xl" className="text-canopy-accent" />
               <p className="text-sm text-canopy-text/70">Loading command configuration...</p>
             </div>
           </AppDialog.Body>

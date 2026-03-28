@@ -17,12 +17,12 @@ const STATUS_CONFIG: Record<
 > = {
   installing: {
     icon: Loader2,
-    iconClass: "text-status-warning animate-spin",
+    iconClass: "text-status-warning animate-spin motion-reduce:animate-none",
     ariaLabel: "Installing dependencies",
   },
   starting: {
     icon: Loader2,
-    iconClass: "text-status-info animate-spin",
+    iconClass: "text-status-info animate-spin motion-reduce:animate-none",
     ariaLabel: "Starting dev server",
   },
   running: {

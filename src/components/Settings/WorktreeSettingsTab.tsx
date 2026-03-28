@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { AlertCircle, Check, RotateCcw } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { WorktreeIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
@@ -140,7 +141,7 @@ export function WorktreeSettingsTab() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <div className="w-5 h-5 border-2 border-canopy-accent border-t-transparent rounded-full animate-spin" />
+        <Spinner size="lg" />
         <span className="ml-2 text-sm text-canopy-text/60">Loading settings...</span>
       </div>
     );

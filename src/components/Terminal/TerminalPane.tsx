@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { AlertTriangle, Loader2, RefreshCw, Settings } from "lucide-react";
+import { AlertTriangle, RefreshCw, Settings } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import type {
   TerminalType,
   TerminalRestartError,
@@ -771,7 +772,7 @@ function TerminalPaneComponent({
             >
               {isBackendRecovering ? (
                 <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="w-8 h-8 animate-spin motion-reduce:animate-none text-status-warning" />
+                  <Spinner size="2xl" className="text-status-warning" />
                   <span className="text-text-inverse font-medium">Reconnecting...</span>
                 </div>
               ) : (
@@ -831,7 +832,7 @@ function TerminalPaneComponent({
                       className="px-4 py-2 bg-canopy-accent/20 hover:bg-canopy-accent/30 text-canopy-accent rounded-lg border border-canopy-accent/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
                       {isRestartingService ? (
-                        <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />
+                        <Spinner size="md" />
                       ) : (
                         <RefreshCw className="w-4 h-4" />
                       )}

@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
-import { GitCommit, ArrowUpFromLine, Loader2 } from "lucide-react";
+import { GitCommit, ArrowUpFromLine } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
 
 const MAX_SUBJECT_LENGTH = 72;
@@ -122,7 +123,7 @@ export function CommitPanel({
               className="flex-1"
             >
               {isPushing ? (
-                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                <Spinner size="sm" className="mr-1.5" />
               ) : (
                 <ArrowUpFromLine className="w-3.5 h-3.5 mr-1.5" />
               )}
@@ -136,7 +137,7 @@ export function CommitPanel({
               className="flex-1"
             >
               {isCommitting ? (
-                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                <Spinner size="sm" className="mr-1.5" />
               ) : (
                 <GitCommit className="w-3.5 h-3.5 mr-1.5" />
               )}
@@ -152,7 +153,7 @@ export function CommitPanel({
             className="flex-1"
           >
             {isCommitting ? (
-              <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              <Spinner size="sm" className="mr-1.5" />
             ) : (
               <GitCommit className="w-3.5 h-3.5 mr-1.5" />
             )}
