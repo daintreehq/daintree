@@ -94,7 +94,7 @@ export function GettingStartedChecklist({
           {...(collapsed ? { inert: true } : {})}
         >
           <div className="px-3 pb-3 space-y-1.5">
-            {CHECKLIST_ITEMS.map(({ id, label, icon: Icon, actionId }) => {
+            {CHECKLIST_ITEMS.map(({ id, label, description, icon: Icon, actionId }) => {
               const done = checklist.items[id];
               const content = (
                 <>
@@ -112,19 +112,31 @@ export function GettingStartedChecklist({
                       done ? "text-canopy-text/40" : "text-canopy-text/70"
                     )}
                   />
-                  <span
-                    className={cn(
-                      "text-xs leading-snug",
-                      done ? "line-through text-canopy-text/40" : "text-canopy-text/90"
+                  <div className="flex flex-col min-w-0 flex-1">
+                    <span
+                      className={cn(
+                        "text-xs leading-snug",
+                        done ? "line-through text-canopy-text/40" : "text-canopy-text/90"
+                      )}
+                    >
+                      {label}
+                    </span>
+                    {description && (
+                      <span
+                        className={cn(
+                          "text-[10px] leading-snug",
+                          done ? "text-canopy-text/30" : "text-canopy-text/50"
+                        )}
+                      >
+                        {description}
+                      </span>
                     )}
-                  >
-                    {label}
-                  </span>
+                  </div>
                 </>
               );
 
               const sharedClasses = cn(
-                "flex items-center gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5",
+                "flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5",
                 "transition-colors duration-200",
                 done ? "opacity-60" : "opacity-100"
               );

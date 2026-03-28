@@ -247,33 +247,33 @@ describe("WelcomeScreen", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
     const buttons = screen.getAllByRole("button", {
-      name: /open a project|launch an ai agent|create a worktree/i,
+      name: /open your project|ask ai to help with your code|start a parallel task/i,
     });
     expect(buttons).toHaveLength(3);
   });
 
-  it("dispatches project.openDialog when Open a project is clicked", () => {
+  it("dispatches project.openDialog when Open your project is clicked", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /open a project/i }));
+    fireEvent.click(screen.getByRole("button", { name: /open your project/i }));
     expect(dispatchMock).toHaveBeenCalledWith("project.openDialog", undefined, {
       source: "user",
     });
   });
 
-  it("dispatches panel.palette when Launch an AI agent is clicked", () => {
+  it("dispatches panel.palette when Ask AI to help with your code is clicked", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /launch an ai agent/i }));
+    fireEvent.click(screen.getByRole("button", { name: /ask ai to help with your code/i }));
     expect(dispatchMock).toHaveBeenCalledWith("panel.palette", undefined, {
       source: "user",
     });
   });
 
-  it("dispatches worktree.createDialog.open when Create a worktree is clicked", () => {
+  it("dispatches worktree.createDialog.open when Start a parallel task is clicked", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /create a worktree/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start a parallel task/i }));
     expect(dispatchMock).toHaveBeenCalledWith("worktree.createDialog.open", undefined, {
       source: "user",
     });
@@ -283,9 +283,9 @@ describe("WelcomeScreen", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(oneComplete)} />);
 
     // openedProject is complete — should not be a button
-    const openProjectButton = screen.queryByRole("button", { name: /open a project/i });
+    const openProjectButton = screen.queryByRole("button", { name: /open your project/i });
     expect(openProjectButton).toBeNull();
-    expect(screen.getByText("Open a project")).toBeTruthy();
+    expect(screen.getByText("Open your project")).toBeTruthy();
   });
 
   it("hides checklist when dismissed", () => {
