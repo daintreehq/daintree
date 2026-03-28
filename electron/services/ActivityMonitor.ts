@@ -78,6 +78,7 @@ export interface ActivityStateMetadata {
   trigger: "input" | "output" | "pattern" | "timeout";
   patternConfidence?: number;
   waitingReason?: WaitingReason;
+  sessionCost?: number;
 }
 
 export class ActivityMonitor {
@@ -613,7 +614,7 @@ export class ActivityMonitor {
         this.promptDetectorConfig.promptScanLineCount
       );
       if (completionResult.isCompletion) {
-        this.transitionToCompleted(completionResult.confidence);
+        this.transitionToCompleted(completionResult.confidence, completionResult.extractedCost);
         return;
       }
     }
@@ -725,7 +726,7 @@ export class ActivityMonitor {
     this.workingHoldUntil = Math.max(this.workingHoldUntil, now + this.WORKING_HOLD_MS);
   }
 
-  private transitionToCompleted(confidence: number): void {
+  private transitionToCompleted(confidence: number, sessionCost?: number): void {
     this.completionTimer.emit(() => {
       if (this.isDisposed) return;
       // Guard: ignore stale timer if a new busy cycle started or completion was reset
@@ -744,6 +745,7 @@ export class ActivityMonitor {
     this.onStateChange(this.terminalId, this.spawnedAt, "completed", {
       trigger: "pattern",
       patternConfidence: confidence,
+      sessionCost,
     });
   }
 

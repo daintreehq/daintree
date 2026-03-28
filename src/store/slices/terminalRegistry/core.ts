@@ -610,7 +610,8 @@ export const createCorePanelActions = (
     lastStateChange,
     trigger,
     confidence,
-    waitingReason
+    waitingReason,
+    sessionCost
   ) => {
     set((state) => {
       const terminal = state.terminals.find((t) => t.id === id);
@@ -629,6 +630,9 @@ export const createCorePanelActions = (
               stateChangeTrigger: trigger,
               stateChangeConfidence: confidence,
               waitingReason: agentState === "waiting" ? waitingReason : undefined,
+              ...(agentState === "completed" && sessionCost != null
+                ? { sessionCost }
+                : {}),
             }
           : t
       );

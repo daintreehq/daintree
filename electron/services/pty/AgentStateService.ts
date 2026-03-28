@@ -104,7 +104,8 @@ export class AgentStateService {
     event: AgentEvent,
     trigger?: AgentStateChangeTrigger,
     confidence?: number,
-    waitingReason?: WaitingReason
+    waitingReason?: WaitingReason,
+    sessionCost?: number
   ): boolean {
     if (!terminal.agentId) {
       return false;
@@ -178,6 +179,7 @@ export class AgentStateService {
       trigger: inferredTrigger,
       confidence: inferredConfidence,
       ...(newState === "waiting" && waitingReason ? { waitingReason } : {}),
+      ...(newState === "completed" && sessionCost != null ? { sessionCost } : {}),
     };
 
     const validatedStateChange = AgentStateChangedSchema.safeParse(stateChangePayload);
@@ -285,6 +287,7 @@ export class AgentStateService {
       trigger: "input" | "output" | "pattern" | "timeout";
       patternConfidence?: number;
       waitingReason?: WaitingReason;
+      sessionCost?: number;
     }
   ): void {
     if (!terminal.agentId) {
@@ -304,7 +307,14 @@ export class AgentStateService {
       this.updateAgentState(terminal, event, "timeout", 0.6, metadata?.waitingReason);
     } else if (metadata?.trigger === "pattern") {
       const confidence = metadata.patternConfidence ?? 0.9;
-      this.updateAgentState(terminal, event, "heuristic", confidence, metadata?.waitingReason);
+      this.updateAgentState(
+        terminal,
+        event,
+        "heuristic",
+        confidence,
+        metadata?.waitingReason,
+        metadata?.sessionCost
+      );
     } else if (metadata?.trigger === "output") {
       this.updateAgentState(terminal, event, "output", 1.0, metadata?.waitingReason);
     } else if (metadata?.trigger === "input") {
