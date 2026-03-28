@@ -40,7 +40,10 @@ test.describe.serial("First-run onboarding flow", () => {
 
     // Step 2: Telemetry consent — verify dialog and click Disable
     await expect(window.locator(SEL.firstRun.telemetryDialog)).toBeVisible({ timeout: T_MEDIUM });
-    await window.locator(`${SEL.firstRun.telemetryDialog} button:has-text("Disable")`).click();
+    await window
+      .locator(SEL.firstRun.telemetryDialog)
+      .locator('button:has-text("Disable")')
+      .click();
 
     // Step 3: Agent selection — verify dialog and click Skip
     await expect(window.locator(SEL.firstRun.agentTitle)).toBeVisible({ timeout: T_MEDIUM });

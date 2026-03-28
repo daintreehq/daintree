@@ -197,9 +197,14 @@ test.describe.serial("Core: Notes Panel", () => {
 
   test("filter by tag narrows list", async () => {
     const { window } = ctx;
-    const palette = window.locator(SEL.notes.palette);
 
+    // Reopen palette to ensure clean state after search test
+    await closeNotesPalette(window);
+    await openNotesPalette(window);
+
+    const palette = window.locator(SEL.notes.palette);
     const tagChip = palette.getByRole("button", { name: "test-tag" });
+    await expect(tagChip).toBeVisible({ timeout: T_MEDIUM });
     await tagChip.click();
     await window.waitForTimeout(T_SETTLE);
 
