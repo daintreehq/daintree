@@ -2,11 +2,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useMainProcessToastListener } from "../useMainProcessToastListener";
+import type { NotifyPayload } from "@/lib/notify";
 
-const notifyMock = vi.fn(() => "toast-id");
+const notifyMock = vi.fn<(payload: NotifyPayload) => string>().mockReturnValue("toast-id");
 
 vi.mock("@/lib/notify", () => ({
-  notify: (...args: unknown[]) => notifyMock(...args),
+  notify: (...args: [NotifyPayload]) => notifyMock(...args),
 }));
 
 type ToastCallback = (payload: {
@@ -36,7 +37,8 @@ describe("useMainProcessToastListener", () => {
   });
 
   afterEach(() => {
-    delete (window as Record<string, unknown>).electron;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).electron;
   });
 
   it("subscribes to onShowToast on mount and cleans up on unmount", () => {
@@ -70,7 +72,8 @@ describe("useMainProcessToastListener", () => {
 
   it("calls notify with an action that triggers checkForUpdates", () => {
     const checkForUpdatesMock = vi.fn();
-    (window.electron as Record<string, unknown>).update = {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window.electron as any).update = {
       checkForUpdates: checkForUpdatesMock,
     };
 
@@ -94,13 +97,14 @@ describe("useMainProcessToastListener", () => {
     );
 
     // Click the action button
-    const call = notifyMock.mock.calls[0][0] as { action: { onClick: () => void } };
-    call.action.onClick();
+    const call = notifyMock.mock.calls[0][0];
+    call.action!.onClick();
     expect(checkForUpdatesMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not crash when window.electron is undefined", () => {
-    delete (window as Record<string, unknown>).electron;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).electron;
     expect(() => renderHook(() => useMainProcessToastListener())).not.toThrow();
   });
 });
