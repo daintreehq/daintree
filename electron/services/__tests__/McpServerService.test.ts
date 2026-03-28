@@ -122,7 +122,7 @@ type TextToolResult = {
 function createManifestEntry(
   entry: Partial<ActionManifestEntry> & Pick<ActionManifestEntry, "id" | "title" | "description">
 ): ActionManifestEntry {
-  return {
+  const result: ActionManifestEntry = {
     id: entry.id,
     name: entry.name ?? entry.id,
     title: entry.title,
@@ -136,6 +136,7 @@ function createManifestEntry(
     disabledReason: entry.disabledReason,
     requiresArgs: entry.requiresArgs ?? false,
   };
+  return result;
 }
 
 function createMockWindow(options?: {
