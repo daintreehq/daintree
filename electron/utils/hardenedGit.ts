@@ -7,7 +7,8 @@ import type { SimpleGit } from "simple-git";
  * Passed as -c flags to every git command, taking precedence over repo config.
  */
 export const HARDENED_GIT_CONFIG = [
-  "core.fsmonitor=false",
+  "core.fsmonitor=true",
+  "core.untrackedCache=true",
   "core.pager=cat",
   "core.askpass=",
   "credential.helper=",

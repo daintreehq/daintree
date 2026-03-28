@@ -72,11 +72,11 @@ describe("createHardenedGit", () => {
     );
   });
 
-  it("passes config overrides including core.fsmonitor=false", () => {
+  it("passes config overrides including core.fsmonitor=true", () => {
     createHardenedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(options.config).toContain("core.fsmonitor=false");
+    expect(options.config).toContain("core.fsmonitor=true");
   });
 
   it("passes config overrides including protocol.ext.allow=never", () => {
@@ -117,7 +117,8 @@ describe("createHardenedGit", () => {
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const expectedKeys = [
-      "core.fsmonitor=false",
+      "core.fsmonitor=true",
+      "core.untrackedCache=true",
       "core.pager=cat",
       "core.askpass=",
       "credential.helper=",
