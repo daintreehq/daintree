@@ -140,7 +140,6 @@ export function setupWebviewCSP(): void {
     });
 
     configuredPartitions.add(partition);
-    console.log(`[MAIN] CSP configured for partition: ${partition} (${partitionType})`);
   };
 
   // Configure static partitions (browser only - portal excluded)
