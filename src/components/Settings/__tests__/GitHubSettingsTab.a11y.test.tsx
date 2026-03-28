@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { GitHubSettingsTab } from "../GitHubSettingsTab";
 
 vi.mock("@/store", () => ({
@@ -60,11 +60,48 @@ describe("GitHubSettingsTab accessibility", () => {
     expect(btn.getAttribute("aria-busy")).toBe("false");
   });
 
-  it("decorative icons inside buttons have aria-hidden", () => {
+  it("decorative icons inside idle buttons have aria-hidden", () => {
     render(<GitHubSettingsTab />);
     const testBtn = screen.getByRole("button", { name: "Test token" });
     const svgs = testBtn.querySelectorAll("svg");
+    expect(svgs.length).toBeGreaterThan(0);
     for (const svg of svgs) {
+      expect(svg.getAttribute("aria-hidden")).toBe("true");
+    }
+  });
+
+  it("Test button shows aria-busy=true and retains accessible name during loading", () => {
+    render(<GitHubSettingsTab />);
+    const input = screen.getByLabelText(/github personal access token/i);
+    fireEvent.change(input, { target: { value: "ghp_test123" } });
+
+    const testBtn = screen.getByRole("button", { name: "Test token" });
+    fireEvent.click(testBtn);
+
+    const busyBtn = screen.getByRole("button", { name: "Test token" });
+    expect(busyBtn.getAttribute("aria-busy")).toBe("true");
+
+    const spinnerSvgs = busyBtn.querySelectorAll("svg");
+    expect(spinnerSvgs.length).toBeGreaterThan(0);
+    for (const svg of spinnerSvgs) {
+      expect(svg.getAttribute("aria-hidden")).toBe("true");
+    }
+  });
+
+  it("Save button shows aria-busy=true and retains accessible name during loading", () => {
+    render(<GitHubSettingsTab />);
+    const input = screen.getByLabelText(/github personal access token/i);
+    fireEvent.change(input, { target: { value: "ghp_test123" } });
+
+    const saveBtn = screen.getByRole("button", { name: "Save token" });
+    fireEvent.click(saveBtn);
+
+    const busyBtn = screen.getByRole("button", { name: "Save token" });
+    expect(busyBtn.getAttribute("aria-busy")).toBe("true");
+
+    const spinnerSvgs = busyBtn.querySelectorAll("svg");
+    expect(spinnerSvgs.length).toBeGreaterThan(0);
+    for (const svg of spinnerSvgs) {
       expect(svg.getAttribute("aria-hidden")).toBe("true");
     }
   });
