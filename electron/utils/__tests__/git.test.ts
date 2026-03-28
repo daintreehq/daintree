@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { WorktreeRemovedError } from "../errorTypes.js";
+import { GitError, WorktreeRemovedError } from "../errorTypes.js";
 
 const mockGit = {
   raw: vi.fn(),
@@ -232,13 +232,29 @@ describe("getWorktreeChangesWithStats in-flight deduplication", () => {
     const callA = getWorktreeChangesWithStats(cwd, false);
     const callB = getWorktreeChangesWithStats(cwd, false);
 
-    await expect(callA).rejects.toThrow();
-    await expect(callB).rejects.toThrow();
+    // Both callers should get GitError (normalized by the IIFE)
+    await expect(callA).rejects.toThrow(GitError);
+    await expect(callB).rejects.toThrow(GitError);
 
     // After rejection, the map should be cleaned up — a new call creates a fresh operation
     mockGit.status.mockResolvedValue(emptyStatus);
     const result = await getWorktreeChangesWithStats(cwd, false);
     expect(result.changedFileCount).toBe(0);
+  });
+
+  it("normalizes errors consistently for all deduplicated callers", async () => {
+    setupGitMocks();
+    const cwd = "/dedup-test/" + Math.random();
+    mockGit.status.mockRejectedValue(
+      new Error("fatal: not a git repository: /main/.git/worktrees/gone")
+    );
+
+    const callA = getWorktreeChangesWithStats(cwd, false);
+    const callB = getWorktreeChangesWithStats(cwd, false);
+
+    // Both callers should get WorktreeRemovedError, not a raw Error
+    await expect(callA).rejects.toThrow(WorktreeRemovedError);
+    await expect(callB).rejects.toThrow(WorktreeRemovedError);
   });
 
   it("cleans up map after resolution so next call starts fresh", async () => {

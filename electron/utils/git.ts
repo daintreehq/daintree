@@ -218,220 +218,247 @@ export async function getWorktreeChangesWithStats(
       throw accessError;
     }
 
-    const git: SimpleGit = createHardenedGit(cwd);
-    const status: StatusResult = await git.status();
-    const gitRoot = realpathSync((await git.revparse(["--show-toplevel"])).trim());
-
-    let lastCommitMessage: string | undefined;
-    let lastCommitTimestampMs: number | undefined;
     try {
-      const output = await git.raw(["log", "-1", "--format=%ct%n%s"]);
-      const [tsLine, ...msgLines] = output.split("\n");
-      const parsed = Number.parseInt((tsLine ?? "").trim(), 10);
-      lastCommitTimestampMs = Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : undefined;
-      lastCommitMessage = msgLines.join("\n").trim() || undefined;
-    } catch {
-      // Silently ignore - this is a non-critical field
-    }
+      const git: SimpleGit = createHardenedGit(cwd);
+      const status: StatusResult = await git.status();
+      const gitRoot = realpathSync((await git.revparse(["--show-toplevel"])).trim());
 
-    const trackedChangedFiles = [
-      ...status.modified,
-      ...status.created,
-      ...status.deleted,
-      ...status.renamed.map((r) => r.to),
-      ...status.staged,
-    ];
+      let lastCommitMessage: string | undefined;
+      let lastCommitTimestampMs: number | undefined;
+      try {
+        const output = await git.raw(["log", "-1", "--format=%ct%n%s"]);
+        const [tsLine, ...msgLines] = output.split("\n");
+        const parsed = Number.parseInt((tsLine ?? "").trim(), 10);
+        lastCommitTimestampMs = Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : undefined;
+        lastCommitMessage = msgLines.join("\n").trim() || undefined;
+      } catch {
+        // Silently ignore - this is a non-critical field
+      }
 
-    let diffOutput = "";
+      const trackedChangedFiles = [
+        ...status.modified,
+        ...status.created,
+        ...status.deleted,
+        ...status.renamed.map((r) => r.to),
+        ...status.staged,
+      ];
 
-    try {
-      if (trackedChangedFiles.length === 0) {
-        diffOutput = "";
-      } else if (trackedChangedFiles.length <= MAX_FILES_FOR_NUMSTAT) {
-        diffOutput = await git.diff(["--no-ext-diff", "--numstat", "HEAD"]);
-      } else {
-        const limitedFiles = trackedChangedFiles.slice(0, MAX_FILES_FOR_NUMSTAT);
-        diffOutput = await git.diff(["--no-ext-diff", "--numstat", "HEAD", "--", ...limitedFiles]);
-        logWarn("Large changeset detected; limiting numstat to first 100 files", {
+      let diffOutput = "";
+
+      try {
+        if (trackedChangedFiles.length === 0) {
+          diffOutput = "";
+        } else if (trackedChangedFiles.length <= MAX_FILES_FOR_NUMSTAT) {
+          diffOutput = await git.diff(["--no-ext-diff", "--numstat", "HEAD"]);
+        } else {
+          const limitedFiles = trackedChangedFiles.slice(0, MAX_FILES_FOR_NUMSTAT);
+          diffOutput = await git.diff([
+            "--no-ext-diff",
+            "--numstat",
+            "HEAD",
+            "--",
+            ...limitedFiles,
+          ]);
+          logWarn("Large changeset detected; limiting numstat to first 100 files", {
+            cwd,
+            totalFiles: trackedChangedFiles.length,
+            limitedTo: MAX_FILES_FOR_NUMSTAT,
+          });
+        }
+      } catch (error) {
+        logWarn("Failed to read numstat diff; continuing without line stats", {
           cwd,
-          totalFiles: trackedChangedFiles.length,
-          limitedTo: MAX_FILES_FOR_NUMSTAT,
+          message: (error as Error).message,
         });
       }
-    } catch (error) {
-      logWarn("Failed to read numstat diff; continuing without line stats", {
-        cwd,
-        message: (error as Error).message,
-      });
-    }
 
-    const diffStats = parseNumstat(diffOutput, gitRoot);
-    const changesMap = new Map<string, FileChangeDetail>();
+      const diffStats = parseNumstat(diffOutput, gitRoot);
+      const changesMap = new Map<string, FileChangeDetail>();
 
-    const countFileLines = async (filePath: string): Promise<number | null> => {
-      try {
-        const stats = await fs.stat(filePath);
-        const MAX_FILE_SIZE = 10 * 1024 * 1024;
-        if (stats.size > MAX_FILE_SIZE) {
-          return null;
-        }
-
-        const buffer = await fs.readFile(filePath);
-
-        const sampleSize = Math.min(buffer.length, 8192);
-        for (let i = 0; i < sampleSize; i++) {
-          if (buffer[i] === 0) {
+      const countFileLines = async (filePath: string): Promise<number | null> => {
+        try {
+          const stats = await fs.stat(filePath);
+          const MAX_FILE_SIZE = 10 * 1024 * 1024;
+          if (stats.size > MAX_FILE_SIZE) {
             return null;
           }
-        }
 
-        const content = buffer.toString("utf-8");
+          const buffer = await fs.readFile(filePath);
 
-        if (content.length === 0) {
-          return 0;
-        }
+          const sampleSize = Math.min(buffer.length, 8192);
+          for (let i = 0; i < sampleSize; i++) {
+            if (buffer[i] === 0) {
+              return null;
+            }
+          }
 
-        let lineCount = 0;
-        for (let i = 0; i < content.length; i++) {
-          if (content[i] === "\n") {
+          const content = buffer.toString("utf-8");
+
+          if (content.length === 0) {
+            return 0;
+          }
+
+          let lineCount = 0;
+          for (let i = 0; i < content.length; i++) {
+            if (content[i] === "\n") {
+              lineCount++;
+            }
+          }
+
+          if (content[content.length - 1] !== "\n") {
             lineCount++;
           }
+
+          return lineCount;
+        } catch (_error) {
+          return null;
+        }
+      };
+
+      const addChange = async (pathFragment: string, statusValue: GitStatus) => {
+        const absolutePath = resolve(gitRoot, pathFragment);
+        const existing = changesMap.get(absolutePath);
+        if (existing) {
+          return;
         }
 
-        if (content[content.length - 1] !== "\n") {
-          lineCount++;
+        const statsForFile = diffStats.get(absolutePath);
+        let insertions: number | null;
+        let deletions: number | null;
+
+        if (statusValue === "untracked" && !statsForFile) {
+          insertions = await countFileLines(absolutePath);
+          deletions = null;
+        } else {
+          insertions = statsForFile?.insertions ?? (statusValue === "untracked" ? null : 0);
+          deletions = statsForFile?.deletions ?? (statusValue === "untracked" ? null : 0);
         }
 
-        return lineCount;
-      } catch (_error) {
-        return null;
-      }
-    };
+        changesMap.set(absolutePath, {
+          path: absolutePath,
+          status: statusValue,
+          insertions,
+          deletions,
+        });
+      };
 
-    const addChange = async (pathFragment: string, statusValue: GitStatus) => {
-      const absolutePath = resolve(gitRoot, pathFragment);
-      const existing = changesMap.get(absolutePath);
-      if (existing) {
-        return;
-      }
-
-      const statsForFile = diffStats.get(absolutePath);
-      let insertions: number | null;
-      let deletions: number | null;
-
-      if (statusValue === "untracked" && !statsForFile) {
-        insertions = await countFileLines(absolutePath);
-        deletions = null;
-      } else {
-        insertions = statsForFile?.insertions ?? (statusValue === "untracked" ? null : 0);
-        deletions = statsForFile?.deletions ?? (statusValue === "untracked" ? null : 0);
+      for (const file of status.modified) {
+        await addChange(file, "modified");
       }
 
-      changesMap.set(absolutePath, {
-        path: absolutePath,
-        status: statusValue,
-        insertions,
-        deletions,
-      });
-    };
-
-    for (const file of status.modified) {
-      await addChange(file, "modified");
-    }
-
-    for (const file of status.renamed) {
-      if (typeof file !== "string" && file.to) {
-        await addChange(file.to, "renamed");
-      }
-    }
-
-    for (const file of status.created) {
-      await addChange(file, "added");
-    }
-
-    for (const file of status.deleted) {
-      await addChange(file, "deleted");
-    }
-
-    for (const file of status.staged) {
-      await addChange(file, "modified");
-    }
-
-    if (status.conflicted) {
-      for (const file of status.conflicted) {
-        await addChange(file, "conflicted");
-      }
-    }
-
-    const untrackedFiles = status.not_added;
-    const MAX_UNTRACKED_FILES = 200;
-    const concurrencyLimit = 10;
-
-    const limitedUntrackedFiles =
-      untrackedFiles.length > MAX_UNTRACKED_FILES
-        ? untrackedFiles.slice(0, MAX_UNTRACKED_FILES)
-        : untrackedFiles;
-
-    if (untrackedFiles.length > MAX_UNTRACKED_FILES) {
-      logWarn("Large number of untracked files; limiting to first 200", {
-        cwd,
-        totalUntracked: untrackedFiles.length,
-        limitedTo: MAX_UNTRACKED_FILES,
-      });
-    }
-
-    for (let i = 0; i < limitedUntrackedFiles.length; i += concurrencyLimit) {
-      const batch = limitedUntrackedFiles.slice(i, i + concurrencyLimit);
-      await Promise.all(batch.map((file) => addChange(file, "untracked")));
-    }
-
-    for (const [absolutePath, stats] of diffStats.entries()) {
-      if (changesMap.has(absolutePath)) continue;
-      changesMap.set(absolutePath, {
-        path: absolutePath,
-        status: "modified",
-        insertions: stats.insertions ?? 0,
-        deletions: stats.deletions ?? 0,
-      });
-    }
-
-    const mtimes = await Promise.all(
-      Array.from(changesMap.values()).map(async (change) => {
-        const targetPath = change.status === "deleted" ? dirname(change.path) : change.path;
-
-        try {
-          const stat = await fs.stat(targetPath);
-          change.mtimeMs = stat.mtimeMs;
-          return stat.mtimeMs;
-        } catch {
-          change.mtimeMs = 0;
-          return 0;
+      for (const file of status.renamed) {
+        if (typeof file !== "string" && file.to) {
+          await addChange(file.to, "renamed");
         }
-      })
-    );
+      }
 
-    const changes = Array.from(changesMap.values());
-    const totalInsertions = changes.reduce((sum, change) => sum + (change.insertions ?? 0), 0);
-    const totalDeletions = changes.reduce((sum, change) => sum + (change.deletions ?? 0), 0);
-    const latestFileMtime = mtimes.length > 0 ? Math.max(...mtimes) : 0;
+      for (const file of status.created) {
+        await addChange(file, "added");
+      }
 
-    const result: WorktreeChanges = {
-      worktreeId: realpathSync(cwd),
-      rootPath: gitRoot,
-      changes,
-      changedFileCount: changes.length,
-      totalInsertions,
-      totalDeletions,
-      insertions: totalInsertions,
-      deletions: totalDeletions,
-      latestFileMtime,
-      lastUpdated: Date.now(),
-      lastCommitMessage,
-      lastCommitTimestampMs,
-    };
+      for (const file of status.deleted) {
+        await addChange(file, "deleted");
+      }
 
-    GIT_WORKTREE_CHANGES_CACHE.set(cwd, result, cacheTTL);
-    return result;
+      for (const file of status.staged) {
+        await addChange(file, "modified");
+      }
+
+      if (status.conflicted) {
+        for (const file of status.conflicted) {
+          await addChange(file, "conflicted");
+        }
+      }
+
+      const untrackedFiles = status.not_added;
+      const MAX_UNTRACKED_FILES = 200;
+      const concurrencyLimit = 10;
+
+      const limitedUntrackedFiles =
+        untrackedFiles.length > MAX_UNTRACKED_FILES
+          ? untrackedFiles.slice(0, MAX_UNTRACKED_FILES)
+          : untrackedFiles;
+
+      if (untrackedFiles.length > MAX_UNTRACKED_FILES) {
+        logWarn("Large number of untracked files; limiting to first 200", {
+          cwd,
+          totalUntracked: untrackedFiles.length,
+          limitedTo: MAX_UNTRACKED_FILES,
+        });
+      }
+
+      for (let i = 0; i < limitedUntrackedFiles.length; i += concurrencyLimit) {
+        const batch = limitedUntrackedFiles.slice(i, i + concurrencyLimit);
+        await Promise.all(batch.map((file) => addChange(file, "untracked")));
+      }
+
+      for (const [absolutePath, stats] of diffStats.entries()) {
+        if (changesMap.has(absolutePath)) continue;
+        changesMap.set(absolutePath, {
+          path: absolutePath,
+          status: "modified",
+          insertions: stats.insertions ?? 0,
+          deletions: stats.deletions ?? 0,
+        });
+      }
+
+      const mtimes = await Promise.all(
+        Array.from(changesMap.values()).map(async (change) => {
+          const targetPath = change.status === "deleted" ? dirname(change.path) : change.path;
+
+          try {
+            const stat = await fs.stat(targetPath);
+            change.mtimeMs = stat.mtimeMs;
+            return stat.mtimeMs;
+          } catch {
+            change.mtimeMs = 0;
+            return 0;
+          }
+        })
+      );
+
+      const changes = Array.from(changesMap.values());
+      const totalInsertions = changes.reduce((sum, change) => sum + (change.insertions ?? 0), 0);
+      const totalDeletions = changes.reduce((sum, change) => sum + (change.deletions ?? 0), 0);
+      const latestFileMtime = mtimes.length > 0 ? Math.max(...mtimes) : 0;
+
+      const result: WorktreeChanges = {
+        worktreeId: realpathSync(cwd),
+        rootPath: gitRoot,
+        changes,
+        changedFileCount: changes.length,
+        totalInsertions,
+        totalDeletions,
+        insertions: totalInsertions,
+        deletions: totalDeletions,
+        latestFileMtime,
+        lastUpdated: Date.now(),
+        lastCommitMessage,
+        lastCommitTimestampMs,
+      };
+
+      GIT_WORKTREE_CHANGES_CACHE.set(cwd, result, cacheTTL);
+      return result;
+    } catch (error) {
+      if (error instanceof WorktreeRemovedError) {
+        throw error;
+      }
+
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (
+        errorMessage.includes("ENOENT") ||
+        errorMessage.includes("no such file or directory") ||
+        errorMessage.includes("Unable to read current working directory") ||
+        errorMessage.includes("not a git repository")
+      ) {
+        throw new WorktreeRemovedError(cwd, error instanceof Error ? error : undefined);
+      }
+
+      const cause = error instanceof Error ? error : new Error(String(error));
+      const gitError = new GitError("Failed to get git worktree changes", { cwd }, cause);
+      logError("Git worktree changes operation failed", gitError, { cwd });
+      throw gitError;
+    }
   })();
 
   if (!forceRefresh) {
@@ -440,25 +467,6 @@ export async function getWorktreeChangesWithStats(
 
   try {
     return await fetchPromise;
-  } catch (error) {
-    if (error instanceof WorktreeRemovedError) {
-      throw error;
-    }
-
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    if (
-      errorMessage.includes("ENOENT") ||
-      errorMessage.includes("no such file or directory") ||
-      errorMessage.includes("Unable to read current working directory") ||
-      errorMessage.includes("not a git repository")
-    ) {
-      throw new WorktreeRemovedError(cwd, error instanceof Error ? error : undefined);
-    }
-
-    const cause = error instanceof Error ? error : new Error(String(error));
-    const gitError = new GitError("Failed to get git worktree changes", { cwd }, cause);
-    logError("Git worktree changes operation failed", gitError, { cwd });
-    throw gitError;
   } finally {
     if (inFlightWorktreeChanges.get(cwd) === fetchPromise) {
       inFlightWorktreeChanges.delete(cwd);
