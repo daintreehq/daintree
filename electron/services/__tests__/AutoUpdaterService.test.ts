@@ -31,7 +31,7 @@ const autoUpdaterMock = vi.hoisted(() => ({
 }));
 
 const storeMock = vi.hoisted(() => ({
-  get: vi.fn(() => undefined),
+  get: vi.fn((): string | undefined => undefined),
   set: vi.fn(),
 }));
 
