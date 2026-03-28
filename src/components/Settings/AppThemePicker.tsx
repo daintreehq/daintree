@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ChevronDown } from "lucide-react";
+import { AlertTriangle, ChevronDown, Monitor } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { useAppThemeStore } from "@/store/appThemeStore";
@@ -7,6 +7,7 @@ import { appThemeClient } from "@/clients/appThemeClient";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { APP_THEME_PREVIEW_KEYS, getAppThemeWarnings } from "@shared/theme";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
+import { SettingsSwitchCard } from "./SettingsSwitchCard";
 
 function PaletteStrip({ scheme }: { scheme: AppColorScheme }) {
   const t = scheme.tokens;
@@ -134,11 +135,58 @@ async function persistCustomSchemes() {
   await appThemeClient.setCustomSchemes(JSON.stringify(customSchemes));
 }
 
+function PreferredSchemePicker({
+  label,
+  schemes,
+  selectedId,
+  onSelect,
+}: {
+  label: string;
+  schemes: AppColorScheme[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <p className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/40">
+        {label}
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {schemes.map((scheme) => (
+          <button
+            key={scheme.id}
+            type="button"
+            onClick={() => onSelect(scheme.id)}
+            className={cn(
+              "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] border text-xs transition-colors",
+              selectedId === scheme.id
+                ? "border-canopy-accent/30 bg-canopy-accent/10 text-canopy-text"
+                : "border-canopy-border text-canopy-text/70 hover:bg-surface-hover"
+            )}
+          >
+            <div
+              className="w-3 h-3 rounded-sm shrink-0"
+              style={{ backgroundColor: scheme.tokens[APP_THEME_PREVIEW_KEYS.background] }}
+            />
+            {scheme.name}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function AppThemePicker() {
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
   const customSchemes = useAppThemeStore((s) => s.customSchemes);
   const setSelectedSchemeId = useAppThemeStore((s) => s.setSelectedSchemeId);
   const addCustomScheme = useAppThemeStore((s) => s.addCustomScheme);
+  const followSystem = useAppThemeStore((s) => s.followSystem);
+  const setFollowSystem = useAppThemeStore((s) => s.setFollowSystem);
+  const preferredDarkSchemeId = useAppThemeStore((s) => s.preferredDarkSchemeId);
+  const setPreferredDarkSchemeId = useAppThemeStore((s) => s.setPreferredDarkSchemeId);
+  const preferredLightSchemeId = useAppThemeStore((s) => s.preferredLightSchemeId);
+  const setPreferredLightSchemeId = useAppThemeStore((s) => s.setPreferredLightSchemeId);
   const [importWarnings, setImportWarnings] = useState<AppThemeValidationWarning[]>([]);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -167,6 +215,12 @@ export function AppThemePicker() {
   const handleSelect = useCallback(
     async (id: string) => {
       const prev = selectedSchemeId;
+
+      if (followSystem) {
+        setFollowSystem(false);
+        appThemeClient.setFollowSystem(false).catch(console.error);
+      }
+
       setSelectedSchemeId(id);
       setOpen(false);
       setActiveIndex(-1);
@@ -196,7 +250,41 @@ export function AppThemePicker() {
         }
       }
     },
-    [setSelectedSchemeId, selectedSchemeId, allSchemes]
+    [setSelectedSchemeId, selectedSchemeId, allSchemes, followSystem, setFollowSystem]
+  );
+
+  const handleToggleFollowSystem = useCallback(async () => {
+    const newValue = !followSystem;
+    setFollowSystem(newValue);
+    try {
+      await appThemeClient.setFollowSystem(newValue);
+    } catch (error) {
+      console.error("Failed to persist follow system:", error);
+    }
+  }, [followSystem, setFollowSystem]);
+
+  const handlePreferredDarkChange = useCallback(
+    async (id: string) => {
+      setPreferredDarkSchemeId(id);
+      try {
+        await appThemeClient.setPreferredDarkScheme(id);
+      } catch (error) {
+        console.error("Failed to persist preferred dark scheme:", error);
+      }
+    },
+    [setPreferredDarkSchemeId]
+  );
+
+  const handlePreferredLightChange = useCallback(
+    async (id: string) => {
+      setPreferredLightSchemeId(id);
+      try {
+        await appThemeClient.setPreferredLightScheme(id);
+      } catch (error) {
+        console.error("Failed to persist preferred light scheme:", error);
+      }
+    },
+    [setPreferredLightSchemeId]
   );
 
   const handleImport = useCallback(async () => {
@@ -296,6 +384,33 @@ export function AppThemePicker() {
 
   return (
     <div className="space-y-3">
+      <SettingsSwitchCard
+        icon={Monitor}
+        title="Match system appearance"
+        subtitle="Automatically switch between dark and light themes"
+        isEnabled={followSystem}
+        onChange={handleToggleFollowSystem}
+        ariaLabel="Toggle automatic theme switching"
+        variant="compact"
+      />
+
+      {followSystem && (
+        <div className="space-y-2 pl-1">
+          <PreferredSchemePicker
+            label="Preferred dark theme"
+            schemes={darkSchemes}
+            selectedId={preferredDarkSchemeId}
+            onSelect={handlePreferredDarkChange}
+          />
+          <PreferredSchemePicker
+            label="Preferred light theme"
+            schemes={lightSchemes}
+            selectedId={preferredLightSchemeId}
+            onSelect={handlePreferredLightChange}
+          />
+        </div>
+      )}
+
       {importMessage && (
         <div className="rounded-[var(--radius-md)] border border-overlay bg-surface-panel px-3 py-2">
           <div className="flex items-start gap-2">

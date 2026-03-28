@@ -978,6 +978,12 @@ export interface ElectronAPI {
     setCustomSchemes(schemesJson: string): Promise<void>;
     importTheme(): Promise<import("../appTheme.js").AppThemeImportResult>;
     setColorVisionMode(mode: import("../appTheme.js").ColorVisionMode): Promise<void>;
+    setFollowSystem(enabled: boolean): Promise<void>;
+    setPreferredDarkScheme(schemeId: string): Promise<void>;
+    setPreferredLightScheme(schemeId: string): Promise<void>;
+    onSystemAppearanceChanged(
+      callback: (payload: { isDark: boolean; schemeId: string }) => void
+    ): () => void;
   };
   telemetry: {
     get(): Promise<{ enabled: boolean; hasSeenPrompt: boolean }>;

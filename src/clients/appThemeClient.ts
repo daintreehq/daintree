@@ -20,4 +20,16 @@ export const appThemeClient = {
   setColorVisionMode: (mode: ColorVisionMode): Promise<void> => {
     return window.electron.appTheme.setColorVisionMode(mode);
   },
+
+  setFollowSystem: (enabled: boolean): Promise<void> => {
+    return window.electron.appTheme.setFollowSystem(enabled);
+  },
+
+  setPreferredDarkScheme: (schemeId: string): Promise<void> => {
+    return window.electron.appTheme.setPreferredDarkScheme(schemeId);
+  },
+
+  setPreferredLightScheme: (schemeId: string): Promise<void> => {
+    return window.electron.appTheme.setPreferredLightScheme(schemeId);
+  },
 } as const;

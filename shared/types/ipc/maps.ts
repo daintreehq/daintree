@@ -1362,6 +1362,18 @@ export interface IpcInvokeMap {
     args: [mode: import("../appTheme.js").ColorVisionMode];
     result: void;
   };
+  "app-theme:set-follow-system": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "app-theme:set-preferred-dark-scheme": {
+    args: [schemeId: string];
+    result: void;
+  };
+  "app-theme:set-preferred-light-scheme": {
+    args: [schemeId: string];
+    result: void;
+  };
   "telemetry:get": {
     args: [];
     result: { enabled: boolean; hasSeenPrompt: boolean };
@@ -1853,6 +1865,9 @@ export interface IpcEventMap {
 
   // Hibernation events
   "hibernation:project-hibernated": HibernationProjectHibernatedPayload;
+
+  // App theme events
+  "app-theme:system-appearance-changed": { isDark: boolean; schemeId: string };
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];
