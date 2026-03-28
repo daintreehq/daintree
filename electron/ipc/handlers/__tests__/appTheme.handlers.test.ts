@@ -262,4 +262,41 @@ describe("appTheme handlers", () => {
 
     expect(mockWindow.setBackgroundColor).toHaveBeenCalledWith("#1a1a2e");
   });
+
+  it("nativeTheme updated does not send when window is destroyed", () => {
+    const mockWindow = {
+      isDestroyed: () => true,
+      setBackgroundColor: vi.fn(),
+    };
+    storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: true };
+
+    registerAppThemeHandlers(mockWindow as never);
+
+    const themeHandler = getNativeThemeHandler();
+    themeHandler();
+    vi.advanceTimersByTime(300);
+
+    expect(typedSend).not.toHaveBeenCalled();
+    expect(mockWindow.setBackgroundColor).not.toHaveBeenCalled();
+  });
+
+  it("nativeTheme updated persists new colorSchemeId to store", () => {
+    const mockWindow = {
+      isDestroyed: () => false,
+      setBackgroundColor: vi.fn(),
+    };
+    storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: true };
+    nativeThemeMock.shouldUseDarkColors = false;
+
+    registerAppThemeHandlers(mockWindow as never);
+
+    const themeHandler = getNativeThemeHandler();
+    themeHandler();
+    vi.advanceTimersByTime(300);
+
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "appTheme",
+      expect.objectContaining({ colorSchemeId: "bondi" })
+    );
+  });
 });
