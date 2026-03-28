@@ -421,6 +421,13 @@ export async function setupWindowServices(
 
   cleanupIpcHandlers = registerIpcHandlers(handlerDeps);
 
+  try {
+    const { pluginService } = await import("../services/PluginService.js");
+    await pluginService.initialize();
+  } catch (error) {
+    console.error("[MAIN] PluginService initialization failed:", error);
+  }
+
   // Wait for pty-host before workspace-host
   console.log("[MAIN] Waiting for Pty Host to be ready before starting Workspace Host...");
   try {

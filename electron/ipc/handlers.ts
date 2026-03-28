@@ -44,6 +44,7 @@ import { registerWorkflowHandlers } from "./handlers/workflow.js";
 import { registerAccessibilityHandlers } from "./handlers/accessibility.js";
 import { registerDemoHandlers } from "./handlers/demo.js";
 import { registerRecoveryHandlers } from "./handlers/recovery.js";
+import { registerPluginHandlers } from "./handlers/plugin.js";
 import { events } from "../services/events.js";
 import { typedHandle, typedSend, sendToRenderer } from "./utils.js";
 
@@ -118,6 +119,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerAccessibilityHandlers());
     register(() => registerDemoHandlers(deps));
     register(() => registerRecoveryHandlers(deps));
+    register(() => registerPluginHandlers());
   } catch (error) {
     runCleanups(cleanupFunctions);
     throw error;

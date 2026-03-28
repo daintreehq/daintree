@@ -1247,6 +1247,12 @@ export interface IpcInvokeMap {
     result: void;
   };
 
+  // Plugin channels
+  "plugin:list": {
+    args: [];
+    result: import("../plugin.js").LoadedPluginInfo[];
+  };
+
   // Dev Preview channels
   "dev-preview:ensure": {
     args: [request: DevPreviewEnsureRequest];

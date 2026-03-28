@@ -1176,6 +1176,9 @@ export interface ElectronAPI {
       result: import("../actions.js").ActionDispatchResult;
     }): void;
   };
+  plugin: {
+    list(): Promise<import("../plugin.js").LoadedPluginInfo[]>;
+  };
   crashRecovery: {
     getPending(): Promise<import("./crashRecovery.js").PendingCrash | null>;
     resolve(action: import("./crashRecovery.js").CrashRecoveryAction): Promise<void>;
