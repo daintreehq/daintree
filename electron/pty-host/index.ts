@@ -1,3 +1,4 @@
+export { PtyPauseCoordinator, type PauseToken } from "./PtyPauseCoordinator.js";
 export { appendEmergencyLog, emergencyLogFatal, getEmergencyLogPath } from "./emergencyLog.js";
 export { ResourceGovernor, type ResourceGovernorDeps } from "./ResourceGovernor.js";
 export {

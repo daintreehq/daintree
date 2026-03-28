@@ -9,11 +9,13 @@ import type {
   TerminalFlowStatus,
   TerminalReliabilityMetricPayload,
 } from "../../shared/types/pty-host.js";
+import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
 
 export interface IpcQueueDeps {
   getTerminal: (
     id: string
   ) => { ptyProcess?: { pause: () => void; resume: () => void } } | undefined;
+  getPauseCoordinator: (id: string) => PtyPauseCoordinator | undefined;
   sendEvent: (event: PtyHostEvent) => void;
   metricsEnabled: () => boolean;
   emitTerminalStatus: (
@@ -75,16 +77,16 @@ export class IpcQueueManager {
       return false;
     }
 
-    const terminal = this.deps.getTerminal(id);
-    if (!terminal?.ptyProcess) {
+    const coordinator = this.deps.getPauseCoordinator(id);
+    if (!coordinator) {
       console.warn(
-        `[PtyHost] Cannot apply IPC backpressure: missing PTY process for ${id}. Queue at ${utilization.toFixed(1)}%`
+        `[PtyHost] Cannot apply IPC backpressure: missing pause coordinator for ${id}. Queue at ${utilization.toFixed(1)}%`
       );
       return false;
     }
 
     try {
-      terminal.ptyProcess.pause();
+      coordinator.pause("ipc-queue");
       console.warn(
         `[PtyHost] IPC queue high (${utilization.toFixed(1)}%). Pausing PTY ${id} for backpressure.`
       );
@@ -109,24 +111,20 @@ export class IpcQueueManager {
         const currentUtilization = this.getUtilization(id);
         const pauseDuration = Date.now() - pauseStartTime;
 
-        const terminal = this.deps.getTerminal(id);
-        if (terminal?.ptyProcess) {
-          try {
-            terminal.ptyProcess.resume();
-            console.warn(
-              `[PtyHost] Force resumed IPC PTY ${id} after ${pauseDuration}ms (queue at ${currentUtilization.toFixed(1)}%). Consumer may be stalled.`
-            );
-            this.deps.emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
-            this.deps.emitReliabilityMetric({
-              terminalId: id,
-              metricType: "pause-end",
-              timestamp: Date.now(),
-              durationMs: pauseDuration,
-              bufferUtilization: currentUtilization,
-            });
-          } catch (error) {
-            console.error(`[PtyHost] Failed to force resume IPC PTY ${id}:`, error);
-          }
+        const coordinator = this.deps.getPauseCoordinator(id);
+        if (coordinator) {
+          coordinator.resume("ipc-queue");
+          console.warn(
+            `[PtyHost] Force resumed IPC PTY ${id} after ${pauseDuration}ms (queue at ${currentUtilization.toFixed(1)}%). Consumer may be stalled.`
+          );
+          this.deps.emitTerminalStatus(id, "running", currentUtilization, pauseDuration);
+          this.deps.emitReliabilityMetric({
+            terminalId: id,
+            metricType: "pause-end",
+            timestamp: Date.now(),
+            durationMs: pauseDuration,
+            bufferUtilization: currentUtilization,
+          });
         }
       }, IPC_MAX_PAUSE_MS);
 
@@ -149,22 +147,18 @@ export class IpcQueueManager {
     const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
     const utilization = this.getUtilization(id);
 
-    const terminal = this.deps.getTerminal(id);
-    if (terminal?.ptyProcess) {
-      try {
-        terminal.ptyProcess.resume();
-        console.log(`[PtyHost] IPC queue cleared to ${utilization.toFixed(1)}%. Resumed PTY ${id}`);
-        this.deps.emitTerminalStatus(id, "running", utilization, pauseDuration);
-        this.deps.emitReliabilityMetric({
-          terminalId: id,
-          metricType: "pause-end",
-          timestamp: Date.now(),
-          durationMs: pauseDuration,
-          bufferUtilization: utilization,
-        });
-      } catch (error) {
-        console.error(`[PtyHost] Failed to resume IPC PTY ${id}:`, error);
-      }
+    const coordinator = this.deps.getPauseCoordinator(id);
+    if (coordinator) {
+      coordinator.resume("ipc-queue");
+      console.log(`[PtyHost] IPC queue cleared to ${utilization.toFixed(1)}%. Resumed PTY ${id}`);
+      this.deps.emitTerminalStatus(id, "running", utilization, pauseDuration);
+      this.deps.emitReliabilityMetric({
+        terminalId: id,
+        metricType: "pause-end",
+        timestamp: Date.now(),
+        durationMs: pauseDuration,
+        bufferUtilization: utilization,
+      });
     }
 
     const safetyTimeout = this.pausedTerminals.get(id);

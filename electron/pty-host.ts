@@ -25,6 +25,7 @@ import { setSessionPersistSuppressed } from "./services/pty/terminalSessionPersi
 import {
   appendEmergencyLog,
   emergencyLogFatal,
+  PtyPauseCoordinator,
   ResourceGovernor,
   BackpressureManager,
   IpcQueueManager,
@@ -92,6 +93,26 @@ const textDecoder = new TextDecoder();
 // need main-process URL detection even when SharedArrayBuffer is active)
 const ipcDataMirrorTerminals = new Set<string>();
 
+// Per-terminal pause coordinators: the single source of truth for PTY flow control
+const pauseCoordinators = new Map<string, PtyPauseCoordinator>();
+
+function getPauseCoordinator(id: string): PtyPauseCoordinator | undefined {
+  return pauseCoordinators.get(id);
+}
+
+function getOrCreatePauseCoordinator(id: string): PtyPauseCoordinator | undefined {
+  let coordinator = pauseCoordinators.get(id);
+  if (coordinator) return coordinator;
+  const terminal = ptyManager.getTerminal(id);
+  if (!terminal?.ptyProcess) return undefined;
+  coordinator = new PtyPauseCoordinator({
+    pause: () => terminal.ptyProcess.pause(),
+    resume: () => terminal.ptyProcess.resume(),
+  });
+  pauseCoordinators.set(id, coordinator);
+  return coordinator;
+}
+
 // MessagePort for direct Renderer ↔ Pty Host communication (bypasses Main)
 // Note: This variable holds the port reference so the message handler stays active
 let rendererPort: MessagePort | null = null;
@@ -105,12 +126,14 @@ function sendEvent(event: PtyHostEvent): void {
 // Instantiate managers with dependency injection
 const backpressureManager = new BackpressureManager({
   getTerminal: (id) => ptyManager.getTerminal(id),
+  getPauseCoordinator,
   sendEvent,
   metricsEnabled,
 });
 
 const ipcQueueManager = new IpcQueueManager({
   getTerminal: (id) => ptyManager.getTerminal(id),
+  getPauseCoordinator,
   sendEvent,
   metricsEnabled,
   emitTerminalStatus: (...args) => backpressureManager.emitTerminalStatus(...args),
@@ -118,7 +141,8 @@ const ipcQueueManager = new IpcQueueManager({
 });
 
 const resourceGovernor = new ResourceGovernor({
-  getTerminals: () => ptyManager.getAll(),
+  getTerminalIds: () => ptyManager.getAll().map((t) => t.id),
+  getPauseCoordinator,
   getTerminalPids: () => ptyManager.getAll().map((t) => ({ id: t.id, pid: t.ptyProcess.pid })),
   incrementPauseCount: (count) => {
     backpressureManager.stats.pauseCount += count;
@@ -188,21 +212,14 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
             `[PtyHost] Visual buffer full (${utilization.toFixed(1)}% utilized). Pausing PTY ${id} for backpressure.`
           );
 
-          const terminal = ptyManager.getTerminal(id);
-          if (!terminal?.ptyProcess) {
+          const bpCoordinator = getOrCreatePauseCoordinator(id);
+          if (!bpCoordinator) {
             console.warn(
               `[PtyHost] Cannot apply backpressure: missing PTY process for ${id}. Falling back to IPC.`
             );
-            // Note: We already partially wrote to SAB, falling back to IPC for remainder is tricky/racy.
-            // Since we buffered the remainder in pendingVisualSegments, we just stick to the pause logic.
             break;
           }
-          try {
-            terminal.ptyProcess.pause();
-          } catch (error) {
-            console.error(`[PtyHost] Failed to pause PTY ${id}:`, error);
-            break;
-          }
+          bpCoordinator.pause("backpressure");
 
           // Track when we started pausing for timeout safety
           const pauseStartTime = Date.now();
@@ -234,15 +251,8 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
             if (backpressureManager.hasPendingSegments(id)) {
               backpressureManager.suspendVisualStream(id, `${dur}ms ack timeout`, util, dur, si);
             } else {
-              // No pending segments — just resume
-              const terminal = ptyManager.getTerminal(id);
-              if (terminal?.ptyProcess) {
-                try {
-                  terminal.ptyProcess.resume();
-                } catch {
-                  // ignore
-                }
-              }
+              // No pending segments — just resume via coordinator
+              getPauseCoordinator(id)?.resume("backpressure");
               backpressureManager.emitTerminalStatus(id, "running", util, dur);
               backpressureManager.emitReliabilityMetric({
                 terminalId: id,
@@ -339,6 +349,13 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
 });
 
 ptyManager.on("exit", (id: string, exitCode: number) => {
+  // Release all pause holds and remove coordinator for this terminal
+  const coordinator = pauseCoordinators.get(id);
+  if (coordinator) {
+    coordinator.forceReleaseAll();
+    pauseCoordinators.delete(id);
+  }
+
   // Clean up any active backpressure monitoring for this terminal
   backpressureManager.cleanupTerminal(id);
 
@@ -536,14 +553,7 @@ function resumePausedTerminal(id: string): void {
   const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
   backpressureManager.deletePauseStartTime(id);
 
-  const terminal = ptyManager.getTerminal(id);
-  if (terminal?.ptyProcess) {
-    try {
-      terminal.ptyProcess.resume();
-    } catch {
-      // ignore
-    }
-  }
+  getPauseCoordinator(id)?.resume("backpressure");
 
   const shardIndex = visualBuffers.length > 0 ? selectShard(id, visualBuffers.length) : 0;
   const s = visualBuffers[shardIndex];
@@ -774,14 +784,11 @@ port.on("message", async (rawMsg: any) => {
         const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
         backpressureManager.deletePauseStartTime(msg.id);
 
-        const terminal = ptyManager.getTerminal(msg.id);
-        if (terminal?.ptyProcess) {
-          try {
-            terminal.ptyProcess.resume();
-          } catch {
-            // ignore
-          }
+        // Release backpressure hold (respects other holds like resource-governor or system-sleep)
+        getPauseCoordinator(msg.id)?.resume("backpressure");
 
+        const terminal = ptyManager.getTerminal(msg.id);
+        if (terminal) {
           // Apply tier-driven ActivityMonitor polling: 50ms active, 500ms background
           const pollingInterval = tier === "active" ? 50 : 500;
           ptyManager.setActivityMonitorTier(msg.id, pollingInterval);
@@ -818,19 +825,15 @@ port.on("message", async (rawMsg: any) => {
         }
         backpressureManager.deletePauseStartTime(msg.id);
 
-        // Apply active tier polling (50ms) and resume PTY when waking
+        // Release backpressure hold via coordinator (respects other holds)
+        if (wasPaused) {
+          getPauseCoordinator(msg.id)?.resume("backpressure");
+        }
+
+        // Apply active tier polling (50ms) when waking
         const terminal = ptyManager.getTerminal(msg.id);
         if (terminal) {
           ptyManager.setActivityMonitorTier(msg.id, 50);
-
-          // Resume PTY if it was paused for backpressure
-          if (wasPaused && terminal.ptyProcess) {
-            try {
-              terminal.ptyProcess.resume();
-            } catch {
-              // ignore
-            }
-          }
         }
 
         // Best-effort warning: cwd missing
@@ -1026,11 +1029,10 @@ port.on("message", async (rawMsg: any) => {
         let pausedCount = 0;
 
         for (const terminal of terminals) {
-          try {
-            terminal.ptyProcess.pause();
+          const coordinator = getOrCreatePauseCoordinator(terminal.id);
+          if (coordinator) {
+            coordinator.pause("system-sleep");
             pausedCount++;
-          } catch {
-            // Ignore errors - process may already be dead
           }
         }
 
@@ -1060,11 +1062,7 @@ port.on("message", async (rawMsg: any) => {
           }
 
           const terminal = terminals[i++];
-          try {
-            terminal.ptyProcess.resume();
-          } catch {
-            // Ignore errors - process may be dead
-          }
+          getPauseCoordinator(terminal.id)?.resume("system-sleep");
         }, RESUME_STAGGER_MS);
         break;
       }
@@ -1156,47 +1154,46 @@ port.on("message", async (rawMsg: any) => {
       }
 
       case "force-resume": {
-        const terminal = ptyManager.getTerminal(msg.id);
-        if (terminal?.ptyProcess) {
-          try {
-            terminal.ptyProcess.resume();
-            console.log(`[PtyHost] Force resumed PTY ${msg.id} via user request`);
+        const coordinator = getPauseCoordinator(msg.id);
+        if (coordinator) {
+          coordinator.forceReleaseAll();
+          console.log(`[PtyHost] Force resumed PTY ${msg.id} via user request`);
 
-            // Clean up any pending backpressure monitoring
-            const checkInterval = backpressureManager.getPausedInterval(msg.id);
-            if (checkInterval) {
-              clearTimeout(checkInterval);
-              backpressureManager.deletePausedInterval(msg.id);
-            }
-            backpressureManager.clearPendingVisual(msg.id);
+          // Clean up any pending backpressure monitoring
+          const checkInterval = backpressureManager.getPausedInterval(msg.id);
+          if (checkInterval) {
+            clearTimeout(checkInterval);
+            backpressureManager.deletePausedInterval(msg.id);
+          }
+          backpressureManager.clearPendingVisual(msg.id);
 
-            // Calculate pause duration if we have a start time
-            const pauseStart = backpressureManager.getPauseStartTime(msg.id);
-            const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
-            backpressureManager.deletePauseStartTime(msg.id);
+          // Calculate pause duration if we have a start time
+          const pauseStart = backpressureManager.getPauseStartTime(msg.id);
+          const pauseDuration = pauseStart ? Date.now() - pauseStart : undefined;
+          backpressureManager.deletePauseStartTime(msg.id);
 
-            // Clear suspended flag to allow output to flow again
-            backpressureManager.clearSuspended(msg.id);
+          // Clear suspended flag to allow output to flow again
+          backpressureManager.clearSuspended(msg.id);
 
-            // Emit resume status
-            const utilization =
-              visualBuffers.length > 0
-                ? visualBuffers[selectShard(msg.id, visualBuffers.length)].getUtilization()
-                : undefined;
-            backpressureManager.emitTerminalStatus(msg.id, "running", utilization, pauseDuration);
+          // Also clear IPC queue backpressure state
+          ipcQueueManager.clearQueue(msg.id);
 
-            // Emit metrics for pause-end (user force-resume path)
-            if (pauseDuration !== undefined) {
-              backpressureManager.emitReliabilityMetric({
-                terminalId: msg.id,
-                metricType: "pause-end",
-                timestamp: Date.now(),
-                durationMs: pauseDuration,
-                bufferUtilization: utilization,
-              });
-            }
-          } catch (error) {
-            console.error(`[PtyHost] Failed to force resume PTY ${msg.id}:`, error);
+          // Emit resume status
+          const utilization =
+            visualBuffers.length > 0
+              ? visualBuffers[selectShard(msg.id, visualBuffers.length)].getUtilization()
+              : undefined;
+          backpressureManager.emitTerminalStatus(msg.id, "running", utilization, pauseDuration);
+
+          // Emit metrics for pause-end (user force-resume path)
+          if (pauseDuration !== undefined) {
+            backpressureManager.emitReliabilityMetric({
+              terminalId: msg.id,
+              metricType: "pause-end",
+              timestamp: Date.now(),
+              durationMs: pauseDuration,
+              bufferUtilization: utilization,
+            });
           }
         } else {
           console.warn(`[PtyHost] Cannot force resume - terminal ${msg.id} not found`);
@@ -1314,6 +1311,11 @@ function cleanup(): void {
   console.log("[PtyHost] Disposing resources...");
 
   resourceGovernor.dispose();
+
+  for (const coordinator of pauseCoordinators.values()) {
+    coordinator.forceReleaseAll();
+  }
+  pauseCoordinators.clear();
 
   backpressureManager.dispose();
   ipcQueueManager.dispose();
