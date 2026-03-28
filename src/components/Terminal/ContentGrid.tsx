@@ -134,8 +134,8 @@ function EmptyState({
   return (
     <div className="flex flex-col items-center justify-center h-full w-full p-8 animate-in fade-in duration-500">
       <div className="max-w-3xl w-full flex flex-col items-center">
-        <div className="mb-12 flex flex-col items-center text-center">
-          <div className="relative group mb-8">
+        <div className="mb-6 flex flex-col items-center text-center">
+          <div className="relative group mb-4">
             {projectIconSvg ? (
               (() => {
                 // Defense-in-depth: sanitize SVG at render time
@@ -188,12 +188,11 @@ function EmptyState({
 
         {hasActiveWorktree && displayRecipes.length > 0 && (
           <div className="mb-8 w-full max-w-2xl">
-            <h4 className="text-xs font-semibold text-canopy-text/50 uppercase tracking-wider mb-3 text-center">
-              Recipes
-            </h4>
+            <h4 className="text-xs font-semibold text-canopy-text/60 mb-3 text-center">Recipes</h4>
             <div className={getRecipeGridClasses(displayRecipes.length)}>
               {displayRecipes.map((recipe) => {
                 const isPinned = recipe.showInEmptyState === true;
+                const recipeSummary = getRecipeTerminalSummary(recipe.terminals);
                 return (
                   <button
                     key={recipe.id}
@@ -222,9 +221,9 @@ function EmptyState({
                         </>
                       )}
                     </div>
-                    <p className="text-xs text-text-muted leading-relaxed">
-                      {getRecipeTerminalSummary(recipe.terminals)}
-                    </p>
+                    {recipeSummary && recipeSummary !== recipe.name && (
+                      <p className="text-xs text-text-muted leading-relaxed">{recipeSummary}</p>
+                    )}
                   </button>
                 );
               })}
@@ -240,7 +239,7 @@ function EmptyState({
 
         <div className="flex flex-col items-center gap-4 mt-4">
           {hasActiveWorktree && (
-            <p className="text-xs text-canopy-text/60 text-center">
+            <p className="text-xs text-canopy-text/70 text-center">
               Tip: Press <Kbd>⌘P</Kbd> to open the command palette or <Kbd>⌘T</Kbd> for a new
               terminal
             </p>
