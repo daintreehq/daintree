@@ -563,6 +563,9 @@ const CHANNELS = {
   AGENT_CAPABILITIES_GET_AGENT_METADATA: "agent-capabilities:get-agent-metadata",
   AGENT_CAPABILITIES_IS_AGENT_ENABLED: "agent-capabilities:is-agent-enabled",
 
+  // Help workspace channels
+  HELP_GET_FOLDER_PATH: "help:get-folder-path",
+
   // Clipboard channels
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
   CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
@@ -2256,6 +2259,12 @@ const api: ElectronAPI = {
     setConfig: (config: { autoRestoreOnCrash?: boolean }) =>
       _unwrappingInvoke(CHANNELS.CRASH_RECOVERY_SET_CONFIG, config),
   },
+
+  // Help workspace API
+  help: {
+    getFolderPath: () => _unwrappingInvoke(CHANNELS.HELP_GET_FOLDER_PATH),
+  },
+
   ...(isDemoMode
     ? {
         demo: {
