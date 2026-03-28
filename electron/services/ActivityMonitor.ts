@@ -61,6 +61,7 @@ export interface ActivityMonitorOptions {
   promptScanLineCount?: number;
   promptConfidence?: number;
   idleDebounceMs?: number;
+  promptFastPathMinQuietMs?: number;
   inputConfirmMs?: number;
   maxNoPromptIdleMs?: number;
   lineRewriteDetection?: {
@@ -86,6 +87,7 @@ export class ActivityMonitor {
   private isDisposed = false;
   private debounceTimer: NodeJS.Timeout | null = null;
   private readonly IDLE_DEBOUNCE_MS: number;
+  private readonly PROMPT_FAST_PATH_MIN_QUIET_MS: number;
   private readonly PROMPT_DEBOUNCE_MS = 500;
   private readonly PROMPT_QUIET_MS = 200;
   private readonly PROMPT_HISTORY_FALLBACK_MS = 3000;
@@ -151,6 +153,7 @@ export class ActivityMonitor {
     options?: ActivityMonitorOptions
   ) {
     this.IDLE_DEBOUNCE_MS = options?.idleDebounceMs ?? 4000;
+    this.PROMPT_FAST_PATH_MIN_QUIET_MS = options?.promptFastPathMinQuietMs ?? 3000;
     this.POLLING_MAX_BOOT_MS = options?.pollingMaxBootMs ?? 15000;
     this.MAX_WORKING_SILENCE_MS = options?.maxWorkingSilenceMs ?? 180000;
 
@@ -623,16 +626,15 @@ export class ActivityMonitor {
     // exit busy immediately rather than waiting the full IDLE_DEBOUNCE_MS. This keeps
     // the idle transition snappy after the prompt appears, even when IDLE_DEBOUNCE_MS
     // has been raised to cover LLM API call silence gaps.
-    // Require at least 3 seconds of quiet to avoid premature idle during inter-tool-call
-    // gaps (Claude bursts with 1-3s pauses, Codex has 3-5s gaps). This prevents the
-    // working↔waiting jitter that occurs when brief output pauses trigger idle transitions
-    // that immediately flip back to working (Issue #3606).
-    const PROMPT_FAST_PATH_MIN_QUIET_MS = 3000;
+    // Default: 3s quiet to avoid premature idle during inter-tool-call gaps (Claude
+    // bursts with 1-3s pauses, Codex has 3-5s gaps — Issue #3606). Agents with
+    // deterministic completion markers (e.g. Cursor, 700ms) can use a lower value
+    // via promptFastPathMinQuietMs in AgentDetectionConfig.
     if (
       this.state === "busy" &&
       !this.completionTimer.emitted &&
       shouldPreferPrompt &&
-      quietForMs >= PROMPT_FAST_PATH_MIN_QUIET_MS &&
+      quietForMs >= this.PROMPT_FAST_PATH_MIN_QUIET_MS &&
       now >= this.workingHoldUntil &&
       !(this.inputTracker.pendingInputUntil > 0 && now < this.inputTracker.pendingInputUntil)
     ) {

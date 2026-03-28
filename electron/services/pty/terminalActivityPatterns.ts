@@ -205,5 +205,6 @@ export function buildActivityMonitorOptions(
     promptScanLineCount: detection?.promptScanLineCount,
     promptConfidence: detection?.promptConfidence,
     idleDebounceMs: effectiveAgentId ? (detection?.debounceMs ?? 4000) : undefined,
+    promptFastPathMinQuietMs: detection?.promptFastPathMinQuietMs,
   };
 }

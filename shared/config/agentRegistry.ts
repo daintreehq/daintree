@@ -74,6 +74,15 @@ export interface AgentDetectionConfig {
   debounceMs?: number;
 
   /**
+   * Minimum quiet-output ms before the prompt fast-path can fire (default: 3000).
+   * Lower values make the busy→idle transition snappier when a prompt is detected.
+   * Agents with deterministic completion markers (e.g. Cursor) can use shorter
+   * values; agents with silent inter-tool-call gaps (Claude/Codex) need the
+   * default to avoid working↔waiting jitter (Issue #3606).
+   */
+  promptFastPathMinQuietMs?: number;
+
+  /**
    * Confidence level when primary pattern matches (default: 0.95).
    */
   primaryConfidence?: number;
@@ -822,6 +831,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       fallbackConfidence: 0.7,
       promptConfidence: 0.85,
       debounceMs: 4000,
+      promptFastPathMinQuietMs: 700,
     },
     routing: {
       capabilities: ["javascript", "typescript", "python", "react", "node", "general-purpose"],
