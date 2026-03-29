@@ -225,6 +225,19 @@ if (isSmokeTest) {
     console.error("[SMOKE] FAILED — node-pty native module:", (err as Error).message);
     app.exit(1);
   }
+
+  // Verify better-sqlite3 loads and can execute queries
+  try {
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(":memory:");
+    const row = db.prepare("SELECT 1 AS n").get() as { n: number };
+    db.close();
+    if (row?.n !== 1) throw new Error("unexpected query result");
+    console.error("[SMOKE] CHECK: better-sqlite3 native module — OK");
+  } catch (err) {
+    console.error("[SMOKE] FAILED — better-sqlite3 native module:", (err as Error).message);
+    app.exit(1);
+  }
 }
 
 app.enableSandbox();
