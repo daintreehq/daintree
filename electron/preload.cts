@@ -210,6 +210,10 @@ const CHANNELS = {
   TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
   TERMINAL_RESTART_SERVICE: "terminal:restart-service",
 
+  // Agent session history channels
+  AGENT_SESSION_LIST: "agent-session:list",
+  AGENT_SESSION_CLEAR: "agent-session:clear",
+
   // Files channels
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",
@@ -2159,6 +2163,12 @@ const api: ElectronAPI = {
 
     isAgentEnabled: (agentId: string) =>
       _unwrappingInvoke(CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED, agentId),
+  },
+
+  // Agent Session History API
+  agentSessionHistory: {
+    list: (worktreeId?: string) => _unwrappingInvoke(CHANNELS.AGENT_SESSION_LIST, { worktreeId }),
+    clear: (worktreeId?: string) => _unwrappingInvoke(CHANNELS.AGENT_SESSION_CLEAR, { worktreeId }),
   },
 
   // Clipboard API

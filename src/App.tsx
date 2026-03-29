@@ -96,6 +96,8 @@ import { FileViewerModalHost } from "./components/FileViewer/FileViewerModalHost
 import { NewTerminalPalette } from "./components/TerminalPalette";
 import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
+import { buildResumeCommand } from "@shared/types/agentSettings";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import {
   GitInitDialog,
   CloneRepoDialog,
@@ -172,6 +174,7 @@ import {
 import { computeChipState } from "./components/Worktree/utils/computeChipState";
 import { parseExactNumber } from "./lib/parseExactNumber";
 import type { WorktreeState, PanelKind } from "./types";
+import type { TerminalType } from "@shared/types";
 import { actionService } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { terminalInstanceService } from "./services/terminal/TerminalInstanceService";
@@ -1592,7 +1595,27 @@ function App() {
         onSelect={(kind) => {
           const result = panelPalette.handleSelect(kind);
           if (!result) return;
-          if (result.id.startsWith("agent:")) {
+          if (result.resumeSession) {
+            const session = result.resumeSession;
+            const agentConfig = getEffectiveAgentConfig(session.agentId);
+            const command = buildResumeCommand(
+              session.agentId,
+              session.sessionId,
+              session.agentLaunchFlags
+            );
+            if (command && agentConfig) {
+              addTerminal({
+                kind: "agent",
+                type: session.agentId as TerminalType,
+                agentId: session.agentId,
+                title: agentConfig.name,
+                cwd: defaultTerminalCwd,
+                worktreeId: activeWorktreeId ?? undefined,
+                command,
+                location: "grid",
+              });
+            }
+          } else if (result.id.startsWith("agent:")) {
             const agentId = result.id.slice("agent:".length);
             if (agentId) {
               launchAgent(agentId);
@@ -1610,7 +1633,27 @@ function App() {
           const selected = panelPalette.confirmSelection();
           if (!selected) return;
           if (selected.id === MORE_AGENTS_PANEL_ID) return;
-          if (selected.id.startsWith("agent:")) {
+          if (selected.resumeSession) {
+            const session = selected.resumeSession;
+            const agentConfig = getEffectiveAgentConfig(session.agentId);
+            const command = buildResumeCommand(
+              session.agentId,
+              session.sessionId,
+              session.agentLaunchFlags
+            );
+            if (command && agentConfig) {
+              addTerminal({
+                kind: "agent",
+                type: session.agentId as TerminalType,
+                agentId: session.agentId,
+                title: agentConfig.name,
+                cwd: defaultTerminalCwd,
+                worktreeId: activeWorktreeId ?? undefined,
+                command,
+                location: "grid",
+              });
+            }
+          } else if (selected.id.startsWith("agent:")) {
             const agentId = selected.id.slice("agent:".length);
             if (agentId) {
               launchAgent(agentId);

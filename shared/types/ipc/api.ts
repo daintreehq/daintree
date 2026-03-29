@@ -72,6 +72,7 @@ import type {
   AgentHelpRequest,
   AgentHelpResult,
 } from "./agent.js";
+import type { AgentSessionRecord } from "./agentSessionHistory.js";
 import type {
   DemoScreenshotResult,
   DemoStartCapturePayload,
@@ -1002,6 +1003,10 @@ export interface ElectronAPI {
     getAgentMetadata(agentId: string): Promise<AgentMetadata | null>;
     /** Check if agent is enabled/available */
     isAgentEnabled(agentId: string): Promise<boolean>;
+  };
+  agentSessionHistory: {
+    list(worktreeId?: string): Promise<AgentSessionRecord[]>;
+    clear(worktreeId?: string): Promise<void>;
   };
   clipboard: {
     saveImage(): Promise<
