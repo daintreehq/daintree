@@ -8,6 +8,8 @@ import type {
   ActionDispatchResult,
   ActionManifestEntry,
   ActionId,
+  ActionKind,
+  ActionDanger,
 } from "../../../shared/types/actions.js";
 
 const testHomeDir = vi.hoisted(
@@ -119,11 +121,22 @@ type TextToolResult = {
   isError?: boolean;
 };
 
-function createManifestEntry(
-  entry: Partial<ActionManifestEntry> & Pick<ActionManifestEntry, "id" | "title" | "description">
-): ActionManifestEntry {
+function createManifestEntry(entry: {
+  id: string;
+  title: string;
+  description: string;
+  name?: string;
+  category?: string;
+  kind?: ActionKind;
+  danger?: ActionDanger;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  enabled?: boolean;
+  disabledReason?: string;
+  requiresArgs?: boolean;
+}): ActionManifestEntry {
   return {
-    id: entry.id,
+    id: entry.id as ActionId,
     name: entry.name ?? entry.id,
     title: entry.title,
     description: entry.description,

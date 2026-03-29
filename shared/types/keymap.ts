@@ -14,7 +14,7 @@ import { BUILT_IN_AGENT_KEY_ACTIONS } from "../config/agentIds.js";
 type WorktreeSwitchIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 type WorktreeSwitchAction = `worktree.switch${WorktreeSwitchIndex}`;
 
-export type KeyAction =
+export type BuiltInKeyAction =
   // Navigation actions
   | "nav.up"
   | "nav.down"
@@ -176,9 +176,11 @@ export type KeyAction =
   | "app.forceQuit"
   | "modal.close";
 
+export type KeyAction = BuiltInKeyAction | (string & {});
+
 /**
- * All valid KeyAction values as a runtime set for validation.
- * Used by import/export to filter unknown action IDs.
+ * All built-in KeyAction values as a runtime set.
+ * Does not include plugin-defined actions.
  */
 export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "nav.up",

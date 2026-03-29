@@ -1,4 +1,4 @@
-import type { KeyAction } from "./keymap.js";
+import type { BuiltInKeyAction } from "./keymap.js";
 import type { z } from "zod";
 
 export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu";
@@ -9,8 +9,8 @@ export type ActionDanger = "safe" | "confirm" | "restricted";
 
 export type ActionScope = "renderer";
 
-export type ActionId =
-  | KeyAction
+export type BuiltInActionId =
+  | BuiltInKeyAction
   // Query actions for App Agent
   | "terminal.list"
   | "terminal.getOutput"
@@ -246,6 +246,8 @@ export type ActionId =
   | "terminal.stashInput"
   | "terminal.popStash"
   | "terminal.restartService";
+
+export type ActionId = BuiltInActionId | (string & {});
 
 export interface ActionContext {
   projectId?: string;

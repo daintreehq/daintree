@@ -31,7 +31,7 @@ export function exportProfile(overrides: Record<string, string[]>): string {
   );
 }
 
-export function importProfile(json: string, validActionIds: ReadonlySet<string>): ImportResult {
+export function importProfile(json: string): ImportResult {
   if (json.length > MAX_FILE_SIZE_BYTES) {
     return {
       ok: false,
@@ -84,17 +84,13 @@ export function importProfile(json: string, validActionIds: ReadonlySet<string>)
 
   const filtered: Record<string, string[]> = {};
   let applied = 0;
-  let skipped = 0;
 
   for (const [key, value] of Object.entries(result.data.overrides)) {
-    if (validActionIds.has(key)) {
-      // Strip empty/whitespace combo strings, consistent with setOverride validation
-      filtered[key] = value.filter((c) => c.trim() !== "");
-      applied++;
-    } else {
-      skipped++;
-    }
+    if (key.trim() === "") continue;
+    // Strip empty/whitespace combo strings, consistent with setOverride validation
+    filtered[key] = value.filter((c) => c.trim() !== "");
+    applied++;
   }
 
-  return { ok: true, overrides: filtered, applied, skipped, errors: [] };
+  return { ok: true, overrides: filtered, applied, skipped: 0, errors: [] };
 }

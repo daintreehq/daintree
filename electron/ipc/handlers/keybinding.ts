@@ -4,7 +4,6 @@ import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import type { KeyAction } from "../../../shared/types/keymap.js";
-import { KEY_ACTION_VALUES } from "../../../shared/types/keymap.js";
 import { exportProfile, importProfile } from "../../utils/keybindingProfileIO.js";
 import type { ImportResult } from "../../utils/keybindingProfileIO.js";
 
@@ -108,7 +107,7 @@ export function registerKeybindingHandlers(_deps: HandlerDependencies): () => vo
     }
 
     const json = await fs.readFile(filePaths[0], "utf-8");
-    const result = importProfile(json, KEY_ACTION_VALUES);
+    const result = importProfile(json);
 
     if (result.ok) {
       const existing = getValidatedOverrides();

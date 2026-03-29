@@ -1,14 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { exportProfile, importProfile } from "../keybindingProfileIO.js";
 
-const VALID_ACTION_IDS: ReadonlySet<string> = new Set([
-  "terminal.new",
-  "terminal.close",
-  "panel.palette",
-  "nav.quickSwitcher",
-  "app.settings",
-]);
-
 describe("exportProfile", () => {
   it("produces valid JSON", () => {
     const json = exportProfile({ "terminal.new": ["Cmd+T"] });
@@ -56,42 +48,40 @@ describe("importProfile", () => {
   }
 
   it("parses a valid profile correctly", () => {
-    const result = importProfile(makeProfileJson({ "terminal.new": ["Cmd+T"] }), VALID_ACTION_IDS);
+    const result = importProfile(makeProfileJson({ "terminal.new": ["Cmd+T"] }));
     expect(result.ok).toBe(true);
     expect(result.overrides["terminal.new"]).toEqual(["Cmd+T"]);
   });
 
-  it("skips unknown action IDs silently", () => {
+  it("accepts unknown action IDs for plugin extensibility", () => {
     const result = importProfile(
       makeProfileJson({
         "terminal.new": ["Cmd+T"],
         "unknown.action": ["Cmd+X"],
-        "future.feature": ["Cmd+Y"],
-      }),
-      VALID_ACTION_IDS
+        "plugin.myCustomAction": ["Cmd+Y"],
+      })
     );
     expect(result.ok).toBe(true);
-    expect(result.applied).toBe(1);
-    expect(result.skipped).toBe(2);
-    expect(result.overrides["unknown.action"]).toBeUndefined();
-    expect(result.overrides["future.feature"]).toBeUndefined();
+    expect(result.applied).toBe(3);
+    expect(result.skipped).toBe(0);
+    expect(result.overrides["unknown.action"]).toEqual(["Cmd+X"]);
+    expect(result.overrides["plugin.myCustomAction"]).toEqual(["Cmd+Y"]);
   });
 
-  it("returns applied and skipped counts", () => {
+  it("returns correct applied count for all entries", () => {
     const result = importProfile(
       makeProfileJson({
         "terminal.new": ["Cmd+T"],
         "terminal.close": ["Cmd+W"],
-        badaction: ["Cmd+B"],
-      }),
-      VALID_ACTION_IDS
+        "custom.action": ["Cmd+B"],
+      })
     );
-    expect(result.applied).toBe(2);
-    expect(result.skipped).toBe(1);
+    expect(result.applied).toBe(3);
+    expect(result.skipped).toBe(0);
   });
 
   it("rejects invalid JSON", () => {
-    const result = importProfile("not valid json{{{", VALID_ACTION_IDS);
+    const result = importProfile("not valid json{{{");
     expect(result.ok).toBe(false);
     expect(result.errors[0]).toBe("Invalid JSON");
   });
@@ -103,27 +93,27 @@ describe("importProfile", () => {
       exportedAt: "",
       overrides: {},
     });
-    const result = importProfile(json, VALID_ACTION_IDS);
+    const result = importProfile(json);
     expect(result.ok).toBe(false);
     expect(result.errors[0]).toContain("Unsupported schema version: 99");
   });
 
   it("rejects file exceeding 100KB", () => {
     const bigJson = "x".repeat(101 * 1024);
-    const result = importProfile(bigJson, VALID_ACTION_IDS);
+    const result = importProfile(bigJson);
     expect(result.ok).toBe(false);
     expect(result.errors[0]).toContain("too large");
   });
 
   it("rejects structurally invalid profile (missing overrides)", () => {
     const json = JSON.stringify({ schemaVersion: 1, app: "canopy", exportedAt: "" });
-    const result = importProfile(json, VALID_ACTION_IDS);
+    const result = importProfile(json);
     expect(result.ok).toBe(false);
     expect(result.errors.length).toBeGreaterThan(0);
   });
 
   it("handles empty overrides as a no-op successfully", () => {
-    const result = importProfile(makeProfileJson({}), VALID_ACTION_IDS);
+    const result = importProfile(makeProfileJson({}));
     expect(result.ok).toBe(true);
     expect(result.applied).toBe(0);
     expect(result.skipped).toBe(0);
@@ -131,16 +121,24 @@ describe("importProfile", () => {
   });
 
   it("strips whitespace-only combo strings from imported entries", () => {
-    const result = importProfile(
-      makeProfileJson({ "terminal.new": ["   ", "  "] }),
-      VALID_ACTION_IDS
-    );
+    const result = importProfile(makeProfileJson({ "terminal.new": ["   ", "  "] }));
     expect(result.ok).toBe(true);
     expect(result.overrides["terminal.new"]).toEqual([]);
   });
 
+  it("skips empty and whitespace-only action ID keys", () => {
+    const result = importProfile(
+      makeProfileJson({ "": ["Cmd+X"], "   ": ["Cmd+Y"], "terminal.new": ["Cmd+T"] })
+    );
+    expect(result.ok).toBe(true);
+    expect(result.applied).toBe(1);
+    expect(result.overrides[""]).toBeUndefined();
+    expect(result.overrides["   "]).toBeUndefined();
+    expect(result.overrides["terminal.new"]).toEqual(["Cmd+T"]);
+  });
+
   it("preserves empty combo arrays (unbound overrides)", () => {
-    const result = importProfile(makeProfileJson({ "terminal.new": [] }), VALID_ACTION_IDS);
+    const result = importProfile(makeProfileJson({ "terminal.new": [] }));
     expect(result.ok).toBe(true);
     expect(result.overrides["terminal.new"]).toEqual([]);
   });
@@ -152,7 +150,7 @@ describe("importProfile", () => {
       app: "canopy",
       overrides: { "terminal.new": "Cmd+T" },
     });
-    const result = importProfile(json, VALID_ACTION_IDS);
+    const result = importProfile(json);
     expect(result.ok).toBe(false);
   });
 
@@ -163,7 +161,18 @@ describe("importProfile", () => {
       "panel.palette": ["Cmd+N"],
     };
     const json = exportProfile(original);
-    const result = importProfile(json, VALID_ACTION_IDS);
+    const result = importProfile(json);
+    expect(result.ok).toBe(true);
+    expect(result.overrides).toEqual(original);
+  });
+
+  it("round-trips plugin-prefixed action IDs through export → import", () => {
+    const original: Record<string, string[]> = {
+      "plugin.example.run": ["Cmd+P"],
+      "terminal.new": ["Cmd+T"],
+    };
+    const json = exportProfile(original);
+    const result = importProfile(json);
     expect(result.ok).toBe(true);
     expect(result.overrides).toEqual(original);
   });

@@ -240,7 +240,7 @@ export type {
 } from "./config.js";
 
 // Keymap types - keyboard shortcuts
-export type { KeyAction, KeymapPreset, KeyMapConfig } from "./keymap.js";
+export type { BuiltInKeyAction, KeyAction, KeymapPreset, KeyMapConfig } from "./keymap.js";
 
 // Agent settings types - AI agent CLI configuration
 export type {
@@ -368,6 +368,7 @@ export type {
   ActionKind,
   ActionDanger,
   ActionScope,
+  BuiltInActionId,
   ActionId,
   ActionContext,
   ActionDefinition,
