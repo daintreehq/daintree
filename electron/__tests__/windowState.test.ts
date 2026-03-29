@@ -16,14 +16,14 @@ const screenMock = vi.hoisted(() => ({
 }));
 
 const constructorCalls: any[] = [];
-const eventHandlers = new Map<string, Function>();
+const eventHandlers = new Map<string, (...args: unknown[]) => void>();
 const winInstance = {
   getBounds: vi.fn(() => ({ x: 100, y: 100, width: 1200, height: 800 })),
   isMaximized: vi.fn(() => false),
   isDestroyed: vi.fn(() => false),
   maximize: vi.fn(),
   center: vi.fn(),
-  on: vi.fn((event: string, handler: Function) => {
+  on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
     eventHandlers.set(event, handler);
   }),
   id: 1,
@@ -33,7 +33,7 @@ vi.mock("electron", () => {
   const BW = vi.fn(function (this: any, opts: any) {
     constructorCalls.push(opts);
     Object.assign(this, winInstance);
-    this.on = vi.fn((event: string, handler: Function) => {
+    this.on = vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       eventHandlers.set(event, handler);
     });
   });
