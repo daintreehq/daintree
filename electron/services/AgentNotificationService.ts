@@ -1,18 +1,9 @@
-import path from "path";
-import { fileURLToPath } from "url";
-import { existsSync } from "fs";
 import { events } from "./events.js";
 import { notificationService, type WatchNotificationContext } from "./NotificationService.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
-import { playSound, type SoundHandle } from "../utils/soundPlayer.js";
+import { soundService } from "./SoundService.js";
 import { CHANNELS } from "../ipc/channels.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// AgentNotificationService lives in electron/services/; sounds are in electron/resources/sounds/
-const SOUNDS_DIR = path.join(__dirname, "..", "resources", "sounds");
 
 const COMPLETION_DEBOUNCE_MS = 2000;
 const NOTIFICATION_STAGGER_MS = 500;
@@ -31,7 +22,6 @@ class AgentNotificationService {
   private waitingEscalationTimers = new Map<string, NodeJS.Timeout>();
   private notificationQueue: PendingNotification[] = [];
   private staggerTimer: NodeJS.Timeout | null = null;
-  private lastSoundHandle: SoundHandle | null = null;
   private unsubscribers: Array<() => void> = [];
   private watchedTerminals = new Set<string>();
 
@@ -275,23 +265,11 @@ class AgentNotificationService {
 
   private playNotificationSound(enabled: boolean, soundFile: string): void {
     if (!enabled) return;
-
-    const soundPath = path.join(SOUNDS_DIR, soundFile);
-
-    if (!existsSync(soundPath)) return;
-
-    if (this.lastSoundHandle) {
-      this.lastSoundHandle.cancel();
-    }
-    this.lastSoundHandle = playSound(soundPath);
+    soundService.playFile(soundFile);
   }
 
   playSoundPreview(soundFile: string): void {
-    const soundPath = path.join(SOUNDS_DIR, soundFile);
-    if (this.lastSoundHandle) {
-      this.lastSoundHandle.cancel();
-    }
-    this.lastSoundHandle = playSound(soundPath);
+    soundService.previewFile(soundFile);
   }
 
   dispose(): void {
@@ -317,10 +295,7 @@ class AgentNotificationService {
 
     this.notificationQueue = [];
 
-    if (this.lastSoundHandle) {
-      this.lastSoundHandle.cancel();
-      this.lastSoundHandle = null;
-    }
+    soundService.cancel();
   }
 }
 

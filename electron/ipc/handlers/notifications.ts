@@ -6,17 +6,10 @@ import {
   type WatchNotificationContext,
 } from "../../services/NotificationService.js";
 import { agentNotificationService } from "../../services/AgentNotificationService.js";
+import { soundService, ALLOWED_SOUND_FILES } from "../../services/SoundService.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
-
-const ALLOWED_SOUND_FILES = new Set([
-  "chime.wav",
-  "ping.wav",
-  "complete.wav",
-  "waiting.wav",
-  "error.wav",
-]);
 
 export function registerNotificationHandlers(_deps: HandlerDependencies): () => void {
   const handleNotificationUpdate = (
@@ -77,7 +70,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     soundFile: unknown
   ): Promise<void> => {
     if (typeof soundFile !== "string" || !ALLOWED_SOUND_FILES.has(soundFile)) return;
-    agentNotificationService.playSoundPreview(soundFile);
+    soundService.previewFile(soundFile);
   };
 
   const handleSyncWatched = (_event: Electron.IpcMainEvent, payload: unknown): void => {

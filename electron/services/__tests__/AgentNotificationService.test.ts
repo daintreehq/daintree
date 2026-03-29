@@ -16,7 +16,15 @@ const notificationServiceMock = vi.hoisted(() => ({
   isWindowFocused: vi.fn(() => false),
 }));
 
-const playSoundMock = vi.hoisted(() => vi.fn(() => ({ cancel: vi.fn() })));
+const soundServiceMock = vi.hoisted(() => ({
+  play: vi.fn(),
+  playFile: vi.fn(),
+  preview: vi.fn(),
+  previewFile: vi.fn(),
+  cancel: vi.fn(),
+  getVariants: vi.fn(() => []),
+  getVariantCount: vi.fn(() => 1),
+}));
 
 vi.mock("../../store.js", () => ({
   store: storeMock,
@@ -30,12 +38,8 @@ vi.mock("../NotificationService.js", () => ({
   notificationService: notificationServiceMock,
 }));
 
-vi.mock("../../utils/soundPlayer.js", () => ({
-  playSound: playSoundMock,
-}));
-
-vi.mock("fs", () => ({
-  existsSync: vi.fn(() => true),
+vi.mock("../SoundService.js", () => ({
+  soundService: soundServiceMock,
 }));
 
 import { events } from "../events.js";
@@ -118,7 +122,7 @@ describe("AgentNotificationService", () => {
     vi.advanceTimersByTime(5000);
 
     expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
-    expect(playSoundMock).not.toHaveBeenCalled();
+    expect(soundServiceMock.playFile).not.toHaveBeenCalled();
   });
 
   it("does not fire notifications for unwatched terminals", () => {
@@ -134,7 +138,7 @@ describe("AgentNotificationService", () => {
     vi.advanceTimersByTime(1000);
 
     expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
-    expect(playSoundMock).not.toHaveBeenCalled();
+    expect(soundServiceMock.playFile).not.toHaveBeenCalled();
   });
 
   it("does not fire notifications when terminalId is absent in payload", () => {
@@ -205,7 +209,7 @@ describe("AgentNotificationService", () => {
 
     events.emit("agent:state-changed", makePayload("waiting"));
 
-    expect(playSoundMock).toHaveBeenCalled();
+    expect(soundServiceMock.playFile).toHaveBeenCalled();
   });
 
   it("does not play sound when soundEnabled is false", () => {
@@ -213,7 +217,7 @@ describe("AgentNotificationService", () => {
 
     events.emit("agent:state-changed", makePayload("waiting"));
 
-    expect(playSoundMock).not.toHaveBeenCalled();
+    expect(soundServiceMock.playFile).not.toHaveBeenCalled();
   });
 
   it("plays waitingSoundFile for waiting events", () => {
@@ -221,7 +225,7 @@ describe("AgentNotificationService", () => {
 
     events.emit("agent:state-changed", makePayload("waiting"));
 
-    expect(playSoundMock).toHaveBeenCalledWith(expect.stringContaining("ping.wav"));
+    expect(soundServiceMock.playFile).toHaveBeenCalledWith(expect.stringContaining("ping.wav"));
   });
 
   it("plays completedSoundFile for completion events", () => {
@@ -230,7 +234,7 @@ describe("AgentNotificationService", () => {
     events.emit("agent:state-changed", makePayload("completed"));
     vi.advanceTimersByTime(5000);
 
-    expect(playSoundMock).toHaveBeenCalledWith(expect.stringContaining("chime.wav"));
+    expect(soundServiceMock.playFile).toHaveBeenCalledWith(expect.stringContaining("chime.wav"));
   });
 
   it("plays escalationSoundFile for escalation events", () => {
@@ -244,7 +248,7 @@ describe("AgentNotificationService", () => {
     vi.advanceTimersByTime(180_000);
 
     // The first call is the waiting sound, the second is escalation
-    const escalationCall = playSoundMock.mock.calls.find((call: string[]) =>
+    const escalationCall = soundServiceMock.playFile.mock.calls.find((call: string[]) =>
       call[0].includes("error.wav")
     );
     expect(escalationCall).toBeDefined();

@@ -21,6 +21,152 @@ const SAMPLE_RATE = 44100;
 const TWO_PI = 2 * Math.PI;
 
 // ---------------------------------------------------------------------------
+// Seeded PRNG (mulberry32) — deterministic builds, reproducible WAVs.
+// Seed can be changed to generate a different "take" of the same sounds.
+// ---------------------------------------------------------------------------
+const SEED = 0xca0917; // change this to re-roll all randomness
+let _seed = SEED;
+function seedReset(s = SEED) {
+  _seed = s;
+}
+function rand() {
+  _seed |= 0;
+  _seed = (_seed + 0x6d2b79f5) | 0;
+  let t = Math.imul(_seed ^ (_seed >>> 15), 1 | _seed);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+/** Random float in [-1, 1] */
+function rand2() {
+  return rand() * 2 - 1;
+}
+
+// ---------------------------------------------------------------------------
+// Variant generation
+//
+// The key insight from game audio: varying GLOBAL parameters (FM index,
+// resonance) produces imperceptible differences.  What actually makes
+// strikes sound different is varying WHICH HARMONICS are excited — the
+// spectral envelope.  Hitting a marimba bar in the center excites the
+// fundamental strongly; hitting near the edge excites upper partials.
+//
+// Each variant is the same bar struck in a slightly different spot with
+// slightly different hand tension.  The "identity core" (gesture contour,
+// transient shape, spectral region) is INVARIANT.  Only micro-features
+// change: pitch ±20 cents, volume ±1dB, transient emphasis, spectral tilt.
+//
+// Research sweet spots (mobile game audio / psychoacoustics):
+//   Pitch:    ±15-20 cents  (below conscious detection, above SSA threshold)
+//   Volume:   ±0.9-1.1x     (~±1dB)
+//   Noise:    ±10%          (strike texture)
+//   Timing:   ±5-15ms       (handled by sequence jitter, not here)
+//   Modes:    ±15-25% on upper partials only (fundamental stays at 1.0)
+// ---------------------------------------------------------------------------
+
+const VARIANT_COUNT = 4;
+
+const VARIANTS = [
+  // v0: center strike — the canonical sound
+  {
+    pitchCents: 0,
+    modeAmpMul: [1.0, 1.0, 1.0, 1.0],
+    modeFreqShift: [0, 0, 0, 0],
+    dropMode: -1,
+    fmIndex: 1.0,
+    fmAmt: 1.0,
+    fmDecayRate: 1.0,
+    malletAmt: 1.0,
+    thumpAmt: 1.0,
+    noiseBandHz: 1.0,
+    excDuration: 1.0,
+    presenceAmt: 1.0,
+    presenceHz: 1.0,
+    resonance: 1.0,
+  },
+  // v1: slightly off-center, marginally softer — upper partials reduced,
+  //     a touch more mallet weight, slightly sharp pitch
+  {
+    pitchCents: 15,
+    modeAmpMul: [1.0, 0.8, 0.75, 0.6],
+    modeFreqShift: [0, -8, -12, 5],
+    dropMode: -1,
+    fmIndex: 0.85,
+    fmAmt: 0.9,
+    fmDecayRate: 1.15,
+    malletAmt: 1.1,
+    thumpAmt: 1.15,
+    noiseBandHz: 0.9,
+    excDuration: 1.15,
+    presenceAmt: 0.85,
+    presenceHz: 0.96,
+    resonance: 1.04,
+  },
+  // v2: slightly brighter strike — upper partials boosted, a touch more
+  //     FM shimmer, slightly shorter contact, flat pitch
+  {
+    pitchCents: -12,
+    modeAmpMul: [1.0, 1.15, 1.25, 1.1],
+    modeFreqShift: [0, 10, 15, -5],
+    dropMode: -1,
+    fmIndex: 1.2,
+    fmAmt: 1.12,
+    fmDecayRate: 0.88,
+    malletAmt: 0.92,
+    thumpAmt: 0.85,
+    noiseBandHz: 1.12,
+    excDuration: 0.85,
+    presenceAmt: 1.2,
+    presenceHz: 1.06,
+    resonance: 0.95,
+  },
+  // v3: slightly warmer, more body — 2nd partial a touch louder, 3rd/4th
+  //     a touch quieter, marginally more thump, sharp pitch
+  {
+    pitchCents: 8,
+    modeAmpMul: [1.0, 1.1, 0.8, 0.7],
+    modeFreqShift: [0, 5, -8, 10],
+    dropMode: -1,
+    fmIndex: 0.9,
+    fmAmt: 0.95,
+    fmDecayRate: 1.08,
+    malletAmt: 1.08,
+    thumpAmt: 1.1,
+    noiseBandHz: 0.95,
+    excDuration: 1.1,
+    presenceAmt: 0.9,
+    presenceHz: 0.98,
+    resonance: 1.02,
+  },
+];
+
+/** Apply variant to a note's opts.  Injects per-mode overrides that
+ *  WoodModal will pick up via modeAmps / modeFreqShifts arrays. */
+function applyVariant(opts, variantIdx) {
+  if (variantIdx === 0) return opts;
+  const v = VARIANTS[variantIdx];
+  const tweaked = { ...opts };
+
+  // Per-mode spectral overrides — the biggest lever for audible variation
+  tweaked._modeAmpMul = v.modeAmpMul;
+  tweaked._modeFreqShift = v.modeFreqShift;
+  tweaked._dropMode = v.dropMode;
+  tweaked._pitchCents = v.pitchCents || 0;
+
+  // Global parameter scaling
+  if (tweaked.fmIndex != null) tweaked.fmIndex *= v.fmIndex;
+  if (tweaked.fmAmt != null) tweaked.fmAmt *= v.fmAmt;
+  if (tweaked.fmDecayRate != null) tweaked.fmDecayRate *= v.fmDecayRate;
+  if (tweaked.malletAmt != null) tweaked.malletAmt *= v.malletAmt;
+  if (tweaked.thumpAmt != null) tweaked.thumpAmt *= v.thumpAmt;
+  if (tweaked.noiseBandHz != null) tweaked.noiseBandHz *= v.noiseBandHz;
+  if (tweaked.excDuration != null) tweaked.excDuration *= v.excDuration;
+  if (tweaked.attackPresenceAmt != null) tweaked.attackPresenceAmt *= v.presenceAmt;
+  if (tweaked.attackPresenceHz != null) tweaked.attackPresenceHz *= v.presenceHz;
+  if (tweaked.resonance != null && v.resonance) tweaked.resonance *= v.resonance;
+  return tweaked;
+}
+
+// ---------------------------------------------------------------------------
 // Just Intonation pitch palette (ratio × 440 Hz)
 //
 // Core: A-major pentatonic.  Ds5 (Lydian #4) adds a sense of wonder /
@@ -255,20 +401,37 @@ class WoodModal {
       // Strike deformation: momentary sharp pitch on fundamental (Hz above true pitch)
       deformHz = 15,
       deformMs = 18,
+      // Variant overrides: per-mode amplitude multipliers and freq shifts
+      _modeAmpMul, // [1.0, 0.3, 0.15, 0.0] — vary which partials ring
+      _modeFreqShift, // [0, -15, -25, 0] — cents shift per mode
+      _dropMode = -1, // index to mute entirely (-1 = none)
     } = opts;
 
     this.modes = modeRatios
       .map((ratio, i) => {
-        const modeFreq = frequency * ratio;
+        // Drop this mode entirely if variant says so
+        if (i === _dropMode) return null;
+
+        let modeFreq = frequency * ratio;
+
+        // Apply per-mode frequency shift (in cents) for upper partials
+        if (_modeFreqShift && i > 0 && _modeFreqShift[i]) {
+          modeFreq *= Math.pow(2, _modeFreqShift[i] / 1200);
+        }
+
         if (modeFreq > SAMPLE_RATE * 0.45) return null;
-        return new ModalResonator(modeFreq, modeQs[i] * resonance, modeAmps[i]);
+
+        // Apply per-mode amplitude multiplier (the biggest audible lever)
+        let amp = modeAmps[i];
+        if (_modeAmpMul && _modeAmpMul[i] !== undefined) {
+          amp *= _modeAmpMul[i];
+        }
+
+        return new ModalResonator(modeFreq, modeQs[i] * resonance, amp);
       })
       .filter(Boolean);
 
-    // Split-fundamental beating: a real wooden bar is never perfectly
-    // uniform — its fundamental splits into two very close modes that
-    // phase against each other, creating a slow organic volume pulse
-    // in the decay tail.  ~7 cents sharp at 440Hz ≈ 1.8Hz beat rate.
+    // Split-fundamental beating
     const shadowFreq = frequency * 1.004;
     if (shadowFreq < SAMPLE_RATE * 0.45) {
       this.modes.push(new ModalResonator(shadowFreq, modeQs[0] * resonance * 0.9, 0.25));
@@ -328,7 +491,7 @@ function generateExcitation(numSamples, opts = {}) {
   // Strike zone micro-variance: a real mallet never hits the exact same
   // spot twice.  ±5% jitter on the noise band and thump frequency adds
   // organic texture to the static WAV without affecting pitch stability.
-  const jitter = () => 0.95 + Math.random() * 0.1;
+  const jitter = () => 0.95 + rand() * 0.1;
   const jitteredBandHz = noiseBandHz * jitter();
   const jitteredThumpStart = thumpStartHz * jitter();
 
@@ -376,7 +539,7 @@ class PinkNoise {
     this.b0 = this.b1 = this.b2 = this.b3 = this.b4 = this.b5 = this.b6 = 0;
   }
   next() {
-    const white = Math.random() * 2 - 1;
+    const white = rand() * 2 - 1;
     this.b0 = 0.99886 * this.b0 + white * 0.0555179;
     this.b1 = 0.99332 * this.b1 + white * 0.0750759;
     this.b2 = 0.969 * this.b2 + white * 0.153852;
@@ -398,7 +561,7 @@ class BrownNoise {
     this.z = 0;
   }
   next() {
-    const white = Math.random() * 2 - 1;
+    const white = rand() * 2 - 1;
     this.z = (this.z + 0.02 * white) / 1.02; // leaky integrator
     return this.z * 3.5; // scale to roughly [-1, 1]
   }
@@ -444,6 +607,14 @@ function canopyNote(freq, duration, opts = {}) {
     // Pitch envelope (FM component only)
     pitchBendHz = 20,
     pitchBendMs = 12,
+    // Attack fingerprint: a short presence burst in the 1.8-3.2kHz range
+    // that aids fast recognition on laptop speakers.  Different center
+    // frequency and hardness per cue creates an identity in the first 80ms
+    // that the 4kHz lowpass would otherwise suppress.
+    attackPresenceHz = 2400, // center frequency of the presence burst
+    attackPresenceQ = 1.5, // Q of the presence band (lower = wider)
+    attackPresenceAmt = 0.0, // 0 = off; typical range 0.08-0.20
+    attackPresenceMs = 10, // duration of the presence burst
   } = opts;
 
   const numSamples = Math.ceil(SAMPLE_RATE * duration);
@@ -454,6 +625,10 @@ function canopyNote(freq, duration, opts = {}) {
   if (modeRatios) modalOpts.modeRatios = modeRatios;
   if (modeAmps) modalOpts.modeAmps = modeAmps;
   if (modeQs) modalOpts.modeQs = modeQs;
+  // Pass variant spectral overrides through to WoodModal
+  if (opts._modeAmpMul) modalOpts._modeAmpMul = opts._modeAmpMul;
+  if (opts._modeFreqShift) modalOpts._modeFreqShift = opts._modeFreqShift;
+  if (opts._dropMode != null) modalOpts._dropMode = opts._dropMode;
   const wood = new WoodModal(freq, modalOpts);
 
   // FM oscillators for the digital excitation component
@@ -463,6 +638,10 @@ function canopyNote(freq, duration, opts = {}) {
   // Detuned double oscillator (added at output for width)
   const detuned = new PhaseOsc();
   const detuneFactor = Math.pow(2, 3 / 1200); // +3 cents
+
+  // Attack presence fingerprint filter (identity in first 80ms)
+  const presenceFilt = attackPresenceAmt > 0 ? new SVFilter() : null;
+  const presenceSamples = Math.ceil(SAMPLE_RATE * (attackPresenceMs / 1000));
 
   // Pre-generate the mallet excitation (noise + thump)
   const mallet = generateExcitation(numSamples, {
@@ -496,7 +675,17 @@ function canopyNote(freq, duration, opts = {}) {
     // --- Detuned double at output (organic width, not through wood) ---
     const detunedSample = detuned.next(f * detuneFactor) * expDecay(t, duration, 6) * detuneMix;
 
-    samples[i] = waveshape(woodSample + detunedSample) * amplitude;
+    // --- Attack presence fingerprint (laptop speaker discrimination) ---
+    let presence = 0;
+    if (presenceFilt && i < presenceSamples) {
+      const presEnv = expDecay(t, attackPresenceMs / 1000, 6);
+      presence =
+        presenceFilt.bandpass(rand2() * 0.5, attackPresenceHz, attackPresenceQ) *
+        presEnv *
+        attackPresenceAmt;
+    }
+
+    samples[i] = waveshape(woodSample + detunedSample + presence) * amplitude;
   }
 
   return samples;
@@ -535,7 +724,11 @@ function sequence(notes, opts = {}) {
     const n = notes[i];
     const jitteredOffset = Math.max(0, offsetSamples + Math.round(jitters[i] * SAMPLE_RATE));
     const noteDur = n.duration + tailPad;
-    const noteSamples = canopyNote(n.freq, noteDur, n.opts || {});
+    // Apply per-variant pitch shift (in cents) to the frequency
+    let noteFreq = n.freq;
+    const pitchCents = (n.opts || {})._pitchCents || 0;
+    if (pitchCents !== 0) noteFreq *= Math.pow(2, pitchCents / 1200);
+    const noteSamples = canopyNote(noteFreq, noteDur, n.opts || {});
     for (let j = 0; j < noteSamples.length && jitteredOffset + j < totalSamples; j++) {
       output[jitteredOffset + j] += noteSamples[j];
     }
@@ -645,8 +838,12 @@ function writeWav(samples, filePath) {
 
   for (let i = 0; i < numSamples; i++) {
     const clamped = Math.max(-1, Math.min(1, samples[i]));
-    const pcm = clamped < 0 ? clamped * 32768 : clamped * 32767;
-    buf.writeInt16LE(Math.round(pcm), 44 + i * 2);
+    // TPDF dither: triangular probability density function noise at ±1 LSB.
+    // Decorrelates quantization error so quiet tails decay more naturally.
+    const dither = (rand() - rand()) / 32768;
+    const scaled = (clamped < 0 ? clamped * 32768 : clamped * 32767) + dither;
+    const pcm = Math.max(-32768, Math.min(32767, Math.round(scaled)));
+    buf.writeInt16LE(pcm, 44 + i * 2);
   }
 
   writeFileSync(filePath, buf);
@@ -672,172 +869,245 @@ function writeWav(samples, filePath) {
 //   ping     0.68  — sharp but not dominant
 // ---------------------------------------------------------------------------
 
-// chime.wav — Lydian ascending pair A4→Ds5
-// Light bamboo resonance with moderate FM excitation.  The digital shimmer
-// passes through the wood modes, creating a hybrid "techno-bamboo" pluck.
-const chime = postProcess(
-  sequence(
-    [
-      {
-        freq: JI.A4,
-        duration: 0.1,
-        opts: {
-          resonance: 0.9,
-          fmAmt: 0.5,
-          fmIndex: 1.2,
-          fmDecayRate: 14,
-          malletAmt: 0.5,
-          thumpAmt: 0.3,
-        },
-      },
-      {
-        freq: JI.Ds5,
-        duration: 0.16,
-        opts: {
-          amplitude: 0.6,
-          resonance: 0.95,
-          fmAmt: 0.4,
-          fmIndex: 0.8,
-          fmDecayRate: 18,
-          malletAmt: 0.55,
-        },
-      },
-    ],
-    { noteGap: 0.015, tailPad: 0.12 }
-  ),
-  { reverbWet: 0.02, targetPeak: 0.7 }
-);
+// chime, complete, waiting, ping — defined as generator functions for
+// variant generation.  See "Sound generators" section below.
 
-// complete.wav — descending resolution E5→A4
-// Warmer, more resonant wood.  The A4 root has higher resonance (longer
-// ring) and less FM — the wood body dominates the tail, giving a warm
-// marimba-bar settling feeling.
-const complete = postProcess(
-  sequence(
-    [
-      {
-        freq: JI.E5,
-        duration: 0.1,
-        opts: {
-          amplitude: 0.5,
-          resonance: 0.9,
-          fmAmt: 0.45,
-          fmIndex: 0.8,
-          fmDecayRate: 18,
-          malletAmt: 0.55,
-        },
-      },
-      {
-        freq: JI.A4,
-        duration: 0.22,
-        opts: {
-          amplitude: 0.6,
-          resonance: 1.1, // more resonant — longer ring on the root
-          fmAmt: 0.3, // less digital on the resolution note
-          fmIndex: 0.6,
-          fmDecayRate: 20,
-          malletAmt: 0.6,
-          thumpAmt: 0.4, // more mallet mass on the low note
-        },
-      },
-    ],
-    { noteGap: 0.025, tailPad: 0.14 }
-  ),
-  { reverbWet: 0.02, targetPeak: 0.62 }
-);
-
-// waiting.wav — rising unresolved pair A4→B4
-// A quiet "inhale" tap on A4 followed by a deliberate hesitation gap,
-// then a firmer, insistent knock on the unresolved B4.  The velocity
-// contrast (soft→loud) creates an "upstroke" that demands attention.
-// FM decays faster (14 vs 10) to keep the tail woody, not glassy —
-// urgency comes from physical mallet force, not lingering shimmer.
-const waiting = postProcess(
-  sequence(
-    [
-      {
-        freq: JI.A4,
-        duration: 0.08,
-        opts: {
-          amplitude: 0.4, // quiet grace-note "inhale"
-          resonance: 0.85,
-          fmAmt: 0.4,
-          fmIndex: 1.0,
-          malletAmt: 0.5,
-        },
-      },
-      {
-        freq: JI.B4,
-        duration: 0.18,
-        opts: {
-          amplitude: 0.6, // louder, insistent follow-up
-          resonance: 0.95,
-          fmAmt: 0.55,
-          fmIndex: 1.6,
-          fmDecayRate: 14, // faster decay keeps it woody, not glassy
-          malletAmt: 0.65, // harder physical strike
-          thumpAmt: 0.45, // more mallet mass
-          noiseBandHz: 1400, // brighter contact
-        },
-      },
-    ],
-    { noteGap: 0.045, tailPad: 0.1 } // wider gap: deliberate hesitation
-  ),
-  { reverbWet: 0.02, targetPeak: 0.75 }
-);
-
-// error.wav — single Cs5 with dense, dark wood character.
-// Low resonance (dead wood), heavy mallet, FM at √3 ratio for metallic
-// undertones.  The wood model shapes the metallic FM into something
-// that sounds like striking a thick, dense branch.
+// error.wav — STATIC: no variants.  Critical sounds need Pavlovian consistency.
 const error = postProcess(
   canopyNote(JI.Cs5, 0.26, {
     amplitude: 0.55,
-    resonance: 0.7, // dead wood — short ring, hollow
-    modeQs: [150, 80, 40, 20], // lower Qs = faster decay, more percussive
-    fmRatio: 1.7321, // √3 — metallic inharmonics
+    resonance: 0.7,
+    modeQs: [150, 80, 40, 20],
+    fmRatio: 1.7321,
     fmAmt: 0.55,
     fmIndex: 2.2,
-    fmDecayRate: 7, // metallic FM lingers
+    fmDecayRate: 7,
     malletAmt: 0.55,
-    noiseBandHz: 800, // darker strike
-    thumpAmt: 0.5, // heavier mallet
+    noiseBandHz: 800,
+    thumpAmt: 0.5,
     pitchBendHz: 35,
     pitchBendMs: 20,
+    attackPresenceHz: 2200,
+    attackPresenceAmt: 0.16,
+    attackPresenceQ: 1.0,
+    attackPresenceMs: 14,
   }),
-  { reverbWet: 0.01, targetPeak: 0.75 }
+  { reverbWet: 0.01, targetPeak: 0.75, chassisMix: 0.01 }
 );
 
-// ping.wav — single kalimba pluck on E5.
-// High resonance, minimal FM — the most purely "natural" sound.  The
-// modal resonators do almost all the work; FM is just a tiny sparkle
-// on the initial strike.
-const ping = postProcess(
-  canopyNote(JI.E5, 0.22, {
-    amplitude: 0.5,
-    resonance: 1.1, // resonant wood — clean ring
-    fmAmt: 0.25, // barely there
-    fmIndex: 0.5,
-    fmDecayRate: 22, // gone almost instantly
-    malletAmt: 0.65, // mostly mallet excitation
-    detuneMix: 0.08,
-    excDuration: 0.004, // very short contact = clean pluck
-  }),
-  { reverbWet: 0.02, targetPeak: 0.68 }
-);
+// ---------------------------------------------------------------------------
+// Sound generators (functions that produce samples, callable per-variant)
+// ---------------------------------------------------------------------------
+
+function genWaiting(variantIdx = 0) {
+  return postProcess(
+    sequence(
+      [
+        {
+          freq: JI.A4,
+          duration: 0.08,
+          opts: applyVariant(
+            {
+              amplitude: 0.4,
+              resonance: 0.85,
+              fmAmt: 0.4,
+              fmIndex: 1.0,
+              malletAmt: 0.5,
+            },
+            variantIdx
+          ),
+        },
+        {
+          freq: JI.B4,
+          duration: 0.18,
+          opts: applyVariant(
+            {
+              amplitude: 0.6,
+              resonance: 0.95,
+              fmAmt: 0.55,
+              fmIndex: 1.6,
+              fmDecayRate: 14,
+              malletAmt: 0.65,
+              thumpAmt: 0.45,
+              noiseBandHz: 1400,
+              attackPresenceHz: 3000,
+              attackPresenceAmt: 0.18,
+              attackPresenceQ: 2.0,
+              attackPresenceMs: 12,
+            },
+            variantIdx
+          ),
+        },
+      ],
+      { noteGap: 0.045, tailPad: 0.1 }
+    ),
+    { reverbWet: 0.02, targetPeak: 0.75, chassisMix: 0.015 }
+  );
+}
+
+function genChime(variantIdx = 0) {
+  return postProcess(
+    sequence(
+      [
+        {
+          freq: JI.A4,
+          duration: 0.1,
+          opts: applyVariant(
+            {
+              resonance: 0.9,
+              fmAmt: 0.5,
+              fmIndex: 1.2,
+              fmDecayRate: 14,
+              malletAmt: 0.5,
+              thumpAmt: 0.3,
+              attackPresenceHz: 2600,
+              attackPresenceAmt: 0.12,
+              attackPresenceQ: 1.8,
+            },
+            variantIdx
+          ),
+        },
+        {
+          freq: JI.Ds5,
+          duration: 0.16,
+          opts: applyVariant(
+            {
+              amplitude: 0.6,
+              resonance: 0.95,
+              fmAmt: 0.4,
+              fmIndex: 0.8,
+              fmDecayRate: 18,
+              malletAmt: 0.55,
+              attackPresenceHz: 2800,
+              attackPresenceAmt: 0.1,
+              attackPresenceQ: 2.0,
+            },
+            variantIdx
+          ),
+        },
+      ],
+      { noteGap: 0.015, tailPad: 0.12 }
+    ),
+    { reverbWet: 0.02, targetPeak: 0.7, chassisMix: 0.02 }
+  );
+}
+
+function genComplete(variantIdx = 0) {
+  return postProcess(
+    sequence(
+      [
+        {
+          freq: JI.E5,
+          duration: 0.1,
+          opts: applyVariant(
+            {
+              amplitude: 0.5,
+              resonance: 0.9,
+              fmAmt: 0.45,
+              fmIndex: 0.8,
+              fmDecayRate: 18,
+              malletAmt: 0.55,
+              attackPresenceHz: 2000,
+              attackPresenceAmt: 0.08,
+              attackPresenceQ: 1.2,
+            },
+            variantIdx
+          ),
+        },
+        {
+          freq: JI.A4,
+          duration: 0.22,
+          opts: applyVariant(
+            {
+              amplitude: 0.6,
+              resonance: 1.1,
+              fmAmt: 0.3,
+              fmIndex: 0.6,
+              fmDecayRate: 20,
+              malletAmt: 0.6,
+              thumpAmt: 0.4,
+              attackPresenceHz: 1800,
+              attackPresenceAmt: 0.06,
+              attackPresenceQ: 1.0,
+            },
+            variantIdx
+          ),
+        },
+      ],
+      { noteGap: 0.025, tailPad: 0.14 }
+    ),
+    { reverbWet: 0.02, targetPeak: 0.62, chassisMix: 0.035 }
+  );
+}
+
+function genPing(variantIdx = 0) {
+  const vopts = applyVariant(
+    {
+      amplitude: 0.5,
+      resonance: 1.1,
+      fmAmt: 0.25,
+      fmIndex: 0.5,
+      fmDecayRate: 22,
+      malletAmt: 0.65,
+      detuneMix: 0.08,
+      excDuration: 0.004,
+      attackPresenceHz: 2800,
+      attackPresenceAmt: 0.14,
+      attackPresenceQ: 2.5,
+      attackPresenceMs: 6,
+    },
+    variantIdx
+  );
+  let freq = JI.E5;
+  if (vopts._pitchCents) freq *= Math.pow(2, vopts._pitchCents / 1200);
+  return postProcess(canopyNote(freq, 0.22, vopts), {
+    reverbWet: 0.02,
+    targetPeak: 0.68,
+    chassisMix: 0.02,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Write files
+//
+// Variant sounds: chime, complete, ping get 4 variants each (.v1, .v2, .v3).
+// Static sounds: waiting and error are single files (semantic consistency).
+// The base file (e.g., chime.wav) is variant 0 — the canonical version.
 // ---------------------------------------------------------------------------
 
-const sounds = { chime, complete, waiting, error, ping };
+// Static sounds (no variants — error needs Pavlovian consistency)
+const staticSounds = { error };
 
-for (const [name, samples] of Object.entries(sounds)) {
+for (const [name, samples] of Object.entries(staticSounds)) {
   const filePath = join(outDir, `${name}.wav`);
   writeWav(samples, filePath);
   const sizeKB = (Buffer.byteLength(Buffer.alloc(44 + samples.length * 2)) / 1024).toFixed(1);
   const durationMs = ((samples.length / SAMPLE_RATE) * 1000).toFixed(0);
   console.log(`  ${name}.wav  ${durationMs}ms  ${sizeKB}KB`);
+}
+
+// Variant sounds
+const variantGenerators = {
+  chime: genChime,
+  complete: genComplete,
+  waiting: genWaiting,
+  ping: genPing,
+};
+
+for (const [name, generator] of Object.entries(variantGenerators)) {
+  for (let v = 0; v < VARIANT_COUNT; v++) {
+    // Each variant gets a unique seed offset so the PRNG produces different
+    // strike textures, noise patterns, and jitter values.
+    seedReset(SEED + v * 0x1000 + name.charCodeAt(0));
+
+    const samples = generator(v);
+    const suffix = v === 0 ? "" : `.v${v}`;
+    const filePath = join(outDir, `${name}${suffix}.wav`);
+    writeWav(samples, filePath);
+    const sizeKB = (Buffer.byteLength(Buffer.alloc(44 + samples.length * 2)) / 1024).toFixed(1);
+    const durationMs = ((samples.length / SAMPLE_RATE) * 1000).toFixed(0);
+    console.log(`  ${name}${suffix}.wav  ${durationMs}ms  ${sizeKB}KB`);
+  }
 }
 
 console.log(`\nSounds written to ${outDir}`);
