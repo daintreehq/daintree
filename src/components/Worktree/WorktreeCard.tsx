@@ -27,7 +27,10 @@ import { WorktreeDetailsSection } from "./WorktreeCard/WorktreeDetailsSection";
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
-import type { AggregateCounts } from "./WorktreeCard/MainWorktreeSummaryRows";
+import {
+  MainWorktreeSummaryRows,
+  type AggregateCounts,
+} from "./WorktreeCard/MainWorktreeSummaryRows";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -115,7 +118,8 @@ export function worktreeCardPropsAreEqual(
     prev.onOpenEditor === next.onOpenEditor &&
     prev.onSaveLayout === next.onSaveLayout &&
     prev.onLaunchAgent === next.onLaunchAgent &&
-    prev.onAfterTerminalSelect === next.onAfterTerminalSelect
+    prev.onAfterTerminalSelect === next.onAfterTerminalSelect &&
+    prev.projectHealth === next.projectHealth
   );
 }
 
@@ -138,6 +142,7 @@ export interface WorktreeCardProps {
   dragHandleListeners?: SyntheticListenerMap;
   dragHandleActivatorRef?: (node: HTMLElement | null) => void;
   isDraggingSort?: boolean;
+  projectHealth?: import("@shared/types").ProjectHealthData | null;
 }
 
 export const WorktreeCard = React.memo(function WorktreeCard({
@@ -159,6 +164,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   dragHandleListeners,
   dragHandleActivatorRef,
   isDraggingSort,
+  projectHealth,
 }: WorktreeCardProps) {
   "use memo";
   const isExpanded = useWorktreeSelectionStore(
