@@ -108,6 +108,18 @@ describe("urlUtils", () => {
       const urls = extractLocalhostUrls(output);
       expect(urls).toContain("http://localhost:5173/");
     });
+
+    it("extracts IPv6 [::1] URLs from terminal output", () => {
+      const output = `Server running at http://[::1]:3000`;
+      const urls = extractLocalhostUrls(output);
+      expect(urls).toContain("http://[::1]:3000/");
+    });
+
+    it("extracts IPv6 [::1] URLs with paths", () => {
+      const output = `Ready at http://[::1]:3000/api/health`;
+      const urls = extractLocalhostUrls(output);
+      expect(urls).toContain("http://[::1]:3000/api/health");
+    });
   });
 
   describe("stripAnsiAndOscCodes", () => {
@@ -162,6 +174,12 @@ describe("urlUtils", () => {
       const result = normalizeBrowserUrl("");
       expect(result.error).toBeDefined();
     });
+
+    it("normalizes IPv6 [::1] URL", () => {
+      const result = normalizeBrowserUrl("http://[::1]:3000");
+      expect(result.url).toBe("http://[::1]:3000/");
+      expect(result.error).toBeUndefined();
+    });
   });
 
   describe("isLocalhostUrl", () => {
@@ -179,6 +197,18 @@ describe("urlUtils", () => {
 
     it("returns false for invalid input", () => {
       expect(isLocalhostUrl("not a url")).toBe(false);
+    });
+
+    it("returns true for IPv6 [::1] URL", () => {
+      expect(isLocalhostUrl("http://[::1]:3000")).toBe(true);
+    });
+
+    it("returns true for IPv6 [::1] URL with path", () => {
+      expect(isLocalhostUrl("http://[::1]:3000/page")).toBe(true);
+    });
+
+    it("returns true for https IPv6 [::1] URL", () => {
+      expect(isLocalhostUrl("https://[::1]:3000")).toBe(true);
     });
   });
 });
