@@ -336,7 +336,7 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
         type: "keyDown",
         key: "f",
         meta: true,
-        control: false,
+        control: true,
         alt: false,
         shift: false,
       });
