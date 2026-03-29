@@ -75,7 +75,6 @@ vi.mock("@/utils/terminalType", () => ({
 vi.mock("p-queue", () => ({
   default: class MockPQueue {
     concurrency: number;
-    private tasks: (() => Promise<unknown>)[] = [];
     constructor(opts: { concurrency: number }) {
       this.concurrency = opts.concurrency;
     }
@@ -85,6 +84,7 @@ vi.mock("p-queue", () => ({
     async addAll(fns: (() => Promise<unknown>)[]) {
       for (const fn of fns) await fn();
     }
+    clear() {}
   },
 }));
 
