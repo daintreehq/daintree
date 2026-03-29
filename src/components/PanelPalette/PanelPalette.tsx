@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
-import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
+import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import type { PanelKindOption } from "@/hooks/usePanelPalette";
 import { PanelKindIcon } from "./PanelKindIcon";
@@ -204,27 +204,14 @@ export function PanelPalette({
       </AppPaletteDialog.Body>
 
       <AppPaletteDialog.Footer>
-        <span>
-          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-            ↑
-          </kbd>
-          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60 ml-1">
-            ↓
-          </kbd>
-          <span className="ml-1.5">to navigate</span>
-        </span>
-        <span>
-          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-            Enter
-          </kbd>
-          <span className="ml-1.5">to create</span>
-        </span>
-        <span>
-          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-            Esc
-          </kbd>
-          <span className="ml-1.5">to close</span>
-        </span>
+        <PaletteFooterHints
+          primaryHint={{ keys: ["↵"], label: "to create" }}
+          hints={[
+            { keys: ["↑", "↓"], label: "to navigate" },
+            { keys: ["↵"], label: "to create" },
+            { keys: ["Esc"], label: "to close" },
+          ]}
+        />
       </AppPaletteDialog.Footer>
     </AppPaletteDialog>
   );

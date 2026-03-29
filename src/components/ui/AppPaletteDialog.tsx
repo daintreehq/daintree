@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { CircleHelp } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { useOverlayState, useEscapeStack } from "@/hooks";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { usePaletteStore } from "@/store/paletteStore";
@@ -11,6 +13,9 @@ import {
   UI_EXIT_EASING,
   getUiTransitionDuration,
 } from "@/lib/animationUtils";
+
+export const KBD_CLASS =
+  "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60";
 
 export interface AppPaletteDialogProps {
   isOpen: boolean;
@@ -197,31 +202,73 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
   );
 };
 
+export interface PaletteFooterHint {
+  keys: string[];
+  label: string;
+}
+
+export interface PaletteFooterHintsProps {
+  primaryHint: PaletteFooterHint;
+  hints: PaletteFooterHint[];
+}
+
+export function PaletteFooterHints({ primaryHint, hints }: PaletteFooterHintsProps) {
+  const [helpOpen, setHelpOpen] = useState(false);
+
+  return (
+    <div className="w-full flex items-center justify-between">
+      <span>
+        {primaryHint.keys.map((key, i) => (
+          <kbd key={key} className={cn(KBD_CLASS, i > 0 && "ml-1")}>
+            {key}
+          </kbd>
+        ))}
+        <span className="ml-1.5">{primaryHint.label}</span>
+      </span>
+      <Popover open={helpOpen} onOpenChange={setHelpOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="p-0.5 rounded transition-colors text-canopy-text/40 hover:text-canopy-text/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+            aria-label="Keyboard shortcuts"
+          >
+            <CircleHelp className="w-3.5 h-3.5" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          side="top"
+          align="end"
+          className="w-auto p-3"
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          <div className="flex flex-col gap-1.5 text-xs text-canopy-text/60">
+            {hints.map(({ keys, label }) => (
+              <span key={label}>
+                {keys.map((key, i) => (
+                  <kbd key={key} className={cn(KBD_CLASS, i > 0 && "ml-1")}>
+                    {key}
+                  </kbd>
+                ))}
+                <span className="ml-1.5">{label}</span>
+              </span>
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
 function DefaultKeyboardHints() {
   return (
-    <>
-      <span>
-        <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-          ↑
-        </kbd>
-        <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60 ml-1">
-          ↓
-        </kbd>
-        <span className="ml-1.5">to navigate</span>
-      </span>
-      <span>
-        <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-          Enter
-        </kbd>
-        <span className="ml-1.5">to select</span>
-      </span>
-      <span>
-        <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-          Esc
-        </kbd>
-        <span className="ml-1.5">to close</span>
-      </span>
-    </>
+    <PaletteFooterHints
+      primaryHint={{ keys: ["↵"], label: "to select" }}
+      hints={[
+        { keys: ["↑", "↓"], label: "to navigate" },
+        { keys: ["↵"], label: "to select" },
+        { keys: ["Esc"], label: "to close" },
+      ]}
+    />
   );
 }
 
