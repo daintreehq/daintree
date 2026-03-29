@@ -12,6 +12,7 @@ import type { ActivityState } from "./TerminalPane";
 import { useTerminalStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
+import { formatTokenCount } from "@/utils/formatTokenCount";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { useErrorStore } from "@/store/errorStore";
@@ -90,6 +91,7 @@ function TerminalHeaderContentComponent({
     stateChangeConfidence,
     waitingReason,
     sessionCost,
+    sessionTokens,
   } = useTerminalStore(
     useShallow((state) => {
       const t = state.terminals.find((t) => t.id === id);
@@ -101,6 +103,7 @@ function TerminalHeaderContentComponent({
         stateChangeConfidence: t?.stateChangeConfidence,
         waitingReason: t?.waitingReason,
         sessionCost: t?.sessionCost,
+        sessionTokens: t?.sessionTokens,
       };
     })
   );
@@ -173,32 +176,43 @@ function TerminalHeaderContentComponent({
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="relative inline-flex items-center shrink-0">
-              <div
-                className={cn(
-                  "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
-                  chipStyle,
-                  isStalled
-                    ? "text-status-warning animate-pulse motion-reduce:animate-none"
-                    : effectiveColor
-                )}
-                role="status"
-                aria-label={`Agent state: ${isStalled ? "stalled" : stateLabel}`}
-              >
-                <StateIcon
+            <div className="inline-flex items-center gap-1.5 shrink-0">
+              <div className="relative inline-flex items-center shrink-0">
+                <div
                   className={cn(
-                    "w-3 h-3",
-                    agentState === "working" && !isStalled && "animate-spin-slow",
-                    "motion-reduce:animate-none"
+                    "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
+                    chipStyle,
+                    isStalled
+                      ? "text-status-warning animate-pulse motion-reduce:animate-none"
+                      : effectiveColor
                   )}
-                  aria-hidden="true"
-                />
+                  role="status"
+                  aria-label={`Agent state: ${isStalled ? "stalled" : stateLabel}`}
+                >
+                  <StateIcon
+                    className={cn(
+                      "w-3 h-3",
+                      agentState === "working" && !isStalled && "animate-spin-slow",
+                      "motion-reduce:animate-none"
+                    )}
+                    aria-hidden="true"
+                  />
+                </div>
+                {errorCount > 0 && (
+                  <span
+                    className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-error"
+                    aria-label={`${errorCount} error${errorCount > 1 ? "s" : ""}`}
+                  />
+                )}
               </div>
-              {errorCount > 0 && (
+              {agentState === "completed" && sessionCost != null && (
                 <span
-                  className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-error"
-                  aria-label={`${errorCount} error${errorCount > 1 ? "s" : ""}`}
-                />
+                  className="text-[11px] text-canopy-text/50 font-mono shrink-0"
+                  style={{ fontVariantNumeric: "tabular-nums" }}
+                >
+                  ${sessionCost.toFixed(2)}
+                  {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)}`}
+                </span>
               )}
             </div>
           </TooltipTrigger>

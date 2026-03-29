@@ -54,6 +54,8 @@ export interface AgentStateChangePayload {
   waitingReason?: WaitingReason;
   /** Extracted session cost in dollars (only present when state is "completed") */
   sessionCost?: number;
+  /** Extracted session token count (only present when state is "completed" and legacy format is used) */
+  sessionTokens?: number;
 }
 
 /** Agent detected payload */

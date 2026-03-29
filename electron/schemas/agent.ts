@@ -46,6 +46,7 @@ export const AgentStateChangedSchema = EventContextSchema.extend({
   confidence: z.number().min(0).max(1),
   waitingReason: z.enum(["prompt", "question"]).optional(),
   sessionCost: z.number().nonnegative().optional(),
+  sessionTokens: z.number().int().nonnegative().optional(),
 });
 
 export const AgentOutputSchema = EventContextSchema.extend({

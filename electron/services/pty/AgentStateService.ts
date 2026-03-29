@@ -105,7 +105,8 @@ export class AgentStateService {
     trigger?: AgentStateChangeTrigger,
     confidence?: number,
     waitingReason?: WaitingReason,
-    sessionCost?: number
+    sessionCost?: number,
+    sessionTokens?: number
   ): boolean {
     if (!terminal.agentId) {
       return false;
@@ -180,6 +181,7 @@ export class AgentStateService {
       confidence: inferredConfidence,
       ...(newState === "waiting" && waitingReason ? { waitingReason } : {}),
       ...(newState === "completed" && sessionCost != null ? { sessionCost } : {}),
+      ...(newState === "completed" && sessionTokens != null ? { sessionTokens } : {}),
     };
 
     const validatedStateChange = AgentStateChangedSchema.safeParse(stateChangePayload);
@@ -288,6 +290,7 @@ export class AgentStateService {
       patternConfidence?: number;
       waitingReason?: WaitingReason;
       sessionCost?: number;
+      sessionTokens?: number;
     }
   ): void {
     if (!terminal.agentId) {
@@ -313,7 +316,8 @@ export class AgentStateService {
         "heuristic",
         confidence,
         metadata?.waitingReason,
-        metadata?.sessionCost
+        metadata?.sessionCost,
+        metadata?.sessionTokens
       );
     } else if (metadata?.trigger === "output") {
       this.updateAgentState(terminal, event, "output", 1.0, metadata?.waitingReason);
