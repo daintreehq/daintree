@@ -613,6 +613,7 @@ class TerminalInstanceService {
       restoreGeneration: 0,
       isSerializedRestoreInProgress: false,
       deferredOutput: [],
+      scrollbackRestoreState: "none",
       attachRevealToken: 0,
       isAltBuffer: false,
       altBufferListeners: new Set(),
@@ -1717,6 +1718,12 @@ class TerminalInstanceService {
     this.cancelAttachReveal(managed);
     this.agentStateController.destroy(id);
     this.restoreController.destroy(id);
+
+    if (managed.scrollbackRestoreDisposable) {
+      managed.scrollbackRestoreDisposable.dispose();
+      managed.scrollbackRestoreDisposable = undefined;
+    }
+    managed.scrollbackRestoreState = "none";
 
     this.instances.delete(id);
 

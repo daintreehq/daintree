@@ -293,6 +293,75 @@ describe("TerminalRestoreController", () => {
     });
   });
 
+  describe("fetchAndRestore", () => {
+    it("sets isSerializedRestoreInProgress before IPC fetch resolves", async () => {
+      const { terminalClient } = await import("@/clients");
+      let resolveFetch!: (value: string | null) => void;
+      vi.mocked(terminalClient.getSerializedState).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = resolve;
+          })
+      );
+
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.fetchAndRestore("t1");
+      await flushMicrotasks();
+
+      // Flag should be set BEFORE the IPC call resolves
+      expect(managed.isSerializedRestoreInProgress).toBe(true);
+
+      resolveFetch("small-state");
+      await flushMicrotasks();
+      await promise;
+    });
+
+    it("returns false and clears flag when terminal becomes stale during fetch", async () => {
+      const { terminalClient } = await import("@/clients");
+      let resolveFetch!: (value: string | null) => void;
+      vi.mocked(terminalClient.getSerializedState).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = resolve;
+          })
+      );
+
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.fetchAndRestore("t1");
+      await flushMicrotasks();
+
+      // Simulate terminal being destroyed during fetch
+      controller.destroy("t1");
+
+      resolveFetch("state-data");
+      const result = await promise;
+
+      expect(result).toBe(false);
+    });
+
+    it("returns false for unknown terminal", async () => {
+      const result = await controller.fetchAndRestore("nonexistent");
+      expect(result).toBe(false);
+    });
+
+    it("clears isSerializedRestoreInProgress when serialized state is null", async () => {
+      const { terminalClient } = await import("@/clients");
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(null as unknown as string);
+
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const result = await controller.fetchAndRestore("t1");
+
+      expect(result).toBe(false);
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+    });
+  });
+
   describe("destroy", () => {
     it("bumps restore generation and clears restore state", () => {
       const managed = makeManagedTerminal({
