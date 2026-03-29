@@ -51,6 +51,7 @@ import { getRecipeGridClasses, getRecipeTerminalSummary } from "./utils/recipeUt
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { getMaximizedGroupFocusTarget } from "./contentGridFocus";
 
 interface TipEntry {
@@ -58,8 +59,7 @@ interface TipEntry {
   message: React.ReactNode;
   actionId?: ActionId;
   actionLabel?: string;
-  docsUrl?: string;
-  requiredAgents?: string[];
+  requiredAgents?: BuiltInAgentId[];
 }
 
 const TIPS: TipEntry[] = [
