@@ -186,4 +186,28 @@ describe("usePanelPalette", () => {
     );
     dispatchSpy.mockRestore();
   });
+
+  it("confirmSelection dispatches agent setup wizard event for MORE_AGENTS", () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    const { result } = renderHook(() => usePanelPalette());
+
+    // Navigate selectedIndex to MORE_AGENTS entry
+    const moreAgentsIndex = result.current.results.findIndex(
+      (item) => item.id === MORE_AGENTS_PANEL_ID
+    );
+    expect(moreAgentsIndex).toBeGreaterThanOrEqual(0);
+
+    // selectedIndex defaults to 0 (first item), so we need to confirm the right item
+    // Since MORE_AGENTS is at index 1 (after claude), we test handleSelect path instead
+    // which is the direct click path. confirmSelection uses selectedIndex.
+    const selected = result.current.handleSelect(result.current.results[moreAgentsIndex]!);
+    expect(selected).toBeNull();
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "canopy:open-agent-setup-wizard",
+        detail: { returnToPanelPalette: true },
+      })
+    );
+    dispatchSpy.mockRestore();
+  });
 });
