@@ -69,6 +69,18 @@ export const systemClient = {
     return window.electron.system.getHardwareInfo();
   },
 
+  getProcessMetrics: (): ReturnType<typeof window.electron.system.getProcessMetrics> => {
+    return window.electron.system.getProcessMetrics();
+  },
+
+  getHeapStats: (): ReturnType<typeof window.electron.system.getHeapStats> => {
+    return window.electron.system.getHeapStats();
+  },
+
+  getDiagnosticsInfo: (): ReturnType<typeof window.electron.system.getDiagnosticsInfo> => {
+    return window.electron.system.getDiagnosticsInfo();
+  },
+
   onWake: (
     callback: (data: { sleepDuration: number; timestamp: number }) => void
   ): (() => void) => {

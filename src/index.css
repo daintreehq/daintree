@@ -1079,6 +1079,23 @@ body,
   will-change: transform;
 }
 
+/* Diagnostics badge state transition flash - one-shot, no looping */
+@keyframes diagnostics-state-flash {
+  0% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.3;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-diagnostics-flash {
+  animation: diagnostics-state-flash 0.4s ease-out 1;
+}
+
 /* Activity blip animation - for new activity signals */
 @keyframes activity-blip {
   0% {
@@ -1151,7 +1168,8 @@ body,
   .animate-badge-bump,
   .animate-activity-blip,
   .animate-trash-pulse,
-  .animate-all-clear-flash {
+  .animate-all-clear-flash,
+  .animate-diagnostics-flash {
     animation: none;
     opacity: 1;
     transform: none;

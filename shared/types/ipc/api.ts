@@ -336,6 +336,9 @@ export interface ElectronAPI {
     downloadDiagnostics(): Promise<boolean>;
     getAppMetrics(): Promise<import("./system.js").AppMetricsSummary>;
     getHardwareInfo(): Promise<import("./system.js").HardwareInfo>;
+    getProcessMetrics(): Promise<import("./system.js").ProcessMetricEntry[]>;
+    getHeapStats(): Promise<import("./system.js").HeapStats>;
+    getDiagnosticsInfo(): Promise<import("./system.js").DiagnosticsInfo>;
     onWake(callback: (data: SystemWakePayload) => void): () => void;
   };
   app: {

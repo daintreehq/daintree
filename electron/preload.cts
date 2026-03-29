@@ -1083,6 +1083,12 @@ const api: ElectronAPI = {
 
     getHardwareInfo: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_HARDWARE_INFO),
 
+    getProcessMetrics: () => _unwrappingInvoke(CHANNELS.DIAGNOSTICS_GET_PROCESS_METRICS),
+
+    getHeapStats: () => _unwrappingInvoke(CHANNELS.DIAGNOSTICS_GET_HEAP_STATS),
+
+    getDiagnosticsInfo: () => _unwrappingInvoke(CHANNELS.DIAGNOSTICS_GET_INFO),
+
     onWake: (callback: (data: { sleepDuration: number; timestamp: number }) => void) => {
       const handler = (
         _event: Electron.IpcRendererEvent,

@@ -72,6 +72,9 @@ import type {
   SystemHealthCheckResult,
   AppMetricsSummary,
   HardwareInfo,
+  ProcessMetricEntry,
+  HeapStats,
+  DiagnosticsInfo,
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
@@ -483,6 +486,18 @@ export interface IpcInvokeMap {
   "system:get-hardware-info": {
     args: [];
     result: HardwareInfo;
+  };
+  "diagnostics:get-process-metrics": {
+    args: [];
+    result: ProcessMetricEntry[];
+  };
+  "diagnostics:get-heap-stats": {
+    args: [];
+    result: HeapStats;
+  };
+  "diagnostics:get-info": {
+    args: [];
+    result: DiagnosticsInfo;
   };
 
   // App state channels

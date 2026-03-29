@@ -1,13 +1,33 @@
 import { app, ipcMain, dialog } from "electron";
 import os from "node:os";
+import v8 from "node:v8";
+import { monitorEventLoopDelay, type IntervalHistogram } from "node:perf_hooks";
 import { promises as fs } from "node:fs";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
-import type { AppMetricsSummary, HardwareInfo } from "../../../shared/types/ipc/system.js";
+import type {
+  AppMetricsSummary,
+  HardwareInfo,
+  ProcessMetricEntry,
+  HeapStats,
+  DiagnosticsInfo,
+} from "../../../shared/types/ipc/system.js";
 import { collectDiagnostics } from "../../services/DiagnosticsCollector.js";
+
+let eventLoopHistogram: IntervalHistogram | null = null;
+
+function ensureEventLoopHistogram(): IntervalHistogram {
+  if (!eventLoopHistogram) {
+    eventLoopHistogram = monitorEventLoopDelay({ resolution: 20 });
+    eventLoopHistogram.enable();
+  }
+  return eventLoopHistogram;
+}
 
 export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
+
+  const histogram = ensureEventLoopHistogram();
 
   const handleGetAppMetrics = (): AppMetricsSummary => {
     try {
@@ -23,6 +43,57 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   };
   ipcMain.handle(CHANNELS.SYSTEM_GET_APP_METRICS, handleGetAppMetrics);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_APP_METRICS));
+
+  const handleGetProcessMetrics = (): ProcessMetricEntry[] => {
+    try {
+      const metrics = app.getAppMetrics();
+      return metrics
+        .map((proc) => ({
+          pid: proc.pid,
+          type: proc.type,
+          name: proc.name ?? proc.type,
+          memoryMB: Math.round((proc.memory.privateBytes ?? proc.memory.workingSetSize) / 1024),
+          cpuPercent: Math.round((proc.cpu?.percentCPUUsage ?? 0) * 10) / 10,
+        }))
+        .sort((a, b) => b.memoryMB - a.memoryMB);
+    } catch {
+      return [];
+    }
+  };
+  ipcMain.handle(CHANNELS.DIAGNOSTICS_GET_PROCESS_METRICS, handleGetProcessMetrics);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.DIAGNOSTICS_GET_PROCESS_METRICS));
+
+  const handleGetHeapStats = (): HeapStats => {
+    try {
+      const mem = process.memoryUsage();
+      const heapStats = v8.getHeapStatistics();
+      const usedMB = mem.heapUsed / 1024 / 1024;
+      const limitMB = heapStats.heap_size_limit / 1024 / 1024;
+      return {
+        usedMB: Math.round(usedMB * 10) / 10,
+        limitMB: Math.round(limitMB),
+        percent: Math.round((usedMB / limitMB) * 100 * 10) / 10,
+        externalMB: Math.round((mem.external + mem.arrayBuffers) / 1024 / 1024 * 10) / 10,
+      };
+    } catch {
+      return { usedMB: 0, limitMB: 0, percent: 0, externalMB: 0 };
+    }
+  };
+  ipcMain.handle(CHANNELS.DIAGNOSTICS_GET_HEAP_STATS, handleGetHeapStats);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.DIAGNOSTICS_GET_HEAP_STATS));
+
+  const handleGetDiagnosticsInfo = (): DiagnosticsInfo => {
+    try {
+      return {
+        uptimeSeconds: Math.floor(process.uptime()),
+        eventLoopP99Ms: Math.round(histogram.percentile(99) / 1_000_000),
+      };
+    } catch {
+      return { uptimeSeconds: 0, eventLoopP99Ms: 0 };
+    }
+  };
+  ipcMain.handle(CHANNELS.DIAGNOSTICS_GET_INFO, handleGetDiagnosticsInfo);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.DIAGNOSTICS_GET_INFO));
 
   const handleGetHardwareInfo = (): HardwareInfo => {
     try {

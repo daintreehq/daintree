@@ -110,6 +110,9 @@ export const CHANNELS = {
   SYSTEM_DOWNLOAD_DIAGNOSTICS: "system:download-diagnostics",
   SYSTEM_GET_APP_METRICS: "system:get-app-metrics",
   SYSTEM_GET_HARDWARE_INFO: "system:get-hardware-info",
+  DIAGNOSTICS_GET_PROCESS_METRICS: "diagnostics:get-process-metrics",
+  DIAGNOSTICS_GET_HEAP_STATS: "diagnostics:get-heap-stats",
+  DIAGNOSTICS_GET_INFO: "diagnostics:get-info",
 
   PR_DETECTED: "pr:detected",
   PR_CLEARED: "pr:cleared",
