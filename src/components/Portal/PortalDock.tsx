@@ -8,13 +8,21 @@ import { PORTAL_MIN_WIDTH, PORTAL_MAX_WIDTH } from "@shared/types";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
-import { useNativeContextMenu } from "@/hooks";
-import type { MenuItemOption } from "@/types";
 import { actionService } from "@/services/ActionService";
+import {
+  ContextMenu,
+  ContextMenuCheckboxItem,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { getElementBoundsAsDip } from "@/lib/portalBounds";
 
 export function PortalDock() {
-  const { showMenu } = useNativeContextMenu();
   const { width, activeTabId, tabs, links, setWidth, setOpen, defaultNewTabUrl } = usePortalStore();
   const contentRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
@@ -41,90 +49,6 @@ export function PortalDock() {
   const showLaunchpad = activeTabId === null || tabs.length === 0 || isBlankTab;
   const hasActiveUrl =
     activeTab?.url !== undefined && activeTab.url !== null && activeTab.url !== "";
-
-  const handleGlobalContextMenu = useCallback(
-    async (event: React.MouseEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (!target) return;
-      if (
-        target.closest(
-          "button,[role='tab'],[role='separator'],a,input,textarea,select,[contenteditable='true']"
-        )
-      ) {
-        return;
-      }
-
-      const defaultNewTabItems: MenuItemOption[] = [
-        {
-          id: "portal:default-new-tab:launchpad",
-          label: "Launchpad",
-          type: "checkbox",
-          checked: defaultNewTabUrl === null,
-        },
-        ...(enabledLinks.length > 0 ? [{ type: "separator" as const }] : []),
-        ...enabledLinks.map((link) => ({
-          id: `portal:default-new-tab:url:${link.url}`,
-          label: link.title,
-          type: "checkbox" as const,
-          checked: defaultNewTabUrl === link.url,
-        })),
-      ];
-
-      const template: MenuItemOption[] = [
-        { id: "portal:new-tab", label: "New Tab" },
-        { type: "separator" },
-        { id: "portal:close-tab", label: "Close Tab", enabled: activeTabId !== null },
-        { id: "portal:close-all", label: "Close All Tabs", enabled: tabs.length > 0 },
-        { type: "separator" },
-        { id: "portal:reset-width", label: "Reset Width" },
-        { type: "separator" },
-        { id: "portal:default-new-tab", label: "Default New Tab", submenu: defaultNewTabItems },
-        { type: "separator" },
-        { id: "settings:open:portal", label: "Portal Settings..." },
-      ];
-
-      const actionId = await showMenu(event, template);
-      if (!actionId) return;
-
-      if (actionId.startsWith("portal:default-new-tab:url:")) {
-        const url = actionId.slice("portal:default-new-tab:url:".length);
-        void actionService.dispatch("portal.setDefaultNewTab", { url }, { source: "context-menu" });
-        return;
-      }
-
-      switch (actionId) {
-        case "portal:new-tab":
-          void actionService.dispatch("portal.newTab", undefined, { source: "context-menu" });
-          break;
-        case "portal:close-tab":
-          void actionService.dispatch("portal.closeTab", undefined, { source: "context-menu" });
-          break;
-        case "portal:close-all":
-          void actionService.dispatch("portal.closeAllTabs", undefined, {
-            source: "context-menu",
-          });
-          break;
-        case "portal:reset-width":
-          void actionService.dispatch("portal.resetWidth", undefined, { source: "context-menu" });
-          break;
-        case "portal:default-new-tab:launchpad":
-          void actionService.dispatch(
-            "portal.setDefaultNewTab",
-            { url: null },
-            { source: "context-menu" }
-          );
-          break;
-        case "settings:open:portal":
-          void actionService.dispatch(
-            "app.settings.openTab",
-            { tab: "portal" },
-            { source: "context-menu" }
-          );
-          break;
-      }
-    },
-    [activeTabId, defaultNewTabUrl, enabledLinks, showMenu, tabs.length]
-  );
 
   const syncBounds = useCallback(() => {
     if (!contentRef.current || !activeTabId) return;
@@ -441,76 +365,161 @@ export function PortalDock() {
   }, []);
 
   return (
-    <div
-      ref={dockRef}
-      role="region"
-      aria-label="Portal"
-      data-macro-focus={isMacroFocused ? "true" : undefined}
-      className={cn(
-        "flex flex-col h-full bg-canopy-bg relative portal-dock outline-none",
-        "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset"
-      )}
-      style={{ width }}
-      onFocus={handleDockFocus}
-      onBlur={handleDockBlur}
-      onContextMenu={handleGlobalContextMenu}
-      tabIndex={-1}
-    >
-      <div
-        role="separator"
-        aria-label="Resize portal panel"
-        aria-orientation="vertical"
-        aria-valuenow={Math.round(width)}
-        aria-valuemin={PORTAL_MIN_WIDTH}
-        aria-valuemax={PORTAL_MAX_WIDTH}
-        tabIndex={0}
-        className={cn(
-          "group absolute -left-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-50",
-          "hover:bg-overlay-soft transition-colors focus:outline-none focus:bg-tint/[0.04] focus:ring-1 focus:ring-canopy-accent/50",
-          isResizing && "bg-canopy-accent/20"
-        )}
-        onMouseDown={handleResizeStart}
-        onKeyDown={handleKeyDown}
-      >
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
         <div
+          ref={dockRef}
+          role="region"
+          aria-label="Portal"
+          data-macro-focus={isMacroFocused ? "true" : undefined}
           className={cn(
-            "w-px h-8 rounded-full transition-all duration-150 delay-100 group-hover:w-0.5",
-            "bg-canopy-text/20",
-            "group-hover:bg-canopy-text/35 group-focus:bg-canopy-accent",
-            isResizing && "bg-canopy-accent"
+            "flex flex-col h-full bg-canopy-bg relative portal-dock outline-none",
+            "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset"
           )}
-        />
-      </div>
-      <PortalToolbar
-        tabs={tabs}
-        activeTabId={activeTabId}
-        onTabClick={handleTabClick}
-        onTabClose={handleTabClose}
-        onNewTab={handleNewTab}
-        defaultNewTabUrl={defaultNewTabUrl}
-        onClose={handleClose}
-        onGoBack={handleGoBack}
-        onGoForward={handleGoForward}
-        onReload={handleReload}
-        onOpenExternal={handleOpenExternal}
-        onCopyUrl={handleCopyUrl}
-        hasActiveUrl={hasActiveUrl}
-        onDuplicateTab={handleDuplicateTab}
-        onCloseOthers={handleCloseOthers}
-        onCloseToRight={handleCloseToRight}
-        onCopyTabUrl={handleCopyTabUrl}
-        onOpenTabExternal={handleOpenTabExternal}
-        onReloadTab={handleReloadTab}
-        enabledLinks={enabledLinks}
-      />
-      <div ref={contentRef} className="flex-1 flex flex-col min-h-0 relative">
-        {showLaunchpad ? (
-          <PortalLaunchpad links={enabledLinks} onOpenUrl={handleOpenUrl} />
-        ) : (
-          <div className="flex-1 bg-canopy-sidebar" id="portal-placeholder" />
-        )}
-      </div>
-    </div>
+          style={{ width }}
+          onFocus={handleDockFocus}
+          onBlur={handleDockBlur}
+          tabIndex={-1}
+        >
+          <div
+            role="separator"
+            aria-label="Resize portal panel"
+            aria-orientation="vertical"
+            aria-valuenow={Math.round(width)}
+            aria-valuemin={PORTAL_MIN_WIDTH}
+            aria-valuemax={PORTAL_MAX_WIDTH}
+            tabIndex={0}
+            className={cn(
+              "group absolute -left-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-50",
+              "hover:bg-overlay-soft transition-colors focus:outline-none focus:bg-tint/[0.04] focus:ring-1 focus:ring-canopy-accent/50",
+              isResizing && "bg-canopy-accent/20"
+            )}
+            onMouseDown={handleResizeStart}
+            onKeyDown={handleKeyDown}
+          >
+            <div
+              className={cn(
+                "w-px h-8 rounded-full transition-all duration-150 delay-100 group-hover:w-0.5",
+                "bg-canopy-text/20",
+                "group-hover:bg-canopy-text/35 group-focus:bg-canopy-accent",
+                isResizing && "bg-canopy-accent"
+              )}
+            />
+          </div>
+          <PortalToolbar
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onTabClick={handleTabClick}
+            onTabClose={handleTabClose}
+            onNewTab={handleNewTab}
+            defaultNewTabUrl={defaultNewTabUrl}
+            onClose={handleClose}
+            onGoBack={handleGoBack}
+            onGoForward={handleGoForward}
+            onReload={handleReload}
+            onOpenExternal={handleOpenExternal}
+            onCopyUrl={handleCopyUrl}
+            hasActiveUrl={hasActiveUrl}
+            onDuplicateTab={handleDuplicateTab}
+            onCloseOthers={handleCloseOthers}
+            onCloseToRight={handleCloseToRight}
+            onCopyTabUrl={handleCopyTabUrl}
+            onOpenTabExternal={handleOpenTabExternal}
+            onReloadTab={handleReloadTab}
+            enabledLinks={enabledLinks}
+          />
+          <div ref={contentRef} className="flex-1 flex flex-col min-h-0 relative">
+            {showLaunchpad ? (
+              <PortalLaunchpad links={enabledLinks} onOpenUrl={handleOpenUrl} />
+            ) : (
+              <div className="flex-1 bg-canopy-sidebar" id="portal-placeholder" />
+            )}
+          </div>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem
+          onSelect={() =>
+            void actionService.dispatch("portal.newTab", undefined, { source: "context-menu" })
+          }
+        >
+          New Tab
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          disabled={activeTabId === null}
+          onSelect={() =>
+            void actionService.dispatch("portal.closeTab", undefined, { source: "context-menu" })
+          }
+        >
+          Close Tab
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={tabs.length === 0}
+          onSelect={() =>
+            void actionService.dispatch("portal.closeAllTabs", undefined, {
+              source: "context-menu",
+            })
+          }
+        >
+          Close All Tabs
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onSelect={() =>
+            void actionService.dispatch("portal.resetWidth", undefined, { source: "context-menu" })
+          }
+        >
+          Reset Width
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>Default New Tab</ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            <ContextMenuCheckboxItem
+              checked={defaultNewTabUrl === null}
+              onSelect={() =>
+                void actionService.dispatch(
+                  "portal.setDefaultNewTab",
+                  { url: null },
+                  { source: "context-menu" }
+                )
+              }
+            >
+              Launchpad
+            </ContextMenuCheckboxItem>
+            {enabledLinks.length > 0 && <ContextMenuSeparator />}
+            {enabledLinks.map((link) => (
+              <ContextMenuCheckboxItem
+                key={link.url}
+                checked={defaultNewTabUrl === link.url}
+                onSelect={() =>
+                  void actionService.dispatch(
+                    "portal.setDefaultNewTab",
+                    { url: link.url },
+                    { source: "context-menu" }
+                  )
+                }
+              >
+                {link.title}
+              </ContextMenuCheckboxItem>
+            ))}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onSelect={() =>
+            void actionService.dispatch(
+              "app.settings.openTab",
+              { tab: "portal" },
+              { source: "context-menu" }
+            )
+          }
+        >
+          Portal Settings...
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
