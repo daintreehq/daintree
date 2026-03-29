@@ -73,9 +73,10 @@ vi.mock("@/store/notificationStore", () => ({
   ),
 }));
 
-const notifyMock = vi.fn(() => "notif-123");
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const notifyMock = vi.fn<(payload: any) => string>(() => "notif-123");
 vi.mock("@/lib/notify", () => ({
-  notify: (...args: unknown[]) => notifyMock(...args),
+  notify: (payload: unknown) => notifyMock(payload),
 }));
 
 vi.mock("../../useElectron", () => ({
