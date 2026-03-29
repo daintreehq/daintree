@@ -28,7 +28,7 @@ import {
   GRID_PLACEHOLDER_ID,
   SortableGridPlaceholder,
 } from "@/components/DragDrop";
-import { AlertTriangle, Settings, Play, Pin } from "lucide-react";
+import { AlertTriangle, Settings, Play, Pin, Plus, Search } from "lucide-react";
 import { CanopyIcon } from "@/components/icons";
 import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
@@ -45,7 +45,7 @@ import { useNativeContextMenu, useProjectBranding } from "@/hooks";
 import { actionService } from "@/services/ActionService";
 import type { CliAvailability } from "@shared/types";
 import type { MenuItemOption } from "@/types";
-import { getRecipeGridClasses, getRecipeTerminalSummary } from "./utils/recipeUtils";
+import { getRecipeTerminalSummary } from "./utils/recipeUtils";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
@@ -80,17 +80,18 @@ function EmptyState({
     );
   }, [allRecipes, activeWorktreeId]);
 
-  // Combine pinned and recently-used recipes into a unified display
-  // Pinned recipes first (sorted by lastUsedAt), then recent non-pinned
-  const displayRecipes = useMemo(() => {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [focusedIndex, setFocusedIndex] = useState(0);
+  const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  // Split recipes into pinned and recent groups
+  const { pinnedRecipes, recentRecipes, showSearch } = useMemo(() => {
     const MAX_RECIPES = 6;
 
-    // Get pinned recipes sorted by lastUsedAt
     const pinned = recipes
       .filter((r) => r.showInEmptyState)
       .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0));
 
-    // Get recently-used non-pinned recipes to backfill remaining slots
     const pinnedIds = new Set(pinned.map((r) => r.id));
     const remainingSlots = Math.max(0, MAX_RECIPES - pinned.length);
     const recent = recipes
@@ -98,9 +99,50 @@ function EmptyState({
       .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))
       .slice(0, remainingSlots);
 
-    // Combine: pinned first, then recent, up to MAX_RECIPES total
-    return [...pinned, ...recent].slice(0, MAX_RECIPES);
+    return {
+      pinnedRecipes: pinned.slice(0, MAX_RECIPES),
+      recentRecipes: recent,
+      showSearch: recipes.length > 6,
+    };
   }, [recipes]);
+
+  // Filter by search query
+  const filteredPinned = useMemo(() => {
+    if (!searchQuery) return pinnedRecipes;
+    const q = searchQuery.toLowerCase();
+    return pinnedRecipes.filter((r) => r.name.toLowerCase().includes(q));
+  }, [pinnedRecipes, searchQuery]);
+
+  const filteredRecent = useMemo(() => {
+    if (!searchQuery) return recentRecipes;
+    const q = searchQuery.toLowerCase();
+    return recentRecipes.filter((r) => r.name.toLowerCase().includes(q));
+  }, [recentRecipes, searchQuery]);
+
+  // Flat list for keyboard navigation (recipes + create button)
+  const totalRows = filteredPinned.length + filteredRecent.length + 1; // +1 for "Create new recipe"
+
+  // Reset focused index when list changes
+  useEffect(() => {
+    setFocusedIndex(0);
+  }, [activeWorktreeId, searchQuery]);
+
+  const handleListKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const next = (focusedIndex + 1) % totalRows;
+        setFocusedIndex(next);
+        rowRefs.current[next]?.focus();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const prev = (focusedIndex - 1 + totalRows) % totalRows;
+        setFocusedIndex(prev);
+        rowRefs.current[prev]?.focus();
+      }
+    },
+    [focusedIndex, totalRows]
+  );
 
   const handleOpenHelp = () => {
     void actionService.dispatch(
@@ -190,47 +232,128 @@ function EmptyState({
           </div>
         )}
 
-        {hasActiveWorktree && displayRecipes.length > 0 && (
-          <div className="mb-8 w-full max-w-2xl">
-            <h4 className="text-xs font-semibold text-canopy-text/60 mb-3 text-center">Recipes</h4>
-            <div className={getRecipeGridClasses(displayRecipes.length)}>
-              {displayRecipes.map((recipe) => {
-                const isPinned = recipe.showInEmptyState === true;
+        {hasActiveWorktree && (
+          <div className="mb-6 w-full max-w-lg">
+            {showSearch && (
+              <div className="mb-2 px-1">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-muted pointer-events-none" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search recipes…"
+                    className="w-full pl-8 pr-3 py-2 text-sm bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-md)] text-canopy-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-canopy-accent/40 focus:border-canopy-accent/40"
+                    aria-label="Search recipes"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
+            <div role="list" aria-label="Recipes" onKeyDown={handleListKeyDown}>
+              {filteredPinned.length > 0 && filteredRecent.length > 0 && (
+                <div className="px-3 pt-1 pb-0.5 text-xs font-medium text-text-muted uppercase tracking-wide">
+                  Pinned
+                </div>
+              )}
+              {filteredPinned.map((recipe, i) => {
                 const recipeSummary = getRecipeTerminalSummary(recipe.terminals);
                 return (
                   <button
                     key={recipe.id}
+                    ref={(el) => {
+                      rowRefs.current[i] = el;
+                    }}
+                    role="listitem"
                     type="button"
+                    tabIndex={focusedIndex === i ? 0 : -1}
                     onClick={() => handleRunRecipe(recipe.id)}
                     disabled={!defaultCwd}
-                    className={cn(
-                      "p-4 border rounded-[var(--radius-md)] transition-all text-left group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent disabled:opacity-50 disabled:cursor-not-allowed",
-                      isPinned
-                        ? "bg-canopy-accent/5 border-canopy-accent/30 hover:bg-canopy-accent/10 hover:border-canopy-accent/60"
-                        : "bg-canopy-sidebar border-canopy-border hover:bg-canopy-bg hover:border-canopy-accent/50"
-                    )}
+                    className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <div className="flex items-center gap-2 mb-2 min-w-0">
-                      <Play className="h-4 w-4 text-canopy-accent group-hover:text-canopy-accent/80 shrink-0" />
-                      <h5 className="font-medium text-sm text-canopy-text truncate flex-1">
-                        {recipe.name}
-                      </h5>
-                      {isPinned && (
-                        <>
-                          <span className="sr-only">Pinned</span>
-                          <Pin
-                            className="h-3.5 w-3.5 text-canopy-accent/60 shrink-0"
-                            aria-hidden="true"
-                          />
-                        </>
-                      )}
-                    </div>
+                    <Play
+                      className="h-3.5 w-3.5 text-canopy-accent opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity shrink-0"
+                      aria-hidden
+                    />
+                    <span className="flex-1 text-sm font-medium text-canopy-text truncate">
+                      {recipe.name}
+                    </span>
                     {recipeSummary && recipeSummary !== recipe.name && (
-                      <p className="text-xs text-text-muted leading-relaxed">{recipeSummary}</p>
+                      <span className="text-xs text-text-muted truncate max-w-[30%]">
+                        {recipeSummary}
+                      </span>
+                    )}
+                    <Pin className="h-3 w-3 text-canopy-accent/60 shrink-0" aria-hidden />
+                  </button>
+                );
+              })}
+
+              {filteredPinned.length > 0 && filteredRecent.length > 0 && (
+                <div className="px-3 pt-2 pb-0.5 text-xs font-medium text-text-muted uppercase tracking-wide">
+                  Recent
+                </div>
+              )}
+              {filteredRecent.map((recipe, i) => {
+                const idx = filteredPinned.length + i;
+                const recipeSummary = getRecipeTerminalSummary(recipe.terminals);
+                return (
+                  <button
+                    key={recipe.id}
+                    ref={(el) => {
+                      rowRefs.current[idx] = el;
+                    }}
+                    role="listitem"
+                    type="button"
+                    tabIndex={focusedIndex === idx ? 0 : -1}
+                    onClick={() => handleRunRecipe(recipe.id)}
+                    disabled={!defaultCwd}
+                    className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Play
+                      className="h-3.5 w-3.5 text-canopy-accent opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity shrink-0"
+                      aria-hidden
+                    />
+                    <span className="flex-1 text-sm font-medium text-canopy-text truncate">
+                      {recipe.name}
+                    </span>
+                    {recipeSummary && recipeSummary !== recipe.name && (
+                      <span className="text-xs text-text-muted truncate max-w-[30%]">
+                        {recipeSummary}
+                      </span>
                     )}
                   </button>
                 );
               })}
+
+              {filteredPinned.length === 0 && filteredRecent.length === 0 && searchQuery && (
+                <div className="px-3 py-2 text-sm text-text-muted">No recipes match</div>
+              )}
+
+              <button
+                ref={(el) => {
+                  rowRefs.current[filteredPinned.length + filteredRecent.length] = el;
+                }}
+                role="listitem"
+                type="button"
+                tabIndex={focusedIndex === filteredPinned.length + filteredRecent.length ? 0 : -1}
+                onClick={() => {
+                  void actionService.dispatch(
+                    "recipe.editor.open",
+                    { worktreeId: activeWorktreeId },
+                    { source: "user" }
+                  );
+                }}
+                className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+              >
+                <Plus
+                  className="h-3.5 w-3.5 text-text-muted group-hover:text-canopy-accent transition-colors shrink-0"
+                  aria-hidden
+                />
+                <span className="flex-1 text-sm text-text-muted group-hover:text-canopy-text transition-colors">
+                  Create new recipe…
+                </span>
+              </button>
             </div>
           </div>
         )}
