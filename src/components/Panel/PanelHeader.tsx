@@ -72,6 +72,8 @@ export interface PanelHeaderProps {
   type?: TerminalType;
   agentId?: string;
   detectedProcessId?: string;
+  worktreeAccentColor?: string;
+  worktreeBranch?: string;
   isFocused: boolean;
   isMaximized?: boolean;
   location?: "grid" | "dock";
@@ -121,6 +123,8 @@ function PanelHeaderComponent({
   type,
   agentId,
   detectedProcessId,
+  worktreeAccentColor,
+  worktreeBranch,
   isFocused,
   isMaximized = false,
   location = "grid",
@@ -726,6 +730,23 @@ function PanelHeaderComponent({
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
+          )}
+
+          {/* Worktree branch badge — shown when multiple worktrees are active */}
+          {worktreeBranch && worktreeAccentColor && (
+            <span
+              className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium leading-none select-none max-w-[120px]"
+              style={
+                {
+                  color: worktreeAccentColor,
+                  backgroundColor: "color-mix(in oklab, var(--worktree-color) 12%, transparent)",
+                  "--worktree-color": worktreeAccentColor,
+                } as React.CSSProperties
+              }
+              aria-label={`Branch: ${worktreeBranch}`}
+            >
+              <span className="truncate">{worktreeBranch}</span>
+            </span>
           )}
         </div>
       )}

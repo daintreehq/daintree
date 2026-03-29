@@ -1290,6 +1290,24 @@ body[data-window-focused="false"] .panel-state-working {
   }
 }
 
+/* Per-worktree color identity — left-edge stripe on grid panels */
+.panel-worktree-identity {
+  position: relative;
+}
+
+.panel-worktree-identity::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: var(--panel-state-edge-inset-block);
+  bottom: var(--panel-state-edge-inset-block);
+  width: 3px;
+  border-radius: 0 var(--panel-state-edge-radius) var(--panel-state-edge-radius) 0;
+  background-color: var(--worktree-color);
+  z-index: 1;
+  pointer-events: none;
+}
+
 /* Backwards compatibility for older selection class */
 .terminal-focused {
   border-color: color-mix(in oklab, var(--theme-border-strong) 84%, var(--theme-text-primary));
