@@ -21,9 +21,9 @@
   color: var(--settings-search-muted, var(--theme-text-muted));
 }
 
-.settings-header {
+.dialog-header {
   --_bg: var(
-    --settings-header-bg,
+    --dialog-header-bg,
     color-mix(in oklch, var(--theme-surface-sidebar) 50%, transparent)
   );
   background: var(--_bg);

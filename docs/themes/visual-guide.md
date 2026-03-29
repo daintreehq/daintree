@@ -497,11 +497,11 @@ background: var(--settings-dialog-bg, var(--theme-surface-panel));
 
 In Bondi: `#FCFCFD` — very close to white, making the settings feel open and airy.
 
-**Header bar** (`settings-header`):
+**Header bar** (`dialog-header`):
 
 ```css
 background: var(
-  --settings-header-bg,
+  --dialog-header-bg,
   color-mix(in oklch, var(--theme-surface-sidebar) 50%, transparent)
 );
 ```

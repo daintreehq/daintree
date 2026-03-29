@@ -154,7 +154,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
       maxHeight="h-[80vh]"
       className="max-h-[800px] overflow-hidden"
     >
-      <AppDialog.Header className="px-4 py-3 border-b border-border-subtle bg-transparent">
+      <AppDialog.Header className="px-4 py-3 border-b border-border-subtle !bg-transparent">
         <AppDialog.Title
           icon={<GitCompare className="w-4 h-4 text-text-muted" />}
           className="text-sm font-semibold text-text-primary"

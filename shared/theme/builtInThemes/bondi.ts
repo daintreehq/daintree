@@ -132,7 +132,7 @@ export const theme: BuiltInThemeSource = {
     "pulse-skeleton-gradient": "linear-gradient(90deg, #EDEFF2 25%, #F5F6F8 50%, #EDEFF2 75%)",
     "settings-card-bg": "#FEFEFE",
     "settings-dialog-bg": "#FCFCFD",
-    "settings-header-bg": "rgba(248,249,251,0.60)",
+    "dialog-header-bg": "rgba(248,249,251,0.60)",
     "settings-kbd-bg": "#F5F6F8",
     "settings-kbd-border": "#D8DBDF",
     "settings-list-item-bg": "#FEFEFE",

@@ -145,7 +145,7 @@ export const theme: BuiltInThemeSource = {
     "pulse-ring-offset": "#FDFCFF",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #E5E8F4 25%, #F0F0FA 50%, #E5E8F4 75%)",
     "settings-dialog-bg": "#FDFCFF",
-    "settings-header-bg": "rgba(238,242,249,0.50)",
+    "dialog-header-bg": "rgba(238,242,249,0.50)",
     "settings-kbd-bg": "#EEF1F9",
     "settings-nav-active-bg": "rgba(95,114,222,0.08)",
     "settings-nav-hover-bg": "rgba(82,88,118,0.03)",
