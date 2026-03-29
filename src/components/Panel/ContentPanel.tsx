@@ -10,6 +10,8 @@ import type { ActivityState } from "@/components/Terminal/TerminalPane";
 import type { TabInfo } from "./TabButton";
 import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
 import { usePreferencesStore } from "@/store";
+import { useWorktreeColorMap } from "@/hooks/useWorktreeColorMap";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 
 /**
  * Base props for all panel types.
@@ -89,6 +91,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     location = "grid",
     isTrashing = false,
     gridPanelCount,
+    worktreeId,
     onFocus,
     onClose,
     onToggleMaximize,
@@ -147,6 +150,19 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
 
   const showGridAttention = location === "grid" && !isMaximized && (gridPanelCount ?? 2) > 1;
   const showGridAgentHighlights = usePreferencesStore((s) => s.showGridAgentHighlights);
+
+  // Per-worktree color identity
+  const worktreeColorMap = useWorktreeColorMap();
+  const worktreeAccentColor = worktreeId ? worktreeColorMap?.[worktreeId] : undefined;
+  const worktreeBranch = useWorktreeDataStore(
+    useCallback(
+      (state) => {
+        if (!worktreeId || !worktreeAccentColor) return undefined;
+        return state.worktrees.get(worktreeId)?.branch;
+      },
+      [worktreeId, worktreeAccentColor]
+    )
+  );
 
   // Determine effective agent state for container border styling.
   // ambientAgentState takes priority so tab groups can surface highest-urgency
@@ -245,7 +261,12 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         ref={ref}
         data-panel-id={id}
         data-panel-location={location}
-        style={{ contain: "content" }}
+        style={{
+          contain: "content",
+          ...(worktreeAccentColor
+            ? ({ "--worktree-color": worktreeAccentColor } as React.CSSProperties)
+            : undefined),
+        }}
         className={cn(
           "flex flex-col h-full overflow-hidden group",
           location === "grid" && !isMaximized && "bg-surface",
@@ -263,6 +284,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
                   ? "panel-state-working"
                   : "border-overlay hover:border-tint/[0.08]"),
           location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
+          worktreeAccentColor && location === "grid" && !isMaximized && "panel-worktree-identity",
           isTrashing && "terminal-trashing",
           className
         )}
@@ -280,6 +302,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           type={type}
           agentId={agentId}
           detectedProcessId={detectedProcessId}
+          worktreeAccentColor={worktreeAccentColor}
+          worktreeBranch={worktreeBranch}
           isFocused={isFocused}
           isMaximized={isMaximized}
           location={location}
