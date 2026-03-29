@@ -174,6 +174,7 @@ import {
 import { computeChipState } from "./components/Worktree/utils/computeChipState";
 import { parseExactNumber } from "./lib/parseExactNumber";
 import type { WorktreeState, PanelKind } from "./types";
+import type { TerminalType } from "@shared/types";
 import { actionService } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { terminalInstanceService } from "./services/terminal/TerminalInstanceService";
@@ -1605,7 +1606,7 @@ function App() {
             if (command && agentConfig) {
               addTerminal({
                 kind: "agent",
-                type: session.agentId as any,
+                type: session.agentId as TerminalType,
                 agentId: session.agentId,
                 title: agentConfig.name,
                 cwd: defaultTerminalCwd,
@@ -1643,7 +1644,7 @@ function App() {
             if (command && agentConfig) {
               addTerminal({
                 kind: "agent",
-                type: session.agentId as any,
+                type: session.agentId as TerminalType,
                 agentId: session.agentId,
                 title: agentConfig.name,
                 cwd: defaultTerminalCwd,

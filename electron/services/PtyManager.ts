@@ -351,7 +351,7 @@ export class PtyManager extends EventEmitter {
             });
           }
         } catch (err) {
-          logWarn("[PtyManager] Failed to persist agent session on trash expiry", err);
+          logError("[PtyManager] Failed to persist agent session on trash expiry", err);
           // Ensure the terminal is killed even if gracefulKill failed
           try {
             this.kill(termId, "trash-expired");
