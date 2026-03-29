@@ -58,6 +58,7 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
   waitingEscalationDelayMs: 180_000,
   workingPulseEnabled: false,
   workingPulseSoundFile: "pulse.wav",
+  uiFeedbackSoundEnabled: false,
 };
 
 const DEFAULT_APP_STATE = {
@@ -857,6 +858,34 @@ describe("AgentNotificationService", () => {
       // Should continue existing pulse, not restart
       vi.advanceTimersByTime(10_000);
       expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("agent:spawned UI feedback sound", () => {
+    it("plays agent-spawned sound when uiFeedbackSoundEnabled is true", () => {
+      mockStore({ uiFeedbackSoundEnabled: true });
+
+      events.emit("agent:spawned", {
+        terminalId: "term-1",
+        agentId: "claude",
+        worktreeId: "wt-1",
+        timestamp: Date.now(),
+      });
+
+      expect(soundServiceMock.play).toHaveBeenCalledWith("agent-spawned");
+    });
+
+    it("does not play agent-spawned sound when uiFeedbackSoundEnabled is false", () => {
+      mockStore({ uiFeedbackSoundEnabled: false });
+
+      events.emit("agent:spawned", {
+        terminalId: "term-1",
+        agentId: "claude",
+        worktreeId: "wt-1",
+        timestamp: Date.now(),
+      });
+
+      expect(soundServiceMock.play).not.toHaveBeenCalled();
     });
   });
 });

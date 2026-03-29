@@ -538,6 +538,8 @@ const CHANNELS = {
   NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE: "notification:working-pulse-acknowledge",
   NOTIFICATION_SHOW_TOAST: "notification:show-toast",
 
+  SOUND_PLAY_UI_EVENT: "sound:play-ui-event",
+
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",
   UPDATE_DOWNLOAD_PROGRESS: "update:download-progress",
@@ -1900,6 +1902,7 @@ const api: ElectronAPI = {
       waitingEscalationDelayMs: number;
       workingPulseEnabled: boolean;
       workingPulseSoundFile: string;
+      uiFeedbackSoundEnabled: boolean;
     }> => _unwrappingInvoke(CHANNELS.NOTIFICATION_SETTINGS_GET),
     setSettings: (
       settings: Partial<{
@@ -1914,10 +1917,12 @@ const api: ElectronAPI = {
         waitingEscalationDelayMs: number;
         workingPulseEnabled: boolean;
         workingPulseSoundFile: string;
+        uiFeedbackSoundEnabled: boolean;
       }>
     ) => _unwrappingInvoke(CHANNELS.NOTIFICATION_SETTINGS_SET, settings),
     playSound: (soundFile: string) =>
       _unwrappingInvoke(CHANNELS.NOTIFICATION_PLAY_SOUND, soundFile),
+    playUiEvent: (soundId: string) => _unwrappingInvoke(CHANNELS.SOUND_PLAY_UI_EVENT, soundId),
     showNative: (payload: { title: string; body: string }) =>
       ipcRenderer.send(CHANNELS.NOTIFICATION_SHOW_NATIVE, payload),
     showWatchNotification: (payload: {

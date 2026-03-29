@@ -24,6 +24,13 @@ export const SOUND_FILES = {
   ping: "ping.wav",
   pulse: "pulse.wav",
   "all-clear": "all-clear.wav",
+  "git-commit": "git-commit.wav",
+  "git-push": "git-push.wav",
+  "git-push-error": "git-push-error.wav",
+  "worktree-create": "worktree-create.wav",
+  "worktree-delete": "worktree-delete.wav",
+  "agent-spawned": "agent-spawned.wav",
+  "context-injected": "context-injected.wav",
 } as const;
 
 export type SoundId = keyof typeof SOUND_FILES;

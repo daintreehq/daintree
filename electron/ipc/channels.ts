@@ -334,6 +334,8 @@ export const CHANNELS = {
   NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE: "notification:working-pulse-acknowledge",
   NOTIFICATION_SHOW_TOAST: "notification:show-toast",
 
+  SOUND_PLAY_UI_EVENT: "sound:play-ui-event",
+
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",
   UPDATE_DOWNLOAD_PROGRESS: "update:download-progress",

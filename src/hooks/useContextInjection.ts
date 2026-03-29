@@ -347,6 +347,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           // silently fail
         }
         window.dispatchEvent(new CustomEvent("canopy:context-injected"));
+        window.electron?.notification?.playUiEvent?.("context-injected").catch(() => {});
 
         if (currentErrorIdRef.current) {
           removeError(currentErrorIdRef.current);

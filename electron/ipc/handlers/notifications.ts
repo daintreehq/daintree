@@ -6,10 +6,12 @@ import {
   type WatchNotificationContext,
 } from "../../services/NotificationService.js";
 import { agentNotificationService } from "../../services/AgentNotificationService.js";
-import { soundService, ALLOWED_SOUND_FILES, getSoundsDir } from "../../services/SoundService.js";
+import { soundService, ALLOWED_SOUND_FILES, SOUND_FILES, getSoundsDir } from "../../services/SoundService.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
+
+type SoundId = keyof typeof SOUND_FILES;
 
 export function registerNotificationHandlers(_deps: HandlerDependencies): () => void {
   const handleNotificationUpdate = (
@@ -69,6 +71,9 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     ) {
       allowed.workingPulseSoundFile = s.workingPulseSoundFile;
     }
+    if (typeof s.uiFeedbackSoundEnabled === "boolean") {
+      allowed.uiFeedbackSoundEnabled = s.uiFeedbackSoundEnabled;
+    }
 
     const current = store.get("notificationSettings");
     store.set("notificationSettings", { ...current, ...allowed });
@@ -86,6 +91,16 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     if (!Array.isArray(payload)) return;
     const ids = payload.filter((v): v is string => typeof v === "string");
     agentNotificationService.syncWatchedPanels(ids);
+  };
+
+  const handlePlayUiEvent = async (
+    _event: Electron.IpcMainInvokeEvent,
+    soundId: unknown
+  ): Promise<void> => {
+    if (typeof soundId !== "string") return;
+    if (!(soundId in SOUND_FILES)) return;
+    if (!store.get("notificationSettings").uiFeedbackSoundEnabled) return;
+    soundService.play(soundId as SoundId);
   };
 
   const handleWaitingAcknowledge = (_event: Electron.IpcMainEvent, payload: unknown): void => {
@@ -143,6 +158,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
   ipcMain.on(CHANNELS.NOTIFICATION_SYNC_WATCHED, handleSyncWatched);
   ipcMain.on(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, handleWaitingAcknowledge);
   ipcMain.on(CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE, handleWorkingPulseAcknowledge);
+  ipcMain.handle(CHANNELS.SOUND_PLAY_UI_EVENT, handlePlayUiEvent);
 
   return () => {
     ipcMain.removeListener(CHANNELS.NOTIFICATION_UPDATE, handleNotificationUpdate);
@@ -158,5 +174,6 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
       CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE,
       handleWorkingPulseAcknowledge
     );
+    ipcMain.removeHandler(CHANNELS.SOUND_PLAY_UI_EVENT);
   };
 }

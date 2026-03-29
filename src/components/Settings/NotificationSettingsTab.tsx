@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Play, Bell, BellOff, Volume2 } from "lucide-react";
+import { Play, Bell, BellOff, Volume2, AudioLines } from "lucide-react";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsCheckbox } from "./SettingsCheckbox";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS: NotificationSettings = {
   waitingEscalationDelayMs: 180_000,
   workingPulseEnabled: false,
   workingPulseSoundFile: "pulse.wav",
+  uiFeedbackSoundEnabled: false,
 };
 
 type LoadState = "loading" | "ready" | "error";
@@ -235,6 +236,21 @@ export function NotificationSettingsTab() {
               </div>
             )}
           </div>
+        </SettingsSection>
+
+        <SettingsSection
+          icon={AudioLines}
+          title="UI Feedback Sounds"
+          description="Play subtle audio cues for git operations, worktree lifecycle, agent spawning, and context injection. These sounds are independent of agent notification sounds above."
+        >
+          <SettingsSwitchCard
+            variant="compact"
+            title="Enable UI feedback sounds"
+            subtitle="Short audio cues for git commit, push, worktree create/delete, agent spawn, and context injection"
+            isEnabled={settings.uiFeedbackSoundEnabled}
+            onChange={() => update({ uiFeedbackSoundEnabled: !settings.uiFeedbackSoundEnabled })}
+            ariaLabel="Enable UI feedback sounds"
+          />
         </SettingsSection>
       </div>
     </div>

@@ -117,6 +117,7 @@ export interface StoreSchema {
     waitingEscalationDelayMs: number;
     workingPulseEnabled: boolean;
     workingPulseSoundFile: string;
+    uiFeedbackSoundEnabled: boolean;
   };
   userAgentRegistry: UserAgentRegistry;
   agentUpdateSettings: AgentUpdateSettings;
@@ -232,6 +233,7 @@ const storeOptions = {
       waitingEscalationDelayMs: 180_000,
       workingPulseEnabled: false,
       workingPulseSoundFile: "pulse.wav",
+      uiFeedbackSoundEnabled: false,
     },
     userAgentRegistry: {},
     agentUpdateSettings: {

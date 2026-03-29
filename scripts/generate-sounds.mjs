@@ -1156,15 +1156,262 @@ function genAllClear(variantIdx = 0) {
 }
 
 // ---------------------------------------------------------------------------
+// UI feedback sound generators (event sounds, quieter than notifications)
+// ---------------------------------------------------------------------------
+
+function genGitCommit(variantIdx = 0) {
+  const vopts = applyVariant(
+    {
+      amplitude: 0.45,
+      resonance: 1.05,
+      fmAmt: 0.2,
+      fmIndex: 0.4,
+      fmDecayRate: 20,
+      malletAmt: 0.55,
+      excDuration: 0.005,
+      detuneMix: 0.06,
+      attackPresenceHz: 2400,
+      attackPresenceAmt: 0.08,
+      attackPresenceQ: 1.5,
+      attackPresenceMs: 8,
+    },
+    variantIdx
+  );
+  let freq = JI.E5;
+  if (vopts._pitchCents) freq *= Math.pow(2, vopts._pitchCents / 1200);
+  return postProcess(canopyNote(freq, 0.18, vopts), {
+    reverbWet: 0.01,
+    targetPeak: 0.55,
+    chassisMix: 0.015,
+  });
+}
+
+function genGitPush(variantIdx = 0) {
+  return postProcess(
+    sequence(
+      [
+        {
+          freq: JI.A4,
+          duration: 0.08,
+          opts: applyVariant(
+            {
+              amplitude: 0.4,
+              resonance: 0.9,
+              fmAmt: 0.35,
+              fmIndex: 0.8,
+              fmDecayRate: 16,
+              malletAmt: 0.45,
+              attackPresenceHz: 2200,
+              attackPresenceAmt: 0.08,
+              attackPresenceQ: 1.5,
+            },
+            variantIdx
+          ),
+        },
+        {
+          freq: JI.E5,
+          duration: 0.2,
+          opts: applyVariant(
+            {
+              amplitude: 0.5,
+              resonance: 0.95,
+              fmAmt: 0.3,
+              fmIndex: 0.7,
+              fmDecayRate: 18,
+              malletAmt: 0.5,
+              thumpAmt: 0.3,
+              attackPresenceHz: 2600,
+              attackPresenceAmt: 0.06,
+              attackPresenceQ: 1.8,
+            },
+            variantIdx
+          ),
+        },
+      ],
+      { noteGap: 0.02, tailPad: 0.1 }
+    ),
+    { reverbWet: 0.01, targetPeak: 0.55, chassisMix: 0.015 }
+  );
+}
+
+function genWorktreeCreate(variantIdx = 0) {
+  return postProcess(
+    sequence(
+      [
+        {
+          freq: JI.B4,
+          duration: 0.08,
+          opts: applyVariant(
+            {
+              amplitude: 0.45,
+              resonance: 0.9,
+              fmAmt: 0.35,
+              fmIndex: 0.9,
+              fmDecayRate: 15,
+              malletAmt: 0.5,
+              attackPresenceHz: 2400,
+              attackPresenceAmt: 0.1,
+              attackPresenceQ: 1.6,
+            },
+            variantIdx
+          ),
+        },
+        {
+          freq: JI.Fs5,
+          duration: 0.22,
+          opts: applyVariant(
+            {
+              amplitude: 0.5,
+              resonance: 0.9,
+              fmAmt: 0.3,
+              fmIndex: 0.7,
+              fmDecayRate: 18,
+              malletAmt: 0.55,
+              thumpAmt: 0.3,
+              attackPresenceHz: 2800,
+              attackPresenceAmt: 0.08,
+              attackPresenceQ: 2.0,
+            },
+            variantIdx
+          ),
+        },
+      ],
+      { noteGap: 0.02, tailPad: 0.12 }
+    ),
+    { reverbWet: 0.02, targetPeak: 0.58, chassisMix: 0.015 }
+  );
+}
+
+function genAgentSpawned(variantIdx = 0) {
+  const vopts = applyVariant(
+    {
+      amplitude: 0.4,
+      resonance: 1.1,
+      fmAmt: 0.15,
+      fmIndex: 0.3,
+      fmDecayRate: 24,
+      malletAmt: 0.5,
+      excDuration: 0.005,
+      detuneMix: 0.06,
+      thumpAmt: 0.25,
+      attackPresenceHz: 2000,
+      attackPresenceAmt: 0.06,
+      attackPresenceQ: 1.2,
+      attackPresenceMs: 6,
+    },
+    variantIdx
+  );
+  let freq = JI.A4;
+  if (vopts._pitchCents) freq *= Math.pow(2, vopts._pitchCents / 1200);
+  return postProcess(canopyNote(freq, 0.15, vopts), {
+    reverbWet: 0.01,
+    targetPeak: 0.5,
+    chassisMix: 0.01,
+  });
+}
+
+function genContextInjected(variantIdx = 0) {
+  const vopts = applyVariant(
+    {
+      amplitude: 0.4,
+      resonance: 0.8,
+      fmAmt: 0.1,
+      fmIndex: 0.3,
+      fmDecayRate: 25,
+      malletAmt: 0.6,
+      excDuration: 0.004,
+      noiseBandHz: 900,
+      detuneMix: 0.04,
+      thumpAmt: 0.3,
+      attackPresenceHz: 2800,
+      attackPresenceAmt: 0.12,
+      attackPresenceQ: 2.0,
+      attackPresenceMs: 5,
+    },
+    variantIdx
+  );
+  let freq = JI.Cs5;
+  if (vopts._pitchCents) freq *= Math.pow(2, vopts._pitchCents / 1200);
+  return postProcess(canopyNote(freq, 0.12, vopts), {
+    reverbWet: 0.005,
+    targetPeak: 0.52,
+    chassisMix: 0.01,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Write files
 //
 // Variant sounds: chime, complete, ping get 4 variants each (.v1, .v2, .v3).
-// Static sounds: waiting and error are single files (semantic consistency).
+// Static sounds: waiting, error, git-push-error, worktree-delete are single
+//   files (semantic consistency for critical/destructive sounds).
 // The base file (e.g., chime.wav) is variant 0 — the canonical version.
 // ---------------------------------------------------------------------------
 
-// Static sounds (no variants — error needs Pavlovian consistency)
-const staticSounds = { error, pulse };
+// git-push-error.wav — STATIC: error semantics need consistency.
+// Shorter, quieter sibling of error.wav — a soft "operation failed" cue.
+const gitPushError = postProcess(
+  canopyNote(JI.Cs5, 0.18, {
+    amplitude: 0.45,
+    resonance: 0.65,
+    modeQs: [120, 60, 30, 15],
+    fmRatio: 1.7321, // √3 — metallic, matching error family
+    fmAmt: 0.4,
+    fmIndex: 1.8,
+    fmDecayRate: 10,
+    malletAmt: 0.45,
+    noiseBandHz: 700,
+    thumpAmt: 0.4,
+    pitchBendHz: 25,
+    pitchBendMs: 15,
+    attackPresenceHz: 2000,
+    attackPresenceAmt: 0.1,
+    attackPresenceQ: 1.0,
+    attackPresenceMs: 10,
+  }),
+  { reverbWet: 0.01, targetPeak: 0.45, chassisMix: 0.01 }
+);
+
+// worktree-delete.wav — STATIC: destructive action needs Pavlovian consistency.
+// Descending Fs5→A4, muffled closing gesture.
+const worktreeDelete = postProcess(
+  sequence(
+    [
+      {
+        freq: JI.Fs5,
+        duration: 0.08,
+        opts: {
+          amplitude: 0.4,
+          resonance: 0.75,
+          fmAmt: 0.2,
+          fmIndex: 0.6,
+          fmDecayRate: 18,
+          malletAmt: 0.45,
+          noiseBandHz: 800,
+        },
+      },
+      {
+        freq: JI.A4,
+        duration: 0.18,
+        opts: {
+          amplitude: 0.35,
+          resonance: 0.75,
+          fmAmt: 0.15,
+          fmIndex: 0.4,
+          fmDecayRate: 20,
+          malletAmt: 0.5,
+          thumpAmt: 0.3,
+          noiseBandHz: 700,
+        },
+      },
+    ],
+    { noteGap: 0.02, tailPad: 0.1 }
+  ),
+  { reverbWet: 0.01, targetPeak: 0.45, chassisMix: 0.01 }
+);
+
+// Static sounds (no variants — error/destructive sounds need Pavlovian consistency)
+const staticSounds = { error, pulse, "git-push-error": gitPushError, "worktree-delete": worktreeDelete };
 
 for (const [name, samples] of Object.entries(staticSounds)) {
   const filePath = join(outDir, `${name}.wav`);
@@ -1181,6 +1428,11 @@ const variantGenerators = {
   waiting: genWaiting,
   ping: genPing,
   "all-clear": genAllClear,
+  "git-commit": genGitCommit,
+  "git-push": genGitPush,
+  "worktree-create": genWorktreeCreate,
+  "agent-spawned": genAgentSpawned,
+  "context-injected": genContextInjected,
 };
 
 for (const [name, generator] of Object.entries(variantGenerators)) {

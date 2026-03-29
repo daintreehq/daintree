@@ -4,6 +4,8 @@ import { checkRateLimit } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type { GitStatus } from "../../../shared/types/git.js";
 import { validateCwd, createHardenedGit } from "../../utils/hardenedGit.js";
+import { store } from "../../store.js";
+import { soundService } from "../../services/SoundService.js";
 
 interface StagingFileEntry {
   path: string;
@@ -118,6 +120,9 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     const git = createHardenedGit(payload.cwd);
     const result = await git.commit(payload.message.trim());
+    if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
+      soundService.play("git-commit");
+    }
     return {
       hash: result.commit || "",
       summary: `${result.summary.changes} changed, ${result.summary.insertions} insertions(+), ${result.summary.deletions} deletions(-)`,
@@ -153,8 +158,14 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
           }
         }
       }
+      if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
+        soundService.play("git-push");
+      }
       return { success: true };
     } catch (error) {
+      if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
+        soundService.play("git-push-error");
+      }
       const errorMessage = error instanceof Error ? error.message : String(error);
       return { success: false, error: errorMessage };
     }

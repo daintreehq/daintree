@@ -1351,6 +1351,7 @@ export interface IpcInvokeMap {
       escalationSoundFile: string;
       waitingEscalationEnabled: boolean;
       waitingEscalationDelayMs: number;
+      uiFeedbackSoundEnabled: boolean;
     };
   };
   "notification:settings-set": {
@@ -1364,11 +1365,16 @@ export interface IpcInvokeMap {
         escalationSoundFile: string;
         waitingEscalationEnabled: boolean;
         waitingEscalationDelayMs: number;
+        uiFeedbackSoundEnabled: boolean;
       }>,
     ];
     result: void;
   };
   "notification:play-sound": {
+    args: [string];
+    result: void;
+  };
+  "sound:play-ui-event": {
     args: [string];
     result: void;
   };

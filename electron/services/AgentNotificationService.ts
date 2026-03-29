@@ -60,7 +60,13 @@ class AgentNotificationService {
       this.handleStateChanged(payload);
     });
 
-    this.unsubscribers.push(unsubStateChanged);
+    const unsubSpawned = events.on("agent:spawned", () => {
+      if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
+        soundService.play("agent-spawned");
+      }
+    });
+
+    this.unsubscribers.push(unsubStateChanged, unsubSpawned);
   }
 
   private handleStateChanged(payload: {

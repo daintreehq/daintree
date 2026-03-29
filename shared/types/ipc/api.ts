@@ -173,6 +173,7 @@ export interface NotificationSettings {
   waitingEscalationDelayMs: number;
   workingPulseEnabled: boolean;
   workingPulseSoundFile: string;
+  uiFeedbackSoundEnabled: boolean;
 }
 
 // ElectronAPI Type (exposed via preload)
@@ -883,6 +884,8 @@ export interface ElectronAPI {
     setSettings(settings: Partial<NotificationSettings>): Promise<void>;
     /** Play a sound file by name for preview */
     playSound(soundFile: string): Promise<void>;
+    /** Play a UI feedback event sound by ID (routed to SoundService with variant selection) */
+    playUiEvent(soundId: string): Promise<void>;
     /** Show a simple native OS notification with no navigation context */
     showNative(payload: { title: string; body: string }): void;
     /** Show a high-priority watch notification unconditionally (no focus suppression) */

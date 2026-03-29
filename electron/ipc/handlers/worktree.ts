@@ -17,6 +17,7 @@ import { generateWorktreePath, validatePathPattern } from "../../../shared/utils
 import { projectStore } from "../../services/ProjectStore.js";
 import { logDebug, logError } from "../../utils/logger.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
+import { soundService } from "../../services/SoundService.js";
 import { checkRateLimit, waitForRateLimitSlot } from "../utils.js";
 
 const WORKTREE_RATE_LIMIT_KEY = "worktreeCreate";
@@ -96,6 +97,9 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       fileSearchService.invalidate(payload.options.path);
     } catch (error) {
       console.warn("[worktree.create] Failed to invalidate file search cache:", error);
+    }
+    if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
+      soundService.play("worktree-create");
     }
     return worktreeId;
   };
@@ -218,6 +222,9 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       } catch (error) {
         console.warn("[worktree.delete] Failed to invalidate file search cache:", error);
       }
+    }
+    if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
+      soundService.play("worktree-delete");
     }
     // Clean up persisted issue association
     const issueMap = store.get("worktreeIssueMap", {});
