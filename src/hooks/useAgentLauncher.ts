@@ -110,6 +110,23 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         }
       }
 
+      // Handle dev-preview pane specially
+      if (agentId === "dev-preview") {
+        try {
+          const terminalId = await addTerminal({
+            kind: "dev-preview",
+            title: "Dev Server",
+            cwd,
+            worktreeId: targetWorktreeId || undefined,
+            location: launchOptions?.location,
+          });
+          return terminalId;
+        } catch (error) {
+          console.error("Failed to launch dev-preview pane:", error);
+          return null;
+        }
+      }
+
       // Get agent config from registry, fall back for "terminal" type
       const agentConfig = getAgentConfig(agentId);
       const isAgent = isRegisteredAgent(agentId);

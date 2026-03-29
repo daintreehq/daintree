@@ -678,6 +678,12 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                 : undefined,
               isCollapsed: effectiveIsCollapsed,
               onLaunchAgent,
+              onOpenPanelPalette: () => {
+                useWorktreeSelectionStore.getState().setActiveWorktree(worktree.id);
+                void actionService.dispatch("panel.palette", undefined, {
+                  source: "context-menu",
+                });
+              },
               onDockAll: handleDockAll,
               onMaximizeAll: handleMaximizeAll,
               onRestartAll: () => void handleRestartAll(),
