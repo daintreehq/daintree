@@ -115,12 +115,13 @@ export function useMemoryLeakDetection(
     hookMounted = true;
 
     const autoRestartThresholdKb = autoRestartThresholdMb * 1024;
+    const localStateMap = stateMapRef.current;
 
     const unsubscribe = useResourceMonitoringStore.subscribe((curr, prev) => {
       if (curr.metrics === prev.metrics) return;
 
       const now = Date.now();
-      const stateMap = stateMapRef.current;
+      const stateMap = localStateMap;
 
       // Clean up states for removed terminals
       for (const id of stateMap.keys()) {
@@ -172,7 +173,7 @@ export function useMemoryLeakDetection(
                 label: "Dismiss",
                 variant: "secondary" as const,
                 onClick: () => {
-                  const st = stateMapRef.current.get(id);
+                  const st = localStateMap.get(id);
                   if (st) st.dismissed = true;
                 },
               },
@@ -208,7 +209,7 @@ export function useMemoryLeakDetection(
     return () => {
       unsubscribe();
       hookMounted = false;
-      stateMapRef.current.clear();
+      localStateMap.clear();
     };
   }, [enabled, autoRestartThresholdMb]);
 }
