@@ -6,7 +6,12 @@ import {
   type WatchNotificationContext,
 } from "../../services/NotificationService.js";
 import { agentNotificationService } from "../../services/AgentNotificationService.js";
-import { soundService, ALLOWED_SOUND_FILES, SOUND_FILES, getSoundsDir } from "../../services/SoundService.js";
+import {
+  soundService,
+  ALLOWED_SOUND_FILES,
+  SOUND_FILES,
+  getSoundsDir,
+} from "../../services/SoundService.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";

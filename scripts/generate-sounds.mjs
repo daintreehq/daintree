@@ -1411,7 +1411,12 @@ const worktreeDelete = postProcess(
 );
 
 // Static sounds (no variants — error/destructive sounds need Pavlovian consistency)
-const staticSounds = { error, pulse, "git-push-error": gitPushError, "worktree-delete": worktreeDelete };
+const staticSounds = {
+  error,
+  pulse,
+  "git-push-error": gitPushError,
+  "worktree-delete": worktreeDelete,
+};
 
 for (const [name, samples] of Object.entries(staticSounds)) {
   const filePath = join(outDir, `${name}.wav`);
