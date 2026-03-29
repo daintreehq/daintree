@@ -5,7 +5,7 @@ import { playSound, type SoundHandle } from "../utils/soundPlayer.js";
 import { getMainWindow } from "../window/windowRef.js";
 import { CHANNELS } from "../ipc/channels.js";
 
-function getSoundsDir(): string {
+export function getSoundsDir(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, "sounds")
     : path.join(app.getAppPath(), "electron", "resources", "sounds");
