@@ -59,16 +59,6 @@ export function isLocalhostUrl(url: string): boolean {
   }
 }
 
-export function isSafeNavigationUrl(url: string): boolean {
-  if (!url) return false;
-  try {
-    const parsed = new URL(url);
-    return ALLOWED_PROTOCOLS.includes(parsed.protocol);
-  } catch {
-    return false;
-  }
-}
-
 export function stripAnsiAndOscCodes(text: string): string {
   return (
     text

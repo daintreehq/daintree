@@ -159,9 +159,6 @@ export function getDistPath(): string | null {
 export function setupWebviewCSP(): void {
   const configuredPartitions = new Set<string>();
 
-  // Browser partition intentionally excluded from CSP rewriting.
-  // Browser panels load external sites (OAuth, docs, etc.) that need their own CSP.
-  // Dev-preview partitions get localhost-only CSP via will-attach-webview below.
   const applyCSP = (partition: string): void => {
     if (configuredPartitions.has(partition)) {
       return;
@@ -183,6 +180,9 @@ export function setupWebviewCSP(): void {
 
     configuredPartitions.add(partition);
   };
+
+  // Configure static partitions (browser only - portal excluded)
+  applyCSP("persist:browser");
 
   // Singleton for the browser partition session — used for identity comparison in navigation handlers.
   const browserSession = session.fromPartition("persist:browser");
