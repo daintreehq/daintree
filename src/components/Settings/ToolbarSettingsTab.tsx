@@ -39,31 +39,13 @@ import {
 } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
 import type { ToolbarButtonId, AnyToolbarButtonId } from "@/../../shared/types/toolbar";
-import {
-  getPluginToolbarButtonIds,
-  getToolbarButtonConfig,
-} from "@shared/config/toolbarButtonRegistry";
+import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { Puzzle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 
 type ButtonMetadata = { label: string; icon: React.ReactNode; description: string };
-
-function getPluginButtonMetadata(): Record<string, ButtonMetadata> {
-  const result: Record<string, ButtonMetadata> = {};
-  for (const id of getPluginToolbarButtonIds()) {
-    const config = getToolbarButtonConfig(id);
-    if (config) {
-      result[id] = {
-        label: config.label,
-        icon: <Puzzle className="h-4 w-4" />,
-        description: `Plugin button (${config.pluginId})`,
-      };
-    }
-  }
-  return result;
-}
 
 const BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, ButtonMetadata>> = {
   "agent-setup": {
@@ -210,10 +192,22 @@ export function ToolbarSettingsTab() {
     })
   );
 
-  const allMetadata = useMemo(
-    () => ({ ...BUTTON_METADATA, ...getPluginButtonMetadata() }),
-    []
-  );
+  const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
+
+  const allMetadata = useMemo(() => {
+    const pluginMeta: Record<string, ButtonMetadata> = {};
+    for (const id of pluginButtonIds) {
+      const config = pluginConfigs.get(id);
+      if (config) {
+        pluginMeta[id] = {
+          label: config.label,
+          icon: <Puzzle className="h-4 w-4" />,
+          description: `Plugin button (${config.pluginId})`,
+        };
+      }
+    }
+    return { ...BUTTON_METADATA, ...pluginMeta };
+  }, [pluginButtonIds, pluginConfigs]);
 
   const handleLeftDragEnd = useCallback(
     (event: DragEndEvent) => {

@@ -117,6 +117,12 @@ export function createApplicationMenu(
           label: "Project Settings",
           click: () => sendAction("open-settings"),
         },
+        ...(buildPluginMenuItems("file").length > 0
+          ? [
+              { type: "separator" as const },
+              ...buildPluginMenuItems("file"),
+            ]
+          : []),
         { type: "separator" },
         {
           label: "Close Window",
@@ -179,6 +185,12 @@ export function createApplicationMenu(
             win.setSimpleFullScreen(!isSimpleFullScreen);
           },
         },
+        ...(buildPluginMenuItems("view").length > 0
+          ? [
+              { type: "separator" as const },
+              ...buildPluginMenuItems("view"),
+            ]
+          : []),
       ],
     },
     {
@@ -279,6 +291,12 @@ export function createApplicationMenu(
                 label: "Check for Updates...",
                 click: () => autoUpdaterService.checkForUpdatesManually(),
               },
+            ]
+          : []),
+        ...(buildPluginMenuItems("help").length > 0
+          ? [
+              { type: "separator" as const },
+              ...buildPluginMenuItems("help"),
             ]
           : []),
       ],

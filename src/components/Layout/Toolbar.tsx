@@ -71,10 +71,7 @@ import {
   usePaletteStore,
 } from "@/store";
 import type { ToolbarButtonId, AnyToolbarButtonId } from "@/../../shared/types/toolbar";
-import {
-  getPluginToolbarButtonIds,
-  getToolbarButtonConfig,
-} from "@shared/config/toolbarButtonRegistry";
+import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { Puzzle } from "lucide-react";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
@@ -441,7 +438,7 @@ export function Toolbar({
   const toolbarIconButtonClass = "toolbar-icon-button text-canopy-text transition-colors";
   const toolbarDividerClass = "toolbar-divider w-px h-5 mx-1";
 
-  const pluginButtonIds = useMemo(() => getPluginToolbarButtonIds(), []);
+  const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
 
   const buttonRegistry = useMemo<
     Record<string, { render: () => React.ReactNode; isAvailable: boolean }>
@@ -1018,7 +1015,7 @@ export function Toolbar({
       },
       ...Object.fromEntries(
         pluginButtonIds.map((pluginId) => {
-          const config = getToolbarButtonConfig(pluginId);
+          const config = pluginConfigs.get(pluginId);
           return [
             pluginId,
             {
@@ -1103,6 +1100,7 @@ export function Toolbar({
       setPrSearchQuery,
       notificationsEnabled,
       pluginButtonIds,
+      pluginConfigs,
     ]
   );
 
@@ -1217,13 +1215,13 @@ export function Toolbar({
   const pluginOverflowMeta = useMemo(() => {
     const meta: Record<string, { label: string; icon: React.ComponentType<{ className?: string }> }> = {};
     for (const id of pluginButtonIds) {
-      const config = getToolbarButtonConfig(id);
+      const config = pluginConfigs.get(id);
       if (config) {
         meta[id] = { label: config.label, icon: Puzzle };
       }
     }
     return meta;
-  }, [pluginButtonIds]);
+  }, [pluginButtonIds, pluginConfigs]);
 
   const overflowActions = useMemo<Partial<Record<AnyToolbarButtonId, () => void>>>(
     () => ({
@@ -1246,7 +1244,7 @@ export function Toolbar({
       problems: onToggleProblems,
       ...Object.fromEntries(
         pluginButtonIds.map((id) => {
-          const config = getToolbarButtonConfig(id);
+          const config = pluginConfigs.get(id);
           return [
             id,
             () => {
@@ -1270,6 +1268,7 @@ export function Toolbar({
       onSettings,
       onToggleProblems,
       pluginButtonIds,
+      pluginConfigs,
     ]
   );
 
