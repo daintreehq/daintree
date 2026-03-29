@@ -74,18 +74,9 @@ function checkRecipeUsed(): boolean {
   return useRecipeStore.getState().recipes.some((r) => r.lastUsedAt != null);
 }
 
-type TriggerFn = (shown: Record<string, boolean>, fire: (id: string) => void) => void;
-
 function initObservers(shown: Record<string, boolean>, fire: (id: string) => void): void {
   if (observerInitialized) return;
   observerInitialized = true;
-
-  const trigger: TriggerFn = (s, f) => {
-    // shared guard wrapper
-    void s;
-    void f;
-  };
-  void trigger;
 
   useTerminalStore.subscribe((state, prev) => {
     if (!shown["first-agent-completed"]) {
