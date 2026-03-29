@@ -43,13 +43,174 @@ import {
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useNativeContextMenu, useProjectBranding } from "@/hooks";
 import { actionService } from "@/services/ActionService";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { CliAvailability } from "@shared/types";
+import type { ActionId } from "@shared/types/actions";
 import type { MenuItemOption } from "@/types";
 import { getRecipeGridClasses, getRecipeTerminalSummary } from "./utils/recipeUtils";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { getMaximizedGroupFocusTarget } from "./contentGridFocus";
+
+interface TipEntry {
+  id: string;
+  message: React.ReactNode;
+  actionId?: ActionId;
+  actionLabel?: string;
+  docsUrl?: string;
+  requiredAgents?: string[];
+}
+
+const TIPS: TipEntry[] = [
+  {
+    id: "quick-switcher",
+    message: (
+      <>
+        Press <Kbd>⌘P</Kbd> to jump between open panels
+      </>
+    ),
+    actionId: "nav.quickSwitcher",
+    actionLabel: "Open Quick Switcher",
+  },
+  {
+    id: "new-terminal",
+    message: (
+      <>
+        Press <Kbd>⌘⌥T</Kbd> to open a new terminal in this worktree
+      </>
+    ),
+    actionId: "terminal.new",
+    actionLabel: "New Terminal",
+  },
+  {
+    id: "panel-palette",
+    message: (
+      <>
+        Press <Kbd>⌘N</Kbd> to open the panel palette — add terminals, browsers, notes, or dev
+        previews
+      </>
+    ),
+    actionId: "panel.palette",
+    actionLabel: "Open Panel Palette",
+  },
+  {
+    id: "launch-claude",
+    message: (
+      <>
+        Press <Kbd>⌘⌥N</Kbd> to launch a Claude agent in this worktree
+      </>
+    ),
+    actionId: "agent.terminal",
+    actionLabel: "Launch Agent",
+    requiredAgents: ["claude"],
+  },
+  {
+    id: "launch-gemini",
+    message: (
+      <>
+        Press <Kbd>⌘⌥N</Kbd> to launch a Gemini agent in this worktree
+      </>
+    ),
+    actionId: "agent.terminal",
+    actionLabel: "Launch Agent",
+    requiredAgents: ["gemini"],
+  },
+  {
+    id: "context-injection",
+    message: (
+      <>
+        Press <Kbd>⌘⇧I</Kbd> to inject the project file tree into the focused terminal
+      </>
+    ),
+    actionId: "terminal.inject",
+    actionLabel: "Inject Context",
+  },
+  {
+    id: "action-palette",
+    message: (
+      <>
+        Press <Kbd>⌘⇧P</Kbd> to open the action palette and search all available commands
+      </>
+    ),
+    actionId: "action.palette.open",
+    actionLabel: "Open Action Palette",
+  },
+  {
+    id: "worktree-palette",
+    message: (
+      <>
+        Press <Kbd>⌘K</Kbd> then <Kbd>W</Kbd> to open the worktree palette and switch branches
+      </>
+    ),
+    actionId: "worktree.openPalette",
+    actionLabel: "Open Worktree Palette",
+  },
+  {
+    id: "worktree-overview",
+    message: (
+      <>
+        Press <Kbd>⌘⇧O</Kbd> to open the worktrees overview and manage all your branches
+      </>
+    ),
+    actionId: "worktree.overview.open",
+    actionLabel: "Open Worktrees Overview",
+  },
+  {
+    id: "agent-switcher",
+    message: (
+      <>
+        Press <Kbd>⌘⇧A</Kbd> to quickly switch between available AI agents
+      </>
+    ),
+    actionId: "agent.palette",
+    actionLabel: "Open Agent Switcher",
+  },
+  {
+    id: "recipes",
+    message: <>Create a recipe to run multi-terminal workflows with a single click</>,
+    actionId: "recipe.manager.open",
+    actionLabel: "Open Recipes",
+  },
+  {
+    id: "new-worktree",
+    message: <>Create a new worktree to isolate each task on its own branch</>,
+    actionId: "worktree.createDialog.open",
+    actionLabel: "New Worktree",
+  },
+];
+
+let tipMountCount = 0;
+
+function RotatingTip() {
+  const mountIndex = useRef(tipMountCount++);
+  const availability = useCliAvailabilityStore((s) => s.availability);
+
+  const filteredTips = useMemo(
+    () =>
+      TIPS.filter((tip) => !tip.requiredAgents || tip.requiredAgents.some((a) => availability[a])),
+    [availability]
+  );
+
+  if (filteredTips.length === 0) return null;
+
+  const tip = filteredTips[mountIndex.current % filteredTips.length];
+
+  return (
+    <div className="flex flex-col items-center gap-2 animate-in fade-in duration-300">
+      <p className="text-xs text-canopy-text/70 text-center">Tip: {tip.message}</p>
+      {tip.actionId && tip.actionLabel && (
+        <button
+          type="button"
+          onClick={() => void actionService.dispatch(tip.actionId!, undefined, { source: "user" })}
+          className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50 rounded px-1"
+        >
+          {tip.actionLabel}
+        </button>
+      )}
+    </div>
+  );
+}
 
 export interface ContentGridProps {
   className?: string;
@@ -242,12 +403,7 @@ function EmptyState({
         )}
 
         <div className="flex flex-col items-center gap-4 mt-4">
-          {hasActiveWorktree && (
-            <p className="text-xs text-canopy-text/70 text-center">
-              Tip: Press <Kbd>⌘P</Kbd> to open the command palette or <Kbd>⌘T</Kbd> for a new
-              terminal
-            </p>
-          )}
+          {hasActiveWorktree && <RotatingTip />}
 
           {!hasActiveWorktree && (
             <button
