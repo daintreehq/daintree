@@ -178,11 +178,161 @@ class Freeverb {
 }
 
 // ---------------------------------------------------------------------------
-// Waveshaper (tanh soft-clip for warmth)
+// Modal synthesis (physically modeled stiff wooden bar / marimba)
+//
+// Unlike Karplus-Strong (which models flexible strings with integer
+// harmonics), modal synthesis uses a bank of resonant bandpass filters
+// tuned to the actual inharmonic mode ratios of a vibrating bar:
+//
+//   Mode 1: 1.000 × f   (fundamental)
+//   Mode 2: 2.756 × f   (not an octave — this is what makes wood sound
+//   Mode 3: 5.404 × f    like wood and not like a guitar string)
+//   Mode 4: 8.933 × f
+//
+// Each mode is an independent resonator with its own decay rate.  Higher
+// modes decay faster (wood absorbs HF energy), which gives the
+// characteristic "bright attack, warm tail" of struck wooden instruments.
 // ---------------------------------------------------------------------------
 
-function waveshape(x, drive = 1.8) {
-  return Math.tanh(x * drive) / Math.tanh(drive);
+class ModalResonator {
+  constructor(freq, q, gain) {
+    // Biquad bandpass coefficients
+    const w0 = (TWO_PI * freq) / SAMPLE_RATE;
+    const alpha = Math.sin(w0) / (2 * q);
+    const a0 = 1 + alpha;
+    this.b0 = (alpha * gain) / a0;
+    this.b1 = 0;
+    this.b2 = (-alpha * gain) / a0;
+    this.a1 = (-2 * Math.cos(w0)) / a0;
+    this.a2 = (1 - alpha) / a0;
+    this.x1 = 0;
+    this.x2 = 0;
+    this.y1 = 0;
+    this.y2 = 0;
+  }
+  process(input) {
+    const y =
+      this.b0 * input +
+      this.b1 * this.x1 +
+      this.b2 * this.x2 -
+      this.a1 * this.y1 -
+      this.a2 * this.y2;
+    this.x2 = this.x1;
+    this.x1 = input;
+    this.y2 = this.y1;
+    this.y1 = y;
+    return y;
+  }
+}
+
+class WoodModal {
+  constructor(frequency, opts = {}) {
+    const {
+      // Mode ratios for a stiff rectangular bar (Euler-Bernoulli beam theory)
+      modeRatios = [1.0, 2.756, 5.404, 8.933],
+      // Amplitude per mode (higher modes are quieter)
+      modeAmps = [1.0, 0.45, 0.2, 0.08],
+      // Q factor per mode (higher modes ring less — wood absorbs HF)
+      modeQs = [200, 120, 60, 30],
+      // Material character: scales all Qs (lower = woodier/deader)
+      resonance = 1.0,
+      // Strike deformation: momentary sharp pitch on fundamental (Hz above true pitch)
+      deformHz = 15,
+      deformMs = 18,
+    } = opts;
+
+    this.modes = modeRatios
+      .map((ratio, i) => {
+        const modeFreq = frequency * ratio;
+        if (modeFreq > SAMPLE_RATE * 0.45) return null;
+        return new ModalResonator(modeFreq, modeQs[i] * resonance, modeAmps[i]);
+      })
+      .filter(Boolean);
+
+    // Strike deformation: a brief, sharp resonator slightly above the
+    // fundamental that decays very fast.  Simulates the momentary pitch
+    // spike when wood is struck hard — the material deforms under impact
+    // and its tension briefly increases before settling.
+    if (deformHz > 0 && frequency + deformHz < SAMPLE_RATE * 0.45) {
+      this.deformMode = new ModalResonator(frequency + deformHz, 40, 0.3);
+      this.deformSamples = Math.ceil(SAMPLE_RATE * (deformMs / 1000));
+    } else {
+      this.deformMode = null;
+      this.deformSamples = 0;
+    }
+    this.sampleIdx = 0;
+  }
+
+  process(excitation) {
+    let out = 0;
+    for (const mode of this.modes) {
+      out += mode.process(excitation);
+    }
+    // Strike deformation fades in first N ms
+    if (this.deformMode && this.sampleIdx < this.deformSamples) {
+      const deformEnv = 1 - this.sampleIdx / this.deformSamples;
+      out += this.deformMode.process(excitation) * deformEnv;
+    }
+    this.sampleIdx++;
+    return out;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Composite mallet exciter
+//
+// Two components:
+//   1. Bandpass-filtered pink noise (surface contact / texture)
+//   2. Low-frequency sine sweep 150→50Hz over 5ms (mallet mass / thump)
+//
+// The combination simulates a physical mallet with mass and surface
+// hardness striking a bar — much more realistic than noise alone.
+// ---------------------------------------------------------------------------
+
+function generateExcitation(numSamples, opts = {}) {
+  const {
+    noiseBandHz = 1100,
+    noiseQ = 2.0,
+    noiseAmt = 0.6,
+    thumpAmt = 0.35,
+    thumpStartHz = 150,
+    thumpEndHz = 50,
+    duration = 0.006, // total excitation window
+  } = opts;
+
+  const excSamples = Math.ceil(SAMPLE_RATE * duration);
+  const out = new Float32Array(numSamples); // zero-padded to full note length
+  const bn = new BrownNoise(); // brown noise: darker, more organic friction
+  const filt = new SVFilter();
+
+  for (let i = 0; i < excSamples && i < numSamples; i++) {
+    const t = i / SAMPLE_RATE;
+    const env = expDecay(t, duration, 8);
+
+    // Noise component: mallet surface texture (brown = wood grain character)
+    const noise = filt.bandpass(bn.next(), noiseBandHz, noiseQ) * noiseAmt;
+
+    // Thump component: mallet mass (exponential freq sweep down)
+    const thumpFreq = thumpStartHz * Math.pow(thumpEndHz / thumpStartHz, t / duration);
+    const thump = Math.sin(TWO_PI * thumpFreq * t) * thumpAmt;
+
+    out[i] = (noise + thump) * env;
+  }
+
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Asymmetric waveshaper (even-harmonic warmth)
+//
+// Standard tanh is symmetrical → generates odd harmonics (hollow, digital).
+// Adding a DC bias before clipping introduces even harmonics (2nd, 4th, 6th)
+// which the ear perceives as warm and musical — the "tube/tape" character.
+// The bias is subtracted afterward to re-center the waveform.
+// ---------------------------------------------------------------------------
+
+function waveshape(x, drive = 1.8, bias = 0.15) {
+  return Math.tanh(x * drive + bias) - Math.tanh(bias);
 }
 
 // ---------------------------------------------------------------------------
@@ -208,89 +358,113 @@ class PinkNoise {
   }
 }
 
+/** Brown noise (integrated white noise, -6dB/octave).
+ *  Darker and more rumbling than pink — sounds like organic friction,
+ *  wood grain scraping, or distant thunder.  Better mallet excitation. */
+class BrownNoise {
+  constructor() {
+    this.z = 0;
+  }
+  next() {
+    const white = Math.random() * 2 - 1;
+    this.z = (this.z + 0.02 * white) / 1.02; // leaky integrator
+    return this.z * 3.5; // scale to roughly [-1, 1]
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Canopy note synthesizer
 //
-// Layers:
-//   1. FM body   — carrier sine + modulator (ratio 1:√2 for woody inharmonicity)
-//   2. Harmonics — even-biased additive (2nd, 3rd, 4th partial)
-//   3. Detuned double — second oscillator +3 cents for organic width
-//   4. Noise transient — bandpass-filtered pink noise "strike"
-//   5. Pitch envelope — subtle downward bend on attack
+// Architecture: serial excitation.  The FM "digital shimmer" and mallet
+// noise are combined into a composite excitation signal that is fed INTO
+// the modal wood resonators.  The wood model physically shapes everything
+// — the digital component literally passes through the wood, fusing the
+// two into one impossible material.  This is "digital ecology" expressed
+// as DSP architecture, not just a metaphor.
+//
+// Signal flow:
+//   [FM burst + mallet noise] → [Modal wood resonators] → [waveshape] → out
+//                                                    ↑
+//                              [detuned double adds organic width at output]
 // ---------------------------------------------------------------------------
 
 function canopyNote(freq, duration, opts = {}) {
   const {
     amplitude = 0.55,
-    attack = 0.012, // BOTW-style: snappier attack, more percussive
-    decayRate = 5.5, // faster decay for tighter, less lingering notes
-    fmRatio = 1.4142, // √2 — woody/bell inharmonicity
+    // Modal wood body
+    resonance = 1.0, // material character (lower = deader wood)
+    modeRatios, // override inharmonic mode ratios
+    modeAmps, // override mode amplitudes
+    modeQs, // override mode Q factors
+    // FM excitation (digital shimmer fed INTO the wood)
+    fmRatio = 1.4142, // √2 for standard woody, √3 for metallic
     fmIndex = 1.5,
-    fmDecayRate = 14, // FM brightness dies faster → kalimba-like pluck
-    harmonicMix = 0.12, // slightly less additive harmonics → cleaner
-    noiseAmt = 0.18, // stronger strike transient → more percussive
-    noiseBandHz = 1200, // higher band → brighter "mallet on wood" character
-    noiseQ = 2.5,
-    noiseDuration = 0.006, // shorter noise burst → sharper attack
-    pitchBendHz = 25,
-    pitchBendMs = 15, // shorter pitch bend → snappier
+    fmDecayRate = 16, // how fast the digital shimmer dies
+    fmAmt = 0.5, // FM contribution to the excitation signal
+    // Mallet excitation
+    malletAmt = 0.5, // mallet noise+thump contribution
+    noiseBandHz = 1100,
+    noiseQ = 2.0,
+    thumpAmt = 0.35,
+    excDuration = 0.006, // mallet contact time
+    // Detuned double (added at output, not through the wood)
+    detuneMix = 0.12,
+    // Pitch envelope (FM component only)
+    pitchBendHz = 20,
+    pitchBendMs = 12,
   } = opts;
 
   const numSamples = Math.ceil(SAMPLE_RATE * duration);
   const samples = new Float32Array(numSamples);
 
+  // Modal resonator bank: the wood body
+  const modalOpts = { resonance };
+  if (modeRatios) modalOpts.modeRatios = modeRatios;
+  if (modeAmps) modalOpts.modeAmps = modeAmps;
+  if (modeQs) modalOpts.modeQs = modeQs;
+  const wood = new WoodModal(freq, modalOpts);
+
+  // FM oscillators for the digital excitation component
   const carrier = new PhaseOsc();
   const modulator = new PhaseOsc();
-  const detuned = new PhaseOsc();
-  const noiseGen = new PinkNoise();
-  const noiseFilt = new SVFilter();
 
+  // Detuned double oscillator (added at output for width)
+  const detuned = new PhaseOsc();
   const detuneFactor = Math.pow(2, 3 / 1200); // +3 cents
+
+  // Pre-generate the mallet excitation (noise + thump)
+  const mallet = generateExcitation(numSamples, {
+    noiseBandHz,
+    noiseQ,
+    noiseAmt: 0.6,
+    thumpAmt,
+    duration: excDuration,
+  });
 
   for (let i = 0; i < numSamples; i++) {
     const t = i / SAMPLE_RATE;
 
-    // Envelope: fast exponential attack + exponential decay (no sustain)
-    const attackEnv = i < attack * SAMPLE_RATE ? Math.pow(t / attack, 2) : 1.0;
-    const decayEnv = expDecay(t, duration, decayRate);
-    const env = attackEnv * decayEnv;
-
-    // Pitch envelope: subtle downward bend
+    // --- FM excitation burst (decays quickly → digital shimmer) ---
     const pitchBendDur = pitchBendMs / 1000;
     const pitchOffset = t < pitchBendDur ? pitchBendHz * (1 - t / pitchBendDur) : 0;
     const f = freq + pitchOffset;
-
-    // FM body
     const modFreq = f * fmRatio;
     const modEnv = expDecay(t, duration, fmDecayRate);
     const mod = modulator.next(modFreq) * fmIndex * modEnv;
-    const fmSample = Math.sin(carrier.phase + mod);
+    const fmSample = Math.sin(carrier.phase + mod) * modEnv; // envelope the FM output too
     carrier.phase += (TWO_PI * f) / SAMPLE_RATE;
     if (carrier.phase > TWO_PI) carrier.phase -= TWO_PI;
 
-    // Detuned double for organic width
-    const detunedSample = detuned.next(f * detuneFactor);
+    // --- Composite excitation: FM + mallet, fed into the wood ---
+    const excitation = fmSample * fmAmt + mallet[i] * malletAmt;
 
-    // Even-biased harmonics (2nd, 3rd, 4th with warm rolloff: 1/n^1.7)
-    const h2 = Math.sin(carrier.phase * 2) * (1 / Math.pow(2, 1.7));
-    const h3 = Math.sin(carrier.phase * 3) * (1 / Math.pow(3, 1.7));
-    const h4 = Math.sin(carrier.phase * 4) * (1 / Math.pow(4, 1.7));
+    // --- Modal wood resonators shape everything ---
+    const woodSample = wood.process(excitation);
 
-    // Mix tonal components
-    let tonal =
-      fmSample * (0.53 - harmonicMix / 2) +
-      detunedSample * (0.35 - harmonicMix / 4) +
-      (h2 + h3 + h4) * harmonicMix;
+    // --- Detuned double at output (organic width, not through wood) ---
+    const detunedSample = detuned.next(f * detuneFactor) * expDecay(t, duration, 6) * detuneMix;
 
-    // Noise transient (strike texture)
-    let noise = 0;
-    if (t < noiseDuration) {
-      const noiseEnv = expDecay(t, noiseDuration, 8);
-      noise = noiseFilt.bandpass(noiseGen.next(), noiseBandHz, noiseQ) * noiseEnv * noiseAmt;
-    }
-
-    // Combine and shape
-    samples[i] = waveshape(tonal + noise) * env * amplitude;
+    samples[i] = waveshape(woodSample + detunedSample) * amplitude;
   }
 
   return samples;
@@ -344,14 +518,22 @@ function sequence(notes, opts = {}) {
 // ---------------------------------------------------------------------------
 
 function postProcess(samples, opts = {}) {
-  const { reverbWet = 0.08, lpFreq = 4000, targetPeak = 0.7 } = opts;
+  const { reverbWet = 0.08, lpFreq = 4000, targetPeak = 0.7, chassisMix = 0.025 } = opts;
 
   const reverb = new Freeverb(reverbWet, 0.4);
   const lp = new OnePole(lpFreq);
 
-  // Apply reverb then lowpass
+  // Sympathetic chassis resonance: a shared, very quiet A4 resonator
+  // that every sound excites.  Even error and waiting carry a whisper
+  // of the brand root — this ties the entire sound family together
+  // acoustically, like keys on the same wooden instrument body.
+  const chassis = chassisMix > 0 ? new ModalResonator(JI.A4, 80, chassisMix) : null;
+
+  // Apply chassis resonance, reverb, then lowpass
   for (let i = 0; i < samples.length; i++) {
-    samples[i] = lp.process(reverb.process(samples[i]));
+    let s = samples[i];
+    if (chassis) s += chassis.process(s);
+    samples[i] = lp.process(reverb.process(s));
   }
 
   // Normalize to target peak
@@ -417,96 +599,160 @@ function writeWav(samples, filePath) {
 // ---------------------------------------------------------------------------
 // Sound definitions — the Canopy palette
 //
-// BOTW-inspired design principles:
-//   1. Dry UI — near-zero reverb; sounds come from the app chrome, not a room
-//   2. Micro-feedback — short, sparse; reserve melodic phrases for significance
-//   3. Instrument-per-meaning — vary FM ratio/index to distinguish semantics
-//   4. Lydian brightness — Ds5 (#4) for wonder/positive events
-//   5. Brand anchor — A4 → E5 (perfect fifth, 3:2) present in every sound
+// Design principles:
+//   1. Earthy core — modal wood resonators are the primary voice
+//   2. Serial excitation — FM shimmer passes THROUGH the wood, not beside it
+//   3. Dry UI — near-zero reverb; sounds feel like app chrome
+//   4. Micro-feedback — short, sparse; 1-2 notes max
+//   5. Material-per-meaning — wood resonance/hardness varies by semantic
+//   6. Brand anchor — A4 → E5 (perfect fifth) woven through all sounds
 // ---------------------------------------------------------------------------
 
-// chime.wav — Lydian ascending pair A4→Ds5, bright "item-get" feeling
-// The Lydian #4 gives a sense of wonder that plain major third doesn't.
-// Two notes only — BOTW teaches that common events deserve micro-feedback.
+// chime.wav — Lydian ascending pair A4→Ds5
+// Light bamboo resonance with moderate FM excitation.  The digital shimmer
+// passes through the wood modes, creating a hybrid "techno-bamboo" pluck.
 const chime = postProcess(
   sequence(
     [
-      { freq: JI.A4, duration: 0.09, opts: { fmRatio: 1.4142, fmIndex: 1.2 } },
+      {
+        freq: JI.A4,
+        duration: 0.1,
+        opts: {
+          resonance: 0.9,
+          fmAmt: 0.5,
+          fmIndex: 1.2,
+          fmDecayRate: 14,
+          malletAmt: 0.5,
+          thumpAmt: 0.3,
+        },
+      },
       {
         freq: JI.Ds5,
-        duration: 0.15,
-        opts: { amplitude: 0.6, fmRatio: 1.4142, fmIndex: 1.0, decayRate: 6 },
+        duration: 0.16,
+        opts: {
+          amplitude: 0.6,
+          resonance: 0.95,
+          fmAmt: 0.4,
+          fmIndex: 0.8,
+          fmDecayRate: 18,
+          malletAmt: 0.55,
+        },
       },
     ],
-    { noteGap: 0.015, tailPad: 0.08 }
+    { noteGap: 0.015, tailPad: 0.12 }
   ),
   { reverbWet: 0.02 }
 );
 
-// complete.wav — descending resolution E5→A4, the brand fifth settling home.
-// Two notes, slightly more resonant than chime — a task resolving feels
-// weightier than a general notification.  Lower FM index = warmer, rounder.
+// complete.wav — descending resolution E5→A4
+// Warmer, more resonant wood.  The A4 root has higher resonance (longer
+// ring) and less FM — the wood body dominates the tail, giving a warm
+// marimba-bar settling feeling.
 const complete = postProcess(
   sequence(
     [
-      { freq: JI.E5, duration: 0.1, opts: { amplitude: 0.5, fmIndex: 1.0, fmDecayRate: 16 } },
+      {
+        freq: JI.E5,
+        duration: 0.1,
+        opts: {
+          amplitude: 0.5,
+          resonance: 0.9,
+          fmAmt: 0.45,
+          fmIndex: 0.8,
+          fmDecayRate: 18,
+          malletAmt: 0.55,
+        },
+      },
       {
         freq: JI.A4,
-        duration: 0.18,
-        opts: { amplitude: 0.6, fmIndex: 0.8, fmDecayRate: 18, decayRate: 4.5 },
+        duration: 0.22,
+        opts: {
+          amplitude: 0.6,
+          resonance: 1.1, // more resonant — longer ring on the root
+          fmAmt: 0.3, // less digital on the resolution note
+          fmIndex: 0.6,
+          fmDecayRate: 20,
+          malletAmt: 0.6,
+          thumpAmt: 0.4, // more mallet mass on the low note
+        },
       },
     ],
-    { noteGap: 0.025, tailPad: 0.1 }
+    { noteGap: 0.025, tailPad: 0.14 }
   ),
   { reverbWet: 0.02 }
 );
 
-// waiting.wav — rising unresolved pair A4→B4, ends on tension (9/8).
-// Slightly brighter FM (higher index) and longer final note so the
-// unresolved quality lingers just enough to prompt action.
+// waiting.wav — rising unresolved pair A4→B4
+// Harder wood (higher resonance + brighter modes) with more FM excitation
+// on the B4 — the digital component lingers longer, adding urgency.
 const waiting = postProcess(
   sequence(
     [
-      { freq: JI.A4, duration: 0.08, opts: { fmIndex: 1.3 } },
+      {
+        freq: JI.A4,
+        duration: 0.08,
+        opts: {
+          resonance: 0.85,
+          fmAmt: 0.5,
+          fmIndex: 1.3,
+          malletAmt: 0.5,
+        },
+      },
       {
         freq: JI.B4,
-        duration: 0.16,
-        opts: { amplitude: 0.55, fmIndex: 1.6, fmDecayRate: 10, decayRate: 4.5 },
+        duration: 0.18,
+        opts: {
+          amplitude: 0.55,
+          resonance: 0.95,
+          fmAmt: 0.6, // more digital = more urgent
+          fmIndex: 1.6,
+          fmDecayRate: 10, // FM lingers longer on the tension note
+          malletAmt: 0.4,
+          noiseBandHz: 1300, // brighter strike
+        },
       },
     ],
-    { noteGap: 0.02, tailPad: 0.08 }
+    { noteGap: 0.02, tailPad: 0.1 }
   ),
   { reverbWet: 0.02 }
 );
 
-// error.wav — single low-ish Cs5 with heavier FM for a darker, buzzier
-// timbre.  BOTW uses a single distinct tone for negative feedback, not a
-// melody.  Higher FM index + slower decay = more metallic/tense character.
+// error.wav — single Cs5 with dense, dark wood character.
+// Low resonance (dead wood), heavy mallet, FM at √3 ratio for metallic
+// undertones.  The wood model shapes the metallic FM into something
+// that sounds like striking a thick, dense branch.
 const error = postProcess(
-  canopyNote(JI.Cs5, 0.22, {
+  canopyNote(JI.Cs5, 0.26, {
     amplitude: 0.55,
-    fmRatio: 1.7321, // √3 — more metallic than √2
-    fmIndex: 2.5,
-    fmDecayRate: 6,
-    decayRate: 5.0,
-    noiseBandHz: 900, // lower noise band = darker strike
-    noiseAmt: 0.22,
-    pitchBendHz: 40, // more dramatic downward bend = "drooping" feel
-    pitchBendMs: 25,
+    resonance: 0.7, // dead wood — short ring, hollow
+    modeQs: [150, 80, 40, 20], // lower Qs = faster decay, more percussive
+    fmRatio: 1.7321, // √3 — metallic inharmonics
+    fmAmt: 0.55,
+    fmIndex: 2.2,
+    fmDecayRate: 7, // metallic FM lingers
+    malletAmt: 0.55,
+    noiseBandHz: 800, // darker strike
+    thumpAmt: 0.5, // heavier mallet
+    pitchBendHz: 35,
+    pitchBendMs: 20,
   }),
   { reverbWet: 0.01 }
 );
 
-// ping.wav — single kalimba-like pluck on E5, the briefest possible
-// acknowledgment.  Very fast decay, minimal FM — clean and bright.
+// ping.wav — single kalimba pluck on E5.
+// High resonance, minimal FM — the most purely "natural" sound.  The
+// modal resonators do almost all the work; FM is just a tiny sparkle
+// on the initial strike.
 const ping = postProcess(
-  canopyNote(JI.E5, 0.18, {
+  canopyNote(JI.E5, 0.22, {
     amplitude: 0.5,
-    fmIndex: 0.8,
-    fmDecayRate: 20,
-    decayRate: 7,
-    noiseAmt: 0.2,
-    noiseDuration: 0.004,
+    resonance: 1.1, // resonant wood — clean ring
+    fmAmt: 0.25, // barely there
+    fmIndex: 0.5,
+    fmDecayRate: 22, // gone almost instantly
+    malletAmt: 0.65, // mostly mallet excitation
+    detuneMix: 0.08,
+    excDuration: 0.004, // very short contact = clean pluck
   }),
   { reverbWet: 0.02 }
 );
