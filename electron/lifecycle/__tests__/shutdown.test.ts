@@ -135,7 +135,6 @@ function makeDeps(overrides?: Partial<ShutdownDeps>): ShutdownDeps {
     setStopAppMetricsMonitor: vi.fn(),
     getStopDiskSpaceMonitor: vi.fn(() => null),
     setStopDiskSpaceMonitor: vi.fn(),
-    getMainWindow: vi.fn(() => null),
     ...overrides,
   };
 }
@@ -175,9 +174,7 @@ describe("registerShutdownHandler", () => {
   });
 
   it("runs cleanup without dialog when no window and no signal", async () => {
-    const { beforeQuitCb } = await setup({
-      getMainWindow: vi.fn(() => null),
-    });
+    const { beforeQuitCb } = await setup();
     const event = makeEvent();
     await beforeQuitCb(event);
 
@@ -198,7 +195,9 @@ describe("registerShutdownHandler", () => {
 
     const mainWindow = { isMinimized: vi.fn() } as unknown as Electron.BrowserWindow;
     const { beforeQuitCb } = await setup({
-      getMainWindow: vi.fn(() => mainWindow),
+      windowRegistry: {
+        getPrimary: () => ({ browserWindow: mainWindow }),
+      } as unknown as ShutdownDeps["windowRegistry"],
     });
     const event = makeEvent();
     await beforeQuitCb(event);
@@ -218,7 +217,9 @@ describe("registerShutdownHandler", () => {
 
     const mainWindow = {} as Electron.BrowserWindow;
     const { beforeQuitCb } = await setup({
-      getMainWindow: vi.fn(() => mainWindow),
+      windowRegistry: {
+        getPrimary: () => ({ browserWindow: mainWindow }),
+      } as unknown as ShutdownDeps["windowRegistry"],
     });
     const event = makeEvent();
     await beforeQuitCb(event);
@@ -235,7 +236,9 @@ describe("registerShutdownHandler", () => {
 
     const mainWindow = {} as Electron.BrowserWindow;
     const { beforeQuitCb } = await setup({
-      getMainWindow: vi.fn(() => mainWindow),
+      windowRegistry: {
+        getPrimary: () => ({ browserWindow: mainWindow }),
+      } as unknown as ShutdownDeps["windowRegistry"],
     });
     const event = makeEvent();
     await beforeQuitCb(event);
@@ -253,7 +256,9 @@ describe("registerShutdownHandler", () => {
 
     const mainWindow = {} as Electron.BrowserWindow;
     const { beforeQuitCb } = await setup({
-      getMainWindow: vi.fn(() => mainWindow),
+      windowRegistry: {
+        getPrimary: () => ({ browserWindow: mainWindow }),
+      } as unknown as ShutdownDeps["windowRegistry"],
     });
     const event = makeEvent();
     await beforeQuitCb(event);
@@ -269,9 +274,7 @@ describe("registerShutdownHandler", () => {
   it("runs cleanup when no window and signal shutdown", async () => {
     signalShutdownMock.isSignalShutdown.mockReturnValue(true);
 
-    const { beforeQuitCb } = await setup({
-      getMainWindow: vi.fn(() => null),
-    });
+    const { beforeQuitCb } = await setup();
     const event = makeEvent();
     await beforeQuitCb(event);
 
@@ -294,9 +297,7 @@ describe("registerShutdownHandler", () => {
         callOrder.push("closeSharedDb");
       });
 
-      const { beforeQuitCb } = await setup({
-        getMainWindow: vi.fn(() => null),
-      });
+      const { beforeQuitCb } = await setup({});
       await beforeQuitCb(makeEvent());
 
       await vi.waitFor(() => {
@@ -310,9 +311,7 @@ describe("registerShutdownHandler", () => {
       dbMaintenanceMock.dispose.mockRejectedValue(new Error("dispose boom"));
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      const { beforeQuitCb } = await setup({
-        getMainWindow: vi.fn(() => null),
-      });
+      const { beforeQuitCb } = await setup({});
       await beforeQuitCb(makeEvent());
 
       await vi.waitFor(() => {
@@ -333,9 +332,7 @@ describe("registerShutdownHandler", () => {
       });
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      const { beforeQuitCb } = await setup({
-        getMainWindow: vi.fn(() => null),
-      });
+      const { beforeQuitCb } = await setup({});
       await beforeQuitCb(makeEvent());
 
       await vi.waitFor(() => {
@@ -363,9 +360,7 @@ describe("registerShutdownHandler", () => {
       mcpServerMock.stop.mockReturnValue(new Promise(() => {}));
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-      const { beforeQuitCb } = await setup({
-        getMainWindow: vi.fn(() => null),
-      });
+      const { beforeQuitCb } = await setup({});
       const event = makeEvent();
       await beforeQuitCb(event);
 
@@ -392,9 +387,7 @@ describe("registerShutdownHandler", () => {
     it("normal cleanup exits with code 0 and timeout does not fire", async () => {
       mcpServerMock.stop.mockReturnValue(Promise.resolve());
 
-      const { beforeQuitCb } = await setup({
-        getMainWindow: vi.fn(() => null),
-      });
+      const { beforeQuitCb } = await setup({});
       const event = makeEvent();
       await beforeQuitCb(event);
 
@@ -412,9 +405,7 @@ describe("registerShutdownHandler", () => {
       mcpServerMock.stop.mockReturnValue(Promise.reject(new Error("MCP stop failed")));
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-      const { beforeQuitCb } = await setup({
-        getMainWindow: vi.fn(() => null),
-      });
+      const { beforeQuitCb } = await setup({});
       const event = makeEvent();
       await beforeQuitCb(event);
 

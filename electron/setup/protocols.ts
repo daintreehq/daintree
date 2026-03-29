@@ -1,4 +1,4 @@
-import { app, protocol, net, session } from "electron";
+import { app, protocol, net, session, BrowserWindow } from "electron";
 import path from "path";
 import { pathToFileURL } from "url";
 import { resolveAppUrlToDistPath, getMimeType, buildHeaders } from "../utils/appProtocol.js";
@@ -11,7 +11,6 @@ import {
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { isLocalhostUrl } from "../../shared/utils/urlUtils.js";
 import { getWebviewDialogService } from "../services/WebviewDialogService.js";
-import { getMainWindow } from "../window/windowRef.js";
 import { CHANNELS } from "../ipc/channels.js";
 
 export function registerAppProtocol(distPath: string): void {
@@ -211,9 +210,12 @@ export function setupWebviewCSP(): void {
             return;
           }
 
-          const mainWindow = getMainWindow();
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send("webview:dialog-request", {
+          const hostContents =
+            (contents as unknown as { hostWebContents?: Electron.WebContents }).hostWebContents ??
+            contents;
+          const parentWindow = BrowserWindow.fromWebContents(hostContents);
+          if (parentWindow && !parentWindow.isDestroyed()) {
+            parentWindow.webContents.send("webview:dialog-request", {
               dialogId,
               panelId,
               type,
@@ -249,9 +251,12 @@ export function setupWebviewCSP(): void {
         if (shortcut !== "close") {
           event.preventDefault();
         }
-        const mainWindow = getMainWindow();
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send(CHANNELS.WEBVIEW_FIND_SHORTCUT, { panelId, shortcut });
+        const findHostContents =
+          (contents as unknown as { hostWebContents?: Electron.WebContents }).hostWebContents ??
+          contents;
+        const findParentWindow = BrowserWindow.fromWebContents(findHostContents);
+        if (findParentWindow && !findParentWindow.isDestroyed()) {
+          findParentWindow.webContents.send(CHANNELS.WEBVIEW_FIND_SHORTCUT, { panelId, shortcut });
         }
       });
     }

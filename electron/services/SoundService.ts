@@ -1,8 +1,8 @@
 import path from "path";
 import { existsSync, readdirSync } from "fs";
-import { app } from "electron";
+import { app, BrowserWindow } from "electron";
 import { playSound, type SoundHandle } from "../utils/soundPlayer.js";
-import { getMainWindow } from "../window/windowRef.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 
 export function getSoundsDir(): string {
@@ -119,10 +119,7 @@ class SoundService {
   }
 
   cancel(): void {
-    const win = getMainWindow();
-    if (win && !win.isDestroyed()) {
-      win.webContents.send(CHANNELS.SOUND_CANCEL);
-    }
+    broadcastToRenderer(CHANNELS.SOUND_CANCEL);
     for (const voice of this.activeVoices) {
       voice.handle.cancel();
     }
@@ -153,9 +150,8 @@ class SoundService {
     if (!existsSync(soundPath)) return;
 
     // Try Web Audio via renderer first
-    const win = getMainWindow();
-    if (win && !win.isDestroyed()) {
-      win.webContents.send(CHANNELS.SOUND_TRIGGER, { soundFile });
+    if (BrowserWindow.getAllWindows().length > 0) {
+      broadcastToRenderer(CHANNELS.SOUND_TRIGGER, { soundFile });
       return;
     }
 
@@ -183,9 +179,8 @@ class SoundService {
     const effectiveVolume = opts.volume ?? this.computeVolume(now);
 
     // Try Web Audio via renderer first
-    const win = getMainWindow();
-    if (win && !win.isDestroyed()) {
-      win.webContents.send(CHANNELS.SOUND_TRIGGER, {
+    if (BrowserWindow.getAllWindows().length > 0) {
+      broadcastToRenderer(CHANNELS.SOUND_TRIGGER, {
         soundFile,
         volume: effectiveVolume,
       });

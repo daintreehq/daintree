@@ -11,6 +11,8 @@ interface MockWebContents {
 
 const webContentsCreatedListeners: WebContentsCreatedListener[] = [];
 
+const mockFromWebContents = vi.hoisted(() => vi.fn(() => null));
+
 vi.mock("electron", () => ({
   app: {
     on: vi.fn((event: string, listener: WebContentsCreatedListener) => {
@@ -18,6 +20,9 @@ vi.mock("electron", () => ({
         webContentsCreatedListeners.push(listener);
       }
     }),
+  },
+  BrowserWindow: {
+    fromWebContents: mockFromWebContents,
   },
   protocol: {
     handle: vi.fn(),
@@ -59,10 +64,6 @@ vi.mock("../../services/WebviewDialogService.js", () => ({
     registerDialog: vi.fn(),
     getPanelId: vi.fn(),
   })),
-}));
-
-vi.mock("../../window/windowRef.js", () => ({
-  getMainWindow: vi.fn(() => null),
 }));
 
 vi.mock("../../ipc/channels.js", () => ({

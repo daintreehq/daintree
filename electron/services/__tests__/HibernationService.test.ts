@@ -34,13 +34,7 @@ vi.mock("../ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
-const windowMock = vi.hoisted(() => ({
-  isDestroyed: vi.fn(() => false),
-  webContents: {
-    isDestroyed: vi.fn(() => false),
-    send: vi.fn(),
-  },
-}));
+const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 
 const writeHibernatedMarkerMock = vi.hoisted(() => vi.fn());
 
@@ -58,8 +52,8 @@ vi.mock("fs/promises", () => ({
   stat: fsMock.stat,
 }));
 
-vi.mock("../../window/windowRef.js", () => ({
-  getMainWindow: () => windowMock,
+vi.mock("../../ipc/utils.js", () => ({
+  broadcastToRenderer: broadcastToRendererMock,
 }));
 
 vi.mock("../../ipc/channels.js", () => ({
@@ -930,7 +924,7 @@ describe("HibernationService", () => {
       const service = new HibernationService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
-      expect(windowMock.webContents.send).toHaveBeenCalledWith(
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(
         "hibernation:project-hibernated",
         expect.objectContaining({
           projectId: "proj-1",
@@ -960,7 +954,7 @@ describe("HibernationService", () => {
       const service = new HibernationService();
       await service.hibernateUnderMemoryPressure();
 
-      expect(windowMock.webContents.send).toHaveBeenCalledWith(
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(
         "hibernation:project-hibernated",
         expect.objectContaining({
           reason: "memory-pressure",
@@ -1004,7 +998,7 @@ describe("HibernationService", () => {
       expect(failingCallback).toHaveBeenCalled();
       expect(successCallback).toHaveBeenCalled();
       // Event should still be emitted
-      expect(windowMock.webContents.send).toHaveBeenCalled();
+      expect(broadcastToRendererMock).toHaveBeenCalled();
     });
   });
 });

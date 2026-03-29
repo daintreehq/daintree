@@ -5,7 +5,7 @@ import type { HibernationProjectHibernatedPayload } from "../../shared/types/ipc
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 import { logInfo, logError } from "../utils/logger.js";
-import { getMainWindow } from "../window/windowRef.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { writeHibernatedMarker } from "./pty/terminalSessionPersistence.js";
 
@@ -339,20 +339,17 @@ export class HibernationService {
     await Promise.allSettled(this.hibernationCallbacks.map((cb) => Promise.resolve(cb(projectId))));
 
     // Emit event to renderer
-    const win = getMainWindow();
-    if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
-      const payload: HibernationProjectHibernatedPayload = {
-        projectId,
-        projectName,
-        reason,
-        terminalsKilled,
-        timestamp: Date.now(),
-      };
-      try {
-        win.webContents.send(CHANNELS.HIBERNATION_PROJECT_HIBERNATED, payload);
-      } catch {
-        // Window may be closing
-      }
+    const payload: HibernationProjectHibernatedPayload = {
+      projectId,
+      projectName,
+      reason,
+      terminalsKilled,
+      timestamp: Date.now(),
+    };
+    try {
+      broadcastToRenderer(CHANNELS.HIBERNATION_PROJECT_HIBERNATED, payload);
+    } catch {
+      // Window may be closing
     }
 
     return terminalsKilled;
