@@ -1,6 +1,12 @@
 import type { BuiltInAgentId } from "../config/agentIds.js";
 
-/** Unique identifier for toolbar buttons */
+/** Identifier for plugin-contributed toolbar buttons (namespaced as plugin.name.buttonId) */
+export type PluginToolbarButtonId = `plugin.${string}`;
+
+/** Identifier for any toolbar button (built-in or plugin-contributed) */
+export type AnyToolbarButtonId = ToolbarButtonId | PluginToolbarButtonId;
+
+/** Unique identifier for built-in toolbar buttons */
 export type ToolbarButtonId =
   | "sidebar-toggle"
   | "agent-setup"
@@ -24,9 +30,9 @@ export type ToolbarButtonId =
 /** Configuration for which toolbar buttons are visible and their order */
 export interface ToolbarLayout {
   /** Ordered list of button IDs to show on the left side (excluding sidebar-toggle which is always first) */
-  leftButtons: ToolbarButtonId[];
+  leftButtons: AnyToolbarButtonId[];
   /** Ordered list of button IDs to show on the right side (excluding portal-toggle which is always last) */
-  rightButtons: ToolbarButtonId[];
+  rightButtons: AnyToolbarButtonId[];
 }
 
 /** Launcher palette default behaviors */

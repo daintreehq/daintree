@@ -70,7 +70,9 @@ import {
   useVoiceRecordingStore,
   usePaletteStore,
 } from "@/store";
-import type { ToolbarButtonId } from "@/../../shared/types/toolbar";
+import type { ToolbarButtonId, AnyToolbarButtonId } from "@/../../shared/types/toolbar";
+import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
+import { Puzzle } from "lucide-react";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useGitHubFilterStore } from "@/store/githubFilterStore";
@@ -96,7 +98,7 @@ const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
 ]);
 
 const OVERFLOW_MENU_META: Partial<
-  Record<ToolbarButtonId, { label: string; icon: React.ComponentType<{ className?: string }> }>
+  Record<AnyToolbarButtonId, { label: string; icon: React.ComponentType<{ className?: string }> }>
 > = {
   claude: { label: "Claude", icon: SquareTerminal },
   gemini: { label: "Gemini", icon: SquareTerminal },
@@ -436,8 +438,10 @@ export function Toolbar({
   const toolbarIconButtonClass = "toolbar-icon-button text-canopy-text transition-colors";
   const toolbarDividerClass = "toolbar-divider w-px h-5 mx-1";
 
+  const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
+
   const buttonRegistry = useMemo<
-    Record<ToolbarButtonId, { render: () => React.ReactNode; isAvailable: boolean }>
+    Record<string, { render: () => React.ReactNode; isAvailable: boolean }>
   >(
     () => ({
       "sidebar-toggle": {
@@ -1009,6 +1013,42 @@ export function Toolbar({
         ),
         isAvailable: true,
       },
+      ...Object.fromEntries(
+        pluginButtonIds.map((pluginId) => {
+          const config = pluginConfigs.get(pluginId);
+          return [
+            pluginId,
+            {
+              render: () => (
+                <TooltipProvider key={pluginId}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        data-toolbar-item=""
+                        onClick={() => {
+                          void actionService.dispatch(
+                            config!.actionId as Parameters<typeof actionService.dispatch>[0],
+                            undefined,
+                            { source: "user" }
+                          );
+                        }}
+                        className={toolbarIconButtonClass}
+                        aria-label={config?.label ?? pluginId}
+                      >
+                        <Puzzle />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{config?.label ?? pluginId}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              ),
+              isAvailable: true,
+            },
+          ];
+        })
+      ),
     }),
     [
       isFocusMode,
@@ -1059,17 +1099,30 @@ export function Toolbar({
       setIssueSearchQuery,
       setPrSearchQuery,
       notificationsEnabled,
+      pluginButtonIds,
+      pluginConfigs,
     ]
   );
 
+  const effectiveLeftButtons = useMemo(
+    () => [...toolbarLayout.leftButtons],
+    [toolbarLayout.leftButtons]
+  );
+
+  const effectiveRightButtons = useMemo(() => {
+    const existing = new Set(toolbarLayout.rightButtons);
+    const extra = pluginButtonIds.filter((id) => !existing.has(id));
+    return [...toolbarLayout.rightButtons, ...extra];
+  }, [toolbarLayout.rightButtons, pluginButtonIds]);
+
   const availableLeftIds = useMemo(
-    () => toolbarLayout.leftButtons.filter((id) => buttonRegistry[id]?.isAvailable),
-    [toolbarLayout.leftButtons, buttonRegistry]
+    () => effectiveLeftButtons.filter((id) => buttonRegistry[id]?.isAvailable),
+    [effectiveLeftButtons, buttonRegistry]
   );
 
   const availableRightIds = useMemo(
-    () => toolbarLayout.rightButtons.filter((id) => buttonRegistry[id]?.isAvailable),
-    [toolbarLayout.rightButtons, buttonRegistry]
+    () => effectiveRightButtons.filter((id) => buttonRegistry[id]?.isAvailable),
+    [effectiveRightButtons, buttonRegistry]
   );
 
   const { leftVisible, leftOverflow, rightVisible, rightOverflow } = useToolbarOverflow(
@@ -1079,12 +1132,12 @@ export function Toolbar({
     availableRightIds
   );
 
-  const leftVisibleSet = useMemo(() => new Set(leftVisible), [leftVisible]);
-  const rightVisibleSet = useMemo(() => new Set(rightVisible), [rightVisible]);
+  const leftVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(leftVisible), [leftVisible]);
+  const rightVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(rightVisible), [rightVisible]);
 
   // Close open dropdowns when their buttons move into overflow
   useEffect(() => {
-    const overflowSet = new Set([...leftOverflow, ...rightOverflow]);
+    const overflowSet = new Set<AnyToolbarButtonId>([...leftOverflow, ...rightOverflow]);
     if (overflowSet.has("github-stats")) {
       setIssuesOpen(false);
       setPrsOpen(false);
@@ -1095,7 +1148,7 @@ export function Toolbar({
     }
   }, [leftOverflow, rightOverflow, closeNotificationCenter]);
 
-  const renderButtons = (buttonIds: ToolbarButtonId[], visibleSet: Set<ToolbarButtonId>) => {
+  const renderButtons = (buttonIds: AnyToolbarButtonId[], visibleSet: Set<AnyToolbarButtonId>) => {
     return buttonIds
       .filter((id) => buttonRegistry[id]?.isAvailable)
       .map((id) => (
@@ -1113,7 +1166,10 @@ export function Toolbar({
       ));
   };
 
-  const renderLeftButtons = (buttonIds: ToolbarButtonId[], visibleSet: Set<ToolbarButtonId>) => {
+  const renderLeftButtons = (
+    buttonIds: AnyToolbarButtonId[],
+    visibleSet: Set<AnyToolbarButtonId>
+  ) => {
     const available = buttonIds.filter((id) => buttonRegistry[id]?.isAvailable);
     const visible = available.filter((id) => visibleSet.has(id));
     const elements: React.ReactNode[] = [];
@@ -1139,11 +1195,11 @@ export function Toolbar({
     for (const el of elements) {
       withDividers.push(el);
       const key = (el as React.ReactElement).key as string;
-      if (visibleSet.has(key as ToolbarButtonId)) {
+      if (visibleSet.has(key as AnyToolbarButtonId)) {
         if (
           visibleIdx < visible.length - 1 &&
-          AGENT_TOOLBAR_IDS.has(visible[visibleIdx]) !==
-            AGENT_TOOLBAR_IDS.has(visible[visibleIdx + 1])
+          AGENT_TOOLBAR_IDS.has(visible[visibleIdx] as ToolbarButtonId) !==
+            AGENT_TOOLBAR_IDS.has(visible[visibleIdx + 1] as ToolbarButtonId)
         ) {
           withDividers.push(
             <div
@@ -1159,7 +1215,21 @@ export function Toolbar({
     return withDividers;
   };
 
-  const overflowActions = useMemo<Partial<Record<ToolbarButtonId, () => void>>>(
+  const pluginOverflowMeta = useMemo(() => {
+    const meta: Record<
+      string,
+      { label: string; icon: React.ComponentType<{ className?: string }> }
+    > = {};
+    for (const id of pluginButtonIds) {
+      const config = pluginConfigs.get(id);
+      if (config) {
+        meta[id] = { label: config.label, icon: Puzzle };
+      }
+    }
+    return meta;
+  }, [pluginButtonIds, pluginConfigs]);
+
+  const overflowActions = useMemo<Partial<Record<AnyToolbarButtonId, () => void>>>(
     () => ({
       claude: () => onLaunchAgent("claude"),
       gemini: () => onLaunchAgent("gemini"),
@@ -1178,6 +1248,23 @@ export function Toolbar({
       },
       settings: onSettings,
       problems: onToggleProblems,
+      ...Object.fromEntries(
+        pluginButtonIds.map((id) => {
+          const config = pluginConfigs.get(id);
+          return [
+            id,
+            () => {
+              if (config) {
+                void actionService.dispatch(
+                  config.actionId as Parameters<typeof actionService.dispatch>[0],
+                  undefined,
+                  { source: "user" }
+                );
+              }
+            },
+          ];
+        })
+      ),
     }),
     [
       onLaunchAgent,
@@ -1186,10 +1273,12 @@ export function Toolbar({
       handleCopyTreeClick,
       onSettings,
       onToggleProblems,
+      pluginButtonIds,
+      pluginConfigs,
     ]
   );
 
-  const renderOverflowMenu = (overflowIds: ToolbarButtonId[], side: "left" | "right") => {
+  const renderOverflowMenu = (overflowIds: AnyToolbarButtonId[], side: "left" | "right") => {
     if (overflowIds.length === 0) return null;
     return (
       <DropdownMenu>
@@ -1233,7 +1322,7 @@ export function Toolbar({
               }
               return items;
             }
-            const meta = OVERFLOW_MENU_META[id];
+            const meta = OVERFLOW_MENU_META[id] ?? pluginOverflowMeta[id];
             if (!meta) return [];
             const Icon = meta.icon;
             return [
@@ -1288,7 +1377,7 @@ export function Toolbar({
             ref={leftGroupRef}
             className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden"
           >
-            {renderLeftButtons(toolbarLayout.leftButtons, leftVisibleSet)}
+            {renderLeftButtons(effectiveLeftButtons, leftVisibleSet)}
           </div>
           <div className="app-no-drag">{renderOverflowMenu(leftOverflow, "left")}</div>
         </div>
@@ -1371,7 +1460,7 @@ export function Toolbar({
             ref={rightGroupRef}
             className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden justify-end"
           >
-            {renderButtons(toolbarLayout.rightButtons, rightVisibleSet)}
+            {renderButtons(effectiveRightButtons, rightVisibleSet)}
           </div>
           <div className="app-no-drag">{renderOverflowMenu(rightOverflow, "right")}</div>
 

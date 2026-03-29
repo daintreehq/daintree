@@ -1,6 +1,10 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { ToolbarPreferences, ToolbarButtonId } from "@/../../shared/types/toolbar";
+import type {
+  ToolbarPreferences,
+  ToolbarButtonId,
+  AnyToolbarButtonId,
+} from "@/../../shared/types/toolbar";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
@@ -35,8 +39,8 @@ const DEFAULT_PREFERENCES: ToolbarPreferences = {
 
 const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "portal-toggle"];
 
-function sanitizeButtonList(buttons: ToolbarButtonId[]): ToolbarButtonId[] {
-  return buttons.filter((id) => !FIXED_BUTTON_IDS.includes(id));
+function sanitizeButtonList(buttons: AnyToolbarButtonId[]): AnyToolbarButtonId[] {
+  return buttons.filter((id) => !FIXED_BUTTON_IDS.includes(id as ToolbarButtonId));
 }
 
 /**
@@ -45,9 +49,9 @@ function sanitizeButtonList(buttons: ToolbarButtonId[]): ToolbarButtonId[] {
  * New buttons are added at their default position.
  */
 function mergeButtonList(
-  persisted: ToolbarButtonId[] | undefined,
-  defaults: ToolbarButtonId[]
-): ToolbarButtonId[] {
+  persisted: AnyToolbarButtonId[] | undefined,
+  defaults: AnyToolbarButtonId[]
+): AnyToolbarButtonId[] {
   if (!persisted) return defaults;
 
   const persistedSet = new Set(persisted);
@@ -68,15 +72,15 @@ function mergeButtonList(
 }
 
 interface ToolbarPreferencesState extends ToolbarPreferences {
-  setLeftButtons: (buttons: ToolbarButtonId[]) => void;
-  setRightButtons: (buttons: ToolbarButtonId[]) => void;
+  setLeftButtons: (buttons: AnyToolbarButtonId[]) => void;
+  setRightButtons: (buttons: AnyToolbarButtonId[]) => void;
   moveButton: (
-    buttonId: ToolbarButtonId,
+    buttonId: AnyToolbarButtonId,
     from: "left" | "right",
     to: "left" | "right",
     toIndex: number
   ) => void;
-  toggleButtonVisibility: (buttonId: ToolbarButtonId, side: "left" | "right") => void;
+  toggleButtonVisibility: (buttonId: AnyToolbarButtonId, side: "left" | "right") => void;
   setAlwaysShowDevServer: (value: boolean) => void;
   setDefaultSelection: (selection: ToolbarPreferences["launcher"]["defaultSelection"]) => void;
   setDefaultAgent: (agent: ToolbarPreferences["launcher"]["defaultAgent"]) => void;
