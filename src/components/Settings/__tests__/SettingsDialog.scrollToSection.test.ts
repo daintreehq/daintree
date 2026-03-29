@@ -174,7 +174,8 @@ describe("Settings scroll-to-section retry logic", () => {
     };
 
     const { tryScroll } = createTryScroll({
-      getElementById: () => mockEl,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      getElementById: () => mockEl as any,
       sectionId: "section-font-size",
       onFrame,
     });
