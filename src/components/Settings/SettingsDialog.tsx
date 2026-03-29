@@ -21,7 +21,6 @@ import {
 } from "@/store";
 import {
   X,
-  TreeDeciduous,
   Code,
   Github,
   LayoutGrid,
@@ -40,7 +39,7 @@ import {
   KeyRound,
   Shield,
 } from "lucide-react";
-import { WorktreeIcon } from "@/components/icons";
+import { WorktreeIcon, CanopyAgentIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
 import { appClient } from "@/clients";
@@ -447,7 +446,7 @@ export function SettingsDialog({
     terminal: <LayoutGrid className="w-5 h-5 text-text-secondary" />,
     terminalAppearance: <SquareTerminal className="w-5 h-5 text-text-secondary" />,
     worktree: <WorktreeIcon className="w-5 h-5 text-text-secondary" />,
-    agents: <TreeDeciduous className="w-5 h-5 text-text-secondary" />,
+    agents: <CanopyAgentIcon className="w-5 h-5 text-text-secondary" />,
     github: <Github className="w-5 h-5 text-text-secondary" />,
     portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
     toolbar: <SettingsIcon className="w-5 h-5 text-text-secondary" />,
@@ -624,7 +623,7 @@ export function SettingsDialog({
               <NavGroup label="Integrations">
                 <NavItem
                   tab="agents"
-                  icon={<TreeDeciduous className="w-4 h-4" />}
+                  icon={<CanopyAgentIcon className="w-4 h-4" />}
                   label="CLI Agents"
                   activeTab={activeTab}
                   isSearching={isSearching}
