@@ -268,6 +268,9 @@ export function AppThemePicker() {
     const otherIds = allSchemes.map((s) => s.id).filter((id) => id !== selectedSchemeId);
     if (otherIds.length === 0) return;
 
+    // Filter out current theme in case it was manually selected mid-cycle
+    shuffleQueueRef.current = shuffleQueueRef.current.filter((id) => id !== selectedSchemeId);
+
     if (shuffleQueueRef.current.length === 0) {
       shuffleQueueRef.current = shuffleArray(otherIds);
     }

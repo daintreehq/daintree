@@ -116,9 +116,9 @@ describe("AppThemePicker shuffle button", () => {
     fireEvent.click(shuffleBtn);
 
     expect(setSelectedSchemeId).toHaveBeenCalledTimes(2);
-    const ids = setSelectedSchemeId.mock.calls.map((call: unknown[]) => call[0]);
+    const ids = setSelectedSchemeId.mock.calls.map((call: unknown[]) => call[0] as string);
     // Both should be from the other themes
-    expect(ids.every((id: string) => id !== "theme-a")).toBe(true);
+    expect(ids.every((id) => id !== "theme-a")).toBe(true);
     // Both IDs in the first cycle should be unique (both b and c)
     expect(new Set(ids).size).toBe(2);
   });
