@@ -221,7 +221,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
 
   const [hasSnapshot, setHasSnapshot] = useState(false);
 
-  // Check for snapshot on mount and when worktree changes
+  // Check for snapshot availability — re-runs when agent activity changes
   React.useEffect(() => {
     let cancelled = false;
     window.electron.git
@@ -235,7 +235,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     return () => {
       cancelled = true;
     };
-  }, [worktree.id]);
+  }, [worktree.id, worktree.lastActivityTimestamp]);
 
   const handleRevertAgentChanges = useCallback(async () => {
     try {

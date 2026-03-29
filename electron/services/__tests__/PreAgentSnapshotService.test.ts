@@ -150,11 +150,15 @@ describe("PreAgentSnapshotService", () => {
 
       emitStateChange("idle", "working", "/test/worktree");
       await vi.waitFor(() => {
-        expect(preAgentSnapshotService.getSnapshot("/test/worktree")).not.toBeNull();
+        const snap = preAgentSnapshotService.getSnapshot("/test/worktree");
+        expect(snap).not.toBeNull();
+        expect(snap!.hasChanges).toBe(true);
       });
 
       // Now set up for revert
-      mockRaw.mockResolvedValue("stash@{0} 1700000000 On main: canopy:pre-agent:1700000000");
+      mockRaw.mockResolvedValue(
+        "stash@{0} 1700000000 On main: canopy:pre-agent:/test/worktree:1700000000"
+      );
       mockReset.mockResolvedValue(undefined);
       mockClean.mockResolvedValue(undefined);
       mockStash.mockClear();

@@ -1,17 +1,11 @@
 import { events } from "./events.js";
 import { createHardenedGit } from "../utils/hardenedGit.js";
 import { logInfo, logWarn } from "../utils/logger.js";
+import type { SnapshotInfo } from "../../shared/types/ipc/git.js";
 
 const STASH_PREFIX = "canopy:pre-agent:";
 const DEFAULT_TTL_MS = 48 * 60 * 60 * 1000; // 48 hours
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
-
-export interface SnapshotInfo {
-  worktreeId: string;
-  stashRef: string;
-  createdAt: number;
-  hasChanges: boolean;
-}
 
 class PreAgentSnapshotService {
   private snapshots = new Map<string, SnapshotInfo>();
@@ -39,7 +33,16 @@ class PreAgentSnapshotService {
 
     if (this.snapshots.has(worktreeId)) return;
 
+    // Set sentinel to prevent duplicate concurrent snapshot creation
+    this.snapshots.set(worktreeId, {
+      worktreeId,
+      stashRef: "",
+      createdAt: Date.now(),
+      hasChanges: false,
+    });
+
     this.createSnapshot(worktreeId).catch((err) => {
+      this.snapshots.delete(worktreeId);
       logWarn("[PreAgentSnapshot] Failed to create snapshot", {
         worktreeId,
         error: err instanceof Error ? err.message : String(err),
@@ -59,6 +62,7 @@ class PreAgentSnapshotService {
     // Check for rebase/merge in progress
     const status = await git.status();
     if (status.conflicted.length > 0) {
+      this.snapshots.delete(worktreeId);
       logInfo("[PreAgentSnapshot] Skipping snapshot — conflicts detected", { worktreeId });
       return;
     }
@@ -67,7 +71,7 @@ class PreAgentSnapshotService {
     const countBefore = stashListBefore.total;
 
     const timestamp = Date.now();
-    const message = `${STASH_PREFIX}${timestamp}`;
+    const message = `${STASH_PREFIX}${worktreeId}:${timestamp}`;
 
     await git.stash(["push", "--include-untracked", "-m", message]);
 
@@ -198,9 +202,10 @@ class PreAgentSnapshotService {
     const raw = await git.raw(["stash", "list", "--pretty=format:%gd %ct %s"]);
     if (!raw.trim()) return null;
 
+    const worktreePrefix = `${STASH_PREFIX}${worktreeId}:`;
     const lines = raw.trim().split("\n");
     for (const line of lines) {
-      if (line.includes(STASH_PREFIX)) {
+      if (line.includes(worktreePrefix)) {
         const match = line.match(/^stash@\{(\d+)\}/);
         if (match) return parseInt(match[1], 10);
       }
