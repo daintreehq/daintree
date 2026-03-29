@@ -348,7 +348,7 @@ function EmptyState({
                 // Defense-in-depth: sanitize SVG at render time
                 const sanitized = sanitizeSvg(projectIconSvg);
                 if (!sanitized.ok) {
-                  return <CanopyIcon className="h-28 w-28 text-tint/80" />;
+                  return <CanopyIcon className="h-28 w-28 text-tint/50" />;
                 }
                 return (
                   <img
@@ -359,7 +359,7 @@ function EmptyState({
                 );
               })()
             ) : (
-              <CanopyIcon className="h-28 w-28 text-tint/80" />
+              <CanopyIcon className="h-28 w-28 text-tint/50" />
             )}
             {hasActiveWorktree && (
               <button

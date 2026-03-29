@@ -60,7 +60,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
       <div className="max-w-2xl w-full flex flex-col items-center px-8 py-12 gap-10">
         {/* Hero */}
         <div className="flex flex-col items-center text-center">
-          <CanopyIcon className="h-16 w-16 text-tint/80 mb-6" />
+          <CanopyIcon className="h-16 w-16 text-tint/50 mb-6" />
           <h1 className="text-2xl font-semibold text-canopy-text tracking-tight mb-2">
             Welcome to Canopy
           </h1>
