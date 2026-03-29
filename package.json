@@ -1,5 +1,6 @@
 {
   "name": "canopy-app",
+  "productName": "Canopy",
   "version": "0.5.3",
   "description": "Canopy IDE - An Electron-based development environment",
   "author": {
