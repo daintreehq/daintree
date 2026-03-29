@@ -1011,6 +1011,7 @@ export interface ElectronAPI {
     setColorScheme(schemeId: string): Promise<void>;
     setCustomSchemes(schemesJson: string): Promise<void>;
     importTheme(): Promise<import("../appTheme.js").AppThemeImportResult>;
+    exportTheme(scheme: import("../appTheme.js").AppColorScheme): Promise<boolean>;
     setColorVisionMode(mode: import("../appTheme.js").ColorVisionMode): Promise<void>;
     setFollowSystem(enabled: boolean): Promise<void>;
     setPreferredDarkScheme(schemeId: string): Promise<void>;

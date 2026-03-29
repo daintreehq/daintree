@@ -410,6 +410,7 @@ export const CHANNELS = {
   APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
   APP_THEME_SET_CUSTOM_SCHEMES: "app-theme:set-custom-schemes",
   APP_THEME_IMPORT: "app-theme:import",
+  APP_THEME_EXPORT: "app-theme:export",
   APP_THEME_SET_COLOR_VISION_MODE: "app-theme:set-color-vision-mode",
   APP_THEME_SET_FOLLOW_SYSTEM: "app-theme:set-follow-system",
   APP_THEME_SET_PREFERRED_DARK_SCHEME: "app-theme:set-preferred-dark-scheme",

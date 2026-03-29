@@ -1,4 +1,4 @@
-import type { AppThemeConfig, ColorVisionMode } from "@shared/types";
+import type { AppThemeConfig, AppColorScheme, ColorVisionMode } from "@shared/types";
 
 export const appThemeClient = {
   get: (): Promise<AppThemeConfig> => {
@@ -15,6 +15,10 @@ export const appThemeClient = {
 
   importTheme: () => {
     return window.electron.appTheme.importTheme();
+  },
+
+  exportTheme: (scheme: AppColorScheme): Promise<boolean> => {
+    return window.electron.appTheme.exportTheme(scheme);
   },
 
   setColorVisionMode: (mode: ColorVisionMode): Promise<void> => {

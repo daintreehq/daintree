@@ -1402,6 +1402,10 @@ export interface IpcInvokeMap {
     args: [];
     result: import("../appTheme.js").AppThemeImportResult;
   };
+  "app-theme:export": {
+    args: [scheme: import("../appTheme.js").AppColorScheme];
+    result: boolean;
+  };
   "app-theme:set-color-vision-mode": {
     args: [mode: import("../appTheme.js").ColorVisionMode];
     result: void;
