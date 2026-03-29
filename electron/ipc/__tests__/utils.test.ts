@@ -6,7 +6,7 @@ const ipcMainMock = vi.hoisted(() => ({
 }));
 
 const browserWindowFromWebContentsMock = vi.hoisted(() => vi.fn());
-const browserWindowGetAllWindowsMock = vi.hoisted(() => vi.fn(() => []));
+const browserWindowGetAllWindowsMock = vi.hoisted(() => vi.fn(() => [] as unknown[]));
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
