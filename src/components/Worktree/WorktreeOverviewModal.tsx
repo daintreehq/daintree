@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo } from "react";
 import { X, FilterX } from "lucide-react";
 import { WorktreeOverviewIcon, CanopyAgentIcon } from "@/components/icons";
+import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
@@ -114,6 +115,30 @@ export interface WorktreeOverviewModalProps {
   agentAvailability?: UseAgentLauncherReturn["availability"];
   agentSettings?: UseAgentLauncherReturn["agentSettings"];
   homeDir?: string;
+}
+
+function EmptyWorktreeState() {
+  const createWorktreeShortcut = useKeybindingDisplay("worktree.createDialog.open");
+
+  return (
+    <div className="flex flex-col items-center justify-center h-full gap-3 text-canopy-text/50">
+      <WorktreeOverviewIcon className="w-8 h-8 text-canopy-text/30" />
+      <p className="text-sm font-medium text-canopy-text/70">No worktrees yet</p>
+      <p className="text-xs text-canopy-text/40">
+        {createWorktreeShortcut ? (
+          <>
+            Press{" "}
+            <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+              {createWorktreeShortcut}
+            </kbd>{" "}
+            to create a worktree.
+          </>
+        ) : (
+          "Create a worktree to get started."
+        )}
+      </p>
+    </div>
+  );
 }
 
 export function WorktreeOverviewModal({
@@ -482,9 +507,7 @@ export function WorktreeOverviewModal({
           {/* Content */}
           <div className="flex-1 overflow-y-auto p-6">
             {worktrees.length === 0 ? (
-              <div className="flex items-center justify-center h-full text-canopy-text/50">
-                No worktrees available
-              </div>
+              <EmptyWorktreeState />
             ) : filteredWorktrees.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full gap-4 text-canopy-text/50">
                 <FilterX className="w-12 h-12 text-canopy-text/30" />

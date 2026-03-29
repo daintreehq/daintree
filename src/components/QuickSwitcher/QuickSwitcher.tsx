@@ -71,7 +71,7 @@ export function QuickSwitcher({
       searchAriaLabel="Search terminals, agents, and worktrees"
       listId="quick-switcher-list"
       itemIdPrefix="qs-option"
-      emptyMessage="No items available"
+      emptyMessage="No panels open"
       noMatchMessage={`No items match "${query}"`}
       totalResults={totalResults}
       emptyContent={
