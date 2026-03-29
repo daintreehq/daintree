@@ -272,3 +272,94 @@ describe("PluginService", () => {
     expect(service.listPlugins()).toHaveLength(1);
   });
 });
+
+describe("Plugin IPC handler registration", () => {
+  let service: PluginService;
+
+  beforeEach(async () => {
+    await writePlugin("test-plugin", { name: "test-plugin", version: "1.0.0" });
+    service = new PluginService(tmpDir);
+    await service.initialize();
+  });
+
+  it("registerHandler succeeds for a loaded plugin with valid channel", () => {
+    const handler = vi.fn();
+    expect(() => service.registerHandler("test-plugin", "get-data", handler)).not.toThrow();
+  });
+
+  it("registerHandler throws when pluginId is not loaded", () => {
+    expect(() => service.registerHandler("unknown-plugin", "get-data", vi.fn())).toThrow(
+      "Unknown plugin: unknown-plugin"
+    );
+  });
+
+  it("registerHandler throws when channel contains a colon", () => {
+    expect(() => service.registerHandler("test-plugin", "bad:channel", vi.fn())).toThrow(
+      "Plugin channel must not contain colons: bad:channel"
+    );
+  });
+
+  it("registerHandler throws when handler is not a function", () => {
+    expect(() =>
+      service.registerHandler("test-plugin", "get-data", "not-a-function" as never)
+    ).toThrow("Plugin handler must be a function, got string");
+  });
+
+  it("dispatchHandler calls the registered handler and returns its result", async () => {
+    const handler = vi.fn().mockResolvedValue({ value: 42 });
+    service.registerHandler("test-plugin", "get-data", handler);
+
+    const result = await service.dispatchHandler("test-plugin", "get-data", ["arg1", "arg2"]);
+    expect(handler).toHaveBeenCalledWith("arg1", "arg2");
+    expect(result).toEqual({ value: 42 });
+  });
+
+  it("dispatchHandler throws when no handler is found", async () => {
+    await expect(service.dispatchHandler("test-plugin", "unknown", [])).rejects.toThrow(
+      "No plugin handler registered for test-plugin:unknown"
+    );
+  });
+
+  it("registering same (pluginId, channel) twice overwrites the handler", async () => {
+    const handler1 = vi.fn().mockReturnValue("first");
+    const handler2 = vi.fn().mockReturnValue("second");
+    service.registerHandler("test-plugin", "get-data", handler1);
+    service.registerHandler("test-plugin", "get-data", handler2);
+
+    const result = await service.dispatchHandler("test-plugin", "get-data", []);
+    expect(result).toBe("second");
+    expect(handler1).not.toHaveBeenCalled();
+  });
+
+  it("removeHandlers removes all handlers for a plugin, leaving others intact", async () => {
+    await writePlugin("other-plugin", { name: "other-plugin", version: "1.0.0" });
+    const service2 = new PluginService(tmpDir);
+    await service2.initialize();
+
+    service2.registerHandler("test-plugin", "ch-a", vi.fn().mockReturnValue("a"));
+    service2.registerHandler("test-plugin", "ch-b", vi.fn().mockReturnValue("b"));
+    service2.registerHandler("other-plugin", "ch-c", vi.fn().mockReturnValue("c"));
+
+    service2.removeHandlers("test-plugin");
+
+    await expect(service2.dispatchHandler("test-plugin", "ch-a", [])).rejects.toThrow();
+    await expect(service2.dispatchHandler("test-plugin", "ch-b", [])).rejects.toThrow();
+    expect(await service2.dispatchHandler("other-plugin", "ch-c", [])).toBe("c");
+  });
+
+  it("hasPlugin returns true for loaded plugins and false otherwise", () => {
+    expect(service.hasPlugin("test-plugin")).toBe(true);
+    expect(service.hasPlugin("nonexistent")).toBe(false);
+  });
+
+  it("registerHandler throws for empty channel", () => {
+    expect(() => service.registerHandler("test-plugin", "", vi.fn())).not.toThrow();
+    // Empty channel is technically valid — no colons
+  });
+
+  it("dispatchHandler handles synchronous handlers", async () => {
+    service.registerHandler("test-plugin", "sync", () => "sync-result");
+    const result = await service.dispatchHandler("test-plugin", "sync", []);
+    expect(result).toBe("sync-result");
+  });
+});

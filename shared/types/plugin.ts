@@ -27,3 +27,5 @@ export interface LoadedPluginInfo {
   resolvedRenderer?: string;
   loadedAt: number;
 }
+
+export type PluginIpcHandler = (...args: unknown[]) => unknown | Promise<unknown>;

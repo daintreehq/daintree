@@ -3,7 +3,7 @@ import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
 import { PluginManifestSchema } from "../schemas/plugin.js";
-import type { PluginManifest } from "../../shared/types/plugin.js";
+import type { PluginManifest, PluginIpcHandler } from "../../shared/types/plugin.js";
 import { registerPanelKind } from "../../shared/config/panelKindRegistry.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
 
@@ -17,6 +17,7 @@ interface LoadedPlugin {
 
 export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
+  private handlerMap = new Map<string, PluginIpcHandler>();
   private initialized = false;
   private pluginsRoot: string;
 
@@ -151,6 +152,42 @@ export class PluginService {
       return null;
     }
     return resolved;
+  }
+
+  hasPlugin(pluginId: string): boolean {
+    return this.plugins.has(pluginId);
+  }
+
+  registerHandler(pluginId: string, channel: string, handler: PluginIpcHandler): void {
+    if (!this.plugins.has(pluginId)) {
+      throw new Error(`Unknown plugin: ${pluginId}`);
+    }
+    if (channel.includes(":")) {
+      throw new Error(`Plugin channel must not contain colons: ${channel}`);
+    }
+    if (typeof handler !== "function") {
+      throw new Error(`Plugin handler must be a function, got ${typeof handler}`);
+    }
+    const key = `${pluginId}:${channel}`;
+    this.handlerMap.set(key, handler);
+  }
+
+  async dispatchHandler(pluginId: string, channel: string, args: unknown[]): Promise<unknown> {
+    const key = `${pluginId}:${channel}`;
+    const handler = this.handlerMap.get(key);
+    if (!handler) {
+      throw new Error(`No plugin handler registered for ${key}`);
+    }
+    return await handler(...args);
+  }
+
+  removeHandlers(pluginId: string): void {
+    const prefix = `${pluginId}:`;
+    for (const key of [...this.handlerMap.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.handlerMap.delete(key);
+      }
+    }
   }
 
   listPlugins(): LoadedPluginInfo[] {
