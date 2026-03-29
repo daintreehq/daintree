@@ -960,6 +960,38 @@ describe("notify()", () => {
       expect(useNotificationStore.getState().notifications).toHaveLength(2);
     });
 
+    it("history retains original message while toast escalates", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify(comboPayload());
+      notify(comboPayload());
+
+      const entries = useNotificationHistoryStore.getState().entries;
+      expect(entries).toHaveLength(2);
+      expect(entries[0].message).toBe("Agent spawned");
+      expect(entries[1].message).toBe("Agent spawned");
+
+      const notifications = useNotificationStore.getState().notifications;
+      expect(notifications[1].message).toBe("Double agent");
+    });
+
+    it("works with watch priority and fires native notification", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      notify({
+        ...comboPayload(),
+        priority: "watch",
+      });
+      notify({
+        ...comboPayload(),
+        priority: "watch",
+      });
+
+      const notifications = useNotificationStore.getState().notifications;
+      expect(notifications).toHaveLength(2);
+      expect(notifications[0].message).toBe("Agent spawned");
+      expect(notifications[1].message).toBe("Double agent");
+      expect(mockShowNative).toHaveBeenCalledTimes(2);
+    });
+
     it("independent combo keys track separately", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
 
