@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { projectClient, systemClient } from "@/clients";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import type { ProcessMetricEntry, HeapStats, DiagnosticsInfo } from "@shared/types/ipc/system";
@@ -14,6 +14,7 @@ const TREND_DEADBAND_MB_PER_MIN = 3;
 const MAX_SAMPLES = 12;
 const BADGE_POLL_MS = 10_000;
 const POPOVER_POLL_MS = 4_000;
+const SAMPLES_PER_MIN = 60_000 / BADGE_POLL_MS;
 
 function getMemoryState(totalMB: number): MemoryState {
   if (totalMB >= MEMORY_THRESHOLD_CRITICAL) return "critical";
@@ -35,7 +36,7 @@ function computeSlope(samples: number[]): number {
 
 function getTrendDirection(samples: number[]): TrendDirection {
   const slopePerSample = computeSlope(samples);
-  const slopePerMin = slopePerSample * 6;
+  const slopePerMin = slopePerSample * SAMPLES_PER_MIN;
   if (Math.abs(slopePerMin) < TREND_DEADBAND_MB_PER_MIN) return "stable";
   return slopePerMin > 0 ? "up" : "down";
 }
@@ -229,6 +230,10 @@ export function ProjectResourceBadge() {
 
   const memoryState = getMemoryState(stats.totalMemoryMB);
   const trend = getTrendDirection(samplesRef.current);
+  const projectIdsKey = useMemo(
+    () => stats.projects.map((p) => p.id).join(","),
+    [stats.projects]
+  );
 
   const fetchStats = useCallback(async () => {
     try {
@@ -297,7 +302,7 @@ export function ProjectResourceBadge() {
           systemClient.getDiagnosticsInfo(),
         ]);
 
-        const projectIds = stats.projects.map((p) => p.id);
+        const projectIds = projectIdsKey ? projectIdsKey.split(",") : [];
         const projectStats =
           projectIds.length > 0 ? await projectClient.getBulkStats(projectIds) : {};
 
@@ -316,7 +321,7 @@ export function ProjectResourceBadge() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [open, stats.projects]);
+  }, [open, projectIdsKey]);
 
   if (isLoading || stats.runningProjects === 0) {
     return null;

@@ -72,7 +72,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       return {
         usedMB: Math.round(usedMB * 10) / 10,
         limitMB: Math.round(limitMB),
-        percent: Math.round((usedMB / limitMB) * 100 * 10) / 10,
+        percent: limitMB > 0 ? Math.round((usedMB / limitMB) * 100 * 10) / 10 : 0,
         externalMB: Math.round((mem.external + mem.arrayBuffers) / 1024 / 1024 * 10) / 10,
       };
     } catch {
