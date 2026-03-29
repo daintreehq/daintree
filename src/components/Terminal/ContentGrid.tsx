@@ -250,7 +250,6 @@ function EmptyState({
               </div>
             )}
 
-            {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
             <div role="list" aria-label="Recipes" onKeyDown={handleListKeyDown}>
               {filteredPinned.length > 0 && filteredRecent.length > 0 && (
                 <div className="px-3 pt-1 pb-0.5 text-xs font-medium text-text-muted uppercase tracking-wide">
