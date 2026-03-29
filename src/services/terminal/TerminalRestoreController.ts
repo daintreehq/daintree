@@ -168,10 +168,29 @@ export class TerminalRestoreController {
   }
 
   async fetchAndRestore(id: string): Promise<boolean> {
+    const managed = this.deps.getInstance(id);
+    if (!managed) {
+      logWarn(`Cannot fetch-and-restore: terminal ${id} not found`);
+      return false;
+    }
+
+    const restoreGeneration = managed.restoreGeneration;
+    managed.isSerializedRestoreInProgress = true;
+
     try {
       const serializedState = await terminalClient.getSerializedState(id);
+
+      // Check staleness after IPC round-trip
+      const current = this.deps.getInstance(id);
+      if (current !== managed || managed.restoreGeneration !== restoreGeneration) {
+        managed.isSerializedRestoreInProgress = false;
+        return false;
+      }
+
+      // restoreFetchedState will take over the isSerializedRestoreInProgress flag
       return await this.restoreFetchedState(id, serializedState);
     } catch (error) {
+      managed.isSerializedRestoreInProgress = false;
       logError(`Failed to fetch state for terminal ${id}`, error);
       return false;
     }

@@ -23,7 +23,8 @@ import { useSafeModeStore } from "@/store/safeModeStore";
 import {
   type TerminalRestoreTask,
   splitSnapshotRestoreTasks,
-  scheduleDeferredSnapshotRestore,
+  scheduleBackgroundFetchAndRestore,
+  registerLazyScrollRestore,
   runInBatches,
   RESTORE_SPAWN_BATCH_SIZE,
   RESTORE_SPAWN_BATCH_DELAY_MS,
@@ -38,7 +39,6 @@ import {
   buildArgsForNonPtyRecreation,
   buildArgsForOrphanedTerminal,
 } from "./statePatcher";
-const RESTORE_CONCURRENCY = 8;
 const CLIPBOARD_DIR_NAME = "canopy-clipboard";
 const VERBOSE_HYDRATION_LOGGING = isCanopyEnvEnabled("CANOPY_VERBOSE");
 
@@ -63,73 +63,41 @@ async function ensureHydrationBootstrap(): Promise<void> {
   await hydrationBootstrapPromise;
 }
 
-async function restoreTerminalSnapshots(
+function scheduleScrollbackRestore(
   tasks: TerminalRestoreTask[],
   isCurrent: () => boolean,
-  switchId?: string
-): Promise<void> {
-  if (tasks.length === 0) {
-    return;
-  }
+  mode: "background" | "lazy"
+): void {
+  for (const task of tasks) {
+    const managed = terminalInstanceService.get(task.terminalId);
+    if (!managed || managed.scrollbackRestoreState !== "none") continue;
 
-  let serializedStateBatch: Record<string, string | null> | null = null;
-  try {
-    serializedStateBatch = await withRendererSpan(
-      PERF_MARKS.HYDRATE_GET_SERIALIZED_STATES,
-      () => terminalClient.getSerializedStates(tasks.map((task) => task.terminalId)),
-      { switchId: switchId ?? null }
-    );
-  } catch (batchError) {
-    logWarn("Batch serialized state fetch failed; falling back to per-terminal requests", {
-      error: batchError,
-    });
-  }
+    managed.scrollbackRestoreState = "pending";
 
-  let nextIndex = 0;
-  const workerCount = Math.min(RESTORE_CONCURRENCY, tasks.length);
+    const doRestore = async () => {
+      if (!isCurrent()) return;
+      const current = terminalInstanceService.get(task.terminalId);
+      if (!current || current !== managed) return;
+      if (managed.scrollbackRestoreState !== "pending") return;
 
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (true) {
-        if (!isCurrent()) return;
-
-        const currentIndex = nextIndex;
-        if (currentIndex >= tasks.length) {
-          return;
-        }
-        nextIndex += 1;
-
-        const task = tasks[currentIndex];
-        try {
-          if (serializedStateBatch) {
-            const hasSerializedState = Object.prototype.hasOwnProperty.call(
-              serializedStateBatch,
-              task.terminalId
-            );
-
-            if (hasSerializedState) {
-              const serializedState = serializedStateBatch[task.terminalId];
-              const restored = await terminalInstanceService.restoreFetchedState(
-                task.terminalId,
-                serializedState
-              );
-              if (!restored && serializedState === null) {
-                await terminalInstanceService.fetchAndRestore(task.terminalId);
-              }
-            } else {
-              await terminalInstanceService.fetchAndRestore(task.terminalId);
-            }
-          } else {
-            await terminalInstanceService.fetchAndRestore(task.terminalId);
-          }
-        } catch (snapshotError) {
-          logWarn(`Serialized state restore failed for ${task.label}`, {
-            error: snapshotError,
-          });
-        }
+      managed.scrollbackRestoreState = "in-progress";
+      try {
+        await terminalInstanceService.fetchAndRestore(task.terminalId);
+        managed.scrollbackRestoreState = "done";
+      } catch (error) {
+        managed.scrollbackRestoreState = "none";
+        logWarn(`Scrollback restore failed for ${task.label}`, { error });
       }
-    })
-  );
+    };
+
+    if (mode === "lazy" && managed.hostElement) {
+      const disposable = registerLazyScrollRestore(managed, doRestore);
+      managed.scrollbackRestoreDisposable = disposable;
+      managed.listeners.push(() => disposable.dispose());
+    } else {
+      scheduleBackgroundFetchAndRestore(doRestore);
+    }
+  }
 }
 
 export interface HydrationOptions {
@@ -717,29 +685,25 @@ export async function hydrateAppState(
           shouldDeferSnapshotRestore
         );
 
-        await withRendererSpan(
-          PERF_MARKS.HYDRATE_RESTORE_SNAPSHOTS_CRITICAL,
-          () => restoreTerminalSnapshots(criticalTasks, checkCurrent, _switchId ?? undefined),
-          { switchId: _switchId ?? null, criticalCount: criticalTasks.length }
-        );
-        if (!checkCurrent()) return;
+        // Schedule critical scrollback restores at background priority —
+        // no blocking IPC fetch on the critical path. The overlay can dismiss
+        // immediately and scrollback fills in asynchronously.
+        if (criticalTasks.length > 0) {
+          markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_SNAPSHOTS_CRITICAL, {
+            switchId: _switchId ?? null,
+            criticalCount: criticalTasks.length,
+          });
+          scheduleScrollbackRestore(criticalTasks, checkCurrent, "background");
+        }
 
+        // Deferred terminals restore lazily on first scroll interaction
         if (deferredTasks.length > 0) {
           markRendererPerformance("hydrate_restore_snapshots_deferred_scheduled", {
             deferredSnapshotCount: deferredTasks.length,
             switchId: _switchId ?? null,
           });
 
-          scheduleDeferredSnapshotRestore(async () => {
-            if (!checkCurrent()) return;
-            await restoreTerminalSnapshots(deferredTasks, checkCurrent, _switchId ?? undefined);
-            if (!checkCurrent()) return;
-
-            markRendererPerformance("hydrate_restore_snapshots_deferred_complete", {
-              deferredSnapshotCount: deferredTasks.length,
-              switchId: _switchId ?? null,
-            });
-          });
+          scheduleScrollbackRestore(deferredTasks, checkCurrent, "lazy");
         }
 
         if (panelRestoreStartedAt !== null) {

@@ -100,6 +100,7 @@ vi.mock("@/services/KeybindingService", () => ({
 
 const initializeBackendTierMock = vi.fn();
 const setGPUHardwareAvailableMock = vi.fn();
+const setTargetSizeMock = vi.fn();
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
@@ -108,6 +109,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     initializeBackendTier: initializeBackendTierMock,
     get: getManagedTerminalMock,
     setGPUHardwareAvailable: setGPUHardwareAvailableMock,
+    setTargetSize: setTargetSizeMock,
   },
 }));
 
@@ -122,14 +124,50 @@ vi.mock("@/lib/notify", () => ({
 
 const { hydrateAppState } = await import("../stateHydration");
 
+function makeMockManagedTerminal(id: string) {
+  const hostElement = document.createElement("div");
+  return {
+    id,
+    scrollbackRestoreState: "none" as "none" | "pending" | "in-progress" | "done",
+    scrollbackRestoreDisposable: undefined as { dispose: () => void } | undefined,
+    hostElement,
+    listeners: [] as Array<() => void>,
+  };
+}
+
 describe("hydrateAppState", () => {
   const project = { id: "project-1", path: "/project" };
   const terminalConfig = { scrollbackLines: 1000, performanceMode: false };
   const agentSettings = { agents: {} };
+  let postTaskCallbacks: Array<() => void>;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    getManagedTerminalMock.mockReturnValue(null);
+    postTaskCallbacks = [];
+
+    vi.stubGlobal("scheduler", {
+      postTask: vi.fn((cb: () => unknown) => {
+        return new Promise<unknown>((resolve, reject) => {
+          postTaskCallbacks.push(() => {
+            try {
+              resolve(cb());
+            } catch (e) {
+              reject(e);
+            }
+          });
+        });
+      }),
+    });
+
+    // By default, return a cached mock managed terminal for any ID (enables scrollback scheduling).
+    // Caching ensures identity checks (current !== managed) pass correctly.
+    const managedCache = new Map<string, ReturnType<typeof makeMockManagedTerminal>>();
+    getManagedTerminalMock.mockImplementation((id: string) => {
+      if (!managedCache.has(id)) {
+        managedCache.set(id, makeMockManagedTerminal(id));
+      }
+      return managedCache.get(id);
+    });
     isTerminalWarmInProjectSwitchCacheMock.mockReturnValue(false);
     terminalClientMock.getForProject.mockResolvedValue([]);
     terminalClientMock.reconnect.mockResolvedValue({ exists: false });
@@ -140,6 +178,19 @@ describe("hydrateAppState", () => {
     projectClientMock.getTabGroups.mockResolvedValue([]);
     projectClientMock.getTerminalSizes.mockResolvedValue({});
   });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    postTaskCallbacks = [];
+  });
+
+  const flushPostTasks = async () => {
+    const callbacks = [...postTaskCallbacks];
+    postTaskCallbacks = [];
+    for (const cb of callbacks) cb();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+  };
 
   it("rehydrates dev-preview panels without backend terminals", async () => {
     appClientMock.hydrate.mockResolvedValue({
@@ -543,22 +594,12 @@ describe("hydrateAppState", () => {
     // Should initialize backend tier from reconnect result
     expect(initializeBackendTierMock).toHaveBeenCalledWith("agent-1", "background");
 
-    // Should restore terminal content
+    // Scrollback restore is deferred to background — flush to verify
+    await flushPostTasks();
     expect(fetchAndRestoreMock).toHaveBeenCalledWith("agent-1");
   });
 
-  it("restores backend terminal snapshots concurrently during hydration", async () => {
-    let releaseFirstRestore!: () => void;
-    const firstRestore = new Promise<void>((resolve) => {
-      releaseFirstRestore = resolve;
-    });
-    fetchAndRestoreMock.mockImplementation((terminalId: string) => {
-      if (terminalId === "terminal-1") {
-        return firstRestore;
-      }
-      return Promise.resolve();
-    });
-
+  it("schedules scrollback restore as background tasks, not blocking hydration", async () => {
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -606,37 +647,27 @@ describe("hydrateAppState", () => {
     const addTerminal = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
       return options.existingId ?? options.requestedId ?? "terminal-id";
     });
-    const setActiveWorktree = vi.fn();
-    const loadRecipes = vi.fn().mockResolvedValue(undefined);
-    const openDiagnosticsDock = vi.fn();
 
-    const hydrationPromise = hydrateAppState({
+    // Hydration completes without waiting for scrollback restore
+    await hydrateAppState({
       addTerminal,
-      setActiveWorktree,
-      loadRecipes,
-      openDiagnosticsDock,
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
     });
 
-    for (let i = 0; i < 30; i += 1) {
-      if (fetchAndRestoreMock.mock.calls.length >= 2) {
-        break;
-      }
-      await Promise.resolve();
-    }
+    // fetchAndRestore NOT called synchronously during hydration
+    expect(fetchAndRestoreMock).not.toHaveBeenCalled();
 
+    // Flush background scheduler tasks
+    await flushPostTasks();
+
+    // Now both terminals should have been restored
     expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-1");
     expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-2");
-
-    releaseFirstRestore();
-    await hydrationPromise;
   });
 
-  it("uses batch serialized state restore when available", async () => {
-    terminalClientMock.getSerializedStates.mockResolvedValue({
-      "terminal-1": "serialized-1",
-      "terminal-2": "serialized-2",
-    });
-
+  it("does not call batch getSerializedStates — uses per-terminal fetchAndRestore", async () => {
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -690,26 +721,17 @@ describe("hydrateAppState", () => {
       openDiagnosticsDock: vi.fn(),
     });
 
-    expect(terminalClientMock.getSerializedStates).toHaveBeenCalledWith([
-      "terminal-1",
-      "terminal-2",
-    ]);
-    expect(restoreFetchedStateMock).toHaveBeenCalledWith("terminal-1", "serialized-1");
-    expect(restoreFetchedStateMock).toHaveBeenCalledWith("terminal-2", "serialized-2");
-    expect(fetchAndRestoreMock).not.toHaveBeenCalled();
+    // Batch endpoint is never called — scrollback restore uses per-terminal fetch
+    expect(terminalClientMock.getSerializedStates).not.toHaveBeenCalled();
+    expect(restoreFetchedStateMock).not.toHaveBeenCalled();
+
+    // Flush background tasks to trigger per-terminal restore
+    await flushPostTasks();
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-1");
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-2");
   });
 
-  it("prefetches worktrees and tab groups while snapshot restoration is in progress", async () => {
-    let releaseRestore!: () => void;
-    fetchAndRestoreMock.mockImplementation((terminalId: string) => {
-      if (terminalId === "terminal-1") {
-        return new Promise<void>((resolve) => {
-          releaseRestore = resolve;
-        });
-      }
-      return Promise.resolve();
-    });
-
+  it("prefetches worktrees and tab groups during hydration", async () => {
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -745,7 +767,7 @@ describe("hydrateAppState", () => {
       return options.existingId ?? "terminal-id";
     });
 
-    const hydrationPromise = hydrateAppState({
+    await hydrateAppState({
       addTerminal,
       setActiveWorktree: vi.fn(),
       loadRecipes: vi.fn().mockResolvedValue(undefined),
@@ -753,112 +775,116 @@ describe("hydrateAppState", () => {
       hydrateTabGroups: vi.fn(),
     });
 
-    for (let i = 0; i < 30; i += 1) {
-      if (fetchAndRestoreMock.mock.calls.length > 0) {
-        break;
-      }
-      await Promise.resolve();
-    }
-
     expect(worktreeClientMock.getAll).toHaveBeenCalledTimes(1);
     expect(projectClientMock.getTabGroups).toHaveBeenCalledWith("project-1");
-
-    releaseRestore();
-    await hydrationPromise;
   });
 
-  it("defers non-critical snapshot restoration during project-switch hydration", async () => {
-    vi.useFakeTimers();
-    try {
-      appClientMock.hydrate.mockResolvedValue({
-        appState: {
-          terminals: [
-            {
-              id: "terminal-active",
-              kind: "terminal",
-              title: "Active",
-              cwd: "/project",
-              location: "grid",
-              worktreeId: "wt-active",
-            },
-            {
-              id: "terminal-background",
-              kind: "terminal",
-              title: "Background",
-              cwd: "/project",
-              location: "grid",
-              worktreeId: "wt-background",
-            },
-            {
-              id: "terminal-dock",
-              kind: "terminal",
-              title: "Dock",
-              cwd: "/project",
-              location: "dock",
-              worktreeId: "wt-background",
-            },
-          ],
-          activeWorktreeId: "wt-active",
-          sidebarWidth: 350,
-        },
-        terminalConfig,
-        project,
-        agentSettings,
-      });
+  it("defers non-critical snapshot restoration to lazy scroll during project-switch", async () => {
+    // Track managed terminals per ID so we can simulate scroll events
+    const managedTerminals = new Map<string, ReturnType<typeof makeMockManagedTerminal>>();
+    getManagedTerminalMock.mockImplementation((id: string) => {
+      if (!managedTerminals.has(id)) {
+        managedTerminals.set(id, makeMockManagedTerminal(id));
+      }
+      return managedTerminals.get(id);
+    });
 
-      terminalClientMock.getForProject.mockResolvedValue([
-        {
-          id: "terminal-active",
-          hasPty: true,
-          cwd: "/project",
-          kind: "terminal",
-          title: "Active",
-          worktreeId: "wt-active",
-        },
-        {
-          id: "terminal-background",
-          hasPty: true,
-          cwd: "/project",
-          kind: "terminal",
-          title: "Background",
-          worktreeId: "wt-background",
-        },
-        {
-          id: "terminal-dock",
-          hasPty: true,
-          cwd: "/project",
-          kind: "terminal",
-          title: "Dock",
-          worktreeId: "wt-background",
-        },
-      ]);
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "terminal-active",
+            kind: "terminal",
+            title: "Active",
+            cwd: "/project",
+            location: "grid",
+            worktreeId: "wt-active",
+          },
+          {
+            id: "terminal-background",
+            kind: "terminal",
+            title: "Background",
+            cwd: "/project",
+            location: "grid",
+            worktreeId: "wt-background",
+          },
+          {
+            id: "terminal-dock",
+            kind: "terminal",
+            title: "Dock",
+            cwd: "/project",
+            location: "dock",
+            worktreeId: "wt-background",
+          },
+        ],
+        activeWorktreeId: "wt-active",
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
 
-      const addTerminal = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
-        return options.existingId ?? options.requestedId ?? "terminal-id";
-      });
+    terminalClientMock.getForProject.mockResolvedValue([
+      {
+        id: "terminal-active",
+        hasPty: true,
+        cwd: "/project",
+        kind: "terminal",
+        title: "Active",
+        worktreeId: "wt-active",
+      },
+      {
+        id: "terminal-background",
+        hasPty: true,
+        cwd: "/project",
+        kind: "terminal",
+        title: "Background",
+        worktreeId: "wt-background",
+      },
+      {
+        id: "terminal-dock",
+        hasPty: true,
+        cwd: "/project",
+        kind: "terminal",
+        title: "Dock",
+        worktreeId: "wt-background",
+      },
+    ]);
 
-      await hydrateAppState(
-        {
-          addTerminal,
-          setActiveWorktree: vi.fn(),
-          loadRecipes: vi.fn().mockResolvedValue(undefined),
-          openDiagnosticsDock: vi.fn(),
-        },
-        "switch-1",
-        () => true
-      );
+    const addTerminal = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
+      return options.existingId ?? options.requestedId ?? "terminal-id";
+    });
 
-      expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-active");
-      expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-dock");
-      expect(fetchAndRestoreMock).not.toHaveBeenCalledWith("terminal-background");
+    await hydrateAppState(
+      {
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      },
+      "switch-1",
+      () => true
+    );
 
-      await vi.advanceTimersByTimeAsync(40);
-      await Promise.resolve();
+    // Nothing restored yet — all scheduled as background or lazy
+    expect(fetchAndRestoreMock).not.toHaveBeenCalled();
 
-      expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-background");
-    } finally {
-      vi.useRealTimers();
-    }
+    // Flush background tasks — critical terminals (active + dock) get restored
+    await flushPostTasks();
+
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-active");
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-dock");
+    expect(fetchAndRestoreMock).not.toHaveBeenCalledWith("terminal-background");
+
+    // Background terminal restores lazily — simulate scroll event on its host element
+    const bgManaged = managedTerminals.get("terminal-background")!;
+    expect(bgManaged.scrollbackRestoreState).toBe("pending");
+
+    bgManaged.hostElement.dispatchEvent(new Event("wheel"));
+    await flushPostTasks();
+
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-background");
   });
 
   it("skips snapshot fetch for warm cached terminal instances during switch-back hydration", async () => {
@@ -891,7 +917,6 @@ describe("hydrateAppState", () => {
     ]);
 
     isTerminalWarmInProjectSwitchCacheMock.mockReturnValue(true);
-    getManagedTerminalMock.mockReturnValue({ id: "terminal-cached" });
 
     const addTerminal = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
       return options.existingId ?? options.requestedId ?? "terminal-id";
@@ -913,6 +938,9 @@ describe("hydrateAppState", () => {
         existingId: "terminal-cached",
       })
     );
+
+    // Flush background tasks — warm terminal should not be scheduled for restore
+    await flushPostTasks();
     expect(fetchAndRestoreMock).not.toHaveBeenCalled();
     expect(terminalClientMock.getSerializedStates).not.toHaveBeenCalled();
   });
