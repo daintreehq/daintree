@@ -237,6 +237,7 @@ function TerminalHeaderContentComponent({
               {sessionCost != null && (
                 <span className="text-canopy-text/60 tabular-nums">
                   Cost: ${sessionCost.toFixed(2)}
+                  {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)} tokens`}
                 </span>
               )}
               {errorCount > 0 && (

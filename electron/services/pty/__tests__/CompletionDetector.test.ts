@@ -181,6 +181,14 @@ describe("detectCompletion", () => {
     it("strips ANSI before matching", () => {
       expect(extractTokensFromLines(["\x1b[32m$0.50 · 999 tokens\x1b[0m"])).toBe(999);
     });
+
+    it("extracts zero tokens", () => {
+      expect(extractTokensFromLines(["$0.00 · 0 tokens"])).toBe(0);
+    });
+
+    it("does not match comma-formatted token counts", () => {
+      expect(extractTokensFromLines(["$0.50 · 1,234 tokens"])).toBeUndefined();
+    });
   });
 
   describe("extractCostFromLines", () => {

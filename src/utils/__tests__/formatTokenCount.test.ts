@@ -18,4 +18,9 @@ describe("formatTokenCount", () => {
     expect(formatTokenCount(1000000)).toBe("1.0m");
     expect(formatTokenCount(2300000)).toBe("2.3m");
   });
+
+  it("handles boundary between k and m", () => {
+    expect(formatTokenCount(999500)).toBe("1000k");
+    expect(formatTokenCount(999999)).toBe("1000k");
+  });
 });
