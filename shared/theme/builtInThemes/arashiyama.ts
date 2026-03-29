@@ -70,6 +70,8 @@ export const theme: BuiltInThemeSource = {
     },
     strategy: {
       shadowStyle: "crisp",
+      materialBlur: 12,
+      materialSaturation: 115,
     },
   },
   tokens: {
