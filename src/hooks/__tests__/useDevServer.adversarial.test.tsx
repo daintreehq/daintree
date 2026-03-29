@@ -1219,7 +1219,7 @@ describe("useDevServer adversarial races", () => {
           panelId: "panel-1",
           projectId: "project-1",
           status: "error",
-          error: { type: "crash", message: "Server crashed" },
+          error: { type: "unknown", message: "Server crashed" },
         }),
       });
     });
