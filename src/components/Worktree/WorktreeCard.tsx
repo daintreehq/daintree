@@ -31,7 +31,7 @@ import {
   MainWorktreeSummaryRows,
   type AggregateCounts,
 } from "./WorktreeCard/MainWorktreeSummaryRows";
-import { useProjectHealth } from "@/hooks/useProjectHealth";
+import type { ProjectHealthData } from "@shared/types";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { useWorktreeMenu } from "./WorktreeCard/hooks/useWorktreeMenu";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
@@ -107,6 +107,7 @@ export function worktreeCardPropsAreEqual(
     prev.isActive === next.isActive &&
     prev.isFocused === next.isFocused &&
     prev.isSingleWorktree === next.isSingleWorktree &&
+    prev.projectHealth === next.projectHealth &&
     prev.homeDir === next.homeDir &&
     prev.variant === next.variant &&
     prev.isDraggingSort === next.isDraggingSort &&
@@ -128,6 +129,7 @@ export interface WorktreeCardProps {
   isFocused: boolean;
   isSingleWorktree?: boolean;
   aggregateCounts?: AggregateCounts;
+  projectHealth?: ProjectHealthData | null;
   onSelect: () => void;
   onCopyTree: () => Promise<string | undefined> | void;
   onOpenEditor: () => void;
@@ -149,6 +151,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   isFocused,
   isSingleWorktree,
   aggregateCounts,
+  projectHealth,
   onSelect,
   onCopyTree,
   onOpenEditor,
@@ -164,7 +167,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   isDraggingSort,
 }: WorktreeCardProps) {
   "use memo";
-  const { health } = useProjectHealth();
   const isExpanded = useWorktreeSelectionStore(
     useCallback((state) => state.expandedWorktrees.has(worktree.id), [worktree.id])
   );
@@ -721,7 +723,10 @@ export const WorktreeCard = React.memo(function WorktreeCard({
           {!effectiveIsCollapsed && (
             <div id={`worktree-body-${worktree.id}`}>
               {isMainWorktree && (
-                <MainWorktreeSummaryRows aggregateCounts={aggregateCounts} health={health} />
+                <MainWorktreeSummaryRows
+                  aggregateCounts={aggregateCounts}
+                  health={projectHealth ?? null}
+                />
               )}
 
               <WorktreeDetailsSection
