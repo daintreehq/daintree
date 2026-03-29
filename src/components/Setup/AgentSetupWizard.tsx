@@ -54,10 +54,7 @@ type WizardAction =
   | { type: "TOGGLE_SELECTION"; agentId: string; checked: boolean }
   | { type: "RESET"; availability: CliAvailability };
 
-function buildInitialState(
-  availability: CliAvailability,
-  skipHealth: boolean
-): WizardState {
+function buildInitialState(availability: CliAvailability, skipHealth: boolean): WizardState {
   return {
     step: skipHealth ? { type: "selection" } : { type: "health" },
     history: [],
@@ -148,11 +145,7 @@ interface AgentSetupWizardProps {
   initialAvailability?: CliAvailability;
 }
 
-export function AgentSetupWizard({
-  isOpen,
-  onClose,
-  initialAvailability,
-}: AgentSetupWizardProps) {
+export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: AgentSetupWizardProps) {
   const [state, dispatch] = useReducer(
     wizardReducer,
     initialAvailability ?? ({} as CliAvailability),
@@ -160,9 +153,7 @@ export function AgentSetupWizard({
   );
 
   const { setAgentSelected } = useAgentSettingsStore();
-  const isAvailabilityLoading = useCliAvailabilityStore(
-    (s) => s.isLoading || s.isRefreshing
-  );
+  const isAvailabilityLoading = useCliAvailabilityStore((s) => s.isLoading || s.isRefreshing);
   const [isSaving, setIsSaving] = useState(false);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -238,7 +229,10 @@ export function AgentSetupWizard({
   );
 
   const selectedAgentIds = useMemo(
-    () => Object.entries(state.selections).filter(([, sel]) => sel).map(([id]) => id),
+    () =>
+      Object.entries(state.selections)
+        .filter(([, sel]) => sel)
+        .map(([id]) => id),
     [state.selections]
   );
 
@@ -324,9 +318,7 @@ export function AgentSetupWizard({
             selections={state.selections}
             isLoading={showLoadingSelections}
             isSaving={isSaving}
-            onToggle={(id, checked) =>
-              dispatch({ type: "TOGGLE_SELECTION", agentId: id, checked })
-            }
+            onToggle={(id, checked) => dispatch({ type: "TOGGLE_SELECTION", agentId: id, checked })}
           />
         )}
         {state.step.type === "agent" && currentAgent && (
@@ -415,9 +407,7 @@ export function AgentSetupWizard({
                 <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
             )}
-            {state.step.type === "complete" && (
-              <Button onClick={handleFinish}>Finish Setup</Button>
-            )}
+            {state.step.type === "complete" && <Button onClick={handleFinish}>Finish Setup</Button>}
           </div>
         </div>
       </AppDialog.Footer>
@@ -443,9 +433,7 @@ function SelectionStep({
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-base font-semibold text-canopy-text mb-2">
-          Choose your AI agents
-        </h3>
+        <h3 className="text-base font-semibold text-canopy-text mb-2">Choose your AI agents</h3>
         <p className="text-sm text-canopy-text/60">
           Select the agents you want in your workflow. Already-installed agents are pre-selected.
           You can change this anytime from{" "}
@@ -488,9 +476,7 @@ function SelectionStep({
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-canopy-text">{config.name}</div>
                   {description && (
-                    <div className="text-[11px] text-canopy-text/40 truncate">
-                      {description}
-                    </div>
+                    <div className="text-[11px] text-canopy-text/40 truncate">{description}</div>
                   )}
                 </div>
                 {isInstalled ? (
