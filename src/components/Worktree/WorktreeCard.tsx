@@ -582,7 +582,9 @@ export const WorktreeCard = React.memo(function WorktreeCard({
             isActive &&
               !isSingleWorktree &&
               variant === "sidebar" &&
-              (worktreeAccentColor ? "before:bg-[var(--worktree-color)]" : "before:bg-accent-primary"),
+              (worktreeAccentColor
+                ? "before:bg-[var(--worktree-color)]"
+                : "before:bg-accent-primary"),
             variant === "grid" &&
               isActive &&
               "border-accent-primary/70 shadow-[var(--theme-shadow-floating)]",
