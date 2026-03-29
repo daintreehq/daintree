@@ -163,7 +163,7 @@ function extractVersion(output: string): string | null {
   return coerced?.version ?? null;
 }
 
-function checkPrerequisite(spec: PrerequisiteSpec): PrerequisiteCheckResult {
+export function checkPrerequisite(spec: PrerequisiteSpec): PrerequisiteCheckResult {
   const checkCmd = process.platform === "win32" ? "where" : "which";
   const command = spec.command ?? spec.tool;
 
@@ -217,6 +217,11 @@ function checkPrerequisite(spec: PrerequisiteSpec): PrerequisiteCheckResult {
     installUrl: spec.installUrl,
     installBlocks: spec.installBlocks,
   };
+}
+
+export async function getHealthCheckSpecs(agentIds?: string[]): Promise<PrerequisiteSpec[]> {
+  await refreshPath();
+  return resolvePrerequisites(agentIds);
 }
 
 export async function runSystemHealthCheck(agentIds?: string[]): Promise<SystemHealthCheckResult> {

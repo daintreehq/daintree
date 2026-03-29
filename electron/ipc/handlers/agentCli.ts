@@ -122,5 +122,29 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
   ipcMain.handle(CHANNELS.SYSTEM_HEALTH_CHECK, handleSystemHealthCheck);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_HEALTH_CHECK));
 
+  const handleSystemHealthCheckSpecs = async (
+    _event: Electron.IpcMainInvokeEvent,
+    agentIds?: string[]
+  ) => {
+    const { getHealthCheckSpecs } = await import("../../services/SystemHealthCheck.js");
+    return await getHealthCheckSpecs(agentIds);
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_HEALTH_CHECK_SPECS, handleSystemHealthCheckSpecs);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_HEALTH_CHECK_SPECS));
+
+  const handleSystemCheckTool = async (
+    _event: Electron.IpcMainInvokeEvent,
+    spec: import("../../../shared/types/ipc/system.js").PrerequisiteSpec
+  ) => {
+    const { checkPrerequisite } = await import("../../services/SystemHealthCheck.js");
+    return new Promise<import("../../../shared/types/ipc/system.js").PrerequisiteCheckResult>(
+      (resolve) => {
+        setImmediate(() => resolve(checkPrerequisite(spec)));
+      }
+    );
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_CHECK_TOOL, handleSystemCheckTool);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_CHECK_TOOL));
+
   return () => handlers.forEach((cleanup) => cleanup());
 }

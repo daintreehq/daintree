@@ -1061,6 +1061,20 @@ const api: ElectronAPI = {
 
     healthCheck: (agentIds?: string[]) => _unwrappingInvoke(CHANNELS.SYSTEM_HEALTH_CHECK, agentIds),
 
+    getHealthCheckSpecs: (agentIds?: string[]) =>
+      _unwrappingInvoke(CHANNELS.SYSTEM_HEALTH_CHECK_SPECS, agentIds),
+
+    checkTool: (spec: {
+      tool: string;
+      label: string;
+      command?: string;
+      versionArgs: string[];
+      severity: string;
+      minVersion?: string;
+      installUrl?: string;
+      installBlocks?: Record<string, unknown>;
+    }) => _unwrappingInvoke(CHANNELS.SYSTEM_CHECK_TOOL, spec),
+
     downloadDiagnostics: () => _unwrappingInvoke(CHANNELS.SYSTEM_DOWNLOAD_DIAGNOSTICS),
 
     getAppMetrics: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_APP_METRICS),
