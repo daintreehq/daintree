@@ -67,12 +67,7 @@ function noise(t: number): number {
   return (Math.sin(t) + Math.sin(t * 1.618) + Math.sin(t * 2.718)) / 3;
 }
 
-function buildFlamePath(
-  t: number,
-  intensity: number,
-  speed: number,
-  phase: number
-): string {
+function buildFlamePath(t: number, intensity: number, speed: number, phase: number): string {
   const s = t * speed + phase;
   const amp = intensity;
 
@@ -94,20 +89,14 @@ function buildFlamePath(
 const FRAME_INTERVAL = 1000 / 14;
 const LS_KEY = "streak-flame-last-played";
 const REDUCED_MOTION =
-  typeof window !== "undefined" &&
-  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 interface StreakFlameProps extends Omit<SVGProps<SVGSVGElement>, "ref"> {
   streakDays: number;
   size?: number;
 }
 
-export function StreakFlame({
-  streakDays,
-  size = 14,
-  className,
-  ...svgProps
-}: StreakFlameProps) {
+export function StreakFlame({ streakDays, size = 14, className, ...svgProps }: StreakFlameProps) {
   const id = useId();
   const milestone = getMilestoneConfig(streakDays);
   const color = getStreakColor(streakDays);
@@ -170,18 +159,9 @@ export function StreakFlame({
       lastFrame = now;
 
       const t = elapsed / 1000;
-      outerRef.current?.setAttribute(
-        "d",
-        buildFlamePath(t, intensity * 2.0, 0.8, 0)
-      );
-      midRef.current?.setAttribute(
-        "d",
-        buildFlamePath(t, intensity * 1.2, 1.2, 0.4)
-      );
-      coreRef.current?.setAttribute(
-        "d",
-        buildFlamePath(t, intensity * 0.5, 1.8, 0.9)
-      );
+      outerRef.current?.setAttribute("d", buildFlamePath(t, intensity * 2.0, 0.8, 0));
+      midRef.current?.setAttribute("d", buildFlamePath(t, intensity * 1.2, 1.2, 0.4));
+      coreRef.current?.setAttribute("d", buildFlamePath(t, intensity * 0.5, 1.8, 0.9));
 
       rafId = requestAnimationFrame(update);
     };
@@ -193,10 +173,7 @@ export function StreakFlame({
       const container = sparksRef.current;
       if (!container || container.children.length >= 3) return;
 
-      const circle = document.createElementNS(
-        "http://www.w3.org/2000/svg",
-        "circle"
-      );
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
       circle.setAttribute("cx", String(7 + Math.random() * 2));
       circle.setAttribute("cy", String(3 + Math.random() * 2));
       circle.setAttribute("r", "0.8");
