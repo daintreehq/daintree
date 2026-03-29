@@ -1124,6 +1124,7 @@ export function Toolbar({
       copyFeedback,
       onSettings,
       settingsContextMenuTabs,
+      onPreloadSettings,
       onToggleProblems,
       errorCount,
       showDeveloperTools,
