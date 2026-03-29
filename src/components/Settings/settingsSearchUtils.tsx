@@ -68,9 +68,7 @@ export function filterSettings(
   if (!cleanQuery && !filterModified) return [];
 
   const scopeFilter = options?.scope;
-  const scopedIndex = scopeFilter
-    ? index.filter((entry) => entry.scope === scopeFilter)
-    : index;
+  const scopedIndex = scopeFilter ? index.filter((entry) => entry.scope === scopeFilter) : index;
 
   // @modified only — return all entries in modified tabs
   if (!cleanQuery && filterModified) {

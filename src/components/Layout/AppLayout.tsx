@@ -224,7 +224,6 @@ export function AppLayout({
     return () => window.removeEventListener("canopy:toggle-portal", handlePortalToggle);
   }, [layout.togglePortal]);
 
-
   useEffect(() => {
     const handleResetSidebarWidth = () => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
     window.addEventListener("canopy:reset-sidebar-width", handleResetSidebarWidth);

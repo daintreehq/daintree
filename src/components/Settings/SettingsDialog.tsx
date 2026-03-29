@@ -334,8 +334,14 @@ export function SettingsDialog({
   ]);
 
   // ── Project settings state machine ──
-  const { settings: projectSettings, saveSettings: saveProjectSettings, isLoading: projectIsLoading, error: projectError } = useProjectSettings(projectId ?? "");
-  const { projects, updateProject, enableInRepoSettings, disableInRepoSettings } = useProjectStore();
+  const {
+    settings: projectSettings,
+    saveSettings: saveProjectSettings,
+    isLoading: projectIsLoading,
+    error: projectError,
+  } = useProjectSettings(projectId ?? "");
+  const { projects, updateProject, enableInRepoSettings, disableInRepoSettings } =
+    useProjectStore();
   const currentProject = projectId ? projects.find((p) => p.id === projectId) : undefined;
 
   const [projectAutoSaveError, setProjectAutoSaveError] = useState<string | null>(null);
@@ -347,7 +353,9 @@ export function SettingsDialog({
   const [excludedPaths, setExcludedPaths] = useState<string[]>([]);
   const [projectIsInitialized, setProjectIsInitialized] = useState(false);
   const [projectIconSvg, setProjectIconSvg] = useState<string | undefined>(undefined);
-  const [defaultWorktreeRecipeId, setDefaultWorktreeRecipeId] = useState<string | undefined>(undefined);
+  const [defaultWorktreeRecipeId, setDefaultWorktreeRecipeId] = useState<string | undefined>(
+    undefined
+  );
   const [devServerCommand, setDevServerCommand] = useState<string>("");
   const [devServerLoadTimeout, setDevServerLoadTimeout] = useState<number | undefined>(undefined);
   const [commandOverrides, setCommandOverrides] = useState<CommandOverride[]>([]);
@@ -359,8 +367,12 @@ export function SettingsDialog({
   const [terminalShellArgs, setTerminalShellArgs] = useState<string>("");
   const [terminalDefaultCwd, setTerminalDefaultCwd] = useState<string>("");
   const [terminalScrollback, setTerminalScrollback] = useState<string>("");
-  const [notificationOverrides, setNotificationOverrides] = useState<Partial<NotificationSettings>>({});
-  const lastSavedSnapshotRef = useRef<ReturnType<typeof createProjectSettingsSnapshot> | null>(null);
+  const [notificationOverrides, setNotificationOverrides] = useState<Partial<NotificationSettings>>(
+    {}
+  );
+  const lastSavedSnapshotRef = useRef<ReturnType<typeof createProjectSettingsSnapshot> | null>(
+    null
+  );
 
   const { recipes, isLoading: recipesLoading } = useRecipeStore();
   const { worktreeMap, worktrees } = useWorktrees();
@@ -382,16 +394,43 @@ export function SettingsDialog({
   const currentProjectSnapshot = useMemo(() => {
     if (!currentProject) return null;
     return createProjectSettingsSnapshot(
-      projectName, projectEmoji, devServerCommand, projectIconSvg, excludedPaths,
-      environmentVariables, runCommands, defaultWorktreeRecipeId, commandOverrides,
-      copyTreeSettings, branchPrefixMode, branchPrefixCustom, devServerLoadTimeout,
-      worktreePathPattern, currentTerminalSettings, notificationOverrides, projectColor
+      projectName,
+      projectEmoji,
+      devServerCommand,
+      projectIconSvg,
+      excludedPaths,
+      environmentVariables,
+      runCommands,
+      defaultWorktreeRecipeId,
+      commandOverrides,
+      copyTreeSettings,
+      branchPrefixMode,
+      branchPrefixCustom,
+      devServerLoadTimeout,
+      worktreePathPattern,
+      currentTerminalSettings,
+      notificationOverrides,
+      projectColor
     );
   }, [
-    projectName, projectEmoji, projectColor, devServerCommand, devServerLoadTimeout,
-    projectIconSvg, excludedPaths, environmentVariables, runCommands, defaultWorktreeRecipeId,
-    commandOverrides, copyTreeSettings, branchPrefixMode, branchPrefixCustom,
-    worktreePathPattern, currentProject, currentTerminalSettings, notificationOverrides,
+    projectName,
+    projectEmoji,
+    projectColor,
+    devServerCommand,
+    devServerLoadTimeout,
+    projectIconSvg,
+    excludedPaths,
+    environmentVariables,
+    runCommands,
+    defaultWorktreeRecipeId,
+    commandOverrides,
+    copyTreeSettings,
+    branchPrefixMode,
+    branchPrefixCustom,
+    worktreePathPattern,
+    currentProject,
+    currentTerminalSettings,
+    notificationOverrides,
   ]);
 
   useEffect(() => {
@@ -442,11 +481,22 @@ export function SettingsDialog({
       setNotificationOverrides(initialNotificationOverrides);
 
       lastSavedSnapshotRef.current = createProjectSettingsSnapshot(
-        currentProject.name, currentProject.emoji || "🌲", initialDevServerCommand,
-        initialProjectIconSvg, initialExcludedPaths, initialEnvVars, initialRunCommands,
-        initialDefaultWorktreeRecipeId, initialCommandOverrides, initialCopyTreeSettings,
-        initialBranchPrefixMode, initialBranchPrefixCustom, initialDevServerLoadTimeout,
-        initialWorktreePathPattern, initialTerminalSettings, initialNotificationOverrides,
+        currentProject.name,
+        currentProject.emoji || "🌲",
+        initialDevServerCommand,
+        initialProjectIconSvg,
+        initialExcludedPaths,
+        initialEnvVars,
+        initialRunCommands,
+        initialDefaultWorktreeRecipeId,
+        initialCommandOverrides,
+        initialCopyTreeSettings,
+        initialBranchPrefixMode,
+        initialBranchPrefixCustom,
+        initialDevServerLoadTimeout,
+        initialWorktreePathPattern,
+        initialTerminalSettings,
+        initialNotificationOverrides,
         currentProject.color
       );
       setProjectIsInitialized(true);
@@ -492,29 +542,40 @@ export function SettingsDialog({
     const seenKeys = new Set<string>();
     for (const envVar of environmentVariables) {
       const trimmedKey = envVar.key.trim();
-      if (!trimmedKey || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmedKey) || seenKeys.has(trimmedKey)) continue;
+      if (!trimmedKey || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmedKey) || seenKeys.has(trimmedKey))
+        continue;
       seenKeys.add(trimmedKey);
       envVarRecord[trimmedKey] = envVar.value;
     }
 
     const sanitizedPaths = excludedPaths.map((p) => p.trim()).filter(Boolean);
     const sanitizedCopyTreeSettings: CopyTreeSettings = {};
-    if (copyTreeSettings.maxContextSize !== undefined) sanitizedCopyTreeSettings.maxContextSize = copyTreeSettings.maxContextSize;
-    if (copyTreeSettings.maxFileSize !== undefined) sanitizedCopyTreeSettings.maxFileSize = copyTreeSettings.maxFileSize;
-    if (copyTreeSettings.charLimit !== undefined) sanitizedCopyTreeSettings.charLimit = copyTreeSettings.charLimit;
+    if (copyTreeSettings.maxContextSize !== undefined)
+      sanitizedCopyTreeSettings.maxContextSize = copyTreeSettings.maxContextSize;
+    if (copyTreeSettings.maxFileSize !== undefined)
+      sanitizedCopyTreeSettings.maxFileSize = copyTreeSettings.maxFileSize;
+    if (copyTreeSettings.charLimit !== undefined)
+      sanitizedCopyTreeSettings.charLimit = copyTreeSettings.charLimit;
     if (copyTreeSettings.strategy) sanitizedCopyTreeSettings.strategy = copyTreeSettings.strategy;
     if (copyTreeSettings.alwaysInclude && copyTreeSettings.alwaysInclude.length > 0) {
-      sanitizedCopyTreeSettings.alwaysInclude = copyTreeSettings.alwaysInclude.map((p) => p.trim()).filter(Boolean);
-      if (sanitizedCopyTreeSettings.alwaysInclude.length === 0) delete sanitizedCopyTreeSettings.alwaysInclude;
+      sanitizedCopyTreeSettings.alwaysInclude = copyTreeSettings.alwaysInclude
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (sanitizedCopyTreeSettings.alwaysInclude.length === 0)
+        delete sanitizedCopyTreeSettings.alwaysInclude;
     }
     if (copyTreeSettings.alwaysExclude && copyTreeSettings.alwaysExclude.length > 0) {
-      sanitizedCopyTreeSettings.alwaysExclude = copyTreeSettings.alwaysExclude.map((p) => p.trim()).filter(Boolean);
-      if (sanitizedCopyTreeSettings.alwaysExclude.length === 0) delete sanitizedCopyTreeSettings.alwaysExclude;
+      sanitizedCopyTreeSettings.alwaysExclude = copyTreeSettings.alwaysExclude
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (sanitizedCopyTreeSettings.alwaysExclude.length === 0)
+        delete sanitizedCopyTreeSettings.alwaysExclude;
     }
     const hasCopyTreeSettings = Object.keys(sanitizedCopyTreeSettings).length > 0;
 
     const sanitizedBranchPrefixCustom = branchPrefixCustom.trim();
-    const effectivePrefixMode = branchPrefixMode === "custom" && !sanitizedBranchPrefixCustom ? "none" : branchPrefixMode;
+    const effectivePrefixMode =
+      branchPrefixMode === "custom" && !sanitizedBranchPrefixCustom ? "none" : branchPrefixMode;
     const sanitizedWorktreePathPattern = worktreePathPattern.trim() || undefined;
     if (sanitizedWorktreePathPattern) {
       const patternValidation = validatePathPattern(sanitizedWorktreePathPattern);
@@ -529,7 +590,11 @@ export function SettingsDialog({
         projectEmoji !== (currentProject.emoji || "🌲") ||
         projectColor !== currentProject.color;
       if (identityChanged) {
-        await updateProject(projectId, { name: trimmedName, emoji: projectEmoji, color: projectColor });
+        await updateProject(projectId, {
+          name: trimmedName,
+          emoji: projectEmoji,
+          color: projectColor,
+        });
       }
 
       await saveProjectSettings({
@@ -544,10 +609,12 @@ export function SettingsDialog({
         commandOverrides: commandOverrides.length > 0 ? commandOverrides : undefined,
         copyTreeSettings: hasCopyTreeSettings ? sanitizedCopyTreeSettings : undefined,
         branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
-        branchPrefixCustom: effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
+        branchPrefixCustom:
+          effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
         worktreePathPattern: sanitizedWorktreePathPattern,
         terminalSettings: currentTerminalSettings,
-        notificationOverrides: Object.keys(notificationOverrides).length > 0 ? notificationOverrides : undefined,
+        notificationOverrides:
+          Object.keys(notificationOverrides).length > 0 ? notificationOverrides : undefined,
         insecureEnvironmentVariables: undefined,
         unresolvedSecureEnvironmentVariables: undefined,
       });
@@ -562,7 +629,9 @@ export function SettingsDialog({
   };
 
   const debouncedProjectSaveRef = useRef(
-    debounce(() => { projectPersistRef.current?.(); }, 500)
+    debounce(() => {
+      projectPersistRef.current?.();
+    }, 500)
   );
 
   useEffect(() => {
@@ -573,7 +642,9 @@ export function SettingsDialog({
 
   useEffect(() => {
     const save = debouncedProjectSaveRef.current;
-    return () => { save.cancel(); };
+    return () => {
+      save.cancel();
+    };
   }, []);
 
   const handleBeforeClose = useCallback(async () => {
@@ -588,7 +659,8 @@ export function SettingsDialog({
   // ── End project settings state machine ──
 
   const searchResults = useMemo(
-    () => filterSettings(SETTINGS_SEARCH_INDEX, deferredQuery, { modifiedTabs, scope: activeScope }),
+    () =>
+      filterSettings(SETTINGS_SEARCH_INDEX, deferredQuery, { modifiedTabs, scope: activeScope }),
     [deferredQuery, modifiedTabs, activeScope]
   );
 
@@ -885,40 +957,218 @@ export function SettingsDialog({
               {activeScope === "global" ? (
                 <>
                   <NavGroup label="General">
-                    <NavItem tab="general" icon={<Settings2 className="w-4 h-4" />} label="General" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.general} modified={modifiedTabs.has("general")} onSelect={handleNavSelect} />
-                    <NavItem tab="terminalAppearance" icon={<SquareTerminal className="w-4 h-4" />} label="Appearance" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.terminalAppearance} onSelect={handleNavSelect} />
-                    <NavItem tab="keyboard" icon={<Keyboard className="w-4 h-4" />} label="Keyboard" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.keyboard} onSelect={handleNavSelect} />
-                    <NavItem tab="notifications" icon={<Bell className="w-4 h-4" />} label="Notifications" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.notifications} onSelect={handleNavSelect} />
-                    <NavItem tab="privacy" icon={<Shield className="w-4 h-4" />} label="Privacy & Data" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.privacy} onSelect={handleNavSelect} />
+                    <NavItem
+                      tab="general"
+                      icon={<Settings2 className="w-4 h-4" />}
+                      label="General"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.general}
+                      modified={modifiedTabs.has("general")}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="terminalAppearance"
+                      icon={<SquareTerminal className="w-4 h-4" />}
+                      label="Appearance"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.terminalAppearance}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="keyboard"
+                      icon={<Keyboard className="w-4 h-4" />}
+                      label="Keyboard"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.keyboard}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="notifications"
+                      icon={<Bell className="w-4 h-4" />}
+                      label="Notifications"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.notifications}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="privacy"
+                      icon={<Shield className="w-4 h-4" />}
+                      label="Privacy & Data"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.privacy}
+                      onSelect={handleNavSelect}
+                    />
                   </NavGroup>
                   <NavGroup label="Terminal">
-                    <NavItem tab="terminal" icon={<LayoutGrid className="w-4 h-4" />} label="Panel Grid" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.terminal} modified={modifiedTabs.has("terminal")} onSelect={handleNavSelect} />
-                    <NavItem tab="worktree" icon={<WorktreeIcon className="w-4 h-4" />} label="Worktree" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.worktree} onSelect={handleNavSelect} />
-                    <NavItem tab="toolbar" icon={<SettingsIcon className="w-4 h-4" />} label="Toolbar" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.toolbar} onSelect={handleNavSelect} />
-                    <NavItem tab="environment" icon={<KeyRound className="w-4 h-4" />} label="Environment" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.environment} onSelect={handleNavSelect} />
+                    <NavItem
+                      tab="terminal"
+                      icon={<LayoutGrid className="w-4 h-4" />}
+                      label="Panel Grid"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.terminal}
+                      modified={modifiedTabs.has("terminal")}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="worktree"
+                      icon={<WorktreeIcon className="w-4 h-4" />}
+                      label="Worktree"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.worktree}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="toolbar"
+                      icon={<SettingsIcon className="w-4 h-4" />}
+                      label="Toolbar"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.toolbar}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="environment"
+                      icon={<KeyRound className="w-4 h-4" />}
+                      label="Environment"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.environment}
+                      onSelect={handleNavSelect}
+                    />
                   </NavGroup>
                   <NavGroup label="Integrations">
-                    <NavItem tab="agents" icon={<CanopyAgentIcon className="w-4 h-4" />} label="CLI Agents" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.agents} onSelect={handleNavSelect} />
-                    <NavItem tab="github" icon={<Github className="w-4 h-4" />} label="GitHub" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.github} onSelect={handleNavSelect} />
-                    <NavItem tab="integrations" icon={<Blocks className="w-4 h-4" />} label="Integrations" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.integrations} onSelect={handleNavSelect} />
-                    <NavItem tab="portal" icon={<PanelRight className="w-4 h-4" />} label="Portal" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.portal} onSelect={handleNavSelect} />
-                    <NavItem tab="mcp" icon={<Plug className="w-4 h-4" />} label="MCP Server" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.mcp} onSelect={handleNavSelect} />
+                    <NavItem
+                      tab="agents"
+                      icon={<CanopyAgentIcon className="w-4 h-4" />}
+                      label="CLI Agents"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.agents}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="github"
+                      icon={<Github className="w-4 h-4" />}
+                      label="GitHub"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.github}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="integrations"
+                      icon={<Blocks className="w-4 h-4" />}
+                      label="Integrations"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.integrations}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="portal"
+                      icon={<PanelRight className="w-4 h-4" />}
+                      label="Portal"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.portal}
+                      onSelect={handleNavSelect}
+                    />
+                    <NavItem
+                      tab="mcp"
+                      icon={<Plug className="w-4 h-4" />}
+                      label="MCP Server"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.mcp}
+                      onSelect={handleNavSelect}
+                    />
                   </NavGroup>
                   <NavGroup label="Input">
-                    <NavItem tab="voice" icon={<Mic className="w-4 h-4" />} label="Voice Input" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.voice} onSelect={handleNavSelect} />
+                    <NavItem
+                      tab="voice"
+                      icon={<Mic className="w-4 h-4" />}
+                      label="Voice Input"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.voice}
+                      onSelect={handleNavSelect}
+                    />
                   </NavGroup>
                   <NavGroup label="Support">
-                    <NavItem tab="troubleshooting" icon={<LifeBuoy className="w-4 h-4" />} label="Troubleshooting" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.troubleshooting} onSelect={handleNavSelect} />
+                    <NavItem
+                      tab="troubleshooting"
+                      icon={<LifeBuoy className="w-4 h-4" />}
+                      label="Troubleshooting"
+                      activeTab={activeTab}
+                      isSearching={isSearching}
+                      matchCount={matchCounts.troubleshooting}
+                      onSelect={handleNavSelect}
+                    />
                   </NavGroup>
                 </>
               ) : (
                 <NavGroup label="Project">
-                  <NavItem tab="project:general" icon={<SettingsIcon className="w-4 h-4" />} label="General" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts["project:general"]} onSelect={handleNavSelect} />
-                  <NavItem tab="project:context" icon={<FileCode className="w-4 h-4" />} label="Context" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts["project:context"]} onSelect={handleNavSelect} />
-                  <NavItem tab="project:automation" icon={<Zap className="w-4 h-4" />} label="Automation" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts["project:automation"]} onSelect={handleNavSelect} />
-                  <NavItem tab="project:recipes" icon={<CookingPot className="w-4 h-4" />} label="Recipes" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts["project:recipes"]} onSelect={handleNavSelect} />
-                  <NavItem tab="project:commands" icon={<Command className="w-4 h-4" />} label="Commands" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts["project:commands"]} onSelect={handleNavSelect} />
-                  <NavItem tab="project:notifications" icon={<Bell className="w-4 h-4" />} label="Notifications" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts["project:notifications"]} onSelect={handleNavSelect} />
+                  <NavItem
+                    tab="project:general"
+                    icon={<SettingsIcon className="w-4 h-4" />}
+                    label="General"
+                    activeTab={activeTab}
+                    isSearching={isSearching}
+                    matchCount={matchCounts["project:general"]}
+                    onSelect={handleNavSelect}
+                  />
+                  <NavItem
+                    tab="project:context"
+                    icon={<FileCode className="w-4 h-4" />}
+                    label="Context"
+                    activeTab={activeTab}
+                    isSearching={isSearching}
+                    matchCount={matchCounts["project:context"]}
+                    onSelect={handleNavSelect}
+                  />
+                  <NavItem
+                    tab="project:automation"
+                    icon={<Zap className="w-4 h-4" />}
+                    label="Automation"
+                    activeTab={activeTab}
+                    isSearching={isSearching}
+                    matchCount={matchCounts["project:automation"]}
+                    onSelect={handleNavSelect}
+                  />
+                  <NavItem
+                    tab="project:recipes"
+                    icon={<CookingPot className="w-4 h-4" />}
+                    label="Recipes"
+                    activeTab={activeTab}
+                    isSearching={isSearching}
+                    matchCount={matchCounts["project:recipes"]}
+                    onSelect={handleNavSelect}
+                  />
+                  <NavItem
+                    tab="project:commands"
+                    icon={<Command className="w-4 h-4" />}
+                    label="Commands"
+                    activeTab={activeTab}
+                    isSearching={isSearching}
+                    matchCount={matchCounts["project:commands"]}
+                    onSelect={handleNavSelect}
+                  />
+                  <NavItem
+                    tab="project:notifications"
+                    icon={<Bell className="w-4 h-4" />}
+                    label="Notifications"
+                    activeTab={activeTab}
+                    isSearching={isSearching}
+                    matchCount={matchCounts["project:notifications"]}
+                    onSelect={handleNavSelect}
+                  />
                 </NavGroup>
               )}
             </div>
@@ -1233,12 +1483,18 @@ export function SettingsDialog({
                       </div>
                     )}
                     {projectError && (
-                      <div className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4" role="alert">
+                      <div
+                        className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
+                        role="alert"
+                      >
                         Failed to load settings: {projectError}
                       </div>
                     )}
                     {projectAutoSaveError && (
-                      <div className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4" role="alert">
+                      <div
+                        className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
+                        role="alert"
+                      >
                         {projectAutoSaveError}
                       </div>
                     )}
