@@ -367,6 +367,8 @@ export function setupBrowserWindow(
     webPreferences.sandbox = true;
     webPreferences.navigateOnDragDrop = false;
     webPreferences.disableBlinkFeatures = "Auxclick";
+    // Preserve the validated partition so the webview uses the correct
+    // persistent session (#4564).
     webPreferences.partition = params.partition;
   });
 
