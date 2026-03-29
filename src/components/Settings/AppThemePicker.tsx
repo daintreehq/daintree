@@ -319,6 +319,11 @@ export function AppThemePicker() {
     }
   }, [addCustomScheme, setSelectedSchemeId]);
 
+  const handleExport = useCallback(async () => {
+    if (!selectedScheme) return;
+    await appThemeClient.exportTheme(selectedScheme);
+  }, [selectedScheme]);
+
   useEscapeStack(open, () => setOpen(false));
 
   useEffect(() => {
@@ -561,12 +566,20 @@ export function AppThemePicker() {
         )}
       </div>
 
-      <button
-        onClick={handleImport}
-        className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
-      >
-        Import app theme...
-      </button>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleExport}
+          className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
+        >
+          Export app theme...
+        </button>
+        <button
+          onClick={handleImport}
+          className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
+        >
+          Import app theme...
+        </button>
+      </div>
     </div>
   );
 }

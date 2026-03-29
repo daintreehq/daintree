@@ -1,4 +1,5 @@
 import { ipcMain, dialog, BrowserWindow, nativeTheme } from "electron";
+import { promises as fs } from "node:fs";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { parseAppThemeFile } from "../../utils/appThemeImporter.js";
@@ -127,6 +128,44 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
   };
   ipcMain.handle(CHANNELS.APP_THEME_IMPORT, handleAppThemeImport);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_THEME_IMPORT));
+
+  const handleAppThemeExport = async (
+    event: Electron.IpcMainInvokeEvent,
+    scheme: AppColorScheme
+  ): Promise<boolean> => {
+    if (!scheme || typeof scheme.id !== "string" || typeof scheme.name !== "string") {
+      return false;
+    }
+
+    const safeName =
+      scheme.name
+        .replace(/[\\/:*?"<>|]/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 200) || "theme";
+
+    const win = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
+    const dialogOptions = {
+      title: "Export App Theme",
+      defaultPath: `${safeName}.json`,
+      filters: [
+        { name: "Theme Files", extensions: ["json"] },
+        { name: "All Files", extensions: ["*"] },
+      ],
+    };
+
+    const { filePath, canceled } = win
+      ? await dialog.showSaveDialog(win, dialogOptions)
+      : await dialog.showSaveDialog(dialogOptions);
+
+    if (canceled || !filePath) return false;
+
+    const { location: _loc, builtin: _builtin, ...exportData } = scheme;
+    await fs.writeFile(filePath, JSON.stringify(exportData, null, 2), "utf-8");
+    return true;
+  };
+  ipcMain.handle(CHANNELS.APP_THEME_EXPORT, handleAppThemeExport);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_THEME_EXPORT));
 
   // Follow system handlers
   const handleSetFollowSystem = async (_event: Electron.IpcMainInvokeEvent, enabled: boolean) => {
