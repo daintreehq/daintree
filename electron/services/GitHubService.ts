@@ -139,7 +139,30 @@ export async function getRepoContext(cwd: string): Promise<RepoContext | null> {
 
   try {
     const gitService = new GitService(cwd);
-    const fetchUrl = await gitService.getRemoteUrl(cwd);
+
+    let fetchUrl: string | null = null;
+
+    try {
+      const { projectStore } = await import("./ProjectStore.js");
+      const repoRoot = await gitService.getRepositoryRoot(cwd);
+      const project = await projectStore.getProjectByPath(repoRoot);
+      if (project) {
+        const settings = await projectStore.getProjectSettings(project.id);
+        if (settings.githubRemote) {
+          const remotes = await gitService.listRemotes(cwd);
+          const match = remotes.find((r) => r.name === settings.githubRemote);
+          if (match?.fetchUrl) {
+            fetchUrl = match.fetchUrl;
+          }
+        }
+      }
+    } catch {
+      // Fall through to default origin lookup
+    }
+
+    if (!fetchUrl) {
+      fetchUrl = await gitService.getRemoteUrl(cwd);
+    }
 
     if (!fetchUrl) return null;
 
