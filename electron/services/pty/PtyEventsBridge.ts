@@ -74,6 +74,8 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         confidence: normalizeConfidence(event.confidence),
         worktreeId: event.worktreeId,
         waitingReason: event.waitingReason,
+        sessionCost: event.sessionCost,
+        sessionTokens: event.sessionTokens,
       });
       return true;
 

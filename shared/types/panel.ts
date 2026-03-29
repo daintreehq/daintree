@@ -368,6 +368,8 @@ export interface TerminalInstance {
   waitingReason?: WaitingReason;
   /** Extracted session cost in dollars from the last completed agent run */
   sessionCost?: number;
+  /** Extracted session token count from the last completed agent run */
+  sessionTokens?: number;
   activityHeadline?: string;
   activityStatus?: "working" | "waiting" | "success" | "failure";
   activityType?: "interactive" | "background" | "idle";

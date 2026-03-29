@@ -130,7 +130,8 @@ export interface TerminalRegistrySlice {
     trigger?: AgentStateChangeTrigger,
     confidence?: number,
     waitingReason?: import("@shared/types/agent.js").WaitingReason,
-    sessionCost?: number
+    sessionCost?: number,
+    sessionTokens?: number
   ) => void;
   updateActivity: (
     id: string,
