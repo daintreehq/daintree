@@ -21,12 +21,17 @@ const SAMPLE_RATE = 44100;
 const TWO_PI = 2 * Math.PI;
 
 // ---------------------------------------------------------------------------
-// Just Intonation A-major pentatonic (ratio × 440 Hz)
+// Just Intonation pitch palette (ratio × 440 Hz)
+//
+// Core: A-major pentatonic.  Ds5 (Lydian #4) adds a sense of wonder /
+// discovery borrowed from the Zelda "item-get" language — brighter than
+// plain major.  Used sparingly in the chime sound.
 // ---------------------------------------------------------------------------
 const JI = {
   A4: 440.0, // 1/1  — root
   B4: 495.0, // 9/8  — suspension / unresolved
   Cs5: 550.0, // 5/4  — brightness / affirmation
+  Ds5: 618.75, // 45/32 — Lydian #4, wonder / discovery
   E5: 660.0, // 3/2  — stability / completion
   Fs5: 733.33, // 5/3  — elevation / alertness
 };
@@ -217,16 +222,18 @@ class PinkNoise {
 function canopyNote(freq, duration, opts = {}) {
   const {
     amplitude = 0.55,
-    attack = 0.018,
+    attack = 0.012, // BOTW-style: snappier attack, more percussive
+    decayRate = 5.5, // faster decay for tighter, less lingering notes
     fmRatio = 1.4142, // √2 — woody/bell inharmonicity
     fmIndex = 1.5,
-    fmDecayRate = 12,
-    noiseAmt = 0.15,
-    noiseBandHz = 1000,
-    noiseQ = 2.0,
-    noiseDuration = 0.008,
-    pitchBendHz = 30,
-    pitchBendMs = 20,
+    fmDecayRate = 14, // FM brightness dies faster → kalimba-like pluck
+    harmonicMix = 0.12, // slightly less additive harmonics → cleaner
+    noiseAmt = 0.18, // stronger strike transient → more percussive
+    noiseBandHz = 1200, // higher band → brighter "mallet on wood" character
+    noiseQ = 2.5,
+    noiseDuration = 0.006, // shorter noise burst → sharper attack
+    pitchBendHz = 25,
+    pitchBendMs = 15, // shorter pitch bend → snappier
   } = opts;
 
   const numSamples = Math.ceil(SAMPLE_RATE * duration);
@@ -245,7 +252,7 @@ function canopyNote(freq, duration, opts = {}) {
 
     // Envelope: fast exponential attack + exponential decay (no sustain)
     const attackEnv = i < attack * SAMPLE_RATE ? Math.pow(t / attack, 2) : 1.0;
-    const decayEnv = expDecay(t, duration, 4.5);
+    const decayEnv = expDecay(t, duration, decayRate);
     const env = attackEnv * decayEnv;
 
     // Pitch envelope: subtle downward bend
@@ -270,7 +277,10 @@ function canopyNote(freq, duration, opts = {}) {
     const h4 = Math.sin(carrier.phase * 4) * (1 / Math.pow(4, 1.7));
 
     // Mix tonal components
-    let tonal = fmSample * 0.5 + detunedSample * 0.35 + (h2 + h3 + h4) * 0.15;
+    let tonal =
+      fmSample * (0.53 - harmonicMix / 2) +
+      detunedSample * (0.35 - harmonicMix / 4) +
+      (h2 + h3 + h4) * harmonicMix;
 
     // Noise transient (strike texture)
     let noise = 0;
@@ -287,26 +297,41 @@ function canopyNote(freq, duration, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-note sequencer — arpeggiates canopyNote() calls
+// Multi-note sequencer
+//
+// BOTW lesson: humanized timing.  Slight rubato (±jitterMs) on note onsets
+// makes sounds feel performed rather than mechanically triggered.
 // ---------------------------------------------------------------------------
 
 function sequence(notes, opts = {}) {
-  const { noteGap = 0.0, tailPad = 0.15 } = opts;
+  const { noteGap = 0.0, tailPad = 0.1, jitterMs = 3 } = opts;
+
+  // Pre-calculate jittered onset offsets (deterministic seed via index)
+  const jitters = notes.map((_, i) => {
+    // Simple deterministic pseudo-random per note index
+    const seed = Math.sin(i * 9.1 + 0.7) * 43758.5453;
+    return (seed - Math.floor(seed) - 0.5) * 2 * (jitterMs / 1000);
+  });
+  // First note always starts on time
+  jitters[0] = 0;
 
   // Calculate total length
   let totalDuration = 0;
-  for (const n of notes) totalDuration += n.duration + noteGap;
-  totalDuration += tailPad; // extra tail for reverb
+  for (let i = 0; i < notes.length; i++) {
+    totalDuration += notes[i].duration + noteGap + Math.abs(jitters[i]);
+  }
+  totalDuration += tailPad;
   const totalSamples = Math.ceil(SAMPLE_RATE * totalDuration);
   const output = new Float32Array(totalSamples);
 
   let offsetSamples = 0;
-  for (const n of notes) {
-    // Allow note duration + tail so reverb/decay can ring
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    const jitteredOffset = Math.max(0, offsetSamples + Math.round(jitters[i] * SAMPLE_RATE));
     const noteDur = n.duration + tailPad;
     const noteSamples = canopyNote(n.freq, noteDur, n.opts || {});
-    for (let i = 0; i < noteSamples.length && offsetSamples + i < totalSamples; i++) {
-      output[offsetSamples + i] += noteSamples[i];
+    for (let j = 0; j < noteSamples.length && jitteredOffset + j < totalSamples; j++) {
+      output[jitteredOffset + j] += noteSamples[j];
     }
     offsetSamples += Math.ceil(SAMPLE_RATE * (n.duration + noteGap));
   }
@@ -392,71 +417,99 @@ function writeWav(samples, filePath) {
 // ---------------------------------------------------------------------------
 // Sound definitions — the Canopy palette
 //
-// Brand anchor interval: A4 → E5 (perfect fifth, 3:2 ratio)
-// All sounds share the same FM timbre, scale, and reverb space.
+// BOTW-inspired design principles:
+//   1. Dry UI — near-zero reverb; sounds come from the app chrome, not a room
+//   2. Micro-feedback — short, sparse; reserve melodic phrases for significance
+//   3. Instrument-per-meaning — vary FM ratio/index to distinguish semantics
+//   4. Lydian brightness — Ds5 (#4) for wonder/positive events
+//   5. Brand anchor — A4 → E5 (perfect fifth, 3:2) present in every sound
 // ---------------------------------------------------------------------------
 
-// chime.wav — ascending arpeggio A4→C#5→E5, warm greeting / general notification
+// chime.wav — Lydian ascending pair A4→Ds5, bright "item-get" feeling
+// The Lydian #4 gives a sense of wonder that plain major third doesn't.
+// Two notes only — BOTW teaches that common events deserve micro-feedback.
 const chime = postProcess(
   sequence(
     [
-      { freq: JI.A4, duration: 0.14 },
-      { freq: JI.Cs5, duration: 0.14 },
-      { freq: JI.E5, duration: 0.22, opts: { amplitude: 0.6 } },
+      { freq: JI.A4, duration: 0.09, opts: { fmRatio: 1.4142, fmIndex: 1.2 } },
+      {
+        freq: JI.Ds5,
+        duration: 0.15,
+        opts: { amplitude: 0.6, fmRatio: 1.4142, fmIndex: 1.0, decayRate: 6 },
+      },
     ],
-    { noteGap: 0.02 }
+    { noteGap: 0.015, tailPad: 0.08 }
   ),
-  { reverbWet: 0.1 }
+  { reverbWet: 0.02 }
 );
 
-// complete.wav — descending resolution E5→C#5→A4, "task settled"
+// complete.wav — descending resolution E5→A4, the brand fifth settling home.
+// Two notes, slightly more resonant than chime — a task resolving feels
+// weightier than a general notification.  Lower FM index = warmer, rounder.
 const complete = postProcess(
   sequence(
     [
-      { freq: JI.E5, duration: 0.12, opts: { amplitude: 0.5 } },
-      { freq: JI.Cs5, duration: 0.12, opts: { amplitude: 0.55 } },
-      { freq: JI.A4, duration: 0.25, opts: { amplitude: 0.6 } },
+      { freq: JI.E5, duration: 0.1, opts: { amplitude: 0.5, fmIndex: 1.0, fmDecayRate: 16 } },
+      {
+        freq: JI.A4,
+        duration: 0.18,
+        opts: { amplitude: 0.6, fmIndex: 0.8, fmDecayRate: 18, decayRate: 4.5 },
+      },
     ],
-    { noteGap: 0.02 }
+    { noteGap: 0.025, tailPad: 0.1 }
   ),
-  { reverbWet: 0.1 }
+  { reverbWet: 0.02 }
 );
 
-// waiting.wav — rise then suspend A4→E5→B4, "needs your attention"
+// waiting.wav — rising unresolved pair A4→B4, ends on tension (9/8).
+// Slightly brighter FM (higher index) and longer final note so the
+// unresolved quality lingers just enough to prompt action.
 const waiting = postProcess(
   sequence(
     [
-      { freq: JI.A4, duration: 0.1 },
-      { freq: JI.E5, duration: 0.1, opts: { amplitude: 0.55 } },
-      { freq: JI.B4, duration: 0.2, opts: { amplitude: 0.5, fmIndex: 1.8 } },
-    ],
-    { noteGap: 0.015 }
-  ),
-  { reverbWet: 0.08 }
-);
-
-// error.wav — wide descending leap F#5→B4, concern without panic
-const error = postProcess(
-  sequence(
-    [
-      {
-        freq: JI.Fs5,
-        duration: 0.12,
-        opts: { amplitude: 0.5, fmIndex: 2.0, fmDecayRate: 8 },
-      },
+      { freq: JI.A4, duration: 0.08, opts: { fmIndex: 1.3 } },
       {
         freq: JI.B4,
-        duration: 0.22,
-        opts: { amplitude: 0.55, fmIndex: 2.0, fmDecayRate: 6 },
+        duration: 0.16,
+        opts: { amplitude: 0.55, fmIndex: 1.6, fmDecayRate: 10, decayRate: 4.5 },
       },
     ],
-    { noteGap: 0.02 }
+    { noteGap: 0.02, tailPad: 0.08 }
   ),
-  { reverbWet: 0.06 }
+  { reverbWet: 0.02 }
 );
 
-// ping.wav — single bright note E5, quick acknowledgment
-const ping = postProcess(canopyNote(JI.E5, 0.25, { amplitude: 0.5 }), { reverbWet: 0.1 });
+// error.wav — single low-ish Cs5 with heavier FM for a darker, buzzier
+// timbre.  BOTW uses a single distinct tone for negative feedback, not a
+// melody.  Higher FM index + slower decay = more metallic/tense character.
+const error = postProcess(
+  canopyNote(JI.Cs5, 0.22, {
+    amplitude: 0.55,
+    fmRatio: 1.7321, // √3 — more metallic than √2
+    fmIndex: 2.5,
+    fmDecayRate: 6,
+    decayRate: 5.0,
+    noiseBandHz: 900, // lower noise band = darker strike
+    noiseAmt: 0.22,
+    pitchBendHz: 40, // more dramatic downward bend = "drooping" feel
+    pitchBendMs: 25,
+  }),
+  { reverbWet: 0.01 }
+);
+
+// ping.wav — single kalimba-like pluck on E5, the briefest possible
+// acknowledgment.  Very fast decay, minimal FM — clean and bright.
+const ping = postProcess(
+  canopyNote(JI.E5, 0.18, {
+    amplitude: 0.5,
+    fmIndex: 0.8,
+    fmDecayRate: 20,
+    decayRate: 7,
+    noiseAmt: 0.2,
+    noiseDuration: 0.004,
+  }),
+  { reverbWet: 0.02 }
+);
 
 // ---------------------------------------------------------------------------
 // Write files
