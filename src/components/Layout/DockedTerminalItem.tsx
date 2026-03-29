@@ -22,7 +22,7 @@ import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
 import { useDockBlockedState } from "./useDockBlockedState";
-import { handleDockInteractOutside } from "./dockPopoverGuard";
+import { handleDockInteractOutside, handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { usePreferencesStore } from "@/store";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -304,6 +304,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         sideOffset={10}
         collisionPadding={collisionPadding}
         onInteractOutside={(e) => handleDockInteractOutside(e, portalContainer)}
+        onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainer)}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           const focusTarget = getTerminalFocusTarget({
