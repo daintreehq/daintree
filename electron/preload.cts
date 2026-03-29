@@ -2159,6 +2159,7 @@ const api: ElectronAPI = {
     complete: () => _unwrappingInvoke(CHANNELS.ONBOARDING_COMPLETE),
     markToastSeen: () => _unwrappingInvoke(CHANNELS.ONBOARDING_MARK_TOAST_SEEN),
     markNewsletterSeen: () => _unwrappingInvoke(CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN),
+    markWaitingNudgeSeen: () => _unwrappingInvoke(CHANNELS.ONBOARDING_MARK_WAITING_NUDGE_SEEN),
     getChecklist: () => _unwrappingInvoke(CHANNELS.ONBOARDING_CHECKLIST_GET),
     dismissChecklist: () => _unwrappingInvoke(CHANNELS.ONBOARDING_CHECKLIST_DISMISS),
     markChecklistItem: (item: ChecklistItemId) =>

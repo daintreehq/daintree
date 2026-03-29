@@ -1035,6 +1035,7 @@ export interface ElectronAPI {
     complete(): Promise<void>;
     markToastSeen(): Promise<void>;
     markNewsletterSeen(): Promise<void>;
+    markWaitingNudgeSeen(): Promise<void>;
     getChecklist(): Promise<ChecklistState>;
     dismissChecklist(): Promise<void>;
     markChecklistItem(item: ChecklistItemId): Promise<void>;

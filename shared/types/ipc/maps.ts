@@ -164,6 +164,7 @@ export interface OnboardingState {
   agentSetupIds: string[];
   firstRunToastSeen: boolean;
   newsletterPromptSeen: boolean;
+  waitingNudgeSeen: boolean;
   migratedFromLocalStorage: boolean;
   checklist: ChecklistState;
 }

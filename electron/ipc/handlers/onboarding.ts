@@ -29,6 +29,7 @@ function getOnboardingState(): OnboardingState {
       agentSetupIds: [],
       firstRunToastSeen: true,
       newsletterPromptSeen: true,
+      waitingNudgeSeen: true,
       migratedFromLocalStorage: true,
       checklist: {
         dismissed: true,
@@ -46,6 +47,7 @@ function getOnboardingState(): OnboardingState {
       agentSetupIds: [],
       firstRunToastSeen: false,
       newsletterPromptSeen: false,
+      waitingNudgeSeen: false,
       migratedFromLocalStorage: false,
       checklist: DEFAULT_CHECKLIST,
     };
@@ -148,6 +150,15 @@ export function registerOnboardingHandlers(): () => void {
     });
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN));
+
+  ipcMain.handle(CHANNELS.ONBOARDING_MARK_WAITING_NUDGE_SEEN, () => {
+    const state = getOnboardingState();
+    store.set("onboarding", {
+      ...state,
+      waitingNudgeSeen: true,
+    });
+  });
+  cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_MARK_WAITING_NUDGE_SEEN));
 
   ipcMain.handle(CHANNELS.ONBOARDING_CHECKLIST_GET, () => getChecklistState());
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_CHECKLIST_GET));
