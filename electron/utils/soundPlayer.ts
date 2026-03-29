@@ -9,7 +9,7 @@ function spawnSilent(cmd: string, args: string[]): ChildProcess {
   return spawn(cmd, args, { stdio: "ignore", detached: false });
 }
 
-export function playSound(filePath: string): SoundHandle {
+export function playSound(filePath: string, volume = 1.0): SoundHandle {
   if (!existsSync(filePath)) {
     return { cancel: () => {} };
   }
@@ -18,9 +18,10 @@ export function playSound(filePath: string): SoundHandle {
 
   try {
     if (process.platform === "darwin") {
-      proc = spawnSilent("afplay", [filePath]);
+      const args = volume < 1.0 ? ["--volume", volume.toFixed(2), filePath] : [filePath];
+      proc = spawnSilent("afplay", args);
     } else if (process.platform === "win32") {
-      // Use PowerShell SoundPlayer (WAV only — bundle WAV files)
+      // PowerShell SoundPlayer has no volume API — volume param ignored
       const escapedPath = filePath.replace(/'/g, "''");
       proc = spawnSilent("powershell", [
         "-NoProfile",
@@ -30,8 +31,11 @@ export function playSound(filePath: string): SoundHandle {
       ]);
     } else {
       // Linux: try paplay first, fall back to aplay
-      proc = spawnSilent("paplay", [filePath]);
+      const paplayArgs =
+        volume < 1.0 ? ["--volume", String(Math.round(volume * 65536)), filePath] : [filePath];
+      proc = spawnSilent("paplay", paplayArgs);
       proc.on("error", () => {
+        // aplay has no volume flag — fall back without volume control
         if (existsSync(filePath)) {
           const fallback = spawnSilent("aplay", [filePath]);
           fallback.on("error", () => {});

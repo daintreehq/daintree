@@ -27,76 +27,187 @@ export type SoundId = keyof typeof SOUND_FILES;
 /** Set of all valid base sound filenames (for input validation). */
 export const ALLOWED_SOUND_FILES = new Set<string>(Object.values(SOUND_FILES));
 
-/**
- * Central sound playback service.  Handles variant discovery, no-repeat
- * round-robin selection, and playback cancellation.
- *
- * Usage:
- *   soundService.play("chime")          — plays a random chime variant
- *   soundService.play("chime", 2)       — plays chime.v2.wav specifically
- *   soundService.play("error")          — plays error.wav (no variants)
- *   soundService.playFile("custom.wav") — plays a raw filename (no variants)
- *   soundService.preview("chime")       — plays the base chime.wav (v0, no variant)
- */
+interface ActiveVoice {
+  handle: SoundHandle;
+  priority: number;
+  startedAt: number;
+}
+
+const DEBOUNCE_MS = 150;
+const DECAY_WINDOW_MS = 2000;
+const DECAY_FACTOR = 0.7;
+const VOLUME_FLOOR = 0.1;
+const MAX_VOICES = 3;
+const MAX_SOUND_DURATION_MS = 600;
+const CHORD_WINDOW_MS = 2000;
+
+const PRIORITY_MAP: Record<string, number> = {
+  error: 1,
+  waiting: 2,
+  chime: 3,
+  complete: 3,
+  ping: 4,
+};
+
 class SoundService {
   private variantCache = new Map<string, string[]>();
   private lastVariant = new Map<string, number>();
-  private lastHandle: SoundHandle | null = null;
 
-  /** Play a built-in sound by ID, with automatic variant selection.
-   *  Pass a specific `variant` index (0-N) to force a particular variant. */
+  // Dampening state
+  private lastPlayedAt = new Map<string, number>();
+  private consecutiveCount = 0;
+  private lastSoundAt = 0;
+  private activeVoices: ActiveVoice[] = [];
+  private completionBurstCount = 0;
+  private completionBurstWindowStart = 0;
+
   play(id: SoundId, variant?: number): void {
+    const now = Date.now();
+    const isChordable = id === "complete" || id === "chime";
+
+    if (isChordable && this.checkCompletionChord(id, now)) {
+      const baseFile = SOUND_FILES[id];
+      this.playDampened(baseFile, { volume: 1.0, priority: this.priorityFor(id) });
+      return;
+    }
+
     const baseFile = SOUND_FILES[id];
     const resolved =
       variant !== undefined ? this.getVariant(baseFile, variant) : this.pickVariant(baseFile);
-    this.playResolved(resolved);
+    this.playDampened(resolved, { debounceKey: baseFile, priority: this.priorityFor(id) });
   }
 
-  /** Play a raw sound filename (e.g., a user-configured custom file).
-   *  Variant resolution still applies — if the file has siblings, one is picked. */
   playFile(soundFile: string): void {
     const resolved = this.pickVariant(soundFile);
-    this.playResolved(resolved);
+    this.playDampened(resolved, {
+      debounceKey: soundFile,
+      priority: this.priorityForFile(soundFile),
+    });
   }
 
-  /** Play the canonical (v0) version of a sound — no variant selection.
-   *  Used for settings preview so users hear the exact base sound. */
   preview(id: SoundId): void {
-    this.playResolved(SOUND_FILES[id]);
+    this.playBypassed(SOUND_FILES[id]);
   }
 
-  /** Preview a raw filename without variant resolution. */
   previewFile(soundFile: string): void {
-    this.playResolved(soundFile);
+    this.playBypassed(soundFile);
   }
 
-  /** Cancel any currently playing sound. */
   cancel(): void {
-    if (this.lastHandle) {
-      this.lastHandle.cancel();
-      this.lastHandle = null;
+    for (const voice of this.activeVoices) {
+      voice.handle.cancel();
     }
+    this.activeVoices = [];
   }
 
-  /** Get the list of variant filenames for a base sound (including the base itself). */
   getVariants(soundFile: string): string[] {
     this.ensureCache(soundFile);
     return this.variantCache.get(soundFile)!;
   }
 
-  /** Get the count of variants for a sound (1 = no variants, 4 = base + 3). */
   getVariantCount(soundFile: string): number {
     return this.getVariants(soundFile).length;
   }
 
-  // -- Private --
+  // -- Private: dampening --
 
-  private playResolved(soundFile: string): void {
+  private playBypassed(soundFile: string): void {
     const soundPath = path.join(getSoundsDir(), soundFile);
     if (!existsSync(soundPath)) return;
-    this.cancel();
-    this.lastHandle = playSound(soundPath);
+    const handle = playSound(soundPath);
+    this.activeVoices.push({ handle, priority: 0, startedAt: Date.now() });
   }
+
+  private playDampened(
+    soundFile: string,
+    opts: { debounceKey?: string; volume?: number; priority: number }
+  ): void {
+    const soundPath = path.join(getSoundsDir(), soundFile);
+    if (!existsSync(soundPath)) return;
+
+    const now = Date.now();
+
+    // Debounce on base sound name (not variant) to catch rapid same-type triggers
+    const key = opts.debounceKey ?? soundFile;
+    const lastPlayed = this.lastPlayedAt.get(key) ?? 0;
+    if (now - lastPlayed < DEBOUNCE_MS) return;
+    this.lastPlayedAt.set(key, now);
+
+    // Compute volume via exponential decay
+    const effectiveVolume = opts.volume ?? this.computeVolume(now);
+
+    // Voice pool management
+    this.pruneStaleVoices(now);
+    if (!this.acquireVoiceSlot(opts.priority)) return;
+
+    const handle = playSound(soundPath, effectiveVolume);
+    this.activeVoices.push({ handle, priority: opts.priority, startedAt: now });
+  }
+
+  private computeVolume(now: number): number {
+    if (now - this.lastSoundAt > DECAY_WINDOW_MS) {
+      this.consecutiveCount = 0;
+    }
+    const volume = Math.max(VOLUME_FLOOR, Math.pow(DECAY_FACTOR, this.consecutiveCount));
+    this.consecutiveCount++;
+    this.lastSoundAt = now;
+    return volume;
+  }
+
+  private pruneStaleVoices(now: number): void {
+    this.activeVoices = this.activeVoices.filter((v) => now - v.startedAt < MAX_SOUND_DURATION_MS);
+  }
+
+  private acquireVoiceSlot(priority: number): boolean {
+    if (this.activeVoices.length < MAX_VOICES) return true;
+
+    // Find lowest-priority (highest number) voice; on tie, pick oldest
+    let worstIdx = -1;
+    let worstPriority = -1;
+    let worstStartedAt = Infinity;
+    for (let i = 0; i < this.activeVoices.length; i++) {
+      const v = this.activeVoices[i];
+      if (
+        v.priority > worstPriority ||
+        (v.priority === worstPriority && v.startedAt < worstStartedAt)
+      ) {
+        worstPriority = v.priority;
+        worstStartedAt = v.startedAt;
+        worstIdx = i;
+      }
+    }
+
+    if (worstPriority <= priority) return false; // All voices outrank or tie — drop new sound
+
+    this.activeVoices[worstIdx].handle.cancel();
+    this.activeVoices.splice(worstIdx, 1);
+    return true;
+  }
+
+  private checkCompletionChord(_id: SoundId, now: number): boolean {
+    if (now - this.completionBurstWindowStart > CHORD_WINDOW_MS) {
+      this.completionBurstCount = 1;
+      this.completionBurstWindowStart = now;
+      return false;
+    }
+    this.completionBurstCount++;
+    if (this.completionBurstCount >= 2) {
+      this.completionBurstCount = 0;
+      return true;
+    }
+    return false;
+  }
+
+  private priorityFor(id: SoundId): number {
+    return PRIORITY_MAP[id] ?? 4;
+  }
+
+  private priorityForFile(soundFile: string): number {
+    const base = path.basename(soundFile, path.extname(soundFile)).replace(/\.v\d+$/, "");
+    return PRIORITY_MAP[base] ?? 4;
+  }
+
+  // -- Private: variant management --
 
   private getVariant(baseFile: string, index: number): string {
     const variants = this.getVariants(baseFile);
@@ -133,7 +244,7 @@ class SoundService {
       }
       variants.sort();
     } catch {
-      // SOUNDS_DIR missing or unreadable
+      // sounds dir missing or unreadable
     }
 
     this.variantCache.set(soundFile, variants);
