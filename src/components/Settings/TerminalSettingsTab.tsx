@@ -15,6 +15,7 @@ import {
   Activity,
   Shield,
   Cpu,
+  MemoryStick,
 } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -42,6 +43,7 @@ import {
 import { actionService } from "@/services/ActionService";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
+import { useMemoryLeakConfigStore } from "@/store/memoryLeakConfigStore";
 import type { HardwareInfo } from "@shared/types/ipc/system";
 
 const STRATEGIES: Array<{
@@ -134,6 +136,11 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const setPanelHardLimit = usePanelLimitStore((state) => state.setHardLimit);
   const resetToHardwareDefaults = usePanelLimitStore((state) => state.resetToHardwareDefaults);
   const initializeFromHardware = usePanelLimitStore((state) => state.initializeFromHardware);
+
+  const memoryLeakDetectionEnabled = useMemoryLeakConfigStore((s) => s.enabled);
+  const autoRestartThresholdMb = useMemoryLeakConfigStore((s) => s.autoRestartThresholdMb);
+  const setMemoryLeakDetectionEnabled = useMemoryLeakConfigStore((s) => s.setEnabled);
+  const setAutoRestartThresholdMb = useMemoryLeakConfigStore((s) => s.setAutoRestartThresholdMb);
 
   const [hardwareInfo, setHardwareInfo] = useState<HardwareInfo | null>(null);
 
@@ -335,6 +342,80 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               window.electron.terminalConfig.setResourceMonitoring(false);
             }}
           />
+        </SettingsSection>
+      )}
+
+      {effectiveSubtab === "performance" && (
+        <SettingsSection
+          icon={MemoryStick}
+          title="Memory Leak Detection"
+          id="terminal-memory-leak-detection"
+          description="Detect runaway memory growth in terminal processes and alert with restart options. Requires resource monitoring."
+        >
+          <SettingsSwitchCard
+            icon={MemoryStick}
+            title={
+              memoryLeakDetectionEnabled
+                ? "Memory Leak Detection Enabled"
+                : "Enable Memory Leak Detection"
+            }
+            subtitle="Show warnings when a terminal's memory grows continuously"
+            isEnabled={memoryLeakDetectionEnabled}
+            onChange={() => {
+              const newValue = !memoryLeakDetectionEnabled;
+              setMemoryLeakDetectionEnabled(newValue);
+              window.electron.terminalConfig.setMemoryLeakDetection(newValue);
+            }}
+            ariaLabel="Memory Leak Detection Toggle"
+            isModified={memoryLeakDetectionEnabled}
+            onReset={() => {
+              setMemoryLeakDetectionEnabled(false);
+              window.electron.terminalConfig.setMemoryLeakDetection(false);
+            }}
+            disabled={!resourceMonitoringEnabled}
+          />
+
+          <div
+            className={cn(
+              "space-y-2",
+              (!memoryLeakDetectionEnabled || !resourceMonitoringEnabled) &&
+                "opacity-50 pointer-events-none"
+            )}
+          >
+            <label htmlFor="auto-restart-threshold" className="text-sm text-canopy-text/70">
+              Auto-Restart Threshold (MB)
+            </label>
+            <input
+              id="auto-restart-threshold"
+              type="number"
+              min="1024"
+              max="32768"
+              step="1024"
+              value={autoRestartThresholdMb}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val)) {
+                  setAutoRestartThresholdMb(val);
+                  if (val >= 1024 && val <= 32768) {
+                    window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb(val);
+                  }
+                }
+              }}
+              disabled={!memoryLeakDetectionEnabled || !resourceMonitoringEnabled}
+              className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+            />
+            <p className="text-xs text-canopy-text/40 select-text">
+              Automatically restart a terminal when its RSS exceeds this threshold. Set between
+              1,024 MB and 32,768 MB.
+            </p>
+          </div>
+
+          {!resourceMonitoringEnabled && (
+            <p className="text-xs text-status-warning/80 flex items-center gap-1.5 select-text">
+              <AlertTriangle className="w-3 h-3" />
+              Enable Resource Monitoring above to use memory leak detection.
+            </p>
+          )}
         </SettingsSection>
       )}
 
