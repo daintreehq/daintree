@@ -37,6 +37,29 @@
   );
 }
 
+@keyframes spark-rise {
+  0% {
+    transform: translate(0, 0) scale(1);
+    opacity: 1;
+  }
+  60% {
+    transform: translate(1px, -5px) scale(0.8);
+    opacity: 0.7;
+  }
+  100% {
+    transform: translate(-1px, -9px) scale(0.4);
+    opacity: 0;
+  }
+}
+
+.streak-spark {
+  animation: spark-rise 600ms ease-out forwards;
+}
+
+.streak-flame-glow {
+  filter: drop-shadow(0 0 3px currentColor);
+}
+
 .pulse-skeleton-shimmer {
   background: var(
     --pulse-skeleton-gradient,
