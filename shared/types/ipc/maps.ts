@@ -1759,6 +1759,7 @@ export interface IpcEventMap {
 
   // Agent events
   "agent:state-changed": AgentStateChangePayload;
+  "agent:all-clear": { timestamp: number };
   "agent:detected": AgentDetectedPayload;
   "agent:exited": AgentExitedPayload;
 

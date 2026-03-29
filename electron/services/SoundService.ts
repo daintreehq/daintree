@@ -23,6 +23,7 @@ export const SOUND_FILES = {
   error: "error.wav",
   ping: "ping.wav",
   pulse: "pulse.wav",
+  "all-clear": "all-clear.wav",
 } as const;
 
 export type SoundId = keyof typeof SOUND_FILES;

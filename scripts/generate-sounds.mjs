@@ -180,6 +180,7 @@ const JI = {
   Ds5: 618.75, // 45/32 — Lydian #4, wonder / discovery
   E5: 660.0, // 3/2  — stability / completion
   Fs5: 733.33, // 5/3  — elevation / alertness
+  A5: 880.0, // 2/1  — octave, full resolution
 };
 
 // ---------------------------------------------------------------------------
@@ -1086,6 +1087,74 @@ function genPing(variantIdx = 0) {
   });
 }
 
+function genAllClear(variantIdx = 0) {
+  return postProcess(
+    sequence(
+      [
+        {
+          freq: JI.A4,
+          duration: 0.09,
+          opts: applyVariant(
+            {
+              amplitude: 0.45,
+              resonance: 1.0,
+              fmAmt: 0.4,
+              fmIndex: 1.0,
+              fmDecayRate: 16,
+              malletAmt: 0.55,
+              thumpAmt: 0.3,
+              attackPresenceHz: 2200,
+              attackPresenceAmt: 0.1,
+              attackPresenceQ: 1.5,
+            },
+            variantIdx
+          ),
+        },
+        {
+          freq: JI.E5,
+          duration: 0.1,
+          opts: applyVariant(
+            {
+              amplitude: 0.5,
+              resonance: 1.05,
+              fmAmt: 0.35,
+              fmIndex: 0.8,
+              fmDecayRate: 18,
+              malletAmt: 0.6,
+              thumpAmt: 0.35,
+              attackPresenceHz: 2400,
+              attackPresenceAmt: 0.08,
+              attackPresenceQ: 1.8,
+            },
+            variantIdx
+          ),
+        },
+        {
+          freq: JI.A5,
+          duration: 0.24,
+          opts: applyVariant(
+            {
+              amplitude: 0.6,
+              resonance: 1.15,
+              fmAmt: 0.25,
+              fmIndex: 0.6,
+              fmDecayRate: 22,
+              malletAmt: 0.6,
+              thumpAmt: 0.4,
+              attackPresenceHz: 1800,
+              attackPresenceAmt: 0.06,
+              attackPresenceQ: 1.0,
+            },
+            variantIdx
+          ),
+        },
+      ],
+      { noteGap: 0.02, tailPad: 0.16 }
+    ),
+    { reverbWet: 0.03, targetPeak: 0.65, chassisMix: 0.03 }
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Write files
 //
@@ -1111,6 +1180,7 @@ const variantGenerators = {
   complete: genComplete,
   waiting: genWaiting,
   ping: genPing,
+  "all-clear": genAllClear,
 };
 
 for (const [name, generator] of Object.entries(variantGenerators)) {
