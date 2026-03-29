@@ -19,7 +19,7 @@ export const NewsletterStep = forwardRef<HTMLHeadingElement, NewsletterStepProps
     return (
       <div
         className={cn(
-          "fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-md",
+          "fixed bottom-4 left-1/2 -translate-x-1/2 z-[var(--z-toast)] w-full max-w-md",
           "bg-surface border border-canopy-border rounded-[var(--radius-lg)] shadow-[var(--theme-shadow-floating)] p-4"
         )}
         role="dialog"

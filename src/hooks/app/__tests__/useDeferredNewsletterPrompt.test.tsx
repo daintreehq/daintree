@@ -49,6 +49,13 @@ vi.mock("../../useElectron", () => ({
 
 import { useDeferredNewsletterPrompt } from "../useDeferredNewsletterPrompt";
 
+// Flush promises without advancing timers
+async function flushPromises() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+}
+
 describe("useDeferredNewsletterPrompt", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -76,14 +83,9 @@ describe("useDeferredNewsletterPrompt", () => {
       },
     });
 
-    const { result } = renderHook(() => useDeferredNewsletterPrompt(true));
+    const { result } = renderHook(() => useDeferredNewsletterPrompt(true, false));
+    await flushPromises();
 
-    // Flush the IPC promise
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-
-    // Simulate agent launch
     storeState = { terminals: [{ kind: "agent" }] };
     act(() => {
       storeSubscribers.forEach((fn) => fn(storeState));
@@ -111,11 +113,8 @@ describe("useDeferredNewsletterPrompt", () => {
       },
     });
 
-    const { result } = renderHook(() => useDeferredNewsletterPrompt(true));
-
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
+    const { result } = renderHook(() => useDeferredNewsletterPrompt(true, false));
+    await flushPromises();
 
     storeState = { terminals: [{ kind: "agent" }] };
     act(() => {
@@ -129,39 +128,29 @@ describe("useDeferredNewsletterPrompt", () => {
     expect(result.current.visible).toBe(false);
   });
 
-  it("shows after agent terminal appears and delay elapses", async () => {
-    const { result } = renderHook(() => useDeferredNewsletterPrompt(true));
-
-    // Flush hydration
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
+  it("shows after agent terminal appears and delay elapses (checklist not visible)", async () => {
+    const { result } = renderHook(() => useDeferredNewsletterPrompt(true, false));
+    await flushPromises();
 
     expect(result.current.visible).toBe(false);
 
-    // Simulate agent launch
     storeState = { terminals: [{ kind: "agent" }] };
     act(() => {
       storeSubscribers.forEach((fn) => fn(storeState));
     });
 
-    // Before delay elapses
     expect(result.current.visible).toBe(false);
 
-    // After delay
     await act(async () => {
-      vi.advanceTimersByTime(2500);
+      vi.advanceTimersByTime(500);
     });
 
     expect(result.current.visible).toBe(true);
   });
 
-  it("dismiss calls markNewsletterSeen and hides prompt", async () => {
-    const { result } = renderHook(() => useDeferredNewsletterPrompt(true));
-
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
+  it("does not show while checklist is visible even after agent launch", async () => {
+    const { result } = renderHook(() => useDeferredNewsletterPrompt(true, true));
+    await flushPromises();
 
     storeState = { terminals: [{ kind: "agent" }] };
     act(() => {
@@ -169,7 +158,107 @@ describe("useDeferredNewsletterPrompt", () => {
     });
 
     await act(async () => {
-      vi.advanceTimersByTime(2500);
+      vi.advanceTimersByTime(5000);
+    });
+
+    // Should not fire — checklist is still visible (only fallback at 180s would fire)
+    expect(result.current.visible).toBe(false);
+  });
+
+  it("shows after checklist dismisses with breathing-room delay", async () => {
+    const { result, rerender } = renderHook(
+      ({ checklistVisible }) => useDeferredNewsletterPrompt(true, checklistVisible),
+      { initialProps: { checklistVisible: true } }
+    );
+    await flushPromises();
+
+    // Agent launches while checklist is visible — should not fire
+    storeState = { terminals: [{ kind: "agent" }] };
+    act(() => {
+      storeSubscribers.forEach((fn) => fn(storeState));
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(result.current.visible).toBe(false);
+
+    // Checklist dismisses
+    rerender({ checklistVisible: false });
+
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(result.current.visible).toBe(true);
+  });
+
+  it("shows after 3-minute fallback if checklist never dismissed", async () => {
+    const { result } = renderHook(() => useDeferredNewsletterPrompt(true, true));
+    await flushPromises();
+
+    // No agent launch, checklist stays visible
+    await act(async () => {
+      vi.advanceTimersByTime(179_999);
+    });
+    expect(result.current.visible).toBe(false);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current.visible).toBe(true);
+  });
+
+  it("does not double-fire if fallback and checklist-dismissed paths both trigger", async () => {
+    const { result, rerender } = renderHook(
+      ({ checklistVisible }) => useDeferredNewsletterPrompt(true, checklistVisible),
+      { initialProps: { checklistVisible: true } }
+    );
+    await flushPromises();
+
+    // Agent launched
+    storeState = { terminals: [{ kind: "agent" }] };
+    act(() => {
+      storeSubscribers.forEach((fn) => fn(storeState));
+    });
+
+    // Advance close to 3 minutes
+    await act(async () => {
+      vi.advanceTimersByTime(179_000);
+    });
+
+    // Checklist dismisses — fires via checklist-dismissed path
+    rerender({ checklistVisible: false });
+
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(result.current.visible).toBe(true);
+
+    // Dismiss it
+    act(() => {
+      result.current.dismiss(false);
+    });
+    expect(result.current.visible).toBe(false);
+
+    // Fallback timer fires — should NOT re-show (firedRef guards)
+    await act(async () => {
+      vi.advanceTimersByTime(1500);
+    });
+    expect(result.current.visible).toBe(false);
+  });
+
+  it("dismiss calls markNewsletterSeen and hides prompt", async () => {
+    const { result } = renderHook(() => useDeferredNewsletterPrompt(true, false));
+    await flushPromises();
+
+    storeState = { terminals: [{ kind: "agent" }] };
+    act(() => {
+      storeSubscribers.forEach((fn) => fn(storeState));
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(500);
     });
 
     expect(result.current.visible).toBe(true);
@@ -183,22 +272,16 @@ describe("useDeferredNewsletterPrompt", () => {
   });
 
   it("cleans up timer on unmount during delay", async () => {
-    const { result, unmount } = renderHook(() => useDeferredNewsletterPrompt(true));
+    const { result, unmount } = renderHook(() => useDeferredNewsletterPrompt(true, false));
+    await flushPromises();
 
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-
-    // Trigger agent detection
     storeState = { terminals: [{ kind: "agent" }] };
     act(() => {
       storeSubscribers.forEach((fn) => fn(storeState));
     });
 
-    // Unmount before delay elapses
     unmount();
 
-    // Advance past the delay — should not throw or update state
     await act(async () => {
       vi.advanceTimersByTime(3000);
     });
@@ -207,11 +290,8 @@ describe("useDeferredNewsletterPrompt", () => {
   });
 
   it("does not show when isStateLoaded is false", async () => {
-    const { result } = renderHook(() => useDeferredNewsletterPrompt(false));
-
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
+    const { result } = renderHook(() => useDeferredNewsletterPrompt(false, false));
+    await flushPromises();
 
     expect(result.current.visible).toBe(false);
     expect(onboardingMock.get).not.toHaveBeenCalled();

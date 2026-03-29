@@ -1248,7 +1248,6 @@ function App() {
   useWindowNotifications();
   useWatchedPanelNotifications();
   const reEntrySummary = useReEntrySummary();
-  useUpdateListener();
   useMainProcessToastListener();
   useWorkflowListener();
   useMcpBridge();
@@ -1337,7 +1336,9 @@ function App() {
   useProjectSwitchRehydration();
   useShortcutHints(isStateLoaded);
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
-  const deferredNewsletter = useDeferredNewsletterPrompt(isStateLoaded);
+  const onboardingOverlayActive = gettingStarted.visible || gettingStarted.showCelebration;
+  const deferredNewsletter = useDeferredNewsletterPrompt(isStateLoaded, onboardingOverlayActive);
+  useUpdateListener(onboardingOverlayActive);
   useOrchestrationMilestones(isStateLoaded);
   useAgentWaitingNudge(isStateLoaded);
 
