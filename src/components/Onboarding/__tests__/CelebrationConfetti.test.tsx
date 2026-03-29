@@ -61,4 +61,39 @@ describe("CelebrationConfetti", () => {
     const overlay = document.body.querySelector(".pointer-events-none");
     expect(overlay).not.toBeNull();
   });
+
+  it("uses theme CSS custom properties for particle colors", () => {
+    const themeColors: Record<string, string> = {
+      "--theme-accent-primary": "#ff0000",
+      "--theme-status-success": "#00ff00",
+      "--theme-status-warning": "#ffff00",
+      "--theme-status-info": "#0000ff",
+      "--theme-activity-active": "#ff00ff",
+      "--theme-activity-working": "#00ffff",
+    };
+    vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      getPropertyValue: (prop: string) => themeColors[prop] ?? "",
+    } as CSSStyleDeclaration);
+
+    render(<CelebrationConfetti />);
+    const particles = document.body.querySelectorAll(".rounded-full");
+    const colors = Array.from(particles).map((el) => (el as HTMLElement).style.backgroundColor);
+    expect(colors.length).toBeGreaterThanOrEqual(6);
+    expect(colors.every((c) => c !== "")).toBe(true);
+    // Verify no Tailwind bg-* classes remain
+    const hasOldClass = Array.from(particles).some((el) => /bg-\w+-\d+/.test(el.className));
+    expect(hasOldClass).toBe(false);
+  });
+
+  it("falls back to hardcoded colors when CSS variables are empty", () => {
+    vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      getPropertyValue: () => "",
+    } as unknown as CSSStyleDeclaration);
+
+    render(<CelebrationConfetti />);
+    const particles = document.body.querySelectorAll(".rounded-full");
+    const colors = Array.from(particles).map((el) => (el as HTMLElement).style.backgroundColor);
+    expect(colors.length).toBeGreaterThanOrEqual(6);
+    expect(colors.every((c) => c !== "")).toBe(true);
+  });
 });

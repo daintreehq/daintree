@@ -2,14 +2,22 @@ import { useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 
-const PARTICLE_COLORS = [
-  "bg-emerald-400",
-  "bg-amber-400",
-  "bg-sky-400",
-  "bg-rose-400",
-  "bg-violet-400",
-  "bg-teal-400",
-];
+function getThemeParticleColors(): string[] {
+  if (typeof document === "undefined") {
+    return ["#34d399", "#34d399", "#fbbf24", "#38bdf8", "#38bdf8", "#a78bfa"];
+  }
+  const styles = getComputedStyle(document.documentElement);
+  const get = (token: string, fallback: string) =>
+    styles.getPropertyValue(token).trim() || fallback;
+  return [
+    get("--theme-accent-primary", "#34d399"),
+    get("--theme-status-success", "#34d399"),
+    get("--theme-status-warning", "#fbbf24"),
+    get("--theme-status-info", "#38bdf8"),
+    get("--theme-activity-active", "#38bdf8"),
+    get("--theme-activity-working", "#a78bfa"),
+  ];
+}
 
 interface Particle {
   id: number;
@@ -21,6 +29,7 @@ interface Particle {
 }
 
 function generateParticles(): Particle[] {
+  const colors = getThemeParticleColors();
   const count = 6 + Math.floor(Math.random() * 3); // 6-8 particles
   return Array.from({ length: count }, (_, i) => {
     const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.5;
@@ -31,7 +40,7 @@ function generateParticles(): Particle[] {
       y: Math.sin(angle) * distance,
       rotate: Math.random() * 360,
       size: 6 + Math.random() * 6,
-      color: PARTICLE_COLORS[i % PARTICLE_COLORS.length],
+      color: colors[i % colors.length],
     };
   });
 }
@@ -50,8 +59,8 @@ export function CelebrationConfetti() {
         {particles.map((p) => (
           <motion.div
             key={p.id}
-            className={`absolute rounded-full ${p.color}`}
-            style={{ width: p.size, height: p.size }}
+            className="absolute rounded-full"
+            style={{ width: p.size, height: p.size, backgroundColor: p.color }}
             initial={{ x: 0, y: 0, scale: 0, opacity: 1 }}
             animate={{
               x: p.x,
