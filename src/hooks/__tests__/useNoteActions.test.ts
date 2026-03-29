@@ -24,6 +24,7 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     notes: [defaultNote],
     visibleNotes: [defaultNote],
     isLoading: false,
+    isInitialized: true,
     isSearching: false,
     lastSelectedNoteId: null as string | null,
     setLastSelectedNoteId: vi.fn(),
@@ -188,6 +189,119 @@ describe("useNoteActions", () => {
       renderHook(() => useNoteActions(props));
 
       expect(props.setSelectedNote).toHaveBeenCalledWith(emptyTitleNote);
+    });
+  });
+
+  describe("auto-create first note", () => {
+    it("auto-creates when palette opens with no notes and store is initialized", () => {
+      const createNote = vi.fn().mockResolvedValue({
+        metadata: { id: "new1", title: "", scope: "project", createdAt: Date.now(), tags: [] },
+        content: "",
+        path: "/notes/new1.md",
+        lastModified: Date.now(),
+      });
+      const props = defaultProps({
+        notes: [],
+        visibleNotes: [],
+        isInitialized: true,
+        isLoading: false,
+        createNote,
+      });
+
+      renderHook(() => useNoteActions(props));
+
+      expect(createNote).toHaveBeenCalledWith("", "project");
+    });
+
+    it("does not auto-create when isInitialized is false", () => {
+      const createNote = vi.fn();
+      const props = defaultProps({
+        notes: [],
+        visibleNotes: [],
+        isInitialized: false,
+        isLoading: true,
+        createNote,
+      });
+
+      renderHook(() => useNoteActions(props));
+
+      expect(createNote).not.toHaveBeenCalled();
+    });
+
+    it("does not auto-create when notes exist", () => {
+      const createNote = vi.fn();
+      const props = defaultProps({
+        notes: [defaultNote],
+        visibleNotes: [defaultNote],
+        isInitialized: true,
+        isLoading: false,
+        createNote,
+      });
+
+      renderHook(() => useNoteActions(props));
+
+      expect(createNote).not.toHaveBeenCalled();
+    });
+
+    it("does not auto-create when palette is closed", () => {
+      const createNote = vi.fn();
+      const props = defaultProps({
+        isOpen: false,
+        notes: [],
+        visibleNotes: [],
+        isInitialized: true,
+        isLoading: false,
+        createNote,
+      });
+
+      renderHook(() => useNoteActions(props));
+
+      expect(createNote).not.toHaveBeenCalled();
+    });
+
+    it("does not auto-create when search hides all notes but notes exist", () => {
+      const createNote = vi.fn();
+      const props = defaultProps({
+        notes: [defaultNote],
+        visibleNotes: [],
+        isInitialized: true,
+        isLoading: false,
+        isSearching: true,
+        createNote,
+      });
+
+      renderHook(() => useNoteActions(props));
+
+      expect(createNote).not.toHaveBeenCalled();
+    });
+
+    it("re-creates when palette is closed and reopened with zero notes", () => {
+      const createNote = vi.fn().mockResolvedValue({
+        metadata: { id: "new1", title: "", scope: "project", createdAt: Date.now(), tags: [] },
+        content: "",
+        path: "/notes/new1.md",
+        lastModified: Date.now(),
+      });
+      const props = defaultProps({
+        notes: [],
+        visibleNotes: [],
+        isInitialized: true,
+        isLoading: false,
+        createNote,
+      });
+
+      const { rerender } = renderHook(({ hookProps }) => useNoteActions(hookProps), {
+        initialProps: { hookProps: props },
+      });
+
+      expect(createNote).toHaveBeenCalledTimes(1);
+
+      // Close palette
+      rerender({ hookProps: { ...props, isOpen: false } });
+      // Reopen palette
+      rerender({ hookProps: { ...props, isOpen: true } });
+
+      expect(createNote).toHaveBeenCalledTimes(2);
     });
   });
 
