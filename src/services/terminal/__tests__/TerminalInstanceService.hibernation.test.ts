@@ -218,14 +218,38 @@ describe("TerminalInstanceService - Hibernation", () => {
       expect(service.isHibernated("t1")).toBe(true);
     });
 
-    it("should never hibernate agent terminals", () => {
-      const managed = makeMockManaged({ kind: "agent", type: "claude" });
+    it("should never hibernate active agent terminals", () => {
+      const managed = makeMockManaged({ kind: "agent", type: "claude", agentState: "working" });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
       service.hibernate("t1");
 
       expect(managed.isHibernated).toBeFalsy();
       expect(managed.terminal.dispose).not.toHaveBeenCalled();
+    });
+
+    it("should never hibernate waiting agent terminals", () => {
+      const managed = makeMockManaged({ kind: "agent", type: "claude", agentState: "waiting" });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.hibernate("t1");
+
+      expect(managed.isHibernated).toBeFalsy();
+      expect(managed.terminal.dispose).not.toHaveBeenCalled();
+    });
+
+    it("should hibernate completed agent terminals", () => {
+      const managed = makeMockManaged({
+        kind: "agent",
+        type: "claude",
+        canonicalAgentState: "completed",
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.hibernate("t1");
+
+      expect(managed.isHibernated).toBe(true);
+      expect(managed.terminal.dispose).toHaveBeenCalled();
     });
 
     it("should be idempotent — second call is a no-op", () => {
@@ -341,11 +365,12 @@ describe("TerminalInstanceService - Hibernation", () => {
       expect(managed.isHibernated).toBe(true);
     });
 
-    it("should NOT start hibernation timer for agent terminals", () => {
+    it("should NOT start hibernation timer for active agent terminals", () => {
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
         kind: "agent",
         type: "claude",
+        agentState: "working",
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
@@ -353,6 +378,37 @@ describe("TerminalInstanceService - Hibernation", () => {
       vi.advanceTimersByTime(600); // past hysteresis
 
       expect(managed.hibernationTimer).toBeUndefined();
+    });
+
+    it("should start hibernation timer for completed agent terminals in BACKGROUND", () => {
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        kind: "agent",
+        type: "claude",
+        canonicalAgentState: "completed",
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
+      vi.advanceTimersByTime(600); // past hysteresis
+
+      expect(managed.hibernationTimer).toBeDefined();
+    });
+
+    it("should hibernate completed agent after HIBERNATION_DELAY_MS in BACKGROUND", () => {
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        kind: "agent",
+        type: "claude",
+        canonicalAgentState: "completed",
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
+      vi.advanceTimersByTime(600); // past hysteresis
+      vi.advanceTimersByTime(HIBERNATION_DELAY_MS);
+
+      expect(managed.isHibernated).toBe(true);
     });
 
     it("should cancel hibernation timer when upgraded from BACKGROUND", () => {

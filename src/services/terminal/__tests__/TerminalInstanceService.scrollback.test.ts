@@ -64,6 +64,7 @@ type ScrollbackTestService = {
   instances: Map<string, unknown>;
   reduceScrollback: (id: string, targetLines: number) => void;
   restoreScrollback: (id: string) => void;
+  reduceScrollbackAllBackground: (targetLines: number) => void;
 };
 
 function makeMockManaged(overrides: Record<string, unknown> = {}) {
@@ -227,6 +228,58 @@ describe("TerminalInstanceService - Scrollback", () => {
 
       // getScrollbackForType("claude", 5000) = min(5000, max(500, floor(5000*1.0))) = 5000
       expect(managed.terminal.options.scrollback).toBe(5000);
+    });
+  });
+
+  describe("reduceScrollbackAllBackground", () => {
+    it("reduces scrollback on non-focused background terminals", () => {
+      const bg1 = makeMockManaged({ isFocused: false });
+      bg1.terminal.buffer.active.length = 3000;
+      const bg2 = makeMockManaged({ isFocused: false });
+      bg2.terminal.buffer.active.length = 3000;
+      service.instances.set("t1", bg1);
+      service.instances.set("t2", bg2);
+
+      service.reduceScrollbackAllBackground(500);
+
+      expect(bg1.terminal.options.scrollback).toBe(500);
+      expect(bg2.terminal.options.scrollback).toBe(500);
+    });
+
+    it("skips focused terminals", () => {
+      const focused = makeMockManaged({ isFocused: true });
+      service.instances.set("t1", focused);
+
+      service.reduceScrollbackAllBackground(500);
+
+      expect(focused.terminal.options.scrollback).toBe(5000);
+    });
+
+    it("skips hibernated terminals", () => {
+      const hibernated = makeMockManaged({ isHibernated: true });
+      service.instances.set("t1", hibernated);
+
+      service.reduceScrollbackAllBackground(500);
+
+      expect(hibernated.terminal.options.scrollback).toBe(5000);
+    });
+
+    it("skips active agent terminals but reduces completed agents", () => {
+      const working = makeMockManaged({ kind: "agent", type: "claude", agentState: "working" });
+      working.terminal.buffer.active.length = 3000;
+      const completed = makeMockManaged({
+        kind: "agent",
+        type: "claude",
+        canonicalAgentState: "completed",
+      });
+      completed.terminal.buffer.active.length = 3000;
+      service.instances.set("t1", working);
+      service.instances.set("t2", completed);
+
+      service.reduceScrollbackAllBackground(500);
+
+      expect(working.terminal.options.scrollback).toBe(5000);
+      expect(completed.terminal.options.scrollback).toBe(500);
     });
   });
 });
