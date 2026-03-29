@@ -20,6 +20,7 @@ import {
 import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
+import { persistAgentSession } from "./pty/agentSessionHistory.js";
 
 /**
  * PtyManager - Facade for terminal process management.
@@ -330,7 +331,36 @@ export class PtyManager extends EventEmitter {
    * Move a terminal to the trash.
    */
   trash(id: string): void {
-    this.registry.trash(id, (termId) => this.kill(termId, "trash-expired"));
+    this.registry.trash(id, (termId) => {
+      // Capture terminal info before async kill (info may be unavailable after kill)
+      const terminal = this.registry.get(termId);
+      const info = terminal?.getInfo();
+
+      void (async () => {
+        try {
+          const sessionId = await this.gracefulKill(termId);
+          if (sessionId && info?.agentId) {
+            await persistAgentSession({
+              sessionId,
+              agentId: info.agentId,
+              worktreeId: info.worktreeId ?? null,
+              title: info.title ?? null,
+              projectId: info.projectId ?? null,
+              agentLaunchFlags: info.agentLaunchFlags,
+              agentModelId: info.agentModelId,
+            });
+          }
+        } catch (err) {
+          logWarn("[PtyManager] Failed to persist agent session on trash expiry", err);
+          // Ensure the terminal is killed even if gracefulKill failed
+          try {
+            this.kill(termId, "trash-expired");
+          } catch {
+            // already dead
+          }
+        }
+      })();
+    });
   }
 
   /**

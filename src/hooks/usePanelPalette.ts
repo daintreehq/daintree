@@ -7,6 +7,7 @@ import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { keybindingService } from "@/services/KeybindingService";
 import type { KeyAction } from "@shared/types/keymap";
+import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 
 export interface PanelKindOption {
   id: string;
@@ -14,7 +15,8 @@ export interface PanelKindOption {
   iconId: string;
   color: string;
   description?: string;
-  category: "agent" | "tool";
+  category: "agent" | "tool" | "resume";
+  resumeSession?: AgentSessionRecord;
 }
 
 export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> & {
@@ -44,9 +46,17 @@ export function usePanelPalette(): UsePanelPaletteReturn {
   const userRegistry = useUserAgentRegistryStore((state) => state.registry);
   const agentSettings = useAgentSettingsStore((state) => state.settings);
   const [keybindingVersion, setKeybindingVersion] = useState(0);
+  const [resumeSessions, setResumeSessions] = useState<AgentSessionRecord[]>([]);
 
   useEffect(() => {
     return keybindingService.subscribe(() => setKeybindingVersion((v) => v + 1));
+  }, []);
+
+  useEffect(() => {
+    window.electron?.agentSessionHistory
+      ?.list()
+      .then(setResumeSessions)
+      .catch(() => {});
   }, []);
 
   const availableKinds = useMemo<PanelKindOption[]>(() => {
@@ -110,6 +120,21 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       }
     }
 
+    const resumeOptions: PanelKindOption[] = resumeSessions.slice(0, 5).map((session) => {
+      const agentConfig = getEffectiveAgentConfig(session.agentId);
+      const date = new Date(session.savedAt);
+      const timeStr = `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
+      return {
+        id: `resume:${session.sessionId}`,
+        name: `Resume ${agentConfig?.name ?? session.agentId}`,
+        iconId: agentConfig?.iconId ?? "terminal",
+        color: agentConfig?.color ?? "var(--color-canopy-text)",
+        description: `${session.sessionId.slice(0, 8)}… · ${timeStr}`,
+        category: "resume" as const,
+        resumeSession: session,
+      };
+    });
+
     return [
       ...agentDedup.values(),
       {
@@ -120,9 +145,10 @@ export function usePanelPalette(): UsePanelPaletteReturn {
         description: "Set up additional AI agents",
         category: "agent" as const,
       },
+      ...resumeOptions,
       ...toolDedup.values(),
     ];
-  }, [userRegistry, keybindingVersion, agentSettings]);
+  }, [userRegistry, keybindingVersion, agentSettings, resumeSessions]);
 
   const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<PanelKindOption>({
     items: availableKinds,

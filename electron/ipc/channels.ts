@@ -59,6 +59,9 @@ export const CHANNELS = {
   TERMINAL_RESTART_SERVICE: "terminal:restart-service",
   TERMINAL_RESOURCE_METRICS: "terminal:resource-metrics",
 
+  AGENT_SESSION_LIST: "agent-session:list",
+  AGENT_SESSION_CLEAR: "agent-session:clear",
+
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",
 

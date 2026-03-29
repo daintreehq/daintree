@@ -21,8 +21,9 @@ interface PanelPaletteProps {
   onClose: () => void;
 }
 
-const SECTION_LABELS: Record<"agent" | "tool", string> = {
+const SECTION_LABELS: Record<"agent" | "tool" | "resume", string> = {
   agent: "AI Agents",
+  resume: "Resume Sessions",
   tool: "Tools",
 };
 
@@ -128,40 +129,30 @@ export function PanelPalette({
 
   const renderSectionedList = () => {
     const agents = results.filter((r) => r.category === "agent");
+    const resumeSessions = results.filter((r) => r.category === "resume");
     const tools = results.filter((r) => r.category === "tool");
     const elements: React.ReactNode[] = [];
 
-    if (agents.length > 0) {
+    const renderSection = (key: "agent" | "resume" | "tool", items: typeof results) => {
+      if (items.length === 0) return;
       elements.push(
         <div
-          key="header-agent"
+          key={`header-${key}`}
           className="px-3 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-canopy-text/40 select-none"
           aria-hidden="true"
         >
-          {SECTION_LABELS.agent}
+          {SECTION_LABELS[key]}
         </div>
       );
-      agents.forEach((kind) => {
+      items.forEach((kind) => {
         const index = results.indexOf(kind);
         elements.push(renderOption(kind, index));
       });
-    }
+    };
 
-    if (tools.length > 0) {
-      elements.push(
-        <div
-          key="header-tool"
-          className="px-3 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-canopy-text/40 select-none"
-          aria-hidden="true"
-        >
-          {SECTION_LABELS.tool}
-        </div>
-      );
-      tools.forEach((kind) => {
-        const index = results.indexOf(kind);
-        elements.push(renderOption(kind, index));
-      });
-    }
+    renderSection("agent", agents);
+    renderSection("resume", resumeSessions);
+    renderSection("tool", tools);
 
     return elements;
   };
