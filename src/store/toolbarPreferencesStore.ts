@@ -7,7 +7,6 @@ import type {
 } from "@/../../shared/types/toolbar";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
-import { isRegisteredPluginButton } from "@shared/config/toolbarButtonRegistry";
 
 const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
   "agent-setup",
@@ -41,11 +40,7 @@ const DEFAULT_PREFERENCES: ToolbarPreferences = {
 const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "portal-toggle"];
 
 function sanitizeButtonList(buttons: AnyToolbarButtonId[]): AnyToolbarButtonId[] {
-  return buttons.filter((id) => {
-    if (FIXED_BUTTON_IDS.includes(id as ToolbarButtonId)) return false;
-    if (id.startsWith("plugin.") && !isRegisteredPluginButton(id)) return false;
-    return true;
-  });
+  return buttons.filter((id) => !FIXED_BUTTON_IDS.includes(id as ToolbarButtonId));
 }
 
 /**
