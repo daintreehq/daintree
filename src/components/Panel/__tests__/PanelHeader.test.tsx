@@ -458,9 +458,7 @@ describe("PanelHeader", () => {
     });
 
     it("does not dispatch when double-clicking a button within the header", () => {
-      const { container } = render(
-        <PanelHeader {...makeProps({ location: "grid", onToggleMaximize: vi.fn() })} />
-      );
+      render(<PanelHeader {...makeProps({ location: "grid", onToggleMaximize: vi.fn() })} />);
       const closeButton = screen.getByTestId("panel-close");
       fireEvent.dblClick(closeButton);
       expect(mockDispatch).not.toHaveBeenCalledWith("nav.toggleFocusMode");
