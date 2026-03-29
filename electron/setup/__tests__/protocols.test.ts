@@ -48,7 +48,14 @@ vi.mock("../../utils/webviewCsp.js", () => ({
 }));
 
 vi.mock("../../utils/openExternal.js", () => ({
-  canOpenExternalUrl: vi.fn(() => false),
+  canOpenExternalUrl: vi.fn((url: string) => {
+    try {
+      const protocol = new URL(url.trim()).protocol;
+      return protocol === "http:" || protocol === "https:";
+    } catch {
+      return false;
+    }
+  }),
   openExternalUrl: vi.fn(),
 }));
 
@@ -58,12 +65,23 @@ vi.mock("../../utils/appProtocol.js", () => ({
   buildHeaders: vi.fn(),
 }));
 
+const mockSend = vi.fn();
+const mockMainWindow = {
+  isDestroyed: () => false,
+  webContents: { send: mockSend },
+};
+
 vi.mock("../../services/WebviewDialogService.js", () => ({
   getWebviewDialogService: vi.fn(() => ({
     registerDialog: vi.fn(),
-    getPanelId: vi.fn(),
+    getPanelId: vi.fn(() => "panel-browser-1"),
   })),
 }));
+
+vi.mock("../../window/windowRef.js", () => ({
+  getMainWindow: vi.fn(() => mockMainWindow),
+}));
+
 
 vi.mock("../../ipc/channels.js", () => ({
   CHANNELS: {
@@ -480,6 +498,90 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
       const handlers = getEventHandlers(contents, "will-redirect");
       expect(handlers.length).toBe(0);
+    });
+  });
+
+  describe("blocked navigation IPC notification", () => {
+    beforeEach(() => {
+      mockSend.mockClear();
+    });
+
+    it("sends navigation-blocked IPC when cross-origin navigation is blocked", () => {
+      const contents = createMockWebContents("webview");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://accounts.google.com/oauth");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockSend).toHaveBeenCalledWith("webview:navigation-blocked", {
+        panelId: "panel-browser-1",
+        url: "https://accounts.google.com/oauth",
+        canOpenExternal: true,
+      });
+    });
+
+    it("sends navigation-blocked IPC when cross-origin redirect is blocked", () => {
+      const contents = createMockWebContents("webview");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-redirect")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://auth.provider.com/callback");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockSend).toHaveBeenCalledWith("webview:navigation-blocked", {
+        panelId: "panel-browser-1",
+        url: "https://auth.provider.com/callback",
+        canOpenExternal: true,
+      });
+    });
+
+    it("does not send navigation-blocked IPC for localhost navigations", () => {
+      const contents = createMockWebContents("webview");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "http://localhost:3000/dashboard");
+
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it("sends canOpenExternal false for javascript: URLs", () => {
+      const contents = createMockWebContents("webview");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "javascript:alert(1)");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockSend).toHaveBeenCalledWith("webview:navigation-blocked", {
+        panelId: "panel-browser-1",
+        url: "javascript:alert(1)",
+        canOpenExternal: false,
+      });
+    });
+
+    it("does not send navigation-blocked IPC when panelId is not found", async () => {
+      const mod = await import("../../services/WebviewDialogService.js");
+      vi.mocked(mod.getWebviewDialogService).mockReturnValueOnce({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => undefined),
+      } as never);
+
+      const contents = createMockWebContents("webview");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://example.com");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockSend).not.toHaveBeenCalled();
     });
   });
 });

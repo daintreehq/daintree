@@ -559,6 +559,7 @@ const CHANNELS = {
   WEBVIEW_DIALOG_REQUEST: "webview:dialog-request",
   WEBVIEW_DIALOG_RESPONSE: "webview:dialog-response",
   WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
+  WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",
   WEBVIEW_START_CONSOLE_CAPTURE: "webview:start-console-capture",
   WEBVIEW_STOP_CONSOLE_CAPTURE: "webview:stop-console-capture",
   WEBVIEW_CLEAR_CONSOLE_CAPTURE: "webview:clear-console-capture",
