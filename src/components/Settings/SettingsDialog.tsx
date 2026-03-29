@@ -352,8 +352,8 @@ export function SettingsDialog({
     const maxAttempts = 20;
     const tryScroll = () => {
       const el = document.getElementById(scrollToSection);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (el && el.offsetParent !== null) {
+        el.scrollIntoView({ behavior: "instant", block: "start" });
         el.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
         el.classList.add("settings-highlight");
         highlightTimer = setTimeout(() => el.classList.remove("settings-highlight"), 1500);
@@ -361,13 +361,13 @@ export function SettingsDialog({
       }
       attempt++;
       if (attempt < maxAttempts) {
-        timers.push(setTimeout(tryScroll, 100));
+        frameIds.push(requestAnimationFrame(tryScroll));
       }
     };
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    timers.push(setTimeout(tryScroll, 100));
+    const frameIds: number[] = [];
+    frameIds.push(requestAnimationFrame(tryScroll));
     return () => {
-      timers.forEach(clearTimeout);
+      frameIds.forEach(cancelAnimationFrame);
       clearTimeout(highlightTimer);
     };
   }, [scrollToSection, activeTab, isSearching]);
