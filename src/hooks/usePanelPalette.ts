@@ -6,7 +6,6 @@ import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { keybindingService } from "@/services/KeybindingService";
-import { actionService } from "@/services/ActionService";
 import type { KeyAction } from "@shared/types/keymap";
 
 export interface PanelKindOption {
@@ -116,9 +115,9 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       {
         id: MORE_AGENTS_PANEL_ID,
         name: "More agents...",
-        iconId: "settings",
+        iconId: "sparkles",
         color: "var(--color-canopy-text)",
-        description: "Configure which agents appear in this menu",
+        description: "Set up additional AI agents",
         category: "agent" as const,
       },
       ...toolDedup.values(),
@@ -136,7 +135,11 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     (option: PanelKindOption): PanelKindOption | null => {
       if (option.id === MORE_AGENTS_PANEL_ID) {
         close();
-        void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
+        window.dispatchEvent(
+          new CustomEvent("canopy:open-agent-setup-wizard", {
+            detail: { returnToPanelPalette: true },
+          })
+        );
         return null;
       }
       close();
@@ -152,7 +155,11 @@ export function usePanelPalette(): UsePanelPaletteReturn {
 
     if (selected.id === MORE_AGENTS_PANEL_ID) {
       close();
-      void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
+      window.dispatchEvent(
+        new CustomEvent("canopy:open-agent-setup-wizard", {
+          detail: { returnToPanelPalette: true },
+        })
+      );
       return selected;
     }
     close();

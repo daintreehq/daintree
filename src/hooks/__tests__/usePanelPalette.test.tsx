@@ -2,7 +2,6 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MORE_AGENTS_PANEL_ID } from "../usePanelPalette";
-import { actionService } from "@/services/ActionService";
 
 const {
   getPanelKindIdsMock,
@@ -46,10 +45,6 @@ vi.mock("@/store/agentSettingsStore", () => ({
     }) => unknown
   ) =>
     selector({ settings: { agents: { claude: { selected: true }, gemini: { selected: true } } } }),
-}));
-
-vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch: vi.fn() },
 }));
 
 import { usePanelPalette } from "../usePanelPalette";
@@ -174,7 +169,8 @@ describe("usePanelPalette", () => {
     expect(selected!.id).toBe("agent:claude");
   });
 
-  it("handleSelect dispatches settings action and returns null for MORE_AGENTS", () => {
+  it("handleSelect dispatches agent setup wizard event and returns null for MORE_AGENTS", () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
     const { result } = renderHook(() => usePanelPalette());
 
     const moreAgents = result.current.results.find((item) => item.id === MORE_AGENTS_PANEL_ID);
@@ -182,10 +178,12 @@ describe("usePanelPalette", () => {
 
     const selected = result.current.handleSelect(moreAgents!);
     expect(selected).toBeNull();
-    expect(actionService.dispatch).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      { tab: "agents" },
-      { source: "user" }
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "canopy:open-agent-setup-wizard",
+        detail: { returnToPanelPalette: true },
+      })
     );
+    dispatchSpy.mockRestore();
   });
 });

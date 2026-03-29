@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isCanopyEnvEnabled } from "@/utils/env";
 import { AgentSetupWizard } from "@/components/Setup/AgentSetupWizard";
+import { actionService } from "@/services/ActionService";
 import { WelcomeStep } from "./WelcomeStep";
 import { OnboardingProgressIndicator } from "./OnboardingProgressIndicator";
 import type { OnboardingState } from "@shared/types";
@@ -36,6 +37,7 @@ export function OnboardingFlow({
   const [currentStep, setCurrentStep] = useState<OnboardingStep | null>(null);
   const [telemetryEnabled, setTelemetryEnabled] = useState(false);
   const [manualWizardOpen, setManualWizardOpen] = useState(false);
+  const returnToPaletteRef = useRef(false);
   const flowStartTimeRef = useRef<number>(0);
   const completedRef = useRef(false);
   const currentStepRef = useRef<OnboardingStep | null>(null);
@@ -94,9 +96,13 @@ export function OnboardingFlow({
     })().catch(console.error);
   }, []);
 
-  // Listen for manual wizard open events (from Settings / toolbar button)
+  // Listen for manual wizard open events (from Settings / toolbar button / panel palette)
   useEffect(() => {
-    const handleOpenWizard = () => setManualWizardOpen(true);
+    const handleOpenWizard = (e: Event) => {
+      const detail = (e as CustomEvent<{ returnToPanelPalette?: boolean }>).detail;
+      returnToPaletteRef.current = detail?.returnToPanelPalette === true;
+      setManualWizardOpen(true);
+    };
     window.addEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
     return () => window.removeEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
   }, []);
@@ -165,6 +171,15 @@ export function OnboardingFlow({
     await advanceStep("welcome");
   }, [advanceStep]);
 
+  const handleManualWizardClose = useCallback(() => {
+    const shouldReturn = returnToPaletteRef.current;
+    returnToPaletteRef.current = false;
+    setManualWizardOpen(false);
+    if (shouldReturn) {
+      void actionService.dispatch("panel.palette", undefined, { source: "user" });
+    }
+  }, []);
+
   // Agent setup wizard close
   const handleAgentSetupClose = useCallback(async () => {
     void onRefreshSettings();
@@ -176,7 +191,7 @@ export function OnboardingFlow({
     return manualWizardOpen ? (
       <AgentSetupWizard
         isOpen
-        onClose={() => setManualWizardOpen(false)}
+        onClose={handleManualWizardClose}
         initialAvailability={availability}
       />
     ) : null;
@@ -185,12 +200,12 @@ export function OnboardingFlow({
   // Still hydrating
   if (state === null) return null;
 
-  // Manual wizard re-open (from Settings / toolbar)
+  // Manual wizard re-open (from Settings / toolbar / panel palette)
   if (manualWizardOpen) {
     return (
       <AgentSetupWizard
         isOpen
-        onClose={() => setManualWizardOpen(false)}
+        onClose={handleManualWizardClose}
         initialAvailability={availability}
       />
     );
