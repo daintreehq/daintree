@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeWorktreeColorMap, WORKTREE_COLOR_PALETTE } from "../worktreeColors";
+import { computeWorktreeColorMap, WORKTREE_COLOR_PALETTE } from "../worktreeColors.js";
 
 describe("computeWorktreeColorMap", () => {
   it("returns null for empty map", () => {
@@ -50,10 +50,9 @@ describe("computeWorktreeColorMap", () => {
   });
 
   it("assigns all 8 palette colors for exactly 8 worktrees", () => {
-    const entries: [string, { path: string }][] = WORKTREE_COLOR_PALETTE.map((_, i) => [
-      `wt-${i}`,
-      { path: `/p/${String(i).padStart(2, "0")}` },
-    ]);
+    const entries: [string, { path: string }][] = WORKTREE_COLOR_PALETTE.map(
+      (_: string, i: number) => [`wt-${i}`, { path: `/p/${String(i).padStart(2, "0")}` }]
+    );
     const result = computeWorktreeColorMap(new Map(entries))!;
     const colors = new Set(Object.values(result));
     expect(colors.size).toBe(WORKTREE_COLOR_PALETTE.length);
