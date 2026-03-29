@@ -9,6 +9,23 @@ export interface PanelContribution {
   showInPalette: boolean;
 }
 
+export interface ToolbarButtonContribution {
+  id: string;
+  label: string;
+  iconId: string;
+  actionId: string;
+  priority?: 1 | 2 | 3 | 4 | 5;
+}
+
+export type MenuItemLocation = "terminal" | "file" | "view" | "help";
+
+export interface MenuItemContribution {
+  label: string;
+  actionId: string;
+  location: MenuItemLocation;
+  accelerator?: string;
+}
+
 export interface PluginManifest {
   name: string;
   version: string;
@@ -18,6 +35,8 @@ export interface PluginManifest {
   renderer?: string;
   contributes: {
     panels: PanelContribution[];
+    toolbarButtons: ToolbarButtonContribution[];
+    menuItems: MenuItemContribution[];
   };
 }
 

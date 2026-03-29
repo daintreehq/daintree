@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import {
   DndContext,
   closestCenter,
@@ -38,14 +38,16 @@ import {
   CopyTreeIcon,
 } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
-import type { ToolbarButtonId } from "@/../../shared/types/toolbar";
+import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
+import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
+import { Puzzle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 
 type ButtonMetadata = { label: string; icon: React.ReactNode; description: string };
 
-const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
+const BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, ButtonMetadata>> = {
   "agent-setup": {
     label: "Agent Setup",
     icon: <CanopyAgentIcon className="h-4 w-4" />,
@@ -124,13 +126,19 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
 };
 
 interface SortableButtonItemProps {
-  buttonId: ToolbarButtonId;
+  buttonId: AnyToolbarButtonId;
   isVisible: boolean;
-  onToggle: (buttonId: ToolbarButtonId) => void;
+  onToggle: (buttonId: AnyToolbarButtonId) => void;
+  allMetadata: Partial<Record<AnyToolbarButtonId, ButtonMetadata>>;
 }
 
-function SortableButtonItem({ buttonId, isVisible, onToggle }: SortableButtonItemProps) {
-  const metadata = BUTTON_METADATA[buttonId];
+function SortableButtonItem({
+  buttonId,
+  isVisible,
+  onToggle,
+  allMetadata,
+}: SortableButtonItemProps) {
+  const metadata = allMetadata[buttonId];
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: buttonId,
   });
@@ -189,19 +197,36 @@ export function ToolbarSettingsTab() {
     })
   );
 
+  const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
+
+  const allMetadata = useMemo(() => {
+    const pluginMeta: Record<string, ButtonMetadata> = {};
+    for (const id of pluginButtonIds) {
+      const config = pluginConfigs.get(id);
+      if (config) {
+        pluginMeta[id] = {
+          label: config.label,
+          icon: <Puzzle className="h-4 w-4" />,
+          description: `Plugin button (${config.pluginId})`,
+        };
+      }
+    }
+    return { ...BUTTON_METADATA, ...pluginMeta };
+  }, [pluginButtonIds, pluginConfigs]);
+
   const handleLeftDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
       if (!over || active.id === over.id) return;
 
-      const oldIndex = layout.leftButtons.indexOf(active.id as ToolbarButtonId);
-      const newIndex = layout.leftButtons.indexOf(over.id as ToolbarButtonId);
+      const oldIndex = layout.leftButtons.indexOf(active.id as AnyToolbarButtonId);
+      const newIndex = layout.leftButtons.indexOf(over.id as AnyToolbarButtonId);
 
       if (oldIndex === -1 || newIndex === -1) return;
 
       const newButtons = [...layout.leftButtons];
       newButtons.splice(oldIndex, 1);
-      newButtons.splice(newIndex, 0, active.id as ToolbarButtonId);
+      newButtons.splice(newIndex, 0, active.id as AnyToolbarButtonId);
 
       setLeftButtons(newButtons);
     },
@@ -213,14 +238,14 @@ export function ToolbarSettingsTab() {
       const { active, over } = event;
       if (!over || active.id === over.id) return;
 
-      const oldIndex = layout.rightButtons.indexOf(active.id as ToolbarButtonId);
-      const newIndex = layout.rightButtons.indexOf(over.id as ToolbarButtonId);
+      const oldIndex = layout.rightButtons.indexOf(active.id as AnyToolbarButtonId);
+      const newIndex = layout.rightButtons.indexOf(over.id as AnyToolbarButtonId);
 
       if (oldIndex === -1 || newIndex === -1) return;
 
       const newButtons = [...layout.rightButtons];
       newButtons.splice(oldIndex, 1);
-      newButtons.splice(newIndex, 0, active.id as ToolbarButtonId);
+      newButtons.splice(newIndex, 0, active.id as AnyToolbarButtonId);
 
       setRightButtons(newButtons);
     },
@@ -228,14 +253,14 @@ export function ToolbarSettingsTab() {
   );
 
   const handleToggleLeft = useCallback(
-    (buttonId: ToolbarButtonId) => {
+    (buttonId: AnyToolbarButtonId) => {
       toggleButtonVisibility(buttonId, "left");
     },
     [toggleButtonVisibility]
   );
 
   const handleToggleRight = useCallback(
-    (buttonId: ToolbarButtonId) => {
+    (buttonId: AnyToolbarButtonId) => {
       toggleButtonVisibility(buttonId, "right");
     },
     [toggleButtonVisibility]
@@ -261,6 +286,7 @@ export function ToolbarSettingsTab() {
                   buttonId={buttonId}
                   isVisible={layout.leftButtons.includes(buttonId)}
                   onToggle={handleToggleLeft}
+                  allMetadata={allMetadata}
                 />
               ))}
             </div>
@@ -286,6 +312,7 @@ export function ToolbarSettingsTab() {
                   buttonId={buttonId}
                   isVisible={layout.rightButtons.includes(buttonId)}
                   onToggle={handleToggleRight}
+                  allMetadata={allMetadata}
                 />
               ))}
             </div>

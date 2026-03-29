@@ -682,6 +682,8 @@ const CHANNELS = {
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
   PLUGIN_INVOKE: "plugin:invoke",
+  PLUGIN_TOOLBAR_BUTTONS: "plugin:toolbar-buttons",
+  PLUGIN_MENU_ITEMS: "plugin:menu-items",
 
   // Workflow approval channels
   WORKFLOW_RESOLVE_APPROVAL: "workflow:resolve-approval",
@@ -2251,6 +2253,9 @@ const api: ElectronAPI = {
         ipcRenderer.removeListener(fullChannel, handler);
       };
     },
+
+    toolbarButtons: () => _unwrappingInvoke(CHANNELS.PLUGIN_TOOLBAR_BUTTONS),
+    menuItems: () => _unwrappingInvoke(CHANNELS.PLUGIN_MENU_ITEMS),
   },
 
   crashRecovery: {
