@@ -6,6 +6,8 @@ import type { GitStatus } from "../../../shared/types/git.js";
 import { validateCwd, createHardenedGit } from "../../utils/hardenedGit.js";
 import { store } from "../../store.js";
 import { soundService } from "../../services/SoundService.js";
+import { preAgentSnapshotService } from "../../services/PreAgentSnapshotService.js";
+import type { SnapshotInfo, SnapshotRevertResult } from "../../../shared/types/ipc/git.js";
 
 interface StagingFileEntry {
   path: string;
@@ -318,6 +320,44 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   };
   ipcMain.handle(CHANNELS.GIT_GET_WORKING_DIFF, handleGetWorkingDiff);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_GET_WORKING_DIFF));
+
+  // Snapshot handlers
+  const handleSnapshotGet = async (
+    _event: Electron.IpcMainInvokeEvent,
+    worktreeId: string
+  ): Promise<SnapshotInfo | null> => {
+    if (typeof worktreeId !== "string" || !worktreeId) return null;
+    return preAgentSnapshotService.getSnapshot(worktreeId);
+  };
+  ipcMain.handle(CHANNELS.GIT_SNAPSHOT_GET, handleSnapshotGet);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_SNAPSHOT_GET));
+
+  const handleSnapshotList = async (): Promise<SnapshotInfo[]> => {
+    return preAgentSnapshotService.listSnapshots();
+  };
+  ipcMain.handle(CHANNELS.GIT_SNAPSHOT_LIST, handleSnapshotList);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_SNAPSHOT_LIST));
+
+  const handleSnapshotRevert = async (
+    _event: Electron.IpcMainInvokeEvent,
+    worktreeId: string
+  ): Promise<SnapshotRevertResult> => {
+    validateCwd(worktreeId);
+    checkRateLimit(CHANNELS.GIT_SNAPSHOT_REVERT, 3, 10_000);
+    return preAgentSnapshotService.revertToSnapshot(worktreeId);
+  };
+  ipcMain.handle(CHANNELS.GIT_SNAPSHOT_REVERT, handleSnapshotRevert);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_SNAPSHOT_REVERT));
+
+  const handleSnapshotDelete = async (
+    _event: Electron.IpcMainInvokeEvent,
+    worktreeId: string
+  ): Promise<void> => {
+    validateCwd(worktreeId);
+    await preAgentSnapshotService.deleteSnapshot(worktreeId);
+  };
+  ipcMain.handle(CHANNELS.GIT_SNAPSHOT_DELETE, handleSnapshotDelete);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_SNAPSHOT_DELETE));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

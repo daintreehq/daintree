@@ -219,6 +219,44 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     }
   }, [isPinned, pinWorktree, unpinWorktree, worktree.id]);
 
+  const [hasSnapshot, setHasSnapshot] = useState(false);
+
+  // Check for snapshot on mount and when worktree changes
+  React.useEffect(() => {
+    let cancelled = false;
+    window.electron.git
+      .snapshotGet(worktree.id)
+      .then((info) => {
+        if (!cancelled) setHasSnapshot(info !== null && info.hasChanges);
+      })
+      .catch(() => {
+        // Ignore errors — snapshot check is best-effort
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [worktree.id]);
+
+  const handleRevertAgentChanges = useCallback(async () => {
+    try {
+      const result = await window.electron.git.snapshotRevert(worktree.id);
+      setHasSnapshot(false);
+      if (result.hasConflicts) {
+        // Notify about conflicts
+        void actionService.dispatch(
+          "app.showNotification",
+          {
+            type: "warning",
+            message: result.message,
+          },
+          { source: "user" }
+        );
+      }
+    } catch {
+      // Error handled by IPC layer
+    }
+  }, [worktree.id]);
+
   const { counts: terminalCounts, terminals: worktreeTerminals } = useWorktreeTerminals(
     worktree.id
   );
@@ -686,6 +724,8 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                   onCloseAll: handleCloseAll,
                   onEndAll: handleEndAll,
                   onDeleteWorktree: !isMainWorktree ? () => setShowDeleteDialog(true) : undefined,
+                  onRevertAgentChanges: handleRevertAgentChanges,
+                  hasSnapshot,
                 }}
               />
 

@@ -262,6 +262,8 @@ export interface WorktreeHeaderProps {
     onCompareDiff?: () => void;
     onOpenPanelPalette?: () => void;
     onDeleteWorktree?: () => void;
+    onRevertAgentChanges?: () => void;
+    hasSnapshot?: boolean;
   };
 }
 
@@ -494,6 +496,8 @@ export function WorktreeHeader({
                 onEndAll={menu.onEndAll}
                 onOpenPanelPalette={menu.onOpenPanelPalette}
                 onDeleteWorktree={menu.onDeleteWorktree}
+                onRevertAgentChanges={menu.onRevertAgentChanges}
+                hasSnapshot={menu.hasSnapshot}
               />
             </DropdownMenuContent>
           </DropdownMenu>

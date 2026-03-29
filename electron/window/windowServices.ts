@@ -35,6 +35,7 @@ import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import { secureStorage } from "../services/SecureStorage.js";
 import { notificationService } from "../services/NotificationService.js";
 import { agentNotificationService } from "../services/AgentNotificationService.js";
+import { preAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
 import {
   initializeAgentAvailabilityStore,
   disposeAgentAvailabilityStore,
@@ -330,6 +331,7 @@ export async function setupWindowServices(
 
   notificationService.initialize(win);
   agentNotificationService.initialize();
+  preAgentSnapshotService.initialize();
   console.log("[MAIN] NotificationService initialized");
 
   // Critical services
@@ -814,6 +816,7 @@ export async function setupWindowServices(
     getSystemSleepService().dispose();
     notificationService.dispose();
     agentNotificationService.dispose();
+    preAgentSnapshotService.dispose();
     autoUpdaterService.dispose();
 
     setLoggerWindow(null);

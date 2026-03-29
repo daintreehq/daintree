@@ -1,4 +1,5 @@
 import type { GitStatus, StagingStatus } from "../git.js";
+import type { SnapshotInfo, SnapshotRevertResult } from "./git.js";
 import type { AgentId } from "../agent.js";
 import type { TabGroup } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
@@ -706,6 +707,10 @@ export interface ElectronAPI {
     ): Promise<import("./git.js").CrossWorktreeDiffResult | string>;
     getUsername(cwd: string): Promise<string | null>;
     getWorkingDiff(cwd: string, type: "unstaged" | "staged" | "head"): Promise<string>;
+    snapshotGet(worktreeId: string): Promise<SnapshotInfo | null>;
+    snapshotList(): Promise<SnapshotInfo[]>;
+    snapshotRevert(worktreeId: string): Promise<SnapshotRevertResult>;
+    snapshotDelete(worktreeId: string): Promise<void>;
   };
   terminalConfig: {
     get(): Promise<TerminalConfig>;
