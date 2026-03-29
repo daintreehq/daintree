@@ -24,6 +24,7 @@ interface AppLayoutProps {
   sidebarContent?: ReactNode;
   onLaunchAgent?: (type: string) => void;
   onSettings?: () => void;
+  onPreloadSettings?: () => void;
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
   onCancelRetry?: (id: string) => void;
   agentAvailability?: CliAvailability;
@@ -41,6 +42,7 @@ export function AppLayout({
   sidebarContent,
   onLaunchAgent,
   onSettings,
+  onPreloadSettings,
   onRetry,
   onCancelRetry,
   agentAvailability,
@@ -295,6 +297,7 @@ export function AppLayout({
       <Toolbar
         onLaunchAgent={handleLaunchAgent}
         onSettings={handleSettings}
+        onPreloadSettings={onPreloadSettings}
         errorCount={layout.errorCount}
         onToggleProblems={handleToggleProblems}
         isFocusMode={layout.isFocusMode}

@@ -117,8 +117,11 @@ import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { RecipeManager } from "./components/TerminalRecipe/RecipeManager";
 import { NotesPalette } from "./components/Notes";
 import { WorkflowSection } from "./components/Workflow";
+function preloadSettingsDialog() {
+  return import("./components/Settings/SettingsDialog");
+}
 const LazySettingsDialog = lazy(() =>
-  import("./components/Settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog }))
+  preloadSettingsDialog().then((m) => ({ default: m.SettingsDialog }))
 );
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
@@ -1335,6 +1338,21 @@ function App() {
   useOrchestrationMilestones(isStateLoaded);
   useAgentWaitingNudge(isStateLoaded);
 
+  useEffect(() => {
+    if (!isStateLoaded) return;
+    const id = requestIdleCallback(
+      () => {
+        preloadSettingsDialog();
+      },
+      { timeout: 5000 }
+    );
+    return () => cancelIdleCallback(id);
+  }, [isStateLoaded]);
+
+  const handlePreloadSettings = useCallback(() => {
+    preloadSettingsDialog();
+  }, []);
+
   const handleLaunchAgent = useCallback(
     async (type: string) => {
       await launchAgent(type);
@@ -1483,6 +1501,7 @@ function App() {
             }
             onLaunchAgent={handleLaunchAgent}
             onSettings={handleSettings}
+            onPreloadSettings={handlePreloadSettings}
             onRetry={handleErrorRetry}
             onCancelRetry={handleCancelRetry}
             agentAvailability={availability}
