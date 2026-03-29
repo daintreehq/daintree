@@ -7,6 +7,7 @@ import { spawnTerminalAndVerify } from "../helpers/workflows";
 import { runTerminalCommand, waitForTerminalText } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
+import { ensureWindowFocused } from "../helpers/focus";
 
 let ctx: AppContext;
 let mainBranch: string;
@@ -102,10 +103,12 @@ test.describe.serial("Core: Worktree Lifecycle", () => {
 
     const newCard = window.locator(SEL.worktree.card(BRANCH));
     const actionsBtn = newCard.locator(SEL.worktree.actionsMenu);
+    await ensureWindowFocused(ctx.app);
     await actionsBtn.click();
 
     const deleteItem = window.getByRole("menuitem", { name: /delete/i });
     await expect(deleteItem).toBeVisible({ timeout: T_SHORT });
+    await deleteItem.hover();
     await deleteItem.click();
 
     const confirmBtn = window.locator(SEL.worktree.deleteConfirm);
