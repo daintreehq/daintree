@@ -10,6 +10,8 @@ export type RefreshTierProvider = () => TerminalRefreshTier;
 
 export type AgentStateCallback = (state: AgentState) => void;
 
+export type PostCompleteHook = (output: string) => void | Promise<void>;
+
 export interface ManagedTerminal {
   terminal: Terminal;
   type: TerminalType;
@@ -57,6 +59,10 @@ export interface ManagedTerminal {
 
   // Last activity marker for scroll-to-last-activity
   lastActivityMarker?: IMarker;
+
+  // Post-complete hook: one-shot callback fired on working → waiting transition
+  postCompleteHook?: PostCompleteHook;
+  postCompleteMarker?: IMarker;
 
   // Project-switch resize suppression
   resizeSuppressionTimer?: number;

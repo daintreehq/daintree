@@ -39,6 +39,10 @@ export class TerminalAgentStateController {
 
     managed.agentState = state;
 
+    if (previousState === "working" && state === "waiting") {
+      this.firePostCompleteHook(managed);
+    }
+
     this.notifySubscribers(managed, state);
   }
 
@@ -143,6 +147,41 @@ export class TerminalAgentStateController {
     }
     this.directingTimers.clear();
     this.compositionCounts.clear();
+  }
+
+  private firePostCompleteHook(managed: ManagedTerminal): void {
+    const hook = managed.postCompleteHook;
+    if (!hook) return;
+
+    // One-shot: remove before calling to prevent re-entry
+    managed.postCompleteHook = undefined;
+    const marker = managed.postCompleteMarker;
+    managed.postCompleteMarker = undefined;
+
+    // Extract plain text from marker position to buffer end
+    const buf = managed.terminal.buffer.active;
+    let startLine = 0;
+    if (marker && !marker.isDisposed && marker.line >= 0) {
+      startLine = marker.line;
+      marker.dispose();
+    }
+
+    const lines: string[] = [];
+    for (let i = startLine; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+    const output = lines.join("\n");
+
+    // Fire-and-forget — do not block state transition path
+    try {
+      const result = hook(output);
+      if (result instanceof Promise) {
+        result.catch((err) => logError("Post-complete hook error", err));
+      }
+    } catch (err) {
+      logError("Post-complete hook error", err);
+    }
   }
 
   private notifySubscribers(managed: ManagedTerminal, state: AgentState): void {

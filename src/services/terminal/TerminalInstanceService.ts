@@ -6,6 +6,7 @@ import {
   ManagedTerminal,
   RefreshTierProvider,
   AgentStateCallback,
+  PostCompleteHook,
   HIBERNATION_DELAY_MS,
 } from "./types";
 import {
@@ -1315,6 +1316,33 @@ class TerminalInstanceService {
     };
   }
 
+  registerPostCompleteHook(id: string, callback: PostCompleteHook): () => void {
+    const managed = this.instances.get(id);
+    if (!managed) return () => {};
+
+    managed.postCompleteMarker?.dispose();
+    managed.postCompleteHook = callback;
+
+    if (!managed.isAltBuffer) {
+      managed.postCompleteMarker = managed.terminal.registerMarker(0);
+    } else {
+      managed.postCompleteMarker = undefined;
+    }
+
+    return () => {
+      this.unregisterPostCompleteHook(id);
+    };
+  }
+
+  unregisterPostCompleteHook(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    managed.postCompleteMarker?.dispose();
+    managed.postCompleteMarker = undefined;
+    managed.postCompleteHook = undefined;
+  }
+
   setFocused(id: string, isFocused: boolean): void {
     const managed = this.instances.get(id);
     if (!managed) return;
@@ -1730,6 +1758,9 @@ class TerminalInstanceService {
     }
 
     managed.lastActivityMarker?.dispose();
+    managed.postCompleteMarker?.dispose();
+    managed.postCompleteMarker = undefined;
+    managed.postCompleteHook = undefined;
     managed.exitSubscribers.clear();
     managed.agentStateSubscribers.clear();
     managed.altBufferListeners.clear();
