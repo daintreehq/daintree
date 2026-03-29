@@ -26,13 +26,13 @@ describe("ContentGrid EmptyState — polish (issue #4406)", () => {
     expect(content).not.toContain("text-canopy-text/60 text-center");
   });
 
-  it("recipes heading uses sentence case without uppercase or tracking-wider", async () => {
+  it("recipe list uses aria-label instead of heading element", async () => {
     const content = await readFile(GRID_PATH, "utf-8");
+    // The redesigned compact list uses role="list" with aria-label instead of an <h4> heading
+    expect(content).toContain('role="list"');
+    expect(content).toContain('aria-label="Recipes"');
+    // No <h4> recipes heading should exist
     const headingMatch = content.match(/<h4[^>]*>[\s\S]*?Recipes[\s\S]*?<\/h4>/);
-    expect(headingMatch).toBeTruthy();
-    const heading = headingMatch![0];
-    expect(heading).not.toContain("uppercase");
-    expect(heading).not.toContain("tracking-wider");
-    expect(heading).toContain("text-canopy-text/60");
+    expect(headingMatch).toBeNull();
   });
 });
