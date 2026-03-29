@@ -117,7 +117,12 @@ export function NoteListItemRow({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuItem onSelect={() => titleEdit.handleStartRename(note, {} as React.MouseEvent)}>
+        <ContextMenuItem
+          onSelect={() => {
+            const syntheticEvent = { stopPropagation: () => {} } as React.MouseEvent;
+            titleEdit.handleStartRename(note, syntheticEvent);
+          }}
+        >
           <Pencil className={ICON_CLASS} />
           Rename Note
         </ContextMenuItem>
@@ -128,7 +133,13 @@ export function NoteListItemRow({
           </ContextMenuItem>
         )}
         <ContextMenuSeparator />
-        <ContextMenuItem destructive onSelect={() => onDelete(note, {} as React.MouseEvent)}>
+        <ContextMenuItem
+          destructive
+          onSelect={() => {
+            const syntheticEvent = { stopPropagation: () => {} } as React.MouseEvent;
+            onDelete(note, syntheticEvent);
+          }}
+        >
           <Trash2 className={ICON_CLASS} />
           Delete Note
         </ContextMenuItem>
