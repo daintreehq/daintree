@@ -219,7 +219,11 @@ describe("TerminalInstanceService - Hibernation", () => {
     });
 
     it("should never hibernate active agent terminals", () => {
-      const managed = makeMockManaged({ kind: "agent", type: "claude", agentState: "working" });
+      const managed = makeMockManaged({
+        kind: "agent",
+        type: "claude",
+        canonicalAgentState: "working",
+      });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
       service.hibernate("t1");
@@ -229,7 +233,11 @@ describe("TerminalInstanceService - Hibernation", () => {
     });
 
     it("should never hibernate waiting agent terminals", () => {
-      const managed = makeMockManaged({ kind: "agent", type: "claude", agentState: "waiting" });
+      const managed = makeMockManaged({
+        kind: "agent",
+        type: "claude",
+        canonicalAgentState: "waiting",
+      });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
       service.hibernate("t1");
@@ -370,7 +378,7 @@ describe("TerminalInstanceService - Hibernation", () => {
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
         kind: "agent",
         type: "claude",
-        agentState: "working",
+        canonicalAgentState: "working",
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 

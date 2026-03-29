@@ -265,7 +265,11 @@ describe("TerminalInstanceService - Scrollback", () => {
     });
 
     it("skips active agent terminals but reduces completed agents", () => {
-      const working = makeMockManaged({ kind: "agent", type: "claude", agentState: "working" });
+      const working = makeMockManaged({
+        kind: "agent",
+        type: "claude",
+        canonicalAgentState: "working",
+      });
       working.terminal.buffer.active.length = 3000;
       const completed = makeMockManaged({
         kind: "agent",

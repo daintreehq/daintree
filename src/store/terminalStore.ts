@@ -73,8 +73,12 @@ export function getTerminalRefreshTier(
     return TerminalRefreshTierEnum.FOCUSED;
   }
 
-  // Agent terminals stay at VISIBLE minimum — they must never be hibernated
-  if (isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId)) {
+  // Active agent terminals stay at VISIBLE minimum to preserve live output.
+  // Completed agents drop to BACKGROUND so they can be hibernated to free memory.
+  if (
+    isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId) &&
+    terminal.agentState !== "completed"
+  ) {
     return TerminalRefreshTierEnum.VISIBLE;
   }
 
