@@ -105,6 +105,10 @@ export class WorktreeMonitor {
   private _lifecycleStatus: WorktreeLifecycleStatus | undefined;
   private _projectScopeId: string | null = null;
 
+  // Poll queue concurrency
+  private _pendingPollPromise: Promise<void> | null = null;
+  private _pollAbortController: AbortController = new AbortController();
+
   // Components
   private pollingStrategy: AdaptivePollingStrategy;
   private noteReader: NoteFileReader;
@@ -278,6 +282,7 @@ export class WorktreeMonitor {
 
     this._isRunning = true;
     this.pollingEnabled = true;
+    this._pollAbortController = new AbortController();
 
     if (this.gitWatchEnabled) {
       this.startWatcher();
@@ -297,6 +302,7 @@ export class WorktreeMonitor {
 
     this._isRunning = true;
     this.pollingEnabled = true;
+    this._pollAbortController = new AbortController();
 
     if (this.gitWatchEnabled) {
       this.startWatcher();
@@ -305,6 +311,8 @@ export class WorktreeMonitor {
 
   stop(): void {
     this._isRunning = false;
+    this._pollAbortController.abort();
+    this._pollAbortController = new AbortController();
     this.clearTimers();
     this.stopWatcher();
   }
@@ -645,15 +653,24 @@ export class WorktreeMonitor {
       }
     };
 
-    try {
-      if (this.pollQueue) {
-        await this.pollQueue.add(() => executePoll());
-      } else {
-        await executePoll();
-      }
-    } catch {
-      // Queue execution failed
-    }
+    if (this._pendingPollPromise) return;
+
+    const runPoll = this.pollQueue
+      ? this.pollQueue.add(() => executePoll(), {
+          signal: this._pollAbortController.signal,
+          priority: this._isCurrent ? 1 : 0,
+        })
+      : executePoll();
+
+    this._pendingPollPromise = runPoll
+      .catch(() => {
+        // Queue abort or execution failure — swallowed intentionally
+      })
+      .finally(() => {
+        this._pendingPollPromise = null;
+      });
+
+    await this._pendingPollPromise;
 
     if (tripped) {
       this.scheduleCircuitBreakerRetry();

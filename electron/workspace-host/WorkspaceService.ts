@@ -1120,8 +1120,6 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
     this.monitors.clear();
 
-    this.pollQueue.clear();
-
     this.activeWorktreeId = null;
     this.mainBranch = "main";
     this.git = null;

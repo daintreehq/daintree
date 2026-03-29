@@ -452,4 +452,172 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
   });
+
+  describe("poll queue concurrency", () => {
+    let PQueue: typeof import("p-queue").default;
+
+    beforeEach(async () => {
+      PQueue = (await import("p-queue")).default;
+    });
+
+    it("deduplicates rapid poll calls — only one executePoll per cycle", async () => {
+      let resolveGit!: () => void;
+      mockGetWorktreeChangesWithStats.mockImplementation(
+        () =>
+          new Promise<{
+            worktreeId: string;
+            rootPath: string;
+            changes: never[];
+            changedFileCount: number;
+            lastUpdated: number;
+          }>((resolve) => {
+            resolveGit = () =>
+              resolve({
+                worktreeId: "/test/worktree",
+                rootPath: "/test",
+                changes: [],
+                changedFileCount: 0,
+                lastUpdated: Date.now(),
+              });
+          })
+      );
+
+      const queue = new PQueue({ concurrency: 1 });
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main", queue);
+      monitor.startWithoutGitStatus();
+
+      // Fire two rapid polls — second should be deduplicated
+      const p1 = (monitor as unknown as { poll: () => Promise<void> }).poll();
+      const p2 = (monitor as unknown as { poll: () => Promise<void> }).poll();
+
+      // Resolve the single git call
+      resolveGit();
+      await p1;
+      await p2;
+
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      monitor.stop();
+    });
+
+    it("stop() aborts a queued poll via AbortController", async () => {
+      let resolveBlocker!: () => void;
+      const blockerPromise = new Promise<void>((r) => {
+        resolveBlocker = r;
+      });
+
+      const queue = new PQueue({ concurrency: 1 });
+      const callbacks = makeCallbacks();
+
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      // Block the queue with a long-running task so the monitor's poll is pending
+      const blockerDone = queue.add(() => blockerPromise);
+
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main", queue);
+      monitor.startWithoutGitStatus();
+
+      // Enqueue a poll — it will wait behind the blocker
+      const pollPromise = (monitor as unknown as { poll: () => Promise<void> }).poll();
+
+      // Stop the monitor — should abort the queued poll
+      monitor.stop();
+
+      // Release the blocker
+      resolveBlocker();
+      await blockerDone;
+      await pollPromise;
+
+      // The aborted poll should never have executed updateGitStatus
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+    });
+
+    it("active worktree polls with higher priority than background", async () => {
+      const addSpy = vi.fn().mockResolvedValue(undefined);
+      const fakeQueue = { add: addSpy } as unknown as import("p-queue").default;
+
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      // Background monitor (isCurrent: false)
+      const bgCallbacks = makeCallbacks();
+      const bgMonitor = new WorktreeMonitor(
+        TEST_WORKTREE,
+        TEST_CONFIG,
+        bgCallbacks,
+        "main",
+        fakeQueue
+      );
+      bgMonitor.startWithoutGitStatus();
+      await (bgMonitor as unknown as { poll: () => Promise<void> }).poll();
+
+      expect(addSpy).toHaveBeenCalledTimes(1);
+      expect(addSpy.mock.calls[0][1]).toMatchObject({ priority: 0 });
+
+      addSpy.mockClear();
+
+      // Active monitor (isCurrent: true)
+      const activeWorktree = {
+        ...TEST_WORKTREE,
+        id: "/test/active",
+        path: "/test/active",
+        isCurrent: true,
+      };
+      const activeCallbacks = makeCallbacks();
+      const activeMonitor = new WorktreeMonitor(
+        activeWorktree,
+        TEST_CONFIG,
+        activeCallbacks,
+        "main",
+        fakeQueue
+      );
+      activeMonitor.startWithoutGitStatus();
+      await (activeMonitor as unknown as { poll: () => Promise<void> }).poll();
+
+      expect(addSpy).toHaveBeenCalledTimes(1);
+      expect(addSpy.mock.calls[0][1]).toMatchObject({ priority: 1 });
+
+      bgMonitor.stop();
+      activeMonitor.stop();
+    });
+
+    it("monitor can restart after stop with fresh AbortController", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const queue = new PQueue({ concurrency: 1 });
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main", queue);
+
+      // Start, poll, stop
+      monitor.startWithoutGitStatus();
+      await (monitor as unknown as { poll: () => Promise<void> }).poll();
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      monitor.stop();
+
+      mockGetWorktreeChangesWithStats.mockClear();
+
+      // Restart — should get a fresh AbortController and poll successfully
+      monitor.startWithoutGitStatus();
+      await (monitor as unknown as { poll: () => Promise<void> }).poll();
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      monitor.stop();
+    });
+  });
 });
