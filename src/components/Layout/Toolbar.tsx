@@ -124,6 +124,7 @@ const OVERFLOW_MENU_META: Partial<
 interface ToolbarProps {
   onLaunchAgent: (type: string) => void;
   onSettings: () => void;
+  onPreloadSettings?: () => void;
   errorCount?: number;
   onToggleProblems?: () => void;
   isFocusMode?: boolean;
@@ -136,6 +137,7 @@ interface ToolbarProps {
 export function Toolbar({
   onLaunchAgent,
   onSettings,
+  onPreloadSettings,
   errorCount = 0,
   onToggleProblems,
   isFocusMode = false,
@@ -930,6 +932,7 @@ export function Toolbar({
                       size="icon"
                       data-toolbar-item=""
                       onClick={onSettings}
+                      onPointerEnter={onPreloadSettings}
                       className={toolbarIconButtonClass}
                       aria-label="Open settings"
                     >

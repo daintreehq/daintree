@@ -48,51 +48,85 @@ import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
 import { appClient } from "@/clients";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { GeneralTab } from "./GeneralTab";
+const importAgentSettings = () => import("./AgentSettings");
+const importTerminalSettingsTab = () => import("./TerminalSettingsTab");
+const importTerminalAppearanceTab = () => import("./TerminalAppearanceTab");
+const importGitHubSettingsTab = () => import("./GitHubSettingsTab");
+const importTroubleshootingTab = () => import("./TroubleshootingTab");
+const importNotificationSettingsTab = () => import("./NotificationSettingsTab");
+const importPortalSettingsTab = () => import("./PortalSettingsTab");
+const importKeyboardShortcutsTab = () => import("./KeyboardShortcutsTab");
+const importWorktreeSettingsTab = () => import("./WorktreeSettingsTab");
+const importToolbarSettingsTab = () => import("./ToolbarSettingsTab");
+const importIntegrationsTab = () => import("./IntegrationsTab");
+const importVoiceInputSettingsTab = () => import("./VoiceInputSettingsTab");
+const importMcpServerSettingsTab = () => import("./McpServerSettingsTab");
+const importEnvironmentSettingsTab = () => import("./EnvironmentSettingsTab");
+const importPrivacyDataTab = () => import("./PrivacyDataTab");
+
 const LazyAgentSettings = lazy(() =>
-  import("./AgentSettings").then((m) => ({ default: m.AgentSettings }))
+  importAgentSettings().then((m) => ({ default: m.AgentSettings }))
 );
 const LazyTerminalSettingsTab = lazy(() =>
-  import("./TerminalSettingsTab").then((m) => ({ default: m.TerminalSettingsTab }))
+  importTerminalSettingsTab().then((m) => ({ default: m.TerminalSettingsTab }))
 );
 const LazyTerminalAppearanceTab = lazy(() =>
-  import("./TerminalAppearanceTab").then((m) => ({ default: m.TerminalAppearanceTab }))
+  importTerminalAppearanceTab().then((m) => ({ default: m.TerminalAppearanceTab }))
 );
 const LazyGitHubSettingsTab = lazy(() =>
-  import("./GitHubSettingsTab").then((m) => ({ default: m.GitHubSettingsTab }))
+  importGitHubSettingsTab().then((m) => ({ default: m.GitHubSettingsTab }))
 );
 const LazyTroubleshootingTab = lazy(() =>
-  import("./TroubleshootingTab").then((m) => ({ default: m.TroubleshootingTab }))
+  importTroubleshootingTab().then((m) => ({ default: m.TroubleshootingTab }))
 );
 const LazyNotificationSettingsTab = lazy(() =>
-  import("./NotificationSettingsTab").then((m) => ({ default: m.NotificationSettingsTab }))
+  importNotificationSettingsTab().then((m) => ({ default: m.NotificationSettingsTab }))
 );
 const LazyPortalSettingsTab = lazy(() =>
-  import("./PortalSettingsTab").then((m) => ({ default: m.PortalSettingsTab }))
+  importPortalSettingsTab().then((m) => ({ default: m.PortalSettingsTab }))
 );
 const LazyKeyboardShortcutsTab = lazy(() =>
-  import("./KeyboardShortcutsTab").then((m) => ({ default: m.KeyboardShortcutsTab }))
+  importKeyboardShortcutsTab().then((m) => ({ default: m.KeyboardShortcutsTab }))
 );
 const LazyWorktreeSettingsTab = lazy(() =>
-  import("./WorktreeSettingsTab").then((m) => ({ default: m.WorktreeSettingsTab }))
+  importWorktreeSettingsTab().then((m) => ({ default: m.WorktreeSettingsTab }))
 );
 const LazyToolbarSettingsTab = lazy(() =>
-  import("./ToolbarSettingsTab").then((m) => ({ default: m.ToolbarSettingsTab }))
+  importToolbarSettingsTab().then((m) => ({ default: m.ToolbarSettingsTab }))
 );
 const LazyIntegrationsTab = lazy(() =>
-  import("./IntegrationsTab").then((m) => ({ default: m.IntegrationsTab }))
+  importIntegrationsTab().then((m) => ({ default: m.IntegrationsTab }))
 );
 const LazyVoiceInputSettingsTab = lazy(() =>
-  import("./VoiceInputSettingsTab").then((m) => ({ default: m.VoiceInputSettingsTab }))
+  importVoiceInputSettingsTab().then((m) => ({ default: m.VoiceInputSettingsTab }))
 );
 const LazyMcpServerSettingsTab = lazy(() =>
-  import("./McpServerSettingsTab").then((m) => ({ default: m.McpServerSettingsTab }))
+  importMcpServerSettingsTab().then((m) => ({ default: m.McpServerSettingsTab }))
 );
 const LazyEnvironmentSettingsTab = lazy(() =>
-  import("./EnvironmentSettingsTab").then((m) => ({ default: m.EnvironmentSettingsTab }))
+  importEnvironmentSettingsTab().then((m) => ({ default: m.EnvironmentSettingsTab }))
 );
 const LazyPrivacyDataTab = lazy(() =>
-  import("./PrivacyDataTab").then((m) => ({ default: m.PrivacyDataTab }))
+  importPrivacyDataTab().then((m) => ({ default: m.PrivacyDataTab }))
 );
+
+function preloadAllSettingsTabs() {
+  importAgentSettings();
+  importTerminalSettingsTab();
+  importTerminalAppearanceTab();
+  importGitHubSettingsTab();
+  importTroubleshootingTab();
+  importNotificationSettingsTab();
+  importPortalSettingsTab();
+  importKeyboardShortcutsTab();
+  importWorktreeSettingsTab();
+  importToolbarSettingsTab();
+  importIntegrationsTab();
+  importVoiceInputSettingsTab();
+  importMcpServerSettingsTab();
+  importEnvironmentSettingsTab();
+  importPrivacyDataTab();
+}
 import { SETTINGS_SEARCH_INDEX } from "./settingsSearchIndex";
 import {
   filterSettings,
@@ -192,6 +226,16 @@ export function SettingsDialog({
   );
 
   const hasProject = !!projectId;
+
+  useEffect(() => {
+    const id = requestIdleCallback(
+      () => {
+        preloadAllSettingsTabs();
+      },
+      { timeout: 4000 }
+    );
+    return () => cancelIdleCallback(id);
+  }, []);
 
   useEffect(() => {
     if (activeTab.startsWith("project:")) {
