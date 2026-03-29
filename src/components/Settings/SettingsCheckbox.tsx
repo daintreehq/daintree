@@ -35,7 +35,7 @@ export function SettingsCheckbox({
       />
       <div className="flex-1">
         <span className="text-sm font-medium text-canopy-text">{label}</span>
-        <p className="text-xs text-canopy-text/50 mt-0.5">{description}</p>
+        <p className="text-xs text-canopy-text/50 mt-0.5 select-text">{description}</p>
       </div>
     </label>
   );

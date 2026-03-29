@@ -683,7 +683,7 @@ function ParagraphingStrategyRow({
           <option value="manual">Manual Enter only</option>
         </select>
       </SettingsRow>
-      <p className="text-xs text-canopy-text/40 ml-[22px]">
+      <p className="text-xs text-canopy-text/40 ml-[22px] select-text">
         {isNonEnglish
           ? "Spoken commands require English. Manual Enter will be used for the selected language."
           : value === "spoken-command"
@@ -768,7 +768,7 @@ function DictionarySection({
           ))}
         </div>
       ) : (
-        <p className="text-xs text-canopy-text/40">
+        <p className="text-xs text-canopy-text/40 select-text">
           Domain-specific terms sent to Deepgram to boost recognition accuracy.
         </p>
       )}
@@ -796,7 +796,7 @@ function CustomInstructionsRow({
         className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors resize-y"
         spellCheck={false}
       />
-      <p className="text-xs text-canopy-text/40">
+      <p className="text-xs text-canopy-text/40 select-text">
         Project-specific rules appended to the core correction prompt.
       </p>
     </div>

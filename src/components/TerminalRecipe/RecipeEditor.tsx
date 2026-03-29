@@ -271,7 +271,10 @@ export function RecipeEditor({
             />
             <span className="text-sm font-medium text-canopy-text">Show in Empty State</span>
           </label>
-          <p id="show-in-empty-state-help" className="text-xs text-text-muted mt-1 ml-6">
+          <p
+            id="show-in-empty-state-help"
+            className="text-xs text-text-muted mt-1 ml-6 select-text"
+          >
             Display this recipe as a primary launcher when the worktree has no active terminals
           </p>
         </div>
@@ -291,7 +294,7 @@ export function RecipeEditor({
             <option value="prompt">Ask before assigning</option>
             <option value="never">Never assign</option>
           </select>
-          <p id="auto-assign-help" className="text-xs text-text-muted mt-1">
+          <p id="auto-assign-help" className="text-xs text-text-muted mt-1 select-text">
             Controls whether the linked GitHub issue is automatically assigned to you during quick
             worktree creation
           </p>
@@ -428,7 +431,7 @@ export function RecipeEditor({
                       </select>
                       <p
                         id={`terminal-exit-behavior-help-${index}`}
-                        className="text-xs text-text-muted mt-1"
+                        className="text-xs text-text-muted mt-1 select-text"
                       >
                         Failures always preserve terminal for debugging
                       </p>
@@ -458,7 +461,7 @@ export function RecipeEditor({
                       />
                       <p
                         id={`terminal-initial-prompt-help-${index}`}
-                        className="text-xs text-text-muted mt-1"
+                        className="text-xs text-text-muted mt-1 select-text"
                       >
                         This prompt will be sent to the agent when it starts. Variables:{" "}
                         <code className="text-canopy-text/70">{"{{issue_number}}"}</code>,{" "}
@@ -493,7 +496,7 @@ export function RecipeEditor({
                       </select>
                       <p
                         id={`terminal-agent-exit-behavior-help-${index}`}
-                        className="text-xs text-text-muted mt-1"
+                        className="text-xs text-text-muted mt-1 select-text"
                       >
                         Failures always preserve terminal for debugging
                       </p>
@@ -521,7 +524,7 @@ export function RecipeEditor({
                       />
                       <p
                         id={`terminal-dev-command-help-${index}`}
-                        className="text-xs text-text-muted mt-1"
+                        className="text-xs text-text-muted mt-1 select-text"
                       >
                         Leave empty to use project default or auto-detect from package.json
                       </p>
@@ -552,7 +555,7 @@ export function RecipeEditor({
                       </select>
                       <p
                         id={`terminal-dev-exit-behavior-help-${index}`}
-                        className="text-xs text-text-muted mt-1"
+                        className="text-xs text-text-muted mt-1 select-text"
                       >
                         Failures always preserve terminal for debugging
                       </p>

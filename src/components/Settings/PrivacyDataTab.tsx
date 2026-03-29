@@ -189,13 +189,15 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   </div>
                   <div>
                     <div className="text-sm font-medium text-canopy-text">{option.title}</div>
-                    <div className="text-xs text-canopy-text/50 mt-0.5">{option.description}</div>
+                    <div className="text-xs text-canopy-text/50 mt-0.5 select-text">
+                      {option.description}
+                    </div>
                   </div>
                 </div>
               </button>
             ))}
           </div>
-          <p className="text-xs text-canopy-text/40 mt-2">
+          <p className="text-xs text-canopy-text/40 mt-2 select-text">
             Changes to telemetry level take effect on next app restart.
           </p>
         </SettingsSection>
@@ -247,7 +249,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                 </button>
               ))}
             </div>
-            <p className="text-xs text-canopy-text/40 mt-2">
+            <p className="text-xs text-canopy-text/40 mt-2 select-text">
               Log pruning happens at startup. Changing this setting takes effect on next launch.
             </p>
           </SettingsSection>

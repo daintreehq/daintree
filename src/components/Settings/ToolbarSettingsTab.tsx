@@ -162,7 +162,7 @@ function SortableButtonItem({ buttonId, isVisible, onToggle }: SortableButtonIte
         <div className="text-canopy-text">{metadata.icon}</div>
         <div className="flex-1">
           <div className="text-sm font-medium text-canopy-text">{metadata.label}</div>
-          <div className="text-xs text-canopy-text/50">{metadata.description}</div>
+          <div className="text-xs text-canopy-text/50 select-text">{metadata.description}</div>
         </div>
       </div>
       <input
@@ -334,7 +334,7 @@ export function ToolbarSettingsTab() {
               <option value="browser">Browser</option>
               <option value="dev-server">Dev Server</option>
             </select>
-            <p className="text-xs text-canopy-text/40">
+            <p className="text-xs text-canopy-text/40 select-text">
               Default option to highlight when opening the launcher palette
             </p>
           </div>

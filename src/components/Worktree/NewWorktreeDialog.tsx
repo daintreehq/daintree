@@ -882,7 +882,7 @@ export function NewWorktreeDialog({
                     </div>
                   </PopoverContent>
                 </Popover>
-                <p className="text-xs text-canopy-text/60">
+                <p className="text-xs text-canopy-text/60 select-text">
                   {parsedBranch.hasPrefix ? (
                     <>
                       <span className="font-mono text-canopy-accent">{parsedBranch.prefix}/</span>

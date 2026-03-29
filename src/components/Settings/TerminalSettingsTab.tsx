@@ -298,7 +298,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           />
 
           {performanceMode && (
-            <p className="text-xs text-status-warning/80 flex items-center gap-1.5">
+            <p className="text-xs text-status-warning/80 flex items-center gap-1.5 select-text">
               <AlertTriangle className="w-3 h-3" />
               New terminals will use reduced scrollback. Existing terminals are unchanged until
               respawned.
@@ -385,7 +385,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 disabled={panelLimits.warningsDisabled}
                 className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
               />
-              <p className="text-xs text-canopy-text/40">
+              <p className="text-xs text-canopy-text/40 select-text">
                 Show a dismissible banner when panel count reaches this number.
               </p>
             </div>
@@ -407,7 +407,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 disabled={panelLimits.warningsDisabled}
                 className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
               />
-              <p className="text-xs text-canopy-text/40">
+              <p className="text-xs text-canopy-text/40 select-text">
                 Require explicit confirmation before adding panels beyond this count.
               </p>
             </div>
@@ -429,7 +429,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               }}
               className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
             />
-            <p className="text-xs text-canopy-text/40">
+            <p className="text-xs text-canopy-text/40 select-text">
               Absolute maximum number of panels. Cannot be bypassed.
             </p>
           </div>
@@ -581,7 +581,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                     {Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)}
                   </span>
                 </div>
-                <p className="text-xs text-canopy-text/40">
+                <p className="text-xs text-canopy-text/40 select-text">
                   Default split ratio when no worktree-specific ratio is saved.
                 </p>
               </div>
@@ -642,7 +642,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   onChange={(e) => handleValueChange(e.target.value)}
                   className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
                 />
-                <p className="text-xs text-canopy-text/40">
+                <p className="text-xs text-canopy-text/40 select-text">
                   {layoutConfig.strategy === "fixed-columns"
                     ? "Terminals will stack vertically when this many columns are filled."
                     : "Terminals will expand horizontally when this many rows are filled."}
@@ -650,7 +650,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               </div>
             )}
 
-            <p className="text-xs text-canopy-text/40 leading-relaxed">
+            <p className="text-xs text-canopy-text/40 leading-relaxed select-text">
               {layoutConfig.strategy === "automatic" &&
                 "Uses a balanced square grid that adapts to the number of terminals (1-4 terminals use 2 columns, 5+ use up to 4 columns)."}
               {layoutConfig.strategy === "fixed-columns" &&
@@ -789,7 +789,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             ))}
           </div>
 
-          <p className="text-xs text-canopy-text/50 leading-relaxed">
+          <p className="text-xs text-canopy-text/50 leading-relaxed select-text">
             Screen reader mode adds an accessible DOM overlay to each terminal, which has a
             performance cost. For best results, only enable when using a screen reader.
           </p>

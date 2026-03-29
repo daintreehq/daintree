@@ -188,7 +188,7 @@ export function EnvironmentSettingsTab() {
       <div className="flex flex-col items-center justify-center py-16 text-center">
         <FolderOpen className="w-10 h-10 text-canopy-text/20 mb-3" />
         <p className="text-sm text-canopy-text/60 mb-1">No project open</p>
-        <p className="text-xs text-canopy-text/40 max-w-xs">
+        <p className="text-xs text-canopy-text/40 max-w-xs select-text">
           Environment variables are project-specific. Open a project to configure its environment
           variables.
         </p>
@@ -212,7 +212,7 @@ export function EnvironmentSettingsTab() {
       id="environment-variables"
     >
       <div className="space-y-3">
-        <p className="text-xs text-canopy-text/50">
+        <p className="text-xs text-canopy-text/50 select-text">
           Variable names containing KEY, SECRET, TOKEN, or PASSWORD are stored securely using OS
           encryption <Lock className="inline h-3 w-3" />.
         </p>

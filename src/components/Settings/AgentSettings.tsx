@@ -208,7 +208,7 @@ export function AgentSettings({
         <div className="flex items-center justify-between">
           <div>
             <h4 className="text-sm font-medium mb-1">CLI Agents</h4>
-            <p className="text-xs text-canopy-text/50">
+            <p className="text-xs text-canopy-text/50 select-text">
               Configure global agent preferences and per-agent settings
             </p>
           </div>
@@ -239,7 +239,7 @@ export function AgentSettings({
           >
             <div className="pb-3 border-b border-canopy-border">
               <h4 className="text-sm font-medium text-canopy-text">Global Agent Settings</h4>
-              <p className="text-xs text-canopy-text/50 mt-0.5">
+              <p className="text-xs text-canopy-text/50 mt-0.5 select-text">
                 Settings that apply across all agents
               </p>
             </div>
@@ -260,7 +260,7 @@ export function AgentSettings({
                   </option>
                 ))}
               </select>
-              <p className="text-xs text-canopy-text/40">
+              <p className="text-xs text-canopy-text/40 select-text">
                 Agent used for automated workflows ("What's Next?", onboarding, project
                 explanations). Distinct from the Portal "Default New Tab Agent" which controls the
                 browser panel opened by the + button.
@@ -280,7 +280,7 @@ export function AgentSettings({
                   <h4 className="text-sm font-medium text-canopy-text">
                     {activeAgent.name} Settings
                   </h4>
-                  <p className="text-xs text-canopy-text/50">
+                  <p className="text-xs text-canopy-text/50 select-text">
                     Configure how {activeAgent.name.toLowerCase()} runs in terminals
                   </p>
                 </div>
@@ -425,7 +425,9 @@ export function AgentSettings({
                 onChange={(e) => updateAgent(activeAgent.id, { customFlags: e.target.value })}
                 placeholder="--verbose --max-tokens=4096"
               />
-              <p className="text-xs text-canopy-text/40">Extra CLI flags appended when launching</p>
+              <p className="text-xs text-canopy-text/40 select-text">
+                Extra CLI flags appended when launching
+              </p>
             </div>
 
             {/* Help Output */}
@@ -463,7 +465,7 @@ export function AgentSettings({
                   <div className="flex items-center justify-between">
                     <div>
                       <h5 className="text-sm font-medium text-canopy-text">Installation</h5>
-                      <p className="text-xs text-canopy-text/50">
+                      <p className="text-xs text-canopy-text/50 select-text">
                         {activeAgent.name} CLI not found
                       </p>
                     </div>
@@ -572,7 +574,7 @@ export function AgentSettings({
                         )}
 
                       <div className="px-3 py-2 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border/50">
-                        <p className="text-xs text-canopy-text/40">
+                        <p className="text-xs text-canopy-text/40 select-text">
                           ⚠️ Review commands before running them in your terminal
                         </p>
                       </div>

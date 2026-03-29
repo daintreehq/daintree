@@ -159,7 +159,9 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
       <div className="flex items-center justify-between">
         <div>
           <h5 className="text-sm font-medium text-canopy-text">Help Output</h5>
-          <p className="text-xs text-canopy-text/50">Available CLI flags for {agentName}</p>
+          <p className="text-xs text-canopy-text/50 select-text">
+            Available CLI flags for {agentName}
+          </p>
         </div>
 
         {isCliAvailable && (
@@ -200,7 +202,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
       {!isLoading && isCliAvailable === false && (
         <div className="px-4 py-6 rounded-[var(--radius-md)] border border-canopy-border bg-surface text-center space-y-2">
           <p className="text-sm text-canopy-text/60">CLI not found</p>
-          <p className="text-xs text-canopy-text/40">
+          <p className="text-xs text-canopy-text/40 select-text">
             {agentName} is not installed or not in your PATH
           </p>
           {usageUrl && (

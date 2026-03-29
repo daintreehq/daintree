@@ -38,7 +38,7 @@ export function SettingsSection({
             </span>
           )}
         </h4>
-        <p className="text-xs text-canopy-text/50">{description}</p>
+        <p className="text-xs text-canopy-text/50 select-text">{description}</p>
       </div>
       {children}
     </div>

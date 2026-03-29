@@ -171,7 +171,7 @@ export function McpServerSettingsTab() {
                   {copied ? "Copied!" : "Copy MCP config"}
                 </button>
 
-                <p className="text-xs text-canopy-text/50 leading-relaxed">
+                <p className="text-xs text-canopy-text/50 leading-relaxed select-text">
                   Paste the copied config into your MCP client (e.g. Claude Code, Cursor,{" "}
                   <code className="text-canopy-text/70">~/.canopy/mcp.json</code>).
                   {status.apiKey && " The config includes the authorization header."}
@@ -216,7 +216,7 @@ export function McpServerSettingsTab() {
               </button>
             </div>
             {status.port && status.configuredPort && status.port !== status.configuredPort && (
-              <p className="text-xs text-status-warning/80 mt-2">
+              <p className="text-xs text-status-warning/80 mt-2 select-text">
                 Configured port {status.configuredPort} was in use — bound to {status.port} instead.
               </p>
             )}
