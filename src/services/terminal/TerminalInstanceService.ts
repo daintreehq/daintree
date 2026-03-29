@@ -140,7 +140,10 @@ class TerminalInstanceService {
       onPostWake: (id) => this.handlePostWake(id),
       onTierApplied: (id, tier, managed) => {
         // Hibernation timer management
-        if (tier === TerminalRefreshTier.BACKGROUND && managed.kind !== "agent") {
+        if (
+          tier === TerminalRefreshTier.BACKGROUND &&
+          (managed.kind !== "agent" || managed.canonicalAgentState === "completed")
+        ) {
           if (!managed.hibernationTimer && !managed.isHibernated) {
             managed.hibernationTimer = setTimeout(() => {
               managed.hibernationTimer = undefined;
@@ -1481,6 +1484,15 @@ class TerminalInstanceService {
     restoreScrollback(managed);
   }
 
+  reduceScrollbackAllBackground(targetLines: number): void {
+    for (const managed of this.instances.values()) {
+      if (managed.isHibernated) continue;
+      if (managed.isFocused) continue;
+      if (managed.kind === "agent" && managed.canonicalAgentState !== "completed") continue;
+      reduceScrollback(managed, targetLines);
+    }
+  }
+
   addExitListener(id: string, cb: (exitCode: number) => void): () => void {
     const managed = this.instances.get(id);
     if (!managed) return () => {};
@@ -1494,7 +1506,12 @@ class TerminalInstanceService {
 
   hibernate(id: string): void {
     const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated || managed.kind === "agent") return;
+    if (
+      !managed ||
+      managed.isHibernated ||
+      (managed.kind === "agent" && managed.canonicalAgentState !== "completed")
+    )
+      return;
 
     logDebug(`[TIS.hibernate] Hibernating terminal ${id}`);
 

@@ -37,6 +37,7 @@ import type { CrashType } from "@shared/types/pty-host";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logWarn, logError } from "@/utils/logger";
 import { useResourceMonitoringStore } from "./resourceMonitoringStore";
+import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
 
 export type { TerminalInstance, AddTerminalOptions, QueuedCommand, CrashType };
 export { isAgentReady };
@@ -72,8 +73,12 @@ export function getTerminalRefreshTier(
     return TerminalRefreshTierEnum.FOCUSED;
   }
 
-  // Agent terminals stay at VISIBLE minimum — they must never be hibernated
-  if (isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId)) {
+  // Active agent terminals stay at VISIBLE minimum to preserve live output.
+  // Completed agents drop to BACKGROUND so they can be hibernated to free memory.
+  if (
+    isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId) &&
+    terminal.agentState !== "completed"
+  ) {
     return TerminalRefreshTierEnum.VISIBLE;
   }
 
@@ -516,6 +521,7 @@ let spawnResultUnsubscribe: (() => void) | null = null;
 let reduceScrollbackUnsubscribe: (() => void) | null = null;
 let restoreScrollbackUnsubscribe: (() => void) | null = null;
 let resourceMetricsUnsubscribe: (() => void) | null = null;
+let reclaimMemoryUnsubscribe: (() => void) | null = null;
 let recoveryTimer: NodeJS.Timeout | null = null;
 let beforeUnloadHandler: (() => void) | null = null;
 
@@ -611,6 +617,10 @@ export function cleanupTerminalStoreListeners() {
   if (resourceMetricsUnsubscribe) {
     resourceMetricsUnsubscribe();
     resourceMetricsUnsubscribe = null;
+  }
+  if (reclaimMemoryUnsubscribe) {
+    reclaimMemoryUnsubscribe();
+    reclaimMemoryUnsubscribe = null;
   }
   if (recoveryTimer) {
     clearTimeout(recoveryTimer);
@@ -920,6 +930,11 @@ export function setupTerminalStoreListeners() {
     if (rmStore.enabled) {
       rmStore.updateMetrics(data.metrics);
     }
+  });
+
+  // Memory pressure: reduce scrollback on all background terminals
+  reclaimMemoryUnsubscribe = window.electron.terminal.onReclaimMemory(() => {
+    terminalInstanceService.reduceScrollbackAllBackground(SCROLLBACK_BACKGROUND);
   });
 
   // Flush pending terminal persistence on window close to prevent data loss
