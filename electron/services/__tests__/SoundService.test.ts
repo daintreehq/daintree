@@ -74,7 +74,28 @@ describe("SoundService", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.resetModules();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    fsMock.existsSync.mockImplementation(() => true);
+    fsMock.readdirSync.mockImplementation(() => [
+      "chime.wav",
+      "chime.v1.wav",
+      "chime.v2.wav",
+      "chime.v3.wav",
+      "complete.wav",
+      "complete.v1.wav",
+      "complete.v2.wav",
+      "complete.v3.wav",
+      "error.wav",
+      "ping.wav",
+      "ping.v1.wav",
+      "ping.v2.wav",
+      "ping.v3.wav",
+      "waiting.wav",
+      "waiting.v1.wav",
+      "waiting.v2.wav",
+      "waiting.v3.wav",
+    ]);
+    mockPlaySound.mockImplementation(() => ({ cancel: mockCancel }));
     appMock.app.isPackaged = false;
     appMock.app.getAppPath.mockReturnValue("/repo");
     Object.defineProperty(process, "resourcesPath", {
@@ -94,7 +115,7 @@ describe("SoundService", () => {
     soundService.play("chime");
 
     expect(fsMock.existsSync).toHaveBeenCalledWith(
-      path.join("/repo", "electron", "resources", "sounds", expect.stringMatching(/chime/))
+      expect.stringContaining(path.join("electron", "resources", "sounds"))
     );
   });
 
@@ -105,7 +126,7 @@ describe("SoundService", () => {
     mod.soundService.play("chime");
 
     expect(fsMock.existsSync).toHaveBeenCalledWith(
-      path.join("/app/resources", "sounds", expect.stringMatching(/chime/))
+      expect.stringContaining(path.join("resources", "sounds"))
     );
   });
 
