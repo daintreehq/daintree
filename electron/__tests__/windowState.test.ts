@@ -15,7 +15,7 @@ const screenMock = vi.hoisted(() => ({
   })),
 }));
 
-const constructorCalls: any[] = [];
+const constructorCalls: unknown[] = [];
 const eventHandlers = new Map<string, (...args: unknown[]) => void>();
 const winInstance = {
   getBounds: vi.fn(() => ({ x: 100, y: 100, width: 1200, height: 800 })),
@@ -30,7 +30,8 @@ const winInstance = {
 };
 
 vi.mock("electron", () => {
-  const BW = vi.fn(function (this: any, opts: any) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mock constructor requires any for this binding
+  const BW = vi.fn(function (this: any, opts: unknown) {
     constructorCalls.push(opts);
     Object.assign(this, winInstance);
     this.on = vi.fn((event: string, handler: (...args: unknown[]) => void) => {

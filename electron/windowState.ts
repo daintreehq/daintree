@@ -4,6 +4,7 @@ import { store } from "./store.js";
 const LEGACY_KEY = "__legacy__";
 const MRU_OFFSET_PX = 30;
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic constraint requires any for assignability
 function debounce<T extends (...args: any[]) => void>(func: T, wait: number): T {
   let timeout: NodeJS.Timeout | null = null;
   return ((...args: Parameters<T>) => {
