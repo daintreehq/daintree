@@ -189,6 +189,22 @@ export const projectClient = {
     return window.electron.project.deleteRecipe(projectId, recipeId);
   },
 
+  exportRecipeToFile: (name: string, json: string): Promise<boolean> => {
+    return window.electron.project.exportRecipeToFile(name, json);
+  },
+
+  importRecipeFromFile: (): Promise<string | null> => {
+    return window.electron.project.importRecipeFromFile();
+  },
+
+  getInRepoRecipes: (projectId: string): Promise<TerminalRecipe[]> => {
+    return window.electron.project.getInRepoRecipes(projectId);
+  },
+
+  syncInRepoRecipes: (projectId: string, recipes: TerminalRecipe[]): Promise<void> => {
+    return window.electron.project.syncInRepoRecipes(projectId, recipes);
+  },
+
   getTerminals: (projectId: string): Promise<TerminalSnapshot[]> => {
     return window.electron.project.getTerminals(projectId);
   },
