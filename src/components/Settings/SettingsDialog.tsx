@@ -38,7 +38,7 @@ import {
   KeyRound,
   Shield,
   FileCode,
-  Zap,
+  GitBranch,
   Command,
   CookingPot,
 } from "lucide-react";
@@ -832,7 +832,7 @@ export function SettingsDialog({
     troubleshooting: "Troubleshooting",
     "project:general": "General",
     "project:context": "Context",
-    "project:automation": "Automation",
+    "project:automation": "Worktree Setup",
     "project:recipes": "Recipes",
     "project:commands": "Commands",
     "project:notifications": "Notifications",
@@ -858,7 +858,7 @@ export function SettingsDialog({
     troubleshooting: <LifeBuoy className="w-5 h-5 text-text-secondary" />,
     "project:general": <SettingsIcon className="w-5 h-5 text-text-secondary" />,
     "project:context": <FileCode className="w-5 h-5 text-text-secondary" />,
-    "project:automation": <Zap className="w-5 h-5 text-text-secondary" />,
+    "project:automation": <GitBranch className="w-5 h-5 text-text-secondary" />,
     "project:recipes": <CookingPot className="w-5 h-5 text-text-secondary" />,
     "project:commands": <Command className="w-5 h-5 text-text-secondary" />,
     "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,
@@ -1147,8 +1147,8 @@ export function SettingsDialog({
                   />
                   <NavItem
                     tab="project:automation"
-                    icon={<Zap className="w-4 h-4" />}
-                    label="Automation"
+                    icon={<GitBranch className="w-4 h-4" />}
+                    label="Worktree Setup"
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts["project:automation"]}
