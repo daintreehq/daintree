@@ -82,7 +82,6 @@ export type { ActionPaletteItem, UseActionPaletteReturn } from "./useActionPalet
 
 export { useDoubleShift } from "./useDoubleShift";
 
-export { useUpdateListener } from "./useUpdateListener";
 export { useMainProcessToastListener } from "./useMainProcessToastListener";
 
 export { useAnimatedPresence } from "./useAnimatedPresence";

@@ -121,7 +121,6 @@ import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
-import { UpdateNotification } from "./components/UpdateNotification";
 import { OnboardingFlow } from "./components/Onboarding/OnboardingFlow";
 import { NewsletterStep } from "./components/Onboarding/NewsletterStep";
 import { GettingStartedChecklist } from "./components/Onboarding/GettingStartedChecklist";
@@ -1656,7 +1655,6 @@ function App() {
       <Toaster />
       <ShortcutHint />
       <ReEntrySummary state={reEntrySummary} />
-      <UpdateNotification />
       <OnboardingFlow
         availability={availability}
         onRefreshSettings={refreshSettings}
