@@ -1,11 +1,23 @@
-import type { BrowserWindow } from "electron";
+import type { BrowserWindow, MessagePortMain } from "electron";
+import type { EventBuffer } from "../services/EventBuffer.js";
+import type { PortalManager } from "../services/PortalManager.js";
+import type { ProjectSwitchService } from "../services/ProjectSwitchService.js";
+
+export interface WindowServices {
+  portalManager?: PortalManager;
+  eventBuffer?: EventBuffer;
+  projectSwitchService?: ProjectSwitchService;
+  activeRendererPort?: MessagePortMain;
+  activePtyHostPort?: MessagePortMain;
+}
 
 export interface WindowContext {
   windowId: number;
   webContentsId: number;
   browserWindow: BrowserWindow;
   projectPath: string | null;
-  services: Record<string, unknown>;
+  abortController: AbortController;
+  services: WindowServices;
   cleanup: Array<() => void>;
   /** @internal Set to true after unregister runs to prevent double-cleanup from deferred event listeners. */
   _unregistered?: boolean;
@@ -33,6 +45,7 @@ export class WindowRegistry {
       webContentsId,
       browserWindow: win,
       projectPath: opts?.projectPath ?? null,
+      abortController: new AbortController(),
       services: {},
       cleanup: [],
     };
@@ -59,6 +72,7 @@ export class WindowRegistry {
     const ctx = this.windows.get(windowId);
     if (!ctx || ctx._unregistered) return;
     ctx._unregistered = true;
+    ctx.abortController.abort();
 
     for (const fn of ctx.cleanup) {
       try {

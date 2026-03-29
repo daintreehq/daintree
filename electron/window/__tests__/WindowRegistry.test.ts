@@ -292,4 +292,76 @@ describe("WindowRegistry", () => {
 
     expect(ctx.projectPath).toBeNull();
   });
+
+  describe("AbortController lifecycle", () => {
+    it("creates an AbortController on register", () => {
+      const registry = new WindowRegistry();
+      const win = makeMockWindow(1, 100);
+
+      const ctx = registry.register(win);
+
+      expect(ctx.abortController).toBeInstanceOf(AbortController);
+      expect(ctx.abortController.signal.aborted).toBe(false);
+    });
+
+    it("aborts signal on unregister", () => {
+      const registry = new WindowRegistry();
+      const win = makeMockWindow(1, 100);
+
+      const ctx = registry.register(win);
+      registry.unregister(1);
+
+      expect(ctx.abortController.signal.aborted).toBe(true);
+    });
+
+    it("aborts signal when closed event fires", () => {
+      const registry = new WindowRegistry();
+      const win = makeMockWindow(1, 100);
+
+      const ctx = registry.register(win);
+      win._fireClosed();
+
+      expect(ctx.abortController.signal.aborted).toBe(true);
+    });
+
+    it("abort is idempotent — both closed and destroyed fire without error", () => {
+      const registry = new WindowRegistry();
+      const win = makeMockWindow(1, 100);
+
+      const ctx = registry.register(win);
+      win._fireClosed();
+      win._fireDestroyed();
+
+      expect(ctx.abortController.signal.aborted).toBe(true);
+    });
+
+    it("dispose aborts all controllers", () => {
+      const registry = new WindowRegistry();
+      const win1 = makeMockWindow(1, 100);
+      const win2 = makeMockWindow(2, 200);
+
+      const ctx1 = registry.register(win1);
+      const ctx2 = registry.register(win2);
+
+      registry.dispose();
+
+      expect(ctx1.abortController.signal.aborted).toBe(true);
+      expect(ctx2.abortController.signal.aborted).toBe(true);
+    });
+
+    it("signal is aborted before cleanup callbacks run", () => {
+      const registry = new WindowRegistry();
+      const win = makeMockWindow(1, 100);
+
+      const ctx = registry.register(win);
+      let signalAbortedDuringCleanup = false;
+      ctx.cleanup.push(() => {
+        signalAbortedDuringCleanup = ctx.abortController.signal.aborted;
+      });
+
+      registry.unregister(1);
+
+      expect(signalAbortedDuringCleanup).toBe(true);
+    });
+  });
 });
