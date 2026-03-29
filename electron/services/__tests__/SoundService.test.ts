@@ -1,5 +1,14 @@
 import path from "path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from "vitest";
 
 const fsMock = vi.hoisted(() => ({
   existsSync: vi.fn<(p: string) => boolean>(() => true),
