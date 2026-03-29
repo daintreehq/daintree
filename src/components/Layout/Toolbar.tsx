@@ -1438,7 +1438,7 @@ export function Toolbar({
               ) : (
                 <>
                   <span className="text-xs font-medium text-canopy-text tracking-wide truncate min-w-0">
-                    Canopy Command Center
+                    Canopy
                   </span>
                   <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent shrink-0">
                     Beta

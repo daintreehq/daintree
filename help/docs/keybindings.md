@@ -75,7 +75,7 @@ All keybindings use macOS notation. On Windows/Linux, substitute **Ctrl** for **
 | Cmd+Alt+L   | Scroll to last activity            |
 | Cmd+Shift+I | Inject context                     |
 | Cmd+Shift+E | Send selection to another terminal |
-| Cmd+Shift+B | Bulk command center                |
+| Cmd+Shift+B | Bulk Operations                    |
 | Cmd+Shift+S | Stash current input                |
 | Cmd+Shift+X | Restore stashed input              |
 

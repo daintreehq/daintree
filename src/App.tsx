@@ -988,13 +988,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                       })
                     }
                     className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-tint/[0.06] rounded transition-colors"
-                    aria-label="Bulk command center"
+                    aria-label="Bulk Operations"
                   >
                     <Radio className="w-3.5 h-3.5" />
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  {createTooltipWithShortcut("Bulk command center", "Cmd+Shift+B")}
+                  {createTooltipWithShortcut("Bulk Operations", "Cmd+Shift+B")}
                 </TooltipContent>
               </Tooltip>
               <Tooltip>
