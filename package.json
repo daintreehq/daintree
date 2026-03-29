@@ -212,6 +212,10 @@
       {
         "from": "help",
         "to": "help"
+      },
+      {
+        "from": "electron/resources/sounds",
+        "to": "sounds"
       }
     ],
     "asarUnpack": [
