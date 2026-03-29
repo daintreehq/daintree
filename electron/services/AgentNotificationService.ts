@@ -306,7 +306,7 @@ class AgentNotificationService {
     this.clearWorkingPulse(terminalId);
   }
 
-  private scheduleWorkingPulse(terminalId: string, worktreeId?: string, agentId?: string): void {
+  private scheduleWorkingPulse(terminalId: string, _worktreeId?: string, _agentId?: string): void {
     this.clearWorkingPulse(terminalId);
 
     const settings = projectStore.getEffectiveNotificationSettings();
