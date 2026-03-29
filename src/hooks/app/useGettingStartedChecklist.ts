@@ -14,6 +14,7 @@ export interface GettingStartedChecklistState {
   dismiss: () => void;
   toggleCollapse: () => void;
   notifyOnboardingComplete: () => void;
+  markItem: (item: ChecklistItemId) => void;
 }
 
 let observerInitialized = false;
@@ -200,5 +201,6 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     dismiss,
     toggleCollapse,
     notifyOnboardingComplete,
+    markItem,
   };
 }

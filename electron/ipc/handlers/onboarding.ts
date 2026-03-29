@@ -9,7 +9,12 @@ type ChecklistState = OnboardingState["checklist"];
 const DEFAULT_CHECKLIST: ChecklistState = {
   dismissed: false,
   celebrationShown: false,
-  items: { openedProject: false, launchedAgent: false, createdWorktree: false },
+  items: {
+    openedProject: false,
+    launchedAgent: false,
+    createdWorktree: false,
+    subscribedNewsletter: false,
+  },
 };
 
 interface MigratePayload {
@@ -34,7 +39,12 @@ function getOnboardingState(): OnboardingState {
       checklist: {
         dismissed: true,
         celebrationShown: true,
-        items: { openedProject: true, launchedAgent: true, createdWorktree: true },
+        items: {
+          openedProject: true,
+          launchedAgent: true,
+          createdWorktree: true,
+          subscribedNewsletter: true,
+        },
       },
     };
   }
@@ -53,13 +63,18 @@ function getOnboardingState(): OnboardingState {
     };
   }
   const checklist = raw.checklist ?? DEFAULT_CHECKLIST;
+  const mergedItems = { ...DEFAULT_CHECKLIST.items, ...checklist.items };
   return {
     ...raw,
     agentSetupIds: Array.isArray(raw.agentSetupIds) ? raw.agentSetupIds : [],
     checklist: {
       ...DEFAULT_CHECKLIST,
       ...checklist,
-      items: { ...DEFAULT_CHECKLIST.items, ...checklist.items },
+      items: {
+        ...mergedItems,
+        subscribedNewsletter:
+          mergedItems.subscribedNewsletter || (raw.newsletterPromptSeen ?? false),
+      },
     },
   };
 }
@@ -95,7 +110,12 @@ export function registerOnboardingHandlers(): () => void {
         ? {
             dismissed: true,
             celebrationShown: true,
-            items: { openedProject: true, launchedAgent: true, createdWorktree: true },
+            items: {
+              openedProject: true,
+              launchedAgent: true,
+              createdWorktree: true,
+              subscribedNewsletter: true,
+            },
           }
         : state.checklist,
     };
@@ -182,7 +202,12 @@ export function registerOnboardingHandlers(): () => void {
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN));
 
   ipcMain.handle(CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM, (_event, item: unknown) => {
-    const validItems = ["openedProject", "launchedAgent", "createdWorktree"];
+    const validItems = [
+      "openedProject",
+      "launchedAgent",
+      "createdWorktree",
+      "subscribedNewsletter",
+    ];
     if (typeof item !== "string" || !validItems.includes(item)) return;
     const state = getOnboardingState();
     const key = item as keyof typeof state.checklist.items;

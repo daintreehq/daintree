@@ -22,19 +22,34 @@ import type { ChecklistState } from "@shared/types/ipc/maps";
 const allIncomplete: ChecklistState = {
   dismissed: false,
   celebrationShown: false,
-  items: { openedProject: false, launchedAgent: false, createdWorktree: false },
+  items: {
+    openedProject: false,
+    launchedAgent: false,
+    createdWorktree: false,
+    subscribedNewsletter: false,
+  },
 };
 
 const allComplete: ChecklistState = {
   dismissed: false,
   celebrationShown: false,
-  items: { openedProject: true, launchedAgent: true, createdWorktree: true },
+  items: {
+    openedProject: true,
+    launchedAgent: true,
+    createdWorktree: true,
+    subscribedNewsletter: true,
+  },
 };
 
 const mixedState: ChecklistState = {
   dismissed: false,
   celebrationShown: false,
-  items: { openedProject: true, launchedAgent: false, createdWorktree: false },
+  items: {
+    openedProject: true,
+    launchedAgent: false,
+    createdWorktree: false,
+    subscribedNewsletter: false,
+  },
 };
 
 describe("GettingStartedChecklist", () => {
@@ -42,6 +57,7 @@ describe("GettingStartedChecklist", () => {
     collapsed: false,
     onDismiss: vi.fn(),
     onToggleCollapse: vi.fn(),
+    onMarkItem: vi.fn(),
   };
 
   beforeEach(() => {
@@ -52,31 +68,32 @@ describe("GettingStartedChecklist", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
 
     const buttons = screen.getAllByRole("button", {
-      name: /open your project|ask ai to help with your code|start a parallel task/i,
+      name: /open your project|ask ai to help with your code|start a parallel task|stay in the loop/i,
     });
-    expect(buttons).toHaveLength(3);
+    expect(buttons).toHaveLength(4);
   });
 
   it("renders completed steps as non-interactive divs that still show labels", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allComplete} />);
 
     const stepButtons = screen.queryAllByRole("button", {
-      name: /open your project|ask ai to help with your code|start a parallel task/i,
+      name: /open your project|ask ai to help with your code|start a parallel task|stay in the loop/i,
     });
     expect(stepButtons).toHaveLength(0);
 
     expect(screen.getByText("Open your project")).toBeTruthy();
     expect(screen.getByText("Ask AI to help with your code")).toBeTruthy();
     expect(screen.getByText("Start a parallel task")).toBeTruthy();
+    expect(screen.getByText("Stay in the loop")).toBeTruthy();
   });
 
   it("renders mixed state correctly — only incomplete steps are buttons", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={mixedState} />);
 
     const stepButtons = screen.getAllByRole("button", {
-      name: /ask ai to help with your code|start a parallel task/i,
+      name: /ask ai to help with your code|start a parallel task|stay in the loop/i,
     });
-    expect(stepButtons).toHaveLength(2);
+    expect(stepButtons).toHaveLength(3);
 
     const completedButton = screen.queryByRole("button", { name: /open your project/i });
     expect(completedButton).toBeNull();
@@ -106,6 +123,26 @@ describe("GettingStartedChecklist", () => {
     expect(dispatchMock).toHaveBeenCalledWith("worktree.createDialog.open", undefined, {
       source: "user",
     });
+  });
+
+  it("dispatches system.openExternal with newsletter URL and calls onMarkItem when 'Stay in the loop' is clicked", () => {
+    render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /stay in the loop/i }));
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://canopyide.com/newsletter" },
+      { source: "user" }
+    );
+    expect(defaultProps.onMarkItem).toHaveBeenCalledWith("subscribedNewsletter");
+  });
+
+  it("does not call onMarkItem for non-markOnClick items", () => {
+    render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /open your project/i }));
+    expect(defaultProps.onMarkItem).not.toHaveBeenCalled();
   });
 
   it("does not call onDismiss or onToggleCollapse when a step is clicked", () => {

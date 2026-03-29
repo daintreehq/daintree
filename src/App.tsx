@@ -65,7 +65,6 @@ import {
   useCloudSyncWarning,
   useAccessibilityAnnouncements,
   useGettingStartedChecklist,
-  useDeferredNewsletterPrompt,
   useOrchestrationMilestones,
   useAgentWaitingNudge,
   useUnloadCleanup,
@@ -126,7 +125,6 @@ import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
 import { OnboardingFlow } from "./components/Onboarding/OnboardingFlow";
-import { NewsletterStep } from "./components/Onboarding/NewsletterStep";
 import { GettingStartedChecklist } from "./components/Onboarding/GettingStartedChecklist";
 import { CelebrationConfetti } from "./components/Onboarding/CelebrationConfetti";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -1339,7 +1337,6 @@ function App() {
   useShortcutHints(isStateLoaded);
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
   const onboardingOverlayActive = gettingStarted.visible || gettingStarted.showCelebration;
-  const deferredNewsletter = useDeferredNewsletterPrompt(isStateLoaded, onboardingOverlayActive);
   useUpdateListener(onboardingOverlayActive);
   useOrchestrationMilestones(isStateLoaded);
   useAgentWaitingNudge(isStateLoaded);
@@ -1770,10 +1767,10 @@ function App() {
           collapsed={gettingStarted.collapsed}
           onDismiss={gettingStarted.dismiss}
           onToggleCollapse={gettingStarted.toggleCollapse}
+          onMarkItem={gettingStarted.markItem}
         />
       )}
       {gettingStarted.showCelebration && <CelebrationConfetti />}
-      {deferredNewsletter.visible && <NewsletterStep onDismiss={deferredNewsletter.dismiss} />}
     </ErrorBoundary>
   );
 }

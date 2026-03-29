@@ -296,6 +296,7 @@ const storeOptions = {
           openedProject: false,
           launchedAgent: false,
           createdWorktree: false,
+          subscribedNewsletter: false,
         },
       },
     },

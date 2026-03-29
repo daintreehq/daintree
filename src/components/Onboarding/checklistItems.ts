@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, Mail } from "lucide-react";
 import { CanopyAgentIcon, WorktreeIcon } from "@/components/icons";
 import type { ActionId } from "@shared/types/actions";
 import type { ChecklistItemId } from "@shared/types/ipc/maps";
@@ -10,6 +10,8 @@ export interface ChecklistItemDef {
   description?: string;
   icon: ComponentType<{ className?: string }>;
   actionId: ActionId;
+  actionArgs?: unknown;
+  markOnClick?: boolean;
 }
 
 export const CHECKLIST_ITEMS: ChecklistItemDef[] = [
@@ -33,5 +35,14 @@ export const CHECKLIST_ITEMS: ChecklistItemDef[] = [
     description: "Work on two things at once without switching branches.",
     icon: WorktreeIcon,
     actionId: "worktree.createDialog.open",
+  },
+  {
+    id: "subscribedNewsletter",
+    label: "Stay in the loop",
+    description: "Get product updates and tips in your inbox.",
+    icon: Mail,
+    actionId: "system.openExternal",
+    actionArgs: { url: "https://canopyide.com/newsletter" },
+    markOnClick: true,
   },
 ];

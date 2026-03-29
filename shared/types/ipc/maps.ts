@@ -143,12 +143,17 @@ import type {
   DemoEncodeResult,
 } from "./demo.js";
 
-export type ChecklistItemId = "openedProject" | "launchedAgent" | "createdWorktree";
+export type ChecklistItemId =
+  | "openedProject"
+  | "launchedAgent"
+  | "createdWorktree"
+  | "subscribedNewsletter";
 
 export interface ChecklistItems {
   openedProject: boolean;
   launchedAgent: boolean;
   createdWorktree: boolean;
+  subscribedNewsletter: boolean;
 }
 
 export interface ChecklistState {
