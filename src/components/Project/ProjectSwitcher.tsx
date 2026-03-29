@@ -130,6 +130,7 @@ export function ProjectSwitcher() {
             onDeleteGroup={projectSwitcher.deleteGroup}
             onMoveGroupUp={projectSwitcher.moveGroupUp}
             onMoveGroupDown={projectSwitcher.moveGroupDown}
+            onHoverProject={projectSwitcher.prefetchProject}
           >
             <Button
               variant="outline"
@@ -193,6 +194,7 @@ export function ProjectSwitcher() {
         onDeleteGroup={projectSwitcher.deleteGroup}
         onMoveGroupUp={projectSwitcher.moveGroupUp}
         onMoveGroupDown={projectSwitcher.moveGroupDown}
+        onHoverProject={projectSwitcher.prefetchProject}
       >
         <TooltipProvider>
           <Tooltip>

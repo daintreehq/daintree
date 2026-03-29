@@ -1548,6 +1548,7 @@ function App() {
         onDeleteGroup={projectSwitcherPalette.deleteGroup}
         onMoveGroupUp={projectSwitcherPalette.moveGroupUp}
         onMoveGroupDown={projectSwitcherPalette.moveGroupDown}
+        onHoverProject={projectSwitcherPalette.prefetchProject}
       />
       <ConfirmDialog
         isOpen={projectSwitcherPalette.stopConfirmProjectId != null}
