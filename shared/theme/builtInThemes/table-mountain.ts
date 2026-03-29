@@ -127,7 +127,7 @@ export const theme: BuiltInThemeSource = {
     "pulse-range-bg": "#F3F0EB",
     "pulse-ring-offset": "#FDFBF8",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #E4DED6 25%, #EDE9E2 50%, #E4DED6 75%)",
-    "settings-header-bg": "rgba(228,222,214,0.50)",
+    "dialog-header-bg": "rgba(228,222,214,0.50)",
     "settings-kbd-bg": "#F4F1EC",
     "settings-nav-active-bg": "rgba(60,48,38,0.05)",
     "settings-nav-active-shadow":

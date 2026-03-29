@@ -99,7 +99,7 @@ export const theme: BuiltInThemeSource = {
     "settings-dialog-bg": "#1d1d1e",
     "settings-card-bg": "#232324",
     "settings-list-item-bg": "#232324",
-    "settings-header-bg": "rgba(19,19,18,0.60)",
+    "dialog-header-bg": "rgba(19,19,18,0.60)",
     "settings-kbd-bg": "#19191A",
     "settings-nav-active-bg": "rgba(255,255,255,0.04)",
     "settings-nav-active-shadow": "none",

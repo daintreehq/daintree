@@ -1207,7 +1207,7 @@ export function SettingsDialog({
         </div>
 
         <div className="settings-shell flex-1 flex flex-col min-w-0">
-          <div className="settings-header flex items-center justify-between px-6 py-4 border-b border-canopy-border shrink-0">
+          <div className="dialog-header flex items-center justify-between px-6 py-4 border-b border-canopy-border shrink-0">
             <h3 className="text-lg font-medium text-canopy-text flex items-center gap-2">
               {isSearching ? (
                 <>
