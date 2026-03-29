@@ -22,6 +22,8 @@ const soundServiceMock = vi.hoisted(() => ({
   preview: vi.fn(),
   previewFile: vi.fn(),
   cancel: vi.fn(),
+  playPulse: vi.fn(),
+  cancelPulse: vi.fn(),
   getVariants: vi.fn(() => []),
   getVariantCount: vi.fn(() => 1),
 }));
@@ -54,6 +56,8 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
   escalationSoundFile: "ping.wav",
   waitingEscalationEnabled: true,
   waitingEscalationDelayMs: 180_000,
+  workingPulseEnabled: false,
+  workingPulseSoundFile: "pulse.wav",
 };
 
 const DEFAULT_APP_STATE = {
@@ -672,6 +676,187 @@ describe("AgentNotificationService", () => {
       vi.advanceTimersByTime(100); // 0ms flush timer would have fired
 
       expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("working pulse", () => {
+    it("does not start pulse when workingPulseEnabled is false", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: false });
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(30_000);
+
+      expect(soundServiceMock.playPulse).not.toHaveBeenCalled();
+    });
+
+    it("does not start pulse when soundEnabled is false", () => {
+      mockStore({ soundEnabled: false, workingPulseEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(30_000);
+
+      expect(soundServiceMock.playPulse).not.toHaveBeenCalled();
+    });
+
+    it("does not start pulse for unwatched grid terminal", () => {
+      mockStore(
+        { soundEnabled: true, workingPulseEnabled: true },
+        {
+          terminals: [
+            {
+              id: "term-1",
+              kind: "agent",
+              agentId: "agent-1",
+              title: "Claude Agent",
+              location: "grid",
+              worktreeId: "wt-1",
+            },
+          ],
+        }
+      );
+      agentNotificationService.syncWatchedPanels([]);
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(30_000);
+
+      expect(soundServiceMock.playPulse).not.toHaveBeenCalled();
+    });
+
+    it("starts pulse after 10s for a watched terminal in working state", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+
+      // Before 10s — no pulse yet
+      vi.advanceTimersByTime(9_999);
+      expect(soundServiceMock.playPulse).not.toHaveBeenCalled();
+
+      // At 10s — first pulse fires
+      vi.advanceTimersByTime(1);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledWith("pulse.wav");
+    });
+
+    it("starts pulse for docked terminal with escalation enabled", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+      agentNotificationService.syncWatchedPanels([]);
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+    });
+
+    it("fires recurring pulses at ~8-10s intervals", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+
+      // Advance past max interval to guarantee next pulse
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(2);
+
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(3);
+    });
+
+    it("stops pulse immediately when agent leaves working state", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+
+      // Agent transitions to completed
+      events.emit("agent:state-changed", makePayload("completed", "working"));
+      soundServiceMock.playPulse.mockClear();
+
+      vi.advanceTimersByTime(30_000);
+      expect(soundServiceMock.playPulse).not.toHaveBeenCalled();
+      expect(soundServiceMock.cancelPulse).toHaveBeenCalled();
+    });
+
+    it("stops pulse on acknowledgeWorkingPulse", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+
+      agentNotificationService.acknowledgeWorkingPulse("term-1");
+      soundServiceMock.playPulse.mockClear();
+
+      vi.advanceTimersByTime(30_000);
+      expect(soundServiceMock.playPulse).not.toHaveBeenCalled();
+    });
+
+    it("stops pulse on dispose", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+
+      agentNotificationService.dispose();
+      soundServiceMock.playPulse.mockClear();
+
+      vi.advanceTimersByTime(30_000);
+      expect(soundServiceMock.playPulse).not.toHaveBeenCalled();
+      expect(soundServiceMock.cancelPulse).toHaveBeenCalled();
+    });
+
+    it("restarts fresh 10s delay when agent re-enters working", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+
+      // Leave working, re-enter
+      events.emit("agent:state-changed", makePayload("completed", "working"));
+      soundServiceMock.playPulse.mockClear();
+
+      events.emit("agent:state-changed", makePayload("working", "completed"));
+
+      // 9s after re-entry — not yet
+      vi.advanceTimersByTime(9_000);
+      expect(soundServiceMock.playPulse).not.toHaveBeenCalled();
+
+      // 10s after re-entry — fires
+      vi.advanceTimersByTime(1_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops recurring pulse if settings change to disabled mid-interval", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+
+      // Disable pulse mid-interval
+      mockStore({ soundEnabled: true, workingPulseEnabled: false });
+      vi.advanceTimersByTime(10_000);
+
+      // Should not have fired again (guard check in tick)
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not start pulse for same-state working→working", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+
+      // Same-state transition — early-return in handleStateChanged
+      events.emit("agent:state-changed", makePayload("working", "working"));
+      soundServiceMock.playPulse.mockClear();
+
+      // Should continue existing pulse, not restart
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
     });
   });
 });

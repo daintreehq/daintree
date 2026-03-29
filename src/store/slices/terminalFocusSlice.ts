@@ -326,6 +326,9 @@ export const createTerminalFocusSlice =
         if (terminal?.agentState === "waiting") {
           window.electron?.notification?.acknowledgeWaiting(id);
         }
+        if (terminal?.agentState === "working") {
+          window.electron?.notification?.acknowledgeWorkingPulse(id);
+        }
         set({ activeDockTerminalId: id, focusedId: id });
       },
 
@@ -345,6 +348,9 @@ export const createTerminalFocusSlice =
         if (terminal.location === "dock") {
           if (terminal.agentState === "waiting") {
             window.electron?.notification?.acknowledgeWaiting(id);
+          }
+          if (terminal.agentState === "working") {
+            window.electron?.notification?.acknowledgeWorkingPulse(id);
           }
           set({ activeDockTerminalId: id, focusedId: id });
         } else {

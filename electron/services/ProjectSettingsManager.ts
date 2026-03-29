@@ -44,6 +44,8 @@ export class ProjectSettingsManager {
         overrides.waitingEscalationEnabled ?? global.waitingEscalationEnabled,
       waitingEscalationDelayMs:
         overrides.waitingEscalationDelayMs ?? global.waitingEscalationDelayMs,
+      workingPulseEnabled: overrides.workingPulseEnabled ?? global.workingPulseEnabled,
+      workingPulseSoundFile: overrides.workingPulseSoundFile ?? global.workingPulseSoundFile,
     };
   }
 

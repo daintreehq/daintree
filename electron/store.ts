@@ -115,6 +115,8 @@ export interface StoreSchema {
     escalationSoundFile: string;
     waitingEscalationEnabled: boolean;
     waitingEscalationDelayMs: number;
+    workingPulseEnabled: boolean;
+    workingPulseSoundFile: string;
   };
   userAgentRegistry: UserAgentRegistry;
   agentUpdateSettings: AgentUpdateSettings;
@@ -228,6 +230,8 @@ const storeOptions = {
       escalationSoundFile: "ping.wav",
       waitingEscalationEnabled: true,
       waitingEscalationDelayMs: 180_000,
+      workingPulseEnabled: false,
+      workingPulseSoundFile: "pulse.wav",
     },
     userAgentRegistry: {},
     agentUpdateSettings: {
