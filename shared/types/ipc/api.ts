@@ -171,6 +171,8 @@ export interface NotificationSettings {
   escalationSoundFile: string;
   waitingEscalationEnabled: boolean;
   waitingEscalationDelayMs: number;
+  workingPulseEnabled: boolean;
+  workingPulseSoundFile: string;
 }
 
 // ElectronAPI Type (exposed via preload)
@@ -902,6 +904,8 @@ export interface ElectronAPI {
     syncWatchedPanels(panelIds: string[]): void;
     /** Acknowledge a waiting agent escalation (cancels pending escalation timer) */
     acknowledgeWaiting(terminalId: string): void;
+    /** Acknowledge working pulse (cancels periodic pulse sound for the terminal) */
+    acknowledgeWorkingPulse(terminalId: string): void;
   };
   sound: {
     /** Listen for sound trigger events from main process */

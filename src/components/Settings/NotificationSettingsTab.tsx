@@ -12,6 +12,7 @@ const AVAILABLE_SOUNDS: { file: string; label: string }[] = [
   { file: "complete.wav", label: "Complete" },
   { file: "waiting.wav", label: "Waiting" },
   { file: "error.wav", label: "Error" },
+  { file: "pulse.wav", label: "Pulse" },
 ];
 
 const ESCALATION_DELAY_OPTIONS: { value: number; label: string }[] = [
@@ -31,6 +32,8 @@ const DEFAULT_SETTINGS: NotificationSettings = {
   escalationSoundFile: "ping.wav",
   waitingEscalationEnabled: true,
   waitingEscalationDelayMs: 180_000,
+  workingPulseEnabled: false,
+  workingPulseSoundFile: "pulse.wav",
 };
 
 type LoadState = "loading" | "ready" | "error";
@@ -157,6 +160,13 @@ export function NotificationSettingsTab() {
                 )}
               </div>
             )}
+            <SettingsCheckbox
+              id="notif-working-pulse"
+              label="Working pulse"
+              description="Play a quiet periodic sound while a watched or docked agent is working in the background"
+              checked={settings.workingPulseEnabled}
+              onChange={(v) => update({ workingPulseEnabled: v })}
+            />
           </div>
         </SettingsSection>
 
@@ -190,6 +200,10 @@ export function NotificationSettingsTab() {
                     {
                       label: "Escalation sound",
                       field: "escalationSoundFile" as const,
+                    },
+                    {
+                      label: "Working pulse sound",
+                      field: "workingPulseSoundFile" as const,
                     },
                   ] as const
                 ).map(({ label, field }) => (

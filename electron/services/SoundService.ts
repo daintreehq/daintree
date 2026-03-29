@@ -22,6 +22,7 @@ export const SOUND_FILES = {
   waiting: "waiting.wav",
   error: "error.wav",
   ping: "ping.wav",
+  pulse: "pulse.wav",
 } as const;
 
 export type SoundId = keyof typeof SOUND_FILES;
@@ -49,6 +50,7 @@ const PRIORITY_MAP: Record<string, number> = {
   chime: 3,
   complete: 3,
   ping: 4,
+  pulse: 5,
 };
 
 /**
@@ -117,6 +119,14 @@ class SoundService {
       voice.handle.cancel();
     }
     this.activeVoices = [];
+  }
+
+  playPulse(soundFile: string): void {
+    this.playBypassed(soundFile);
+  }
+
+  cancelPulse(): void {
+    this.cancel();
   }
 
   getVariants(soundFile: string): string[] {

@@ -1925,6 +1925,8 @@ const api: ElectronAPI = {
       ipcRenderer.send(CHANNELS.NOTIFICATION_SYNC_WATCHED, panelIds),
     acknowledgeWaiting: (terminalId: string) =>
       ipcRenderer.send(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, { terminalId }),
+    acknowledgeWorkingPulse: (terminalId: string) =>
+      ipcRenderer.send(CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE, { terminalId }),
     onShowToast: (
       callback: (payload: {
         type: "success" | "error" | "info" | "warning";
