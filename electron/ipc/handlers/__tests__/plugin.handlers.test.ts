@@ -30,18 +30,22 @@ beforeEach(() => {
 });
 
 describe("registerPluginHandlers", () => {
-  it("registers handlers for PLUGIN_LIST and PLUGIN_INVOKE", () => {
+  it("registers handlers for PLUGIN_LIST, PLUGIN_INVOKE, PLUGIN_TOOLBAR_BUTTONS, and PLUGIN_MENU_ITEMS", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(2);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(4);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:invoke", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:toolbar-buttons", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:menu-items", expect.any(Function));
   });
 
-  it("cleanup removes both handlers", () => {
+  it("cleanup removes all handlers", () => {
     const cleanup = registerPluginHandlers();
     cleanup();
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:list");
     expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:invoke");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:toolbar-buttons");
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledWith("plugin:menu-items");
   });
 
   it("PLUGIN_LIST handler delegates to pluginService.listPlugins", async () => {
