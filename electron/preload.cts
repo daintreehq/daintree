@@ -946,6 +946,12 @@ const api: ElectronAPI = {
       _typedOn(CHANNELS.TERMINAL_RESTORE_SCROLLBACK, callback),
 
     restartService: (): Promise<void> => _unwrappingInvoke(CHANNELS.TERMINAL_RESTART_SERVICE),
+
+    onReclaimMemory: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(CHANNELS.WINDOW_RECLAIM_MEMORY, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.WINDOW_RECLAIM_MEMORY, handler);
+    },
   },
 
   // Files API

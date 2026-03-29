@@ -276,6 +276,7 @@ export interface ElectronAPI {
     ): () => void;
     onRestoreScrollback(callback: (data: { terminalIds: string[] }) => void): () => void;
     restartService(): Promise<void>;
+    onReclaimMemory(callback: () => void): () => void;
   };
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;

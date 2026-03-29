@@ -127,8 +127,8 @@ describe("ProcessMemoryMonitor", () => {
     });
   });
 
-  it("emits warn log when Tab exceeds 1536 MB threshold", () => {
-    mockGetAppMetrics.mockReturnValue([makeMetric("Tab", 1600 * 1024, 200)]);
+  it("emits warn log when Tab exceeds 768 MB threshold", () => {
+    mockGetAppMetrics.mockReturnValue([makeMetric("Tab", 800 * 1024, 200)]);
 
     stop = startAppMetricsMonitor();
     vi.advanceTimersByTime(30_000);
@@ -136,8 +136,8 @@ describe("ProcessMemoryMonitor", () => {
     expect(logWarn).toHaveBeenCalledWith("process-memory-threshold-exceeded", {
       pid: 200,
       type: "Tab",
-      mb: 1600,
-      thresholdMb: 1536,
+      mb: 800,
+      thresholdMb: 768,
     });
   });
 
