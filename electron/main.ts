@@ -126,7 +126,7 @@ if (!gotTheLock) {
   setWindowRegistry(windowRegistry);
 
   async function createWindow(): Promise<void> {
-    const currentWindow = getMainWindow();
+    const currentWindow = windowRegistry.getPrimary()?.browserWindow ?? null;
     if (currentWindow && !currentWindow.isDestroyed()) {
       console.log("[MAIN] Main window already exists, focusing");
       if (currentWindow.isMinimized()) currentWindow.restore();
@@ -183,7 +183,7 @@ if (!gotTheLock) {
     setStopAppMetricsMonitor,
     getStopDiskSpaceMonitor,
     setStopDiskSpaceMonitor,
-    getMainWindow,
+    windowRegistry,
   });
 
   app.whenReady().then(async () => {

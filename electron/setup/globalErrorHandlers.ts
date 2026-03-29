@@ -2,7 +2,7 @@ import { app } from "electron";
 import { emergencyLogMainFatal } from "../utils/emergencyLog.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
-import { getMainWindow } from "../window/windowRef.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { store } from "../store.js";
 import type { AppError } from "../../shared/types/ipc/errors.js";
@@ -36,10 +36,7 @@ function buildFatalAppError(kind: string, error: unknown): AppError {
 
 function notifyRenderer(appError: AppError): void {
   try {
-    const win = getMainWindow();
-    if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
-      win.webContents.send(CHANNELS.ERROR_NOTIFY, appError);
-    }
+    broadcastToRenderer(CHANNELS.ERROR_NOTIFY, appError);
   } catch {
     // best-effort only
   }

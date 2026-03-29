@@ -37,7 +37,6 @@ export interface ShutdownDeps {
   setStopAppMetricsMonitor: (v: (() => void) | null) => void;
   getStopDiskSpaceMonitor: () => (() => void) | null;
   setStopDiskSpaceMonitor: (v: (() => void) | null) => void;
-  getMainWindow: () => Electron.BrowserWindow | null;
   windowRegistry?: import("../window/WindowRegistry.js").WindowRegistry;
 }
 
@@ -52,7 +51,8 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
       return;
     }
 
-    const canShowDialog = !isSignalShutdown() && deps.getMainWindow() != null;
+    const canShowDialog =
+      !isSignalShutdown() && deps.windowRegistry?.getPrimary()?.browserWindow != null;
 
     if (isConfirmingQuit) {
       event.preventDefault();
