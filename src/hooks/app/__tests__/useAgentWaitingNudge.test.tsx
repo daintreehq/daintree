@@ -269,4 +269,65 @@ describe("useAgentWaitingNudge", () => {
 
     expect(onboardingMock.get).not.toHaveBeenCalled();
   });
+
+  it("handles hydrate failure gracefully", async () => {
+    onboardingMock.get.mockRejectedValueOnce(new Error("IPC failed"));
+
+    renderHook(() => useAgentWaitingNudge(true));
+    await act(async () => {});
+
+    act(() => {
+      emitStoreUpdate([{ id: "t1", agentState: "waiting" }]);
+    });
+
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not call removeNotification with null when notify returns empty", async () => {
+    notifyMock.mockReturnValue("");
+
+    const { unmount } = renderHook(() => useAgentWaitingNudge(true));
+    await act(async () => {});
+
+    act(() => {
+      emitStoreUpdate([{ id: "t1", agentState: "waiting" }]);
+    });
+
+    removeNotificationMock.mockClear();
+    unmount();
+    expect(removeNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("fires only once when two agents transition to waiting in same update", async () => {
+    renderHook(() => useAgentWaitingNudge(true));
+    await act(async () => {});
+
+    act(() => {
+      emitStoreUpdate([
+        { id: "t1", agentState: "waiting" },
+        { id: "t2", agentState: "waiting" },
+      ]);
+    });
+
+    expect(notifyMock).toHaveBeenCalledOnce();
+    expect(onboardingMock.markWaitingNudgeSeen).toHaveBeenCalledOnce();
+  });
+
+  it("does not double-fire when agent already waiting at mount then another transitions", async () => {
+    storeState = { terminals: [{ id: "t1", agentState: "waiting" }] };
+
+    renderHook(() => useAgentWaitingNudge(true));
+    await act(async () => {});
+
+    expect(notifyMock).toHaveBeenCalledOnce();
+
+    act(() => {
+      emitStoreUpdate([
+        { id: "t1", agentState: "waiting" },
+        { id: "t2", agentState: "waiting" },
+      ]);
+    });
+
+    expect(notifyMock).toHaveBeenCalledOnce();
+  });
 });

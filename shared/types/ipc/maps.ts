@@ -1498,6 +1498,10 @@ export interface IpcInvokeMap {
     args: [];
     result: void;
   };
+  "onboarding:mark-waiting-nudge-seen": {
+    args: [];
+    result: void;
+  };
   "onboarding:checklist-get": {
     args: [];
     result: ChecklistState;
