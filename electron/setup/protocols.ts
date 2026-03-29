@@ -10,7 +10,7 @@ import {
   isDevPreviewPartition,
 } from "../utils/webviewCsp.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
-import { isLocalhostUrl } from "../../shared/utils/urlUtils.js";
+import { isLocalhostUrl, isSafeNavigationUrl } from "../../shared/utils/urlUtils.js";
 import { getWebviewDialogService } from "../services/WebviewDialogService.js";
 import { CHANNELS } from "../ipc/channels.js";
 
@@ -159,6 +159,9 @@ export function getDistPath(): string | null {
 export function setupWebviewCSP(): void {
   const configuredPartitions = new Set<string>();
 
+  // Browser partition intentionally excluded from CSP rewriting.
+  // Browser panels load external sites (OAuth, docs, etc.) that need their own CSP.
+  // Dev-preview partitions get localhost-only CSP via will-attach-webview below.
   const applyCSP = (partition: string): void => {
     if (configuredPartitions.has(partition)) {
       return;
@@ -181,8 +184,8 @@ export function setupWebviewCSP(): void {
     configuredPartitions.add(partition);
   };
 
-  // Configure static partitions (browser only - portal excluded)
-  applyCSP("persist:browser");
+  // Singleton for the browser partition session — used for identity comparison in navigation handlers.
+  const browserSession = session.fromPartition("persist:browser");
 
   // Monitor for dynamic dev-preview partitions
   app.on("web-contents-created", (_event, contents) => {
@@ -209,37 +212,59 @@ export function setupWebviewCSP(): void {
       // Block webview guest navigations to non-localhost URLs (closes TOCTOU gap
       // where will-attach-webview validates src at attachment but the guest can
       // navigate away afterwards).
+      // Browser partition allows cross-origin http/https for OAuth/OIDC flows.
+      // Dev-preview and other partitions remain restricted to localhost only.
       contents.on("will-navigate", (event, navigationUrl) => {
-        if (!isLocalhostUrl(navigationUrl)) {
-          console.warn(`[MAIN] Blocked webview navigation to non-localhost URL: ${navigationUrl}`);
-          event.preventDefault();
+        const isBrowserPanel = contents.session === browserSession;
 
-          const panelId = getWebviewDialogService().getPanelId(contents.id);
-          if (panelId) {
-            const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
-            if (parentWindow && !parentWindow.isDestroyed()) {
-              getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, {
-                panelId,
-                url: navigationUrl,
-              });
+        if (isBrowserPanel) {
+          if (!isSafeNavigationUrl(navigationUrl)) {
+            console.warn(`[MAIN] Blocked webview navigation to unsafe URL: ${navigationUrl}`);
+            event.preventDefault();
+          }
+        } else {
+          if (!isLocalhostUrl(navigationUrl)) {
+            console.warn(
+              `[MAIN] Blocked webview navigation to non-localhost URL: ${navigationUrl}`
+            );
+            event.preventDefault();
+
+            const panelId = getWebviewDialogService().getPanelId(contents.id);
+            if (panelId) {
+              const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
+              if (parentWindow && !parentWindow.isDestroyed()) {
+                getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, {
+                  panelId,
+                  url: navigationUrl,
+                });
+              }
             }
           }
         }
       });
 
       contents.on("will-redirect", (event, redirectUrl) => {
-        if (!isLocalhostUrl(redirectUrl)) {
-          console.warn(`[MAIN] Blocked webview redirect to non-localhost URL: ${redirectUrl}`);
-          event.preventDefault();
+        const isBrowserPanel = contents.session === browserSession;
 
-          const panelId = getWebviewDialogService().getPanelId(contents.id);
-          if (panelId) {
-            const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
-            if (parentWindow && !parentWindow.isDestroyed()) {
-              getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, {
-                panelId,
-                url: redirectUrl,
-              });
+        if (isBrowserPanel) {
+          if (!isSafeNavigationUrl(redirectUrl)) {
+            console.warn(`[MAIN] Blocked webview redirect to unsafe URL: ${redirectUrl}`);
+            event.preventDefault();
+          }
+        } else {
+          if (!isLocalhostUrl(redirectUrl)) {
+            console.warn(`[MAIN] Blocked webview redirect to non-localhost URL: ${redirectUrl}`);
+            event.preventDefault();
+
+            const panelId = getWebviewDialogService().getPanelId(contents.id);
+            if (panelId) {
+              const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
+              if (parentWindow && !parentWindow.isDestroyed()) {
+                getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, {
+                  panelId,
+                  url: redirectUrl,
+                });
+              }
             }
           }
         }
