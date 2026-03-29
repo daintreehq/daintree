@@ -1514,6 +1514,16 @@ export interface IpcInvokeMap {
     result: void;
   };
 
+  // Milestones
+  "milestones:get": {
+    args: [];
+    result: Record<string, boolean>;
+  };
+  "milestones:mark-shown": {
+    args: [milestoneId: string];
+    result: void;
+  };
+
   // Shortcut Hints
   "shortcut-hints:get-counts": {
     args: [];

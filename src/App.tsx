@@ -65,6 +65,7 @@ import {
   useAccessibilityAnnouncements,
   useGettingStartedChecklist,
   useDeferredNewsletterPrompt,
+  useOrchestrationMilestones,
   useUnloadCleanup,
   useHomeDir,
   usePerformanceMonitors,
@@ -1336,6 +1337,7 @@ function App() {
   useShortcutHints(isStateLoaded);
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
   const deferredNewsletter = useDeferredNewsletterPrompt(isStateLoaded);
+  useOrchestrationMilestones(isStateLoaded);
 
   const handleLaunchAgent = useCallback(
     async (type: string) => {

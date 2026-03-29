@@ -460,6 +460,10 @@ export const CHANNELS = {
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
   ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN: "onboarding:checklist-mark-celebration-shown",
 
+  // Milestone channels
+  MILESTONES_GET: "milestones:get",
+  MILESTONES_MARK_SHOWN: "milestones:mark-shown",
+
   // Shortcut Hints channels
   SHORTCUT_HINTS_GET_COUNTS: "shortcut-hints:get-counts",
   SHORTCUT_HINTS_INCREMENT_COUNT: "shortcut-hints:increment-count",

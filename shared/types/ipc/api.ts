@@ -1040,6 +1040,10 @@ export interface ElectronAPI {
     markChecklistItem(item: ChecklistItemId): Promise<void>;
     markChecklistCelebrationShown(): Promise<void>;
   };
+  milestones: {
+    get(): Promise<Record<string, boolean>>;
+    markShown(id: string): Promise<void>;
+  };
   shortcutHints: {
     getCounts(): Promise<Record<string, number>>;
     incrementCount(actionId: string): Promise<void>;

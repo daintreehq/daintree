@@ -653,6 +653,9 @@ const CHANNELS = {
   ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN: "onboarding:checklist-mark-celebration-shown",
 
   // Shortcut Hints channels
+  MILESTONES_GET: "milestones:get",
+  MILESTONES_MARK_SHOWN: "milestones:mark-shown",
+
   SHORTCUT_HINTS_GET_COUNTS: "shortcut-hints:get-counts",
   SHORTCUT_HINTS_INCREMENT_COUNT: "shortcut-hints:increment-count",
 
@@ -2162,6 +2165,11 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM, item),
     markChecklistCelebrationShown: () =>
       _unwrappingInvoke(CHANNELS.ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN),
+  },
+
+  milestones: {
+    get: () => _unwrappingInvoke(CHANNELS.MILESTONES_GET),
+    markShown: (id: string) => _unwrappingInvoke(CHANNELS.MILESTONES_MARK_SHOWN, id),
   },
 
   shortcutHints: {

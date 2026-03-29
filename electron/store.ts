@@ -172,6 +172,7 @@ export interface StoreSchema {
       };
     };
   };
+  orchestrationMilestones: Record<string, boolean>;
   shortcutHintCounts: Record<string, number>;
   updateChannel: "stable" | "nightly";
 }
@@ -283,6 +284,7 @@ const storeOptions = {
         },
       },
     },
+    orchestrationMilestones: {},
     shortcutHintCounts: {},
     updateChannel: "stable" as const,
   },
