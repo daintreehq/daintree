@@ -1,5 +1,17 @@
 import { useState, useCallback, useEffect } from "react";
-import { Globe, FolderOpen, Plus, Trash2, Edit3, Download, FileDown, Check } from "lucide-react";
+import {
+  Globe,
+  FolderOpen,
+  Plus,
+  Trash2,
+  Edit3,
+  Download,
+  FileDown,
+  FileUp,
+  Check,
+  Lock,
+  GitBranch,
+} from "lucide-react";
 import { TerminalRecipeIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -26,9 +38,12 @@ export function RecipeManager({
 }: RecipeManagerProps) {
   const globalRecipes = useRecipeStore((s) => s.globalRecipes);
   const projectRecipes = useRecipeStore((s) => s.projectRecipes);
+  const inRepoRecipes = useRecipeStore((s) => s.inRepoRecipes);
   const deleteRecipe = useRecipeStore((s) => s.deleteRecipe);
   const exportRecipe = useRecipeStore((s) => s.exportRecipe);
+  const exportRecipeToFile = useRecipeStore((s) => s.exportRecipeToFile);
   const importRecipe = useRecipeStore((s) => s.importRecipe);
+  const importRecipeFromFile = useRecipeStore((s) => s.importRecipeFromFile);
   const currentProject = useProjectStore((s) => s.currentProject);
 
   const [recipeToDelete, setRecipeToDelete] = useState<string | null>(null);
@@ -95,7 +110,7 @@ export function RecipeManager({
     }
   };
 
-  const renderRecipeRow = (recipe: TerminalRecipe) => {
+  const renderRecipeRow = (recipe: TerminalRecipe, readOnly = false) => {
     const exported = exportFeedback === recipe.id;
     const isGlobal = recipe.projectId === undefined;
     return (
@@ -104,6 +119,12 @@ export function RecipeManager({
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-foreground truncate">{recipe.name}</span>
+              {readOnly && (
+                <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
+                  <Lock className="h-3 w-3" />
+                  Read-only
+                </span>
+              )}
               {isGlobal && (
                 <span className="text-[11px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
                   <Globe className="h-3 w-3" />
@@ -130,20 +151,22 @@ export function RecipeManager({
             </div>
           </div>
           <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onEditRecipe(recipe)}
-                  className="h-7 px-2"
-                  aria-label={`Edit recipe ${recipe.name}`}
-                >
-                  <Edit3 />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Edit recipe</TooltipContent>
-            </Tooltip>
+            {!readOnly && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onEditRecipe(recipe)}
+                    className="h-7 px-2"
+                    aria-label={`Edit recipe ${recipe.name}`}
+                  >
+                    <Edit3 />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Edit recipe</TooltipContent>
+              </Tooltip>
+            )}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -169,15 +192,31 @@ export function RecipeManager({
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setRecipeToDelete(recipe.id)}
+                  onClick={() => void exportRecipeToFile(recipe.id)}
                   className="h-7 px-2"
-                  aria-label={`Delete recipe ${recipe.name}`}
+                  aria-label={`Export recipe ${recipe.name} to file`}
                 >
-                  <Trash2 className="text-status-error" />
+                  <FileUp />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Delete recipe</TooltipContent>
+              <TooltipContent side="bottom">Export to file</TooltipContent>
             </Tooltip>
+            {!readOnly && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setRecipeToDelete(recipe.id)}
+                    className="h-7 px-2"
+                    aria-label={`Delete recipe ${recipe.name}`}
+                  >
+                    <Trash2 className="text-status-error" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Delete recipe</TooltipContent>
+              </Tooltip>
+            )}
           </div>
         </div>
       </div>
@@ -211,7 +250,7 @@ export function RecipeManager({
               </div>
             ) : (
               <div className="border border-canopy-border rounded-[var(--radius-md)] divide-y divide-canopy-border">
-                {globalRecipes.map(renderRecipeRow)}
+                {globalRecipes.map((r) => renderRecipeRow(r))}
               </div>
             )}
             <div className="flex gap-2 mt-2">
@@ -221,6 +260,22 @@ export function RecipeManager({
               </Button>
             </div>
           </div>
+
+          {/* Team Recipes Section (in-repo) */}
+          {inRepoRecipes.length > 0 && (
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                <GitBranch className="h-4 w-4" />
+                Team Recipes
+              </h3>
+              <p className="text-xs text-canopy-text/60 mb-3">
+                Shared via .canopy/recipes/ in the repository
+              </p>
+              <div className="border border-canopy-border rounded-[var(--radius-md)] divide-y divide-canopy-border">
+                {inRepoRecipes.map((r) => renderRecipeRow(r, true))}
+              </div>
+            </div>
+          )}
 
           {/* Project Recipes Section */}
           <div className="mb-4">
@@ -240,7 +295,7 @@ export function RecipeManager({
               </div>
             ) : (
               <div className="border border-canopy-border rounded-[var(--radius-md)] divide-y divide-canopy-border">
-                {projectRecipes.map(renderRecipeRow)}
+                {projectRecipes.map((r) => renderRecipeRow(r))}
               </div>
             )}
             <div className="flex gap-2 mt-2">
@@ -250,7 +305,15 @@ export function RecipeManager({
               </Button>
               <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)}>
                 <FileDown className="h-3 w-3" />
-                Import
+                Import from Clipboard
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void importRecipeFromFile(currentProject?.id)}
+              >
+                <FileUp className="h-3 w-3" />
+                Import from File
               </Button>
             </div>
           </div>

@@ -11,6 +11,9 @@ const {
   globalAddRecipeMock,
   globalUpdateRecipeMock,
   globalDeleteRecipeMock,
+  getInRepoRecipesMock,
+  exportRecipeToFileMock,
+  importRecipeFromFileMock,
 } = vi.hoisted(() => ({
   addRecipeMock: vi.fn().mockResolvedValue(undefined),
   getRecipesMock: vi.fn().mockResolvedValue([]),
@@ -22,6 +25,9 @@ const {
   globalAddRecipeMock: vi.fn().mockResolvedValue(undefined),
   globalUpdateRecipeMock: vi.fn().mockResolvedValue(undefined),
   globalDeleteRecipeMock: vi.fn().mockResolvedValue(undefined),
+  getInRepoRecipesMock: vi.fn().mockResolvedValue([]),
+  exportRecipeToFileMock: vi.fn().mockResolvedValue(true),
+  importRecipeFromFileMock: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@/clients", () => ({
@@ -30,6 +36,9 @@ vi.mock("@/clients", () => ({
     addRecipe: addRecipeMock,
     updateRecipe: updateRecipeMock,
     deleteRecipe: deleteRecipeMock,
+    getInRepoRecipes: getInRepoRecipesMock,
+    exportRecipeToFile: exportRecipeToFileMock,
+    importRecipeFromFile: importRecipeFromFileMock,
   },
   agentSettingsClient: {
     get: getAgentSettingsMock,
@@ -506,6 +515,98 @@ describe("recipeStore", () => {
 
       const recipe = globalAddRecipeMock.mock.calls[0]?.[0];
       expect(recipe.worktreeId).toBeUndefined();
+    });
+  });
+
+  describe("in-repo recipes", () => {
+    it("loadRecipes includes in-repo recipes", async () => {
+      const inRepoRecipe = {
+        id: "inrepo-test",
+        name: "Team Recipe",
+        terminals: [{ type: "terminal" as const, title: "Shell" }],
+        createdAt: 500,
+      };
+      globalGetRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce([]);
+      getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
+
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      const state = useRecipeStore.getState();
+      expect(state.inRepoRecipes).toHaveLength(1);
+      expect(state.recipes).toHaveLength(1);
+      expect(state.recipes[0]?.id).toBe("inrepo-test");
+    });
+
+    it("project recipes shadow in-repo recipes with same name", async () => {
+      const inRepoRecipe = {
+        id: "inrepo-1",
+        name: "Shared Recipe",
+        terminals: [{ type: "terminal" as const }],
+        createdAt: 100,
+      };
+      const projectRecipe = {
+        id: "project-1",
+        name: "Shared Recipe",
+        projectId: "proj-1",
+        terminals: [{ type: "terminal" as const }],
+        createdAt: 200,
+      };
+      globalGetRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce([projectRecipe]);
+      getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
+
+      await useRecipeStore.getState().loadRecipes("proj-1");
+
+      const state = useRecipeStore.getState();
+      expect(state.recipes).toHaveLength(1);
+      expect(state.recipes[0]?.id).toBe("project-1");
+    });
+
+    it("reset clears inRepoRecipes", () => {
+      useRecipeStore.setState({
+        inRepoRecipes: [{ id: "x", name: "x", terminals: [], createdAt: 0 }],
+      });
+      useRecipeStore.getState().reset();
+      expect(useRecipeStore.getState().inRepoRecipes).toEqual([]);
+    });
+  });
+
+  describe("file export/import", () => {
+    it("exportRecipeToFile calls client with recipe name and JSON", async () => {
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "r-1",
+            name: "My Recipe",
+            projectId: "proj-1",
+            terminals: [{ type: "terminal" as const }],
+            createdAt: 100,
+          },
+        ],
+        projectRecipes: [
+          {
+            id: "r-1",
+            name: "My Recipe",
+            projectId: "proj-1",
+            terminals: [{ type: "terminal" as const }],
+            createdAt: 100,
+          },
+        ],
+        globalRecipes: [],
+      });
+
+      await useRecipeStore.getState().exportRecipeToFile("r-1");
+
+      expect(exportRecipeToFileMock).toHaveBeenCalledWith("My Recipe", expect.any(String));
+      const json = JSON.parse(exportRecipeToFileMock.mock.calls[0]![1]);
+      expect(json).not.toHaveProperty("projectId");
+    });
+
+    it("importRecipeFromFile returns false when cancelled", async () => {
+      importRecipeFromFileMock.mockResolvedValueOnce(null);
+      const result = await useRecipeStore.getState().importRecipeFromFile("proj-1");
+      expect(result).toBe(false);
     });
   });
 });

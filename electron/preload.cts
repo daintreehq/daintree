@@ -1256,6 +1256,23 @@ const api: ElectronAPI = {
     deleteRecipe: (projectId: string, recipeId: string): Promise<void> =>
       _unwrappingInvoke(CHANNELS.PROJECT_DELETE_RECIPE, { projectId, recipeId }),
 
+    exportRecipeToFile: (name: string, json: string): Promise<boolean> =>
+      _unwrappingInvoke(CHANNELS.RECIPE_EXPORT_FILE, { name, json }),
+
+    importRecipeFromFile: (): Promise<string | null> =>
+      _unwrappingInvoke(CHANNELS.RECIPE_IMPORT_FILE),
+
+    getInRepoRecipes: (
+      projectId: string
+    ): Promise<import("../shared/types/index.js").TerminalRecipe[]> =>
+      _unwrappingInvoke(CHANNELS.PROJECT_GET_INREPO_RECIPES, projectId),
+
+    syncInRepoRecipes: (
+      projectId: string,
+      recipes: import("../shared/types/index.js").TerminalRecipe[]
+    ): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.PROJECT_SYNC_INREPO_RECIPES, { projectId, recipes }),
+
     getTerminals: (
       projectId: string
     ): Promise<import("../shared/types/index.js").TerminalSnapshot[]> =>

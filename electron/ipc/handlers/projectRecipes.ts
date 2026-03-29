@@ -1,6 +1,8 @@
-import { ipcMain } from "electron";
+import { ipcMain, dialog, BrowserWindow } from "electron";
+import fs from "fs/promises";
 import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
+import { safeRecipeFilename } from "../../utils/recipeFilename.js";
 import type { HandlerDependencies } from "../types.js";
 import type { TerminalRecipe } from "../../types/index.js";
 
@@ -110,6 +112,89 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
   };
   ipcMain.handle(CHANNELS.PROJECT_DELETE_RECIPE, handleProjectDeleteRecipe);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_DELETE_RECIPE));
+
+  const handleRecipeExportFile = async (
+    event: Electron.IpcMainInvokeEvent,
+    payload: { name: string; json: string }
+  ): Promise<boolean> => {
+    if (!payload || typeof payload.name !== "string" || typeof payload.json !== "string") {
+      throw new Error("Invalid payload");
+    }
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const defaultFilename = safeRecipeFilename(payload.name);
+    const dialogOptions: Electron.SaveDialogOptions = {
+      title: "Export Recipe",
+      defaultPath: defaultFilename,
+      filters: [{ name: "Recipe Files", extensions: ["json"] }],
+    };
+    const { filePath, canceled } = win
+      ? await dialog.showSaveDialog(win, dialogOptions)
+      : await dialog.showSaveDialog(dialogOptions);
+    if (canceled || !filePath) return false;
+    await fs.writeFile(filePath, payload.json, "utf-8");
+    return true;
+  };
+  ipcMain.handle(CHANNELS.RECIPE_EXPORT_FILE, handleRecipeExportFile);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.RECIPE_EXPORT_FILE));
+
+  const handleRecipeImportFile = async (
+    event: Electron.IpcMainInvokeEvent
+  ): Promise<string | null> => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const dialogOptions: Electron.OpenDialogOptions = {
+      title: "Import Recipe",
+      filters: [{ name: "Recipe Files", extensions: ["json"] }],
+      properties: ["openFile"],
+    };
+    const { filePaths, canceled } = win
+      ? await dialog.showOpenDialog(win, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+    if (canceled || filePaths.length === 0) return null;
+    return fs.readFile(filePaths[0]!, "utf-8");
+  };
+  ipcMain.handle(CHANNELS.RECIPE_IMPORT_FILE, handleRecipeImportFile);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.RECIPE_IMPORT_FILE));
+
+  const handleProjectGetInRepoRecipes = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string
+  ): Promise<TerminalRecipe[]> => {
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    const project = projectStore.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+    return projectStore.readInRepoRecipes(project.path);
+  };
+  ipcMain.handle(CHANNELS.PROJECT_GET_INREPO_RECIPES, handleProjectGetInRepoRecipes);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_INREPO_RECIPES));
+
+  const handleProjectSyncInRepoRecipes = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { projectId: string; recipes: TerminalRecipe[] }
+  ): Promise<void> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    const { projectId, recipes } = payload;
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    if (!Array.isArray(recipes)) {
+      throw new Error("Invalid recipes array");
+    }
+    const project = projectStore.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+    for (const recipe of recipes) {
+      await projectStore.writeInRepoRecipe(project.path, recipe);
+    }
+  };
+  ipcMain.handle(CHANNELS.PROJECT_SYNC_INREPO_RECIPES, handleProjectSyncInRepoRecipes);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SYNC_INREPO_RECIPES));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

@@ -96,6 +96,18 @@ export class ProjectStore {
     return this.identityFiles.writeInRepoSettings(projectPath, settings);
   }
 
+  async writeInRepoRecipe(projectPath: string, recipe: TerminalRecipe): Promise<void> {
+    return this.identityFiles.writeInRepoRecipe(projectPath, recipe);
+  }
+
+  async readInRepoRecipes(projectPath: string): Promise<TerminalRecipe[]> {
+    return this.identityFiles.readInRepoRecipes(projectPath);
+  }
+
+  async deleteInRepoRecipe(projectPath: string, recipeName: string): Promise<void> {
+    return this.identityFiles.deleteInRepoRecipe(projectPath, recipeName);
+  }
+
   // --- DB CRUD ---
 
   private async getGitRoot(projectPath: string): Promise<string> {
