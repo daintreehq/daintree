@@ -26,10 +26,7 @@ describe("SystemHealthCheckStep grouping", () => {
   });
 
   it("should filter out silent specs from both groups", () => {
-    const specsWithSilent = [
-      ...mockSpecs,
-      { tool: "hidden", label: "Hidden", severity: "silent" },
-    ];
+    const specsWithSilent = [...mockSpecs, { tool: "hidden", label: "Hidden", severity: "silent" }];
     const visible = specsWithSilent.filter((s) => s.severity !== "silent");
     expect(visible).toHaveLength(6);
     expect(visible.every((s) => s.severity !== "silent")).toBe(true);
@@ -101,9 +98,7 @@ describe("Promise pool concurrency", () => {
 });
 
 describe("allRequired derivation", () => {
-  type CheckState =
-    | "loading"
-    | { available: boolean; meetsMinVersion: boolean; severity: string };
+  type CheckState = "loading" | { available: boolean; meetsMinVersion: boolean; severity: string };
 
   function deriveAllRequired(
     specs: Array<{ tool: string; severity: string }>,
@@ -114,10 +109,7 @@ describe("allRequired derivation", () => {
       .every((s) => {
         const state = checkStates[s.tool];
         return (
-          state !== "loading" &&
-          state !== undefined &&
-          state.available &&
-          state.meetsMinVersion
+          state !== "loading" && state !== undefined && state.available && state.meetsMinVersion
         );
       });
   }

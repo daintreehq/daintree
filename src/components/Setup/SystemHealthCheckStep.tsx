@@ -64,9 +64,7 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
       if (!activeRef.current) return;
 
       setSpecs(resolvedSpecs);
-      setCheckStates(
-        Object.fromEntries(resolvedSpecs.map((s) => [s.tool, "loading" as const]))
-      );
+      setCheckStates(Object.fromEntries(resolvedSpecs.map((s) => [s.tool, "loading" as const])));
 
       await runPool(resolvedSpecs, POOL_CONCURRENCY, async (spec) => {
         try {
@@ -113,7 +111,8 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
   const systemSpecs = visibleSpecs.filter((s) => BASELINE_TOOLS.has(s.tool));
   const agentSpecs = visibleSpecs.filter((s) => !BASELINE_TOOLS.has(s.tool));
 
-  const allDone = visibleSpecs.length > 0 && visibleSpecs.every((s) => checkStates[s.tool] !== "loading");
+  const allDone =
+    visibleSpecs.length > 0 && visibleSpecs.every((s) => checkStates[s.tool] !== "loading");
   const allRequired = allDone
     ? visibleSpecs
         .filter((s) => s.severity === "fatal")
