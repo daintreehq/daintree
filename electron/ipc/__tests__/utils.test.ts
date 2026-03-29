@@ -6,16 +6,20 @@ const ipcMainMock = vi.hoisted(() => ({
 }));
 
 const browserWindowFromWebContentsMock = vi.hoisted(() => vi.fn());
+const browserWindowGetAllWindowsMock = vi.hoisted(() => vi.fn(() => [] as unknown[]));
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   BrowserWindow: Object.assign(class {}, {
     fromWebContents: browserWindowFromWebContentsMock,
+    getAllWindows: browserWindowGetAllWindowsMock,
   }),
 }));
 
 import {
   sendToRenderer,
+  broadcastToRenderer,
+  sendToRendererContext,
   typedHandle,
   typedHandleWithContext,
   typedSend,
@@ -169,6 +173,166 @@ describe("ipc utils", () => {
     const ctx = handler.mock.calls[0][0] as { webContentsId: number; senderWindow: unknown };
     expect(ctx.webContentsId).toBe(99);
     expect(ctx.senderWindow).toBeNull();
+  });
+});
+
+describe("broadcastToRenderer", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("no-ops when there are no open windows", () => {
+    browserWindowGetAllWindowsMock.mockReturnValue([]);
+    expect(() => broadcastToRenderer("channel:test", { ok: true })).not.toThrow();
+  });
+
+  it("sends to a single alive window", () => {
+    const send = vi.fn();
+    const win = {
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, send },
+    };
+    browserWindowGetAllWindowsMock.mockReturnValue([win]);
+
+    broadcastToRenderer("channel:test", "data1", "data2");
+    expect(send).toHaveBeenCalledWith("channel:test", "data1", "data2");
+  });
+
+  it("sends to multiple alive windows", () => {
+    const send1 = vi.fn();
+    const send2 = vi.fn();
+    const win1 = {
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, send: send1 },
+    };
+    const win2 = {
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, send: send2 },
+    };
+    browserWindowGetAllWindowsMock.mockReturnValue([win1, win2]);
+
+    broadcastToRenderer("channel:test", { payload: true });
+    expect(send1).toHaveBeenCalledTimes(1);
+    expect(send1).toHaveBeenCalledWith("channel:test", { payload: true });
+    expect(send2).toHaveBeenCalledTimes(1);
+    expect(send2).toHaveBeenCalledWith("channel:test", { payload: true });
+  });
+
+  it("skips destroyed windows", () => {
+    const send1 = vi.fn();
+    const send2 = vi.fn();
+    const alive = {
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, send: send1 },
+    };
+    const destroyed = {
+      isDestroyed: () => true,
+      webContents: { isDestroyed: () => false, send: send2 },
+    };
+    browserWindowGetAllWindowsMock.mockReturnValue([alive, destroyed]);
+
+    broadcastToRenderer("channel:test");
+    expect(send1).toHaveBeenCalled();
+    expect(send2).not.toHaveBeenCalled();
+  });
+
+  it("skips windows with no webContents", () => {
+    const win = { isDestroyed: () => false };
+    browserWindowGetAllWindowsMock.mockReturnValue([win]);
+
+    expect(() => broadcastToRenderer("channel:test")).not.toThrow();
+  });
+
+  it("skips windows where webContents is destroyed", () => {
+    const send = vi.fn();
+    const win = {
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => true, send },
+    };
+    browserWindowGetAllWindowsMock.mockReturnValue([win]);
+
+    broadcastToRenderer("channel:test");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("does not throw when webContents.send throws", () => {
+    const send1 = vi.fn(() => {
+      throw new Error("send failed");
+    });
+    const send2 = vi.fn();
+    const win1 = {
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, send: send1 },
+    };
+    const win2 = {
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, send: send2 },
+    };
+    browserWindowGetAllWindowsMock.mockReturnValue([win1, win2]);
+
+    expect(() => broadcastToRenderer("channel:test")).not.toThrow();
+    expect(send2).toHaveBeenCalledWith("channel:test");
+  });
+});
+
+describe("sendToRendererContext", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("sends to senderWindow when non-null and alive", () => {
+    const send = vi.fn();
+    const ctx = {
+      senderWindow: {
+        isDestroyed: () => false,
+        webContents: { isDestroyed: () => false, send },
+      },
+      webContentsId: 1,
+      event: {},
+    };
+
+    sendToRendererContext(ctx as never, "channel:test", "arg1", "arg2");
+    expect(send).toHaveBeenCalledWith("channel:test", "arg1", "arg2");
+  });
+
+  it("no-ops when senderWindow is null", () => {
+    const ctx = {
+      senderWindow: null,
+      webContentsId: 1,
+      event: {},
+    };
+
+    expect(() => sendToRendererContext(ctx as never, "channel:test", "data")).not.toThrow();
+  });
+
+  it("passes variadic args through correctly", () => {
+    const send = vi.fn();
+    const ctx = {
+      senderWindow: {
+        isDestroyed: () => false,
+        webContents: { isDestroyed: () => false, send },
+      },
+      webContentsId: 1,
+      event: {},
+    };
+
+    sendToRendererContext(ctx as never, "channel:test", 1, "two", { three: 3 });
+    expect(send).toHaveBeenCalledWith("channel:test", 1, "two", { three: 3 });
+  });
+
+  it("no-ops when senderWindow is destroyed", () => {
+    const send = vi.fn();
+    const ctx = {
+      senderWindow: {
+        isDestroyed: () => true,
+        webContents: { isDestroyed: () => false, send },
+      },
+      webContentsId: 1,
+      event: {},
+    };
+
+    sendToRendererContext(ctx as never, "channel:test", "data");
+    expect(send).not.toHaveBeenCalled();
   });
 });
 

@@ -186,6 +186,17 @@ export function sendToRenderer(
   }
 }
 
+export function broadcastToRenderer(channel: string, ...args: unknown[]): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win, channel, ...args);
+  }
+}
+
+export function sendToRendererContext(ctx: IpcContext, channel: string, ...args: unknown[]): void {
+  if (ctx.senderWindow === null) return;
+  sendToRenderer(ctx.senderWindow, channel, ...args);
+}
+
 export function typedHandle<K extends keyof IpcInvokeMap>(
   channel: K,
   handler: (

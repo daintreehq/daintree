@@ -48,9 +48,15 @@ import { registerDemoHandlers } from "./handlers/demo.js";
 import { registerRecoveryHandlers } from "./handlers/recovery.js";
 import { registerPluginHandlers } from "./handlers/plugin.js";
 import { events } from "../services/events.js";
-import { typedHandle, typedSend, sendToRenderer } from "./utils.js";
+import {
+  typedHandle,
+  typedSend,
+  sendToRenderer,
+  broadcastToRenderer,
+  sendToRendererContext,
+} from "./utils.js";
 
-export { typedHandle, typedSend, sendToRenderer };
+export { typedHandle, typedSend, sendToRenderer, broadcastToRenderer, sendToRendererContext };
 
 type CleanupFn = () => void;
 
