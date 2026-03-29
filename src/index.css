@@ -1114,6 +1114,24 @@ body,
   will-change: transform, opacity;
 }
 
+/* All-clear flash: subtle full-screen overlay when all agents complete */
+@keyframes all-clear-flash {
+  0% {
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.12;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.animate-all-clear-flash {
+  animation: all-clear-flash 450ms ease-out forwards;
+  will-change: opacity;
+}
+
 /* Respect user's motion preferences */
 @media (prefers-reduced-motion: reduce) {
   .animate-activity-pulse,
@@ -1125,7 +1143,8 @@ body,
   .status-working,
   .animate-badge-bump,
   .animate-activity-blip,
-  .animate-trash-pulse {
+  .animate-trash-pulse,
+  .animate-all-clear-flash {
     animation: none;
     opacity: 1;
     transform: none;

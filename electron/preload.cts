@@ -216,6 +216,7 @@ const CHANNELS = {
 
   // Agent state channels
   AGENT_STATE_CHANGED: "agent:state-changed",
+  AGENT_ALL_CLEAR: "agent:all-clear",
   AGENT_DETECTED: "agent:detected",
   AGENT_EXITED: "agent:exited",
 
@@ -817,6 +818,9 @@ const api: ElectronAPI = {
 
     onAgentExited: (callback: (data: AgentExitedPayload) => void) =>
       _typedOn(CHANNELS.AGENT_EXITED, callback),
+
+    onAllAgentsClear: (callback: (data: { timestamp: number }) => void) =>
+      _typedOn(CHANNELS.AGENT_ALL_CLEAR, callback),
 
     onActivity: (callback: (data: TerminalActivityPayload) => void) =>
       _typedOn(CHANNELS.TERMINAL_ACTIVITY, callback),

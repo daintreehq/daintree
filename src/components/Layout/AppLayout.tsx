@@ -9,6 +9,7 @@ import { ProjectSettingsDialog, ProjectSwitchOverlay } from "@/components/Projec
 import { ChordIndicator } from "./ChordIndicator";
 import { DemoCursor } from "../Demo";
 import { ApprovalQueue } from "../Workflow/ApprovalQueue";
+import { AllClearOverlay } from "../AllClearOverlay";
 import { useDiagnosticsStore, useDockStore, type PanelState } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
@@ -370,6 +371,7 @@ export function AppLayout({
       />
       <ChordIndicator />
       <ApprovalQueue />
+      <AllClearOverlay />
       {window.electron?.demo && <DemoCursor />}
     </div>
   );
