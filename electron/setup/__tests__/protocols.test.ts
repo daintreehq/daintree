@@ -11,7 +11,7 @@ interface MockWebContents {
 
 const webContentsCreatedListeners: WebContentsCreatedListener[] = [];
 
-const mockFromWebContents = vi.hoisted(() => vi.fn(() => null));
+const mockFromWebContents = vi.hoisted(() => vi.fn<() => unknown>(() => null));
 
 vi.mock("electron", () => ({
   app: {
