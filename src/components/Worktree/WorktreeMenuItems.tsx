@@ -33,6 +33,7 @@ import {
   Save,
   SquareTerminal,
   Trash2,
+  Undo2,
   X,
 } from "lucide-react";
 import { MoveToDockIcon, CopyTreeIcon, TerminalRecipeIcon } from "@/components/icons";
@@ -111,6 +112,8 @@ export interface WorktreeMenuItemsProps {
   onEndAll: () => void;
   onOpenPanelPalette?: () => void;
   onDeleteWorktree?: () => void;
+  onRevertAgentChanges?: () => void;
+  hasSnapshot?: boolean;
 }
 
 export function WorktreeMenuItems({
@@ -150,6 +153,8 @@ export function WorktreeMenuItems({
   onEndAll,
   onOpenPanelPalette,
   onDeleteWorktree,
+  onRevertAgentChanges,
+  hasSnapshot,
 }: WorktreeMenuItemsProps) {
   const hasIssueSub = Boolean(worktree.issueNumber && (onOpenIssuePortal || onOpenIssueExternal));
   const hasPRSub = Boolean(worktree.prNumber && (onOpenPRPortal || onOpenPRExternal));
@@ -290,6 +295,13 @@ export function WorktreeMenuItems({
         <C.Item onSelect={onCompareDiff}>
           <GitCompare className="w-3.5 h-3.5 mr-2" />
           Compare Worktrees…
+        </C.Item>
+      )}
+
+      {onRevertAgentChanges && hasSnapshot && (
+        <C.Item onSelect={onRevertAgentChanges}>
+          <Undo2 className="w-3.5 h-3.5 mr-2" />
+          Revert Agent Changes
         </C.Item>
       )}
 

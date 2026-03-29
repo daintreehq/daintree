@@ -182,4 +182,63 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       return await window.electron.git.getStagingStatus(cwd);
     },
   }));
+
+  actions.set("git.snapshotGet", () => ({
+    id: "git.snapshotGet",
+    title: "Get Pre-Agent Snapshot",
+    description: "Get the pre-agent file snapshot for a worktree",
+    category: "git",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ worktreeId: z.string() }),
+    run: async (args: unknown) => {
+      const { worktreeId } = args as { worktreeId: string };
+      return await window.electron.git.snapshotGet(worktreeId);
+    },
+  }));
+
+  actions.set("git.snapshotList", () => ({
+    id: "git.snapshotList",
+    title: "List Pre-Agent Snapshots",
+    description: "List all pre-agent file snapshots",
+    category: "git",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({}).optional(),
+    run: async () => {
+      return await window.electron.git.snapshotList();
+    },
+  }));
+
+  actions.set("git.snapshotRevert", () => ({
+    id: "git.snapshotRevert",
+    title: "Revert Agent Changes",
+    description: "Revert working tree to the pre-agent snapshot state",
+    category: "git",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    argsSchema: z.object({ worktreeId: z.string() }),
+    run: async (args: unknown) => {
+      const { worktreeId } = args as { worktreeId: string };
+      return await window.electron.git.snapshotRevert(worktreeId);
+    },
+  }));
+
+  actions.set("git.snapshotDelete", () => ({
+    id: "git.snapshotDelete",
+    title: "Delete Pre-Agent Snapshot",
+    description: "Delete the pre-agent snapshot for a worktree without reverting",
+    category: "git",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ worktreeId: z.string() }),
+    run: async (args: unknown) => {
+      const { worktreeId } = args as { worktreeId: string };
+      await window.electron.git.snapshotDelete(worktreeId);
+    },
+  }));
 }

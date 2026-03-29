@@ -256,6 +256,10 @@ export const CHANNELS = {
   GIT_COMPARE_WORKTREES: "git:compare-worktrees",
   GIT_GET_USERNAME: "git:get-username",
   GIT_GET_WORKING_DIFF: "git:get-working-diff",
+  GIT_SNAPSHOT_GET: "git:snapshot-get",
+  GIT_SNAPSHOT_LIST: "git:snapshot-list",
+  GIT_SNAPSHOT_REVERT: "git:snapshot-revert",
+  GIT_SNAPSHOT_DELETE: "git:snapshot-delete",
 
   PORTAL_CREATE: "portal:create",
   PORTAL_SHOW: "portal:show",

@@ -452,6 +452,10 @@ const CHANNELS = {
   GIT_COMPARE_WORKTREES: "git:compare-worktrees",
   GIT_GET_USERNAME: "git:get-username",
   GIT_GET_WORKING_DIFF: "git:get-working-diff",
+  GIT_SNAPSHOT_GET: "git:snapshot-get",
+  GIT_SNAPSHOT_LIST: "git:snapshot-list",
+  GIT_SNAPSHOT_REVERT: "git:snapshot-revert",
+  GIT_SNAPSHOT_DELETE: "git:snapshot-delete",
 
   // Portal channels
   PORTAL_CREATE: "portal:create",
@@ -1646,6 +1650,16 @@ const api: ElectronAPI = {
 
     getWorkingDiff: (cwd: string, type: "unstaged" | "staged" | "head") =>
       _unwrappingInvoke(CHANNELS.GIT_GET_WORKING_DIFF, { cwd, type }),
+
+    snapshotGet: (worktreeId: string) => _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_GET, worktreeId),
+
+    snapshotList: () => _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_LIST),
+
+    snapshotRevert: (worktreeId: string) =>
+      _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_REVERT, worktreeId),
+
+    snapshotDelete: (worktreeId: string) =>
+      _unwrappingInvoke(CHANNELS.GIT_SNAPSHOT_DELETE, worktreeId),
   },
 
   // Terminal Config API
