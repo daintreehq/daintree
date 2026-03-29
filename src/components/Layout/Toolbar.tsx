@@ -26,10 +26,8 @@ import {
   ChevronsUpDown,
   Globe,
   Leaf,
-  Monitor,
   Bell,
   LayoutGrid,
-  Signal,
   Ellipsis,
   GitBranch,
 } from "lucide-react";
@@ -62,7 +60,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
-import { useProjectSettings, useKeybindingDisplay } from "@/hooks";
+import { useKeybindingDisplay } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
 import {
@@ -87,8 +85,6 @@ import { NotificationCenter } from "@/components/Notifications/NotificationCente
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
-import { DetectedServersList } from "@/components/DetectedServers/DetectedServersList";
-import type { DetectedDevServer } from "@shared/types/ipc/globalDevServers";
 import { useUIStore } from "@/store/uiStore";
 import { useShallow } from "zustand/react/shallow";
 
@@ -109,7 +105,6 @@ const OVERFLOW_MENU_META: Partial<
   cursor: { label: "Cursor", icon: SquareTerminal },
   terminal: { label: "Terminal", icon: SquareTerminal },
   browser: { label: "Browser", icon: Globe },
-  "dev-server": { label: "Dev Server", icon: Monitor },
   "panel-palette": { label: "Panel Palette", icon: LayoutGrid },
   "github-stats": { label: "GitHub Stats", icon: GitPullRequest },
   "notification-center": { label: "Notifications", icon: Bell },
@@ -147,8 +142,6 @@ export function Toolbar({
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
   const projectSwitcher = projectSwitcherPalette;
-  const { settings: projectSettings } = useProjectSettings();
-  const devServerCommand = projectSettings?.devServerCommand?.trim();
   const {
     stats,
     loading: statsLoading,
@@ -179,20 +172,6 @@ export function Toolbar({
   const togglePortal = usePortalStore((state) => state.toggle);
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
-
-  const [detectedServers, setDetectedServers] = useState<DetectedDevServer[]>([]);
-  const [detectedServersOpen, setDetectedServersOpen] = useState(false);
-  const detectedServersButtonRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    void window.electron.globalDevServers.get().then((result) => {
-      setDetectedServers(result.servers);
-    });
-    const cleanup = window.electron.globalDevServers.onChanged((payload) => {
-      setDetectedServers(payload.servers);
-    });
-    return cleanup;
-  }, []);
 
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [prsOpen, setPrsOpen] = useState(false);
@@ -593,92 +572,6 @@ export function Toolbar({
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
-        ),
-        isAvailable: true,
-      },
-      "dev-server": {
-        render: () => (
-          <div key="dev-server" className="relative inline-flex items-center gap-0.5">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="inline-flex">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      data-toolbar-item=""
-                      onClick={() => {
-                        void actionService.dispatch("devServer.start", undefined, {
-                          source: "user",
-                        });
-                      }}
-                      disabled={!currentProject}
-                      className={toolbarIconButtonClass}
-                      aria-label={
-                        !currentProject
-                          ? "Open a project to use Dev Preview"
-                          : devServerCommand
-                            ? "Start Dev Server"
-                            : "Open Dev Preview"
-                      }
-                    >
-                      <Monitor />
-                    </Button>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {!currentProject
-                    ? "Open a project to use Dev Preview"
-                    : devServerCommand
-                      ? "Start Dev Server"
-                      : "Open Dev Preview"}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            {detectedServers.length > 0 && (
-              <>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        ref={detectedServersButtonRef}
-                        variant="ghost"
-                        size="icon"
-                        data-toolbar-item=""
-                        onClick={() => setDetectedServersOpen(!detectedServersOpen)}
-                        className={cn(toolbarIconButtonClass, "relative h-8 w-8")}
-                        aria-label={`${detectedServers.length} detected dev servers`}
-                      >
-                        <Signal className="h-4 w-4" />
-                        <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-canopy-accent text-[10px] font-bold tabular-nums text-accent-foreground">
-                          {detectedServers.length}
-                        </span>
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Detected Dev Servers</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-                <FixedDropdown
-                  open={detectedServersOpen}
-                  onOpenChange={setDetectedServersOpen}
-                  anchorRef={detectedServersButtonRef}
-                  className="p-0 w-[350px]"
-                >
-                  <DetectedServersList
-                    servers={detectedServers}
-                    onOpen={(url) => {
-                      void actionService.dispatch(
-                        "devServer.openDetected",
-                        { url },
-                        { source: "user" }
-                      );
-                    }}
-                    onClose={() => setDetectedServersOpen(false)}
-                  />
-                </FixedDropdown>
-              </>
-            )}
-          </div>
         ),
         isAvailable: true,
       },
@@ -1131,7 +1024,6 @@ export function Toolbar({
       portalShortcut,
       notesShortcut,
       settingsShortcut,
-      devServerCommand,
       panelPaletteOpen,
       panelPaletteShortcut,
       handleTogglePanelPalette,
@@ -1164,8 +1056,6 @@ export function Toolbar({
       toggleNotificationCenter,
       closeNotificationCenter,
       notificationUnreadCount,
-      detectedServers,
-      detectedServersOpen,
       setIssueSearchQuery,
       setPrSearchQuery,
       notificationsEnabled,
@@ -1202,9 +1092,6 @@ export function Toolbar({
     }
     if (overflowSet.has("notification-center")) {
       closeNotificationCenter();
-    }
-    if (overflowSet.has("dev-server")) {
-      setDetectedServersOpen(false);
     }
   }, [leftOverflow, rightOverflow, closeNotificationCenter]);
 
@@ -1281,9 +1168,6 @@ export function Toolbar({
       cursor: () => onLaunchAgent("cursor"),
       terminal: () => onLaunchAgent("terminal"),
       browser: () => onLaunchAgent("browser"),
-      "dev-server": () => {
-        void actionService.dispatch("devServer.start", undefined, { source: "user" });
-      },
       "panel-palette": handleTogglePanelPalette,
       "notification-center": toggleNotificationCenter,
       notes: () => {

@@ -242,7 +242,6 @@ export type BuiltInActionId =
   | "notes.delete"
   | "notes.reveal"
   | "devServer.start"
-  | "devServer.openDetected"
   | "worktree.compareDiff"
   | "terminal.copy"
   | "terminal.paste"

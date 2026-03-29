@@ -7,23 +7,6 @@ export function registerDevServerActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
 ): void {
-  actions.set("devServer.openDetected", () => ({
-    id: "devServer.openDetected",
-    title: "Open Detected Dev Server",
-    description: "Open a detected dev server URL in the system browser",
-    category: "devServer",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async (args: unknown) => {
-      const { url } = args as { url?: string };
-      if (!url) {
-        throw new Error("No URL provided");
-      }
-      await window.electron.system.openExternal(url);
-    },
-  }));
-
   actions.set("devServer.start", () => ({
     id: "devServer.start",
     title: "Open Dev Preview",

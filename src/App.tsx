@@ -61,7 +61,6 @@ import {
   useTerminalStoreBootstrap,
   useSemanticWorkerLifecycle,
   useSystemWakeHandler,
-  useDevServerDiscovery,
   useCloudSyncWarning,
   useAccessibilityAnnouncements,
   useGettingStartedChecklist,
@@ -1375,7 +1374,6 @@ function App() {
   useSemanticWorkerLifecycle();
   useSystemWakeHandler();
   useCloudSyncWarning(homeDir);
-  useDevServerDiscovery();
   useAccessibilityAnnouncements();
 
   useEffect(() => {

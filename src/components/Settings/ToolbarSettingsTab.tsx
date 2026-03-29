@@ -19,7 +19,6 @@ import {
   GripVertical,
   SquareTerminal,
   Globe,
-  Monitor,
   AlertTriangle,
   Leaf,
   Settings,
@@ -81,11 +80,6 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
     label: "Browser",
     icon: <Globe className="h-4 w-4" />,
     description: "Open browser panel",
-  },
-  "dev-server": {
-    label: "Dev Server",
-    icon: <Monitor className="h-4 w-4" />,
-    description: "Start development server",
   },
   "panel-palette": {
     label: "Panel Palette",
@@ -332,7 +326,6 @@ export function ToolbarSettingsTab() {
               <option value="codex">Codex</option>
               <option value="opencode">OpenCode</option>
               <option value="browser">Browser</option>
-              <option value="dev-server">Dev Server</option>
             </select>
             <p className="text-xs text-canopy-text/40 select-text">
               Default option to highlight when opening the launcher palette

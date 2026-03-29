@@ -53,8 +53,6 @@ import type {
   DevPreviewStopByPanelRequest,
   DevPreviewSessionState,
   DevPreviewStateChangedPayload,
-  GlobalDevServersGetResult,
-  GlobalDevServersChangedPayload,
 } from "../shared/types/ipc.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type {
@@ -1544,15 +1542,6 @@ const api: ElectronAPI = {
 
     onStateChanged: (callback: (payload: DevPreviewStateChangedPayload) => void) =>
       _typedOn(CHANNELS.DEV_PREVIEW_STATE_CHANGED, callback),
-  },
-
-  // Global Dev Servers API
-  globalDevServers: {
-    get: (): Promise<GlobalDevServersGetResult> =>
-      _typedInvoke("global-dev-servers:get") as Promise<GlobalDevServersGetResult>,
-
-    onChanged: (callback: (payload: GlobalDevServersChangedPayload) => void) =>
-      _typedOn("global-dev-servers:changed", callback),
   },
 
   // Git API

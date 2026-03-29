@@ -9,7 +9,6 @@ const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
   ...(BUILT_IN_AGENT_IDS as unknown as ToolbarButtonId[]),
   "terminal",
   "browser",
-  "dev-server",
   "panel-palette",
 ];
 
@@ -151,9 +150,27 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }),
     {
       name: "canopy-toolbar-preferences",
+      version: 1,
       storage: createSafeJSONStorage(),
-      // defaultAgent has been moved to agentPreferencesStore. Exclude it from
-      // persistence so it is no longer written back to this key.
+      migrate: (persisted, version) => {
+        const state = persisted as Record<string, unknown>;
+        if (version < 1) {
+          const layout = state.layout as
+            | { leftButtons?: string[]; rightButtons?: string[] }
+            | undefined;
+          if (layout?.leftButtons) {
+            layout.leftButtons = layout.leftButtons.filter((id) => id !== "dev-server");
+          }
+          if (layout?.rightButtons) {
+            layout.rightButtons = layout.rightButtons.filter((id) => id !== "dev-server");
+          }
+          const launcher = state.launcher as { defaultSelection?: string } | undefined;
+          if (launcher?.defaultSelection === "dev-server") {
+            launcher.defaultSelection = undefined;
+          }
+        }
+        return state as ToolbarPreferencesState;
+      },
       partialize: (state) => ({
         layout: state.layout,
         launcher: {
