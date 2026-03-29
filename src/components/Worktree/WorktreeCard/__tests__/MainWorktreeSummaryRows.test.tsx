@@ -28,6 +28,12 @@ const baseHealth: ProjectHealthData = {
   ciStatus: "success",
   prCount: 3,
   issueCount: 12,
+  latestRelease: null,
+  securityAlerts: { visible: false, count: 0 },
+  mergeVelocity: { mergedCounts: { 60: 0, 120: 0, 180: 0 } },
+  repoUrl: "",
+  hasRemote: true,
+  loading: false,
 };
 
 describe("MainWorktreeSummaryRows", () => {
