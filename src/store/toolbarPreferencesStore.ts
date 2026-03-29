@@ -169,7 +169,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             launcher.defaultSelection = undefined;
           }
         }
-        return state as ToolbarPreferencesState;
+        return state as unknown as ToolbarPreferencesState;
       },
       partialize: (state) => ({
         layout: state.layout,
