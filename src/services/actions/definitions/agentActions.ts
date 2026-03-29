@@ -4,6 +4,23 @@ import { z } from "zod";
 import { useTerminalStore } from "@/store/terminalStore";
 import { AGENT_REGISTRY } from "@/config/agents";
 import type { ActionId } from "@shared/types/actions";
+import { notify } from "@/lib/notify";
+
+const AGENT_SPAWN_COMBO_TIERS = ["Double agent", "Triple agent", "Sleeper cell activated"] as const;
+
+function notifyAgentSpawned(agentName: string): void {
+  const firstTier = `${agentName} spawned`;
+  notify({
+    type: "success",
+    message: firstTier,
+    priority: "high",
+    countable: false,
+    combo: {
+      key: "agent:spawn",
+      tiers: [firstTier, ...AGENT_SPAWN_COMBO_TIERS],
+    },
+  });
+}
 
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("agent.launch", () => ({
@@ -41,6 +58,10 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         interactive,
         modelId: model,
       });
+      if (agentId !== "terminal") {
+        const cfg = AGENT_REGISTRY[agentId];
+        notifyAgentSpawned(cfg?.name ?? agentId);
+      }
       return { terminalId };
     },
   }));
@@ -70,6 +91,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       scope: "renderer",
       run: async () => {
         const terminalId = await callbacks.onLaunchAgent(id);
+        notifyAgentSpawned(config.name);
         return { terminalId };
       },
     }));
