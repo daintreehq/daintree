@@ -166,10 +166,12 @@ function BulkCommandPaletteInner() {
       if (doubleEscapeTimerRef.current) {
         clearTimeout(doubleEscapeTimerRef.current);
       }
+      queueRef.current?.clear();
     };
   }, []);
 
   useEscapeStack(step === "preview", () => setStep("select"));
+  useEscapeStack(pendingDestructive, () => setPendingDestructive(false));
 
   useEffect(() => {
     setStep("select");
@@ -296,7 +298,9 @@ function BulkCommandPaletteInner() {
       totalTargets = promises.length;
       const results = await Promise.allSettled(promises);
       failures = results.filter((r) => r.status === "rejected").length;
-      useCommandHistoryStore.getState().recordPrompt(BULK_HISTORY_KEY, commandText);
+      if (totalTargets > 0) {
+        useCommandHistoryStore.getState().recordPrompt(BULK_HISTORY_KEY, commandText);
+      }
     } else if (mode === "recipe" && selectedRecipeId) {
       const queue = new PQueue({ concurrency: 2 });
       queueRef.current = queue;
@@ -316,13 +320,15 @@ function BulkCommandPaletteInner() {
       queueRef.current = null;
     }
 
-    const toastType = failures > 0 ? "warning" : "success";
-    const failSuffix = failures > 0 ? ` (${failures} failed)` : "";
-    useNotificationStore.getState().addNotification({
-      type: toastType,
-      priority: "low",
-      message: `Sent to ${selectedRows.length} worktree${selectedRows.length !== 1 ? "s" : ""}, ${totalTargets} target${totalTargets !== 1 ? "s" : ""}${failSuffix}`,
-    });
+    if (totalTargets > 0) {
+      const toastType = failures > 0 ? "warning" : "success";
+      const failSuffix = failures > 0 ? ` (${failures} failed)` : "";
+      useNotificationStore.getState().addNotification({
+        type: toastType,
+        priority: "low",
+        message: `Sent to ${selectedRows.length} worktree${selectedRows.length !== 1 ? "s" : ""}, ${totalTargets} target${totalTargets !== 1 ? "s" : ""}${failSuffix}`,
+      });
+    }
 
     setIsSending(false);
     closePalette();
@@ -519,7 +525,10 @@ function BulkCommandPaletteInner() {
                         setShowHistory(false);
                       }}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter" && canSend) {
+                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSend) {
+                          e.preventDefault();
+                          handleConfirm();
+                        } else if (e.key === "Enter" && canSend) {
                           e.preventDefault();
                           handleSend();
                         } else if (e.key === "ArrowUp" && historyEntries.length > 0) {
