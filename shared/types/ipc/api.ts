@@ -1196,6 +1196,9 @@ export interface ElectronAPI {
       config: Partial<import("./crashRecovery.js").CrashRecoveryConfig>
     ): Promise<import("./crashRecovery.js").CrashRecoveryConfig>;
   };
+  help: {
+    getFolderPath(): Promise<string | null>;
+  };
   demo?: {
     moveTo(x: number, y: number, durationMs: number): Promise<void>;
     moveToSelector(

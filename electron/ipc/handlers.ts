@@ -30,6 +30,7 @@ import { registerCommandHandlers } from "./handlers/commands.js";
 import { registerAppAgentHandlers } from "./handlers/appAgent.js";
 import { registerAgentCapabilitiesHandlers } from "./handlers/agentCapabilities.js";
 import { registerCliHandlers } from "./handlers/cli.js";
+import { registerHelpHandlers } from "./handlers/help.js";
 import { registerClipboardHandlers } from "./handlers/clipboard.js";
 import { registerGitWriteHandlers } from "./handlers/git-write.js";
 import { registerTelemetryHandlers } from "./handlers/telemetry.js";
@@ -105,6 +106,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerAppAgentHandlers(deps));
     register(() => registerAgentCapabilitiesHandlers());
     register(() => registerCliHandlers());
+    register(() => registerHelpHandlers());
     register(() => registerClipboardHandlers());
     register(() => registerGitWriteHandlers(deps));
     register(() => registerTelemetryHandlers());

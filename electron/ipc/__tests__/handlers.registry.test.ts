@@ -32,6 +32,7 @@ const registerMocks = vi.hoisted(() => ({
   registerAppAgentHandlers: vi.fn(),
   registerAgentCapabilitiesHandlers: vi.fn(),
   registerCliHandlers: vi.fn(),
+  registerHelpHandlers: vi.fn(),
   registerClipboardHandlers: vi.fn(),
   registerGitWriteHandlers: vi.fn(),
   registerTelemetryHandlers: vi.fn(),
@@ -141,6 +142,9 @@ vi.mock("../handlers/agentCapabilities.js", () => ({
 }));
 vi.mock("../handlers/cli.js", () => ({
   registerCliHandlers: registerMocks.registerCliHandlers,
+}));
+vi.mock("../handlers/help.js", () => ({
+  registerHelpHandlers: registerMocks.registerHelpHandlers,
 }));
 vi.mock("../handlers/clipboard.js", () => ({
   registerClipboardHandlers: registerMocks.registerClipboardHandlers,

@@ -388,6 +388,9 @@ export const CHANNELS = {
   CLI_INSTALL: "cli:install",
   CLI_GET_STATUS: "cli:get-status",
 
+  // Help workspace channels
+  HELP_GET_FOLDER_PATH: "help:get-folder-path",
+
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
   CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
 

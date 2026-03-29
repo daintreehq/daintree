@@ -208,7 +208,12 @@
       "!node_modules/node-pty/bin",
       "!node_modules/node-pty/prebuilds"
     ],
-    "extraResources": [],
+    "extraResources": [
+      {
+        "from": "help",
+        "to": "help"
+      }
+    ],
     "asarUnpack": [
       "node_modules/node-pty/**/*",
       "node_modules/better-sqlite3/**/*"
