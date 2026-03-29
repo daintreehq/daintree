@@ -107,22 +107,13 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ["integrations", "github", "token", "authentication"],
   },
   {
-    id: "tab-nav-editor",
-    tab: "editor",
-    tabLabel: "Editor Integration",
+    id: "tab-nav-integrations",
+    tab: "integrations",
+    tabLabel: "Integrations",
     section: "Settings Navigation",
-    title: "Editor Integration",
-    description: "Configure external code editor for file opening",
-    keywords: ["integrations", "editor", "vscode", "cursor", "ide"],
-  },
-  {
-    id: "tab-nav-imageViewer",
-    tab: "imageViewer",
-    tabLabel: "Image Viewer",
-    section: "Settings Navigation",
-    title: "Image Viewer",
-    description: "Configure image viewer application",
-    keywords: ["integrations", "image", "viewer", "photo", "picture"],
+    title: "Integrations",
+    description: "External editor, image viewer, and other tool integrations",
+    keywords: ["integrations", "editor", "vscode", "cursor", "ide", "image", "viewer", "photo"],
   },
   {
     id: "tab-nav-portal",
@@ -720,8 +711,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   // Editor Integration
   {
     id: "editor-external",
-    tab: "editor",
-    tabLabel: "Editor Integration",
+    tab: "integrations",
+    tabLabel: "Integrations",
     section: "External Editor",
     title: "External Editor",
     description:
@@ -744,8 +735,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   // Image Viewer
   {
     id: "image-viewer",
-    tab: "imageViewer",
-    tabLabel: "Image Viewer",
+    tab: "integrations",
+    tabLabel: "Integrations",
     section: "Image Viewer",
     title: "Image Viewer",
     description:

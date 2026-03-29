@@ -241,7 +241,7 @@ describe("subtab-aware search", () => {
 });
 
 describe("SETTINGS_SEARCH_INDEX", () => {
-  it("has entries covering all 17 settings tabs", () => {
+  it("has entries covering all 16 settings tabs", () => {
     const tabs = new Set(SETTINGS_SEARCH_INDEX.map((e) => e.tab));
     const expectedTabs = [
       "general",
@@ -254,8 +254,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       "portal",
       "toolbar",
       "notifications",
-      "editor",
-      "imageViewer",
+      "integrations",
       "voice",
       "mcp",
       "environment",
@@ -300,8 +299,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       portal: "Portal Links",
       toolbar: "Toolbar Customization",
       notifications: "Notifications",
-      editor: "Editor Integration",
-      imageViewer: "Image Viewer",
+      integrations: "Integrations",
       voice: "Voice Input",
       mcp: "MCP Server",
       environment: "Environment Variables",
@@ -328,8 +326,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       portal: "Portal Links",
       toolbar: "Toolbar Customization",
       notifications: "Notifications",
-      editor: "Editor Integration",
-      imageViewer: "Image Viewer",
+      integrations: "Integrations",
       voice: "Voice Input",
       mcp: "MCP Server",
       environment: "Environment Variables",
