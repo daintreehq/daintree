@@ -133,12 +133,10 @@ export function buildSwitcherSections(
   const pinned = ungrouped.filter((p) => p.isPinned && !p.isActive);
   const current = ungrouped.filter((p) => p.isActive);
   const remaining = ungrouped.filter((p) => !p.isActive && !p.isPinned);
-  const running = remaining.filter(
-    (p) => p.activeAgentCount > 0 || p.waitingAgentCount > 0 || p.processCount > 0
-  );
-  const recent = remaining.filter(
-    (p) => p.activeAgentCount === 0 && p.waitingAgentCount === 0 && p.processCount === 0
-  );
+  const isRunning = (p: SearchableProject) =>
+    p.activeAgentCount > 0 || p.waitingAgentCount > 0 || p.processCount > 0 || p.isBackground;
+  const running = remaining.filter(isRunning);
+  const recent = remaining.filter((p) => !isRunning(p));
 
   if (pinned.length > 0) {
     sections.push({ key: "pinned", label: "Pinned", isUserGroup: false, items: pinned });

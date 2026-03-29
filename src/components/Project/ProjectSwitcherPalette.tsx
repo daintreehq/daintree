@@ -731,12 +731,10 @@ function ProjectListContent({
     const pinned = results.filter((p) => p.isPinned && !p.isActive);
     const current = results.filter((p) => p.isActive);
     const remaining = results.filter((p) => !p.isActive && !p.isPinned);
-    const running = remaining.filter(
-      (p) => p.activeAgentCount > 0 || p.waitingAgentCount > 0 || p.processCount > 0
-    );
-    const recent = remaining.filter(
-      (p) => p.activeAgentCount === 0 && p.waitingAgentCount === 0 && p.processCount === 0
-    );
+    const isRunning = (p: SearchableProject) =>
+      p.activeAgentCount > 0 || p.waitingAgentCount > 0 || p.processCount > 0 || p.isBackground;
+    const running = remaining.filter(isRunning);
+    const recent = remaining.filter((p) => !isRunning(p));
     return [
       { key: "pinned", label: "Pinned", isUserGroup: false, items: pinned },
       { key: "current", label: null, isUserGroup: false, items: current },

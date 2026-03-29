@@ -92,8 +92,8 @@ export function ProjectSwitcher() {
       projectSwitcher.close();
       notify({
         type: "info",
-        title: `${project.name} opened in background`,
-        message: "Project agents will continue running",
+        title: "Background open",
+        message: "Background open is not yet available — coming soon",
         duration: 3000,
       });
     },
@@ -214,6 +214,7 @@ export function ProjectSwitcher() {
         onStopProject={handleStopProject}
         onCloseProject={handleCloseProject}
         onLocateProject={handleLocateProject}
+        onTogglePinProject={handleTogglePinProject}
         onOpenProjectSettings={handleOpenSettings}
         onCopyPath={handleCopyPath}
         onSelectBackground={handleSelectBackground}
