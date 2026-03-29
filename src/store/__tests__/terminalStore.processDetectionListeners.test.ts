@@ -182,6 +182,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 (window as unknown as Record<string, unknown>).electron = {
   terminal: {
     onResourceMetrics: vi.fn(() => vi.fn()),
+    onReclaimMemory: vi.fn(() => vi.fn()),
   },
   terminalConfig: {
     get: vi.fn().mockResolvedValue({}),
