@@ -123,6 +123,10 @@ export interface StoreSchema {
   };
   projectEnv: Record<string, string>;
   appAgentConfig: AppAgentConfig;
+  windowStates: Record<
+    string,
+    { x?: number; y?: number; width: number; height: number; isMaximized: boolean }
+  >;
   worktreeIssueMap: Record<string, IssueAssociation>;
   appTheme: Partial<AppThemeConfig>;
   telemetry: {
@@ -236,6 +240,7 @@ const storeOptions = {
     },
     projectEnv: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
+    windowStates: {},
     worktreeIssueMap: {},
     appTheme: {},
     telemetry: {
