@@ -63,6 +63,7 @@ export const CHANNELS = {
   FILES_READ: "files:read",
 
   AGENT_STATE_CHANGED: "agent:state-changed",
+  AGENT_ALL_CLEAR: "agent:all-clear",
   AGENT_DETECTED: "agent:detected",
   AGENT_EXITED: "agent:exited",
 

@@ -62,6 +62,11 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   });
   handlers.push(unsubAgentState);
 
+  const unsubAllClear = events.on("agent:all-clear", (payload) => {
+    sendToRenderer(mainWindow, CHANNELS.AGENT_ALL_CLEAR, payload);
+  });
+  handlers.push(unsubAllClear);
+
   const unsubAgentDetected = events.on("agent:detected", (payload: unknown) => {
     sendToRenderer(mainWindow, CHANNELS.AGENT_DETECTED, payload);
   });

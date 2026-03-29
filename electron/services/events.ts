@@ -187,6 +187,12 @@ export const EVENT_META: Record<keyof CanopyEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "Agent state changed (idle, working, completed, etc.)",
   },
+  "agent:all-clear": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "All concurrent agents finished — workspace fully quiet",
+  },
   "agent:detected": {
     category: "agent",
     requiresContext: false,
@@ -535,6 +541,14 @@ export type CanopyEventMap = {
   }>;
 
   /**
+   * Emitted when all concurrent agents finish and the workspace becomes fully quiet.
+   * Requires ≥2 agents to have been concurrently active in the session.
+   */
+  "agent:all-clear": {
+    timestamp: number;
+  };
+
+  /**
    * Emitted when an agent CLI is detected running in a terminal.
    */
   "agent:detected": {
@@ -857,6 +871,7 @@ export const ALL_EVENT_TYPES: Array<keyof CanopyEventMap> = [
   "sys:issue:not-found",
   "agent:spawned",
   "agent:state-changed",
+  "agent:all-clear",
   "agent:detected",
   "agent:exited",
   "agent:output",
