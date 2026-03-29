@@ -264,7 +264,7 @@ AppDialog.Header = function AppDialogHeader({ children, className }: AppDialogHe
   return (
     <div
       className={cn(
-        "px-6 py-4 border-b border-canopy-border bg-overlay-soft flex items-center justify-between shrink-0",
+        "px-6 py-4 border-b border-canopy-border dialog-header flex items-center justify-between shrink-0",
         className
       )}
     >
