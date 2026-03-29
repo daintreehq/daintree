@@ -13,12 +13,8 @@ import {
   type LeakState,
 } from "../useMemoryLeakDetection";
 
-function feedSamples(
-  state: LeakState,
-  samples: number[],
-  now: number = Date.now()
-): { alert: boolean; autoRestart: boolean; autoRestartThresholdKb: number } {
-  let result = { alert: false, autoRestart: false, autoRestartThresholdKb: 0 };
+function feedSamples(state: LeakState, samples: number[], now: number = Date.now()): boolean {
+  let result = false;
   for (const sample of samples) {
     result = evaluateTerminal(sample, state, now);
   }
@@ -68,7 +64,7 @@ describe("startup suppression", () => {
     const baseMem = MIN_MEMORY_KB + 10_000;
     for (let i = 0; i < STARTUP_SKIP_SAMPLES - 1; i++) {
       const result = evaluateTerminal(baseMem + i * 500, state, Date.now());
-      expect(result.alert).toBe(false);
+      expect(result).toBe(false);
     }
     expect(state.sampleCount).toBe(STARTUP_SKIP_SAMPLES - 1);
   });
@@ -84,7 +80,7 @@ describe("minimum memory gate", () => {
       (_, i) => smallMem + i * 200
     );
     const result = feedSamples(state, samples);
-    expect(result.alert).toBe(false);
+    expect(result).toBe(false);
   });
 });
 
@@ -126,7 +122,7 @@ describe("minimum slope gate", () => {
     // Very slow growth — 1 KB per sample (well below MIN_SLOPE_KB_PER_SAMPLE of 137)
     for (let i = 0; i < CONSECUTIVE_REQUIRED + 5; i++) {
       const result = evaluateTerminal(baseMem + (i + 1) * 1, state, Date.now());
-      expect(result.alert).toBe(false);
+      expect(result).toBe(false);
     }
   });
 });
@@ -146,7 +142,7 @@ describe("happy path — fires alert", () => {
     let alerted = false;
     for (let i = 0; i < CONSECUTIVE_REQUIRED + 5; i++) {
       const result = evaluateTerminal(baseMem + (i + 1) * 200, state, now);
-      if (result.alert) {
+      if (result) {
         alerted = true;
         break;
       }
@@ -170,7 +166,7 @@ describe("cooldown", () => {
     let firstAlertAt = 0;
     for (let i = 0; i < CONSECUTIVE_REQUIRED + 5; i++) {
       const result = evaluateTerminal(baseMem + (i + 1) * 200, state, now);
-      if (result.alert) {
+      if (result) {
         state.lastAlertAt = now;
         firstAlertAt = now;
         break;
@@ -184,7 +180,7 @@ describe("cooldown", () => {
     const highMem = baseMem + 200_000;
     for (let i = 0; i < CONSECUTIVE_REQUIRED + 5; i++) {
       const result = evaluateTerminal(highMem + (i + 1) * 200, state, shortlyAfter);
-      expect(result.alert).toBe(false);
+      expect(result).toBe(false);
     }
   });
 
@@ -201,7 +197,7 @@ describe("cooldown", () => {
     // First alert
     for (let i = 0; i < CONSECUTIVE_REQUIRED + 5; i++) {
       const result = evaluateTerminal(baseMem + (i + 1) * 200, state, now);
-      if (result.alert) {
+      if (result) {
         state.lastAlertAt = now;
         break;
       }
@@ -214,7 +210,7 @@ describe("cooldown", () => {
     let alertedAgain = false;
     for (let i = 0; i < CONSECUTIVE_REQUIRED + 5; i++) {
       const result = evaluateTerminal(highMem + (i + 1) * 200, state, afterCooldown);
-      if (result.alert) {
+      if (result) {
         alertedAgain = true;
         break;
       }
@@ -234,7 +230,7 @@ describe("dismiss", () => {
       (_, i) => baseMem + i * 200
     );
     const result = feedSamples(state, samples);
-    expect(result.alert).toBe(false);
+    expect(result).toBe(false);
   });
 });
 
@@ -271,14 +267,14 @@ describe("multiple terminals", () => {
     let aAlerted = false;
     for (let i = 0; i < CONSECUTIVE_REQUIRED + 5; i++) {
       const r = evaluateTerminal(baseMem + (i + 1) * 200, stateA, now);
-      if (r.alert) aAlerted = true;
+      if (r) aAlerted = true;
     }
     expect(aAlerted).toBe(true);
 
     // Terminal B: constant memory → should not alert
     for (let i = 0; i < STARTUP_SKIP_SAMPLES + CONSECUTIVE_REQUIRED + 5; i++) {
       const r = evaluateTerminal(baseMem, stateB, now);
-      expect(r.alert).toBe(false);
+      expect(r).toBe(false);
     }
   });
 });

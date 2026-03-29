@@ -43,6 +43,7 @@ import {
 import { actionService } from "@/services/ActionService";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
+import { useMemoryLeakConfigStore } from "@/store/memoryLeakConfigStore";
 import type { HardwareInfo } from "@shared/types/ipc/system";
 
 const STRATEGIES: Array<{
@@ -136,17 +137,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const resetToHardwareDefaults = usePanelLimitStore((state) => state.resetToHardwareDefaults);
   const initializeFromHardware = usePanelLimitStore((state) => state.initializeFromHardware);
 
-  const [memoryLeakDetectionEnabled, setMemoryLeakDetectionEnabled] = useState(false);
-  const [autoRestartThresholdMb, setAutoRestartThresholdMb] = useState(8192);
-
-  useEffect(() => {
-    window.electron?.terminalConfig?.get().then((config) => {
-      const leakEnabled =
-        config.memoryLeakDetectionEnabled ?? config.resourceMonitoringEnabled === true;
-      setMemoryLeakDetectionEnabled(leakEnabled);
-      setAutoRestartThresholdMb(config.memoryLeakAutoRestartThresholdMb ?? 8192);
-    });
-  }, []);
+  const memoryLeakDetectionEnabled = useMemoryLeakConfigStore((s) => s.enabled);
+  const autoRestartThresholdMb = useMemoryLeakConfigStore((s) => s.autoRestartThresholdMb);
+  const setMemoryLeakDetectionEnabled = useMemoryLeakConfigStore((s) => s.setEnabled);
+  const setAutoRestartThresholdMb = useMemoryLeakConfigStore((s) => s.setAutoRestartThresholdMb);
 
   const [hardwareInfo, setHardwareInfo] = useState<HardwareInfo | null>(null);
 
