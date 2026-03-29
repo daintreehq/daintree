@@ -257,6 +257,7 @@ export interface WorktreeHeaderProps {
     onViewPlan?: () => void;
     onOpenReviewHub?: () => void;
     onCompareDiff?: () => void;
+    onOpenPanelPalette?: () => void;
     onDeleteWorktree?: () => void;
   };
 }
@@ -486,6 +487,7 @@ export function WorktreeHeader({
                 onCloseCompleted={menu.onCloseCompleted}
                 onCloseAll={menu.onCloseAll}
                 onEndAll={menu.onEndAll}
+                onOpenPanelPalette={menu.onOpenPanelPalette}
                 onDeleteWorktree={menu.onDeleteWorktree}
               />
             </DropdownMenuContent>

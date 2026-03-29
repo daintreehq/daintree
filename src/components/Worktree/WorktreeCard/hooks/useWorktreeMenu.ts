@@ -4,6 +4,7 @@ import { actionService } from "@/services/ActionService";
 import { useNativeContextMenu } from "@/hooks";
 import type { MenuItemOption, TerminalRecipe, WorktreeState } from "@/types";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 export function useWorktreeMenu({
   worktree,
@@ -65,6 +66,7 @@ export function useWorktreeMenu({
         : []),
       { id: "launch:terminal", label: "Open Terminal", enabled: Boolean(onLaunchAgent) },
       { id: "launch:browser", label: "Open Browser", enabled: Boolean(onLaunchAgent) },
+      { id: "launch:dev-preview", label: "Open Dev Preview", enabled: Boolean(onLaunchAgent) },
     ];
 
     const sessionsSubmenu: MenuItemOption[] = [
@@ -110,6 +112,7 @@ export function useWorktreeMenu({
 
     const template: MenuItemOption[] = [
       { id: "submenu:launch", label: "Launch", submenu: launchSubmenu },
+      { id: "worktree:panel-palette", label: "Open Panel Palette" },
       { id: "submenu:sessions", label: "Sessions", submenu: sessionsSubmenu },
       { type: "separator" },
 
@@ -232,6 +235,11 @@ export function useWorktreeMenu({
           { tab: "agents" },
           { source: "context-menu" }
         );
+        return;
+      }
+
+      if (actionId === "launch:dev-preview") {
+        onLaunchAgent?.("dev-preview");
         return;
       }
 
@@ -363,6 +371,10 @@ export function useWorktreeMenu({
         case "worktree:compare-diff":
           onShowCompareDiff?.();
           break;
+        case "worktree:panel-palette":
+          useWorktreeSelectionStore.getState().setActiveWorktree(worktree.id);
+          void actionService.dispatch("panel.palette", undefined, { source: "context-menu" });
+          break;
         case "worktree:delete":
           onShowDeleteDialog();
           break;
@@ -372,6 +384,7 @@ export function useWorktreeMenu({
       contextMenuTemplate,
       onCloseAll,
       onEndAll,
+      onLaunchAgent,
       onRestartAll,
       onShowDeleteDialog,
       onShowIssuePicker,

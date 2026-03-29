@@ -10,8 +10,10 @@ import {
   GitCompare,
   GitPullRequest,
   Globe,
+  LayoutGrid,
   Layers,
   Link,
+  Monitor,
   Maximize2,
   PanelTopClose,
   PanelTopOpen,
@@ -88,6 +90,7 @@ export interface WorktreeMenuItemsProps {
   onCloseCompleted: () => void;
   onCloseAll: () => void;
   onEndAll: () => void;
+  onOpenPanelPalette?: () => void;
   onDeleteWorktree?: () => void;
 }
 
@@ -126,6 +129,7 @@ export function WorktreeMenuItems({
   onCloseCompleted,
   onCloseAll,
   onEndAll,
+  onOpenPanelPalette,
   onDeleteWorktree,
 }: WorktreeMenuItemsProps) {
   const hasIssueSub = Boolean(worktree.issueNumber && (onOpenIssuePortal || onOpenIssueExternal));
@@ -170,8 +174,20 @@ export function WorktreeMenuItems({
             <Globe className="w-3.5 h-3.5 mr-2 text-status-info" />
             Open Browser
           </C.Item>
+          <C.Item onSelect={() => onLaunchAgent?.("dev-preview")} disabled={!onLaunchAgent}>
+            <Monitor className="w-3.5 h-3.5 mr-2 text-status-success" />
+            Open Dev Preview
+          </C.Item>
         </C.SubContent>
       </C.Sub>
+
+      {/* Open Panel Palette (flat item) */}
+      {onOpenPanelPalette && (
+        <C.Item onSelect={onOpenPanelPalette}>
+          <LayoutGrid className="w-3.5 h-3.5 mr-2" />
+          Open Panel Palette
+        </C.Item>
+      )}
 
       {/* Sessions submenu */}
       <C.Sub>
