@@ -38,10 +38,10 @@ export function createApplicationMenu(
     return null;
   };
 
-  const sendAction = (action: string) => {
-    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+  const sendAction = (action: string, target: BrowserWindow | null) => {
+    if (target && !target.isDestroyed() && !target.webContents.isDestroyed()) {
       try {
-        mainWindow.webContents.send(CHANNELS.MENU_ACTION, action);
+        target.webContents.send(CHANNELS.MENU_ACTION, action);
       } catch {
         // Silently ignore send failures during window disposal.
       }
@@ -60,7 +60,8 @@ export function createApplicationMenu(
         items.push({
           label: `New ${agent.name}`,
           accelerator: agent.shortcut ? convertShortcutToAccelerator(agent.shortcut) : undefined,
-          click: () => sendAction(`launch-agent:${agent.id}`),
+          click: (_item, browserWindow) =>
+            sendAction(`launch-agent:${agent.id}`, getTargetBrowserWindow(browserWindow)),
         });
       }
     });
@@ -75,7 +76,8 @@ export function createApplicationMenu(
       items.push({
         label: item.label,
         accelerator: item.accelerator ? convertShortcutToAccelerator(item.accelerator) : undefined,
-        click: () => sendAction(`plugin:${item.actionId}`),
+        click: (_item, browserWindow) =>
+          sendAction(`plugin:${item.actionId}`, getTargetBrowserWindow(browserWindow)),
       });
     }
     return items;
@@ -88,32 +90,35 @@ export function createApplicationMenu(
         {
           label: "Open Directory...",
           accelerator: "CommandOrControl+O",
-          click: async () => {
-            if (mainWindow.isDestroyed()) return;
-            const result = await dialog.showOpenDialog(mainWindow, {
+          click: async (_item, browserWindow) => {
+            const win = getTargetBrowserWindow(browserWindow);
+            if (!win) return;
+            const result = await dialog.showOpenDialog(win, {
               properties: ["openDirectory", "createDirectory"],
               title: "Open Git Repository",
             });
 
             if (!result.canceled && result.filePaths.length > 0) {
               const directoryPath = result.filePaths[0];
-              await handleDirectoryOpen(directoryPath, mainWindow, cliAvailabilityService);
+              await handleDirectoryOpen(directoryPath, win, cliAvailabilityService);
             }
           },
         },
         {
           label: "New Worktree...",
           accelerator: "CommandOrControl+N",
-          click: () => sendAction("new-worktree"),
+          click: (_item, browserWindow) =>
+            sendAction("new-worktree", getTargetBrowserWindow(browserWindow)),
         },
         {
           label: "Open Recent",
-          submenu: buildRecentProjectsMenu(mainWindow, cliAvailabilityService),
+          submenu: buildRecentProjectsMenu(getTargetBrowserWindow, cliAvailabilityService),
         },
         { type: "separator" },
         {
           label: "Project Settings",
-          click: () => sendAction("open-settings"),
+          click: (_item, browserWindow) =>
+            sendAction("open-settings", getTargetBrowserWindow(browserWindow)),
         },
         ...(buildPluginMenuItems("file").length > 0
           ? [{ type: "separator" as const }, ...buildPluginMenuItems("file")]
@@ -144,7 +149,8 @@ export function createApplicationMenu(
         {
           label: "Toggle Sidebar",
           accelerator: "CommandOrControl+B",
-          click: () => sendAction("toggle-sidebar"),
+          click: (_item, browserWindow) =>
+            sendAction("toggle-sidebar", getTargetBrowserWindow(browserWindow)),
         },
         { type: "separator" },
         {
@@ -191,12 +197,14 @@ export function createApplicationMenu(
         {
           label: "Duplicate Panel",
           accelerator: "CommandOrControl+T",
-          click: () => sendAction("duplicate-panel"),
+          click: (_item, browserWindow) =>
+            sendAction("duplicate-panel", getTargetBrowserWindow(browserWindow)),
         },
         {
           label: "New Terminal",
           accelerator: "CommandOrControl+Alt+T",
-          click: () => sendAction("new-terminal"),
+          click: (_item, browserWindow) =>
+            sendAction("new-terminal", getTargetBrowserWindow(browserWindow)),
         },
         ...(buildAgentMenuItems().length > 0
           ? [
@@ -211,12 +219,14 @@ export function createApplicationMenu(
         {
           label: "Quick Switcher...",
           accelerator: "CommandOrControl+P",
-          click: () => sendAction("open-quick-switcher"),
+          click: (_item, browserWindow) =>
+            sendAction("open-quick-switcher", getTargetBrowserWindow(browserWindow)),
         },
         {
           label: "Command Palette...",
           accelerator: "CommandOrControl+Shift+P",
-          click: () => sendAction("open-action-palette"),
+          click: (_item, browserWindow) =>
+            sendAction("open-action-palette", getTargetBrowserWindow(browserWindow)),
         },
         { type: "separator" },
         {
@@ -225,12 +235,9 @@ export function createApplicationMenu(
           click: async () => {
             try {
               const status = await CliInstallService.install();
-              if (
-                mainWindow &&
-                !mainWindow.isDestroyed() &&
-                !mainWindow.webContents.isDestroyed()
-              ) {
-                mainWindow.webContents.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+              const win = BrowserWindow.getFocusedWindow() ?? mainWindow;
+              if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+                win.webContents.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
                   type: "success",
                   title: "CLI Installed",
                   message: `The \`canopy\` command is now available at ${status.path}`,
@@ -239,12 +246,9 @@ export function createApplicationMenu(
               createApplicationMenu(mainWindow, cliAvailabilityService);
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);
-              if (
-                mainWindow &&
-                !mainWindow.isDestroyed() &&
-                !mainWindow.webContents.isDestroyed()
-              ) {
-                mainWindow.webContents.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+              const win = BrowserWindow.getFocusedWindow() ?? mainWindow;
+              if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+                win.webContents.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
                   type: "error",
                   title: "CLI Installation Failed",
                   message,
@@ -264,7 +268,8 @@ export function createApplicationMenu(
       submenu: [
         {
           label: "Getting Started",
-          click: () => sendAction("show-getting-started"),
+          click: (_item, browserWindow) =>
+            sendAction("show-getting-started", getTargetBrowserWindow(browserWindow)),
         },
         { type: "separator" },
         {
@@ -306,7 +311,8 @@ export function createApplicationMenu(
         {
           label: "Settings...",
           accelerator: "CommandOrControl+,",
-          click: () => sendAction("open-settings"),
+          click: (_item, browserWindow) =>
+            sendAction("open-settings", getTargetBrowserWindow(browserWindow)),
         },
         { type: "separator" },
         { role: "services" },
@@ -325,7 +331,7 @@ export function createApplicationMenu(
 }
 
 function buildRecentProjectsMenu(
-  mainWindow: BrowserWindow,
+  getTarget: (browserWindow: Electron.BaseWindow | undefined) => BrowserWindow | null,
   cliAvailabilityService?: CliAvailabilityService
 ): Electron.MenuItemConstructorOptions[] {
   const projects = projectStore.getAllProjects();
@@ -338,8 +344,10 @@ function buildRecentProjectsMenu(
 
   const menuItems: Electron.MenuItemConstructorOptions[] = sortedProjects.map((project) => ({
     label: `${project.emoji || "📁"} ${project.name} - ${project.path}`,
-    click: async () => {
-      await handleDirectoryOpen(project.path, mainWindow, cliAvailabilityService);
+    click: async (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) => {
+      const targetWindow = getTarget(browserWindow);
+      if (!targetWindow) return;
+      await handleDirectoryOpen(project.path, targetWindow, cliAvailabilityService);
     },
   }));
 
@@ -348,10 +356,10 @@ function buildRecentProjectsMenu(
 
 export async function handleDirectoryOpen(
   directoryPath: string,
-  mainWindow: BrowserWindow,
+  targetWindow: BrowserWindow,
   cliAvailabilityService?: CliAvailabilityService
 ): Promise<void> {
-  if (mainWindow.isDestroyed()) return;
+  if (targetWindow.isDestroyed()) return;
 
   try {
     const switchService = getProjectSwitchServiceRef();
@@ -363,7 +371,7 @@ export async function handleDirectoryOpen(
     const project = await projectStore.addProject(directoryPath);
     await switchService.switchProject(project.id);
 
-    createApplicationMenu(mainWindow, cliAvailabilityService);
+    createApplicationMenu(targetWindow, cliAvailabilityService);
   } catch (error) {
     console.error("Failed to open project:", error);
 
