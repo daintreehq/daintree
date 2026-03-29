@@ -295,6 +295,7 @@ export function WorktreeHeader({
   const hasUpstreamDelta =
     (worktree.aheadCount !== undefined && worktree.aheadCount > 0) ||
     (worktree.behindCount !== undefined && worktree.behindCount > 0);
+  const isMainStandardLayout = !!(isMainOnStandardBranch && !hasIssueTitle);
 
   const { visibleStates, sessionAriaLabel } = useMemo(() => {
     if (!sessionStates || !sessionTotal || sessionTotal === 0) {
@@ -334,6 +335,20 @@ export function WorktreeHeader({
               isHeadline
               isActive={isActive}
             />
+          ) : isMainStandardLayout ? (
+            <span
+              className={cn(
+                "truncate text-[13px] font-medium transition-colors duration-200",
+                isActive
+                  ? "text-text-primary/90"
+                  : isMuted
+                    ? "text-text-muted"
+                    : "text-text-secondary"
+              )}
+              data-testid="primary-worktree-project-name"
+            >
+              {worktree.name}
+            </span>
           ) : (
             <BranchLabel
               label={branchLabel}
@@ -481,11 +496,20 @@ export function WorktreeHeader({
       {/* Secondary row: branch label when issue title is headline, issue badge fallback, PR badge, sync indicator, and/or plan badge */}
       {!isCollapsed &&
         (hasIssueTitle ||
+          isMainStandardLayout ||
           (worktree.issueNumber && !hasIssueTitle) ||
           (worktree.prNumber && worktree.prState !== "closed") ||
           hasUpstreamDelta ||
           hasPlanFile) && (
           <div className="flex flex-col gap-0.5 mt-1.5">
+            {isMainStandardLayout && (
+              <BranchLabel
+                label={branchLabel}
+                isActive={isActive}
+                isMuted={isMuted}
+                isMainWorktree={false}
+              />
+            )}
             {worktree.issueNumber && !hasIssueTitle && (
               <IssueBadge
                 issueNumber={worktree.issueNumber}

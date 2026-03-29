@@ -252,6 +252,119 @@ describe("WorktreeHeader issue title headline", () => {
   });
 });
 
+describe("WorktreeHeader primary worktree standard branch layout", () => {
+  const mainWorktree: WorktreeState = {
+    ...baseWorktree,
+    isMainWorktree: true,
+    name: "canopy-app",
+    branch: "main",
+  };
+
+  it("renders project name as headline when isMainOnStandardBranch and no issue title", () => {
+    renderHeader({
+      worktree: mainWorktree,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      branchLabel: "main",
+    });
+    const projectName = screen.getByTestId("primary-worktree-project-name");
+    expect(projectName.textContent).toBe("canopy-app");
+  });
+
+  it("renders branch label in secondary row", () => {
+    renderHeader({
+      worktree: mainWorktree,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      branchLabel: "main",
+    });
+    expect(screen.getByTestId("primary-worktree-project-name")).toBeDefined();
+    expect(screen.getByText("main")).toBeDefined();
+  });
+
+  it("applies active styling to project name when isActive", () => {
+    renderHeader({
+      worktree: mainWorktree,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      isActive: true,
+      branchLabel: "main",
+    });
+    const projectName = screen.getByTestId("primary-worktree-project-name");
+    expect(projectName.className).toContain("text-text-primary/90");
+  });
+
+  it("applies inactive styling to project name when not active", () => {
+    renderHeader({
+      worktree: mainWorktree,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      isActive: false,
+      branchLabel: "main",
+    });
+    const projectName = screen.getByTestId("primary-worktree-project-name");
+    expect(projectName.className).toContain("text-text-secondary");
+  });
+
+  it("falls back to BranchLabel when isMainOnStandardBranch is false", () => {
+    renderHeader({
+      worktree: { ...mainWorktree, branch: "feature/test" },
+      isMainWorktree: true,
+      isMainOnStandardBranch: false,
+      branchLabel: "feature/test",
+    });
+    expect(screen.queryByTestId("primary-worktree-project-name")).toBeNull();
+    expect(screen.getByText(/test/)).toBeDefined();
+  });
+
+  it("uses issue title as headline even when isMainOnStandardBranch if issue exists", () => {
+    renderHeader({
+      worktree: { ...mainWorktree, issueNumber: 100, issueTitle: "Some issue" },
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      branchLabel: "main",
+    });
+    expect(screen.queryByTestId("primary-worktree-project-name")).toBeNull();
+    expect(screen.getByText("Some issue")).toBeDefined();
+  });
+
+  it("applies muted styling to project name when isMuted", () => {
+    renderHeader({
+      worktree: mainWorktree,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      isActive: false,
+      isMuted: true,
+      branchLabel: "main",
+    });
+    const projectName = screen.getByTestId("primary-worktree-project-name");
+    expect(projectName.className).toContain("text-text-muted");
+  });
+
+  it("falls back to BranchLabel when isMainOnStandardBranch is undefined", () => {
+    renderHeader({
+      worktree: mainWorktree,
+      isMainWorktree: true,
+      branchLabel: "main",
+    });
+    expect(screen.queryByTestId("primary-worktree-project-name")).toBeNull();
+  });
+
+  it("hides secondary branch row when collapsed", () => {
+    renderHeader({
+      worktree: mainWorktree,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      isCollapsed: true,
+      branchLabel: "main",
+    });
+    expect(screen.getByTestId("primary-worktree-project-name")).toBeDefined();
+    // The branch "main" should only appear as the project name row, not a separate secondary element
+    const allText = screen.getByTestId("primary-worktree-project-name").textContent;
+    expect(allText).toBe("canopy-app");
+  });
+});
+
 describe("WorktreeHeader plan file badge", () => {
   it("renders plan badge when hasPlanFile is true and onOpenPlan is provided", () => {
     const onOpenPlan = vi.fn();
