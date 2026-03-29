@@ -2,7 +2,10 @@ import path from "node:path";
 import fs from "node:fs";
 import { getAgentConfig } from "../../shared/config/agentRegistry.js";
 import { buildPatternConfig } from "../../electron/services/pty/terminalActivityPatterns.js";
-import { createPatternDetector, stripAnsi } from "../../electron/services/pty/AgentPatternDetector.js";
+import {
+  createPatternDetector,
+  stripAnsi,
+} from "../../electron/services/pty/AgentPatternDetector.js";
 import { appendJsonLine, ensureDir } from "../perf/lib/io.js";
 import type { CorpusEntry, AgentState } from "./types.js";
 
@@ -37,9 +40,7 @@ function parseArgs(argv: string[]): RunnerOptions {
 
   const agentId = args.get("agent");
   if (!agentId || !SUPPORTED_AGENTS.includes(agentId)) {
-    throw new Error(
-      `--agent required. Supported: ${SUPPORTED_AGENTS.join(", ")}`
-    );
+    throw new Error(`--agent required. Supported: ${SUPPORTED_AGENTS.join(", ")}`);
   }
 
   return {
@@ -73,10 +74,7 @@ async function runSession(options: RunnerOptions): Promise<string> {
   ensureDir(options.outDir);
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const corpusPath = path.join(
-    options.outDir,
-    `${options.agentId}_${timestamp}.jsonl`
-  );
+  const corpusPath = path.join(options.outDir, `${options.agentId}_${timestamp}.jsonl`);
 
   const startTime = Date.now();
   const entries: CorpusEntry[] = [];

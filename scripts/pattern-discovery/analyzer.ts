@@ -202,11 +202,7 @@ function buildHeuristicBatchLine(
   });
 }
 
-async function submitBatch(
-  apiKey: string,
-  batchLines: string[],
-  purpose: string
-): Promise<string> {
+async function submitBatch(apiKey: string, batchLines: string[], purpose: string): Promise<string> {
   const OpenAI = (await import("openai")).default;
   const client = new OpenAI({ apiKey });
 

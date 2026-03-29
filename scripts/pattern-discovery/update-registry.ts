@@ -4,10 +4,7 @@ import { readJson } from "../perf/lib/io.js";
 import { replayCorpus } from "./corpus-replay.js";
 import type { AnalyzerOutput, PatternCandidate } from "./types.js";
 
-const REGISTRY_PATH = path.resolve(
-  import.meta.dirname,
-  "../../shared/config/agentRegistry.ts"
-);
+const REGISTRY_PATH = path.resolve(import.meta.dirname, "../../shared/config/agentRegistry.ts");
 
 const CORPUS_DIR = path.resolve(import.meta.dirname, "corpus");
 
@@ -21,9 +18,7 @@ const PATTERN_FIELDS = [
 
 type PatternField = (typeof PATTERN_FIELDS)[number];
 
-function groupCandidatesByCategory(
-  candidates: PatternCandidate[]
-): Map<PatternField, string[]> {
+function groupCandidatesByCategory(candidates: PatternCandidate[]): Map<PatternField, string[]> {
   const grouped = new Map<PatternField, string[]>();
   for (const candidate of candidates) {
     if (!PATTERN_FIELDS.includes(candidate.category as PatternField)) continue;
@@ -50,9 +45,7 @@ function replacePatternArray(
   const endIdx = source.indexOf(endMarker);
 
   if (startIdx === -1 || endIdx === -1) {
-    console.warn(
-      `[update-registry] Missing sentinels for ${agentId}.${field}, skipping`
-    );
+    console.warn(`[update-registry] Missing sentinels for ${agentId}.${field}, skipping`);
     return source;
   }
 
@@ -67,17 +60,9 @@ function replacePatternArray(
     })
     .join("\n");
 
-  const replacement = [
-    `${indent}${startMarker}`,
-    patternsStr,
-    `${indent}${endMarker}`,
-  ].join("\n");
+  const replacement = [`${indent}${startMarker}`, patternsStr, `${indent}${endMarker}`].join("\n");
 
-  return (
-    source.slice(0, beforeStart + 1) +
-    replacement +
-    source.slice(afterEnd)
-  );
+  return source.slice(0, beforeStart + 1) + replacement + source.slice(afterEnd);
 }
 
 function validatePatterns(patterns: string[]): string[] {
@@ -172,7 +157,9 @@ function main(): void {
   // Validate with corpus replay BEFORE writing
   const originalSource = fs.readFileSync(REGISTRY_PATH, "utf-8");
   const corpusFiles = fs.existsSync(CORPUS_DIR)
-    ? fs.readdirSync(CORPUS_DIR).filter((f) => f.startsWith(analysis.agentId) && f.endsWith(".jsonl"))
+    ? fs
+        .readdirSync(CORPUS_DIR)
+        .filter((f) => f.startsWith(analysis.agentId) && f.endsWith(".jsonl"))
     : [];
 
   if (corpusFiles.length > 0) {

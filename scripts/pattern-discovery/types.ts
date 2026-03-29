@@ -1,10 +1,4 @@
-export type AgentState =
-  | "initializing"
-  | "working"
-  | "waiting"
-  | "completed"
-  | "error"
-  | "unknown";
+export type AgentState = "initializing" | "working" | "waiting" | "completed" | "error" | "unknown";
 
 export interface CorpusEntry {
   time: number;

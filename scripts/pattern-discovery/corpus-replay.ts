@@ -58,7 +58,12 @@ export function replayCorpus(corpusPath: string, agentId: string): CorpusReplayR
 
 function statesMatch(expected: AgentState, actual: AgentState, isWorking: boolean): boolean {
   if (expected === "working") return isWorking;
-  if (expected === "waiting" || expected === "completed" || expected === "initializing" || expected === "error") {
+  if (
+    expected === "waiting" ||
+    expected === "completed" ||
+    expected === "initializing" ||
+    expected === "error"
+  ) {
     return !isWorking;
   }
   return expected === "unknown";
