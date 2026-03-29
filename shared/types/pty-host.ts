@@ -147,6 +147,8 @@ export type PtyHostEvent =
       confidence: number;
       worktreeId?: string;
       waitingReason?: WaitingReason;
+      sessionCost?: number;
+      sessionTokens?: number;
     }
   | {
       type: "agent-detected";

@@ -391,6 +391,8 @@ events.on("agent:state-changed", (payload) => {
       confidence: payload.confidence,
       worktreeId: payload.worktreeId,
       waitingReason: payload.waitingReason,
+      sessionCost: payload.sessionCost,
+      sessionTokens: payload.sessionTokens,
     });
 
     if (payload.state === "waiting" || payload.state === "completed") {

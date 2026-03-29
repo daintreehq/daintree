@@ -530,6 +530,8 @@ export type CanopyEventMap = {
     trigger: AgentStateChangeTrigger;
     confidence: number;
     waitingReason?: import("../../shared/types/agent.js").WaitingReason;
+    sessionCost?: number;
+    sessionTokens?: number;
   }>;
 
   /**

@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { detectCompletion, extractCostFromLines } from "../CompletionDetector.js";
+import {
+  detectCompletion,
+  extractCostFromLines,
+  extractTokensFromLines,
+} from "../CompletionDetector.js";
 
 describe("detectCompletion", () => {
   it("returns false with no patterns", () => {
@@ -125,6 +129,65 @@ describe("detectCompletion", () => {
       const result = detectCompletion(["Total cost:            $0.00"], claudePatterns, 0.9, 6);
       expect(result.isCompletion).toBe(true);
       expect(result.extractedCost).toBe(0);
+    });
+  });
+
+  describe("token extraction", () => {
+    const claudePatterns = [
+      /[✢✳✶✻✽●]\s+\w+\s+for\s+\d/,
+      /Total cost:\s+\$\d/,
+      /Total duration/,
+      /\$\d+\.\d+\s*·\s*\d+\s*tokens/,
+    ];
+
+    it("extracts tokens from legacy format", () => {
+      const result = detectCompletion(["$0.50 · 1234 tokens"], claudePatterns, 0.9, 6);
+      expect(result.isCompletion).toBe(true);
+      expect(result.extractedTokens).toBe(1234);
+    });
+
+    it("returns undefined tokens for modern Total cost format", () => {
+      const result = detectCompletion(
+        ["✻ Worked for 12s.", "Total cost:            $3.10"],
+        claudePatterns,
+        0.9,
+        6
+      );
+      expect(result.isCompletion).toBe(true);
+      expect(result.extractedCost).toBe(3.1);
+      expect(result.extractedTokens).toBeUndefined();
+    });
+
+    it("extracts both cost and tokens from legacy format", () => {
+      const result = detectCompletion(["$1.23 · 45000 tokens"], claudePatterns, 0.9, 6);
+      expect(result.extractedCost).toBe(1.23);
+      expect(result.extractedTokens).toBe(45000);
+    });
+  });
+
+  describe("extractTokensFromLines", () => {
+    it("extracts from legacy token format", () => {
+      expect(extractTokensFromLines(["$0.50 · 1234 tokens"])).toBe(1234);
+    });
+
+    it("returns undefined for Total cost format", () => {
+      expect(extractTokensFromLines(["Total cost:            $2.89"])).toBeUndefined();
+    });
+
+    it("returns undefined for non-cost lines", () => {
+      expect(extractTokensFromLines(["some random output"])).toBeUndefined();
+    });
+
+    it("strips ANSI before matching", () => {
+      expect(extractTokensFromLines(["\x1b[32m$0.50 · 999 tokens\x1b[0m"])).toBe(999);
+    });
+
+    it("extracts zero tokens", () => {
+      expect(extractTokensFromLines(["$0.00 · 0 tokens"])).toBe(0);
+    });
+
+    it("does not match comma-formatted token counts", () => {
+      expect(extractTokensFromLines(["$0.50 · 1,234 tokens"])).toBeUndefined();
     });
   });
 
