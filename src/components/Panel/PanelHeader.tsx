@@ -294,7 +294,7 @@ function PanelHeaderComponent({
     if (location === "dock") {
       onRestore?.();
     } else {
-      actionService.dispatch("nav.toggleFocusMode");
+      void actionService.dispatch("nav.toggleFocusMode");
     }
   };
 
