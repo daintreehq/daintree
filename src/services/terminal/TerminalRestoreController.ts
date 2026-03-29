@@ -188,7 +188,11 @@ export class TerminalRestoreController {
       }
 
       // restoreFetchedState will take over the isSerializedRestoreInProgress flag
-      return await this.restoreFetchedState(id, serializedState);
+      const result = await this.restoreFetchedState(id, serializedState);
+      if (!result) {
+        managed.isSerializedRestoreInProgress = false;
+      }
+      return result;
     } catch (error) {
       managed.isSerializedRestoreInProgress = false;
       logError(`Failed to fetch state for terminal ${id}`, error);

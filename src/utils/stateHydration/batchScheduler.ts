@@ -47,21 +47,6 @@ export function splitSnapshotRestoreTasks(
   return { criticalTasks, deferredTasks };
 }
 
-export function scheduleDeferredSnapshotRestore(runRestore: () => Promise<void>): void {
-  const execute = () => {
-    void runRestore().catch((error) => {
-      logWarn("Deferred terminal snapshot restore failed", { error });
-    });
-  };
-
-  if (typeof scheduler !== "undefined" && typeof scheduler.postTask === "function") {
-    void scheduler.postTask(execute, { priority: "background" });
-    return;
-  }
-
-  setTimeout(execute, DEFERRED_RESTORE_FALLBACK_DELAY_MS);
-}
-
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

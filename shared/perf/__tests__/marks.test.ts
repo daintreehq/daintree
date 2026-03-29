@@ -24,7 +24,6 @@ describe("PERF_MARKS", () => {
     expect(PERF_MARKS.HYDRATE_BOOTSTRAP).toBe("hydrate_bootstrap");
     expect(PERF_MARKS.HYDRATE_APP_CLIENT).toBe("hydrate_app_client");
     expect(PERF_MARKS.HYDRATE_GET_TERMINALS).toBe("hydrate_get_terminals");
-    expect(PERF_MARKS.HYDRATE_GET_SERIALIZED_STATES).toBe("hydrate_get_serialized_states");
     expect(PERF_MARKS.HYDRATE_RESTORE_SNAPSHOTS_CRITICAL).toBe(
       "hydrate_restore_snapshots_critical"
     );

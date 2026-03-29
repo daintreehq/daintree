@@ -347,6 +347,19 @@ describe("TerminalRestoreController", () => {
       const result = await controller.fetchAndRestore("nonexistent");
       expect(result).toBe(false);
     });
+
+    it("clears isSerializedRestoreInProgress when serialized state is null", async () => {
+      const { terminalClient } = await import("@/clients");
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(null as unknown as string);
+
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const result = await controller.fetchAndRestore("t1");
+
+      expect(result).toBe(false);
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+    });
   });
 
   describe("destroy", () => {
