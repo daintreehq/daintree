@@ -133,7 +133,7 @@ If the answer is **Workshop**, we don't build the feature. At most, we build a *
 | Completion Notifications   | **APPROVE**              | Unblocks agent. Manages multiplicity. Enables reactive workflow.                                                       |
 | Voice Input                | **APPROVE**              | Bridges gap. Hands-free delegation while monitoring other agents. Accessibility value.                                 |
 | Integrated Browser         | **APPROVE**              | Localhost preview, console capture, and agent-app debugging. Bridges gap. Not a general-purpose browser.               |
-| Canopy Assistant           | **APPROVE**              | Wraps AI with orchestration context (panels, worktrees, actions). Not a generic chat — it's orchestration-aware.     |
+| Canopy Assistant           | **APPROVE**              | Wraps AI with orchestration context (panels, worktrees, actions). Not a generic chat — it's orchestration-aware.       |
 | Notes Panel                | **APPROVE**              | Annotation alongside agent work. Markdown editing for note-taking, not code editing. Bridges gap.                      |
 | Terminal Recipes           | **APPROVE**              | Enables automation. Repeatable multi-agent setups reduce manual panel configuration.                                   |
 | Portal (Web Agent Dock)    | **APPROVE**              | Bridges gap between CLI agents and web agent UIs. Manages multiplicity across agent interfaces.                        |
