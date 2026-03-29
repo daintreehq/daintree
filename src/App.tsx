@@ -176,6 +176,7 @@ import { useRenderProfiler } from "./utils/renderProfiler";
 import { useWorktreeDataStore } from "./store/worktreeDataStore";
 import type { WorktreeActions } from "./hooks/useWorktreeActions";
 import type { UseAgentLauncherReturn } from "./hooks/useAgentLauncher";
+import { useProjectHealth } from "./hooks/useProjectHealth";
 
 interface SidebarWorktreeRowProps {
   worktreeId: string;
@@ -313,6 +314,7 @@ interface StaticWorktreeRowProps {
   agentSettings: UseAgentLauncherReturn["agentSettings"];
   homeDir: string | undefined;
   aggregateCounts?: WorktreeCardProps["aggregateCounts"];
+  projectHealth?: WorktreeCardProps["projectHealth"];
 }
 
 const StaticWorktreeRow = React.memo(function StaticWorktreeRow({
@@ -326,6 +328,7 @@ const StaticWorktreeRow = React.memo(function StaticWorktreeRow({
   agentSettings,
   homeDir,
   aggregateCounts,
+  projectHealth,
 }: StaticWorktreeRowProps) {
   const worktree = useWorktreeDataStore((state) => state.worktrees.get(worktreeId));
 
@@ -363,6 +366,7 @@ const StaticWorktreeRow = React.memo(function StaticWorktreeRow({
         isFocused={worktreeId === focusedWorktreeId}
         isSingleWorktree={totalWorktreeCount === 1}
         aggregateCounts={aggregateCounts}
+        projectHealth={projectHealth}
         onSelect={onSelect}
         onCopyTree={onCopyTree}
         onOpenEditor={onOpenEditor}
@@ -386,6 +390,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const [isRefreshing, startRefreshTransition] = useTransition();
   const currentProject = useProjectStore((state) => state.currentProject);
   useProjectSettings();
+  const { health: projectHealth } = useProjectHealth();
   const { launchAgent, availability, agentSettings } = useAgentLauncher();
   const {
     activeWorktreeId,
@@ -576,9 +581,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   }, [deferredWorktrees, derivedMetaMap, mainWorktree, integrationWorktree]);
 
   const mainWorktreeAggregateCounts = useMemo(() => {
-    const nonMainCount = deferredWorktrees.filter(
-      (w) => w.id !== mainWorktree?.id && w.id !== integrationWorktree?.id
-    ).length;
+    const nonMainCount = deferredWorktrees.length - 1 - (integrationWorktree ? 1 : 0);
     if (
       nonMainCount === 0 &&
       quickStateCounts.working === 0 &&
@@ -593,7 +596,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       waiting: quickStateCounts.waiting,
       finished: quickStateCounts.finished,
     };
-  }, [deferredWorktrees, mainWorktree, integrationWorktree, quickStateCounts]);
+  }, [deferredWorktrees.length, integrationWorktree, quickStateCounts]);
 
   const { filteredWorktrees, groupedSections } = useMemo(() => {
     const filters: FilterState = {
@@ -998,6 +1001,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               agentSettings={agentSettings}
               homeDir={homeDir}
               aggregateCounts={mainWorktreeAggregateCounts}
+              projectHealth={projectHealth}
             />
           </div>
         )}
