@@ -6,7 +6,7 @@ import {
   type WatchNotificationContext,
 } from "../../services/NotificationService.js";
 import { agentNotificationService } from "../../services/AgentNotificationService.js";
-import { soundService, ALLOWED_SOUND_FILES } from "../../services/SoundService.js";
+import { soundService, ALLOWED_SOUND_FILES, SOUNDS_DIR } from "../../services/SoundService.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
@@ -113,10 +113,15 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     );
   };
 
+  const handleGetSoundDir = async (): Promise<string> => {
+    return SOUNDS_DIR;
+  };
+
   ipcMain.on(CHANNELS.NOTIFICATION_UPDATE, handleNotificationUpdate);
   ipcMain.handle(CHANNELS.NOTIFICATION_SETTINGS_GET, handleSettingsGet);
   ipcMain.handle(CHANNELS.NOTIFICATION_SETTINGS_SET, handleSettingsSet);
   ipcMain.handle(CHANNELS.NOTIFICATION_PLAY_SOUND, handlePlaySound);
+  ipcMain.handle(CHANNELS.SOUND_GET_DIR, handleGetSoundDir);
   ipcMain.on(CHANNELS.NOTIFICATION_SHOW_NATIVE, handleShowNative);
   ipcMain.on(CHANNELS.NOTIFICATION_SHOW_WATCH, handleShowWatch);
   ipcMain.on(CHANNELS.NOTIFICATION_SYNC_WATCHED, handleSyncWatched);
@@ -127,6 +132,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     ipcMain.removeHandler(CHANNELS.NOTIFICATION_SETTINGS_GET);
     ipcMain.removeHandler(CHANNELS.NOTIFICATION_SETTINGS_SET);
     ipcMain.removeHandler(CHANNELS.NOTIFICATION_PLAY_SOUND);
+    ipcMain.removeHandler(CHANNELS.SOUND_GET_DIR);
     ipcMain.removeListener(CHANNELS.NOTIFICATION_SHOW_NATIVE, handleShowNative);
     ipcMain.removeListener(CHANNELS.NOTIFICATION_SHOW_WATCH, handleShowWatch);
     ipcMain.removeListener(CHANNELS.NOTIFICATION_SYNC_WATCHED, handleSyncWatched);

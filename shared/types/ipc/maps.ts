@@ -1373,6 +1373,12 @@ export interface IpcInvokeMap {
     result: void;
   };
 
+  // Sound channels
+  "sound:get-dir": {
+    args: [];
+    result: string;
+  };
+
   // App theme channels
   "app-theme:get": {
     args: [];
@@ -1817,6 +1823,10 @@ export interface IpcEventMap {
     writesSuppressed: boolean;
   };
   "portal:tabs-evicted": { tabIds: string[] };
+
+  // Sound events (main → renderer)
+  "sound:trigger": { soundFile: string };
+  "sound:cancel": void;
 
   // Notification events
   "notification:update": { waitingCount: number };

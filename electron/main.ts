@@ -82,6 +82,7 @@ app.commandLine.appendSwitch(
 // Keep the renderer process at full priority and prevent AudioContext suspension
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 if (process.platform === "darwin") {
   app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 }
