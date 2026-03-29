@@ -1336,7 +1336,9 @@ export interface IpcInvokeMap {
       completedEnabled: boolean;
       waitingEnabled: boolean;
       soundEnabled: boolean;
-      soundFile: string;
+      completedSoundFile: string;
+      waitingSoundFile: string;
+      escalationSoundFile: string;
       waitingEscalationEnabled: boolean;
       waitingEscalationDelayMs: number;
     };
@@ -1347,7 +1349,9 @@ export interface IpcInvokeMap {
         completedEnabled: boolean;
         waitingEnabled: boolean;
         soundEnabled: boolean;
-        soundFile: string;
+        completedSoundFile: string;
+        waitingSoundFile: string;
+        escalationSoundFile: string;
         waitingEscalationEnabled: boolean;
         waitingEscalationDelayMs: number;
       }>,

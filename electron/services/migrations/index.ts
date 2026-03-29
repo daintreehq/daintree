@@ -5,6 +5,7 @@ import { migration004 } from "./004-upgrade-correction-model.js";
 import { migration005 } from "./005-add-getting-started-checklist.js";
 import { migration006 } from "./006-rename-theme-canopy-to-daintree.js";
 import { migration007 } from "./007-reduce-default-terminal-scrollback.js";
+import { migration008 } from "./008-split-notification-sounds.js";
 
 export const migrations: Migration[] = [
   migration002,
@@ -13,4 +14,5 @@ export const migrations: Migration[] = [
   migration005,
   migration006,
   migration007,
+  migration008,
 ];

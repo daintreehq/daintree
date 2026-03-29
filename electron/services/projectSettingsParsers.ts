@@ -39,11 +39,24 @@ export function parseNotificationOverrides(
   if (typeof obj.completedEnabled === "boolean") result.completedEnabled = obj.completedEnabled;
   if (typeof obj.waitingEnabled === "boolean") result.waitingEnabled = obj.waitingEnabled;
   if (typeof obj.soundEnabled === "boolean") result.soundEnabled = obj.soundEnabled;
+  const ALLOWED_SOUNDS = ["chime.wav", "ping.wav", "complete.wav", "waiting.wav", "error.wav"];
+
   if (
-    typeof obj.soundFile === "string" &&
-    ["chime.wav", "ping.wav", "complete.wav", "waiting.wav", "error.wav"].includes(obj.soundFile)
+    typeof obj.completedSoundFile === "string" &&
+    ALLOWED_SOUNDS.includes(obj.completedSoundFile)
   ) {
-    result.soundFile = obj.soundFile;
+    result.completedSoundFile = obj.completedSoundFile;
+  } else if (typeof obj.soundFile === "string" && ALLOWED_SOUNDS.includes(obj.soundFile)) {
+    result.completedSoundFile = obj.soundFile;
+  }
+  if (typeof obj.waitingSoundFile === "string" && ALLOWED_SOUNDS.includes(obj.waitingSoundFile)) {
+    result.waitingSoundFile = obj.waitingSoundFile;
+  }
+  if (
+    typeof obj.escalationSoundFile === "string" &&
+    ALLOWED_SOUNDS.includes(obj.escalationSoundFile)
+  ) {
+    result.escalationSoundFile = obj.escalationSoundFile;
   }
   if (typeof obj.waitingEscalationEnabled === "boolean") {
     result.waitingEscalationEnabled = obj.waitingEscalationEnabled;

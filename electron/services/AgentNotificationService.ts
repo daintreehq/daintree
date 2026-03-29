@@ -105,7 +105,7 @@ class AgentNotificationService {
       // Waiting (permission request) is urgent — show immediately, bypass queue stagger
       const label = this.getLabel(agentId, worktreeId);
       const context = this.makeContext(terminalId, agentId, worktreeId);
-      this.playNotificationSound(settings.soundEnabled);
+      this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
       notificationService.showWatchNotification(
         "Agent waiting",
         `${label} is waiting for input`,
@@ -140,7 +140,8 @@ class AgentNotificationService {
           agentId,
           triggerSound: settings.soundEnabled,
         },
-        true
+        true,
+        settings.completedSoundFile
       );
     }, COMPLETION_DEBOUNCE_MS);
 
@@ -176,7 +177,7 @@ class AgentNotificationService {
       if (!currentTerminal || currentTerminal.location !== "dock") return;
 
       const label = currentTerminal.title || this.getLabel(agentId, worktreeId);
-      this.playNotificationSound(currentSettings.soundEnabled);
+      this.playNotificationSound(currentSettings.soundEnabled, currentSettings.escalationSoundFile);
       notificationService.showNativeNotification(
         "Agent still waiting",
         `${label} has been waiting for input`
@@ -201,14 +202,16 @@ class AgentNotificationService {
   private enqueue(
     notification: PendingNotification,
     bypassFocusCheck = false,
-    soundOverride?: string
+    soundFile?: string
   ): void {
     if (!bypassFocusCheck && this.isFocusedOnWorktree(notification.worktreeId)) {
       return;
     }
 
     this.notificationQueue.push({ ...notification });
-    this.playNotificationSound(notification.triggerSound, soundOverride);
+    if (soundFile) {
+      this.playNotificationSound(notification.triggerSound, soundFile);
+    }
 
     if (!this.staggerTimer) {
       this.drainQueue();
@@ -270,11 +273,9 @@ class AgentNotificationService {
     };
   }
 
-  private playNotificationSound(enabled: boolean, fileOverride?: string): void {
+  private playNotificationSound(enabled: boolean, soundFile: string): void {
     if (!enabled) return;
 
-    const settings = projectStore.getEffectiveNotificationSettings();
-    const soundFile = fileOverride ?? settings.soundFile;
     const soundPath = path.join(SOUNDS_DIR, soundFile);
 
     if (!existsSync(soundPath)) return;

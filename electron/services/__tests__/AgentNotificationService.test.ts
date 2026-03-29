@@ -45,7 +45,9 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
   completedEnabled: false,
   waitingEnabled: false,
   soundEnabled: false,
-  soundFile: "chime.wav",
+  completedSoundFile: "complete.wav",
+  waitingSoundFile: "waiting.wav",
+  escalationSoundFile: "ping.wav",
   waitingEscalationEnabled: true,
   waitingEscalationDelayMs: 180_000,
 };
@@ -212,6 +214,40 @@ describe("AgentNotificationService", () => {
     events.emit("agent:state-changed", makePayload("waiting"));
 
     expect(playSoundMock).not.toHaveBeenCalled();
+  });
+
+  it("plays waitingSoundFile for waiting events", () => {
+    mockStore({ waitingEnabled: true, soundEnabled: true, waitingSoundFile: "ping.wav" });
+
+    events.emit("agent:state-changed", makePayload("waiting"));
+
+    expect(playSoundMock).toHaveBeenCalledWith(expect.stringContaining("ping.wav"));
+  });
+
+  it("plays completedSoundFile for completion events", () => {
+    mockStore({ completedEnabled: true, soundEnabled: true, completedSoundFile: "chime.wav" });
+
+    events.emit("agent:state-changed", makePayload("completed"));
+    vi.advanceTimersByTime(5000);
+
+    expect(playSoundMock).toHaveBeenCalledWith(expect.stringContaining("chime.wav"));
+  });
+
+  it("plays escalationSoundFile for escalation events", () => {
+    mockStore({
+      waitingEnabled: true,
+      soundEnabled: true,
+      escalationSoundFile: "error.wav",
+    });
+
+    events.emit("agent:state-changed", makePayload("waiting"));
+    vi.advanceTimersByTime(180_000);
+
+    // The first call is the waiting sound, the second is escalation
+    const escalationCall = playSoundMock.mock.calls.find((call: string[]) =>
+      call[0].includes("error.wav")
+    );
+    expect(escalationCall).toBeDefined();
   });
 
   it("fires only waiting notification when only waitingEnabled is true (mixed sequence)", () => {

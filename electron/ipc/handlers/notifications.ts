@@ -43,8 +43,17 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     if (typeof s.completedEnabled === "boolean") allowed.completedEnabled = s.completedEnabled;
     if (typeof s.waitingEnabled === "boolean") allowed.waitingEnabled = s.waitingEnabled;
     if (typeof s.soundEnabled === "boolean") allowed.soundEnabled = s.soundEnabled;
-    if (typeof s.soundFile === "string" && ALLOWED_SOUND_FILES.has(s.soundFile)) {
-      allowed.soundFile = s.soundFile;
+    if (typeof s.completedSoundFile === "string" && ALLOWED_SOUND_FILES.has(s.completedSoundFile)) {
+      allowed.completedSoundFile = s.completedSoundFile;
+    }
+    if (typeof s.waitingSoundFile === "string" && ALLOWED_SOUND_FILES.has(s.waitingSoundFile)) {
+      allowed.waitingSoundFile = s.waitingSoundFile;
+    }
+    if (
+      typeof s.escalationSoundFile === "string" &&
+      ALLOWED_SOUND_FILES.has(s.escalationSoundFile)
+    ) {
+      allowed.escalationSoundFile = s.escalationSoundFile;
     }
     if (typeof s.waitingEscalationEnabled === "boolean") {
       allowed.waitingEscalationEnabled = s.waitingEscalationEnabled;
