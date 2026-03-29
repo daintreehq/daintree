@@ -7,6 +7,7 @@ import { CHANNELS } from "../ipc/channels.js";
 
 const COMPLETION_DEBOUNCE_MS = 2000;
 const NOTIFICATION_STAGGER_MS = 500;
+const BURST_WINDOW_MS = 200;
 
 interface PendingNotification {
   title: string;
@@ -17,6 +18,14 @@ interface PendingNotification {
   triggerSound: boolean;
 }
 
+interface BurstWaitingEntry {
+  worktreeId?: string;
+  terminalId?: string;
+  agentId?: string;
+  soundFile: string;
+  soundEnabled: boolean;
+}
+
 class AgentNotificationService {
   private completionTimers = new Map<string, NodeJS.Timeout>();
   private waitingEscalationTimers = new Map<string, NodeJS.Timeout>();
@@ -24,6 +33,13 @@ class AgentNotificationService {
   private staggerTimer: NodeJS.Timeout | null = null;
   private unsubscribers: Array<() => void> = [];
   private watchedTerminals = new Set<string>();
+
+  private waitingBurstBuffer: BurstWaitingEntry[] = [];
+  private waitingBurstTimer: NodeJS.Timeout | null = null;
+  private completionBurstBuffer: PendingNotification[] = [];
+  private completionBurstTimer: NodeJS.Timeout | null = null;
+  private completionBurstSoundFile: string | undefined;
+  private waitingTerminalIds = new Set<string>();
 
   syncWatchedPanels(panelIds: string[]): void {
     this.watchedTerminals = new Set(panelIds);
@@ -64,8 +80,14 @@ class AgentNotificationService {
       }
     }
 
+    // Track currently-waiting terminal IDs for escalation grouping
+    if (state === "waiting" && terminalId) {
+      this.waitingTerminalIds.add(terminalId);
+    }
+
     // Cancel waiting escalation when agent leaves "waiting"
     if (previousState === "waiting" && state !== "waiting" && terminalId) {
+      this.waitingTerminalIds.delete(terminalId);
       this.clearWaitingEscalation(terminalId);
     }
 
@@ -92,17 +114,16 @@ class AgentNotificationService {
     if (state === "completed" && settings.completedEnabled) {
       this.scheduleCompletionNotification(key, worktreeId, terminalId, agentId);
     } else if (state === "waiting" && settings.waitingEnabled) {
-      // Waiting (permission request) is urgent — show immediately, bypass queue stagger
-      const label = this.getLabel(agentId, worktreeId);
-      const context = this.makeContext(terminalId, agentId, worktreeId);
-      this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
-      notificationService.showWatchNotification(
-        "Agent waiting",
-        `${label} is waiting for input`,
-        context,
-        CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-        true
-      );
+      this.waitingBurstBuffer.push({
+        worktreeId,
+        terminalId,
+        agentId,
+        soundFile: settings.waitingSoundFile,
+        soundEnabled: settings.soundEnabled,
+      });
+      if (this.waitingBurstTimer === null) {
+        this.waitingBurstTimer = setTimeout(() => this.flushWaitingBurst(), BURST_WINDOW_MS);
+      }
     }
   }
 
@@ -121,21 +142,79 @@ class AgentNotificationService {
       const settings = projectStore.getEffectiveNotificationSettings();
       if (settings.enabled === false || !settings.completedEnabled) return;
       const label = this.getLabel(agentId, worktreeId);
-      this.enqueue(
-        {
-          title: "Agent completed",
-          body: `${label} finished its task`,
-          worktreeId,
-          terminalId,
-          agentId,
-          triggerSound: settings.soundEnabled,
-        },
-        true,
-        settings.completedSoundFile
-      );
+      this.completionBurstBuffer.push({
+        title: "Agent completed",
+        body: `${label} finished its task`,
+        worktreeId,
+        terminalId,
+        agentId,
+        triggerSound: settings.soundEnabled,
+      });
+      if (!this.completionBurstSoundFile) {
+        this.completionBurstSoundFile = settings.completedSoundFile;
+      }
+      if (this.completionBurstTimer === null) {
+        this.completionBurstTimer = setTimeout(() => this.flushCompletionBurst(), 0);
+      }
     }, COMPLETION_DEBOUNCE_MS);
 
     this.completionTimers.set(key, timer);
+  }
+
+  private flushWaitingBurst(): void {
+    this.waitingBurstTimer = null;
+    const items = this.waitingBurstBuffer.splice(0);
+    if (items.length === 0) return;
+
+    const first = items[0];
+    this.playNotificationSound(first.soundEnabled, first.soundFile);
+
+    if (items.length === 1) {
+      const label = this.getLabel(first.agentId, first.worktreeId);
+      const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
+      notificationService.showWatchNotification(
+        "Agent waiting",
+        `${label} is waiting for input`,
+        context,
+        CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
+        true
+      );
+    } else {
+      const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
+      notificationService.showWatchNotification(
+        "Agents waiting",
+        `${items.length} agents waiting for input`,
+        context,
+        CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
+        true
+      );
+    }
+  }
+
+  private flushCompletionBurst(): void {
+    this.completionBurstTimer = null;
+    const items = this.completionBurstBuffer.splice(0);
+    const soundFile = this.completionBurstSoundFile;
+    this.completionBurstSoundFile = undefined;
+    if (items.length === 0) return;
+
+    if (items.length === 1) {
+      this.enqueue(items[0], true, soundFile);
+    } else {
+      const first = items[0];
+      this.enqueue(
+        {
+          title: "Agents completed",
+          body: `${items.length} agents finished their tasks`,
+          worktreeId: first.worktreeId,
+          terminalId: first.terminalId,
+          agentId: first.agentId,
+          triggerSound: first.triggerSound,
+        },
+        true,
+        soundFile
+      );
+    }
   }
 
   private scheduleWaitingEscalation(
@@ -166,12 +245,25 @@ class AgentNotificationService {
       const currentTerminal = currentTerminals.find((t) => t.id === terminalId);
       if (!currentTerminal || currentTerminal.location !== "dock") return;
 
-      const label = currentTerminal.title || this.getLabel(agentId, worktreeId);
+      // Count all dock terminals currently waiting (for grouped escalation)
+      const waitingDockCount = currentTerminals.filter(
+        (t) => t.location === "dock" && this.waitingTerminalIds.has(t.id)
+      ).length;
+
       this.playNotificationSound(currentSettings.soundEnabled, currentSettings.escalationSoundFile);
-      notificationService.showNativeNotification(
-        "Agent still waiting",
-        `${label} has been waiting for input`
-      );
+
+      if (waitingDockCount > 1) {
+        notificationService.showNativeNotification(
+          "Agents still waiting",
+          `${waitingDockCount} agents have been waiting for input`
+        );
+      } else {
+        const label = currentTerminal.title || this.getLabel(agentId, worktreeId);
+        notificationService.showNativeNotification(
+          "Agent still waiting",
+          `${label} has been waiting for input`
+        );
+      }
     }, settings.waitingEscalationDelayMs);
 
     this.waitingEscalationTimers.set(terminalId, timer);
@@ -293,6 +385,20 @@ class AgentNotificationService {
       this.staggerTimer = null;
     }
 
+    if (this.waitingBurstTimer) {
+      clearTimeout(this.waitingBurstTimer);
+      this.waitingBurstTimer = null;
+    }
+    this.waitingBurstBuffer = [];
+
+    if (this.completionBurstTimer) {
+      clearTimeout(this.completionBurstTimer);
+      this.completionBurstTimer = null;
+    }
+    this.completionBurstBuffer = [];
+    this.completionBurstSoundFile = undefined;
+
+    this.waitingTerminalIds.clear();
     this.notificationQueue = [];
 
     soundService.cancel();

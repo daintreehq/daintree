@@ -58,9 +58,12 @@ const PRIORITY_MAP: Record<string, number> = {
  * Playback is routed to the renderer's Web Audio API via IPC when available,
  * falling back to OS process spawning (soundPlayer.ts) otherwise.
  */
+const SOUND_THROTTLE_MS = 300;
+
 class SoundService {
   private variantCache = new Map<string, string[]>();
   private lastVariant = new Map<string, number>();
+  private lastPlayFileAt = 0;
 
   // Dampening state
   private lastPlayedAt = new Map<string, number>();
@@ -87,6 +90,9 @@ class SoundService {
   }
 
   playFile(soundFile: string): void {
+    const now = Date.now();
+    if (now - this.lastPlayFileAt < SOUND_THROTTLE_MS) return;
+    this.lastPlayFileAt = now;
     const resolved = this.pickVariant(soundFile);
     this.playDampened(resolved, {
       debounceKey: soundFile,

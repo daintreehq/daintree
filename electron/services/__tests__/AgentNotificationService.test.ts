@@ -181,6 +181,7 @@ describe("AgentNotificationService", () => {
     mockStore({ waitingEnabled: true });
 
     events.emit("agent:state-changed", makePayload("waiting"));
+    vi.advanceTimersByTime(200);
 
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
       "Agent waiting",
@@ -208,6 +209,7 @@ describe("AgentNotificationService", () => {
     mockStore({ waitingEnabled: true, soundEnabled: true });
 
     events.emit("agent:state-changed", makePayload("waiting"));
+    vi.advanceTimersByTime(200);
 
     expect(soundServiceMock.playFile).toHaveBeenCalled();
   });
@@ -216,6 +218,7 @@ describe("AgentNotificationService", () => {
     mockStore({ waitingEnabled: true });
 
     events.emit("agent:state-changed", makePayload("waiting"));
+    vi.advanceTimersByTime(200);
 
     expect(soundServiceMock.playFile).not.toHaveBeenCalled();
   });
@@ -224,6 +227,7 @@ describe("AgentNotificationService", () => {
     mockStore({ waitingEnabled: true, soundEnabled: true, waitingSoundFile: "ping.wav" });
 
     events.emit("agent:state-changed", makePayload("waiting"));
+    vi.advanceTimersByTime(200);
 
     expect(soundServiceMock.playFile).toHaveBeenCalledWith(expect.stringContaining("ping.wav"));
   });
@@ -261,7 +265,7 @@ describe("AgentNotificationService", () => {
     vi.advanceTimersByTime(5000);
 
     events.emit("agent:state-changed", makePayload("waiting", "completed"));
-    vi.advanceTimersByTime(1000);
+    vi.advanceTimersByTime(200);
 
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
@@ -519,6 +523,154 @@ describe("AgentNotificationService", () => {
       // 60_000ms more — now 180_000 from re-entry, should fire
       vi.advanceTimersByTime(60_000);
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("burst coalescing", () => {
+    function makePayloadFor(
+      terminalId: string,
+      agentId: string,
+      state: AgentState,
+      previousState: AgentState = "working"
+    ) {
+      return {
+        state,
+        previousState,
+        worktreeId: "wt-1",
+        terminalId,
+        agentId,
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      };
+    }
+
+    function makeMultiTerminalAppState(count: number) {
+      return {
+        activeWorktreeId: "wt-1",
+        terminals: Array.from({ length: count }, (_, i) => ({
+          id: `term-${i + 1}`,
+          kind: "agent",
+          agentId: `agent-${i + 1}`,
+          title: `Agent ${i + 1}`,
+          location: "dock" as const,
+          worktreeId: "wt-1",
+        })),
+      };
+    }
+
+    it("coalesces multiple simultaneous waiting events into one notification", () => {
+      const appState = makeMultiTerminalAppState(3);
+      mockStore({ waitingEnabled: true, soundEnabled: true }, appState);
+      agentNotificationService.syncWatchedPanels(["term-1", "term-2", "term-3"]);
+
+      events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
+      events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
+      events.emit("agent:state-changed", makePayloadFor("term-3", "agent-3", "waiting"));
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agents waiting",
+        "3 agents waiting for input",
+        expect.any(Object),
+        "notification:watch-navigate",
+        true
+      );
+      expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows single-agent message for one waiting event after burst window", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.stringContaining("agent-1 is waiting for input"),
+        expect.any(Object),
+        "notification:watch-navigate",
+        true
+      );
+    });
+
+    it("produces separate notifications for events in different burst windows", () => {
+      const appState = makeMultiTerminalAppState(2);
+      mockStore({ waitingEnabled: true }, appState);
+      agentNotificationService.syncWatchedPanels(["term-1", "term-2"]);
+
+      events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
+      vi.advanceTimersByTime(200); // first burst flushes
+
+      events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
+      vi.advanceTimersByTime(200); // second burst flushes
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(2);
+    });
+
+    it("coalesces simultaneous completion debounces into one notification", () => {
+      const appState = makeMultiTerminalAppState(3);
+      mockStore({ completedEnabled: true, soundEnabled: true }, appState);
+      agentNotificationService.syncWatchedPanels(["term-1", "term-2", "term-3"]);
+
+      // All 3 agents complete at the same time
+      events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "completed"));
+      events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "completed"));
+      events.emit("agent:state-changed", makePayloadFor("term-3", "agent-3", "completed"));
+
+      // Advance past the 2000ms debounce + 0ms flush timer
+      vi.advanceTimersByTime(2001);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agents completed",
+        "3 agents finished their tasks",
+        expect.any(Object),
+        "notification:watch-navigate",
+        true
+      );
+    });
+
+    it("groups escalation notifications for multiple waiting dock terminals", () => {
+      const appState = makeMultiTerminalAppState(3);
+      mockStore({ waitingEnabled: true, soundEnabled: true }, appState);
+      agentNotificationService.syncWatchedPanels(["term-1", "term-2", "term-3"]);
+
+      events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
+      events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
+      events.emit("agent:state-changed", makePayloadFor("term-3", "agent-3", "waiting"));
+
+      // Advance past burst window + escalation delay
+      vi.advanceTimersByTime(180_000);
+
+      // First escalation timer fires — should see grouped message
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agents still waiting",
+        "3 agents have been waiting for input"
+      );
+    });
+
+    it("dispose clears waiting burst timer", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      agentNotificationService.dispose();
+      vi.advanceTimersByTime(300);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+    });
+
+    it("dispose clears completion burst timer", () => {
+      mockStore({ completedEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("completed"));
+      vi.advanceTimersByTime(2000); // debounce fires, pushes to burst buffer
+      agentNotificationService.dispose();
+      vi.advanceTimersByTime(100); // 0ms flush timer would have fired
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
     });
   });
 });
