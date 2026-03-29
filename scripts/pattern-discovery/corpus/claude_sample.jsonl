@@ -1,0 +1,20 @@
+{"time":0.0,"chunk":"\u001b[1mClaude Code v2.2.0\u001b[0m","detectedState":"initializing","confidence":0.9,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":0.5,"chunk":"\u001b[1m>\u001b[0m ","detectedState":"waiting","confidence":0.85,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":1.0,"chunk":"✽ Thinking… (esc to interrupt · 2s)","detectedState":"working","confidence":0.95,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":3.0,"chunk":"✻ Deliberating… (esc to interrupt · 4s)","detectedState":"working","confidence":0.95,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":5.0,"chunk":"✶ Reading files… (esc to interrupt · 6s)","detectedState":"working","confidence":0.95,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":7.0,"chunk":"◇ Analyzing code… (esc to interrupt · 8s)","detectedState":"working","confidence":0.95,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":9.0,"chunk":"● Processing… (esc to interrupt · 10s)","detectedState":"working","confidence":0.95,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":10.0,"chunk":"✢ Analyzing…","detectedState":"working","confidence":0.75,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":11.0,"chunk":"✳ Cogitating…","detectedState":"working","confidence":0.75,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":12.0,"chunk":"✽ Working for 5 seconds\nTotal cost: $0.05\nTotal duration: 5.2s","detectedState":"completed","confidence":0.9,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":13.0,"chunk":"\u001b[1m>\u001b[0m ","detectedState":"waiting","confidence":0.85,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":14.0,"chunk":"· Writing code… (esc to interrupt · 3s)","detectedState":"working","confidence":0.95,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":16.0,"chunk":"* Editing files… (esc to interrupt · 5s)","detectedState":"working","confidence":0.95,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":18.0,"chunk":"(15s · esc to interrupt)","detectedState":"working","confidence":0.95,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":19.0,"chunk":"What would you like me to help you with?","detectedState":"waiting","confidence":0.0,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":20.0,"chunk":"User prompt completed.\n\nReady for more input.","detectedState":"waiting","confidence":0.0,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":21.0,"chunk":"$0.12 · 1500 tokens","detectedState":"completed","confidence":0.9,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":22.0,"chunk":"Task completed successfully.","detectedState":"completed","confidence":0.9,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":23.0,"chunk":"\u001b[33m✽\u001b[0m \u001b[1mDeliberating…\u001b[0m (esc to interrupt · 5s)","detectedState":"working","confidence":0.95,"agentId":"claude","agentVersion":"2.2.0"}
+{"time":24.0,"chunk":"bypass permissions\n> Try something","detectedState":"waiting","confidence":0.85,"agentId":"claude","agentVersion":"2.2.0"}
