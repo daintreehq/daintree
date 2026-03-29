@@ -165,10 +165,15 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     if (!settings || typeof settings !== "object") {
       throw new Error("Invalid settings object");
     }
+    const previousSettings = await projectStore.getProjectSettings(projectId);
     await projectStore.saveProjectSettings(projectId, settings);
     const project = projectStore.getProjectById(projectId);
     if (project?.inRepoSettings) {
       await projectStore.writeInRepoSettings(project.path, settings);
+    }
+    if (settings.githubRemote !== previousSettings.githubRemote) {
+      const { clearGitHubCaches } = await import("../../services/GitHubService.js");
+      clearGitHubCaches();
     }
   };
   ipcMain.handle(CHANNELS.PROJECT_SAVE_SETTINGS, handleProjectSaveSettings);

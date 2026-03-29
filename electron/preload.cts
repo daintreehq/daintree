@@ -291,6 +291,7 @@ const CHANNELS = {
   GITHUB_GET_ISSUE_URL: "github:get-issue-url",
   GITHUB_GET_ISSUE_BY_NUMBER: "github:get-issue-by-number",
   GITHUB_GET_PR_BY_NUMBER: "github:get-pr-by-number",
+  GITHUB_LIST_REMOTES: "github:list-remotes",
 
   // Notes channels
   NOTES_CREATE: "notes:create",
@@ -1423,6 +1424,8 @@ const api: ElectronAPI = {
 
     getPRByNumber: (cwd: string, prNumber: number) =>
       _unwrappingInvoke(CHANNELS.GITHUB_GET_PR_BY_NUMBER, { cwd, prNumber }),
+
+    listRemotes: (cwd: string) => _unwrappingInvoke(CHANNELS.GITHUB_LIST_REMOTES, cwd),
 
     onPRDetected: (callback: (data: PRDetectedPayload) => void) =>
       _typedOn(CHANNELS.PR_DETECTED, callback),

@@ -398,6 +398,14 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }, "getRemoteUrl");
   }
 
+  async listRemotes(repoPath: string): Promise<Array<{ name: string; fetchUrl: string }>> {
+    return this.handleGitOperation(async () => {
+      const git = createHardenedGit(repoPath);
+      const remotes = await git.getRemotes(true);
+      return remotes.map((r) => ({ name: r.name, fetchUrl: r.refs?.fetch || "" }));
+    }, "listRemotes");
+  }
+
   async getWorktreeChangesWithStats(
     worktreePath: string,
     forceRefresh = true // Default to true to avoid overwriting per-worktree cache TTLs

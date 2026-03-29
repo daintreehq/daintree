@@ -24,6 +24,7 @@ export interface ProjectSettingsSnapshot {
   color: string | undefined;
   branchPrefixCustom: string;
 
+  githubRemote: string | undefined;
   worktreePathPattern: string;
   terminalSettings: ProjectTerminalSettings | undefined;
   notificationOverrides: Partial<NotificationSettings> | undefined;
@@ -59,6 +60,7 @@ export function createProjectSettingsSnapshot(
   branchPrefixMode: "none" | "username" | "custom" = "none",
   branchPrefixCustom: string = "",
   devServerLoadTimeout: number | undefined = undefined,
+  githubRemote: string | undefined = undefined,
   worktreePathPattern: string = "",
   terminalSettings: ProjectTerminalSettings | undefined = undefined,
   notificationOverrides: Partial<NotificationSettings> | undefined = undefined,
@@ -140,6 +142,7 @@ export function createProjectSettingsSnapshot(
     color: color?.trim() || undefined,
     branchPrefixMode: normalizedMode,
     branchPrefixCustom: normalizedMode === "custom" ? trimmedCustom : "",
+    githubRemote,
     worktreePathPattern: worktreePathPattern.trim(),
     terminalSettings: normalizeTerminalSettings(terminalSettings),
     notificationOverrides: normalizeNotificationOverrides(notificationOverrides),
@@ -261,6 +264,7 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
   if (a.branchPrefixMode !== b.branchPrefixMode) return false;
   if (a.branchPrefixCustom !== b.branchPrefixCustom) return false;
 
+  if (a.githubRemote !== b.githubRemote) return false;
   if (a.worktreePathPattern !== b.worktreePathPattern) return false;
 
   // Terminal settings comparison

@@ -305,6 +305,8 @@ export interface ProjectSettings {
   /** Custom branch prefix string when branchPrefixMode is "custom" (e.g., "feature/") */
   branchPrefixCustom?: string;
 
+  /** Git remote name to use for GitHub integration (defaults to "origin") */
+  githubRemote?: string;
   /** Per-project worktree path pattern override (uses global default when unset) */
   worktreePathPattern?: string;
   /** Per-project terminal configuration overrides */

@@ -123,6 +123,7 @@ import { AutomationTab as ProjectAutomationTab } from "@/components/Project/Auto
 import { RecipesTab as ProjectRecipesTab } from "@/components/Project/RecipesTab";
 import { CommandOverridesTab } from "./CommandOverridesTab";
 import { ProjectNotificationsTab } from "@/components/Project/ProjectNotificationsTab";
+import { GitHubTab as ProjectGitHubTab } from "@/components/Project/GitHubTab";
 
 let rememberedTab: SettingsTab = "general";
 let rememberedProjectTab: SettingsTab = "project:general";
@@ -165,7 +166,8 @@ export type SettingsTab =
   | "project:automation"
   | "project:recipes"
   | "project:commands"
-  | "project:notifications";
+  | "project:notifications"
+  | "project:github";
 
 export type SettingsScope = "global" | "project";
 
@@ -370,6 +372,7 @@ export function SettingsDialog({
   const [notificationOverrides, setNotificationOverrides] = useState<Partial<NotificationSettings>>(
     {}
   );
+  const [githubRemote, setGithubRemote] = useState<string | undefined>(undefined);
   const lastSavedSnapshotRef = useRef<ReturnType<typeof createProjectSettingsSnapshot> | null>(
     null
   );
@@ -407,6 +410,7 @@ export function SettingsDialog({
       branchPrefixMode,
       branchPrefixCustom,
       devServerLoadTimeout,
+      githubRemote,
       worktreePathPattern,
       currentTerminalSettings,
       notificationOverrides,
@@ -418,6 +422,7 @@ export function SettingsDialog({
     projectColor,
     devServerCommand,
     devServerLoadTimeout,
+    githubRemote,
     projectIconSvg,
     excludedPaths,
     environmentVariables,
@@ -454,6 +459,7 @@ export function SettingsDialog({
       const initialWorktreePathPattern = projectSettings.worktreePathPattern ?? "";
       const initialTerminalSettings = projectSettings.terminalSettings;
       const initialNotificationOverrides = projectSettings.notificationOverrides ?? {};
+      const initialGithubRemote = projectSettings.githubRemote;
 
       setProjectName(currentProject.name);
       setProjectEmoji(currentProject.emoji || "🌲");
@@ -479,6 +485,7 @@ export function SettingsDialog({
           : ""
       );
       setNotificationOverrides(initialNotificationOverrides);
+      setGithubRemote(initialGithubRemote);
 
       lastSavedSnapshotRef.current = createProjectSettingsSnapshot(
         currentProject.name,
@@ -494,6 +501,7 @@ export function SettingsDialog({
         initialBranchPrefixMode,
         initialBranchPrefixCustom,
         initialDevServerLoadTimeout,
+        initialGithubRemote,
         initialWorktreePathPattern,
         initialTerminalSettings,
         initialNotificationOverrides,
@@ -520,6 +528,7 @@ export function SettingsDialog({
       setTerminalDefaultCwd("");
       setTerminalScrollback("");
       setNotificationOverrides({});
+      setGithubRemote(undefined);
       lastSavedSnapshotRef.current = null;
     }
   }, [projectSettings, isOpen, projectIsInitialized, currentProject, projectIsLoading]);
@@ -611,6 +620,7 @@ export function SettingsDialog({
         branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
         branchPrefixCustom:
           effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
+        githubRemote: githubRemote || undefined,
         worktreePathPattern: sanitizedWorktreePathPattern,
         terminalSettings: currentTerminalSettings,
         notificationOverrides:
@@ -826,6 +836,7 @@ export function SettingsDialog({
     "project:recipes": "Recipes",
     "project:commands": "Commands",
     "project:notifications": "Notifications",
+    "project:github": "GitHub",
   };
 
   const tabIcons: Record<SettingsTab, React.ReactNode> = {
@@ -851,6 +862,7 @@ export function SettingsDialog({
     "project:recipes": <CookingPot className="w-5 h-5 text-text-secondary" />,
     "project:commands": <Command className="w-5 h-5 text-text-secondary" />,
     "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,
+    "project:github": <Github className="w-5 h-5 text-text-secondary" />,
   };
 
   return (
@@ -1167,6 +1179,15 @@ export function SettingsDialog({
                     activeTab={activeTab}
                     isSearching={isSearching}
                     matchCount={matchCounts["project:notifications"]}
+                    onSelect={handleNavSelect}
+                  />
+                  <NavItem
+                    tab="project:github"
+                    icon={<Github className="w-4 h-4" />}
+                    label="GitHub"
+                    activeTab={activeTab}
+                    isSearching={isSearching}
+                    matchCount={matchCounts["project:github"]}
                     onSelect={handleNavSelect}
                   />
                 </NavGroup>
@@ -1635,6 +1656,22 @@ export function SettingsDialog({
                             <ProjectNotificationsTab
                               overrides={notificationOverrides}
                               onChange={setNotificationOverrides}
+                            />
+                          )}
+                        </div>
+
+                        <div
+                          role="tabpanel"
+                          id="settings-panel-project:github"
+                          aria-labelledby="settings-tab-project:github"
+                          tabIndex={0}
+                          className={activeTab === "project:github" ? "" : "hidden"}
+                        >
+                          {visitedTabs.has("project:github") && currentProject && (
+                            <ProjectGitHubTab
+                              githubRemote={githubRemote}
+                              onGithubRemoteChange={setGithubRemote}
+                              projectPath={currentProject.path}
                             />
                           )}
                         </div>
