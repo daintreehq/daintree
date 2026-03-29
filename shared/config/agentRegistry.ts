@@ -298,20 +298,32 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     detection: {
       primaryPatterns: [
+        // @generated:claude:primaryPatterns:start
         "[·*✢✳✶✻✽●✼✾⟡◇◆○]\\s+[^()\\n]{2,80}\\s*\\(esc to interrupt",
         "esc to interrupt[^)\\n]*\\)?$",
         "\\(\\d+s\\s*[·•]\\s*esc to interrupt",
+        // @generated:claude:primaryPatterns:end
       ],
-      fallbackPatterns: ["[✢✳✶✻✽●]\\s+\\w+…"],
-      bootCompletePatterns: ["claude\\s+code\\s+v?\\d"],
+      fallbackPatterns: [
+        // @generated:claude:fallbackPatterns:start
+        "[✢✳✶✻✽●]\\s+\\w+…",
+        // @generated:claude:fallbackPatterns:end
+      ],
+      bootCompletePatterns: [
+        // @generated:claude:bootCompletePatterns:start
+        "claude\\s+code\\s+v?\\d",
+        // @generated:claude:bootCompletePatterns:end
+      ],
       promptPatterns: ["^\\s*>\\s*", "^\\s*❯\\s*"],
       promptHintPatterns: ["bypass permissions", "^\\s*>\\s+Try\\b"],
       completionPatterns: [
+        // @generated:claude:completionPatterns:start
         "[✢✳✶✻✽●]\\s+\\w+\\s+for\\s+\\d",
         "Total cost:\\s+\\$\\d",
         "Total duration",
         "\\$\\d+\\.\\d+\\s*·\\s*\\d+\\s*tokens",
         "Task\\s+completed",
+        // @generated:claude:completionPatterns:end
       ],
       completionConfidence: 0.9,
       scanLineCount: 10,
@@ -426,15 +438,30 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     detection: {
       primaryPatterns: [
+        // @generated:gemini:primaryPatterns:start
         "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+[^()\\n]{2,80}\\s*\\(esc to cancel",
         "esc to cancel[^)\\n]*\\)?$",
         "\\(\\d+s,?\\s*esc to cancel",
+        // @generated:gemini:primaryPatterns:end
       ],
-      fallbackPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w"],
-      bootCompletePatterns: ["type\\s+your\\s+message"],
+      fallbackPatterns: [
+        // @generated:gemini:fallbackPatterns:start
+        "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w",
+        // @generated:gemini:fallbackPatterns:end
+      ],
+      bootCompletePatterns: [
+        // @generated:gemini:bootCompletePatterns:start
+        "type\\s+your\\s+message",
+        // @generated:gemini:bootCompletePatterns:end
+      ],
       promptPatterns: ["^\\s*>\\s*", "type\\s+your\\s+message"],
       promptHintPatterns: ["type\\s+your\\s+message"],
-      completionPatterns: ["Response\\s+complete", "Finished\\s+processing"],
+      completionPatterns: [
+        // @generated:gemini:completionPatterns:start
+        "Response\\s+complete",
+        "Finished\\s+processing",
+        // @generated:gemini:completionPatterns:end
+      ],
       completionConfidence: 0.9,
       scanLineCount: 10,
       primaryConfidence: 0.95,
@@ -553,18 +580,31 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     detection: {
       primaryPatterns: [
+        // @generated:codex:primaryPatterns:start
         "[•·]\\s+[^()\\n]{2,80}\\s+\\([^)]*esc to interrupt",
         "esc to interrupt[^)\\n]*\\)?$",
         "\\(\\d+s\\s*[·•]\\s*esc to interrupt",
+        // @generated:codex:primaryPatterns:end
       ],
-      fallbackPatterns: ["[•·]\\s+Working"],
-      bootCompletePatterns: ["openai[-\\s]+codex", "codex\\s+v"],
+      fallbackPatterns: [
+        // @generated:codex:fallbackPatterns:start
+        "[•·]\\s+Working",
+        // @generated:codex:fallbackPatterns:end
+      ],
+      bootCompletePatterns: [
+        // @generated:codex:bootCompletePatterns:start
+        "openai[-\\s]+codex",
+        "codex\\s+v",
+        // @generated:codex:bootCompletePatterns:end
+      ],
       promptPatterns: ["^\\s*[›❯>]\\s*", "^\\s*codex\\s*>\\s*"],
       promptHintPatterns: ["context\\s+left"],
       completionPatterns: [
+        // @generated:codex:completionPatterns:start
         "Task\\s+completed\\s+successfully",
         "\\d+\\s+files?\\s+changed",
         "Created\\s+\\d+\\s+files?",
+        // @generated:codex:completionPatterns:end
       ],
       completionConfidence: 0.9,
       scanLineCount: 10,
@@ -705,22 +745,36 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     detection: {
       primaryPatterns: [
+        // @generated:opencode:primaryPatterns:start
         "[⣾⣽⣻⢿⡿⣟⣯⣷]\\s+[^\\n]{2,80}\\s*\\(.*esc",
         "[·•●]\\s+(Generating|Building tool call|Waiting for tool response)",
         "press\\s+esc\\s+(again\\s+)?to\\s+(interrupt|exit\\s+cancel)",
         "esc\\s*(again\\s+)?to\\s+(interrupt|cancel)",
+        // @generated:opencode:primaryPatterns:end
       ],
       fallbackPatterns: [
+        // @generated:opencode:fallbackPatterns:start
         "[⣾⣽⣻⢿⡿⣟⣯⣷]\\s+\\w",
         "working[…\\.]+",
         "generating",
         "waiting for tool response",
         "building tool call",
+        // @generated:opencode:fallbackPatterns:end
       ],
-      bootCompletePatterns: ["Ask anything", "Build\\s+OpenCode"],
+      bootCompletePatterns: [
+        // @generated:opencode:bootCompletePatterns:start
+        "Ask anything",
+        "Build\\s+OpenCode",
+        // @generated:opencode:bootCompletePatterns:end
+      ],
       promptPatterns: ["^\\s*[›❯>]\\s*", "Ask anything"],
       promptHintPatterns: ["Ask anything"],
-      completionPatterns: ["Task\\s+completed", "\\d+\\s+files?\\s+changed"],
+      completionPatterns: [
+        // @generated:opencode:completionPatterns:start
+        "Task\\s+completed",
+        "\\d+\\s+files?\\s+changed",
+        // @generated:opencode:completionPatterns:end
+      ],
       completionConfidence: 0.9,
       scanLineCount: 10,
       primaryConfidence: 0.95,

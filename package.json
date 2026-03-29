@@ -58,6 +58,9 @@
     "perf:nightly": "tsx scripts/perf/run.ts --mode nightly",
     "perf:soak": "tsx scripts/perf/run.ts --mode soak",
     "perf:trend": "tsx scripts/perf/report/trend.ts --mode ci",
+    "pattern-discovery:run": "tsx scripts/pattern-discovery/runner.ts",
+    "pattern-discovery:analyze": "tsx scripts/pattern-discovery/analyzer.ts",
+    "pattern-discovery:update": "tsx scripts/pattern-discovery/update-registry.ts",
     "prepare": "husky"
   },
   "dependencies": {
@@ -155,6 +158,7 @@
     "lint-staged": "^16.4.0",
     "lucide-react": "^0.577.0",
     "nodemon": "^3.1.11",
+    "openai": "^6.33.0",
     "p-queue": "^9.0.1",
     "path-browserify": "^1.0.1",
     "postcss": "^8.5.8",
