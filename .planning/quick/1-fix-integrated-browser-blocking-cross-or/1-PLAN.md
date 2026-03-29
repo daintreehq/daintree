@@ -20,12 +20,14 @@ must_haves:
     - "Cross-origin navigations remain blocked in dev-preview webviews"
     - "Dangerous protocols (javascript:, data:, file:, about:) remain blocked in all webviews"
     - "New window/popup cross-origin navigations remain blocked (setWindowOpenHandler unchanged)"
+    - "Browser partition does not apply localhost-only CSP to external page responses"
+    - "Dev-preview partitions still get localhost-only CSP via onHeadersReceived"
   artifacts:
     - path: "electron/setup/protocols.ts"
-      provides: "Partition-aware navigation filtering for webview guests"
+      provides: "Partition-aware navigation filtering and CSP scoping for webview guests"
       contains: "isBrowserPartition"
     - path: "electron/setup/__tests__/protocols.test.ts"
-      provides: "Tests for cross-origin navigation allowance in browser partition"
+      provides: "Tests for cross-origin navigation allowance in browser partition and CSP scoping"
       contains: "allows cross-origin"
   key_links:
     - from: "electron/setup/protocols.ts"
@@ -41,9 +43,9 @@ must_haves:
 <objective>
 Fix the integrated browser panel blocking cross-origin navigations that break OAuth/OIDC redirect flows.
 
-Purpose: When a localhost app initiates an OAuth flow (e.g., redirecting to accounts.google.com), the webview's will-navigate handler blocks the cross-origin navigation. This makes OAuth flows unusable in the integrated browser. The fix allows same-window cross-origin navigations in persist:browser webviews while maintaining security for dev-preview webviews.
+Purpose: When a localhost app initiates an OAuth flow (e.g., redirecting to accounts.google.com), the webview's will-navigate handler blocks the cross-origin navigation. Additionally, the persist:browser session applies a localhost-only CSP via onHeadersReceived, which rewrites response headers on external pages — breaking OAuth provider pages even if navigation were allowed. The fix: (1) allows same-window cross-origin navigations in persist:browser webviews while maintaining security for dev-preview webviews, and (2) removes CSP header rewriting from the browser partition so external sites keep their own CSP.
 
-Output: Updated navigation filtering that is partition-aware, with tests proving OAuth-style flows work.
+Output: Updated navigation filtering that is partition-aware, CSP scoped to dev-preview only, with tests proving OAuth-style flows work.
 </objective>
 
 <execution_context>
@@ -61,7 +63,7 @@ Output: Updated navigation filtering that is partition-aware, with tests proving
 <tasks>
 
 <task type="auto">
-  <name>Task 1: Add isSafeNavigationUrl utility and make navigation filtering partition-aware</name>
+  <name>Task 1: Remove browser CSP, add isSafeNavigationUrl, make navigation filtering partition-aware</name>
   <files>
     shared/utils/urlUtils.ts
     electron/setup/protocols.ts
@@ -69,18 +71,40 @@ Output: Updated navigation filtering that is partition-aware, with tests proving
   <action>
 1. In `shared/utils/urlUtils.ts`, add a new exported function `isSafeNavigationUrl(url: string): boolean` that returns true if the URL uses http: or https: protocol (blocking javascript:, data:, file:, about:, blob:, and empty strings). This is a weaker check than `isLocalhostUrl` -- it allows any http/https URL but blocks dangerous protocols.
 
-2. In `electron/setup/protocols.ts`, modify the `will-navigate` and `will-redirect` handlers (lines 173-185) to be partition-aware:
-   - Import `classifyPartition` (already imported) and use it to check the webview's session partition.
-   - Access the partition via `contents.session.partition` (Electron WebContents exposes this -- but TS types may not expose it, so cast as needed using `(contents.session as { partition?: string }).partition ?? ""`).
+2. In `electron/setup/protocols.ts`, make TWO changes:
+
+**Change A — Remove CSP for browser partition (BLOCKER FIX):**
+The `applyCSP("persist:browser")` call at line 146 applies `getLocalhostDevCSP()` to the browser session's `onHeadersReceived`. This rewrites CSP headers on ALL responses — including external OAuth pages — with a localhost-only policy, breaking them. Remove this line entirely. Browser panels should behave like a real browser where external sites keep their own CSP headers. Dev-preview partitions still get the localhost CSP via the dynamic `will-attach-webview` path. Add a comment explaining why browser is excluded:
+```typescript
+// Browser partition intentionally excluded from CSP rewriting.
+// Browser panels load external sites (OAuth, docs, etc.) that need their own CSP.
+// Dev-preview partitions get localhost-only CSP via will-attach-webview below.
+```
+
+**Change B — Partition-aware navigation filtering:**
+Modify the `will-navigate` and `will-redirect` handlers (lines 173-185) to be partition-aware:
+   - Import `isSafeNavigationUrl` from `../../shared/utils/urlUtils.js`.
+   - Determine the partition by storing a `partitionMap` (Map<number, string>) at the module level that maps `contents.id` to partition string. Populate it in the `will-attach-webview` handler by adding: `partitionMap.set(contents.id, params.partition ?? "")`. This is more reliable than accessing `contents.session.partition` which may not be in Electron 40 TS types.
+   - In the `will-navigate` handler, look up `partitionMap.get(contents.id) ?? ""` and use `classifyPartition()` to check if it's a browser partition.
    - For `persist:browser` partition webviews: allow cross-origin navigations as long as the URL passes `isSafeNavigationUrl` (http/https only, no dangerous protocols).
    - For all other webview partitions (dev-preview, etc.): keep the existing `isLocalhostUrl` restriction.
-   - Update the import to include `isSafeNavigationUrl` from `../../shared/utils/urlUtils.js`.
-   - Log allowed cross-origin navigations at debug level: `console.log(\`[MAIN] Allowed cross-origin webview navigation: ${navigationUrl}\`)` only when the URL is not localhost (to avoid log spam for normal navigation).
+   - Log allowed cross-origin navigations at debug level only when the URL is not localhost (to avoid log spam).
+   - Clean up the map entry when the webview is destroyed: add `contents.on("destroyed", () => { partitionMap.delete(contents.id); })`.
 
 The key logic change in the will-navigate handler should be:
 ```typescript
+// Module-level map: webContents id -> partition string
+const partitionMap = new Map<number, string>();
+
+// Inside will-attach-webview handler (existing), add:
+partitionMap.set(contents.id, params.partition ?? "");
+
+// Add cleanup
+contents.on("destroyed", () => { partitionMap.delete(contents.id); });
+
+// Updated will-navigate handler:
 contents.on("will-navigate", (event, navigationUrl) => {
-  const partition = (contents.session as { partition?: string }).partition ?? "";
+  const partition = partitionMap.get(contents.id) ?? "";
   const isBrowserPanel = classifyPartition(partition) === "browser";
 
   if (isBrowserPanel) {
@@ -100,41 +124,56 @@ contents.on("will-navigate", (event, navigationUrl) => {
 ```
 
 Apply the same pattern to the `will-redirect` handler.
+
+NOTE: The partitionMap approach is used instead of `contents.session.partition` because Electron 40's TS types may not expose `.partition` on session objects reliably (escalation from review). Recording at `will-attach-webview` time is the canonical Electron pattern for mapping webview contents to their partition.
   </action>
   <verify>
     Run `npx vitest run shared/utils/__tests__/urlUtils.test.ts electron/setup/__tests__/protocols.test.ts --reporter=verbose 2>&1 | tail -30` to confirm existing tests still pass (some will fail until Task 2 updates them).
     Run `npx tsc --noEmit 2>&1 | head -20` to confirm no type errors.
   </verify>
   <done>
+    - `applyCSP("persist:browser")` removed — browser session no longer rewrites CSP headers on responses
     - `isSafeNavigationUrl` correctly allows http/https URLs and blocks javascript:, data:, file:, about:, blob:, empty strings
-    - `will-navigate` and `will-redirect` handlers in protocols.ts are partition-aware
+    - `will-navigate` and `will-redirect` handlers in protocols.ts are partition-aware using partitionMap
     - Browser partition webviews allow cross-origin http/https navigations
-    - Dev-preview partition webviews still restrict to localhost only
+    - Dev-preview partition webviews still restrict to localhost only and still get localhost CSP
+    - partitionMap populated at will-attach-webview time (not via contents.session.partition)
   </done>
 </task>
 
 <task type="auto">
-  <name>Task 2: Update tests for partition-aware navigation and add isSafeNavigationUrl tests</name>
+  <name>Task 2: Update tests for partition-aware navigation, CSP scoping, and isSafeNavigationUrl</name>
   <files>
     electron/setup/__tests__/protocols.test.ts
     shared/utils/__tests__/urlUtils.test.ts
   </files>
   <action>
 1. In `electron/setup/__tests__/protocols.test.ts`:
-   - Update the mock `MockWebContents` interface to include a `session` property with `partition` string.
-   - In `createMockWebContents`, add a `session` property: `session: { partition: "" }`. Add an optional parameter to set the partition (default empty string).
-   - Create a helper `createBrowserWebview()` that calls `createMockWebContents("webview")` and sets `session.partition = "persist:browser"`.
-   - Create a helper `createDevPreviewWebview()` that calls `createMockWebContents("webview")` and sets `session.partition = "persist:dev-preview-abc"`.
 
-   Update existing tests:
-   - Tests that previously expected cross-origin URLs like `https://example.com` to be BLOCKED should be split: one test for browser partition (expects ALLOWED) and one for dev-preview partition (expects BLOCKED).
-   - The `blocks navigation to https://example.com` test should now test with a dev-preview webview.
-   - Add new test: `allows cross-origin navigation in browser partition` that navigates to `https://accounts.google.com/oauth` and verifies `preventDefault` is NOT called.
-   - Add new test: `allows cross-origin redirect in browser partition` for will-redirect.
-   - Add new test: `blocks cross-origin navigation in dev-preview partition`.
-   - Keep the dangerous-protocol tests (javascript:, data:, file:, about:) -- these should still block in BOTH browser and dev-preview partitions. Update these to test both partition types.
-   - Keep the localhost tests as-is (localhost should always be allowed in both partitions).
+   **Mock and helper updates:**
+   - Update the `MockWebContents` interface to include a `session` property (for compatibility) and `id` field.
+   - In `createMockWebContents`, keep the existing structure but ensure `id` is stable per call (use an incrementing counter).
+   - Create a helper `simulateWebContentsCreatedWithPartition(contents, partition)` that:
+     a. Calls `setupWebviewCSP()`
+     b. Triggers the `web-contents-created` listener
+     c. Finds the `will-attach-webview` handler registered on `contents.on` and calls it with `({}, {}, { partition })` to populate the partitionMap
+   - Create `createBrowserWebview()` that returns a webview mock and calls `simulateWebContentsCreatedWithPartition` with `"persist:browser"`.
+   - Create `createDevPreviewWebview()` that does the same with `"persist:dev-preview-abc"`.
+
+   **Update existing tests:**
+   - The `blocks navigation to https://example.com` test should now use a dev-preview webview (since browser partition would allow it).
+   - Add new test: `allows cross-origin navigation in browser partition` that creates a browser webview, navigates to `https://accounts.google.com/oauth`, and verifies `preventDefault` is NOT called.
+   - Add new test: `allows cross-origin redirect in browser partition` for will-redirect with `https://auth.provider.com/callback`.
+   - Add new test: `blocks cross-origin navigation in dev-preview partition` that creates a dev-preview webview, navigates to `https://example.com`, and verifies `preventDefault` IS called.
+   - Dangerous-protocol tests (javascript:, data:, file:, about:, empty string) should still pass — these block in BOTH partitions. For thoroughness, add a test that dangerous protocols are also blocked in browser partition.
+   - Keep localhost tests as-is (localhost always allowed in both partitions).
    - Update the `logs blocked navigations` test to use a dev-preview partition since browser partition would allow the navigation.
+   - Update the `blocks non-localhost redirects` and `logs blocked redirects` tests to use dev-preview partition.
+
+   **Add CSP scoping tests:**
+   - Add a new `describe("CSP partition scoping")` block:
+     - Test: `does not apply CSP to persist:browser session` — call `setupWebviewCSP()`, then verify that `session.fromPartition` was NOT called with `"persist:browser"` (or if called, that `onHeadersReceived` was not set on the browser session). The mock for `session.fromPartition` should track calls.
+     - Test: `applies CSP to dev-preview partitions via will-attach-webview` — simulate a webview attachment with a dev-preview partition and verify `session.fromPartition` is called with that partition and `onHeadersReceived` is configured.
 
 2. In `shared/utils/__tests__/urlUtils.test.ts` (create if it doesn't exist, or add to existing):
    - Add a `describe("isSafeNavigationUrl")` block with tests:
@@ -156,6 +195,8 @@ Apply the same pattern to the `will-redirect` handler.
     - All existing security tests still pass (dangerous protocols blocked in all partitions)
     - New tests verify cross-origin http/https navigation is allowed in browser partition
     - New tests verify cross-origin navigation is blocked in dev-preview partition
+    - New tests verify CSP is NOT applied to persist:browser session
+    - New tests verify CSP IS applied to dev-preview sessions
     - isSafeNavigationUrl has dedicated unit tests
     - npm run check passes clean
   </done>
@@ -169,6 +210,8 @@ Apply the same pattern to the `will-redirect` handler.
 3. Security invariants maintained:
    - javascript:, data:, file:, about: URLs blocked in ALL webviews
    - Dev-preview webviews restricted to localhost only
+   - Dev-preview webviews get localhost-only CSP via onHeadersReceived
+   - Browser partition does NOT get localhost-only CSP (external pages keep their own CSP)
    - setWindowOpenHandler still denies all popups (unchanged)
    - will-attach-webview still requires localhost src (unchanged)
    - Permission lockdown for browser session still denies all permissions (unchanged)
@@ -176,7 +219,8 @@ Apply the same pattern to the `will-redirect` handler.
 
 <success_criteria>
 - OAuth/OIDC redirect flows (localhost -> external auth provider -> localhost callback) work in browser panel webviews
-- Dev-preview webviews remain locked to localhost only
+- External pages in browser panel are not broken by localhost-only CSP rewriting
+- Dev-preview webviews remain locked to localhost only with localhost CSP
 - Dangerous protocol navigations (javascript:, data:, file:) blocked in all webviews
 - All tests pass, npm run check clean
 </success_criteria>
