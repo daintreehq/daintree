@@ -1,4 +1,4 @@
-# Canopy Command Center
+# Canopy
 
 **Overview:** Electron-based IDE for orchestrating AI coding agents (Claude, Gemini, Codex). Features integrated terminals, worktree dashboard, panel management, and context injection.
 **Stack:** Electron 40, React 19, Vite 6, TypeScript, Tailwind CSS v4, Zustand, node-pty, simple-git, @xterm/xterm 6.0, @xterm/addon-fit 0.11.

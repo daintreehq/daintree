@@ -1,6 +1,6 @@
-# Canopy Command Center
+# Canopy
 
-**Overview:** Electron-based IDE for orchestrating AI coding agents (Claude, Gemini, Codex). Acts as "Mission Control" for AI-assisted development: spawn agents, inject codebase context, monitor worktrees.
+**Overview:** Electron-based IDE for orchestrating AI coding agents (Claude, Gemini, Codex). Orchestrates AI-assisted development: spawn agents, inject codebase context, monitor worktrees.
 **Stack:** Electron 33, React 19, Vite 6, TypeScript, Tailwind CSS v4, Zustand, node-pty, simple-git.
 
 ## Critical Rules

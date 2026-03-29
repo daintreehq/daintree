@@ -302,8 +302,8 @@ function BulkCommandPaletteInner() {
   const actionLabel = step === "preview" ? "Confirm" : mode === "keystroke" ? "Send" : "Preview";
 
   return (
-    <AppPaletteDialog isOpen onClose={closePalette} ariaLabel="Bulk Command Center">
-      <AppPaletteDialog.Header label="Bulk Command Center">
+    <AppPaletteDialog isOpen onClose={closePalette} ariaLabel="Bulk Operations">
+      <AppPaletteDialog.Header label="Bulk Operations">
         <div className="flex gap-1 mb-1">
           {(["keystroke", "text", "recipe"] as const).map((m) => (
             <button

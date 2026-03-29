@@ -1,5 +1,5 @@
 /**
- * Shared types for Canopy Command Center
+ * Shared types for Canopy
  *
  * This module provides a single source of truth for type definitions
  * used across the main process, renderer process, and preload script.

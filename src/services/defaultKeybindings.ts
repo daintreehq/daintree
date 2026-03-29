@@ -338,7 +338,7 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+B",
     scope: "global",
     priority: 0,
-    description: "Open bulk command center",
+    description: "Open Bulk Operations",
     category: "Terminal",
   },
   // Directional terminal navigation (Ghostty-style: Cmd+Option+Arrow)
