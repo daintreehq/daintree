@@ -11,9 +11,14 @@ import { isSensitiveEnvKey } from "../../shared/utils/envVars.js";
 import { projectEnvSecureStorage } from "./ProjectEnvSecureStorage.js";
 import { getProjectStateDir, settingsFilePath } from "./projectStorePaths.js";
 import { parseTerminalSettings, parseNotificationOverrides } from "./projectSettingsParsers.js";
+import { Cache } from "../utils/cache.js";
 
 export class ProjectSettingsManager {
   private notificationOverridesCache = new Map<string, Partial<NotificationSettings> | undefined>();
+  private readonly settingsCache = new Cache<string, ProjectSettings>({
+    maxSize: 20,
+    defaultTTL: 30_000,
+  });
 
   constructor(
     private projectsConfigDir: string,
@@ -43,6 +48,9 @@ export class ProjectSettingsManager {
   }
 
   async getProjectSettings(projectId: string): Promise<ProjectSettings> {
+    const cached = this.settingsCache.get(projectId);
+    if (cached) return cached;
+
     const filePath = settingsFilePath(this.projectsConfigDir, projectId);
     if (!filePath || !existsSync(filePath)) {
       this.notificationOverridesCache.delete(projectId);
@@ -191,6 +199,7 @@ export class ProjectSettingsManager {
       };
 
       this.notificationOverridesCache.set(projectId, settings.notificationOverrides);
+      this.settingsCache.set(projectId, settings);
 
       return settings;
     } catch (error) {
@@ -208,6 +217,8 @@ export class ProjectSettingsManager {
   }
 
   async saveProjectSettings(projectId: string, settings: ProjectSettings): Promise<void> {
+    this.settingsCache.invalidate(projectId);
+
     const stateDir = getProjectStateDir(this.projectsConfigDir, projectId);
     if (!stateDir) {
       throw new Error(`Invalid project ID: ${projectId}`);
