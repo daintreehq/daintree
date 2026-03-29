@@ -645,7 +645,8 @@ describe("AgentNotificationService", () => {
       // Advance past burst window + escalation delay
       vi.advanceTimersByTime(180_000);
 
-      // First escalation timer fires — should see grouped message
+      // Exactly one grouped escalation notification, not 3
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
         "Agents still waiting",
         "3 agents have been waiting for input"

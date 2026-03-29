@@ -246,16 +246,22 @@ class AgentNotificationService {
       if (!currentTerminal || currentTerminal.location !== "dock") return;
 
       // Count all dock terminals currently waiting (for grouped escalation)
-      const waitingDockCount = currentTerminals.filter(
-        (t) => t.location === "dock" && this.waitingTerminalIds.has(t.id)
-      ).length;
+      const waitingDockTerminalIds = currentTerminals
+        .filter((t) => t.location === "dock" && this.waitingTerminalIds.has(t.id))
+        .map((t) => t.id);
 
       this.playNotificationSound(currentSettings.soundEnabled, currentSettings.escalationSoundFile);
 
-      if (waitingDockCount > 1) {
+      if (waitingDockTerminalIds.length > 1) {
+        // Cancel sibling escalation timers so only one grouped notification fires
+        for (const siblingId of waitingDockTerminalIds) {
+          if (siblingId !== terminalId) {
+            this.clearWaitingEscalation(siblingId);
+          }
+        }
         notificationService.showNativeNotification(
           "Agents still waiting",
-          `${waitingDockCount} agents have been waiting for input`
+          `${waitingDockTerminalIds.length} agents have been waiting for input`
         );
       } else {
         const label = currentTerminal.title || this.getLabel(agentId, worktreeId);
