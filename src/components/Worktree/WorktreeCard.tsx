@@ -27,11 +27,7 @@ import { WorktreeDetailsSection } from "./WorktreeCard/WorktreeDetailsSection";
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
-import {
-  MainWorktreeSummaryRows,
-  type AggregateCounts,
-} from "./WorktreeCard/MainWorktreeSummaryRows";
-import type { ProjectHealthData } from "@shared/types";
+import type { AggregateCounts } from "./WorktreeCard/MainWorktreeSummaryRows";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { useWorktreeMenu } from "./WorktreeCard/hooks/useWorktreeMenu";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
@@ -107,7 +103,6 @@ export function worktreeCardPropsAreEqual(
     prev.isActive === next.isActive &&
     prev.isFocused === next.isFocused &&
     prev.isSingleWorktree === next.isSingleWorktree &&
-    prev.projectHealth === next.projectHealth &&
     prev.homeDir === next.homeDir &&
     prev.variant === next.variant &&
     prev.isDraggingSort === next.isDraggingSort &&
@@ -129,7 +124,6 @@ export interface WorktreeCardProps {
   isFocused: boolean;
   isSingleWorktree?: boolean;
   aggregateCounts?: AggregateCounts;
-  projectHealth?: ProjectHealthData | null;
   onSelect: () => void;
   onCopyTree: () => Promise<string | undefined> | void;
   onOpenEditor: () => void;
@@ -151,7 +145,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   isFocused,
   isSingleWorktree,
   aggregateCounts,
-  projectHealth,
   onSelect,
   onCopyTree,
   onOpenEditor,
@@ -649,7 +642,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
             <GripVertical className="w-3 h-3" />
           </div>
         )}
-        <div className={cn("flex-1 min-w-0 py-5", dragHandleListeners ? "pl-1 pr-4" : "px-4")}>
+        <div className={cn("flex-1 min-w-0 py-3", dragHandleListeners ? "pl-1 pr-4" : "px-4")}>
           <WorktreeHeader
             worktree={worktree}
             isActive={isActive}
@@ -664,6 +657,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
             branchLabel={branchLabel}
             sessionStates={terminalCounts.byState}
             sessionTotal={terminalCounts.total}
+            aggregateCounts={isMainWorktree ? aggregateCounts : undefined}
             badges={{
               onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
               onOpenPR: worktree.prNumber ? handleOpenPRExternal : undefined,
@@ -722,13 +716,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
 
           {!effectiveIsCollapsed && (
             <div id={`worktree-body-${worktree.id}`}>
-              {isMainWorktree && (
-                <MainWorktreeSummaryRows
-                  aggregateCounts={aggregateCounts}
-                  health={projectHealth ?? null}
-                />
-              )}
-
               <WorktreeDetailsSection
                 worktree={worktree}
                 homeDir={homeDir}

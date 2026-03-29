@@ -54,7 +54,7 @@ export function WorktreeDetailsSection({
   return (
     <div
       id={detailsId}
-      className="mt-3 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset p-3"
+      className="mt-2 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset p-3"
     >
       {isExpanded ? (
         <div className="-m-3">
