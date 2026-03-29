@@ -96,6 +96,7 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
   claude: "--dangerously-skip-permissions",
   gemini: "--yolo",
   codex: "--dangerously-bypass-approvals-and-sandbox",
+  cursor: "--force",
 };
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
