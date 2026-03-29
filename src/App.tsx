@@ -80,6 +80,7 @@ import { ContentGrid } from "./components/Terminal";
 import { PanelTransitionOverlay } from "./components/Panel";
 import {
   WorktreeCard,
+  type WorktreeCardProps,
   WorktreePalette,
   WorktreeSidebarSearchBar,
   WorktreeOverviewModal,
@@ -175,6 +176,7 @@ import { useRenderProfiler } from "./utils/renderProfiler";
 import { useWorktreeDataStore } from "./store/worktreeDataStore";
 import type { WorktreeActions } from "./hooks/useWorktreeActions";
 import type { UseAgentLauncherReturn } from "./hooks/useAgentLauncher";
+import { useProjectHealth } from "./hooks/useProjectHealth";
 
 interface SidebarWorktreeRowProps {
   worktreeId: string;
@@ -311,6 +313,8 @@ interface StaticWorktreeRowProps {
   availability: UseAgentLauncherReturn["availability"];
   agentSettings: UseAgentLauncherReturn["agentSettings"];
   homeDir: string | undefined;
+  aggregateCounts?: WorktreeCardProps["aggregateCounts"];
+  projectHealth?: WorktreeCardProps["projectHealth"];
 }
 
 const StaticWorktreeRow = React.memo(function StaticWorktreeRow({
@@ -323,6 +327,8 @@ const StaticWorktreeRow = React.memo(function StaticWorktreeRow({
   availability,
   agentSettings,
   homeDir,
+  aggregateCounts,
+  projectHealth,
 }: StaticWorktreeRowProps) {
   const worktree = useWorktreeDataStore((state) => state.worktrees.get(worktreeId));
 
@@ -359,6 +365,8 @@ const StaticWorktreeRow = React.memo(function StaticWorktreeRow({
         isActive={worktreeId === activeWorktreeId}
         isFocused={worktreeId === focusedWorktreeId}
         isSingleWorktree={totalWorktreeCount === 1}
+        aggregateCounts={aggregateCounts}
+        projectHealth={projectHealth}
         onSelect={onSelect}
         onCopyTree={onCopyTree}
         onOpenEditor={onOpenEditor}
@@ -382,6 +390,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const [isRefreshing, startRefreshTransition] = useTransition();
   const currentProject = useProjectStore((state) => state.currentProject);
   useProjectSettings();
+  const { health: projectHealth } = useProjectHealth();
   const { launchAgent, availability, agentSettings } = useAgentLauncher();
   const {
     activeWorktreeId,
@@ -570,6 +579,24 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     }
     return counts;
   }, [deferredWorktrees, derivedMetaMap, mainWorktree, integrationWorktree]);
+
+  const mainWorktreeAggregateCounts = useMemo(() => {
+    const nonMainCount = deferredWorktrees.length - 1 - (integrationWorktree ? 1 : 0);
+    if (
+      nonMainCount === 0 &&
+      quickStateCounts.working === 0 &&
+      quickStateCounts.waiting === 0 &&
+      quickStateCounts.finished === 0
+    ) {
+      return undefined;
+    }
+    return {
+      worktrees: nonMainCount,
+      working: quickStateCounts.working,
+      waiting: quickStateCounts.waiting,
+      finished: quickStateCounts.finished,
+    };
+  }, [deferredWorktrees.length, integrationWorktree, quickStateCounts]);
 
   const { filteredWorktrees, groupedSections } = useMemo(() => {
     const filters: FilterState = {
@@ -962,7 +989,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             className="shrink-0"
             style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
           >
-            {renderWorktreeCard(mainWorktree)}
+            <StaticWorktreeRow
+              key={mainWorktree.id}
+              worktreeId={mainWorktree.id}
+              activeWorktreeId={activeWorktreeId}
+              focusedWorktreeId={focusedWorktreeId}
+              totalWorktreeCount={deferredWorktrees.length}
+              selectWorktree={selectWorktree}
+              worktreeActions={worktreeActions}
+              availability={availability}
+              agentSettings={agentSettings}
+              homeDir={homeDir}
+              aggregateCounts={mainWorktreeAggregateCounts}
+              projectHealth={projectHealth}
+            />
           </div>
         )}
 
