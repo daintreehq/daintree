@@ -3,6 +3,7 @@ import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { notify } from "@/lib/notify";
 import { isElectronAvailable } from "@/hooks/useElectron";
+import { DEFAULT_AUTO_RESTART_THRESHOLD_MB } from "@/store/memoryLeakConfigStore";
 
 export const MEMORY_HISTORY_SIZE = 30;
 export const STARTUP_SKIP_SAMPLES = 30;
@@ -12,7 +13,6 @@ export const MIN_SLOPE_KB_PER_SAMPLE = 137; // ~200 MB/hour at 2.5s intervals
 export const PLATEAU_WINDOW = 5;
 export const PLATEAU_RANGE_THRESHOLD_KB = MIN_SLOPE_KB_PER_SAMPLE * PLATEAU_WINDOW;
 export const ALERT_COOLDOWN_MS = 5 * 60_000; // 5 minutes
-export const DEFAULT_AUTO_RESTART_THRESHOLD_MB = 8192;
 
 export interface LeakState {
   sampleCount: number;
@@ -48,26 +48,20 @@ export function isPlateau(values: number[]): boolean {
   return max - min < PLATEAU_RANGE_THRESHOLD_KB;
 }
 
-export function evaluateTerminal(
-  memoryKb: number,
-  state: LeakState,
-  now: number
-): { alert: boolean; autoRestart: boolean; autoRestartThresholdKb: number } {
+export function evaluateTerminal(memoryKb: number, state: LeakState, now: number): boolean {
   state.sampleCount++;
   state.memHistory = [...state.memHistory, memoryKb].slice(-MEMORY_HISTORY_SIZE);
 
-  const result = { alert: false, autoRestart: false, autoRestartThresholdKb: 0 };
-
-  if (state.sampleCount < STARTUP_SKIP_SAMPLES) return result;
-  if (state.dismissed) return result;
+  if (state.sampleCount < STARTUP_SKIP_SAMPLES) return false;
+  if (state.dismissed) return false;
   if (memoryKb < MIN_MEMORY_KB) {
     state.consecutiveIncreases = 0;
-    return result;
+    return false;
   }
 
   if (isPlateau(state.memHistory)) {
     state.consecutiveIncreases = 0;
-    return result;
+    return false;
   }
 
   const prev = state.memHistory[state.memHistory.length - 2];
@@ -81,12 +75,12 @@ export function evaluateTerminal(
     const slope = computeSlope(state.memHistory);
     if (slope >= MIN_SLOPE_KB_PER_SAMPLE) {
       if (now - state.lastAlertAt >= ALERT_COOLDOWN_MS) {
-        result.alert = true;
+        return true;
       }
     }
   }
 
-  return result;
+  return false;
 }
 
 function formatMb(kb: number): string {
@@ -142,9 +136,9 @@ export function useMemoryLeakDetection(
           stateMap.set(id, leakState);
         }
 
-        const result = evaluateTerminal(metric.memoryKb, leakState, now);
+        const shouldAlert = evaluateTerminal(metric.memoryKb, leakState, now);
 
-        if (result.alert) {
+        if (shouldAlert) {
           leakState.lastAlertAt = now;
 
           const terminal = useTerminalStore.getState().terminals.find((t) => t.id === id);
