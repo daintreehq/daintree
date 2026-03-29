@@ -297,7 +297,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
 
   // Direct MessagePort output: send data directly to renderer, bypassing main process
   if (!visualWritten && !isBackgrounded && !isSuspended && rendererPort) {
-    const bytes = typeof data === "string" ? Buffer.from(data) : data;
+    const bytes = Buffer.from(data);
     const byteCount = bytes.length;
 
     if (!portQueueManager.isAtCapacity(id, byteCount)) {
@@ -1227,8 +1227,9 @@ port.on("message", async (rawMsg: any) => {
           // Clear suspended flag to allow output to flow again
           backpressureManager.clearSuspended(msg.id);
 
-          // Also clear IPC queue backpressure state
+          // Also clear IPC and port queue backpressure state
           ipcQueueManager.clearQueue(msg.id);
+          portQueueManager.clearQueue(msg.id);
 
           // Emit resume status
           const utilization =
@@ -1371,6 +1372,7 @@ function cleanup(): void {
 
   backpressureManager.dispose();
   ipcQueueManager.dispose();
+  portQueueManager.dispose();
 
   terminalResourceMonitor.dispose();
   processTreeCache.stop();
