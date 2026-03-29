@@ -681,6 +681,7 @@ const CHANNELS = {
 
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
+  PLUGIN_INVOKE: "plugin:invoke",
 
   // Workflow approval channels
   WORKFLOW_RESOLVE_APPROVAL: "workflow:resolve-approval",
@@ -2238,6 +2239,18 @@ const api: ElectronAPI = {
 
   plugin: {
     list: () => _unwrappingInvoke(CHANNELS.PLUGIN_LIST),
+
+    invoke: (pluginId: string, channel: string, ...args: unknown[]) =>
+      _unwrappingInvoke(CHANNELS.PLUGIN_INVOKE, pluginId, channel, ...args),
+
+    on: (pluginId: string, channel: string, callback: (payload: unknown) => void) => {
+      const fullChannel = `plugin:${pluginId}:${channel}`;
+      const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+      ipcRenderer.on(fullChannel, handler);
+      return () => {
+        ipcRenderer.removeListener(fullChannel, handler);
+      };
+    },
   },
 
   crashRecovery: {
