@@ -98,6 +98,8 @@ import type {
   StartAgentUpdatePayload,
   StartAgentUpdateResult,
   SystemHealthCheckResult,
+  PrerequisiteSpec,
+  PrerequisiteCheckResult,
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
@@ -329,6 +331,8 @@ export interface ElectronAPI {
     setAgentUpdateSettings(settings: AgentUpdateSettings): Promise<void>;
     startAgentUpdate(payload: StartAgentUpdatePayload): Promise<StartAgentUpdateResult>;
     healthCheck(agentIds?: string[]): Promise<SystemHealthCheckResult>;
+    getHealthCheckSpecs(agentIds?: string[]): Promise<PrerequisiteSpec[]>;
+    checkTool(spec: PrerequisiteSpec): Promise<PrerequisiteCheckResult>;
     downloadDiagnostics(): Promise<boolean>;
     getAppMetrics(): Promise<import("./system.js").AppMetricsSummary>;
     getHardwareInfo(): Promise<import("./system.js").HardwareInfo>;

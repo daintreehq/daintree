@@ -4,27 +4,46 @@ import {
   ChevronDown,
   ChevronRight,
   CircleCheck,
-  CircleDashed,
   CircleX,
   ExternalLink,
+  Loader2,
   RotateCw,
 } from "lucide-react";
 import { systemClient } from "@/clients";
-import type { PrerequisiteCheckResult, SystemHealthCheckResult } from "@shared/types";
+import type { PrerequisiteCheckResult, PrerequisiteSpec } from "@shared/types";
 import type { AgentInstallBlock } from "@shared/config/agentRegistry";
 import { detectOS } from "@/lib/agentInstall";
 import { InstallBlock } from "./InstallBlock";
 import { EmbeddedTerminal } from "./EmbeddedTerminal";
 
-const POLL_INTERVAL = 3000;
+const POOL_CONCURRENCY = 3;
+
+const BASELINE_TOOLS = new Set(["git", "node", "npm", "gh"]);
 
 interface SystemHealthCheckStepProps {
   onSkip: () => void;
   agentIds?: readonly string[];
 }
 
+type CheckState = "loading" | PrerequisiteCheckResult;
+
+async function runPool<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>
+): Promise<void> {
+  const iter = items[Symbol.iterator]();
+  async function worker() {
+    for (let next = iter.next(); !next.done; next = iter.next()) {
+      await fn(next.value);
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, worker));
+}
+
 export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckStepProps) {
-  const [result, setResult] = useState<SystemHealthCheckResult | null>(null);
+  const [specs, setSpecs] = useState<PrerequisiteSpec[]>([]);
+  const [checkStates, setCheckStates] = useState<Record<string, CheckState>>({});
   const [isChecking, setIsChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const activeRef = useRef(true);
@@ -35,9 +54,45 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
     isCheckingRef.current = true;
     setIsChecking(true);
     setError(null);
+    setSpecs([]);
+    setCheckStates({});
+
     try {
-      const data = await systemClient.healthCheck(agentIds ? [...agentIds] : undefined);
-      if (activeRef.current) setResult(data);
+      const resolvedSpecs = await systemClient.getHealthCheckSpecs(
+        agentIds ? [...agentIds] : undefined
+      );
+      if (!activeRef.current) return;
+
+      setSpecs(resolvedSpecs);
+      setCheckStates(
+        Object.fromEntries(resolvedSpecs.map((s) => [s.tool, "loading" as const]))
+      );
+
+      await runPool(resolvedSpecs, POOL_CONCURRENCY, async (spec) => {
+        try {
+          const result = await systemClient.checkTool(spec);
+          if (activeRef.current) {
+            setCheckStates((prev) => ({ ...prev, [spec.tool]: result }));
+          }
+        } catch {
+          if (activeRef.current) {
+            setCheckStates((prev) => ({
+              ...prev,
+              [spec.tool]: {
+                tool: spec.tool,
+                label: spec.label,
+                available: false,
+                version: null,
+                severity: spec.severity,
+                meetsMinVersion: false,
+                minVersion: spec.minVersion,
+                installUrl: spec.installUrl,
+                installBlocks: spec.installBlocks,
+              },
+            }));
+          }
+        }
+      });
     } catch (err) {
       if (activeRef.current) setError(err instanceof Error ? err.message : "Health check failed");
     } finally {
@@ -49,14 +104,24 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
   useEffect(() => {
     activeRef.current = true;
     void runCheck();
-    const id = setInterval(() => void runCheck(), POLL_INTERVAL);
     return () => {
       activeRef.current = false;
-      clearInterval(id);
     };
   }, [runCheck]);
 
-  const visibleResults = result?.prerequisites.filter((c) => c.severity !== "silent") ?? [];
+  const visibleSpecs = specs.filter((s) => s.severity !== "silent");
+  const systemSpecs = visibleSpecs.filter((s) => BASELINE_TOOLS.has(s.tool));
+  const agentSpecs = visibleSpecs.filter((s) => !BASELINE_TOOLS.has(s.tool));
+
+  const allDone = visibleSpecs.length > 0 && visibleSpecs.every((s) => checkStates[s.tool] !== "loading");
+  const allRequired = allDone
+    ? visibleSpecs
+        .filter((s) => s.severity === "fatal")
+        .every((s) => {
+          const state = checkStates[s.tool];
+          return state !== "loading" && state?.available && state.meetsMinVersion;
+        })
+    : true;
 
   return (
     <div className="space-y-5">
@@ -67,24 +132,50 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
         </p>
       </div>
 
-      <div className="space-y-2">
-        {result
-          ? visibleResults.map((check) => <PrerequisiteRow key={check.tool} check={check} />)
-          : Array.from({ length: 4 }, (_, i) => (
-              <PrerequisiteRow
-                key={i}
-                check={{
-                  tool: "",
-                  label: "",
-                  available: false,
-                  version: null,
-                  severity: "fatal",
-                  meetsMinVersion: true,
-                }}
-                loading={isChecking}
+      {systemSpecs.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-xs font-medium text-canopy-text/50 uppercase tracking-wide">
+            System tools
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {systemSpecs.map((spec) => (
+              <PrerequisiteCard
+                key={spec.tool}
+                spec={spec}
+                state={checkStates[spec.tool] ?? "loading"}
               />
             ))}
-      </div>
+          </div>
+        </div>
+      )}
+
+      {agentSpecs.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-xs font-medium text-canopy-text/50 uppercase tracking-wide">
+            Agent CLIs
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {agentSpecs.map((spec) => (
+              <PrerequisiteCard
+                key={spec.tool}
+                spec={spec}
+                state={checkStates[spec.tool] ?? "loading"}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {specs.length === 0 && isChecking && (
+        <div className="grid grid-cols-2 gap-2">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div
+              key={i}
+              className="rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30 px-3 py-2.5 animate-pulse h-[52px]"
+            />
+          ))}
+        </div>
+      )}
 
       <div className="border-t border-canopy-border pt-4">
         <div className="flex items-center gap-2 mb-3">
@@ -100,7 +191,7 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
         </div>
       )}
 
-      {result && !result.allRequired && (
+      {allDone && !allRequired && (
         <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-status-warning/20 bg-status-warning/5">
           <p className="text-xs text-status-warning">
             Some required tools are missing or outdated. Agents that depend on them may not work
@@ -141,18 +232,14 @@ function getInstallBlocksForOS(check: PrerequisiteCheckResult): AgentInstallBloc
   return null;
 }
 
-function PrerequisiteRow({
-  check,
-  loading = false,
-}: {
-  check: PrerequisiteCheckResult;
-  loading?: boolean;
-}) {
-  const needsInstall = !loading && (!check.available || !check.meetsMinVersion);
+function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; state: CheckState }) {
+  const loading = state === "loading";
+  const check: PrerequisiteCheckResult | null = loading ? null : state;
+  const needsInstall = check && (!check.available || !check.meetsMinVersion);
   const installBlocks = needsInstall ? getInstallBlocksForOS(check) : null;
   const [expanded, setExpanded] = useState(false);
-  const label = check.label || check.tool;
-  const versionMismatch = check.available && !check.meetsMinVersion && check.minVersion;
+  const label = spec.label || spec.tool;
+  const versionMismatch = check?.available && !check.meetsMinVersion && check.minVersion;
 
   return (
     <div className="rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30">
@@ -160,7 +247,7 @@ function PrerequisiteRow({
         <StatusIcon check={check} loading={loading} />
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium text-canopy-text">{label}</div>
-          {check.version && !versionMismatch && (
+          {check?.version && !versionMismatch && (
             <div className="text-[11px] text-canopy-text/40">v{check.version}</div>
           )}
           {versionMismatch && (
@@ -171,9 +258,7 @@ function PrerequisiteRow({
         </div>
         {loading ? (
           <span className="text-[11px] text-canopy-text/30">Checking…</span>
-        ) : check.available && check.meetsMinVersion ? (
-          <span className="text-[11px] text-status-success font-medium">Found</span>
-        ) : (
+        ) : needsInstall ? (
           <div className="flex items-center gap-2">
             {installBlocks && (
               <button
@@ -202,7 +287,7 @@ function PrerequisiteRow({
               </a>
             )}
           </div>
-        )}
+        ) : null}
       </div>
       {expanded && installBlocks && (
         <div className="px-3 pb-3 space-y-2">
@@ -215,14 +300,20 @@ function PrerequisiteRow({
   );
 }
 
-function StatusIcon({ check, loading }: { check: PrerequisiteCheckResult; loading: boolean }) {
+function StatusIcon({
+  check,
+  loading,
+}: {
+  check: PrerequisiteCheckResult | null;
+  loading: boolean;
+}) {
   if (loading) {
-    return <CircleDashed className="w-4 h-4 text-canopy-text/20 animate-pulse shrink-0" />;
+    return <Loader2 className="w-4 h-4 text-canopy-text/30 animate-spin shrink-0" />;
   }
-  if (check.available && check.meetsMinVersion) {
+  if (check?.available && check.meetsMinVersion) {
     return <CircleCheck className="w-4 h-4 text-status-success shrink-0" />;
   }
-  if (check.severity === "warn") {
+  if (check?.severity === "warn") {
     return <AlertTriangle className="w-4 h-4 text-status-warning shrink-0" />;
   }
   return <CircleX className="w-4 h-4 text-status-error shrink-0" />;

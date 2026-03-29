@@ -45,6 +45,18 @@ export const systemClient = {
     return window.electron.system.healthCheck(agentIds);
   },
 
+  getHealthCheckSpecs: (
+    agentIds?: string[]
+  ): ReturnType<typeof window.electron.system.getHealthCheckSpecs> => {
+    return window.electron.system.getHealthCheckSpecs(agentIds);
+  },
+
+  checkTool: (
+    spec: Parameters<typeof window.electron.system.checkTool>[0]
+  ): ReturnType<typeof window.electron.system.checkTool> => {
+    return window.electron.system.checkTool(spec);
+  },
+
   downloadDiagnostics: (): Promise<boolean> => {
     return window.electron.system.downloadDiagnostics();
   },

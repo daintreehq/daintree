@@ -105,6 +105,8 @@ export const CHANNELS = {
   SYSTEM_SET_AGENT_UPDATE_SETTINGS: "system:set-agent-update-settings",
   SYSTEM_START_AGENT_UPDATE: "system:start-agent-update",
   SYSTEM_HEALTH_CHECK: "system:health-check",
+  SYSTEM_HEALTH_CHECK_SPECS: "system:health-check-specs",
+  SYSTEM_CHECK_TOOL: "system:check-tool",
   SYSTEM_DOWNLOAD_DIAGNOSTICS: "system:download-diagnostics",
   SYSTEM_GET_APP_METRICS: "system:get-app-metrics",
   SYSTEM_GET_HARDWARE_INFO: "system:get-hardware-info",
