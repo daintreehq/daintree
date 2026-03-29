@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { PanelHeader } from "../PanelHeader";
 import type { PanelHeaderProps } from "../PanelHeader";
 
@@ -364,27 +364,22 @@ describe("PanelHeader", () => {
   });
 
   describe("Maximize tooltip", () => {
-    it("includes double-click header hint", () => {
+    it("does not include double-click header hint", () => {
       render(<PanelHeader {...makeProps({ onToggleMaximize: vi.fn() })} />);
       const tooltips = screen.getAllByTestId("tooltip-content");
-      const maximizeTooltip = tooltips.find(
-        (el) =>
-          el.textContent?.includes("Maximize") && el.textContent?.includes("double-click header")
-      );
+      const maximizeTooltip = tooltips.find((el) => el.textContent?.includes("Maximize"));
       expect(maximizeTooltip).toBeDefined();
+      expect(maximizeTooltip!.textContent).not.toContain("double-click header");
     });
   });
 
   describe("Restore Grid View tooltip", () => {
-    it("includes double-click header hint when maximized", () => {
+    it("does not include double-click header hint when maximized", () => {
       render(<PanelHeader {...makeProps({ onToggleMaximize: vi.fn(), isMaximized: true })} />);
       const tooltips = screen.getAllByTestId("tooltip-content");
-      const restoreTooltip = tooltips.find(
-        (el) =>
-          el.textContent?.includes("Restore Grid View") &&
-          el.textContent?.includes("double-click header")
-      );
+      const restoreTooltip = tooltips.find((el) => el.textContent?.includes("Restore Grid View"));
       expect(restoreTooltip).toBeDefined();
+      expect(restoreTooltip!.textContent).not.toContain("double-click header");
     });
   });
 
@@ -440,6 +435,33 @@ describe("PanelHeader", () => {
       render(<PanelHeader {...makeProps({ tabs: twoTabs, onTabClick: vi.fn() })} />);
       expect(screen.queryByLabelText("Scroll left")).toBeNull();
       expect(screen.getByLabelText("Scroll right")).toBeDefined();
+    });
+  });
+
+  describe("header double-click behavior", () => {
+    it("dispatches nav.toggleFocusMode when double-clicking header in grid mode", () => {
+      const { container } = render(
+        <PanelHeader {...makeProps({ location: "grid", onToggleMaximize: vi.fn() })} />
+      );
+      const header = container.firstElementChild as HTMLElement;
+      fireEvent.dblClick(header);
+      expect(mockDispatch).toHaveBeenCalledWith("nav.toggleFocusMode");
+    });
+
+    it("calls onRestore when double-clicking header in dock mode", () => {
+      const onRestore = vi.fn();
+      const { container } = render(<PanelHeader {...makeProps({ location: "dock", onRestore })} />);
+      const header = container.firstElementChild as HTMLElement;
+      fireEvent.dblClick(header);
+      expect(onRestore).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).not.toHaveBeenCalledWith("nav.toggleFocusMode");
+    });
+
+    it("does not dispatch when double-clicking a button within the header", () => {
+      render(<PanelHeader {...makeProps({ location: "grid", onToggleMaximize: vi.fn() })} />);
+      const closeButton = screen.getByTestId("panel-close");
+      fireEvent.dblClick(closeButton);
+      expect(mockDispatch).not.toHaveBeenCalledWith("nav.toggleFocusMode");
     });
   });
 });

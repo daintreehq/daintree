@@ -294,7 +294,7 @@ function PanelHeaderComponent({
     if (location === "dock") {
       onRestore?.();
     } else {
-      onToggleMaximize?.();
+      void actionService.dispatch("nav.toggleFocusMode");
     }
   };
 
@@ -965,8 +965,7 @@ function PanelHeaderComponent({
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Restore Grid View", maximizeShortcut) +
-                  " · double-click header"}
+                {createTooltipWithShortcut("Restore Grid View", maximizeShortcut)}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -989,8 +988,7 @@ function PanelHeaderComponent({
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  {createTooltipWithShortcut("Maximize", maximizeShortcut) +
-                    " · double-click header"}
+                  {createTooltipWithShortcut("Maximize", maximizeShortcut)}
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
