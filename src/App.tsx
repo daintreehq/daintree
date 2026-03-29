@@ -94,7 +94,12 @@ import { FileViewerModalHost } from "./components/FileViewer/FileViewerModalHost
 import { NewTerminalPalette } from "./components/TerminalPalette";
 import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
-import { GitInitDialog, ProjectOnboardingWizard, WelcomeScreen } from "./components/Project";
+import {
+  GitInitDialog,
+  CloneRepoDialog,
+  ProjectOnboardingWizard,
+  WelcomeScreen,
+} from "./components/Project";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { CreateProjectFolderDialog } from "./components/Project/CreateProjectFolderDialog";
@@ -1175,6 +1180,10 @@ function App() {
   const createFolderDialogOpen = useProjectStore((state) => state.createFolderDialogOpen);
   const closeCreateFolderDialog = useProjectStore((state) => state.closeCreateFolderDialog);
   const openCreateFolderDialog = useProjectStore((state) => state.openCreateFolderDialog);
+
+  const cloneRepoDialogOpen = useProjectStore((state) => state.cloneRepoDialogOpen);
+  const closeCloneRepoDialog = useProjectStore((state) => state.closeCloneRepoDialog);
+  const handleCloneSuccess = useProjectStore((state) => state.handleCloneSuccess);
   const { selectWorktree, activeWorktreeId, focusedWorktreeId } = useWorktreeSelectionStore(
     useShallow((state) => ({
       selectWorktree: state.selectWorktree,
@@ -1633,6 +1642,12 @@ function App() {
       <CreateProjectFolderDialog
         isOpen={createFolderDialogOpen}
         onClose={closeCreateFolderDialog}
+      />
+
+      <CloneRepoDialog
+        isOpen={cloneRepoDialogOpen}
+        onSuccess={handleCloneSuccess}
+        onCancel={closeCloneRepoDialog}
       />
 
       <PanelTransitionOverlay />

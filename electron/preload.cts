@@ -378,6 +378,8 @@ const CHANNELS = {
   PROJECT_INIT_GIT: "project:init-git",
   PROJECT_INIT_GIT_GUIDED: "project:init-git-guided",
   PROJECT_INIT_GIT_PROGRESS: "project:init-git-progress",
+  PROJECT_CLONE_REPO: "project:clone-repo",
+  PROJECT_CLONE_PROGRESS: "project:clone-progress",
   PROJECT_GET_RECIPES: "project:get-recipes",
   PROJECT_SAVE_RECIPES: "project:save-recipes",
   PROJECT_ADD_RECIPE: "project:add-recipe",
@@ -1184,6 +1186,22 @@ const api: ElectronAPI = {
       ) => callback(data);
       ipcRenderer.on(CHANNELS.PROJECT_INIT_GIT_PROGRESS, listener);
       return () => ipcRenderer.removeListener(CHANNELS.PROJECT_INIT_GIT_PROGRESS, listener);
+    },
+
+    cloneRepo: (
+      options: import("../shared/types/ipc/gitClone.js").CloneRepoOptions
+    ): Promise<import("../shared/types/ipc/gitClone.js").CloneRepoResult> =>
+      _unwrappingInvoke(CHANNELS.PROJECT_CLONE_REPO, options),
+
+    onCloneProgress: (
+      callback: (event: import("../shared/types/ipc/gitClone.js").CloneRepoProgressEvent) => void
+    ) => {
+      const listener = (
+        _event: unknown,
+        data: import("../shared/types/ipc/gitClone.js").CloneRepoProgressEvent
+      ) => callback(data);
+      ipcRenderer.on(CHANNELS.PROJECT_CLONE_PROGRESS, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.PROJECT_CLONE_PROGRESS, listener);
     },
 
     getRecipes: (projectId: string): Promise<TerminalRecipe[]> =>

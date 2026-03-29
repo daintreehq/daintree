@@ -44,6 +44,8 @@ const createMockProjectClient = () => ({
   disableInRepoSettings: vi.fn().mockResolvedValue({}),
   checkMissing: vi.fn().mockResolvedValue([]),
   locate: vi.fn().mockResolvedValue(null),
+  cloneRepo: vi.fn().mockResolvedValue({ success: true }),
+  onCloneProgress: vi.fn().mockReturnValue(() => {}),
 });
 
 describe("TerminalPersistence.saveTabGroups", () => {

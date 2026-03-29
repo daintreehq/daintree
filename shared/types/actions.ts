@@ -106,6 +106,7 @@ export type BuiltInActionId =
   | "project.detectRunners"
   | "project.getStats"
   | "project.settings.open"
+  | "project.cloneRepo"
   | "app.developerMode.set"
   | "logs.openFile"
   | "logs.clear"

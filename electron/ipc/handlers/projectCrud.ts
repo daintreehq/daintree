@@ -14,7 +14,13 @@ import type {
   GitInitResult,
   GitInitProgressEvent,
 } from "../../../shared/types/ipc/gitInit.js";
-import { createHardenedGit } from "../../utils/hardenedGit.js";
+import type {
+  CloneRepoOptions,
+  CloneRepoResult,
+  CloneRepoProgressEvent,
+} from "../../../shared/types/ipc/gitClone.js";
+import { createHardenedGit, HARDENED_GIT_CONFIG } from "../../utils/hardenedGit.js";
+import { simpleGit } from "simple-git";
 
 export function registerProjectCrudHandlers(deps: HandlerDependencies): () => void {
   const { mainWindow } = deps;
@@ -689,6 +695,124 @@ Thumbs.db
 
   ipcMain.handle(CHANNELS.PROJECT_INIT_GIT_GUIDED, handleProjectInitGitGuided);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_INIT_GIT_GUIDED));
+
+  const handleProjectCloneRepo = async (
+    _event: Electron.IpcMainInvokeEvent,
+    options: CloneRepoOptions
+  ): Promise<CloneRepoResult> => {
+    if (!options || typeof options !== "object") {
+      throw new Error("Invalid options object");
+    }
+
+    const { url, parentPath, folderName } = options;
+
+    if (typeof url !== "string" || !url.trim()) {
+      throw new Error("Repository URL is required");
+    }
+    if (!/^https?:\/\//i.test(url) && !/^git@/i.test(url)) {
+      throw new Error("Only HTTP(S) and SSH (git@) URLs are supported");
+    }
+    if (typeof parentPath !== "string" || !parentPath.trim()) {
+      throw new Error("Parent path is required");
+    }
+    if (!path.isAbsolute(parentPath)) {
+      throw new Error("Parent path must be absolute");
+    }
+    if (typeof folderName !== "string" || !folderName.trim()) {
+      throw new Error("Folder name is required");
+    }
+
+    const trimmedFolder = folderName.trim();
+    if (
+      trimmedFolder.includes("/") ||
+      trimmedFolder.includes("\\") ||
+      trimmedFolder === ".." ||
+      trimmedFolder === "."
+    ) {
+      throw new Error("Folder name must not contain path separators or dot segments");
+    }
+
+    const targetPath = path.join(parentPath, trimmedFolder);
+    const normalizedParent = path.resolve(parentPath);
+    const normalizedTarget = path.resolve(targetPath);
+    if (!normalizedTarget.startsWith(normalizedParent + path.sep)) {
+      throw new Error("Folder name resolves outside of the parent directory");
+    }
+
+    const fs = await import("fs");
+
+    try {
+      const parentStat = await fs.promises.stat(parentPath);
+      if (!parentStat.isDirectory()) {
+        throw new Error("Parent path is not a directory");
+      }
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        throw new Error("Parent directory does not exist", { cause: err });
+      }
+      throw err;
+    }
+
+    const targetExists = await fs.promises
+      .access(targetPath)
+      .then(() => true)
+      .catch(() => false);
+    if (targetExists) {
+      throw new Error(`Folder "${trimmedFolder}" already exists in this location`);
+    }
+
+    const emitProgress = (stage: string, progress: number, message: string) => {
+      if (mainWindow.isDestroyed()) return;
+      const event: CloneRepoProgressEvent = {
+        stage,
+        progress,
+        message,
+        timestamp: Date.now(),
+      };
+      mainWindow.webContents.send(CHANNELS.PROJECT_CLONE_PROGRESS, event);
+    };
+
+    try {
+      emitProgress("starting", 0, "Starting clone...");
+
+      const git = simpleGit({
+        baseDir: parentPath,
+        config: [...HARDENED_GIT_CONFIG, "transfer.bundleURI=false"],
+        timeout: { block: 0 },
+        progress({ stage, progress }) {
+          emitProgress(stage, progress, `${stage}: ${progress}%`);
+        },
+        unsafe: {
+          allowUnsafeProtocolOverride: true,
+          allowUnsafeSshCommand: true,
+          allowUnsafeGitProxy: true,
+          allowUnsafeHooksPath: true,
+        },
+      });
+
+      await git.clone(url, trimmedFolder);
+
+      emitProgress("complete", 100, "Clone complete");
+      return { success: true, clonedPath: targetPath };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      emitProgress("error", 0, `Clone failed: ${errorMessage}`);
+
+      // Clean up partial clone
+      const partialExists = await fs.promises
+        .access(targetPath)
+        .then(() => true)
+        .catch(() => false);
+      if (partialExists) {
+        await fs.promises.rm(targetPath, { recursive: true, force: true }).catch(() => {});
+      }
+
+      return { success: false, error: errorMessage };
+    }
+  };
+  ipcMain.handle(CHANNELS.PROJECT_CLONE_REPO, handleProjectCloneRepo);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CLONE_REPO));
 
   const handleProjectCheckMissing = async (
     _event: Electron.IpcMainInvokeEvent
