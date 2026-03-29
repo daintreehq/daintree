@@ -13,6 +13,7 @@ const defaultOnboardingState: OnboardingState = {
   migratedFromLocalStorage: true,
   firstRunToastSeen: false,
   newsletterPromptSeen: false,
+  waitingNudgeSeen: false,
   checklist: {
     dismissed: false,
     celebrationShown: false,

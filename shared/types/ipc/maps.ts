@@ -164,6 +164,7 @@ export interface OnboardingState {
   agentSetupIds: string[];
   firstRunToastSeen: boolean;
   newsletterPromptSeen: boolean;
+  waitingNudgeSeen: boolean;
   migratedFromLocalStorage: boolean;
   checklist: ChecklistState;
 }
@@ -1494,6 +1495,10 @@ export interface IpcInvokeMap {
     result: void;
   };
   "onboarding:mark-newsletter-seen": {
+    args: [];
+    result: void;
+  };
+  "onboarding:mark-waiting-nudge-seen": {
     args: [];
     result: void;
   };
