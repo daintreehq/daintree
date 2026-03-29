@@ -18,6 +18,12 @@ const VALID_TABS: SettingsTab[] = [
   "environment",
   "privacy",
   "troubleshooting",
+  "project:general",
+  "project:context",
+  "project:automation",
+  "project:recipes",
+  "project:commands",
+  "project:notifications",
 ];
 
 /**

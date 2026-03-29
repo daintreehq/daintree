@@ -1714,6 +1714,7 @@ function App() {
             defaultSubtab={settingsSubtab}
             defaultSectionId={settingsSectionId}
             onSettingsChange={refreshSettings}
+            projectId={currentProject?.id ?? null}
           />
         </Suspense>
       )}

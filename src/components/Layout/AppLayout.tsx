@@ -5,7 +5,7 @@ import { TerminalDockRegion } from "./TerminalDockRegion";
 import { DiagnosticsDock } from "../Diagnostics";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { PortalDock, PortalVisibilityController } from "../Portal";
-import { ProjectSettingsDialog, ProjectSwitchOverlay } from "@/components/Project";
+import { ProjectSwitchOverlay } from "@/components/Project";
 import { ChordIndicator } from "./ChordIndicator";
 import { DemoCursor } from "../Demo";
 import { ApprovalQueue } from "../Workflow/ApprovalQueue";
@@ -49,8 +49,6 @@ export function AppLayout({
   projectSwitcherPalette,
 }: AppLayoutProps) {
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
-  const [isProjectSettingsOpen, setIsProjectSettingsOpen] = useState(false);
-
   const currentProject = useProjectStore((state) => state.currentProject);
   const isProjectSwitching = useProjectStore((state) => state.isSwitching);
   const switchingToProjectName = useProjectStore((state) => state.switchingToProjectName);
@@ -226,12 +224,6 @@ export function AppLayout({
     return () => window.removeEventListener("canopy:toggle-portal", handlePortalToggle);
   }, [layout.togglePortal]);
 
-  useEffect(() => {
-    const handleOpenProjectSettings = () => setIsProjectSettingsOpen(true);
-    window.addEventListener("canopy:open-project-settings", handleOpenProjectSettings);
-    return () =>
-      window.removeEventListener("canopy:open-project-settings", handleOpenProjectSettings);
-  }, []);
 
   useEffect(() => {
     const handleResetSidebarWidth = () => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
@@ -356,14 +348,6 @@ export function AppLayout({
           <DiagnosticsDock onRetry={onRetry} onCancelRetry={onCancelRetry} />
         </ErrorBoundary>
       </div>
-
-      {currentProject && isProjectSettingsOpen && (
-        <ProjectSettingsDialog
-          projectId={currentProject.id}
-          isOpen={isProjectSettingsOpen}
-          onClose={() => setIsProjectSettingsOpen(false)}
-        />
-      )}
 
       <ProjectSwitchOverlay
         isSwitching={isProjectSwitching}

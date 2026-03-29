@@ -229,7 +229,9 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      window.dispatchEvent(new CustomEvent("canopy:open-project-settings"));
+      window.dispatchEvent(new CustomEvent("canopy:open-settings-tab", {
+        detail: { tab: "project:general" },
+      }));
     },
   }));
 }

@@ -32,6 +32,12 @@ export function useSettingsDialog() {
       "environment",
       "privacy",
       "troubleshooting",
+      "project:general",
+      "project:context",
+      "project:automation",
+      "project:recipes",
+      "project:commands",
+      "project:notifications",
     ];
     const tab = allowedTabs.includes(target.tab as SettingsTab)
       ? (target.tab as SettingsTab)

@@ -165,6 +165,7 @@ describe("subtab-aware search", () => {
       {
         id: "test-entry",
         tab: "agents" as const,
+        scope: "global" as const,
         tabLabel: "CLI Agents",
         section: "Settings",
         title: "Some Setting",
@@ -183,6 +184,7 @@ describe("subtab-aware search", () => {
       {
         id: "sub-entry",
         tab: "agents" as const,
+        scope: "global" as const,
         tabLabel: "CLI Agents",
         section: "Runtime",
         title: "Enable Agent",
@@ -202,6 +204,7 @@ describe("subtab-aware search", () => {
       {
         id: "no-subtab",
         tab: "general" as const,
+        scope: "global" as const,
         tabLabel: "General",
         section: "About",
         title: "App Version",
@@ -218,6 +221,7 @@ describe("subtab-aware search", () => {
       {
         id: "a",
         tab: "agents" as const,
+        scope: "global" as const,
         tabLabel: "CLI Agents",
         section: "S",
         title: "Enable",
@@ -227,6 +231,7 @@ describe("subtab-aware search", () => {
       {
         id: "b",
         tab: "agents" as const,
+        scope: "global" as const,
         tabLabel: "CLI Agents",
         section: "S",
         title: "Enable Gemini",
@@ -241,7 +246,7 @@ describe("subtab-aware search", () => {
 });
 
 describe("SETTINGS_SEARCH_INDEX", () => {
-  it("has entries covering all 16 settings tabs", () => {
+  it("has entries covering all settings tabs", () => {
     const tabs = new Set(SETTINGS_SEARCH_INDEX.map((e) => e.tab));
     const expectedTabs = [
       "general",
@@ -260,6 +265,12 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       "environment",
       "privacy",
       "troubleshooting",
+      "project:general",
+      "project:context",
+      "project:automation",
+      "project:recipes",
+      "project:commands",
+      "project:notifications",
     ];
     for (const tab of expectedTabs) {
       expect(tabs.has(tab as never), `tab "${tab}" should be in index`).toBe(true);
@@ -305,6 +316,12 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       environment: "Environment Variables",
       privacy: "Privacy & Data",
       troubleshooting: "Troubleshooting",
+      "project:general": "General",
+      "project:context": "Context",
+      "project:automation": "Automation",
+      "project:recipes": "Recipes",
+      "project:commands": "Commands",
+      "project:notifications": "Notifications",
     };
     for (const entry of SETTINGS_SEARCH_INDEX) {
       expect(
@@ -332,6 +349,12 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       environment: "Environment Variables",
       privacy: "Privacy & Data",
       troubleshooting: "Troubleshooting",
+      "project:general": "General",
+      "project:context": "Context",
+      "project:automation": "Automation",
+      "project:recipes": "Recipes",
+      "project:commands": "Commands",
+      "project:notifications": "Notifications",
     };
     for (const tabKey of Object.keys(tabTitles)) {
       const navEntry = SETTINGS_SEARCH_INDEX.find((e) => e.id === `tab-nav-${tabKey}`);
@@ -447,6 +470,7 @@ describe("fuzzy matching", () => {
       {
         id: "a",
         tab: "general" as const,
+        scope: "global" as const,
         tabLabel: "General",
         section: "S",
         title: "Font Size",
@@ -455,6 +479,7 @@ describe("fuzzy matching", () => {
       {
         id: "b",
         tab: "general" as const,
+        scope: "global" as const,
         tabLabel: "General",
         section: "S",
         title: "Color Scheme",
@@ -553,5 +578,44 @@ describe("@modified filter", () => {
     const modifiedTabs = new Set<SettingsTab>(["github"]);
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "font @modified", { modifiedTabs });
     expect(results).toHaveLength(0);
+  });
+});
+
+describe("scope filtering", () => {
+  it("filters results to global scope only", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "notifications", { scope: "global" });
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((r) => r.scope === "global")).toBe(true);
+  });
+
+  it("filters results to project scope only", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "notifications", { scope: "project" });
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((r) => r.scope === "project")).toBe(true);
+  });
+
+  it("project scope search for 'general' returns only project:general entries", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "general", { scope: "project" });
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((r) => r.tab.startsWith("project:"))).toBe(true);
+  });
+
+  it("global scope search does not include project entries", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "recipes", { scope: "global" });
+    expect(results.every((r) => !r.tab.startsWith("project:"))).toBe(true);
+  });
+
+  it("returns results from both scopes when no scope filter is set", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "notifications");
+    const scopes = new Set(results.map((r) => r.scope));
+    expect(scopes.has("global")).toBe(true);
+    expect(scopes.has("project")).toBe(true);
+  });
+
+  it("every entry in the index has a scope field", () => {
+    for (const entry of SETTINGS_SEARCH_INDEX) {
+      expect(entry.scope, `entry "${entry.id}" should have scope`).toBeTruthy();
+      expect(["global", "project"]).toContain(entry.scope);
+    }
   });
 });

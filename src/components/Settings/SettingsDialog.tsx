@@ -37,6 +37,10 @@ import {
   ChevronRight,
   KeyRound,
   Shield,
+  FileCode,
+  Zap,
+  Command,
+  CookingPot,
 } from "lucide-react";
 import { WorktreeIcon, CanopyAgentIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
@@ -97,8 +101,31 @@ import {
   parseQuery,
 } from "./settingsSearchUtils";
 import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
+import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
+import { useProjectSettings } from "@/hooks";
+import { useProjectStore } from "@/store/projectStore";
+import { useWorktrees } from "@/hooks/useWorktrees";
+import { useRecipeStore } from "@/store/recipeStore";
+import { debounce } from "@/utils/debounce";
+import {
+  createProjectSettingsSnapshot,
+  areSnapshotsEqual,
+  type EnvVar,
+} from "@/components/Project/projectSettingsDirty";
+import { validatePathPattern } from "@shared/utils/pathPattern";
+import type { RunCommand, CopyTreeSettings } from "@/types";
+import type { ProjectTerminalSettings } from "@shared/types/project";
+import type { CommandOverride } from "@shared/types/commands";
+import type { NotificationSettings } from "@shared/types/ipc/api";
+import { GeneralTab as ProjectGeneralTab } from "@/components/Project/GeneralTab";
+import { ContextTab as ProjectContextTab } from "@/components/Project/ContextTab";
+import { AutomationTab as ProjectAutomationTab } from "@/components/Project/AutomationTab";
+import { RecipesTab as ProjectRecipesTab } from "@/components/Project/RecipesTab";
+import { CommandOverridesTab } from "./CommandOverridesTab";
+import { ProjectNotificationsTab } from "@/components/Project/ProjectNotificationsTab";
 
 let rememberedTab: SettingsTab = "general";
+let rememberedProjectTab: SettingsTab = "project:general";
 
 export interface SettingsNavTarget {
   tab: SettingsTab;
@@ -113,6 +140,7 @@ interface SettingsDialogProps {
   defaultSubtab?: string;
   defaultSectionId?: string;
   onSettingsChange?: () => void;
+  projectId?: string | null;
 }
 
 export type SettingsTab =
@@ -131,7 +159,19 @@ export type SettingsTab =
   | "mcp"
   | "environment"
   | "privacy"
-  | "troubleshooting";
+  | "troubleshooting"
+  | "project:general"
+  | "project:context"
+  | "project:automation"
+  | "project:recipes"
+  | "project:commands"
+  | "project:notifications";
+
+export type SettingsScope = "global" | "project";
+
+function scopeForTab(tab: SettingsTab): SettingsScope {
+  return tab.startsWith("project:") ? "project" : "global";
+}
 
 export function SettingsDialog({
   isOpen,
@@ -140,14 +180,23 @@ export function SettingsDialog({
   defaultSubtab,
   defaultSectionId,
   onSettingsChange,
+  projectId,
 }: SettingsDialogProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab ?? rememberedTab);
+  const initialTab = defaultTab ?? rememberedTab;
+  const [activeScope, setActiveScope] = useState<SettingsScope>(scopeForTab(initialTab));
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [visitedTabs, setVisitedTabs] = useState<Set<SettingsTab>>(
-    () => new Set<SettingsTab>([defaultTab ?? rememberedTab])
+    () => new Set<SettingsTab>([initialTab])
   );
 
+  const hasProject = !!projectId;
+
   useEffect(() => {
-    rememberedTab = activeTab;
+    if (activeTab.startsWith("project:")) {
+      rememberedProjectTab = activeTab;
+    } else {
+      rememberedTab = activeTab;
+    }
   }, [activeTab]);
   const markTabVisited = useCallback((tab: SettingsTab) => {
     setVisitedTabs((prev) => {
@@ -177,6 +226,7 @@ export function SettingsDialog({
       if (defaultTab !== activeTab) {
         setActiveTab(defaultTab);
       }
+      setActiveScope(scopeForTab(defaultTab));
       if (defaultSubtab !== undefined) {
         setActiveSubtabs((prev) => ({ ...prev, [defaultTab]: defaultSubtab }));
       }
@@ -283,9 +333,263 @@ export function SettingsDialog({
     twoPaneSplitConfig.defaultRatio,
   ]);
 
+  // ── Project settings state machine ──
+  const { settings: projectSettings, saveSettings: saveProjectSettings, isLoading: projectIsLoading, error: projectError } = useProjectSettings(projectId ?? "");
+  const { projects, updateProject, enableInRepoSettings, disableInRepoSettings } = useProjectStore();
+  const currentProject = projectId ? projects.find((p) => p.id === projectId) : undefined;
+
+  const [projectAutoSaveError, setProjectAutoSaveError] = useState<string | null>(null);
+  const [projectName, setProjectName] = useState("");
+  const [projectEmoji, setProjectEmoji] = useState("🌲");
+  const [projectColor, setProjectColor] = useState<string | undefined>(undefined);
+  const [runCommands, setRunCommands] = useState<RunCommand[]>([]);
+  const [environmentVariables, setEnvironmentVariables] = useState<EnvVar[]>([]);
+  const [excludedPaths, setExcludedPaths] = useState<string[]>([]);
+  const [projectIsInitialized, setProjectIsInitialized] = useState(false);
+  const [projectIconSvg, setProjectIconSvg] = useState<string | undefined>(undefined);
+  const [defaultWorktreeRecipeId, setDefaultWorktreeRecipeId] = useState<string | undefined>(undefined);
+  const [devServerCommand, setDevServerCommand] = useState<string>("");
+  const [devServerLoadTimeout, setDevServerLoadTimeout] = useState<number | undefined>(undefined);
+  const [commandOverrides, setCommandOverrides] = useState<CommandOverride[]>([]);
+  const [copyTreeSettings, setCopyTreeSettings] = useState<CopyTreeSettings>({});
+  const [branchPrefixMode, setBranchPrefixMode] = useState<"none" | "username" | "custom">("none");
+  const [branchPrefixCustom, setBranchPrefixCustom] = useState<string>("");
+  const [worktreePathPattern, setWorktreePathPattern] = useState<string>("");
+  const [terminalShell, setTerminalShell] = useState<string>("");
+  const [terminalShellArgs, setTerminalShellArgs] = useState<string>("");
+  const [terminalDefaultCwd, setTerminalDefaultCwd] = useState<string>("");
+  const [terminalScrollback, setTerminalScrollback] = useState<string>("");
+  const [notificationOverrides, setNotificationOverrides] = useState<Partial<NotificationSettings>>({});
+  const lastSavedSnapshotRef = useRef<ReturnType<typeof createProjectSettingsSnapshot> | null>(null);
+
+  const { recipes, isLoading: recipesLoading } = useRecipeStore();
+  const { worktreeMap, worktrees } = useWorktrees();
+
+  const currentTerminalSettings = useMemo((): ProjectTerminalSettings | undefined => {
+    const result: ProjectTerminalSettings = {};
+    if (terminalShell.trim()) result.shell = terminalShell.trim();
+    if (terminalShellArgs.trim()) result.shellArgs = terminalShellArgs.trim().split(/\s+/);
+    if (terminalDefaultCwd.trim()) result.defaultWorkingDirectory = terminalDefaultCwd.trim();
+    if (terminalScrollback.trim()) {
+      const num = Number(terminalScrollback);
+      if (Number.isFinite(num) && num >= SCROLLBACK_MIN && num <= SCROLLBACK_MAX) {
+        result.scrollbackLines = Math.trunc(num);
+      }
+    }
+    return Object.keys(result).length > 0 ? result : undefined;
+  }, [terminalShell, terminalShellArgs, terminalDefaultCwd, terminalScrollback]);
+
+  const currentProjectSnapshot = useMemo(() => {
+    if (!currentProject) return null;
+    return createProjectSettingsSnapshot(
+      projectName, projectEmoji, devServerCommand, projectIconSvg, excludedPaths,
+      environmentVariables, runCommands, defaultWorktreeRecipeId, commandOverrides,
+      copyTreeSettings, branchPrefixMode, branchPrefixCustom, devServerLoadTimeout,
+      worktreePathPattern, currentTerminalSettings, notificationOverrides, projectColor
+    );
+  }, [
+    projectName, projectEmoji, projectColor, devServerCommand, devServerLoadTimeout,
+    projectIconSvg, excludedPaths, environmentVariables, runCommands, defaultWorktreeRecipeId,
+    commandOverrides, copyTreeSettings, branchPrefixMode, branchPrefixCustom,
+    worktreePathPattern, currentProject, currentTerminalSettings, notificationOverrides,
+  ]);
+
+  useEffect(() => {
+    if (isOpen && !projectIsLoading && projectSettings && currentProject && !projectIsInitialized) {
+      const initialRunCommands = projectSettings.runCommands || [];
+      const envVars = projectSettings.environmentVariables || {};
+      const initialEnvVars = Object.entries(envVars).map(([key, value]) => ({
+        id: `env-${Date.now()}-${Math.random()}`,
+        key,
+        value,
+      }));
+      const initialExcludedPaths = projectSettings.excludedPaths || [];
+      const initialProjectIconSvg = projectSettings.projectIconSvg;
+      const initialDefaultWorktreeRecipeId = projectSettings.defaultWorktreeRecipeId;
+      const initialDevServerCommand = projectSettings.devServerCommand || "";
+      const initialDevServerLoadTimeout = projectSettings.devServerLoadTimeout;
+      const initialCommandOverrides = projectSettings.commandOverrides || [];
+      const initialCopyTreeSettings = projectSettings.copyTreeSettings || {};
+      const initialBranchPrefixMode = projectSettings.branchPrefixMode ?? "none";
+      const initialBranchPrefixCustom = projectSettings.branchPrefixCustom ?? "";
+      const initialWorktreePathPattern = projectSettings.worktreePathPattern ?? "";
+      const initialTerminalSettings = projectSettings.terminalSettings;
+      const initialNotificationOverrides = projectSettings.notificationOverrides ?? {};
+
+      setProjectName(currentProject.name);
+      setProjectEmoji(currentProject.emoji || "🌲");
+      setProjectColor(currentProject.color);
+      setRunCommands(initialRunCommands);
+      setEnvironmentVariables(initialEnvVars);
+      setExcludedPaths(initialExcludedPaths);
+      setProjectIconSvg(initialProjectIconSvg);
+      setDefaultWorktreeRecipeId(initialDefaultWorktreeRecipeId);
+      setDevServerCommand(initialDevServerCommand);
+      setDevServerLoadTimeout(initialDevServerLoadTimeout);
+      setCommandOverrides(initialCommandOverrides);
+      setCopyTreeSettings(initialCopyTreeSettings);
+      setBranchPrefixMode(initialBranchPrefixMode);
+      setBranchPrefixCustom(initialBranchPrefixCustom);
+      setWorktreePathPattern(initialWorktreePathPattern);
+      setTerminalShell(initialTerminalSettings?.shell ?? "");
+      setTerminalShellArgs(initialTerminalSettings?.shellArgs?.join(" ") ?? "");
+      setTerminalDefaultCwd(initialTerminalSettings?.defaultWorkingDirectory ?? "");
+      setTerminalScrollback(
+        initialTerminalSettings?.scrollbackLines !== undefined
+          ? String(initialTerminalSettings.scrollbackLines)
+          : ""
+      );
+      setNotificationOverrides(initialNotificationOverrides);
+
+      lastSavedSnapshotRef.current = createProjectSettingsSnapshot(
+        currentProject.name, currentProject.emoji || "🌲", initialDevServerCommand,
+        initialProjectIconSvg, initialExcludedPaths, initialEnvVars, initialRunCommands,
+        initialDefaultWorktreeRecipeId, initialCommandOverrides, initialCopyTreeSettings,
+        initialBranchPrefixMode, initialBranchPrefixCustom, initialDevServerLoadTimeout,
+        initialWorktreePathPattern, initialTerminalSettings, initialNotificationOverrides,
+        currentProject.color
+      );
+      setProjectIsInitialized(true);
+    }
+    if (!isOpen) {
+      setProjectIsInitialized(false);
+      setEnvironmentVariables([]);
+      setProjectIconSvg(undefined);
+      setDefaultWorktreeRecipeId(undefined);
+      setDevServerCommand("");
+      setDevServerLoadTimeout(undefined);
+      setCommandOverrides([]);
+      setCopyTreeSettings({});
+      setProjectAutoSaveError(null);
+      setProjectColor(undefined);
+      setBranchPrefixMode("none");
+      setBranchPrefixCustom("");
+      setWorktreePathPattern("");
+      setTerminalShell("");
+      setTerminalShellArgs("");
+      setTerminalDefaultCwd("");
+      setTerminalScrollback("");
+      setNotificationOverrides({});
+      lastSavedSnapshotRef.current = null;
+    }
+  }, [projectSettings, isOpen, projectIsInitialized, currentProject, projectIsLoading]);
+
+  useEffect(() => {
+    if (isOpen) {
+      setProjectIsInitialized(false);
+    }
+  }, [projectId, isOpen]);
+
+  const projectPersistRef = useRef<() => Promise<void>>(undefined);
+  projectPersistRef.current = async () => {
+    if (!projectSettings || !currentProject || !projectId) return;
+
+    const sanitizedRunCommands = runCommands
+      .map((cmd) => ({ ...cmd, name: cmd.name.trim(), command: cmd.command.trim() }))
+      .filter((cmd) => cmd.name && cmd.command);
+
+    const envVarRecord: Record<string, string> = {};
+    const seenKeys = new Set<string>();
+    for (const envVar of environmentVariables) {
+      const trimmedKey = envVar.key.trim();
+      if (!trimmedKey || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmedKey) || seenKeys.has(trimmedKey)) continue;
+      seenKeys.add(trimmedKey);
+      envVarRecord[trimmedKey] = envVar.value;
+    }
+
+    const sanitizedPaths = excludedPaths.map((p) => p.trim()).filter(Boolean);
+    const sanitizedCopyTreeSettings: CopyTreeSettings = {};
+    if (copyTreeSettings.maxContextSize !== undefined) sanitizedCopyTreeSettings.maxContextSize = copyTreeSettings.maxContextSize;
+    if (copyTreeSettings.maxFileSize !== undefined) sanitizedCopyTreeSettings.maxFileSize = copyTreeSettings.maxFileSize;
+    if (copyTreeSettings.charLimit !== undefined) sanitizedCopyTreeSettings.charLimit = copyTreeSettings.charLimit;
+    if (copyTreeSettings.strategy) sanitizedCopyTreeSettings.strategy = copyTreeSettings.strategy;
+    if (copyTreeSettings.alwaysInclude && copyTreeSettings.alwaysInclude.length > 0) {
+      sanitizedCopyTreeSettings.alwaysInclude = copyTreeSettings.alwaysInclude.map((p) => p.trim()).filter(Boolean);
+      if (sanitizedCopyTreeSettings.alwaysInclude.length === 0) delete sanitizedCopyTreeSettings.alwaysInclude;
+    }
+    if (copyTreeSettings.alwaysExclude && copyTreeSettings.alwaysExclude.length > 0) {
+      sanitizedCopyTreeSettings.alwaysExclude = copyTreeSettings.alwaysExclude.map((p) => p.trim()).filter(Boolean);
+      if (sanitizedCopyTreeSettings.alwaysExclude.length === 0) delete sanitizedCopyTreeSettings.alwaysExclude;
+    }
+    const hasCopyTreeSettings = Object.keys(sanitizedCopyTreeSettings).length > 0;
+
+    const sanitizedBranchPrefixCustom = branchPrefixCustom.trim();
+    const effectivePrefixMode = branchPrefixMode === "custom" && !sanitizedBranchPrefixCustom ? "none" : branchPrefixMode;
+    const sanitizedWorktreePathPattern = worktreePathPattern.trim() || undefined;
+    if (sanitizedWorktreePathPattern) {
+      const patternValidation = validatePathPattern(sanitizedWorktreePathPattern);
+      if (!patternValidation.valid) return;
+    }
+
+    setProjectAutoSaveError(null);
+    try {
+      const trimmedName = projectName.trim() || currentProject.name;
+      const identityChanged =
+        trimmedName !== currentProject.name ||
+        projectEmoji !== (currentProject.emoji || "🌲") ||
+        projectColor !== currentProject.color;
+      if (identityChanged) {
+        await updateProject(projectId, { name: trimmedName, emoji: projectEmoji, color: projectColor });
+      }
+
+      await saveProjectSettings({
+        ...projectSettings,
+        runCommands: sanitizedRunCommands,
+        environmentVariables: Object.keys(envVarRecord).length > 0 ? envVarRecord : undefined,
+        excludedPaths: sanitizedPaths.length > 0 ? sanitizedPaths : undefined,
+        projectIconSvg,
+        defaultWorktreeRecipeId,
+        devServerCommand: devServerCommand.trim() || undefined,
+        devServerLoadTimeout,
+        commandOverrides: commandOverrides.length > 0 ? commandOverrides : undefined,
+        copyTreeSettings: hasCopyTreeSettings ? sanitizedCopyTreeSettings : undefined,
+        branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
+        branchPrefixCustom: effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
+        worktreePathPattern: sanitizedWorktreePathPattern,
+        terminalSettings: currentTerminalSettings,
+        notificationOverrides: Object.keys(notificationOverrides).length > 0 ? notificationOverrides : undefined,
+        insecureEnvironmentVariables: undefined,
+        unresolvedSecureEnvironmentVariables: undefined,
+      });
+
+      if (currentProjectSnapshot) {
+        lastSavedSnapshotRef.current = currentProjectSnapshot;
+      }
+    } catch (err) {
+      console.error("Failed to auto-save project settings:", err);
+      setProjectAutoSaveError(err instanceof Error ? err.message : "Failed to save settings");
+    }
+  };
+
+  const debouncedProjectSaveRef = useRef(
+    debounce(() => { projectPersistRef.current?.(); }, 500)
+  );
+
+  useEffect(() => {
+    if (!projectIsInitialized || !currentProjectSnapshot || !lastSavedSnapshotRef.current) return;
+    if (areSnapshotsEqual(lastSavedSnapshotRef.current, currentProjectSnapshot)) return;
+    debouncedProjectSaveRef.current();
+  }, [currentProjectSnapshot, projectIsInitialized]);
+
+  useEffect(() => {
+    const save = debouncedProjectSaveRef.current;
+    return () => { save.cancel(); };
+  }, []);
+
+  const handleBeforeClose = useCallback(async () => {
+    await debouncedProjectSaveRef.current.flush();
+    return true;
+  }, []);
+
+  const handleClose = useCallback(async () => {
+    await debouncedProjectSaveRef.current.flush();
+    onClose();
+  }, [onClose]);
+  // ── End project settings state machine ──
+
   const searchResults = useMemo(
-    () => filterSettings(SETTINGS_SEARCH_INDEX, deferredQuery, { modifiedTabs }),
-    [deferredQuery, modifiedTabs]
+    () => filterSettings(SETTINGS_SEARCH_INDEX, deferredQuery, { modifiedTabs, scope: activeScope }),
+    [deferredQuery, modifiedTabs, activeScope]
   );
 
   const cleanSearchQuery = useMemo(() => parseQuery(deferredQuery).cleanQuery, [deferredQuery]);
@@ -376,6 +680,18 @@ export function SettingsDialog({
     [markTabVisited]
   );
 
+  const handleScopeSwitch = useCallback(
+    (scope: SettingsScope) => {
+      if (scope === activeScope) return;
+      setActiveScope(scope);
+      setSearchQuery("");
+      const tab = scope === "project" ? rememberedProjectTab : rememberedTab;
+      markTabVisited(tab);
+      startTransition(() => setActiveTab(tab));
+    },
+    [activeScope, markTabVisited]
+  );
+
   const tablistRef = useRef<HTMLDivElement>(null);
   const { canScrollUp, canScrollDown } = useVerticalScrollShadows(tablistRef);
 
@@ -432,6 +748,12 @@ export function SettingsDialog({
     environment: "Environment Variables",
     privacy: "Privacy & Data",
     troubleshooting: "Troubleshooting",
+    "project:general": "General",
+    "project:context": "Context",
+    "project:automation": "Automation",
+    "project:recipes": "Recipes",
+    "project:commands": "Commands",
+    "project:notifications": "Notifications",
   };
 
   const tabIcons: Record<SettingsTab, React.ReactNode> = {
@@ -451,12 +773,19 @@ export function SettingsDialog({
     environment: <KeyRound className="w-5 h-5 text-text-secondary" />,
     privacy: <Shield className="w-5 h-5 text-text-secondary" />,
     troubleshooting: <LifeBuoy className="w-5 h-5 text-text-secondary" />,
+    "project:general": <SettingsIcon className="w-5 h-5 text-text-secondary" />,
+    "project:context": <FileCode className="w-5 h-5 text-text-secondary" />,
+    "project:automation": <Zap className="w-5 h-5 text-text-secondary" />,
+    "project:recipes": <CookingPot className="w-5 h-5 text-text-secondary" />,
+    "project:commands": <Command className="w-5 h-5 text-text-secondary" />,
+    "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,
   };
 
   return (
     <AppDialog
       isOpen={isOpen}
-      onClose={onClose}
+      onClose={handleClose}
+      onBeforeClose={handleBeforeClose}
       size="4xl"
       maxHeight="h-[75vh]"
       className="settings-shell min-h-[500px] max-h-[800px]"
@@ -464,6 +793,35 @@ export function SettingsDialog({
       <div className="flex h-full overflow-hidden">
         <div className="settings-sidebar w-48 border-r border-canopy-border p-3 flex flex-col shrink-0">
           <h2 className="text-sm font-semibold text-canopy-text mb-2 px-2">Settings</h2>
+
+          {hasProject && (
+            <div className="flex gap-1 mb-2 px-1">
+              <button
+                type="button"
+                onClick={() => handleScopeSwitch("global")}
+                className={cn(
+                  "flex-1 text-xs py-1 px-2 rounded-[var(--radius-md)] font-medium transition-colors",
+                  activeScope === "global"
+                    ? "bg-canopy-accent/15 text-canopy-accent"
+                    : "text-text-secondary hover:text-canopy-text hover:bg-overlay-subtle"
+                )}
+              >
+                Global
+              </button>
+              <button
+                type="button"
+                onClick={() => handleScopeSwitch("project")}
+                className={cn(
+                  "flex-1 text-xs py-1 px-2 rounded-[var(--radius-md)] font-medium transition-colors",
+                  activeScope === "project"
+                    ? "bg-canopy-accent/15 text-canopy-accent"
+                    : "text-text-secondary hover:text-canopy-text hover:bg-overlay-subtle"
+                )}
+              >
+                Project
+              </button>
+            </div>
+          )}
 
           <div
             className={cn(
@@ -524,166 +882,45 @@ export function SettingsDialog({
               onKeyDown={handleTablistKeyDown}
               className="h-full overflow-y-auto space-y-3"
             >
-              <NavGroup label="General">
-                <NavItem
-                  tab="general"
-                  icon={<Settings2 className="w-4 h-4" />}
-                  label="General"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.general}
-                  modified={modifiedTabs.has("general")}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="terminalAppearance"
-                  icon={<SquareTerminal className="w-4 h-4" />}
-                  label="Appearance"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.terminalAppearance}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="keyboard"
-                  icon={<Keyboard className="w-4 h-4" />}
-                  label="Keyboard"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.keyboard}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="notifications"
-                  icon={<Bell className="w-4 h-4" />}
-                  label="Notifications"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.notifications}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="privacy"
-                  icon={<Shield className="w-4 h-4" />}
-                  label="Privacy & Data"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.privacy}
-                  onSelect={handleNavSelect}
-                />
-              </NavGroup>
-
-              <NavGroup label="Terminal">
-                <NavItem
-                  tab="terminal"
-                  icon={<LayoutGrid className="w-4 h-4" />}
-                  label="Panel Grid"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.terminal}
-                  modified={modifiedTabs.has("terminal")}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="worktree"
-                  icon={<WorktreeIcon className="w-4 h-4" />}
-                  label="Worktree"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.worktree}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="toolbar"
-                  icon={<SettingsIcon className="w-4 h-4" />}
-                  label="Toolbar"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.toolbar}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="environment"
-                  icon={<KeyRound className="w-4 h-4" />}
-                  label="Environment"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.environment}
-                  onSelect={handleNavSelect}
-                />
-              </NavGroup>
-
-              <NavGroup label="Integrations">
-                <NavItem
-                  tab="agents"
-                  icon={<CanopyAgentIcon className="w-4 h-4" />}
-                  label="CLI Agents"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.agents}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="github"
-                  icon={<Github className="w-4 h-4" />}
-                  label="GitHub"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.github}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="integrations"
-                  icon={<Blocks className="w-4 h-4" />}
-                  label="Integrations"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.integrations}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="portal"
-                  icon={<PanelRight className="w-4 h-4" />}
-                  label="Portal"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.portal}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="mcp"
-                  icon={<Plug className="w-4 h-4" />}
-                  label="MCP Server"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.mcp}
-                  onSelect={handleNavSelect}
-                />
-              </NavGroup>
-
-              <NavGroup label="Input">
-                <NavItem
-                  tab="voice"
-                  icon={<Mic className="w-4 h-4" />}
-                  label="Voice Input"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.voice}
-                  onSelect={handleNavSelect}
-                />
-              </NavGroup>
-
-              <NavGroup label="Support">
-                <NavItem
-                  tab="troubleshooting"
-                  icon={<LifeBuoy className="w-4 h-4" />}
-                  label="Troubleshooting"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.troubleshooting}
-                  onSelect={handleNavSelect}
-                />
-              </NavGroup>
+              {activeScope === "global" ? (
+                <>
+                  <NavGroup label="General">
+                    <NavItem tab="general" icon={<Settings2 className="w-4 h-4" />} label="General" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.general} modified={modifiedTabs.has("general")} onSelect={handleNavSelect} />
+                    <NavItem tab="terminalAppearance" icon={<SquareTerminal className="w-4 h-4" />} label="Appearance" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.terminalAppearance} onSelect={handleNavSelect} />
+                    <NavItem tab="keyboard" icon={<Keyboard className="w-4 h-4" />} label="Keyboard" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.keyboard} onSelect={handleNavSelect} />
+                    <NavItem tab="notifications" icon={<Bell className="w-4 h-4" />} label="Notifications" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.notifications} onSelect={handleNavSelect} />
+                    <NavItem tab="privacy" icon={<Shield className="w-4 h-4" />} label="Privacy & Data" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.privacy} onSelect={handleNavSelect} />
+                  </NavGroup>
+                  <NavGroup label="Terminal">
+                    <NavItem tab="terminal" icon={<LayoutGrid className="w-4 h-4" />} label="Panel Grid" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.terminal} modified={modifiedTabs.has("terminal")} onSelect={handleNavSelect} />
+                    <NavItem tab="worktree" icon={<WorktreeIcon className="w-4 h-4" />} label="Worktree" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.worktree} onSelect={handleNavSelect} />
+                    <NavItem tab="toolbar" icon={<SettingsIcon className="w-4 h-4" />} label="Toolbar" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.toolbar} onSelect={handleNavSelect} />
+                    <NavItem tab="environment" icon={<KeyRound className="w-4 h-4" />} label="Environment" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.environment} onSelect={handleNavSelect} />
+                  </NavGroup>
+                  <NavGroup label="Integrations">
+                    <NavItem tab="agents" icon={<CanopyAgentIcon className="w-4 h-4" />} label="CLI Agents" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.agents} onSelect={handleNavSelect} />
+                    <NavItem tab="github" icon={<Github className="w-4 h-4" />} label="GitHub" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.github} onSelect={handleNavSelect} />
+                    <NavItem tab="integrations" icon={<Blocks className="w-4 h-4" />} label="Integrations" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.integrations} onSelect={handleNavSelect} />
+                    <NavItem tab="portal" icon={<PanelRight className="w-4 h-4" />} label="Portal" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.portal} onSelect={handleNavSelect} />
+                    <NavItem tab="mcp" icon={<Plug className="w-4 h-4" />} label="MCP Server" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.mcp} onSelect={handleNavSelect} />
+                  </NavGroup>
+                  <NavGroup label="Input">
+                    <NavItem tab="voice" icon={<Mic className="w-4 h-4" />} label="Voice Input" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.voice} onSelect={handleNavSelect} />
+                  </NavGroup>
+                  <NavGroup label="Support">
+                    <NavItem tab="troubleshooting" icon={<LifeBuoy className="w-4 h-4" />} label="Troubleshooting" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts.troubleshooting} onSelect={handleNavSelect} />
+                  </NavGroup>
+                </>
+              ) : (
+                <NavGroup label="Project">
+                  <NavItem tab="project:general" icon={<SettingsIcon className="w-4 h-4" />} label="General" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts["project:general"]} onSelect={handleNavSelect} />
+                  <NavItem tab="project:context" icon={<FileCode className="w-4 h-4" />} label="Context" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts["project:context"]} onSelect={handleNavSelect} />
+                  <NavItem tab="project:automation" icon={<Zap className="w-4 h-4" />} label="Automation" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts["project:automation"]} onSelect={handleNavSelect} />
+                  <NavItem tab="project:recipes" icon={<CookingPot className="w-4 h-4" />} label="Recipes" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts["project:recipes"]} onSelect={handleNavSelect} />
+                  <NavItem tab="project:commands" icon={<Command className="w-4 h-4" />} label="Commands" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts["project:commands"]} onSelect={handleNavSelect} />
+                  <NavItem tab="project:notifications" icon={<Bell className="w-4 h-4" />} label="Notifications" activeTab={activeTab} isSearching={isSearching} matchCount={matchCounts["project:notifications"]} onSelect={handleNavSelect} />
+                </NavGroup>
+              )}
             </div>
             {canScrollDown && (
               <div
@@ -714,7 +951,7 @@ export function SettingsDialog({
               )}
             </h3>
             <button
-              onClick={onClose}
+              onClick={handleClose}
               className="text-canopy-text/60 hover:text-canopy-text transition-colors p-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
               aria-label="Close settings"
             >
@@ -986,6 +1223,169 @@ export function SettingsDialog({
                     </Suspense>
                   )}
                 </div>
+
+                {/* Project settings panels */}
+                {activeScope === "project" && projectId && (
+                  <>
+                    {projectIsLoading && (
+                      <div className="text-sm text-canopy-text/60 text-center py-8">
+                        Loading settings...
+                      </div>
+                    )}
+                    {projectError && (
+                      <div className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4" role="alert">
+                        Failed to load settings: {projectError}
+                      </div>
+                    )}
+                    {projectAutoSaveError && (
+                      <div className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4" role="alert">
+                        {projectAutoSaveError}
+                      </div>
+                    )}
+                    {!projectIsLoading && !projectError && (
+                      <>
+                        <div
+                          role="tabpanel"
+                          id="settings-panel-project:general"
+                          aria-labelledby="settings-tab-project:general"
+                          tabIndex={0}
+                          className={activeTab === "project:general" ? "" : "hidden"}
+                        >
+                          {visitedTabs.has("project:general") && (
+                            <ProjectGeneralTab
+                              currentProject={currentProject}
+                              name={projectName}
+                              onNameChange={setProjectName}
+                              emoji={projectEmoji}
+                              onEmojiChange={setProjectEmoji}
+                              color={projectColor}
+                              onColorChange={setProjectColor}
+                              devServerCommand={devServerCommand}
+                              onDevServerCommandChange={setDevServerCommand}
+                              devServerLoadTimeout={devServerLoadTimeout}
+                              onDevServerLoadTimeoutChange={setDevServerLoadTimeout}
+                              projectIconSvg={projectIconSvg}
+                              onProjectIconSvgChange={setProjectIconSvg}
+                              enableInRepoSettings={enableInRepoSettings}
+                              disableInRepoSettings={disableInRepoSettings}
+                              projectId={projectId}
+                              isOpen={isOpen}
+                            />
+                          )}
+                        </div>
+
+                        <div
+                          role="tabpanel"
+                          id="settings-panel-project:context"
+                          aria-labelledby="settings-tab-project:context"
+                          tabIndex={0}
+                          className={activeTab === "project:context" ? "" : "hidden"}
+                        >
+                          {visitedTabs.has("project:context") && (
+                            <ProjectContextTab
+                              excludedPaths={excludedPaths}
+                              onExcludedPathsChange={setExcludedPaths}
+                              copyTreeSettings={copyTreeSettings}
+                              onCopyTreeSettingsChange={setCopyTreeSettings}
+                              environmentVariables={environmentVariables}
+                              onEnvironmentVariablesChange={setEnvironmentVariables}
+                              worktrees={worktrees}
+                              settings={projectSettings}
+                              isOpen={isOpen}
+                            />
+                          )}
+                        </div>
+
+                        <div
+                          role="tabpanel"
+                          id="settings-panel-project:automation"
+                          aria-labelledby="settings-tab-project:automation"
+                          tabIndex={0}
+                          className={activeTab === "project:automation" ? "" : "hidden"}
+                        >
+                          {visitedTabs.has("project:automation") && (
+                            <ProjectAutomationTab
+                              currentProject={currentProject}
+                              runCommands={runCommands}
+                              onRunCommandsChange={setRunCommands}
+                              defaultWorktreeRecipeId={defaultWorktreeRecipeId}
+                              onDefaultWorktreeRecipeIdChange={setDefaultWorktreeRecipeId}
+                              branchPrefixMode={branchPrefixMode}
+                              onBranchPrefixModeChange={setBranchPrefixMode}
+                              branchPrefixCustom={branchPrefixCustom}
+                              onBranchPrefixCustomChange={setBranchPrefixCustom}
+                              worktreePathPattern={worktreePathPattern}
+                              onWorktreePathPatternChange={setWorktreePathPattern}
+                              terminalShell={terminalShell}
+                              onTerminalShellChange={setTerminalShell}
+                              terminalShellArgs={terminalShellArgs}
+                              onTerminalShellArgsChange={setTerminalShellArgs}
+                              terminalDefaultCwd={terminalDefaultCwd}
+                              onTerminalDefaultCwdChange={setTerminalDefaultCwd}
+                              terminalScrollback={terminalScrollback}
+                              onTerminalScrollbackChange={setTerminalScrollback}
+                              recipes={recipes}
+                              recipesLoading={recipesLoading}
+                              onNavigateToRecipes={() => {
+                                markTabVisited("project:recipes");
+                                startTransition(() => setActiveTab("project:recipes"));
+                              }}
+                            />
+                          )}
+                        </div>
+
+                        <div
+                          role="tabpanel"
+                          id="settings-panel-project:recipes"
+                          aria-labelledby="settings-tab-project:recipes"
+                          tabIndex={0}
+                          className={activeTab === "project:recipes" ? "" : "hidden"}
+                        >
+                          {visitedTabs.has("project:recipes") && (
+                            <ProjectRecipesTab
+                              projectId={projectId}
+                              defaultWorktreeRecipeId={defaultWorktreeRecipeId}
+                              onDefaultWorktreeRecipeIdChange={setDefaultWorktreeRecipeId}
+                              worktreeMap={worktreeMap}
+                              isOpen={isOpen}
+                            />
+                          )}
+                        </div>
+
+                        <div
+                          role="tabpanel"
+                          id="settings-panel-project:commands"
+                          aria-labelledby="settings-tab-project:commands"
+                          tabIndex={0}
+                          className={activeTab === "project:commands" ? "" : "hidden"}
+                        >
+                          {visitedTabs.has("project:commands") && (
+                            <CommandOverridesTab
+                              projectId={projectId}
+                              overrides={commandOverrides}
+                              onChange={setCommandOverrides}
+                            />
+                          )}
+                        </div>
+
+                        <div
+                          role="tabpanel"
+                          id="settings-panel-project:notifications"
+                          aria-labelledby="settings-tab-project:notifications"
+                          tabIndex={0}
+                          className={activeTab === "project:notifications" ? "" : "hidden"}
+                        >
+                          {visitedTabs.has("project:notifications") && (
+                            <ProjectNotificationsTab
+                              overrides={notificationOverrides}
+                              onChange={setNotificationOverrides}
+                            />
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
               </>
             )}
           </div>
