@@ -67,9 +67,7 @@ vi.mock("../../../services/DiagnosticsCollector.js", () => ({
 import { registerDiagnosticsHandlers } from "../diagnostics.js";
 
 function getHandlerFn(channelName: string): (...args: unknown[]) => unknown {
-  const call = ipcMainMock.handle.mock.calls.find(
-    (c: unknown[]) => c[0] === channelName
-  );
+  const call = ipcMainMock.handle.mock.calls.find((c: unknown[]) => c[0] === channelName);
   if (!call) throw new Error(`No handler registered for ${channelName}`);
   return call[1] as (...args: unknown[]) => unknown;
 }

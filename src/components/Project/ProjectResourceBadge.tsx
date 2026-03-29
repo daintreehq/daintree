@@ -146,9 +146,7 @@ function ProjectBreakdown({
   projects: Array<{ id: string; name: string }>;
   projectStats: Record<string, BulkProjectStatsEntry>;
 }) {
-  const entries = projects
-    .map((p) => ({ ...p, stats: projectStats[p.id] }))
-    .filter((p) => p.stats);
+  const entries = projects.map((p) => ({ ...p, stats: projectStats[p.id] })).filter((p) => p.stats);
 
   if (entries.length === 0) return null;
 
@@ -230,10 +228,7 @@ export function ProjectResourceBadge() {
 
   const memoryState = getMemoryState(stats.totalMemoryMB);
   const trend = getTrendDirection(samplesRef.current);
-  const projectIdsKey = useMemo(
-    () => stats.projects.map((p) => p.id).join(","),
-    [stats.projects]
-  );
+  const projectIdsKey = useMemo(() => stats.projects.map((p) => p.id).join(","), [stats.projects]);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -343,9 +338,7 @@ export function ProjectResourceBadge() {
           <div
             className={`text-[10px] font-mono tabular-nums tracking-tight shrink-0 ${STATE_TEXT_CLASSES[memoryState]}`}
           >
-            {trend !== "stable" && (
-              <span className="mr-0.5">{TREND_ARROWS[trend]}</span>
-            )}
+            {trend !== "stable" && <span className="mr-0.5">{TREND_ARROWS[trend]}</span>}
             {formatMemory(stats.totalMemoryMB)}
           </div>
         </button>
@@ -356,10 +349,7 @@ export function ProjectResourceBadge() {
             <>
               <ProcessTable metrics={popoverData.processMetrics} />
               <HeapBar heapStats={popoverData.heapStats} />
-              <ProjectBreakdown
-                projects={stats.projects}
-                projectStats={popoverData.projectStats}
-              />
+              <ProjectBreakdown projects={stats.projects} projectStats={popoverData.projectStats} />
               <DiagnosticsSection
                 diagnosticsInfo={popoverData.diagnosticsInfo}
                 trend={trend}
