@@ -71,6 +71,9 @@ vi.mock("../../ipc/channels.js", () => ({
 }));
 
 import { setupWebviewCSP } from "../protocols.js";
+import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
+
+const mockedGetWebviewDialogService = vi.mocked(getWebviewDialogService);
 
 function createMockWebContents(type: "webview" | "window" | "browserView"): MockWebContents {
   const eventHandlers = new Map<string, ((...args: unknown[]) => void)[]>();
@@ -247,6 +250,101 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
         )
       );
       warnSpy.mockRestore();
+    });
+  });
+
+  describe("js-dialog routing via BrowserWindow.fromWebContents", () => {
+    it("sends dialog request to the parent window resolved from hostWebContents", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(() => "panel-1"),
+        getPanelId: vi.fn(),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const jsDialogHandlers = getEventHandlers(contents, "js-dialog");
+      expect(jsDialogHandlers.length).toBe(1);
+
+      const mockEvent = { preventDefault: vi.fn() };
+      const mockCallback = vi.fn();
+      jsDialogHandlers[0](
+        mockEvent,
+        "http://localhost:3000",
+        "Test message",
+        "confirm",
+        "",
+        mockCallback
+      );
+
+      expect(mockSend).toHaveBeenCalledWith(
+        "webview:dialog-request",
+        expect.objectContaining({
+          panelId: "panel-1",
+          type: "confirm",
+          message: "Test message",
+        })
+      );
+    });
+
+    it("resolves dialog when no parent window is found", () => {
+      mockFromWebContents.mockReturnValue(null);
+      const mockResolveDialog = vi.fn();
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(() => "panel-1"),
+        getPanelId: vi.fn(),
+        resolveDialog: mockResolveDialog,
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      simulateWebContentsCreated(contents);
+
+      const jsDialogHandlers = getEventHandlers(contents, "js-dialog");
+      const mockEvent = { preventDefault: vi.fn() };
+      const mockCallback = vi.fn();
+      jsDialogHandlers[0](mockEvent, "http://localhost:3000", "Alert", "alert", "", mockCallback);
+
+      expect(mockResolveDialog).toHaveBeenCalledWith(expect.any(String), true);
+    });
+
+    it("sends find shortcut to the parent window resolved from hostWebContents", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-1"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
+      expect(beforeInputHandlers.length).toBe(1);
+
+      const mockEvent = { preventDefault: vi.fn() };
+      beforeInputHandlers[0](mockEvent, {
+        type: "keyDown",
+        key: "f",
+        meta: true,
+        control: false,
+        alt: false,
+        shift: false,
+      });
+
+      expect(mockSend).toHaveBeenCalledWith("webview:find-shortcut", {
+        panelId: "panel-1",
+        shortcut: "find",
+      });
     });
   });
 

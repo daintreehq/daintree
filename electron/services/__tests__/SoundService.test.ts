@@ -167,6 +167,18 @@ describe("SoundService", () => {
     });
   });
 
+  it("broadcasts sound:trigger with volume via playDampened when windows are available", () => {
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+
+    soundService.play("error");
+
+    expect(mockBroadcastToRenderer).toHaveBeenCalledWith("sound:trigger", {
+      soundFile: "error.wav",
+      volume: 1,
+    });
+    expect(mockPlaySound).not.toHaveBeenCalled();
+  });
+
   // -- Path resolution --
 
   it("resolves sounds directory from app path in dev mode", () => {

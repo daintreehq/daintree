@@ -210,10 +210,7 @@ export function setupWebviewCSP(): void {
             return;
           }
 
-          const hostContents =
-            (contents as unknown as { hostWebContents?: Electron.WebContents }).hostWebContents ??
-            contents;
-          const parentWindow = BrowserWindow.fromWebContents(hostContents);
+          const parentWindow = BrowserWindow.fromWebContents(contents.hostWebContents ?? contents);
           if (parentWindow && !parentWindow.isDestroyed()) {
             parentWindow.webContents.send("webview:dialog-request", {
               dialogId,
@@ -251,10 +248,9 @@ export function setupWebviewCSP(): void {
         if (shortcut !== "close") {
           event.preventDefault();
         }
-        const findHostContents =
-          (contents as unknown as { hostWebContents?: Electron.WebContents }).hostWebContents ??
-          contents;
-        const findParentWindow = BrowserWindow.fromWebContents(findHostContents);
+        const findParentWindow = BrowserWindow.fromWebContents(
+          contents.hostWebContents ?? contents
+        );
         if (findParentWindow && !findParentWindow.isDestroyed()) {
           findParentWindow.webContents.send(CHANNELS.WEBVIEW_FIND_SHORTCUT, { panelId, shortcut });
         }
