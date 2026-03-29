@@ -23,3 +23,17 @@ export function handleDockInteractOutside(
     return;
   }
 }
+
+/**
+ * Prevents Radix Popover from dismissing on Escape when focus is inside the
+ * dock panel's portal container (terminal or hybrid input editor). Allows
+ * Escape-to-dismiss when focus is on header buttons or other non-terminal elements.
+ */
+export function handleDockEscapeKeyDown(
+  event: KeyboardEvent & { preventDefault: () => void },
+  portalContainer: HTMLElement | null
+) {
+  if (portalContainer?.contains(document.activeElement)) {
+    event.preventDefault();
+  }
+}

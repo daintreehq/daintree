@@ -41,7 +41,7 @@ import {
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import type { TabGroup } from "@/types";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
-import { handleDockInteractOutside } from "./dockPopoverGuard";
+import { handleDockInteractOutside, handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { usePreferencesStore } from "@/store";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -476,6 +476,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         sideOffset={10}
         collisionPadding={collisionPadding}
         onInteractOutside={(e) => handleDockInteractOutside(e, portalContainer)}
+        onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainer)}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           const focusTarget = getTerminalFocusTarget({
