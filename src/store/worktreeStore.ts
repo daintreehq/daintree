@@ -440,7 +440,8 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     set({ bulkCreateDialog: { isOpen: true, selectedIssues } });
   },
 
-  closeBulkCreateDialog: () => set({ bulkCreateDialog: { isOpen: false, selectedIssues: [] } }),
+  closeBulkCreateDialog: () =>
+    set((s) => ({ bulkCreateDialog: { ...s.bulkCreateDialog, isOpen: false } })),
 
   openQuickCreate: (context) => {
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {

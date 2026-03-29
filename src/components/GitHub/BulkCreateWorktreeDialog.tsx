@@ -1,4 +1,4 @@
-import { useCallback, useReducer, useRef, useMemo, useEffect } from "react";
+import { useCallback, useReducer, useRef, useMemo, useEffect, useLayoutEffect } from "react";
 import PQueue from "p-queue";
 import { Check, AlertTriangle, UserPlus, Play, ChevronsUpDown, RotateCcw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
@@ -315,6 +315,7 @@ export function BulkCreateWorktreeDialog({
   const queueRef = useRef<PQueue | null>(null);
   const runIdRef = useRef(0);
   const isExecutingRef = useRef(false);
+  const prevIsOpenRef = useRef(false);
 
   // Shared preferences (same store as single create dialog)
   const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
@@ -401,6 +402,14 @@ export function BulkCreateWorktreeDialog({
       }
     >()
   );
+
+  useLayoutEffect(() => {
+    if (isOpen && !prevIsOpenRef.current) {
+      dispatchProgress({ type: "RESET" });
+      batchTrackingRef.current = new Map();
+    }
+    prevIsOpenRef.current = isOpen;
+  }, [isOpen]);
 
   const runBatch = useCallback(
     async (toCreate: PlannedWorktree[]) => {
@@ -773,14 +782,10 @@ export function BulkCreateWorktreeDialog({
       queueRef.current = null;
     }
     isExecutingRef.current = false;
-    dispatchProgress({ type: "RESET" });
-    batchTrackingRef.current = new Map();
     onClose();
   }, [isExecuting, onClose]);
 
   const handleDone = useCallback(() => {
-    dispatchProgress({ type: "RESET" });
-    batchTrackingRef.current = new Map();
     onComplete();
     onClose();
   }, [onComplete, onClose]);

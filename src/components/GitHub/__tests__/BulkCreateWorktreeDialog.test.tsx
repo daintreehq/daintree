@@ -500,7 +500,7 @@ describe("BulkCreateWorktreeDialog", () => {
   it("second run after Done does not show 0 of N created", async () => {
     const onComplete = vi.fn();
     const onClose = vi.fn();
-    render(
+    const { rerender } = render(
       <BulkCreateWorktreeDialog {...defaultProps} onComplete={onComplete} onClose={onClose} />
     );
 
@@ -511,15 +511,29 @@ describe("BulkCreateWorktreeDialog", () => {
     await advanceTimersGradually(5000);
     expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
 
-    // Click Done to reset the dialog
+    // Click Done — state preserved during close
     await act(async () => {
       screen.getByTestId("bulk-create-done-button").click();
     });
 
-    // Second run: create again (component stays mounted, isOpen still true via mock)
-    // Reset mock call count for clarity
+    // Simulate dialog close/reopen cycle (useLayoutEffect resets on false→true)
+    await act(async () => {
+      rerender(
+        <BulkCreateWorktreeDialog
+          {...defaultProps}
+          isOpen={false}
+          onComplete={onComplete}
+          onClose={onClose}
+        />
+      );
+    });
     mockWorktreeCreate.mockClear();
     setupWorktreeCreateMocks();
+    await act(async () => {
+      rerender(
+        <BulkCreateWorktreeDialog {...defaultProps} onComplete={onComplete} onClose={onClose} />
+      );
+    });
 
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
@@ -540,7 +554,8 @@ describe("BulkCreateWorktreeDialog", () => {
         })
     );
 
-    render(<BulkCreateWorktreeDialog {...defaultProps} />);
+    const onClose = vi.fn();
+    const { rerender } = render(<BulkCreateWorktreeDialog {...defaultProps} onClose={onClose} />);
 
     // Start the batch
     await act(async () => {
@@ -555,9 +570,18 @@ describe("BulkCreateWorktreeDialog", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
+    // Simulate dialog close/reopen cycle (useLayoutEffect resets on false→true)
+    await act(async () => {
+      rerender(<BulkCreateWorktreeDialog {...defaultProps} isOpen={false} onClose={onClose} />);
+    });
+
     // Reset mocks for the second run
     mockWorktreeCreate.mockClear();
     setupWorktreeCreateMocks();
+
+    await act(async () => {
+      rerender(<BulkCreateWorktreeDialog {...defaultProps} onClose={onClose} />);
+    });
 
     // Create should work again — guard was released by handleClose
     await act(async () => {
@@ -870,7 +894,7 @@ describe("BulkCreateWorktreeDialog", () => {
       onComplete,
       onClose,
     };
-    render(<BulkCreateWorktreeDialog {...props} />);
+    const { rerender } = render(<BulkCreateWorktreeDialog {...props} />);
 
     // First run with recipe
     await act(async () => {
@@ -884,6 +908,11 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-done-button").click();
     });
 
+    // Simulate dialog close/reopen cycle (useLayoutEffect resets on false→true)
+    await act(async () => {
+      rerender(<BulkCreateWorktreeDialog {...props} isOpen={false} />);
+    });
+
     // Second run — crash terminal from first run to prove tracking was reset
     mockTerminals = [
       { id: "t-run1", exitCode: 1 },
@@ -895,6 +924,10 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     mockWorktreeCreate.mockClear();
     setupWorktreeCreateMocks();
+
+    await act(async () => {
+      rerender(<BulkCreateWorktreeDialog {...props} isOpen={true} />);
+    });
 
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
@@ -944,5 +977,30 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     expect(screen.queryByTestId("bulk-create-done-button")).toBeNull();
+  });
+
+  it("does not flash empty state when Done is clicked", async () => {
+    const onComplete = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <BulkCreateWorktreeDialog {...defaultProps} onComplete={onComplete} onClose={onClose} />
+    );
+
+    // Complete a full batch run
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+
+    // Click Done — state should NOT reset while dialog is still mounted
+    await act(async () => {
+      screen.getByTestId("bulk-create-done-button").click();
+    });
+
+    // The completion text should still be visible (no RESET before close)
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+    expect(onComplete).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
   });
 });
