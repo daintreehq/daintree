@@ -23,6 +23,7 @@ import {
   Link,
   Lock,
   Maximize2,
+  NotebookPen,
   Minimize2,
   OctagonX,
   Pencil,
@@ -81,6 +82,45 @@ export function extractUrlAtPoint(
   return null;
 }
 
+export interface CreateNoteArgs {
+  title: string;
+  content: string;
+  scope: "worktree" | "project";
+  worktreeId?: string;
+}
+
+export function buildCreateNoteArgs(
+  agentName: string,
+  worktreeName: string | undefined,
+  selectionText: string,
+  worktreeId: string | undefined
+): CreateNoteArgs {
+  const timestamp = new Date().toLocaleString();
+  const title = `Note from ${agentName} — ${timestamp}`;
+
+  const lines: string[] = [];
+  lines.push(`**Agent:** ${agentName}`);
+  if (worktreeName) lines.push(`**Worktree:** ${worktreeName}`);
+  lines.push(`**Time:** ${timestamp}`);
+
+  if (selectionText) {
+    lines.push("");
+    lines.push(
+      selectionText
+        .split("\n")
+        .map((line) => `> ${line}`)
+        .join("\n")
+    );
+  }
+
+  return {
+    title,
+    content: lines.join("\n"),
+    scope: worktreeId ? "worktree" : "project",
+    worktreeId,
+  };
+}
+
 interface TerminalContextMenuProps {
   terminalId: string;
   children: React.ReactNode;
@@ -117,6 +157,7 @@ export function TerminalContextMenu({
   const isWatched = useTerminalStore((state) => state.watchedPanels.has(terminalId));
 
   const [hasSelection, setHasSelection] = useState(false);
+  const [selectionText, setSelectionText] = useState("");
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
 
   const handleContextMenu = useCallback(
@@ -127,7 +168,9 @@ export function TerminalContextMenu({
         setHoveredUrl(null);
         return;
       }
-      setHasSelection(!!managed.terminal.getSelection());
+      const selection = managed.terminal.getSelection();
+      setHasSelection(!!selection);
+      setSelectionText(selection);
       setHoveredUrl(extractUrlAtPoint(managed.terminal, e.clientX, e.clientY));
     },
     [terminalId]
@@ -314,9 +357,32 @@ export function TerminalContextMenu({
             );
           }
           break;
+        case "create-note": {
+          const agentConfig = terminal.agentId ? getAgentConfig(terminal.agentId) : null;
+          const agentName = agentConfig?.name ?? terminal.agentId ?? "Agent";
+          const currentWorktree = worktrees.find((wt) => wt.id === terminal.worktreeId);
+          const worktreeName = currentWorktree
+            ? (currentWorktree.isMainWorktree
+                ? currentWorktree.name
+                : currentWorktree.branch || currentWorktree.name
+              ).trim() || undefined
+            : undefined;
+          const noteArgs = buildCreateNoteArgs(
+            agentName,
+            worktreeName,
+            selectionText,
+            terminal.worktreeId
+          );
+          void actionService.dispatch(
+            "notes.create",
+            { ...noteArgs, openPanel: true },
+            { source: "context-menu" }
+          );
+          break;
+        }
       }
     },
-    [terminal, terminalId]
+    [terminal, terminalId, selectionText, worktrees]
   );
 
   if (!terminal) {
@@ -648,6 +714,12 @@ export function TerminalContextMenu({
             )}
             {isWatched ? "Cancel Watch" : "Watch Terminal"}
             <ContextMenuShortcut>{isMac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
+          </ContextMenuItem>
+        )}
+        {terminal.agentId && (
+          <ContextMenuItem onSelect={() => handleAction("create-note")}>
+            <NotebookPen className={ICON_CLASS} aria-hidden="true" />
+            Create Note
           </ContextMenuItem>
         )}
         {showConvertTo && (
