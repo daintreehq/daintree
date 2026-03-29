@@ -953,7 +953,10 @@ export class ActivityMonitor {
     }
     try {
       return this.processStateValidator.getDescendantsCpuUsage();
-    } catch {
+    } catch (error) {
+      if (process.env.CANOPY_VERBOSE) {
+        console.warn("[ActivityMonitor] CPU usage query failed:", error);
+      }
       return null;
     }
   }

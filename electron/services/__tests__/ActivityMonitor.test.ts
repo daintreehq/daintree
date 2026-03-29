@@ -3452,14 +3452,12 @@ describe("ActivityMonitor", () => {
       vi.advanceTimersByTime(200);
       expect(monitor.getState()).toBe("busy");
 
+      const callCountBeforeDispose = onStateChange.mock.calls.length;
       monitor.dispose();
 
       // After dispose, no further state changes should occur
       vi.advanceTimersByTime(5000);
-      const postDisposeCalls = onStateChange.mock.calls.filter(
-        (c: unknown[], idx: number) => idx > onStateChange.mock.calls.length - 1
-      );
-      expect(postDisposeCalls).toHaveLength(0);
+      expect(onStateChange.mock.calls.length).toBe(callCountBeforeDispose);
     });
   });
 });
