@@ -44,6 +44,7 @@ interface RecipeEditorProps {
   recipe?: TerminalRecipe;
   initialTerminals?: RecipeTerminal[];
   worktreeId?: string;
+  defaultScope?: "global" | "project";
   isOpen: boolean;
   onClose: () => void;
   onSave?: (recipe: TerminalRecipe) => void;
@@ -71,6 +72,7 @@ export function RecipeEditor({
   recipe,
   initialTerminals,
   worktreeId,
+  defaultScope,
   isOpen,
   onClose,
   onSave,
@@ -85,6 +87,7 @@ export function RecipeEditor({
   ]);
   const [showInEmptyState, setShowInEmptyState] = useState(false);
   const [autoAssign, setAutoAssign] = useState<"always" | "never" | "prompt">("always");
+  const [scope, setScope] = useState<"global" | "project">("project");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const recipeNameInputRef = useRef<HTMLInputElement>(null);
@@ -100,6 +103,7 @@ export function RecipeEditor({
       setTerminals(nextTerminals);
       setShowInEmptyState(nextShowInEmptyState);
       setAutoAssign(nextAutoAssign);
+      setScope(recipe.projectId === undefined ? "global" : "project");
       initialStateRef.current = serializeEditorState(
         recipe.name,
         nextTerminals,
@@ -112,6 +116,7 @@ export function RecipeEditor({
       setTerminals(nextTerminals);
       setShowInEmptyState(false);
       setAutoAssign("always");
+      setScope(defaultScope ?? "project");
       initialStateRef.current = serializeEditorState("", nextTerminals, false, "always");
     } else {
       const nextTerminals: RecipeTerminal[] = [
@@ -121,10 +126,11 @@ export function RecipeEditor({
       setTerminals(nextTerminals);
       setShowInEmptyState(false);
       setAutoAssign("always");
+      setScope(defaultScope ?? "project");
       initialStateRef.current = serializeEditorState("", nextTerminals, false, "always");
     }
     setError(null);
-  }, [recipe, initialTerminals, isOpen]);
+  }, [recipe, initialTerminals, defaultScope, isOpen]);
 
   const isDirty = useMemo(
     () =>
@@ -196,13 +202,15 @@ export function RecipeEditor({
           autoAssign,
         });
       } else {
-        if (!currentProject?.id) {
+        const isGlobal = scope === "global";
+        if (!isGlobal && !currentProject?.id) {
           throw new Error("No project selected");
         }
+        const targetProjectId = isGlobal ? undefined : currentProject!.id;
         await createRecipe(
-          currentProject.id,
+          targetProjectId,
           recipeName,
-          worktreeId,
+          isGlobal ? undefined : worktreeId,
           terminals,
           showInEmptyState,
           autoAssign
@@ -215,8 +223,8 @@ export function RecipeEditor({
           : {
               id: `recipe-${Date.now()}`,
               name: recipeName,
-              projectId: currentProject!.id,
-              worktreeId,
+              projectId: scope === "global" ? undefined : currentProject!.id,
+              worktreeId: scope === "global" ? undefined : worktreeId,
               terminals,
               createdAt: Date.now(),
             };
@@ -257,6 +265,27 @@ export function RecipeEditor({
             placeholder="e.g., Full Stack Dev"
             className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
           />
+        </div>
+
+        <div className="mb-4">
+          <label htmlFor="recipe-scope" className="block text-sm font-medium text-canopy-text mb-1">
+            Scope
+          </label>
+          {recipe ? (
+            <div className="px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text text-sm opacity-75">
+              {recipe.projectId === undefined ? "Global (all projects)" : "Project"}
+            </div>
+          ) : (
+            <select
+              id="recipe-scope"
+              value={scope}
+              onChange={(e) => setScope(e.target.value as "global" | "project")}
+              className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+            >
+              <option value="project">Project (current project only)</option>
+              <option value="global">Global (all projects)</option>
+            </select>
+          )}
         </div>
 
         <div className="mb-4">

@@ -7,6 +7,10 @@ const {
   deleteRecipeMock,
   addTerminalMock,
   getAgentSettingsMock,
+  globalGetRecipesMock,
+  globalAddRecipeMock,
+  globalUpdateRecipeMock,
+  globalDeleteRecipeMock,
 } = vi.hoisted(() => ({
   addRecipeMock: vi.fn().mockResolvedValue(undefined),
   getRecipesMock: vi.fn().mockResolvedValue([]),
@@ -14,6 +18,10 @@ const {
   deleteRecipeMock: vi.fn().mockResolvedValue(undefined),
   addTerminalMock: vi.fn().mockResolvedValue(undefined),
   getAgentSettingsMock: vi.fn().mockResolvedValue({ agents: {} }),
+  globalGetRecipesMock: vi.fn().mockResolvedValue([]),
+  globalAddRecipeMock: vi.fn().mockResolvedValue(undefined),
+  globalUpdateRecipeMock: vi.fn().mockResolvedValue(undefined),
+  globalDeleteRecipeMock: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/clients", () => ({
@@ -25,6 +33,12 @@ vi.mock("@/clients", () => ({
   },
   agentSettingsClient: {
     get: getAgentSettingsMock,
+  },
+  globalRecipesClient: {
+    getRecipes: globalGetRecipesMock,
+    addRecipe: globalAddRecipeMock,
+    updateRecipe: globalUpdateRecipeMock,
+    deleteRecipe: globalDeleteRecipeMock,
   },
 }));
 
@@ -288,5 +302,210 @@ describe("recipeStore", () => {
     const recipe = useRecipeStore.getState().recipes[0];
     expect(recipe?.terminals).toHaveLength(1);
     expect(recipe?.terminals[0]?.type).toBe("terminal");
+  });
+
+  describe("global recipes", () => {
+    it("loadRecipes fetches from both global and project sources", async () => {
+      const globalRecipe = {
+        id: "global-1",
+        name: "Global Recipe",
+        terminals: [{ type: "terminal" as const, title: "Shell", env: {} }],
+        createdAt: 1000,
+      };
+      const projectRecipe = {
+        id: "project-recipe-1",
+        name: "Project Recipe",
+        projectId: "project-1",
+        terminals: [{ type: "terminal" as const, title: "Shell", env: {} }],
+        createdAt: 2000,
+      };
+
+      globalGetRecipesMock.mockResolvedValueOnce([globalRecipe]);
+      getRecipesMock.mockResolvedValueOnce([projectRecipe]);
+
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      const state = useRecipeStore.getState();
+      expect(state.globalRecipes).toHaveLength(1);
+      expect(state.projectRecipes).toHaveLength(1);
+      expect(state.recipes).toHaveLength(2);
+      // Global first, then project
+      expect(state.recipes[0]?.id).toBe("global-1");
+      expect(state.recipes[1]?.id).toBe("project-recipe-1");
+    });
+
+    it("createRecipe with undefined projectId routes to globalRecipesClient", async () => {
+      await useRecipeStore
+        .getState()
+        .createRecipe(
+          undefined,
+          "Global Recipe",
+          undefined,
+          [{ type: "terminal", title: "Shell", command: "npm test", env: {} }],
+          false
+        );
+
+      expect(globalAddRecipeMock).toHaveBeenCalledTimes(1);
+      expect(addRecipeMock).not.toHaveBeenCalled();
+
+      const recipe = globalAddRecipeMock.mock.calls[0]?.[0];
+      expect(recipe.projectId).toBeUndefined();
+      expect(recipe.worktreeId).toBeUndefined();
+
+      const state = useRecipeStore.getState();
+      expect(state.globalRecipes).toHaveLength(1);
+      expect(state.recipes).toHaveLength(1);
+    });
+
+    it("createRecipe with projectId routes to projectClient", async () => {
+      await useRecipeStore
+        .getState()
+        .createRecipe(
+          "project-1",
+          "Project Recipe",
+          "wt-1",
+          [{ type: "terminal", title: "Shell", command: "npm test", env: {} }],
+          false
+        );
+
+      expect(addRecipeMock).toHaveBeenCalledTimes(1);
+      expect(globalAddRecipeMock).not.toHaveBeenCalled();
+
+      const state = useRecipeStore.getState();
+      expect(state.projectRecipes).toHaveLength(1);
+      expect(state.recipes).toHaveLength(1);
+    });
+
+    it("updateRecipe routes global recipes to globalRecipesClient", async () => {
+      useRecipeStore.setState({
+        globalRecipes: [
+          {
+            id: "global-1",
+            name: "Global",
+            terminals: [{ type: "terminal", title: "Shell", env: {} }],
+            createdAt: 1000,
+          },
+        ],
+        projectRecipes: [],
+        recipes: [
+          {
+            id: "global-1",
+            name: "Global",
+            terminals: [{ type: "terminal", title: "Shell", env: {} }],
+            createdAt: 1000,
+          },
+        ],
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore.getState().updateRecipe("global-1", { name: "Updated Global" });
+
+      expect(globalUpdateRecipeMock).toHaveBeenCalledTimes(1);
+      expect(updateRecipeMock).not.toHaveBeenCalled();
+    });
+
+    it("deleteRecipe routes global recipes to globalRecipesClient", async () => {
+      useRecipeStore.setState({
+        globalRecipes: [
+          {
+            id: "global-1",
+            name: "Global",
+            terminals: [{ type: "terminal", title: "Shell", env: {} }],
+            createdAt: 1000,
+          },
+        ],
+        projectRecipes: [],
+        recipes: [
+          {
+            id: "global-1",
+            name: "Global",
+            terminals: [{ type: "terminal", title: "Shell", env: {} }],
+            createdAt: 1000,
+          },
+        ],
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore.getState().deleteRecipe("global-1");
+
+      expect(globalDeleteRecipeMock).toHaveBeenCalledTimes(1);
+      expect(deleteRecipeMock).not.toHaveBeenCalled();
+
+      const state = useRecipeStore.getState();
+      expect(state.globalRecipes).toHaveLength(0);
+      expect(state.recipes).toHaveLength(0);
+    });
+
+    it("getRecipesForWorktree includes global recipes", () => {
+      useRecipeStore.setState({
+        globalRecipes: [
+          {
+            id: "global-1",
+            name: "Global",
+            terminals: [{ type: "terminal", title: "Shell", env: {} }],
+            createdAt: 1000,
+          },
+        ],
+        projectRecipes: [
+          {
+            id: "project-1-recipe",
+            name: "Project Wide",
+            projectId: "project-1",
+            terminals: [{ type: "terminal", title: "Shell", env: {} }],
+            createdAt: 2000,
+          },
+        ],
+        recipes: [
+          {
+            id: "global-1",
+            name: "Global",
+            terminals: [{ type: "terminal", title: "Shell", env: {} }],
+            createdAt: 1000,
+          },
+          {
+            id: "project-1-recipe",
+            name: "Project Wide",
+            projectId: "project-1",
+            terminals: [{ type: "terminal", title: "Shell", env: {} }],
+            createdAt: 2000,
+          },
+        ],
+        currentProjectId: "project-1",
+      });
+
+      const results = useRecipeStore.getState().getRecipesForWorktree(undefined);
+      expect(results).toHaveLength(2);
+    });
+
+    it("importRecipe with undefined projectId creates global recipe", async () => {
+      const input = JSON.stringify({
+        name: "Imported Global",
+        terminals: [{ type: "terminal", command: "npm test" }],
+      });
+
+      await useRecipeStore.getState().importRecipe(undefined, input);
+
+      expect(globalAddRecipeMock).toHaveBeenCalledTimes(1);
+      expect(addRecipeMock).not.toHaveBeenCalled();
+
+      const recipe = useRecipeStore.getState().globalRecipes[0];
+      expect(recipe?.projectId).toBeUndefined();
+      expect(recipe?.worktreeId).toBeUndefined();
+    });
+
+    it("global recipe creation clears worktreeId even if provided", async () => {
+      await useRecipeStore
+        .getState()
+        .createRecipe(
+          undefined,
+          "Global",
+          "wt-1",
+          [{ type: "terminal", title: "Shell", env: {} }],
+          false
+        );
+
+      const recipe = globalAddRecipeMock.mock.calls[0]?.[0];
+      expect(recipe.worktreeId).toBeUndefined();
+    });
   });
 });

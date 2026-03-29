@@ -383,6 +383,10 @@ const CHANNELS = {
   PROJECT_ADD_RECIPE: "project:add-recipe",
   PROJECT_UPDATE_RECIPE: "project:update-recipe",
   PROJECT_DELETE_RECIPE: "project:delete-recipe",
+  GLOBAL_GET_RECIPES: "global:get-recipes",
+  GLOBAL_ADD_RECIPE: "global:add-recipe",
+  GLOBAL_UPDATE_RECIPE: "global:update-recipe",
+  GLOBAL_DELETE_RECIPE: "global:delete-recipe",
   PROJECT_GET_TERMINALS: "project:get-terminals",
   PROJECT_SET_TERMINALS: "project:set-terminals",
   PROJECT_GET_TERMINAL_SIZES: "project:get-terminal-sizes",
@@ -1289,6 +1293,22 @@ const api: ElectronAPI = {
 
     locate: (projectId: string): Promise<Project | null> =>
       _unwrappingInvoke(CHANNELS.PROJECT_LOCATE, projectId),
+  },
+
+  // Global Recipes API
+  globalRecipes: {
+    getRecipes: (): Promise<TerminalRecipe[]> => _unwrappingInvoke(CHANNELS.GLOBAL_GET_RECIPES),
+
+    addRecipe: (recipe: TerminalRecipe): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.GLOBAL_ADD_RECIPE, { recipe }),
+
+    updateRecipe: (
+      recipeId: string,
+      updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
+    ): Promise<void> => _unwrappingInvoke(CHANNELS.GLOBAL_UPDATE_RECIPE, { recipeId, updates }),
+
+    deleteRecipe: (recipeId: string): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.GLOBAL_DELETE_RECIPE, { recipeId }),
   },
 
   // Agent Settings API

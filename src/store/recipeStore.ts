@@ -1,7 +1,7 @@
 import { create, type StateCreator } from "zustand";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
 import { useTerminalStore, type TerminalInstance } from "./terminalStore";
-import { projectClient, agentSettingsClient, systemClient } from "@/clients";
+import { projectClient, agentSettingsClient, systemClient, globalRecipesClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
@@ -62,12 +62,14 @@ function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
 
 interface RecipeState {
   recipes: TerminalRecipe[];
+  globalRecipes: TerminalRecipe[];
+  projectRecipes: TerminalRecipe[];
   isLoading: boolean;
   currentProjectId: string | null;
 
   loadRecipes: (projectId: string) => Promise<void>;
   createRecipe: (
-    projectId: string,
+    projectId: string | undefined,
     name: string,
     worktreeId: string | undefined,
     terminals: RecipeTerminal[],
@@ -99,7 +101,7 @@ interface RecipeState {
   ) => Promise<RecipeSpawnResults>;
 
   exportRecipe: (id: string) => string | null;
-  importRecipe: (projectId: string, json: string) => Promise<void>;
+  importRecipe: (projectId: string | undefined, json: string) => Promise<void>;
 
   generateRecipeFromActiveTerminals: (worktreeId: string) => RecipeTerminal[];
 
@@ -110,31 +112,49 @@ const MAX_TERMINALS_PER_RECIPE = 10;
 
 let loadRecipesRequestId = 0;
 
+function mergeRecipes(
+  globalRecipes: TerminalRecipe[],
+  projectRecipes: TerminalRecipe[]
+): TerminalRecipe[] {
+  return [...globalRecipes, ...projectRecipes];
+}
+
 const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   recipes: [],
+  globalRecipes: [],
+  projectRecipes: [],
   isLoading: false,
   currentProjectId: null,
 
   loadRecipes: async (projectId: string) => {
     const requestId = ++loadRecipesRequestId;
     const previousProjectId = get().currentProjectId;
+    const clearRecipes = previousProjectId && previousProjectId !== projectId;
     set({
       isLoading: true,
       currentProjectId: projectId,
-      recipes: previousProjectId && previousProjectId !== projectId ? [] : get().recipes,
+      ...(clearRecipes ? { recipes: [], globalRecipes: [], projectRecipes: [] } : {}),
     });
     try {
-      const recipes = await projectClient.getRecipes(projectId);
+      const [globalRecipes, projectRecipes] = await Promise.all([
+        globalRecipesClient.getRecipes(),
+        projectClient.getRecipes(projectId),
+      ]);
       if (requestId !== loadRecipesRequestId || get().currentProjectId !== projectId) {
         return;
       }
-      set({ recipes, isLoading: false });
+      set({
+        globalRecipes,
+        projectRecipes,
+        recipes: mergeRecipes(globalRecipes, projectRecipes),
+        isLoading: false,
+      });
     } catch (error) {
       if (requestId !== loadRecipesRequestId || get().currentProjectId !== projectId) {
         return;
       }
       console.error("Failed to load recipes:", error);
-      set({ recipes: [], isLoading: false });
+      set({ recipes: [], globalRecipes: [], projectRecipes: [], isLoading: false });
     }
   },
 
@@ -153,26 +173,43 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       throw new Error(`Recipe cannot exceed ${MAX_TERMINALS_PER_RECIPE} terminals`);
     }
 
+    const isGlobal = projectId === undefined;
     const newRecipe: TerminalRecipe = {
       id: `recipe-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       name,
       projectId,
-      worktreeId,
+      // Global recipes must not have a worktreeId
+      worktreeId: isGlobal ? undefined : worktreeId,
       terminals: terminals.map(sanitizeRecipeTerminal),
       createdAt: Date.now(),
       showInEmptyState,
       autoAssign,
     };
 
-    const newRecipes = [...get().recipes, newRecipe];
-    set({ recipes: newRecipes });
+    const prevGlobal = get().globalRecipes;
+    const prevProject = get().projectRecipes;
+    const nextGlobal = isGlobal ? [...prevGlobal, newRecipe] : prevGlobal;
+    const nextProject = isGlobal ? prevProject : [...prevProject, newRecipe];
+    set({
+      globalRecipes: nextGlobal,
+      projectRecipes: nextProject,
+      recipes: mergeRecipes(nextGlobal, nextProject),
+    });
 
     try {
-      await projectClient.addRecipe(projectId, newRecipe);
+      if (isGlobal) {
+        await globalRecipesClient.addRecipe(newRecipe);
+      } else {
+        await projectClient.addRecipe(projectId, newRecipe);
+      }
     } catch (error) {
       console.error("Failed to persist recipe:", error);
       // Rollback on failure
-      set({ recipes: get().recipes.filter((r) => r.id !== newRecipe.id) });
+      set({
+        globalRecipes: prevGlobal,
+        projectRecipes: prevProject,
+        recipes: mergeRecipes(prevGlobal, prevProject),
+      });
       throw error;
     }
   },
@@ -194,6 +231,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }
 
     const recipe = recipes[index];
+    const isGlobal = recipe.projectId === undefined;
     const sanitizedTerminals = updates.terminals?.map(sanitizeRecipeTerminal);
     const sanitizedUpdates = sanitizedTerminals
       ? { ...updates, terminals: sanitizedTerminals }
@@ -204,17 +242,38 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       ...sanitizedUpdates,
       terminals: sanitizedTerminals ?? recipe.terminals,
     };
-    const newRecipes = [...recipes];
-    newRecipes[index] = updatedRecipe;
 
-    set({ recipes: newRecipes });
+    const prevGlobal = get().globalRecipes;
+    const prevProject = get().projectRecipes;
+    const applyUpdate = (list: TerminalRecipe[]) => {
+      const idx = list.findIndex((r) => r.id === id);
+      if (idx === -1) return list;
+      const next = [...list];
+      next[idx] = updatedRecipe;
+      return next;
+    };
+    const nextGlobal = isGlobal ? applyUpdate(prevGlobal) : prevGlobal;
+    const nextProject = isGlobal ? prevProject : applyUpdate(prevProject);
+    set({
+      globalRecipes: nextGlobal,
+      projectRecipes: nextProject,
+      recipes: mergeRecipes(nextGlobal, nextProject),
+    });
 
     try {
-      await projectClient.updateRecipe(recipe.projectId, id, sanitizedUpdates);
+      if (isGlobal) {
+        await globalRecipesClient.updateRecipe(id, sanitizedUpdates);
+      } else {
+        await projectClient.updateRecipe(recipe.projectId!, id, sanitizedUpdates);
+      }
     } catch (error) {
       console.error("Failed to persist recipe update:", error);
       // Rollback on failure
-      set({ recipes });
+      set({
+        globalRecipes: prevGlobal,
+        projectRecipes: prevProject,
+        recipes: mergeRecipes(prevGlobal, prevProject),
+      });
       throw error;
     }
   },
@@ -226,15 +285,31 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       throw new Error(`Recipe ${id} not found`);
     }
 
-    const newRecipes = recipes.filter((r) => r.id !== id);
-    set({ recipes: newRecipes });
+    const isGlobal = recipe.projectId === undefined;
+    const prevGlobal = get().globalRecipes;
+    const prevProject = get().projectRecipes;
+    const nextGlobal = isGlobal ? prevGlobal.filter((r) => r.id !== id) : prevGlobal;
+    const nextProject = isGlobal ? prevProject : prevProject.filter((r) => r.id !== id);
+    set({
+      globalRecipes: nextGlobal,
+      projectRecipes: nextProject,
+      recipes: mergeRecipes(nextGlobal, nextProject),
+    });
 
     try {
-      await projectClient.deleteRecipe(recipe.projectId, id);
+      if (isGlobal) {
+        await globalRecipesClient.deleteRecipe(id);
+      } else {
+        await projectClient.deleteRecipe(recipe.projectId!, id);
+      }
     } catch (error) {
       console.error("Failed to persist recipe deletion:", error);
       // Rollback on failure
-      set({ recipes });
+      set({
+        globalRecipes: prevGlobal,
+        projectRecipes: prevProject,
+        recipes: mergeRecipes(prevGlobal, prevProject),
+      });
       throw error;
     }
   },
@@ -464,26 +539,46 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       throw new Error("No valid terminals found in recipe");
     }
 
+    const isGlobal = projectId === undefined;
     const importedRecipe: TerminalRecipe = {
       id: `recipe-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       name: String(recipe.name),
       projectId,
-      worktreeId: typeof recipe.worktreeId === "string" ? recipe.worktreeId : undefined,
+      worktreeId: isGlobal
+        ? undefined
+        : typeof recipe.worktreeId === "string"
+          ? recipe.worktreeId
+          : undefined,
       terminals: sanitizedTerminals,
       createdAt: Date.now(),
       showInEmptyState:
         typeof recipe.showInEmptyState === "boolean" ? recipe.showInEmptyState : false,
     };
 
-    const newRecipes = [...get().recipes, importedRecipe];
-    set({ recipes: newRecipes });
+    const prevGlobal = get().globalRecipes;
+    const prevProject = get().projectRecipes;
+    const nextGlobal = isGlobal ? [...prevGlobal, importedRecipe] : prevGlobal;
+    const nextProject = isGlobal ? prevProject : [...prevProject, importedRecipe];
+    set({
+      globalRecipes: nextGlobal,
+      projectRecipes: nextProject,
+      recipes: mergeRecipes(nextGlobal, nextProject),
+    });
 
     try {
-      await projectClient.addRecipe(projectId, importedRecipe);
+      if (isGlobal) {
+        await globalRecipesClient.addRecipe(importedRecipe);
+      } else {
+        await projectClient.addRecipe(projectId, importedRecipe);
+      }
     } catch (_error) {
       console.error("Failed to persist imported recipe:", _error);
       // Rollback on failure
-      set({ recipes: get().recipes.filter((r) => r.id !== importedRecipe.id) });
+      set({
+        globalRecipes: prevGlobal,
+        projectRecipes: prevProject,
+        recipes: mergeRecipes(prevGlobal, prevProject),
+      });
       throw _error;
     }
   },
@@ -500,7 +595,14 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     return terminalsToCapture.map(terminalToRecipeTerminal);
   },
 
-  reset: () => set({ recipes: [], isLoading: false, currentProjectId: null }),
+  reset: () =>
+    set({
+      recipes: [],
+      globalRecipes: [],
+      projectRecipes: [],
+      isLoading: false,
+      currentProjectId: null,
+    }),
 });
 
 export const useRecipeStore = create<RecipeState>()(createRecipeStore);

@@ -90,6 +90,19 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
     },
   }));
 
+  actions.set("recipe.manager.open", () => ({
+    id: "recipe.manager.open",
+    title: "Manage Recipes",
+    description: "Open the recipe manager to view and manage global and project recipes",
+    category: "recipes",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      window.dispatchEvent(new CustomEvent("canopy:open-recipe-manager"));
+    },
+  }));
+
   actions.set("recipe.editor.openFromLayout", () => ({
     id: "recipe.editor.openFromLayout",
     title: "Open Recipe Editor From Layout",

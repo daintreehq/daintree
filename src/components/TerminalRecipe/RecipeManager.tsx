@@ -1,0 +1,336 @@
+import { useState, useCallback, useEffect } from "react";
+import { Globe, FolderOpen, Plus, Trash2, Edit3, Download, FileDown, Check } from "lucide-react";
+import { TerminalRecipeIcon } from "@/components/icons";
+import { Button } from "@/components/ui/button";
+import { AppDialog } from "@/components/ui/AppDialog";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { useRecipeStore } from "@/store/recipeStore";
+import { useProjectStore } from "@/store/projectStore";
+import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
+import type { TerminalRecipe } from "@/types";
+import { useRef } from "react";
+
+interface RecipeManagerProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onEditRecipe: (recipe: TerminalRecipe) => void;
+  onCreateRecipe: (scope: "global" | "project") => void;
+}
+
+export function RecipeManager({
+  isOpen,
+  onClose,
+  onEditRecipe,
+  onCreateRecipe,
+}: RecipeManagerProps) {
+  const globalRecipes = useRecipeStore((s) => s.globalRecipes);
+  const projectRecipes = useRecipeStore((s) => s.projectRecipes);
+  const deleteRecipe = useRecipeStore((s) => s.deleteRecipe);
+  const exportRecipe = useRecipeStore((s) => s.exportRecipe);
+  const importRecipe = useRecipeStore((s) => s.importRecipe);
+  const currentProject = useProjectStore((s) => s.currentProject);
+
+  const [recipeToDelete, setRecipeToDelete] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [exportFeedback, setExportFeedback] = useState<string | null>(null);
+  const [showImportDialog, setShowImportDialog] = useState(false);
+  const [importScope, setImportScope] = useState<"global" | "project">("project");
+  const [importJson, setImportJson] = useState("");
+  const [importError, setImportError] = useState<string | null>(null);
+  const exportTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (exportTimeoutRef.current) {
+        clearTimeout(exportTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleDeleteRecipe = async (recipeId: string) => {
+    setDeleteError(null);
+    try {
+      await deleteRecipe(recipeId);
+      setRecipeToDelete(null);
+    } catch (err) {
+      console.error("Failed to delete recipe:", err);
+      setDeleteError(err instanceof Error ? err.message : "Failed to delete recipe");
+    }
+  };
+
+  const handleExportRecipe = useCallback(
+    async (recipeId: string) => {
+      const json = exportRecipe(recipeId);
+      if (json) {
+        try {
+          await navigator.clipboard.writeText(json);
+          setExportFeedback(recipeId);
+          if (exportTimeoutRef.current) clearTimeout(exportTimeoutRef.current);
+          exportTimeoutRef.current = setTimeout(() => {
+            setExportFeedback(null);
+            exportTimeoutRef.current = null;
+          }, 2000);
+        } catch (err) {
+          console.error("Failed to copy to clipboard:", err);
+        }
+      }
+    },
+    [exportRecipe]
+  );
+
+  const handleImportRecipe = async () => {
+    setImportError(null);
+    const targetProjectId = importScope === "global" ? undefined : currentProject?.id;
+    if (importScope === "project" && !targetProjectId) {
+      setImportError("No project selected");
+      return;
+    }
+    try {
+      await importRecipe(targetProjectId, importJson);
+      setShowImportDialog(false);
+      setImportJson("");
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : "Failed to import recipe");
+    }
+  };
+
+  const renderRecipeRow = (recipe: TerminalRecipe) => {
+    const exported = exportFeedback === recipe.id;
+    const isGlobal = recipe.projectId === undefined;
+    return (
+      <div key={recipe.id} className="p-3 hover:bg-muted/50 transition-colors group cursor-default">
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-foreground truncate">{recipe.name}</span>
+              {isGlobal && (
+                <span className="text-[11px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
+                  <Globe className="h-3 w-3" />
+                  Global
+                </span>
+              )}
+              <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
+                {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
+              </span>
+              {recipe.showInEmptyState && (
+                <span className="text-[11px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
+                  Empty State
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground mt-1">
+              {recipe.lastUsedAt ? (
+                <span>
+                  Last used <LiveTimeAgo timestamp={recipe.lastUsedAt} />
+                </span>
+              ) : (
+                <span>Never used</span>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onEditRecipe(recipe)}
+                  className="h-7 px-2"
+                  aria-label={`Edit recipe ${recipe.name}`}
+                >
+                  <Edit3 />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Edit recipe</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleExportRecipe(recipe.id)}
+                  className="h-7 px-2"
+                  aria-label={
+                    exported
+                      ? `Recipe ${recipe.name} exported to clipboard`
+                      : `Export recipe ${recipe.name} to clipboard`
+                  }
+                >
+                  {exported ? <Check className="text-status-success" /> : <Download />}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {exported ? "Exported" : "Export to clipboard"}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setRecipeToDelete(recipe.id)}
+                  className="h-7 px-2"
+                  aria-label={`Delete recipe ${recipe.name}`}
+                >
+                  <Trash2 className="text-status-error" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Delete recipe</TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <TooltipProvider delayDuration={400} skipDelayDuration={300}>
+      <AppDialog isOpen={isOpen} onClose={onClose} size="lg">
+        <AppDialog.Header>
+          <AppDialog.Title>
+            <span className="flex items-center gap-2">
+              <TerminalRecipeIcon className="h-5 w-5" />
+              Recipe Manager
+            </span>
+          </AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+
+        <AppDialog.Body>
+          {/* Global Recipes Section */}
+          <div className="mb-6">
+            <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+              <Globe className="h-4 w-4" />
+              Global Recipes
+            </h3>
+            <p className="text-xs text-canopy-text/60 mb-3">Available across all projects</p>
+            {globalRecipes.length === 0 ? (
+              <div className="text-sm text-canopy-text/60 text-center py-4 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+                No global recipes
+              </div>
+            ) : (
+              <div className="border border-canopy-border rounded-[var(--radius-md)] divide-y divide-canopy-border">
+                {globalRecipes.map(renderRecipeRow)}
+              </div>
+            )}
+            <div className="flex gap-2 mt-2">
+              <Button variant="outline" size="sm" onClick={() => onCreateRecipe("global")}>
+                <Plus className="h-3 w-3" />
+                New Global Recipe
+              </Button>
+            </div>
+          </div>
+
+          {/* Project Recipes Section */}
+          <div className="mb-4">
+            <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+              <FolderOpen className="h-4 w-4" />
+              Project Recipes
+              {currentProject && (
+                <span className="text-xs font-normal text-canopy-text/50">
+                  {currentProject.emoji} {currentProject.name}
+                </span>
+              )}
+            </h3>
+            <p className="text-xs text-canopy-text/60 mb-3">Specific to the current project</p>
+            {projectRecipes.length === 0 ? (
+              <div className="text-sm text-canopy-text/60 text-center py-4 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+                No project recipes
+              </div>
+            ) : (
+              <div className="border border-canopy-border rounded-[var(--radius-md)] divide-y divide-canopy-border">
+                {projectRecipes.map(renderRecipeRow)}
+              </div>
+            )}
+            <div className="flex gap-2 mt-2">
+              <Button variant="outline" size="sm" onClick={() => onCreateRecipe("project")}>
+                <Plus className="h-3 w-3" />
+                New Project Recipe
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)}>
+                <FileDown className="h-3 w-3" />
+                Import
+              </Button>
+            </div>
+          </div>
+        </AppDialog.Body>
+      </AppDialog>
+
+      <ConfirmDialog
+        isOpen={recipeToDelete !== null}
+        title="Delete Recipe"
+        description={
+          deleteError
+            ? `Error: ${deleteError}`
+            : "Are you sure you want to delete this recipe? This action cannot be undone."
+        }
+        confirmLabel={deleteError ? "Retry" : "Delete"}
+        onConfirm={() => {
+          if (recipeToDelete) void handleDeleteRecipe(recipeToDelete);
+        }}
+        onClose={() => {
+          setRecipeToDelete(null);
+          setDeleteError(null);
+        }}
+      />
+
+      <AppDialog
+        isOpen={showImportDialog}
+        onClose={() => {
+          setShowImportDialog(false);
+          setImportJson("");
+          setImportError(null);
+        }}
+        size="md"
+      >
+        <AppDialog.Header>
+          <AppDialog.Title>Import Recipe</AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+
+        <AppDialog.Body>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-canopy-text mb-1">Import as</label>
+            <select
+              value={importScope}
+              onChange={(e) => setImportScope(e.target.value as "global" | "project")}
+              className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text text-sm"
+            >
+              <option value="project">Project Recipe</option>
+              <option value="global">Global Recipe</option>
+            </select>
+          </div>
+          <textarea
+            value={importJson}
+            onChange={(e) => setImportJson(e.target.value)}
+            placeholder='{"name": "My Recipe", "terminals": [...]}'
+            className="w-full h-48 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-sm text-canopy-text font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent resize-none"
+            spellCheck={false}
+          />
+          {importError && (
+            <div className="mt-3 text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3">
+              {importError}
+            </div>
+          )}
+        </AppDialog.Body>
+
+        <AppDialog.Footer>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setShowImportDialog(false);
+              setImportJson("");
+              setImportError(null);
+            }}
+          >
+            Cancel
+          </Button>
+          <Button onClick={handleImportRecipe} disabled={!importJson.trim()}>
+            Import
+          </Button>
+        </AppDialog.Footer>
+      </AppDialog>
+    </TooltipProvider>
+  );
+}

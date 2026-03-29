@@ -26,6 +26,7 @@ import { generateProjectId, getProjectStateDir } from "./projectStorePaths.js";
 import { ProjectSettingsManager } from "./ProjectSettingsManager.js";
 import { ProjectStateManager } from "./ProjectStateManager.js";
 import { ProjectFileStore } from "./ProjectFileStore.js";
+import { GlobalFileStore } from "./GlobalFileStore.js";
 import { ProjectIdentityFiles } from "./ProjectIdentityFiles.js";
 import { cleanupQuarantinedProjectFiles } from "./projectQuarantineCleanup.js";
 
@@ -54,13 +55,16 @@ export class ProjectStore {
   private settingsManager: ProjectSettingsManager;
   private stateManager: ProjectStateManager;
   private fileStore: ProjectFileStore;
+  private globalFileStore: GlobalFileStore;
   private identityFiles: ProjectIdentityFiles;
 
   constructor() {
     this.projectsConfigDir = path.join(app.getPath("userData"), "projects");
+    const globalConfigDir = path.join(app.getPath("userData"), "global");
     this.settingsManager = new ProjectSettingsManager(this.projectsConfigDir, store);
     this.stateManager = new ProjectStateManager(this.projectsConfigDir);
     this.fileStore = new ProjectFileStore(this.projectsConfigDir);
+    this.globalFileStore = new GlobalFileStore(globalConfigDir);
     this.identityFiles = new ProjectIdentityFiles();
   }
 
@@ -534,6 +538,27 @@ export class ProjectStore {
 
   async deleteRecipe(projectId: string, recipeId: string): Promise<void> {
     return this.fileStore.deleteRecipe(projectId, recipeId);
+  }
+
+  // --- Global Recipes ---
+
+  async getGlobalRecipes(): Promise<TerminalRecipe[]> {
+    return this.globalFileStore.getRecipes();
+  }
+
+  async addGlobalRecipe(recipe: TerminalRecipe): Promise<void> {
+    return this.globalFileStore.addRecipe(recipe);
+  }
+
+  async updateGlobalRecipe(
+    recipeId: string,
+    updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
+  ): Promise<void> {
+    return this.globalFileStore.updateRecipe(recipeId, updates);
+  }
+
+  async deleteGlobalRecipe(recipeId: string): Promise<void> {
+    return this.globalFileStore.deleteRecipe(recipeId);
   }
 
   // --- Workflows ---

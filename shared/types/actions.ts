@@ -148,6 +148,7 @@ export type BuiltInActionId =
   | "recipe.list"
   | "recipe.editor.open"
   | "recipe.editor.openFromLayout"
+  | "recipe.manager.open"
   | "panel.focus"
   | "panel.focusIndex"
   | "panel.palette"

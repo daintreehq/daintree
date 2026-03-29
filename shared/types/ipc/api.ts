@@ -499,6 +499,15 @@ export interface ElectronAPI {
      */
     locate(projectId: string): Promise<Project | null>;
   };
+  globalRecipes: {
+    getRecipes(): Promise<TerminalRecipe[]>;
+    addRecipe(recipe: TerminalRecipe): Promise<void>;
+    updateRecipe(
+      recipeId: string,
+      updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
+    ): Promise<void>;
+    deleteRecipe(recipeId: string): Promise<void>;
+  };
   agentSettings: {
     get(): Promise<AgentSettings>;
     set(agentId: AgentId, settings: Partial<AgentSettingsEntry>): Promise<AgentSettings>;

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Plus, Trash2, Edit3, Download, FileDown, Check } from "lucide-react";
+import { Plus, Trash2, Edit3, Download, FileDown, Check, Globe } from "lucide-react";
 import { TerminalRecipeIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { useRecipeStore } from "@/store/recipeStore";
@@ -154,13 +154,17 @@ export function RecipesTab({
     }
   };
 
-  const getRecipeScope = (recipe: TerminalRecipe): string => {
-    if (!recipe.worktreeId) return "Project-wide";
+  const getRecipeScope = (recipe: TerminalRecipe): { label: string; isGlobal: boolean } => {
+    if (recipe.projectId === undefined) return { label: "Global", isGlobal: true };
+    if (!recipe.worktreeId) return { label: "Project-wide", isGlobal: false };
     const worktree = worktreeMap.get(recipe.worktreeId);
     if (worktree) {
-      return `Worktree: ${worktree.isMainWorktree ? worktree.name : worktree.branch || worktree.name}`;
+      return {
+        label: `Worktree: ${worktree.isMainWorktree ? worktree.name : worktree.branch || worktree.name}`,
+        isGlobal: false,
+      };
     }
-    return `Worktree: ${recipe.worktreeId}`;
+    return { label: `Worktree: ${recipe.worktreeId}`, isGlobal: false };
   };
 
   return (
@@ -204,9 +208,21 @@ export function RecipesTab({
                             </TooltipTrigger>
                             <TooltipContent side="bottom">{recipe.name}</TooltipContent>
                           </Tooltip>
-                          <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
-                            {getRecipeScope(recipe)}
-                          </span>
+                          {(() => {
+                            const scopeInfo = getRecipeScope(recipe);
+                            return (
+                              <span
+                                className={`text-[11px] px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1 ${
+                                  scopeInfo.isGlobal
+                                    ? "text-status-info bg-status-info/10"
+                                    : "text-muted-foreground bg-muted"
+                                }`}
+                              >
+                                {scopeInfo.isGlobal && <Globe className="h-3 w-3" />}
+                                {scopeInfo.label}
+                              </span>
+                            );
+                          })()}
                           <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
                             {recipe.terminals.length} terminal
                             {recipe.terminals.length !== 1 ? "s" : ""}

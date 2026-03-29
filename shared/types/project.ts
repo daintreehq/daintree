@@ -183,8 +183,8 @@ export interface TerminalRecipe {
   id: string;
   /** Human-readable name for the recipe */
   name: string;
-  /** Project ID this recipe belongs to (required for project-scoped storage) */
-  projectId: string;
+  /** Project ID this recipe belongs to; undefined means global (not tied to any project) */
+  projectId?: string;
   /** Associated worktree ID (optional for worktree-specific recipes) */
   worktreeId?: string;
   /** List of terminals to spawn when recipe is executed */

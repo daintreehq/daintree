@@ -112,6 +112,7 @@ import { BulkCommandPalette } from "./components/BulkCommandCenter";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { PanelLimitConfirmDialog } from "./components/Terminal/PanelLimitConfirmDialog";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
+import { RecipeManager } from "./components/TerminalRecipe/RecipeManager";
 import { NotesPalette } from "./components/Notes";
 import { WorkflowSection } from "./components/Workflow";
 const LazySettingsDialog = lazy(() =>
@@ -454,6 +455,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const getWorktreeErrors = useErrorStore((state) => state.getWorktreeErrors);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const recipeManagerEditRef = useRef<import("@/types").TerminalRecipe | undefined>(undefined);
   const scrollContentRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [hiddenAbove, setHiddenAbove] = useState(0);
@@ -468,6 +470,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const [recipeEditorInitialTerminals, setRecipeEditorInitialTerminals] = useState<
     RecipeTerminal[] | undefined
   >(undefined);
+  const [recipeEditorDefaultScope, setRecipeEditorDefaultScope] = useState<
+    "global" | "project" | undefined
+  >(undefined);
+
+  const [isRecipeManagerOpen, setIsRecipeManagerOpen] = useState(false);
 
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
 
@@ -783,6 +790,45 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return () => controller.abort();
   }, [handleOpenRecipeEditor]);
 
+  useEffect(() => {
+    const handleOpenRecipeManagerEvent = () => {
+      setIsRecipeManagerOpen(true);
+    };
+    const controller = new AbortController();
+    window.addEventListener("canopy:open-recipe-manager", handleOpenRecipeManagerEvent, {
+      signal: controller.signal,
+    });
+    return () => controller.abort();
+  }, []);
+
+  const handleCloseRecipeManager = useCallback(() => {
+    setIsRecipeManagerOpen(false);
+  }, []);
+
+  const handleRecipeManagerEdit = useCallback((recipe: import("@/types").TerminalRecipe) => {
+    setIsRecipeManagerOpen(false);
+    setRecipeEditorWorktreeId(recipe.worktreeId);
+    setRecipeEditorDefaultScope(recipe.projectId === undefined ? "global" : "project");
+    setRecipeEditorInitialTerminals(undefined);
+    // Small delay to let the manager dialog close first
+    setTimeout(() => {
+      setIsRecipeEditorOpen(true);
+    }, 100);
+    // Store the recipe to edit via a ref-like approach by setting it directly
+    recipeManagerEditRef.current = recipe;
+  }, []);
+
+  const handleRecipeManagerCreate = useCallback((scope: "global" | "project") => {
+    setIsRecipeManagerOpen(false);
+    setRecipeEditorDefaultScope(scope);
+    setRecipeEditorWorktreeId(undefined);
+    setRecipeEditorInitialTerminals(undefined);
+    recipeManagerEditRef.current = undefined;
+    setTimeout(() => {
+      setIsRecipeEditorOpen(true);
+    }, 100);
+  }, []);
+
   const worktreeActions = useWorktreeActions({
     onOpenRecipeEditor: handleOpenRecipeEditor,
     launchAgent,
@@ -792,6 +838,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     setIsRecipeEditorOpen(false);
     setRecipeEditorWorktreeId(undefined);
     setRecipeEditorInitialTerminals(undefined);
+    setRecipeEditorDefaultScope(undefined);
+    recipeManagerEditRef.current = undefined;
   }, []);
 
   const sortableIds = useMemo(
@@ -1091,10 +1139,19 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         <WorkflowSection />
 
         <RecipeEditor
+          recipe={recipeManagerEditRef.current}
           worktreeId={recipeEditorWorktreeId}
           initialTerminals={recipeEditorInitialTerminals}
+          defaultScope={recipeEditorDefaultScope}
           isOpen={isRecipeEditorOpen}
           onClose={handleCloseRecipeEditor}
+        />
+
+        <RecipeManager
+          isOpen={isRecipeManagerOpen}
+          onClose={handleCloseRecipeManager}
+          onEditRecipe={handleRecipeManagerEdit}
+          onCreateRecipe={handleRecipeManagerCreate}
         />
 
         {rootPath && (
