@@ -176,6 +176,117 @@ export function simulateProjectSwitchCycle(params: {
   };
 }
 
+export interface ProjectSwitchPhaseResult {
+  checksum: number;
+  phases: {
+    serializeMs: number;
+    ptyHibernateMs: number;
+    storeResetMs: number;
+    projectLoadMs: number;
+    terminalRestoreMs: number;
+    ptyWarmupMs: number;
+    gitFetchMs: number;
+    totalMs: number;
+  };
+}
+
+export function simulateProjectSwitchPhased(params: {
+  outgoingStateSize: number;
+  incomingLayout: PersistedLayout;
+}): ProjectSwitchPhaseResult {
+  const totalStart = performance.now();
+  let checksum = 0;
+
+  // Phase 1: Serialize outgoing state (JSON.stringify — dominant cost)
+  const serializeStart = performance.now();
+  const outgoingState = {
+    activeWorktreeId: "wt-1",
+    sidebarWidth: 280,
+    terminals: Array.from({ length: params.outgoingStateSize }, (_, index) => ({
+      id: `term-${index}`,
+      cwd: `/repo/switch/${index}`,
+      title: `Terminal ${index}`,
+      scrollback: `line-data-${index}-${"x".repeat(64)}`,
+    })),
+  };
+  const payload = JSON.stringify(outgoingState);
+  checksum += payload.length;
+  const serializeMs = Math.max(0, performance.now() - serializeStart);
+
+  // Phase 2: PTY hibernate (object mapping)
+  const ptyHibernateStart = performance.now();
+  const hibernated = new Map<string, { id: string; cwd: string }>();
+  for (const term of outgoingState.terminals) {
+    hibernated.set(term.id, { id: term.id, cwd: term.cwd });
+  }
+  checksum += hibernated.size;
+  const ptyHibernateMs = Math.max(0, performance.now() - ptyHibernateStart);
+
+  // Phase 3: Store reset (clear maps + arrays)
+  const storeResetStart = performance.now();
+  const stores = Array.from({ length: 17 }, () => new Map<string, unknown>());
+  for (const store of stores) {
+    for (let i = 0; i < params.outgoingStateSize; i++) {
+      store.set(`key-${i}`, { value: i });
+    }
+    store.clear();
+  }
+  checksum += stores.length;
+  const storeResetMs = Math.max(0, performance.now() - storeResetStart);
+
+  // Phase 4: Project load (JSON.parse + index build)
+  const projectLoadStart = performance.now();
+  const projectData = JSON.parse(JSON.stringify(params.incomingLayout));
+  const panelIndex = new Map<string, PanelState>();
+  for (const panel of projectData.panels as PanelState[]) {
+    panelIndex.set(panel.id, panel);
+  }
+  checksum += panelIndex.size;
+  const projectLoadMs = Math.max(0, performance.now() - projectLoadStart);
+
+  // Phase 5: Terminal restore (hydration + tab group rebuild)
+  const terminalRestoreStart = performance.now();
+  const hydrated = simulateLayoutHydration(params.incomingLayout);
+  checksum += hydrated.checksum;
+  const terminalRestoreMs = Math.max(0, performance.now() - terminalRestoreStart);
+
+  // Phase 6: PTY warmup (descriptor allocation)
+  const ptyWarmupStart = performance.now();
+  const descriptors = new Array(params.incomingLayout.panels.length);
+  for (let i = 0; i < descriptors.length; i++) {
+    descriptors[i] = { fd: i, pid: 1000 + i };
+  }
+  checksum += descriptors.length;
+  const ptyWarmupMs = Math.max(0, performance.now() - ptyWarmupStart);
+
+  // Phase 7: Git status fetch (file status aggregation)
+  const gitFetchStart = performance.now();
+  const fileStatuses = new Map<string, string>();
+  for (const wt of params.incomingLayout.worktrees) {
+    for (let j = 0; j < 10; j++) {
+      fileStatuses.set(`${wt}/file-${j}.ts`, j % 3 === 0 ? "modified" : "clean");
+    }
+  }
+  checksum += fileStatuses.size;
+  const gitFetchMs = Math.max(0, performance.now() - gitFetchStart);
+
+  const totalMs = Math.max(0, performance.now() - totalStart);
+
+  return {
+    checksum,
+    phases: {
+      serializeMs,
+      ptyHibernateMs,
+      storeResetMs,
+      projectLoadMs,
+      terminalRestoreMs,
+      ptyWarmupMs,
+      gitFetchMs,
+      totalMs,
+    },
+  };
+}
+
 export function createDevPreviewLogFrames(frameCount: number, noisy = false): DevPreviewLogFrame[] {
   const frames: DevPreviewLogFrame[] = [];
 
