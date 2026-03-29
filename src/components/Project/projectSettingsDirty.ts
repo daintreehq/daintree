@@ -21,6 +21,7 @@ export interface ProjectSettingsSnapshot {
   commandOverrides: CommandOverride[];
   copyTreeSettings: CopyTreeSettings;
   branchPrefixMode: "none" | "username" | "custom";
+  color: string | undefined;
   branchPrefixCustom: string;
 
   worktreePathPattern: string;
@@ -60,7 +61,8 @@ export function createProjectSettingsSnapshot(
   devServerLoadTimeout: number | undefined = undefined,
   worktreePathPattern: string = "",
   terminalSettings: ProjectTerminalSettings | undefined = undefined,
-  notificationOverrides: Partial<NotificationSettings> | undefined = undefined
+  notificationOverrides: Partial<NotificationSettings> | undefined = undefined,
+  color: string | undefined = undefined
 ): ProjectSettingsSnapshot {
   const envVarRecord: Record<string, string> = {};
   const seenKeys = new Map<string, number>();
@@ -135,6 +137,7 @@ export function createProjectSettingsSnapshot(
     defaultWorktreeRecipeId,
     commandOverrides: sortedCommandOverrides,
     copyTreeSettings: normalizedCopyTreeSettings,
+    color: color?.trim() || undefined,
     branchPrefixMode: normalizedMode,
     branchPrefixCustom: normalizedMode === "custom" ? trimmedCustom : "",
     worktreePathPattern: worktreePathPattern.trim(),
@@ -191,6 +194,7 @@ function areStringArraysEqual(a: string[] | undefined, b: string[] | undefined):
 export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettingsSnapshot): boolean {
   if (a.name !== b.name) return false;
   if (a.emoji !== b.emoji) return false;
+  if (a.color !== b.color) return false;
   if (a.devServerCommand !== b.devServerCommand) return false;
   if (a.devServerLoadTimeout !== b.devServerLoadTimeout) return false;
   if (a.projectIconSvg !== b.projectIconSvg) return false;

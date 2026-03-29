@@ -53,6 +53,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [autoSaveError, setAutoSaveError] = useState<string | null>(null);
   const [name, setName] = useState(currentProject?.name || "");
   const [emoji, setEmoji] = useState(currentProject?.emoji || "🌲");
+  const [color, setColor] = useState<string | undefined>(undefined);
 
   const [runCommands, setRunCommands] = useState<RunCommand[]>([]);
   const [environmentVariables, setEnvironmentVariables] = useState<EnvVar[]>([]);
@@ -118,11 +119,13 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       devServerLoadTimeout,
       worktreePathPattern,
       currentTerminalSettings,
-      notificationOverrides
+      notificationOverrides,
+      color
     );
   }, [
     name,
     emoji,
+    color,
     devServerCommand,
     devServerLoadTimeout,
     projectIconSvg,
@@ -165,6 +168,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
 
       setName(currentProject.name);
       setEmoji(currentProject.emoji || "🌲");
+      setColor(currentProject.color);
       setRunCommands(initialRunCommands);
       setEnvironmentVariables(initialEnvVars);
       setExcludedPaths(initialExcludedPaths);
@@ -204,7 +208,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         initialDevServerLoadTimeout,
         initialWorktreePathPattern,
         initialTerminalSettings,
-        initialNotificationOverrides
+        initialNotificationOverrides,
+        currentProject.color
       );
 
       setIsInitialized(true);
@@ -219,6 +224,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setCommandOverrides([]);
       setCopyTreeSettings({});
       setAutoSaveError(null);
+      setColor(undefined);
       setBranchPrefixMode("none");
       setBranchPrefixCustom("");
 
@@ -307,8 +313,12 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     setAutoSaveError(null);
     try {
       const trimmedName = name.trim() || currentProject.name;
-      if (trimmedName !== currentProject.name || emoji !== (currentProject.emoji || "🌲")) {
-        await updateProject(projectId, { name: trimmedName, emoji });
+      const identityChanged =
+        trimmedName !== currentProject.name ||
+        emoji !== (currentProject.emoji || "🌲") ||
+        color !== currentProject.color;
+      if (identityChanged) {
+        await updateProject(projectId, { name: trimmedName, emoji, color });
       }
 
       await saveSettings({
@@ -482,6 +492,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                     onNameChange={setName}
                     emoji={emoji}
                     onEmojiChange={setEmoji}
+                    color={color}
+                    onColorChange={setColor}
                     devServerCommand={devServerCommand}
                     onDevServerCommandChange={setDevServerCommand}
                     devServerLoadTimeout={devServerLoadTimeout}

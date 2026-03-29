@@ -1,6 +1,6 @@
 import { getAgentConfig } from "@/config/agents";
 
-function isValidHexColor(color: string): boolean {
+export function isValidHexColor(color: string): boolean {
   return /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(color);
 }
 

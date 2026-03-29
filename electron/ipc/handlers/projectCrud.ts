@@ -94,7 +94,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     const updated = projectStore.updateProject(projectId, safeUpdates);
     if (
       updated.inRepoSettings &&
-      (updates.name !== undefined || updates.emoji !== undefined || updates.color !== undefined)
+      (updates.name !== undefined || updates.emoji !== undefined || "color" in updates)
     ) {
       projectStore
         .writeInRepoProjectIdentity(updated.path, {

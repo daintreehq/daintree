@@ -219,7 +219,7 @@ export class ProjectStore {
     if (updates.name !== undefined) set.name = updates.name;
     if (updates.path !== undefined) set.path = updates.path;
     if (updates.emoji !== undefined) set.emoji = updates.emoji;
-    if (updates.color !== undefined) set.color = updates.color ?? null;
+    if ("color" in updates) set.color = updates.color ?? null;
     if (updates.lastOpened !== undefined) set.lastOpened = updates.lastOpened;
     if (updates.status !== undefined) set.status = updates.status ?? null;
     if (updates.canopyConfigPresent !== undefined)
