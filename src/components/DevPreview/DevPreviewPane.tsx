@@ -31,6 +31,7 @@ import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { WebviewDialog } from "../Browser/WebviewDialog";
 import { FindBar } from "../Browser/FindBar";
 import { useFindInPage } from "@/hooks/useFindInPage";
+import { useNavigationBlockedNotification } from "@/hooks/useNavigationBlockedNotification";
 
 const scrollCache = new Map<string, { url: string; scrollY: number }>();
 
@@ -565,6 +566,7 @@ export function DevPreviewPane({
     isWebviewReady && !isEvicted,
     isFocused
   );
+  useNavigationBlockedNotification(id);
 
   return (
     <ContentPanel

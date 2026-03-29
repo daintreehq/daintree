@@ -43,8 +43,10 @@ vi.mock("../../utils/webviewCsp.js", () => ({
   isDevPreviewPartition: vi.fn(() => false),
 }));
 
+const mockCanOpenExternalUrl = vi.fn<(url: string) => boolean>(() => false);
+
 vi.mock("../../utils/openExternal.js", () => ({
-  canOpenExternalUrl: vi.fn(() => false),
+  canOpenExternalUrl: (url: string) => mockCanOpenExternalUrl(url),
   openExternalUrl: vi.fn(),
 }));
 
@@ -54,19 +56,30 @@ vi.mock("../../utils/appProtocol.js", () => ({
   buildHeaders: vi.fn(),
 }));
 
+const mockGetPanelId = vi.fn<(id: number) => string | undefined>(() => undefined);
+
 vi.mock("../../services/WebviewDialogService.js", () => ({
   getWebviewDialogService: vi.fn(() => ({
     registerDialog: vi.fn(),
-    getPanelId: vi.fn(),
+    getPanelId: mockGetPanelId,
   })),
 }));
 
+const mockMainWindowSend = vi.fn();
+const mockMainWindow = {
+  isDestroyed: () => false,
+  webContents: { send: mockMainWindowSend },
+};
+
 vi.mock("../../window/windowRef.js", () => ({
-  getMainWindow: vi.fn(() => null),
+  getMainWindow: vi.fn(() => mockMainWindow),
 }));
 
 vi.mock("../../ipc/channels.js", () => ({
-  CHANNELS: { WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut" },
+  CHANNELS: {
+    WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
+    WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",
+  },
 }));
 
 import { setupWebviewCSP } from "../protocols.js";
@@ -101,6 +114,9 @@ function getEventHandlers(
 describe("setupWebviewCSP — webview guest navigation restriction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCanOpenExternalUrl.mockReturnValue(false);
+    mockGetPanelId.mockReturnValue(undefined);
+    mockMainWindowSend.mockClear();
     webContentsCreatedListeners.length = 0;
   });
 
@@ -264,6 +280,74 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
       const handlers = getEventHandlers(contents, "will-redirect");
       expect(handlers.length).toBe(0);
+    });
+  });
+
+  describe("blocked navigation notification", () => {
+    it("sends WEBVIEW_NAVIGATION_BLOCKED for blocked http/https URLs", () => {
+      mockCanOpenExternalUrl.mockReturnValue(true);
+      mockGetPanelId.mockReturnValue("panel-123");
+      const contents = createMockWebContents("webview");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://auth.example.com/authorize");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockMainWindowSend).toHaveBeenCalledWith("webview:navigation-blocked", {
+        panelId: "panel-123",
+        url: "https://auth.example.com/authorize",
+      });
+    });
+
+    it("sends notification for blocked redirects", () => {
+      mockCanOpenExternalUrl.mockReturnValue(true);
+      mockGetPanelId.mockReturnValue("panel-456");
+      const contents = createMockWebContents("webview");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-redirect")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://accounts.google.com/o/oauth2/auth");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockMainWindowSend).toHaveBeenCalledWith("webview:navigation-blocked", {
+        panelId: "panel-456",
+        url: "https://accounts.google.com/o/oauth2/auth",
+      });
+    });
+
+    it("does not send notification for non-web URLs (javascript:, data:, etc.)", () => {
+      mockGetPanelId.mockReturnValue("panel-789");
+      const contents = createMockWebContents("webview");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "javascript:alert(1)");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockMainWindowSend).not.toHaveBeenCalledWith(
+        "webview:navigation-blocked",
+        expect.anything()
+      );
+    });
+
+    it("does not send notification when panelId is not registered", () => {
+      mockGetPanelId.mockReturnValue(undefined);
+      const contents = createMockWebContents("webview");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://example.com");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockMainWindowSend).not.toHaveBeenCalledWith(
+        "webview:navigation-blocked",
+        expect.anything()
+      );
     });
   });
 });

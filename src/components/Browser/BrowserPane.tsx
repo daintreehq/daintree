@@ -28,6 +28,7 @@ import { useProjectStore } from "@/store";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 import { useFindInPage } from "@/hooks/useFindInPage";
+import { useNavigationBlockedNotification } from "@/hooks/useNavigationBlockedNotification";
 
 export interface BrowserPaneProps extends BasePanelProps {
   initialUrl: string;
@@ -601,6 +602,7 @@ export function BrowserPane({
     isWebviewReady && !isEvicted,
     isFocused
   );
+  useNavigationBlockedNotification(id);
 
   const handleOpenExternal = useCallback(() => {
     if (!hasValidUrl) return;

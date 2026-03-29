@@ -1878,6 +1878,10 @@ export interface IpcEventMap {
     panelId: string;
     shortcut: "find" | "next" | "prev" | "close";
   };
+  "webview:navigation-blocked": {
+    panelId: string;
+    url: string;
+  };
 
   // Voice input events
   "voice-input:transcription-delta": string;

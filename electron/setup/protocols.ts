@@ -170,10 +170,26 @@ export function setupWebviewCSP(): void {
       // Block webview guest navigations to non-localhost URLs (closes TOCTOU gap
       // where will-attach-webview validates src at attachment but the guest can
       // navigate away afterwards).
+      // When a navigable URL is blocked, notify the renderer so the user can
+      // choose to open it in their system browser instead.
+      const notifyBlockedNavigation = (url: string): void => {
+        if (!canOpenExternalUrl(url)) return;
+        const panelId = getWebviewDialogService().getPanelId(contents.id);
+        if (!panelId) return;
+        const mainWindow = getMainWindow();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, {
+            panelId,
+            url,
+          });
+        }
+      };
+
       contents.on("will-navigate", (event, navigationUrl) => {
         if (!isLocalhostUrl(navigationUrl)) {
           console.warn(`[MAIN] Blocked webview navigation to non-localhost URL: ${navigationUrl}`);
           event.preventDefault();
+          notifyBlockedNavigation(navigationUrl);
         }
       });
 
@@ -181,6 +197,7 @@ export function setupWebviewCSP(): void {
         if (!isLocalhostUrl(redirectUrl)) {
           console.warn(`[MAIN] Blocked webview redirect to non-localhost URL: ${redirectUrl}`);
           event.preventDefault();
+          notifyBlockedNavigation(redirectUrl);
         }
       });
 
