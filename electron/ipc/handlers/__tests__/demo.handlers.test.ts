@@ -327,7 +327,7 @@ describe("registerDemoHandlers", () => {
 
     const result = await handler({}, { x: 25, y: 75, durationMs: 500 });
     expect(result).toBeUndefined();
-    expect(deps.mainWindow.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+    expect(deps.mainWindow!.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       "demo:exec-move-to",
       { x: 25, y: 75, durationMs: 500, requestId: "test-request-id" }
     );
@@ -353,7 +353,7 @@ describe("registerDemoHandlers", () => {
       { selector: ".my-btn", durationMs: 300, offsetX: 5, offsetY: -3 }
     );
     expect(result).toBeUndefined();
-    expect(deps.mainWindow.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+    expect(deps.mainWindow!.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       "demo:exec-move-to-selector",
       {
         selector: ".my-btn",
@@ -382,7 +382,7 @@ describe("registerDemoHandlers", () => {
 
     const result = await handler({}, { durationMs: 1000 });
     expect(result).toBeUndefined();
-    expect(deps.mainWindow.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+    expect(deps.mainWindow!.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       "demo:exec-sleep",
       { durationMs: 1000, requestId: "test-request-id" }
     );
@@ -556,7 +556,7 @@ describe("frame capture pipeline", () => {
 
   it("continues capturing after capturePage error", async () => {
     const deps = makeDeps(true);
-    const capturePage = deps.mainWindow.webContents.capturePage as ReturnType<typeof vi.fn>;
+    const capturePage = deps.mainWindow!.webContents.capturePage as ReturnType<typeof vi.fn>;
     capturePage.mockRejectedValueOnce(new Error("GPU error")).mockResolvedValue({
       toPNG: () => Buffer.from([0x89, 0x50, 0x4e, 0x47]),
       getSize: () => ({ width: 1920, height: 1080 }),

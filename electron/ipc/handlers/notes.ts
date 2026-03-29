@@ -65,7 +65,7 @@ function getNotesService(): NotesService {
   return notesService;
 }
 
-export function registerNotesHandlers(deps: HandlerDependencies): () => void {
+export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
   const broadcastUpdate = (payload: NoteUpdatedPayload) => {

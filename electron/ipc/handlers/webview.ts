@@ -211,7 +211,7 @@ function cleanupSession(wcId: number): void {
   sessions.delete(wcId);
 }
 
-export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
+export function registerWebviewHandlers(_deps: HandlerDependencies): () => void {
   const handleSetLifecycleState = async (
     _event: Electron.IpcMainInvokeEvent,
     webContentsId: unknown,

@@ -153,24 +153,32 @@ export function setLoggerWindow(_window: BrowserWindow | null): void {
   // No-op — kept for backward compatibility with existing call sites.
 }
 
+let cachedBroadcast: typeof import("../ipc/utils.js").broadcastToRenderer | null | undefined;
+let cachedBW: typeof import("electron").BrowserWindow | null | undefined;
+
 function getBroadcast(): typeof import("../ipc/utils.js").broadcastToRenderer | null {
+  if (cachedBroadcast !== undefined) return cachedBroadcast;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const utils = require("../ipc/utils.js") as typeof import("../ipc/utils.js");
-    return utils.broadcastToRenderer;
+    cachedBroadcast = utils.broadcastToRenderer;
   } catch {
-    return null;
+    cachedBroadcast = null;
   }
+  return cachedBroadcast;
 }
 
 function hasAnyWindow(): boolean {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { BrowserWindow: BW } = require("electron") as typeof import("electron");
-    return BW.getAllWindows().length > 0;
-  } catch {
-    return false;
+  if (cachedBW === undefined) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      cachedBW = (require("electron") as typeof import("electron")).BrowserWindow;
+    } catch {
+      cachedBW = null;
+    }
   }
+  if (!cachedBW) return false;
+  return cachedBW.getAllWindows().length > 0;
 }
 
 function sendLogToRenderer(entry: LogEntry): void {

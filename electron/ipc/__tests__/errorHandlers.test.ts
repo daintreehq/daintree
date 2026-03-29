@@ -236,7 +236,7 @@ describe("errorHandlers", () => {
   describe("exponential backoff and retry limits", () => {
     it("retries transient terminal errors up to 3 times with backoff", async () => {
       const CHANNELS = await getChannels();
-      const mockWindow = createMockWindow();
+      createMockWindow();
       let callCount = 0;
       const spawn = vi.fn(() => {
         callCount++;
@@ -259,7 +259,7 @@ describe("errorHandlers", () => {
 
     it("exhausts max terminal attempts (3) and rethrows", async () => {
       const CHANNELS = await getChannels();
-      const mockWindow = createMockWindow();
+      createMockWindow();
       const spawn = vi.fn(() => {
         throw createTransientError("EBUSY");
       });
@@ -280,7 +280,7 @@ describe("errorHandlers", () => {
 
     it("exhausts max worktree attempts (5) and rethrows", async () => {
       const CHANNELS = await getChannels();
-      const mockWindow = createMockWindow();
+      createMockWindow();
       const refresh = vi.fn().mockRejectedValue(createTransientError("ETIMEDOUT"));
 
       registerErrorHandlers({ refresh } as never, null);
@@ -296,7 +296,7 @@ describe("errorHandlers", () => {
 
     it("aborts immediately on non-transient error without sleeping", async () => {
       const CHANNELS = await getChannels();
-      const mockWindow = createMockWindow();
+      createMockWindow();
       const spawn = vi.fn(() => {
         throw createNonTransientError("File not found");
       });
@@ -317,7 +317,7 @@ describe("errorHandlers", () => {
 
     it("stops retrying when a transient error becomes non-transient mid-loop", async () => {
       const CHANNELS = await getChannels();
-      const mockWindow = createMockWindow();
+      createMockWindow();
       let callCount = 0;
       const spawn = vi.fn(() => {
         callCount++;
@@ -396,7 +396,7 @@ describe("errorHandlers", () => {
 
     it("cancellation via cancel handler aborts in-progress retry", async () => {
       const CHANNELS = await getChannels();
-      const mockWindow = createMockWindow();
+      createMockWindow();
       const spawn = vi.fn(() => {
         throw createTransientError("EBUSY");
       });
@@ -430,7 +430,7 @@ describe("errorHandlers", () => {
 
     it("computes backoff delay with jitter correctly", async () => {
       const CHANNELS = await getChannels();
-      const mockWindow = createMockWindow();
+      createMockWindow();
       const spawn = vi.fn(() => {
         throw createTransientError("EBUSY");
       });
@@ -486,7 +486,7 @@ describe("errorHandlers", () => {
 
       // Import error types to create typed errors
       const { ConfigError } = await import("../../utils/errorTypes.js");
-      const destroyedWindow = createMockWindow({ destroyed: true });
+      createMockWindow({ destroyed: true });
       registerErrorHandlers(null, null);
 
       // Trigger a retry that uses a ptyClient spawn which throws a ConfigError
@@ -516,7 +516,7 @@ describe("errorHandlers", () => {
 
     it("preserves correlationId through buffer and flush", async () => {
       const CHANNELS = await getChannels();
-      const destroyedWindow = createMockWindow({ destroyed: true });
+      createMockWindow({ destroyed: true });
       registerErrorHandlers(null, null);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
@@ -536,7 +536,7 @@ describe("errorHandlers", () => {
 
     it("does not persist transient or non-critical errors to disk", async () => {
       const CHANNELS = await getChannels();
-      const destroyedWindow = createMockWindow({ destroyed: true });
+      createMockWindow({ destroyed: true });
       registerErrorHandlers(null, null);
 
       // Trigger an error (invalid retry payload creates an "unknown" type error)
@@ -551,7 +551,7 @@ describe("errorHandlers", () => {
   describe("flushPendingErrors", () => {
     it("delivers buffered errors and clears persisted store on flush", async () => {
       const CHANNELS = await getChannels();
-      const destroyedWindow = createMockWindow({ destroyed: true });
+      createMockWindow({ destroyed: true });
       registerErrorHandlers(null, null);
 
       // Buffer some errors
@@ -588,7 +588,7 @@ describe("errorHandlers", () => {
 
     it("prevents double delivery after flush", async () => {
       const CHANNELS = await getChannels();
-      const destroyedWindow = createMockWindow({ destroyed: true });
+      createMockWindow({ destroyed: true });
       registerErrorHandlers(null, null);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
@@ -1123,7 +1123,7 @@ describe("errorHandlers", () => {
 
     it("does not return fromPreviousSession on same-session flushed errors", async () => {
       const CHANNELS = await getChannels();
-      const destroyedWindow = createMockWindow({ destroyed: true });
+      createMockWindow({ destroyed: true });
       registerErrorHandlers(null, null);
 
       // Buffer an error

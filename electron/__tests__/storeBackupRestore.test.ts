@@ -3,9 +3,9 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
-vi.mock("electron-store", () => {
-  const { default: ConfClass } = require("conf");
-  return { default: ConfClass };
+vi.mock("electron-store", async () => {
+  const conf = await import("conf");
+  return { default: conf.default };
 });
 
 import {

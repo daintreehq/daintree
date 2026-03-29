@@ -7,7 +7,7 @@ import {
 } from "../../services/SystemSleepService.js";
 import type { HandlerDependencies } from "../types.js";
 
-export function registerSystemSleepHandlers(deps: HandlerDependencies): () => void {
+export function registerSystemSleepHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
   const systemSleepService = getSystemSleepService();
 

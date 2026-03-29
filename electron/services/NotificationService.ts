@@ -16,6 +16,7 @@ const DEBOUNCE_MS = 300;
 const DEFAULT_TITLE = "Canopy";
 
 interface TrackedWindow {
+  browserWindow: import("electron").BrowserWindow;
   focusHandler: () => void;
   blurHandler: () => void;
 }
@@ -29,11 +30,10 @@ class NotificationService {
   private activeNotifications = new Set<Notification>();
 
   private detachAllWindowListeners(): void {
-    for (const [windowId, tracked] of this.trackedWindows) {
-      const ctx = this.registry?.getByWindowId(windowId);
-      if (ctx && !ctx.browserWindow.isDestroyed()) {
-        ctx.browserWindow.off("focus", tracked.focusHandler);
-        ctx.browserWindow.off("blur", tracked.blurHandler);
+    for (const [, tracked] of this.trackedWindows) {
+      if (!tracked.browserWindow.isDestroyed()) {
+        tracked.browserWindow.off("focus", tracked.focusHandler);
+        tracked.browserWindow.off("blur", tracked.blurHandler);
       }
     }
     this.trackedWindows.clear();
@@ -68,7 +68,11 @@ class NotificationService {
     ctx.browserWindow.on("focus", focusHandler);
     ctx.browserWindow.on("blur", blurHandler);
 
-    this.trackedWindows.set(windowId, { focusHandler, blurHandler });
+    this.trackedWindows.set(windowId, {
+      browserWindow: ctx.browserWindow,
+      focusHandler,
+      blurHandler,
+    });
   }
 
   initialize(registry: WindowRegistry): void {

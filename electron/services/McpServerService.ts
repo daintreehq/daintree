@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain } from "electron";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import http from "node:http";
 import net from "node:net";
