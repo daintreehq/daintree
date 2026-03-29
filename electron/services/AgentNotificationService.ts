@@ -11,6 +11,8 @@ const BURST_WINDOW_MS = 200;
 const WORKING_PULSE_INITIAL_DELAY_MS = 10_000;
 const WORKING_PULSE_MIN_INTERVAL_MS = 8_000;
 const WORKING_PULSE_MAX_INTERVAL_MS = 10_000;
+const ALL_CLEAR_DEBOUNCE_MS = 500;
+const ACTIVE_AGENT_STATES = new Set(["working", "running", "directing"]);
 
 interface PendingNotification {
   title: string;
@@ -38,6 +40,9 @@ class AgentNotificationService {
   private staggerTimer: NodeJS.Timeout | null = null;
   private unsubscribers: Array<() => void> = [];
   private watchedTerminals = new Set<string>();
+  private hasEverGoneWorking = false;
+  private peakConcurrentWorking = 0;
+  private allClearTimer: NodeJS.Timeout | null = null;
 
   private waitingBurstBuffer: BurstWaitingEntry[] = [];
   private waitingBurstTimer: NodeJS.Timeout | null = null;
@@ -69,6 +74,9 @@ class AgentNotificationService {
   }): void {
     const { state, previousState, worktreeId, terminalId, agentId, waitingReason } = payload;
     const settings = projectStore.getEffectiveNotificationSettings();
+
+    // All-clear tracking runs regardless of notification settings
+    this.checkAllClear(state, previousState);
 
     // Allow same-state transitions for waitingReason changes (e.g., prompt -> question)
     if (state === previousState && !(state === "waiting" && waitingReason !== undefined)) return;
@@ -140,6 +148,64 @@ class AgentNotificationService {
         this.waitingBurstTimer = setTimeout(() => this.flushWaitingBurst(), BURST_WINDOW_MS);
       }
     }
+  }
+
+  private countActiveAgents(): number {
+    const terminals = store.get("appState").terminals;
+    return terminals.filter(
+      (t: { agentState?: string }) => t.agentState && ACTIVE_AGENT_STATES.has(t.agentState)
+    ).length;
+  }
+
+  private checkAllClear(state: string, previousState: string): void {
+    const wasActive = ACTIVE_AGENT_STATES.has(previousState);
+    const isActive = ACTIVE_AGENT_STATES.has(state);
+
+    // Track when agents start working
+    if (!wasActive && isActive) {
+      this.hasEverGoneWorking = true;
+      const activeCount = this.countActiveAgents();
+      this.peakConcurrentWorking = Math.max(this.peakConcurrentWorking, activeCount);
+
+      // Cancel any pending all-clear — a new agent just started
+      if (this.allClearTimer) {
+        clearTimeout(this.allClearTimer);
+        this.allClearTimer = null;
+      }
+      return;
+    }
+
+    // Only consider transitions OUT of active states
+    if (!wasActive || isActive) return;
+
+    const activeCount = this.countActiveAgents();
+
+    // All conditions must hold to schedule the all-clear
+    if (!this.hasEverGoneWorking || this.peakConcurrentWorking < 2 || activeCount > 0) return;
+
+    // Cancel any existing timer (rapid succession of completions)
+    if (this.allClearTimer) {
+      clearTimeout(this.allClearTimer);
+    }
+
+    this.allClearTimer = setTimeout(() => {
+      this.allClearTimer = null;
+
+      // Re-check after debounce — an agent may have started during the window
+      const currentActive = this.countActiveAgents();
+      if (currentActive > 0) return;
+
+      // Fire the all-clear
+      const settings = projectStore.getEffectiveNotificationSettings();
+      if (settings.soundEnabled) {
+        soundService.play("all-clear");
+      }
+      events.emit("agent:all-clear", { timestamp: Date.now() });
+
+      // Reset for next multi-agent session
+      this.peakConcurrentWorking = 0;
+      this.hasEverGoneWorking = false;
+    }, ALL_CLEAR_DEBOUNCE_MS);
   }
 
   private scheduleCompletionNotification(
@@ -469,6 +535,11 @@ class AgentNotificationService {
     }
     this.workingPulseIntervalTimers.clear();
 
+    if (this.allClearTimer) {
+      clearTimeout(this.allClearTimer);
+      this.allClearTimer = null;
+    }
+
     if (this.staggerTimer) {
       clearTimeout(this.staggerTimer);
       this.staggerTimer = null;
@@ -489,6 +560,8 @@ class AgentNotificationService {
 
     this.waitingTerminalIds.clear();
     this.notificationQueue = [];
+    this.hasEverGoneWorking = false;
+    this.peakConcurrentWorking = 0;
 
     soundService.cancel();
     soundService.cancelPulse();
