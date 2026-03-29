@@ -1,5 +1,5 @@
 import { useState, useRef, useLayoutEffect, useCallback } from "react";
-import type { ToolbarButtonId, ToolbarButtonPriority } from "@shared/types/toolbar";
+import type { ToolbarButtonId, ToolbarButtonPriority, AnyToolbarButtonId } from "@shared/types/toolbar";
 import { TOOLBAR_BUTTON_PRIORITIES } from "@shared/types/toolbar";
 
 const OVERFLOW_TRIGGER_WIDTH = 0;
@@ -7,8 +7,8 @@ const HYSTERESIS_BUFFER = 8;
 const DEFAULT_ITEM_WIDTH = 36;
 
 export interface OverflowResult {
-  visibleIds: ToolbarButtonId[];
-  overflowIds: ToolbarButtonId[];
+  visibleIds: AnyToolbarButtonId[];
+  overflowIds: AnyToolbarButtonId[];
 }
 
 /**
@@ -21,8 +21,8 @@ export interface OverflowResult {
 export function computeOverflow(
   containerWidth: number,
   itemWidths: Map<string, number>,
-  orderedIds: ToolbarButtonId[],
-  priorities: Record<ToolbarButtonId, ToolbarButtonPriority>
+  orderedIds: AnyToolbarButtonId[],
+  priorities: Record<string, ToolbarButtonPriority>
 ): OverflowResult {
   if (orderedIds.length === 0) {
     return { visibleIds: [], overflowIds: [] };
@@ -46,7 +46,7 @@ export function computeOverflow(
       return b.index - a.index;
     });
 
-  const overflowSet = new Set<ToolbarButtonId>();
+  const overflowSet = new Set<AnyToolbarButtonId>();
   let currentWidth = totalWidth;
   const targetWidth = containerWidth - OVERFLOW_TRIGGER_WIDTH - HYSTERESIS_BUFFER;
 
@@ -69,13 +69,13 @@ function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
 export function useToolbarOverflow(
   leftContainerRef: React.RefObject<HTMLDivElement | null>,
   rightContainerRef: React.RefObject<HTMLDivElement | null>,
-  leftIds: ToolbarButtonId[],
-  rightIds: ToolbarButtonId[]
+  leftIds: AnyToolbarButtonId[],
+  rightIds: AnyToolbarButtonId[]
 ): {
-  leftVisible: ToolbarButtonId[];
-  leftOverflow: ToolbarButtonId[];
-  rightVisible: ToolbarButtonId[];
-  rightOverflow: ToolbarButtonId[];
+  leftVisible: AnyToolbarButtonId[];
+  leftOverflow: AnyToolbarButtonId[];
+  rightVisible: AnyToolbarButtonId[];
+  rightOverflow: AnyToolbarButtonId[];
 } {
   const [leftResult, setLeftResult] = useState<OverflowResult>({
     visibleIds: leftIds,

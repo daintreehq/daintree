@@ -6,6 +6,7 @@ import type { CliAvailabilityService } from "./services/CliAvailabilityService.j
 import * as CliInstallService from "./services/CliInstallService.js";
 import { getProjectSwitchServiceRef } from "./window/windowServices.js";
 import { autoUpdaterService } from "./services/AutoUpdaterService.js";
+import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 
 app.setAboutPanelOptions({
   applicationName: "Canopy",
@@ -64,6 +65,21 @@ export function createApplicationMenu(
       }
     });
 
+    return items;
+  };
+
+  const buildPluginMenuItems = (
+    location: string
+  ): Electron.MenuItemConstructorOptions[] => {
+    const items: Electron.MenuItemConstructorOptions[] = [];
+    for (const { item } of getPluginMenuItems()) {
+      if (item.location !== location) continue;
+      items.push({
+        label: item.label,
+        accelerator: item.accelerator ? convertShortcutToAccelerator(item.accelerator) : undefined,
+        click: () => sendAction(`plugin:${item.actionId}`),
+      });
+    }
     return items;
   };
 
@@ -185,6 +201,12 @@ export function createApplicationMenu(
               { type: "separator" as const },
             ]
           : [{ type: "separator" as const }]),
+        ...(buildPluginMenuItems("terminal").length > 0
+          ? [
+              ...buildPluginMenuItems("terminal"),
+              { type: "separator" as const },
+            ]
+          : []),
         {
           label: "Quick Switcher...",
           accelerator: "CommandOrControl+P",

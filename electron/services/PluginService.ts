@@ -5,7 +5,10 @@ import { pathToFileURL } from "url";
 import { PluginManifestSchema } from "../schemas/plugin.js";
 import type { PluginManifest, PluginIpcHandler } from "../../shared/types/plugin.js";
 import { registerPanelKind } from "../../shared/config/panelKindRegistry.js";
+import { registerToolbarButton } from "../../shared/config/toolbarButtonRegistry.js";
+import { registerPluginMenuItem } from "./pluginMenuRegistry.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
+import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 
 interface LoadedPlugin {
   manifest: PluginManifest;
@@ -126,6 +129,22 @@ export class PluginService {
         showInPalette: panel.showInPalette,
         extensionId: manifest.name,
       });
+    }
+
+    for (const btn of manifest.contributes.toolbarButtons) {
+      const buttonId = `plugin.${manifest.name}.${btn.id}` as PluginToolbarButtonId;
+      registerToolbarButton({
+        id: buttonId,
+        label: btn.label,
+        iconId: btn.iconId,
+        actionId: btn.actionId,
+        priority: btn.priority ?? 3,
+        pluginId: manifest.name,
+      });
+    }
+
+    for (const menuItem of manifest.contributes.menuItems) {
+      registerPluginMenuItem(manifest.name, menuItem);
     }
 
     if (plugin.resolvedMain) {

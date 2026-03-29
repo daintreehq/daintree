@@ -6,9 +6,17 @@ import os from "os";
 vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
   registerPanelKind: vi.fn(),
 }));
+vi.mock("../../../shared/config/toolbarButtonRegistry.js", () => ({
+  registerToolbarButton: vi.fn(),
+}));
+vi.mock("../pluginMenuRegistry.js", () => ({
+  registerPluginMenuItem: vi.fn(),
+}));
 
 import { PluginService } from "../PluginService.js";
 import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
+import { registerToolbarButton } from "../../../shared/config/toolbarButtonRegistry.js";
+import { registerPluginMenuItem } from "../pluginMenuRegistry.js";
 
 let tmpDir: string;
 
@@ -270,6 +278,103 @@ describe("PluginService", () => {
     // Second call is no-op (already initialized)
     await service.initialize();
     expect(service.listPlugins()).toHaveLength(1);
+  });
+
+  it("registers toolbar buttons from plugin manifest", async () => {
+    await writePlugin("toolbar-test", {
+      name: "toolbar-test",
+      version: "1.0.0",
+      contributes: {
+        toolbarButtons: [
+          {
+            id: "my-btn",
+            label: "My Button",
+            iconId: "puzzle",
+            actionId: "toolbar-test.doThing",
+            priority: 4,
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(registerToolbarButton).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "plugin.toolbar-test.my-btn",
+        label: "My Button",
+        iconId: "puzzle",
+        actionId: "toolbar-test.doThing",
+        priority: 4,
+        pluginId: "toolbar-test",
+      })
+    );
+  });
+
+  it("uses default priority 3 when not specified in toolbar button", async () => {
+    await writePlugin("default-priority", {
+      name: "default-priority",
+      version: "1.0.0",
+      contributes: {
+        toolbarButtons: [
+          {
+            id: "btn",
+            label: "Btn",
+            iconId: "icon",
+            actionId: "test.action",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(registerToolbarButton).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "plugin.default-priority.btn",
+        priority: 3,
+      })
+    );
+  });
+
+  it("registers menu items from plugin manifest", async () => {
+    await writePlugin("menu-test", {
+      name: "menu-test",
+      version: "1.0.0",
+      contributes: {
+        menuItems: [
+          {
+            label: "Do Something",
+            actionId: "menu-test.doSomething",
+            location: "terminal",
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(registerPluginMenuItem).toHaveBeenCalledWith("menu-test", {
+      label: "Do Something",
+      actionId: "menu-test.doSomething",
+      location: "terminal",
+    });
+  });
+
+  it("does not call toolbar/menu registration when no contributions", async () => {
+    await writePlugin("empty-contribs", {
+      name: "empty-contribs",
+      version: "1.0.0",
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(registerToolbarButton).not.toHaveBeenCalled();
+    expect(registerPluginMenuItem).not.toHaveBeenCalled();
   });
 });
 

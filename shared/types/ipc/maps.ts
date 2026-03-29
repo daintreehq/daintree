@@ -1248,6 +1248,17 @@ export interface IpcInvokeMap {
     args: [];
     result: import("../plugin.js").LoadedPluginInfo[];
   };
+  "plugin:toolbar-buttons": {
+    args: [];
+    result: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
+  };
+  "plugin:menu-items": {
+    args: [];
+    result: Array<{
+      pluginId: string;
+      item: import("../plugin.js").MenuItemContribution;
+    }>;
+  };
 
   // Dev Preview channels
   "dev-preview:ensure": {
