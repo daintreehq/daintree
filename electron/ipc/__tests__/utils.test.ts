@@ -212,7 +212,9 @@ describe("broadcastToRenderer", () => {
     browserWindowGetAllWindowsMock.mockReturnValue([win1, win2]);
 
     broadcastToRenderer("channel:test", { payload: true });
+    expect(send1).toHaveBeenCalledTimes(1);
     expect(send1).toHaveBeenCalledWith("channel:test", { payload: true });
+    expect(send2).toHaveBeenCalledTimes(1);
     expect(send2).toHaveBeenCalledWith("channel:test", { payload: true });
   });
 
@@ -316,6 +318,21 @@ describe("sendToRendererContext", () => {
 
     sendToRendererContext(ctx as never, "channel:test", 1, "two", { three: 3 });
     expect(send).toHaveBeenCalledWith("channel:test", 1, "two", { three: 3 });
+  });
+
+  it("no-ops when senderWindow is destroyed", () => {
+    const send = vi.fn();
+    const ctx = {
+      senderWindow: {
+        isDestroyed: () => true,
+        webContents: { isDestroyed: () => false, send },
+      },
+      webContentsId: 1,
+      event: {},
+    };
+
+    sendToRendererContext(ctx as never, "channel:test", "data");
+    expect(send).not.toHaveBeenCalled();
   });
 });
 
