@@ -1,6 +1,15 @@
 import type * as React from "react";
 import type { WorktreeState } from "../../types";
 import {
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubTrigger,
+  ContextMenuSubContent,
+} from "@/components/ui/context-menu";
+import {
   CircleDot,
   Code,
   Copy,
@@ -40,6 +49,16 @@ export interface WorktreeMenuComponents {
   SubTrigger: MenuComponent;
   SubContent: MenuComponent;
 }
+
+export const CONTEXT_COMPONENTS: WorktreeMenuComponents = {
+  Item: ContextMenuItem,
+  Label: ContextMenuLabel,
+  Separator: ContextMenuSeparator,
+  Shortcut: ContextMenuShortcut,
+  Sub: ContextMenuSub,
+  SubTrigger: ContextMenuSubTrigger,
+  SubContent: ContextMenuSubContent,
+};
 
 export interface WorktreeLaunchAgentItem {
   id: string;

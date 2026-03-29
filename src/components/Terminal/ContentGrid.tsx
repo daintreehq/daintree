@@ -41,12 +41,22 @@ import {
   GRID_FIT_DELAY_MS,
 } from "@/lib/terminalLayout";
 import { useWorktrees } from "@/hooks/useWorktrees";
-import { useNativeContextMenu, useProjectBranding } from "@/hooks";
+import { useProjectBranding } from "@/hooks";
 import { actionService } from "@/services/ActionService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { CliAvailability } from "@shared/types";
 import type { ActionId } from "@shared/types/actions";
-import type { MenuItemOption } from "@/types";
+import {
+  ContextMenu,
+  ContextMenuCheckboxItem,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { getRecipeTerminalSummary } from "./utils/recipeUtils";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
@@ -552,7 +562,6 @@ function EmptyState({
 
 export function ContentGrid({ className, defaultCwd, agentAvailability }: ContentGridProps) {
   "use memo";
-  const { showMenu } = useNativeContextMenu();
   const {
     terminals,
     focusedId,
@@ -832,105 +841,37 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
     return computeGridColumns(gridItemCount, gridWidth, strategy, value);
   }, [gridItemCount, layoutConfig, gridWidth, maximizedId, preMaximizeLayout, activeWorktreeId]);
 
-  const handleGridContextMenu = useCallback(
-    async (event: React.MouseEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (!target) return;
-      if (target.closest(".terminal-pane")) return;
+  const gridAgentMenuItems = useMemo(() => {
+    return getEffectiveAgentIds()
+      .filter((id) => !gridSelectedAgentIds || gridSelectedAgentIds.has(id))
+      .map((id) => {
+        const agentConfig = getEffectiveAgentConfig(id);
+        const canLaunch =
+          id === "terminal" ? true : !agentAvailability || agentAvailability[id] === true;
+        return { id, name: agentConfig?.name ?? id, canLaunch };
+      });
+  }, [agentAvailability, gridSelectedAgentIds]);
 
-      const canLaunch = (agentId: string) => {
-        if (agentId === "terminal") return true;
-        if (!agentAvailability) return true;
-        return agentAvailability[agentId] === true;
-      };
-
-      // When gridSelectedAgentIds is undefined (settings not loaded), show all registry agents.
-      // When it's a Set, show only agents not explicitly deselected.
-      const agentMenuItems: MenuItemOption[] = getEffectiveAgentIds()
-        .filter((id) => !gridSelectedAgentIds || gridSelectedAgentIds.has(id))
-        .map((id) => {
-          const config = getEffectiveAgentConfig(id);
-          return {
-            id: `new:${id}`,
-            label: `New ${config?.name ?? id}`,
-            enabled: canLaunch(id),
-          };
-        });
-
-      const template: MenuItemOption[] = [
-        { id: "new:terminal", label: "New Terminal" },
-        { id: "new:browser", label: "New Browser" },
-        ...(agentMenuItems.length > 0 ? [{ type: "separator" as const }, ...agentMenuItems] : []),
-        { type: "separator" },
-        {
-          id: "layout",
-          label: "Grid Layout",
-          submenu: [
-            {
-              id: "layout:automatic",
-              label: "Automatic",
-              type: "checkbox",
-              checked: layoutConfig.strategy === "automatic",
-            },
-            {
-              id: "layout:fixed-columns",
-              label: "Fixed Columns",
-              type: "checkbox",
-              checked: layoutConfig.strategy === "fixed-columns",
-            },
-            {
-              id: "layout:fixed-rows",
-              label: "Fixed Rows",
-              type: "checkbox",
-              checked: layoutConfig.strategy === "fixed-rows",
-            },
-          ],
-        },
-        { type: "separator" },
-        { id: "settings:terminal", label: "Terminal Settings..." },
-      ];
-
-      const actionId = await showMenu(event, template);
-      if (!actionId) return;
-
-      if (actionId.startsWith("new:")) {
-        const agentId = actionId.slice("new:".length) as
-          | "claude"
-          | "gemini"
-          | "codex"
-          | "opencode"
-          | "terminal"
-          | "browser";
-        void actionService.dispatch(
-          "agent.launch",
-          { agentId, location: "grid", cwd: defaultCwd || undefined },
-          { source: "context-menu" }
-        );
-        return;
-      }
-
-      if (actionId.startsWith("layout:")) {
-        const nextStrategy = actionId.slice("layout:".length) as
-          | "automatic"
-          | "fixed-columns"
-          | "fixed-rows";
-        void actionService.dispatch(
-          "panel.gridLayout.setStrategy",
-          { strategy: nextStrategy },
-          { source: "context-menu" }
-        );
-        return;
-      }
-
-      if (actionId === "settings:terminal") {
-        void actionService.dispatch(
-          "app.settings.openTab",
-          { tab: "terminal" },
-          { source: "context-menu" }
-        );
-      }
+  const handleGridLaunch = useCallback(
+    (agentId: string) => {
+      void actionService.dispatch(
+        "agent.launch",
+        { agentId, location: "grid", cwd: defaultCwd || undefined },
+        { source: "context-menu" }
+      );
     },
-    [agentAvailability, defaultCwd, gridSelectedAgentIds, layoutConfig, showMenu]
+    [defaultCwd]
+  );
+
+  const handleGridLayoutChange = useCallback(
+    (strategy: "automatic" | "fixed-columns" | "fixed-rows") => {
+      void actionService.dispatch(
+        "panel.gridLayout.setStrategy",
+        { strategy },
+        { source: "context-menu" }
+      );
+    },
+    []
   );
 
   // Terminal IDs for SortableContext
@@ -1068,6 +1009,59 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
     }
   }, [focusedId, maximizedGroupFocusTarget, maximizedGroupPanels.length, setFocused]);
 
+  const gridContextMenuContent = (
+    <ContextMenuContent>
+      <ContextMenuItem onSelect={() => handleGridLaunch("terminal")}>New Terminal</ContextMenuItem>
+      <ContextMenuItem onSelect={() => handleGridLaunch("browser")}>New Browser</ContextMenuItem>
+      {gridAgentMenuItems.length > 0 && <ContextMenuSeparator />}
+      {gridAgentMenuItems.map((agent) => (
+        <ContextMenuItem
+          key={agent.id}
+          disabled={!agent.canLaunch}
+          onSelect={() => handleGridLaunch(agent.id)}
+        >
+          New {agent.name}
+        </ContextMenuItem>
+      ))}
+      <ContextMenuSeparator />
+      <ContextMenuSub>
+        <ContextMenuSubTrigger>Grid Layout</ContextMenuSubTrigger>
+        <ContextMenuSubContent>
+          <ContextMenuCheckboxItem
+            checked={layoutConfig.strategy === "automatic"}
+            onSelect={() => handleGridLayoutChange("automatic")}
+          >
+            Automatic
+          </ContextMenuCheckboxItem>
+          <ContextMenuCheckboxItem
+            checked={layoutConfig.strategy === "fixed-columns"}
+            onSelect={() => handleGridLayoutChange("fixed-columns")}
+          >
+            Fixed Columns
+          </ContextMenuCheckboxItem>
+          <ContextMenuCheckboxItem
+            checked={layoutConfig.strategy === "fixed-rows"}
+            onSelect={() => handleGridLayoutChange("fixed-rows")}
+          >
+            Fixed Rows
+          </ContextMenuCheckboxItem>
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      <ContextMenuSeparator />
+      <ContextMenuItem
+        onSelect={() =>
+          void actionService.dispatch(
+            "app.settings.openTab",
+            { tab: "terminal" },
+            { source: "context-menu" }
+          )
+        }
+      >
+        Terminal Settings...
+      </ContextMenuItem>
+    </ContextMenuContent>
+  );
+
   // Maximized terminal or group takes full screen
   if (maximizedId && maximizeTarget) {
     if (maximizeTarget.type === "group") {
@@ -1160,24 +1154,28 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       >
         <GridNotificationBar className="mx-1 mt-1 shrink-0" />
         <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
-        <div
-          ref={combinedGridRef}
-          onContextMenu={handleGridContextMenu}
-          className={cn(
-            "relative flex-1 min-h-0",
-            isOver && "ring-2 ring-canopy-accent/30 ring-inset"
-          )}
-        >
-          <TwoPaneSplitLayout
-            terminals={twoPaneTerminals}
-            focusedId={focusedId}
-            activeWorktreeId={activeWorktreeId}
-            isInTrash={isInTrash}
-            onAddTabLeft={() => handleAddTabForPanel(twoPaneTerminals[0])}
-            onAddTabRight={() => handleAddTabForPanel(twoPaneTerminals[1])}
-          />
-          <GridFullOverlay maxTerminals={maxGridCapacity} show={showGridFullOverlay} />
-        </div>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <div
+              ref={combinedGridRef}
+              className={cn(
+                "relative flex-1 min-h-0",
+                isOver && "ring-2 ring-canopy-accent/30 ring-inset"
+              )}
+            >
+              <TwoPaneSplitLayout
+                terminals={twoPaneTerminals}
+                focusedId={focusedId}
+                activeWorktreeId={activeWorktreeId}
+                isInTrash={isInTrash}
+                onAddTabLeft={() => handleAddTabForPanel(twoPaneTerminals[0])}
+                onAddTabRight={() => handleAddTabForPanel(twoPaneTerminals[1])}
+              />
+              <GridFullOverlay maxTerminals={maxGridCapacity} show={showGridFullOverlay} />
+            </div>
+          </ContextMenuTrigger>
+          {gridContextMenuContent}
+        </ContextMenu>
       </div>
     );
   }
@@ -1201,104 +1199,110 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
       <div className="relative flex-1 min-h-0">
         <SortableContext id="grid-container" items={terminalIds} strategy={rectSortingStrategy}>
-          <div
-            ref={combinedGridRef}
-            onContextMenu={handleGridContextMenu}
-            className={cn(
-              "h-full bg-noise p-1",
-              isOver && "ring-2 ring-canopy-accent/30 ring-inset"
-            )}
-            style={{
-              display: "grid",
-              gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
-              gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
-              gap: "4px",
-              backgroundColor: "var(--color-grid-bg)",
-              transition: isProjectSwitching
-                ? "none"
-                : `grid-template-columns ${GRID_TRANSITION_DURATION_MS}ms ease-out`,
-              overflowY: "auto",
-            }}
-            role="grid"
-            id="panel-grid"
-            aria-label="Panel grid"
-            data-grid-container="true"
-          >
-            {isEmpty && !showPlaceholder ? (
-              <div className="col-span-full row-span-full">
-                <EmptyState
-                  hasActiveWorktree={hasActiveWorktree}
-                  activeWorktreeName={activeWorktreeName}
-                  activeWorktreeId={activeWorktreeId}
-                  showProjectPulse={showProjectPulse}
-                  projectIconSvg={projectIconSvg}
-                  defaultCwd={defaultCwd}
-                />
-              </div>
-            ) : (
-              <>
-                {tabGroups.map((group, index) => {
-                  const groupPanels = getTabGroupPanels(group.id, "grid");
-                  if (groupPanels.length === 0) return null;
-
-                  const elements: React.ReactNode[] = [];
-
-                  if (showPlaceholder && placeholderInGrid && placeholderIndex === index) {
-                    elements.push(<SortableGridPlaceholder key={GRID_PLACEHOLDER_ID} />);
-                  }
-
-                  const isGroupDisabled = groupPanels.some((p) => isInTrash(p.id));
-
-                  if (groupPanels.length === 1) {
-                    const terminal = groupPanels[0];
-                    elements.push(
-                      <SortableTerminal
-                        key={group.id}
-                        terminal={terminal}
-                        sourceLocation="grid"
-                        sourceIndex={index}
-                        disabled={isGroupDisabled}
-                      >
-                        <GridPanel
-                          terminal={terminal}
-                          isFocused={terminal.id === focusedId}
-                          gridPanelCount={gridItemCount}
-                          gridCols={gridCols}
-                          onAddTab={() => handleAddTabForPanel(terminal)}
-                        />
-                      </SortableTerminal>
-                    );
-                  } else {
-                    const firstPanel = groupPanels[0];
-                    elements.push(
-                      <SortableTerminal
-                        key={group.id}
-                        terminal={firstPanel}
-                        sourceLocation="grid"
-                        sourceIndex={index}
-                        disabled={isGroupDisabled}
-                        groupId={group.id}
-                        groupPanelIds={group.panelIds}
-                      >
-                        <GridTabGroup
-                          group={group}
-                          panels={groupPanels}
-                          focusedId={focusedId}
-                          gridPanelCount={gridItemCount}
-                          gridCols={gridCols}
-                        />
-                      </SortableTerminal>
-                    );
-                  }
-
-                  return elements;
-                })}
-                {showPlaceholder && placeholderInGrid && placeholderIndex === tabGroups.length && (
-                  <SortableGridPlaceholder key={GRID_PLACEHOLDER_ID} />
+          <ContextMenu>
+            <ContextMenuTrigger asChild>
+              <div
+                ref={combinedGridRef}
+                className={cn(
+                  "h-full bg-noise p-1",
+                  isOver && "ring-2 ring-canopy-accent/30 ring-inset"
                 )}
-              </>
-            )}
-          </div>
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
+                  gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
+                  gap: "4px",
+                  backgroundColor: "var(--color-grid-bg)",
+                  transition: isProjectSwitching
+                    ? "none"
+                    : `grid-template-columns ${GRID_TRANSITION_DURATION_MS}ms ease-out`,
+                  overflowY: "auto",
+                }}
+                role="grid"
+                id="panel-grid"
+                aria-label="Panel grid"
+                data-grid-container="true"
+              >
+                {isEmpty && !showPlaceholder ? (
+                  <div className="col-span-full row-span-full">
+                    <EmptyState
+                      hasActiveWorktree={hasActiveWorktree}
+                      activeWorktreeName={activeWorktreeName}
+                      activeWorktreeId={activeWorktreeId}
+                      showProjectPulse={showProjectPulse}
+                      projectIconSvg={projectIconSvg}
+                      defaultCwd={defaultCwd}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    {tabGroups.map((group, index) => {
+                      const groupPanels = getTabGroupPanels(group.id, "grid");
+                      if (groupPanels.length === 0) return null;
+
+                      const elements: React.ReactNode[] = [];
+
+                      if (showPlaceholder && placeholderInGrid && placeholderIndex === index) {
+                        elements.push(<SortableGridPlaceholder key={GRID_PLACEHOLDER_ID} />);
+                      }
+
+                      const isGroupDisabled = groupPanels.some((p) => isInTrash(p.id));
+
+                      if (groupPanels.length === 1) {
+                        const terminal = groupPanels[0];
+                        elements.push(
+                          <SortableTerminal
+                            key={group.id}
+                            terminal={terminal}
+                            sourceLocation="grid"
+                            sourceIndex={index}
+                            disabled={isGroupDisabled}
+                          >
+                            <GridPanel
+                              terminal={terminal}
+                              isFocused={terminal.id === focusedId}
+                              gridPanelCount={gridItemCount}
+                              gridCols={gridCols}
+                              onAddTab={() => handleAddTabForPanel(terminal)}
+                            />
+                          </SortableTerminal>
+                        );
+                      } else {
+                        const firstPanel = groupPanels[0];
+                        elements.push(
+                          <SortableTerminal
+                            key={group.id}
+                            terminal={firstPanel}
+                            sourceLocation="grid"
+                            sourceIndex={index}
+                            disabled={isGroupDisabled}
+                            groupId={group.id}
+                            groupPanelIds={group.panelIds}
+                          >
+                            <GridTabGroup
+                              group={group}
+                              panels={groupPanels}
+                              focusedId={focusedId}
+                              gridPanelCount={gridItemCount}
+                              gridCols={gridCols}
+                            />
+                          </SortableTerminal>
+                        );
+                      }
+
+                      return elements;
+                    })}
+                    {showPlaceholder &&
+                      placeholderInGrid &&
+                      placeholderIndex === tabGroups.length && (
+                        <SortableGridPlaceholder key={GRID_PLACEHOLDER_ID} />
+                      )}
+                  </>
+                )}
+              </div>
+            </ContextMenuTrigger>
+            {gridContextMenuContent}
+          </ContextMenu>
         </SortableContext>
 
         <GridFullOverlay maxTerminals={maxGridCapacity} show={showGridFullOverlay} />

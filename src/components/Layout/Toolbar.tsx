@@ -77,9 +77,14 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useGitHubFilterStore } from "@/store/githubFilterStore";
 import { useRepositoryStats } from "@/hooks/useRepositoryStats";
-import { useNativeContextMenu } from "@/hooks";
 import type { CliAvailability, AgentSettings } from "@shared/types";
-import type { MenuItemOption } from "@/types";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { ProjectSwitcherPalette } from "@/components/Project/ProjectSwitcherPalette";
@@ -139,7 +144,6 @@ export function Toolbar({
   agentSettings,
   projectSwitcherPalette,
 }: ToolbarProps) {
-  const { showMenu } = useNativeContextMenu();
   const currentProject = useProjectStore((state) => state.currentProject);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
@@ -335,27 +339,16 @@ export function Toolbar({
     }
   }, [isCopyingTree, activeWorktree, handleCopyTree]);
 
-  const handleSettingsContextMenu = useCallback(
-    async (event: React.MouseEvent) => {
-      const template: MenuItemOption[] = [
-        { id: "settings:general", label: "General" },
-        { id: "settings:agents", label: "Agents" },
-        { id: "settings:terminal", label: "Terminal" },
-        { id: "settings:keyboard", label: "Keyboard" },
-        { id: "settings:notifications", label: "Notifications" },
-        { id: "settings:portal", label: "Portal" },
-        { type: "separator" },
-        { id: "settings:toolbar", label: "Customize Toolbar…" },
-        { id: "settings:troubleshooting", label: "Troubleshooting" },
-      ];
-
-      const actionId = await showMenu(event, template);
-      if (!actionId) return;
-
-      const tab = actionId.replace("settings:", "");
-      void actionService.dispatch("app.settings.openTab", { tab }, { source: "context-menu" });
-    },
-    [showMenu]
+  const settingsContextMenuTabs = useMemo(
+    () => [
+      { tab: "general", label: "General" },
+      { tab: "agents", label: "Agents" },
+      { tab: "terminal", label: "Terminal" },
+      { tab: "keyboard", label: "Keyboard" },
+      { tab: "notifications", label: "Notifications" },
+      { tab: "portal", label: "Portal" },
+    ],
+    []
   );
 
   const getToolbarItems = useCallback(
@@ -927,26 +920,68 @@ export function Toolbar({
       },
       settings: {
         render: () => (
-          <TooltipProvider key="settings">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={onSettings}
-                  onContextMenu={handleSettingsContextMenu}
-                  className={toolbarIconButtonClass}
-                  aria-label="Open settings"
+          <ContextMenu key="settings">
+            <ContextMenuTrigger asChild>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      data-toolbar-item=""
+                      onClick={onSettings}
+                      className={toolbarIconButtonClass}
+                      aria-label="Open settings"
+                    >
+                      <SlidersHorizontal />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {createTooltipWithShortcut("Open Settings", settingsShortcut)}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </ContextMenuTrigger>
+            <ContextMenuContent>
+              {settingsContextMenuTabs.map(({ tab, label }) => (
+                <ContextMenuItem
+                  key={tab}
+                  onSelect={() =>
+                    void actionService.dispatch(
+                      "app.settings.openTab",
+                      { tab },
+                      { source: "context-menu" }
+                    )
+                  }
                 >
-                  <SlidersHorizontal />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Open Settings", settingsShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+                  {label}
+                </ContextMenuItem>
+              ))}
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                onSelect={() =>
+                  void actionService.dispatch(
+                    "app.settings.openTab",
+                    { tab: "toolbar" },
+                    { source: "context-menu" }
+                  )
+                }
+              >
+                Customize Toolbar…
+              </ContextMenuItem>
+              <ContextMenuItem
+                onSelect={() =>
+                  void actionService.dispatch(
+                    "app.settings.openTab",
+                    { tab: "troubleshooting" },
+                    { source: "context-menu" }
+                  )
+                }
+              >
+                Troubleshooting
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
         ),
         isAvailable: true,
       },
@@ -1085,7 +1120,7 @@ export function Toolbar({
       treeCopied,
       copyFeedback,
       onSettings,
-      handleSettingsContextMenu,
+      settingsContextMenuTabs,
       onToggleProblems,
       errorCount,
       showDeveloperTools,

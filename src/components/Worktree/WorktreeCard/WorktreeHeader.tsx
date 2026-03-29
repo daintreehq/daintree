@@ -454,6 +454,7 @@ export function WorktreeHeader({
               sideOffset={4}
               collisionPadding={8}
               onClick={(e) => e.stopPropagation()}
+              onContextMenu={(e) => e.stopPropagation()}
               className="w-64"
             >
               <WorktreeMenuItems
