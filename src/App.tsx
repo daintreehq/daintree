@@ -80,6 +80,7 @@ import { ContentGrid } from "./components/Terminal";
 import { PanelTransitionOverlay } from "./components/Panel";
 import {
   WorktreeCard,
+  type WorktreeCardProps,
   WorktreePalette,
   WorktreeSidebarSearchBar,
   WorktreeOverviewModal,
@@ -311,6 +312,7 @@ interface StaticWorktreeRowProps {
   availability: UseAgentLauncherReturn["availability"];
   agentSettings: UseAgentLauncherReturn["agentSettings"];
   homeDir: string | undefined;
+  aggregateCounts?: WorktreeCardProps["aggregateCounts"];
 }
 
 const StaticWorktreeRow = React.memo(function StaticWorktreeRow({
@@ -323,6 +325,7 @@ const StaticWorktreeRow = React.memo(function StaticWorktreeRow({
   availability,
   agentSettings,
   homeDir,
+  aggregateCounts,
 }: StaticWorktreeRowProps) {
   const worktree = useWorktreeDataStore((state) => state.worktrees.get(worktreeId));
 
@@ -359,6 +362,7 @@ const StaticWorktreeRow = React.memo(function StaticWorktreeRow({
         isActive={worktreeId === activeWorktreeId}
         isFocused={worktreeId === focusedWorktreeId}
         isSingleWorktree={totalWorktreeCount === 1}
+        aggregateCounts={aggregateCounts}
         onSelect={onSelect}
         onCopyTree={onCopyTree}
         onOpenEditor={onOpenEditor}
@@ -570,6 +574,26 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     }
     return counts;
   }, [deferredWorktrees, derivedMetaMap, mainWorktree, integrationWorktree]);
+
+  const mainWorktreeAggregateCounts = useMemo(() => {
+    const nonMainCount = deferredWorktrees.filter(
+      (w) => w.id !== mainWorktree?.id && w.id !== integrationWorktree?.id
+    ).length;
+    if (
+      nonMainCount === 0 &&
+      quickStateCounts.working === 0 &&
+      quickStateCounts.waiting === 0 &&
+      quickStateCounts.finished === 0
+    ) {
+      return undefined;
+    }
+    return {
+      worktrees: nonMainCount,
+      working: quickStateCounts.working,
+      waiting: quickStateCounts.waiting,
+      finished: quickStateCounts.finished,
+    };
+  }, [deferredWorktrees, mainWorktree, integrationWorktree, quickStateCounts]);
 
   const { filteredWorktrees, groupedSections } = useMemo(() => {
     const filters: FilterState = {
@@ -962,7 +986,19 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             className="shrink-0"
             style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
           >
-            {renderWorktreeCard(mainWorktree)}
+            <StaticWorktreeRow
+              key={mainWorktree.id}
+              worktreeId={mainWorktree.id}
+              activeWorktreeId={activeWorktreeId}
+              focusedWorktreeId={focusedWorktreeId}
+              totalWorktreeCount={deferredWorktrees.length}
+              selectWorktree={selectWorktree}
+              worktreeActions={worktreeActions}
+              availability={availability}
+              agentSettings={agentSettings}
+              homeDir={homeDir}
+              aggregateCounts={mainWorktreeAggregateCounts}
+            />
           </div>
         )}
 

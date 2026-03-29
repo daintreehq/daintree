@@ -228,4 +228,50 @@ describe("worktreeCardPropsAreEqual", () => {
     const next = baseProps({ worktree: { ...baseWorktree, lifecycleStatus: { ...status } } });
     expect(worktreeCardPropsAreEqual(prev, next)).toBe(false);
   });
+
+  it("returns true when aggregateCounts is same reference", () => {
+    const counts = { worktrees: 3, working: 1, waiting: 0, finished: 2 };
+    expect(
+      worktreeCardPropsAreEqual(
+        baseProps({ aggregateCounts: counts }),
+        baseProps({ aggregateCounts: counts })
+      )
+    ).toBe(true);
+  });
+
+  it("returns true when aggregateCounts has same values (different reference)", () => {
+    expect(
+      worktreeCardPropsAreEqual(
+        baseProps({ aggregateCounts: { worktrees: 3, working: 1, waiting: 0, finished: 2 } }),
+        baseProps({ aggregateCounts: { worktrees: 3, working: 1, waiting: 0, finished: 2 } })
+      )
+    ).toBe(true);
+  });
+
+  it("returns false when aggregateCounts working count changes", () => {
+    expect(
+      worktreeCardPropsAreEqual(
+        baseProps({ aggregateCounts: { worktrees: 3, working: 1, waiting: 0, finished: 2 } }),
+        baseProps({ aggregateCounts: { worktrees: 3, working: 2, waiting: 0, finished: 2 } })
+      )
+    ).toBe(false);
+  });
+
+  it("returns false when aggregateCounts changes from undefined to defined", () => {
+    expect(
+      worktreeCardPropsAreEqual(
+        baseProps({ aggregateCounts: undefined }),
+        baseProps({ aggregateCounts: { worktrees: 3, working: 1, waiting: 0, finished: 2 } })
+      )
+    ).toBe(false);
+  });
+
+  it("returns true when both aggregateCounts are undefined", () => {
+    expect(
+      worktreeCardPropsAreEqual(
+        baseProps({ aggregateCounts: undefined }),
+        baseProps({ aggregateCounts: undefined })
+      )
+    ).toBe(true);
+  });
 });

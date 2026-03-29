@@ -27,6 +27,11 @@ import { WorktreeDetailsSection } from "./WorktreeCard/WorktreeDetailsSection";
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
+import {
+  MainWorktreeSummaryRows,
+  type AggregateCounts,
+} from "./WorktreeCard/MainWorktreeSummaryRows";
+import { useProjectHealth } from "@/hooks/useProjectHealth";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { useWorktreeMenu } from "./WorktreeCard/hooks/useWorktreeMenu";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
@@ -83,6 +88,21 @@ export function worktreeCardPropsAreEqual(
     }
   }
 
+  if (prev.aggregateCounts !== next.aggregateCounts) {
+    const a = prev.aggregateCounts;
+    const b = next.aggregateCounts;
+    if (a == null || b == null) {
+      if (a !== b) return false;
+    } else if (
+      a.worktrees !== b.worktrees ||
+      a.working !== b.working ||
+      a.waiting !== b.waiting ||
+      a.finished !== b.finished
+    ) {
+      return false;
+    }
+  }
+
   return (
     prev.isActive === next.isActive &&
     prev.isFocused === next.isFocused &&
@@ -107,6 +127,7 @@ export interface WorktreeCardProps {
   isActive: boolean;
   isFocused: boolean;
   isSingleWorktree?: boolean;
+  aggregateCounts?: AggregateCounts;
   onSelect: () => void;
   onCopyTree: () => Promise<string | undefined> | void;
   onOpenEditor: () => void;
@@ -127,6 +148,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   isActive,
   isFocused,
   isSingleWorktree,
+  aggregateCounts,
   onSelect,
   onCopyTree,
   onOpenEditor,
@@ -142,6 +164,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   isDraggingSort,
 }: WorktreeCardProps) {
   "use memo";
+  const { health } = useProjectHealth();
   const isExpanded = useWorktreeSelectionStore(
     useCallback((state) => state.expandedWorktrees.has(worktree.id), [worktree.id])
   );
@@ -697,6 +720,10 @@ export const WorktreeCard = React.memo(function WorktreeCard({
 
           {!effectiveIsCollapsed && (
             <div id={`worktree-body-${worktree.id}`}>
+              {isMainWorktree && (
+                <MainWorktreeSummaryRows aggregateCounts={aggregateCounts} health={health} />
+              )}
+
               <WorktreeDetailsSection
                 worktree={worktree}
                 homeDir={homeDir}
