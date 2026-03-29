@@ -39,7 +39,14 @@ export function parseNotificationOverrides(
   if (typeof obj.completedEnabled === "boolean") result.completedEnabled = obj.completedEnabled;
   if (typeof obj.waitingEnabled === "boolean") result.waitingEnabled = obj.waitingEnabled;
   if (typeof obj.soundEnabled === "boolean") result.soundEnabled = obj.soundEnabled;
-  const ALLOWED_SOUNDS = ["chime.wav", "ping.wav", "complete.wav", "waiting.wav", "error.wav"];
+  const ALLOWED_SOUNDS = [
+    "chime.wav",
+    "ping.wav",
+    "complete.wav",
+    "waiting.wav",
+    "error.wav",
+    "pulse.wav",
+  ];
 
   if (
     typeof obj.completedSoundFile === "string" &&
@@ -69,6 +76,15 @@ export function parseNotificationOverrides(
       30_000,
       Math.min(3_600_000, obj.waitingEscalationDelayMs)
     );
+  }
+  if (typeof obj.workingPulseEnabled === "boolean") {
+    result.workingPulseEnabled = obj.workingPulseEnabled;
+  }
+  if (
+    typeof obj.workingPulseSoundFile === "string" &&
+    ALLOWED_SOUNDS.includes(obj.workingPulseSoundFile)
+  ) {
+    result.workingPulseSoundFile = obj.workingPulseSoundFile;
   }
 
   return Object.keys(result).length > 0 ? result : undefined;

@@ -8,6 +8,9 @@ import { CHANNELS } from "../ipc/channels.js";
 const COMPLETION_DEBOUNCE_MS = 2000;
 const NOTIFICATION_STAGGER_MS = 500;
 const BURST_WINDOW_MS = 200;
+const WORKING_PULSE_INITIAL_DELAY_MS = 10_000;
+const WORKING_PULSE_MIN_INTERVAL_MS = 8_000;
+const WORKING_PULSE_MAX_INTERVAL_MS = 10_000;
 
 interface PendingNotification {
   title: string;
@@ -29,6 +32,8 @@ interface BurstWaitingEntry {
 class AgentNotificationService {
   private completionTimers = new Map<string, NodeJS.Timeout>();
   private waitingEscalationTimers = new Map<string, NodeJS.Timeout>();
+  private workingPulseDelayTimers = new Map<string, NodeJS.Timeout>();
+  private workingPulseIntervalTimers = new Map<string, NodeJS.Timeout>();
   private notificationQueue: PendingNotification[] = [];
   private staggerTimer: NodeJS.Timeout | null = null;
   private unsubscribers: Array<() => void> = [];
@@ -91,12 +96,22 @@ class AgentNotificationService {
       this.clearWaitingEscalation(terminalId);
     }
 
+    // Cancel working pulse when agent leaves "working"
+    if (previousState === "working" && state !== "working" && terminalId) {
+      this.clearWorkingPulse(terminalId);
+    }
+
     // Master toggle — skip all notifications when disabled
     if (settings.enabled === false) return;
 
     // Schedule waiting escalation for docked agents (independent of watched status)
     if (state === "waiting" && terminalId) {
       this.scheduleWaitingEscalation(terminalId, worktreeId, agentId);
+    }
+
+    // Schedule working pulse for watched/docked agents entering working state
+    if (state === "working" && previousState !== "working" && terminalId) {
+      this.scheduleWorkingPulse(terminalId, worktreeId, agentId);
     }
 
     // Skip if all OS notification types are disabled (off by default).
@@ -287,6 +302,64 @@ class AgentNotificationService {
     this.clearWaitingEscalation(terminalId);
   }
 
+  acknowledgeWorkingPulse(terminalId: string): void {
+    this.clearWorkingPulse(terminalId);
+  }
+
+  private scheduleWorkingPulse(terminalId: string, _worktreeId?: string, _agentId?: string): void {
+    this.clearWorkingPulse(terminalId);
+
+    const settings = projectStore.getEffectiveNotificationSettings();
+    if (!settings.workingPulseEnabled || !settings.soundEnabled) return;
+
+    // Eligibility: watched OR (docked + escalation enabled)
+    const isWatched = this.watchedTerminals.has(terminalId);
+    if (!isWatched) {
+      const terminals = store.get("appState").terminals;
+      const terminal = terminals.find((t) => t.id === terminalId);
+      if (!terminal || terminal.location !== "dock" || !settings.waitingEscalationEnabled) return;
+    }
+
+    const delayTimer = setTimeout(() => {
+      this.workingPulseDelayTimers.delete(terminalId);
+      this.startPulseInterval(terminalId);
+    }, WORKING_PULSE_INITIAL_DELAY_MS);
+
+    this.workingPulseDelayTimers.set(terminalId, delayTimer);
+  }
+
+  private startPulseInterval(terminalId: string): void {
+    const tick = () => {
+      const currentSettings = projectStore.getEffectiveNotificationSettings();
+      if (!currentSettings.workingPulseEnabled || !currentSettings.soundEnabled) {
+        this.clearWorkingPulse(terminalId);
+        return;
+      }
+      soundService.playPulse(currentSettings.workingPulseSoundFile);
+
+      const jitter =
+        WORKING_PULSE_MIN_INTERVAL_MS +
+        Math.random() * (WORKING_PULSE_MAX_INTERVAL_MS - WORKING_PULSE_MIN_INTERVAL_MS);
+      const nextTimer = setTimeout(tick, jitter);
+      this.workingPulseIntervalTimers.set(terminalId, nextTimer);
+    };
+    tick();
+  }
+
+  private clearWorkingPulse(terminalId: string): void {
+    const delayTimer = this.workingPulseDelayTimers.get(terminalId);
+    if (delayTimer) {
+      clearTimeout(delayTimer);
+      this.workingPulseDelayTimers.delete(terminalId);
+    }
+    const intervalTimer = this.workingPulseIntervalTimers.get(terminalId);
+    if (intervalTimer) {
+      clearTimeout(intervalTimer);
+      this.workingPulseIntervalTimers.delete(terminalId);
+    }
+    soundService.cancelPulse();
+  }
+
   private enqueue(
     notification: PendingNotification,
     bypassFocusCheck = false,
@@ -386,6 +459,16 @@ class AgentNotificationService {
     }
     this.waitingEscalationTimers.clear();
 
+    for (const timer of this.workingPulseDelayTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.workingPulseDelayTimers.clear();
+
+    for (const timer of this.workingPulseIntervalTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.workingPulseIntervalTimers.clear();
+
     if (this.staggerTimer) {
       clearTimeout(this.staggerTimer);
       this.staggerTimer = null;
@@ -408,6 +491,7 @@ class AgentNotificationService {
     this.notificationQueue = [];
 
     soundService.cancel();
+    soundService.cancelPulse();
   }
 }
 

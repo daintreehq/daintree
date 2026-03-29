@@ -338,7 +338,11 @@ describe("TerminalFocusSlice - focusNextBlockedDock", () => {
   beforeAll(() => {
     // openDockTerminal accesses window.electron?.notification?.acknowledgeWaiting
     Object.defineProperty(globalThis, "window", {
-      value: { electron: { notification: { acknowledgeWaiting: vi.fn() } } },
+      value: {
+        electron: {
+          notification: { acknowledgeWaiting: vi.fn(), acknowledgeWorkingPulse: vi.fn() },
+        },
+      },
       writable: true,
       configurable: true,
     });

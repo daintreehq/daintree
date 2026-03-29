@@ -872,6 +872,25 @@ function writeWav(samples, filePath) {
 // chime, complete, waiting, ping — defined as generator functions for
 // variant generation.  See "Sound generators" section below.
 
+// pulse.wav — STATIC: ambient working-state awareness cue.
+// Single quiet note, long attack, played every 8-10s during background work.
+// A4 (root) conveys grounding/presence without implying completion or alert.
+const pulse = postProcess(
+  canopyNote(JI.A4, 0.22, {
+    amplitude: 0.28,
+    resonance: 1.1,
+    fmAmt: 0.2,
+    fmIndex: 0.4,
+    fmDecayRate: 20,
+    malletAmt: 0.6,
+    thumpAmt: 0.3,
+    detuneMix: 0.1,
+    excDuration: 0.004,
+    attackPresenceAmt: 0,
+  }),
+  { reverbWet: 0.01, targetPeak: 0.4, chassisMix: 0.02 }
+);
+
 // error.wav — STATIC: no variants.  Critical sounds need Pavlovian consistency.
 const error = postProcess(
   canopyNote(JI.Cs5, 0.26, {
@@ -1076,7 +1095,7 @@ function genPing(variantIdx = 0) {
 // ---------------------------------------------------------------------------
 
 // Static sounds (no variants — error needs Pavlovian consistency)
-const staticSounds = { error };
+const staticSounds = { error, pulse };
 
 for (const [name, samples] of Object.entries(staticSounds)) {
   const filePath = join(outDir, `${name}.wav`);

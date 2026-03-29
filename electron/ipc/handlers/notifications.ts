@@ -60,6 +60,15 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
         Math.min(3_600_000, s.waitingEscalationDelayMs)
       );
     }
+    if (typeof s.workingPulseEnabled === "boolean") {
+      allowed.workingPulseEnabled = s.workingPulseEnabled;
+    }
+    if (
+      typeof s.workingPulseSoundFile === "string" &&
+      ALLOWED_SOUND_FILES.has(s.workingPulseSoundFile)
+    ) {
+      allowed.workingPulseSoundFile = s.workingPulseSoundFile;
+    }
 
     const current = store.get("notificationSettings");
     store.set("notificationSettings", { ...current, ...allowed });
@@ -84,6 +93,13 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     const p = payload as Record<string, unknown>;
     if (typeof p.terminalId !== "string") return;
     agentNotificationService.acknowledgeWaiting(p.terminalId);
+  };
+
+  const handleWorkingPulseAcknowledge = (_event: Electron.IpcMainEvent, payload: unknown): void => {
+    if (!payload || typeof payload !== "object") return;
+    const p = payload as Record<string, unknown>;
+    if (typeof p.terminalId !== "string") return;
+    agentNotificationService.acknowledgeWorkingPulse(p.terminalId);
   };
 
   const handleShowNative = (_event: Electron.IpcMainEvent, payload: unknown): void => {
@@ -126,6 +142,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
   ipcMain.on(CHANNELS.NOTIFICATION_SHOW_WATCH, handleShowWatch);
   ipcMain.on(CHANNELS.NOTIFICATION_SYNC_WATCHED, handleSyncWatched);
   ipcMain.on(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, handleWaitingAcknowledge);
+  ipcMain.on(CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE, handleWorkingPulseAcknowledge);
 
   return () => {
     ipcMain.removeListener(CHANNELS.NOTIFICATION_UPDATE, handleNotificationUpdate);
@@ -137,5 +154,9 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     ipcMain.removeListener(CHANNELS.NOTIFICATION_SHOW_WATCH, handleShowWatch);
     ipcMain.removeListener(CHANNELS.NOTIFICATION_SYNC_WATCHED, handleSyncWatched);
     ipcMain.removeListener(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, handleWaitingAcknowledge);
+    ipcMain.removeListener(
+      CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE,
+      handleWorkingPulseAcknowledge
+    );
   };
 }

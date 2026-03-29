@@ -534,6 +534,7 @@ const CHANNELS = {
   NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
   NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
   NOTIFICATION_WAITING_ACKNOWLEDGE: "notification:waiting-acknowledge",
+  NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE: "notification:working-pulse-acknowledge",
   NOTIFICATION_SHOW_TOAST: "notification:show-toast",
 
   // Auto-update channels
@@ -1893,6 +1894,8 @@ const api: ElectronAPI = {
       escalationSoundFile: string;
       waitingEscalationEnabled: boolean;
       waitingEscalationDelayMs: number;
+      workingPulseEnabled: boolean;
+      workingPulseSoundFile: string;
     }> => _unwrappingInvoke(CHANNELS.NOTIFICATION_SETTINGS_GET),
     setSettings: (
       settings: Partial<{
@@ -1905,6 +1908,8 @@ const api: ElectronAPI = {
         escalationSoundFile: string;
         waitingEscalationEnabled: boolean;
         waitingEscalationDelayMs: number;
+        workingPulseEnabled: boolean;
+        workingPulseSoundFile: string;
       }>
     ) => _unwrappingInvoke(CHANNELS.NOTIFICATION_SETTINGS_SET, settings),
     playSound: (soundFile: string) =>
@@ -1925,6 +1930,8 @@ const api: ElectronAPI = {
       ipcRenderer.send(CHANNELS.NOTIFICATION_SYNC_WATCHED, panelIds),
     acknowledgeWaiting: (terminalId: string) =>
       ipcRenderer.send(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, { terminalId }),
+    acknowledgeWorkingPulse: (terminalId: string) =>
+      ipcRenderer.send(CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE, { terminalId }),
     onShowToast: (
       callback: (payload: {
         type: "success" | "error" | "info" | "warning";
