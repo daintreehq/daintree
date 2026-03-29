@@ -199,6 +199,21 @@ describe("buildActivityMonitorOptions", () => {
     expect(result.promptHintPatterns).toBeUndefined();
   });
 
+  it("sets promptFastPathMinQuietMs for cursor agent", () => {
+    const result = buildActivityMonitorOptions("cursor", {});
+    expect(result.promptFastPathMinQuietMs).toBe(700);
+  });
+
+  it("leaves promptFastPathMinQuietMs undefined for claude agent", () => {
+    const result = buildActivityMonitorOptions("claude", {});
+    expect(result.promptFastPathMinQuietMs).toBeUndefined();
+  });
+
+  it("leaves promptFastPathMinQuietMs undefined for non-agent terminals", () => {
+    const result = buildActivityMonitorOptions(undefined, {});
+    expect(result.promptFastPathMinQuietMs).toBeUndefined();
+  });
+
   it("populates pattern config fields for a known agent", () => {
     const result = buildActivityMonitorOptions("claude", {});
     expect(result.outputActivityDetection).toEqual({
