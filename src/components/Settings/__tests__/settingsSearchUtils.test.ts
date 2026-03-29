@@ -271,6 +271,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       "project:recipes",
       "project:commands",
       "project:notifications",
+      "project:github",
     ];
     for (const tab of expectedTabs) {
       expect(tabs.has(tab as never), `tab "${tab}" should be in index`).toBe(true);
@@ -322,6 +323,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       "project:recipes": "Recipes",
       "project:commands": "Commands",
       "project:notifications": "Notifications",
+      "project:github": "GitHub",
     };
     for (const entry of SETTINGS_SEARCH_INDEX) {
       expect(
@@ -355,6 +357,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       "project:recipes": "Recipes",
       "project:commands": "Commands",
       "project:notifications": "Notifications",
+      "project:github": "GitHub",
     };
     for (const tabKey of Object.keys(tabTitles)) {
       const navEntry = SETTINGS_SEARCH_INDEX.find((e) => e.id === `tab-nav-${tabKey}`);

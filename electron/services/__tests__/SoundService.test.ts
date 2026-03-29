@@ -117,6 +117,7 @@ describe("SoundService", () => {
     appMock.app.isPackaged = false;
     appMock.app.getAppPath.mockReturnValue("/repo");
     mockIsDestroyed.mockReturnValue(false);
+    mockGetMainWindow.mockReturnValue(null);
     Object.defineProperty(process, "resourcesPath", {
       value: "/app/resources",
       writable: true,
@@ -451,7 +452,7 @@ describe("SoundService", () => {
 
   it("applies dampening to playFile calls", () => {
     soundService.playFile("complete.wav");
-    vi.advanceTimersByTime(200);
+    vi.advanceTimersByTime(300);
     soundService.playFile("complete.wav");
 
     expect(mockPlaySound).toHaveBeenCalledTimes(2);

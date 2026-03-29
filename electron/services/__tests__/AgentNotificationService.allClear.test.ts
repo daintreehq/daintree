@@ -19,9 +19,11 @@ const notificationServiceMock = vi.hoisted(() => ({
 const soundServiceMock = vi.hoisted(() => ({
   play: vi.fn(),
   playFile: vi.fn(),
+  playPulse: vi.fn(),
   preview: vi.fn(),
   previewFile: vi.fn(),
   cancel: vi.fn(),
+  cancelPulse: vi.fn(),
   getVariants: vi.fn(() => []),
   getVariantCount: vi.fn(() => 1),
 }));
