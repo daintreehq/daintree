@@ -21,7 +21,7 @@ import {
 } from "@/store";
 import {
   X,
-  Code,
+  Blocks,
   Github,
   LayoutGrid,
   PanelRight,
@@ -33,7 +33,6 @@ import {
   Bell,
   Mic,
   Plug,
-  Image,
   Search,
   ChevronRight,
   KeyRound,
@@ -75,11 +74,8 @@ const LazyWorktreeSettingsTab = lazy(() =>
 const LazyToolbarSettingsTab = lazy(() =>
   import("./ToolbarSettingsTab").then((m) => ({ default: m.ToolbarSettingsTab }))
 );
-const LazyEditorIntegrationTab = lazy(() =>
-  import("./EditorIntegrationTab").then((m) => ({ default: m.EditorIntegrationTab }))
-);
-const LazyImageViewerTab = lazy(() =>
-  import("./ImageViewerTab").then((m) => ({ default: m.ImageViewerTab }))
+const LazyIntegrationsTab = lazy(() =>
+  import("./IntegrationsTab").then((m) => ({ default: m.IntegrationsTab }))
 );
 const LazyVoiceInputSettingsTab = lazy(() =>
   import("./VoiceInputSettingsTab").then((m) => ({ default: m.VoiceInputSettingsTab }))
@@ -130,8 +126,7 @@ export type SettingsTab =
   | "portal"
   | "toolbar"
   | "notifications"
-  | "editor"
-  | "imageViewer"
+  | "integrations"
   | "voice"
   | "mcp"
   | "environment"
@@ -431,8 +426,7 @@ export function SettingsDialog({
     portal: "Portal Links",
     toolbar: "Toolbar Customization",
     notifications: "Notifications",
-    editor: "Editor Integration",
-    imageViewer: "Image Viewer",
+    integrations: "Integrations",
     voice: "Voice Input",
     mcp: "MCP Server",
     environment: "Environment Variables",
@@ -451,8 +445,7 @@ export function SettingsDialog({
     portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
     toolbar: <SettingsIcon className="w-5 h-5 text-text-secondary" />,
     notifications: <Bell className="w-5 h-5 text-text-secondary" />,
-    editor: <Code className="w-5 h-5 text-text-secondary" />,
-    imageViewer: <Image className="w-5 h-5 text-text-secondary" />,
+    integrations: <Blocks className="w-5 h-5 text-text-secondary" />,
     voice: <Mic className="w-5 h-5 text-text-secondary" />,
     mcp: <Plug className="w-5 h-5 text-text-secondary" />,
     environment: <KeyRound className="w-5 h-5 text-text-secondary" />,
@@ -640,21 +633,12 @@ export function SettingsDialog({
                   onSelect={handleNavSelect}
                 />
                 <NavItem
-                  tab="editor"
-                  icon={<Code className="w-4 h-4" />}
-                  label="Editor"
+                  tab="integrations"
+                  icon={<Blocks className="w-4 h-4" />}
+                  label="Integrations"
                   activeTab={activeTab}
                   isSearching={isSearching}
-                  matchCount={matchCounts.editor}
-                  onSelect={handleNavSelect}
-                />
-                <NavItem
-                  tab="imageViewer"
-                  icon={<Image className="w-4 h-4" />}
-                  label="Image Viewer"
-                  activeTab={activeTab}
-                  isSearching={isSearching}
-                  matchCount={matchCounts.imageViewer}
+                  matchCount={matchCounts.integrations}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -916,28 +900,14 @@ export function SettingsDialog({
 
                 <div
                   role="tabpanel"
-                  id="settings-panel-editor"
-                  aria-labelledby="settings-tab-editor"
+                  id="settings-panel-integrations"
+                  aria-labelledby="settings-tab-integrations"
                   tabIndex={0}
-                  className={activeTab === "editor" ? "" : "hidden"}
+                  className={activeTab === "integrations" ? "" : "hidden"}
                 >
-                  {visitedTabs.has("editor") && (
+                  {visitedTabs.has("integrations") && (
                     <Suspense fallback={null}>
-                      <LazyEditorIntegrationTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-imageViewer"
-                  aria-labelledby="settings-tab-imageViewer"
-                  tabIndex={0}
-                  className={activeTab === "imageViewer" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("imageViewer") && (
-                    <Suspense fallback={null}>
-                      <LazyImageViewerTab />
+                      <LazyIntegrationsTab />
                     </Suspense>
                   )}
                 </div>
