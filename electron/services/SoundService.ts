@@ -1,12 +1,13 @@
 import path from "path";
-import { fileURLToPath } from "url";
 import { existsSync, readdirSync } from "fs";
+import { app } from "electron";
 import { playSound, type SoundHandle } from "../utils/soundPlayer.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const SOUNDS_DIR = path.join(__dirname, "..", "resources", "sounds");
+function getSoundsDir(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "sounds")
+    : path.join(app.getAppPath(), "electron", "resources", "sounds");
+}
 
 /**
  * Built-in sound identifiers.  Each key maps to the base WAV filename.
@@ -91,7 +92,7 @@ class SoundService {
   // -- Private --
 
   private playResolved(soundFile: string): void {
-    const soundPath = path.join(SOUNDS_DIR, soundFile);
+    const soundPath = path.join(getSoundsDir(), soundFile);
     if (!existsSync(soundPath)) return;
     this.cancel();
     this.lastHandle = playSound(soundPath);
@@ -126,7 +127,7 @@ class SoundService {
 
     const variantPattern = new RegExp(`^${base}\\.v\\d+${ext.replace(".", "\\.")}$`);
     try {
-      const files = readdirSync(SOUNDS_DIR);
+      const files = readdirSync(getSoundsDir());
       for (const f of files) {
         if (variantPattern.test(f)) variants.push(f);
       }
