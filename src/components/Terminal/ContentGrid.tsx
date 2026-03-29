@@ -348,7 +348,7 @@ function EmptyState({
                 // Defense-in-depth: sanitize SVG at render time
                 const sanitized = sanitizeSvg(projectIconSvg);
                 if (!sanitized.ok) {
-                  return <CanopyIcon className="h-28 w-28 text-tint/50" />;
+                  return <CanopyIcon className="h-28 w-28 text-tint/65" />;
                 }
                 return (
                   <img
@@ -359,7 +359,7 @@ function EmptyState({
                 );
               })()
             ) : (
-              <CanopyIcon className="h-28 w-28 text-tint/50" />
+              <CanopyIcon className="h-28 w-28 text-tint/65" />
             )}
             {hasActiveWorktree && (
               <button
@@ -411,7 +411,12 @@ function EmptyState({
               </div>
             )}
 
-            <div role="list" aria-label="Recipes" onKeyDown={handleListKeyDown}>
+            <div
+              role="list"
+              aria-label="Recipes"
+              onKeyDown={handleListKeyDown}
+              className="flex flex-col gap-1"
+            >
               {filteredPinned.length > 0 && filteredRecent.length > 0 && (
                 <div className="px-3 pt-1 pb-0.5 text-xs font-medium text-text-muted uppercase tracking-wide">
                   Pinned
@@ -430,10 +435,10 @@ function EmptyState({
                     tabIndex={focusedIndex === i ? 0 : -1}
                     onClick={() => handleRunRecipe(recipe.id)}
                     disabled={!defaultCwd}
-                    className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Play
-                      className="h-3.5 w-3.5 text-canopy-accent opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity shrink-0"
+                      className="h-3.5 w-3.5 text-status-success/50 group-hover:text-status-success transition-colors shrink-0"
                       aria-hidden
                     />
                     <span className="flex-1 text-sm font-medium text-canopy-text truncate">
@@ -468,10 +473,10 @@ function EmptyState({
                     tabIndex={focusedIndex === idx ? 0 : -1}
                     onClick={() => handleRunRecipe(recipe.id)}
                     disabled={!defaultCwd}
-                    className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Play
-                      className="h-3.5 w-3.5 text-canopy-accent opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity shrink-0"
+                      className="h-3.5 w-3.5 text-status-success/50 group-hover:text-status-success transition-colors shrink-0"
                       aria-hidden
                     />
                     <span className="flex-1 text-sm font-medium text-canopy-text truncate">

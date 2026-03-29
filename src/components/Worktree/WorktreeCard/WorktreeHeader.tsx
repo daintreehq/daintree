@@ -26,11 +26,13 @@ import {
   CircleDot,
   CornerDownRight,
   FileText,
+  GitBranch,
   GitPullRequest,
   MoreHorizontal,
   Sprout,
   Pin,
 } from "lucide-react";
+import type { AggregateCounts } from "./MainWorktreeSummaryRows";
 import { useIssueTooltip, usePRTooltip } from "@/hooks/useGitHubTooltip";
 import { IssueTooltipContent, PRTooltipContent, TooltipLoading } from "./GitHubTooltipContent";
 
@@ -213,6 +215,7 @@ export interface WorktreeHeaderProps {
   branchLabel: string;
   sessionStates?: Record<AgentState, number>;
   sessionTotal?: number;
+  aggregateCounts?: AggregateCounts;
   badges: {
     onOpenIssue?: () => void;
     onOpenPR?: () => void;
@@ -276,6 +279,7 @@ export function WorktreeHeader({
   branchLabel,
   sessionStates,
   sessionTotal,
+  aggregateCounts,
   badges,
   menu,
 }: WorktreeHeaderProps) {
@@ -495,23 +499,119 @@ export function WorktreeHeader({
         </div>
       </div>
 
-      {/* Secondary row: branch label when issue title is headline, issue badge fallback, PR badge, sync indicator, and/or plan badge */}
+      {/* Secondary row: branch + inline stats for main worktree, or badges for secondary worktrees */}
+      {!isCollapsed && isMainStandardLayout && (
+        <div className="flex items-center gap-2 mt-1" data-testid="main-worktree-meta-row">
+          <BranchLabel
+            label={branchLabel}
+            isActive={isActive}
+            isMuted={isMuted}
+            isMainWorktree={false}
+          />
+          {hasUpstreamDelta && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className="flex items-center gap-1 text-[10px] font-mono tabular-nums"
+                  data-testid="upstream-sync-indicator"
+                >
+                  {worktree.aheadCount !== undefined && worktree.aheadCount > 0 && (
+                    <span className="text-status-success">↑{worktree.aheadCount}</span>
+                  )}
+                  {worktree.behindCount !== undefined && worktree.behindCount > 0 && (
+                    <span className="text-status-warning">↓{worktree.behindCount}</span>
+                  )}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="right" className="text-xs">
+                {worktree.aheadCount !== undefined && worktree.aheadCount > 0 && (
+                  <span>
+                    {worktree.aheadCount} commit{worktree.aheadCount !== 1 ? "s" : ""} ahead
+                  </span>
+                )}
+                {worktree.aheadCount !== undefined &&
+                  worktree.aheadCount > 0 &&
+                  worktree.behindCount !== undefined &&
+                  worktree.behindCount > 0 && <span>, </span>}
+                {worktree.behindCount !== undefined && worktree.behindCount > 0 && (
+                  <span>
+                    {worktree.behindCount} commit{worktree.behindCount !== 1 ? "s" : ""} behind
+                  </span>
+                )}
+                <span> upstream</span>
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {aggregateCounts && aggregateCounts.worktrees > 0 && (
+            <>
+              <span className="text-text-muted/40 text-[10px]" aria-hidden="true">
+                ·
+              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className="flex items-center gap-1.5 text-[10px] text-canopy-text/50"
+                    data-testid="aggregate-worktree-row"
+                  >
+                    <span className="flex items-center gap-0.5">
+                      <GitBranch className="w-2.5 h-2.5" aria-hidden="true" />
+                      <span className="font-mono tabular-nums">{aggregateCounts.worktrees}</span>
+                    </span>
+                    {aggregateCounts.working > 0 && (
+                      <span className={cn("flex items-center gap-0.5", STATE_COLORS.working)}>
+                        <STATE_ICONS.working
+                          className="w-2.5 h-2.5 animate-spin-slow motion-reduce:animate-none"
+                          aria-hidden="true"
+                        />
+                        <span className="font-mono tabular-nums">{aggregateCounts.working}</span>
+                      </span>
+                    )}
+                    {aggregateCounts.waiting > 0 && (
+                      <span className={cn("flex items-center gap-0.5", STATE_COLORS.waiting)}>
+                        <STATE_ICONS.waiting className="w-2.5 h-2.5" aria-hidden="true" />
+                        <span className="font-mono tabular-nums">{aggregateCounts.waiting}</span>
+                      </span>
+                    )}
+                    {aggregateCounts.finished > 0 &&
+                      aggregateCounts.working === 0 &&
+                      aggregateCounts.waiting === 0 && (
+                        <span className={cn("flex items-center gap-0.5", STATE_COLORS.completed)}>
+                          <STATE_ICONS.completed className="w-2.5 h-2.5" aria-hidden="true" />
+                          <span className="font-mono tabular-nums">{aggregateCounts.finished}</span>
+                        </span>
+                      )}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="text-xs">
+                  {aggregateCounts.worktrees} worktree
+                  {aggregateCounts.worktrees !== 1 ? "s" : ""}
+                  {(aggregateCounts.working > 0 ||
+                    aggregateCounts.waiting > 0 ||
+                    aggregateCounts.finished > 0) &&
+                    " — "}
+                  {[
+                    aggregateCounts.working > 0 && `${aggregateCounts.working} working`,
+                    aggregateCounts.waiting > 0 && `${aggregateCounts.waiting} waiting`,
+                    aggregateCounts.finished > 0 && `${aggregateCounts.finished} done`,
+                  ]
+                    .filter(Boolean)
+                    .join(", ")}
+                </TooltipContent>
+              </Tooltip>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Secondary row for non-main-standard layouts: issue badge, PR badge, sync indicator, plan badge */}
       {!isCollapsed &&
+        !isMainStandardLayout &&
         (hasIssueTitle ||
-          isMainStandardLayout ||
           (worktree.issueNumber && !hasIssueTitle) ||
           (worktree.prNumber && worktree.prState !== "closed") ||
           hasUpstreamDelta ||
           hasPlanFile) && (
           <div className="flex flex-col gap-0.5 mt-1.5">
-            {isMainStandardLayout && (
-              <BranchLabel
-                label={branchLabel}
-                isActive={isActive}
-                isMuted={isMuted}
-                isMainWorktree={false}
-              />
-            )}
             {worktree.issueNumber && !hasIssueTitle && (
               <IssueBadge
                 issueNumber={worktree.issueNumber}
