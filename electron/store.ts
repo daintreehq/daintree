@@ -161,6 +161,7 @@ export interface StoreSchema {
     agentSetupIds: string[];
     firstRunToastSeen: boolean;
     newsletterPromptSeen: boolean;
+    waitingNudgeSeen: boolean;
     migratedFromLocalStorage: boolean;
     checklist: {
       dismissed: boolean;
@@ -273,6 +274,7 @@ const storeOptions = {
       agentSetupIds: [],
       firstRunToastSeen: false,
       newsletterPromptSeen: false,
+      waitingNudgeSeen: false,
       migratedFromLocalStorage: false,
       checklist: {
         dismissed: false,
