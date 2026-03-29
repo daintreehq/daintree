@@ -146,8 +146,7 @@ export function GitHubListItem({
       className={cn(
         "hover:bg-muted/50 transition-colors group cursor-default select-none",
         isActive && "bg-muted/50",
-        isSelected && "bg-canopy-accent/10 border-l-2 border-canopy-accent",
-        !isSelected && "border-l-2 border-transparent"
+        isSelected && "bg-accent-soft"
       )}
       onClick={isSelectionActive && onToggleSelect ? (e) => onToggleSelect(e) : undefined}
     >
