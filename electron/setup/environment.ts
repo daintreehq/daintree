@@ -25,7 +25,7 @@ fixPath();
 // each test run gets its own isolated data directory.
 const hasExplicitUserDataDir = process.argv.some((a) => a.startsWith("--user-data-dir"));
 if (!app.isPackaged && !hasExplicitUserDataDir) {
-  app.setPath("userData", path.join(app.getPath("appData"), `${app.name}-dev`));
+  app.setPath("userData", path.join(app.getPath("appData"), "canopy-app-dev"));
 }
 
 // GPU crash fallback: disable hardware acceleration before app.whenReady()
