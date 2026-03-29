@@ -109,8 +109,8 @@ jobs:
           git add shared/config/agentRegistry.ts
           git commit -m "chore(patterns): auto-update agent detection patterns
 
-          - Weekly pattern discovery run
-          - Updated detection patterns based on current agent CLI output"
+- Weekly pattern discovery run
+- Updated detection patterns based on current agent CLI output"
           git push origin "$BRANCH"
 
           gh pr create \

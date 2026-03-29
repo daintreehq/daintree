@@ -61,7 +61,10 @@ function replacePatternArray(
 
   const indent = "        ";
   const patternsStr = newPatterns
-    .map((p) => `${indent}"${p}",`)
+    .map((p) => {
+      const escaped = p.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      return `${indent}"${escaped}",`;
+    })
     .join("\n");
 
   const replacement = [
@@ -166,16 +169,17 @@ function main(): void {
     return;
   }
 
-  // Write updated registry
-  fs.writeFileSync(REGISTRY_PATH, source, "utf-8");
-  console.log(`[update-registry] Registry updated (${changes} fields)`);
-
-  // Validate with corpus replay
+  // Validate with corpus replay BEFORE writing
+  const originalSource = fs.readFileSync(REGISTRY_PATH, "utf-8");
   const corpusFiles = fs.existsSync(CORPUS_DIR)
     ? fs.readdirSync(CORPUS_DIR).filter((f) => f.startsWith(analysis.agentId) && f.endsWith(".jsonl"))
     : [];
 
   if (corpusFiles.length > 0) {
+    // Write temporarily to validate, restore on failure
+    fs.writeFileSync(REGISTRY_PATH, source, "utf-8");
+    let validationFailed = false;
+
     console.log("[update-registry] Running corpus replay validation...");
     for (const file of corpusFiles) {
       const result = replayCorpus(path.join(CORPUS_DIR, file), analysis.agentId);
@@ -186,9 +190,21 @@ function main(): void {
         console.error(
           `[update-registry] FAIL: accuracy ${(result.accuracy * 100).toFixed(1)}% < ${options.minAccuracy * 100}%`
         );
-        process.exitCode = 1;
+        validationFailed = true;
       }
     }
+
+    if (validationFailed) {
+      fs.writeFileSync(REGISTRY_PATH, originalSource, "utf-8");
+      console.error("[update-registry] Validation failed, registry restored to original");
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log(`[update-registry] Registry updated and validated (${changes} fields)`);
+  } else {
+    fs.writeFileSync(REGISTRY_PATH, source, "utf-8");
+    console.log(`[update-registry] Registry updated (${changes} fields, no corpus for validation)`);
   }
 }
 
