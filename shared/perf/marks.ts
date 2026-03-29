@@ -10,7 +10,6 @@ export const PERF_MARKS = {
   HYDRATE_BOOTSTRAP: "hydrate_bootstrap",
   HYDRATE_APP_CLIENT: "hydrate_app_client",
   HYDRATE_GET_TERMINALS: "hydrate_get_terminals",
-  HYDRATE_GET_SERIALIZED_STATES: "hydrate_get_serialized_states",
   HYDRATE_RESTORE_SNAPSHOTS_CRITICAL: "hydrate_restore_snapshots_critical",
   HYDRATE_COMPLETE: "hydrate_complete",
 

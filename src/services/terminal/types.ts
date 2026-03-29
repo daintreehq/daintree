@@ -98,6 +98,10 @@ export interface ManagedTerminal {
   isSerializedRestoreInProgress: boolean;
   deferredOutput: Array<string | Uint8Array>;
 
+  // Deferred scrollback restore state — prevents double-restore and tracks lifecycle
+  scrollbackRestoreState: "none" | "pending" | "in-progress" | "done";
+  scrollbackRestoreDisposable?: { dispose: () => void };
+
   // Alternate screen buffer state (tracked via xterm.js onBufferChange).
   // Used to adapt UI (remove padding) and resize strategy for TUI applications.
   isAltBuffer?: boolean;
