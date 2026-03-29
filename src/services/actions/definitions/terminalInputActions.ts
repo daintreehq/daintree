@@ -154,7 +154,7 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.bulkCommand", () => ({
     id: "terminal.bulkCommand",
-    title: "Bulk Command Center",
+    title: "Bulk Operations",
     description: "Send keystrokes or commands to multiple agent terminals",
     category: "terminal",
     kind: "command",

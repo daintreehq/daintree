@@ -2,7 +2,7 @@
 
 ## What is Canopy?
 
-Canopy is a desktop application for orchestrating AI coding agents. Think of it as mission control for your AI-assisted development workflow. Agents like Claude, Gemini, and Codex run in real terminals inside Canopy, and you manage them through a panel grid with state intelligence, context injection, and automation.
+Canopy is a desktop application for orchestrating AI coding agents. Think of it as a habitat for your AI-assisted development workflow. Agents like Claude, Gemini, and Codex run in real terminals inside Canopy, and you manage them through a panel grid with state intelligence, context injection, and automation.
 
 Canopy is **not** a code editor (use VS Code for that) and **not** a chat UI (agents run in actual terminals). It's the orchestration layer where you direct work, monitor progress, and intervene when agents need help.
 

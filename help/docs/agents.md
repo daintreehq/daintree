@@ -69,6 +69,6 @@ The model can be selected in the agent palette before launching.
 
 ## Bulk Operations
 
-- **Cmd+Shift+B** — Open bulk command center to send commands to multiple agents
+- **Cmd+Shift+B** — Open Bulk Operations to send commands to multiple agents
 - **Cmd+K Cmd+E** — End all sessions in the active worktree
 - **Cmd+K Cmd+T** — Restart all sessions in the active worktree

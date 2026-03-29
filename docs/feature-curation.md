@@ -109,15 +109,15 @@ Canopy features should trend toward automation, not interaction:
 
 Features at the "Manual" level rarely belong. Features at "Reactive" or "Autonomous" level are strong candidates.
 
-## Workshop vs Mission Control
+## Workshop vs Orchestration Layer
 
 Ask yourself:
 
-> _"Does this feature belong in the Workshop (VS Code) or Mission Control (Canopy)?"_
+> _"Does this feature belong in the Workshop (VS Code) or the Orchestration Layer (Canopy)?"_
 
 If the answer is **Workshop**, we don't build the feature. At most, we build a **button that opens the Workshop** to the right place (like the existing "Open in Editor" integration).
 
-**The grey area:** Read-only viewing, annotation, and lightweight interaction (staging files, reviewing diffs, writing notes) belong in Mission Control. Editing code, running linters, resolving merge conflicts belong in the Workshop.
+**The grey area:** Read-only viewing, annotation, and lightweight interaction (staging files, reviewing diffs, writing notes) belong in the Orchestration Layer. Editing code, running linters, resolving merge conflicts belong in the Workshop.
 
 ## Decision Examples
 
@@ -133,7 +133,7 @@ If the answer is **Workshop**, we don't build the feature. At most, we build a *
 | Completion Notifications   | **APPROVE**              | Unblocks agent. Manages multiplicity. Enables reactive workflow.                                                       |
 | Voice Input                | **APPROVE**              | Bridges gap. Hands-free delegation while monitoring other agents. Accessibility value.                                 |
 | Integrated Browser         | **APPROVE**              | Localhost preview, console capture, and agent-app debugging. Bridges gap. Not a general-purpose browser.               |
-| Canopy Assistant           | **APPROVE**              | Wraps AI with orchestration context (panels, worktrees, actions). Not a generic chat — it's Mission Control aware.     |
+| Canopy Assistant           | **APPROVE**              | Wraps AI with orchestration context (panels, worktrees, actions). Not a generic chat — it's orchestration-aware.       |
 | Notes Panel                | **APPROVE**              | Annotation alongside agent work. Markdown editing for note-taking, not code editing. Bridges gap.                      |
 | Terminal Recipes           | **APPROVE**              | Enables automation. Repeatable multi-agent setups reduce manual panel configuration.                                   |
 | Portal (Web Agent Dock)    | **APPROVE**              | Bridges gap between CLI agents and web agent UIs. Manages multiplicity across agent interfaces.                        |
@@ -199,7 +199,7 @@ Before implementing any feature, verify:
 - [ ] Passes Cost of Attention test (reduces cognitive load)
 - [ ] Passes Green Light test (satisfies 2+ criteria)
 - [ ] Passes Red Light test (no triggers)
-- [ ] Belongs in Mission Control, not Workshop
+- [ ] Belongs in the Orchestration Layer, not Workshop
 - [ ] At "Assisted" automation level or higher
 - [ ] Follows 4-layer architectural pattern
 - [ ] Multi-project compatible
