@@ -64,10 +64,13 @@ interface RecipeState {
   recipes: TerminalRecipe[];
   globalRecipes: TerminalRecipe[];
   projectRecipes: TerminalRecipe[];
+  inRepoRecipes: TerminalRecipe[];
   isLoading: boolean;
   currentProjectId: string | null;
 
   loadRecipes: (projectId: string) => Promise<void>;
+  exportRecipeToFile: (id: string) => Promise<boolean>;
+  importRecipeFromFile: (projectId: string | undefined) => Promise<boolean>;
   createRecipe: (
     projectId: string | undefined,
     name: string,
@@ -114,15 +117,20 @@ let loadRecipesRequestId = 0;
 
 function mergeRecipes(
   globalRecipes: TerminalRecipe[],
-  projectRecipes: TerminalRecipe[]
+  projectRecipes: TerminalRecipe[],
+  inRepoRecipes: TerminalRecipe[] = []
 ): TerminalRecipe[] {
-  return [...globalRecipes, ...projectRecipes];
+  // In-repo recipes that have a same-name local project recipe are shadowed
+  const projectNames = new Set(projectRecipes.map((r) => r.name));
+  const visibleInRepo = inRepoRecipes.filter((r) => !projectNames.has(r.name));
+  return [...globalRecipes, ...visibleInRepo, ...projectRecipes];
 }
 
 const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   recipes: [],
   globalRecipes: [],
   projectRecipes: [],
+  inRepoRecipes: [],
   isLoading: false,
   currentProjectId: null,
 
@@ -133,12 +141,15 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     set({
       isLoading: true,
       currentProjectId: projectId,
-      ...(clearRecipes ? { recipes: [], globalRecipes: [], projectRecipes: [] } : {}),
+      ...(clearRecipes
+        ? { recipes: [], globalRecipes: [], projectRecipes: [], inRepoRecipes: [] }
+        : {}),
     });
     try {
-      const [globalRecipes, projectRecipes] = await Promise.all([
+      const [globalRecipes, projectRecipes, inRepoRecipes] = await Promise.all([
         globalRecipesClient.getRecipes(),
         projectClient.getRecipes(projectId),
+        projectClient.getInRepoRecipes(projectId).catch(() => [] as TerminalRecipe[]),
       ]);
       if (requestId !== loadRecipesRequestId || get().currentProjectId !== projectId) {
         return;
@@ -146,7 +157,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       set({
         globalRecipes,
         projectRecipes,
-        recipes: mergeRecipes(globalRecipes, projectRecipes),
+        inRepoRecipes,
+        recipes: mergeRecipes(globalRecipes, projectRecipes, inRepoRecipes),
         isLoading: false,
       });
     } catch (error) {
@@ -154,7 +166,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         return;
       }
       console.error("Failed to load recipes:", error);
-      set({ recipes: [], globalRecipes: [], projectRecipes: [], isLoading: false });
+      set({
+        recipes: [],
+        globalRecipes: [],
+        projectRecipes: [],
+        inRepoRecipes: [],
+        isLoading: false,
+      });
     }
   },
 
@@ -188,12 +206,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const prevGlobal = get().globalRecipes;
     const prevProject = get().projectRecipes;
+    const inRepo = get().inRepoRecipes;
     const nextGlobal = isGlobal ? [...prevGlobal, newRecipe] : prevGlobal;
     const nextProject = isGlobal ? prevProject : [...prevProject, newRecipe];
     set({
       globalRecipes: nextGlobal,
       projectRecipes: nextProject,
-      recipes: mergeRecipes(nextGlobal, nextProject),
+      recipes: mergeRecipes(nextGlobal, nextProject, inRepo),
     });
 
     try {
@@ -204,11 +223,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       }
     } catch (error) {
       console.error("Failed to persist recipe:", error);
-      // Rollback on failure
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
-        recipes: mergeRecipes(prevGlobal, prevProject),
+        recipes: mergeRecipes(prevGlobal, prevProject, inRepo),
       });
       throw error;
     }
@@ -245,6 +263,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const prevGlobal = get().globalRecipes;
     const prevProject = get().projectRecipes;
+    const inRepo = get().inRepoRecipes;
     const applyUpdate = (list: TerminalRecipe[]) => {
       const idx = list.findIndex((r) => r.id === id);
       if (idx === -1) return list;
@@ -257,7 +276,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     set({
       globalRecipes: nextGlobal,
       projectRecipes: nextProject,
-      recipes: mergeRecipes(nextGlobal, nextProject),
+      recipes: mergeRecipes(nextGlobal, nextProject, inRepo),
     });
 
     try {
@@ -268,11 +287,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       }
     } catch (error) {
       console.error("Failed to persist recipe update:", error);
-      // Rollback on failure
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
-        recipes: mergeRecipes(prevGlobal, prevProject),
+        recipes: mergeRecipes(prevGlobal, prevProject, inRepo),
       });
       throw error;
     }
@@ -288,12 +306,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     const isGlobal = recipe.projectId === undefined;
     const prevGlobal = get().globalRecipes;
     const prevProject = get().projectRecipes;
+    const inRepo = get().inRepoRecipes;
     const nextGlobal = isGlobal ? prevGlobal.filter((r) => r.id !== id) : prevGlobal;
     const nextProject = isGlobal ? prevProject : prevProject.filter((r) => r.id !== id);
     set({
       globalRecipes: nextGlobal,
       projectRecipes: nextProject,
-      recipes: mergeRecipes(nextGlobal, nextProject),
+      recipes: mergeRecipes(nextGlobal, nextProject, inRepo),
     });
 
     try {
@@ -304,11 +323,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       }
     } catch (error) {
       console.error("Failed to persist recipe deletion:", error);
-      // Rollback on failure
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
-        recipes: mergeRecipes(prevGlobal, prevProject),
+        recipes: mergeRecipes(prevGlobal, prevProject, inRepo),
       });
       throw error;
     }
@@ -450,6 +468,21 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     return JSON.stringify(exportableRecipe, null, 2);
   },
 
+  exportRecipeToFile: async (id) => {
+    const recipe = get().getRecipeById(id);
+    if (!recipe) return false;
+    const { projectId: _p, ...exportable } = recipe;
+    const json = JSON.stringify(exportable, null, 2);
+    return projectClient.exportRecipeToFile(recipe.name, json);
+  },
+
+  importRecipeFromFile: async (projectId) => {
+    const json = await projectClient.importRecipeFromFile();
+    if (!json) return false;
+    await get().importRecipe(projectId, json);
+    return true;
+  },
+
   importRecipe: async (projectId, json) => {
     let recipe: Partial<TerminalRecipe>;
     try {
@@ -557,12 +590,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const prevGlobal = get().globalRecipes;
     const prevProject = get().projectRecipes;
+    const inRepo = get().inRepoRecipes;
     const nextGlobal = isGlobal ? [...prevGlobal, importedRecipe] : prevGlobal;
     const nextProject = isGlobal ? prevProject : [...prevProject, importedRecipe];
     set({
       globalRecipes: nextGlobal,
       projectRecipes: nextProject,
-      recipes: mergeRecipes(nextGlobal, nextProject),
+      recipes: mergeRecipes(nextGlobal, nextProject, inRepo),
     });
 
     try {
@@ -573,11 +607,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       }
     } catch (_error) {
       console.error("Failed to persist imported recipe:", _error);
-      // Rollback on failure
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
-        recipes: mergeRecipes(prevGlobal, prevProject),
+        recipes: mergeRecipes(prevGlobal, prevProject, inRepo),
       });
       throw _error;
     }
@@ -600,6 +633,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       recipes: [],
       globalRecipes: [],
       projectRecipes: [],
+      inRepoRecipes: [],
       isLoading: false,
       currentProjectId: null,
     }),

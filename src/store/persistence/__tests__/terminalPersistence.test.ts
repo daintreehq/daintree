@@ -52,6 +52,10 @@ const createMockProjectClient = () => ({
   locate: vi.fn().mockResolvedValue(null),
   cloneRepo: vi.fn().mockResolvedValue({ success: true }),
   onCloneProgress: vi.fn().mockReturnValue(() => {}),
+  exportRecipeToFile: vi.fn().mockResolvedValue(true),
+  importRecipeFromFile: vi.fn().mockResolvedValue(null),
+  getInRepoRecipes: vi.fn().mockResolvedValue([]),
+  syncInRepoRecipes: vi.fn().mockResolvedValue(undefined),
 });
 
 describe("TerminalPersistence", () => {
