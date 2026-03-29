@@ -726,6 +726,8 @@ export interface ElectronAPI {
     >;
     setScreenReaderMode(mode: "auto" | "on" | "off"): Promise<void>;
     setResourceMonitoring(enabled: boolean): Promise<void>;
+    setMemoryLeakDetection(enabled: boolean): Promise<void>;
+    setMemoryLeakAutoRestartThresholdMb(thresholdMb: number): Promise<void>;
   };
   accessibility: {
     getEnabled(): Promise<boolean>;

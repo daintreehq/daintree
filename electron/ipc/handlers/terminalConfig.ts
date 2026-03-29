@@ -188,6 +188,50 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
   );
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_RESOURCE_MONITORING));
 
+  const handleTerminalConfigSetMemoryLeakDetection = async (
+    _event: Electron.IpcMainInvokeEvent,
+    enabled: boolean
+  ) => {
+    if (typeof enabled !== "boolean") {
+      console.warn("Invalid terminal memoryLeakDetectionEnabled:", enabled);
+      return;
+    }
+    const currentConfig = getTerminalConfigObject();
+    store.set("terminalConfig", { ...currentConfig, memoryLeakDetectionEnabled: enabled });
+  };
+  ipcMain.handle(
+    CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_DETECTION,
+    handleTerminalConfigSetMemoryLeakDetection
+  );
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_DETECTION));
+
+  const handleTerminalConfigSetMemoryLeakAutoRestart = async (
+    _event: Electron.IpcMainInvokeEvent,
+    thresholdMb: number
+  ) => {
+    if (!Number.isFinite(thresholdMb) || !Number.isInteger(thresholdMb)) {
+      console.warn("Invalid memoryLeakAutoRestartThresholdMb (not a finite integer):", thresholdMb);
+      return;
+    }
+    if (thresholdMb < 1024 || thresholdMb > 32768) {
+      console.warn(
+        "Invalid memoryLeakAutoRestartThresholdMb (out of range 1024-32768):",
+        thresholdMb
+      );
+      return;
+    }
+    const currentConfig = getTerminalConfigObject();
+    store.set("terminalConfig", {
+      ...currentConfig,
+      memoryLeakAutoRestartThresholdMb: thresholdMb,
+    });
+  };
+  ipcMain.handle(
+    CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART,
+    handleTerminalConfigSetMemoryLeakAutoRestart
+  );
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART));
+
   const handleTerminalConfigImportColorScheme = async (event: Electron.IpcMainInvokeEvent) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
     const dialogOptions = {

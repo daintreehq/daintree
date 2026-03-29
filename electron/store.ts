@@ -31,6 +31,8 @@ export interface StoreSchema {
     hybridInputAutoFocus?: boolean;
     screenReaderMode?: "auto" | "on" | "off";
     resourceMonitoringEnabled?: boolean;
+    memoryLeakDetectionEnabled?: boolean;
+    memoryLeakAutoRestartThresholdMb?: number;
   };
   hibernation: {
     enabled: boolean;

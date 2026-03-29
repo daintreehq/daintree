@@ -1666,6 +1666,12 @@ const api: ElectronAPI = {
 
     setResourceMonitoring: (enabled: boolean) =>
       _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_RESOURCE_MONITORING, enabled),
+
+    setMemoryLeakDetection: (enabled: boolean) =>
+      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_DETECTION, enabled),
+
+    setMemoryLeakAutoRestartThresholdMb: (thresholdMb: number) =>
+      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART, thresholdMb),
   },
 
   // Accessibility API
