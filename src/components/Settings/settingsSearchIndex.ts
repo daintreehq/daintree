@@ -504,6 +504,18 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     ],
   },
   {
+    id: "appearance-dock-density",
+    tab: "terminalAppearance",
+    scope: "global",
+    tabLabel: "Appearance",
+    subtab: "app",
+    subtabLabel: "App",
+    section: "Dock Density",
+    title: "Dock Density",
+    description: "Control dock bar height: compact, normal, or comfortable",
+    keywords: ["dock", "density", "compact", "comfortable", "height", "size", "spacing"],
+  },
+  {
     id: "appearance-color-scheme",
     tab: "terminalAppearance",
     scope: "global",

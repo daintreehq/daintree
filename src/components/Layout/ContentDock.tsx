@@ -38,7 +38,8 @@ const AGENT_OPTIONS = [
   { type: "browser" as const, label: "Browser" },
 ];
 
-export type DockDensity = "normal" | "compact";
+import type { DockDensity } from "@/store/preferencesStore";
+export type { DockDensity } from "@/store/preferencesStore";
 
 interface ContentDockProps {
   density?: DockDensity;

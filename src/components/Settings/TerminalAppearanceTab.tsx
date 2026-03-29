@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { Palette, Type, CaseSensitive, Eye } from "lucide-react";
+import { Palette, Type, CaseSensitive, Eye, PanelBottom } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTerminalFontStore } from "@/store";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
@@ -10,6 +10,7 @@ import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { ColorSchemePicker } from "./ColorSchemePicker";
 import { AppThemePicker } from "./AppThemePicker";
 import { ColorVisionPicker } from "./ColorVisionPicker";
+import { DockDensityPicker } from "./DockDensityPicker";
 
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 24;
@@ -147,6 +148,14 @@ export function TerminalAppearanceTab({
               description="Adjust colors for color vision deficiency. Affects status indicators and default terminal palette."
             >
               <ColorVisionPicker />
+            </SettingsSection>
+
+            <SettingsSection
+              icon={PanelBottom}
+              title="Dock Density"
+              description="Control the height and spacing of items in the dock bar."
+            >
+              <DockDensityPicker />
             </SettingsSection>
           </>
         )}

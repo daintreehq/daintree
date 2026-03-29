@@ -620,6 +620,13 @@ code.hljs {
   --dock-item-height: 1.75rem;
 }
 
+/* Comfortable density mode for dock - increased padding and heights */
+[data-dock-density="comfortable"] {
+  --dock-padding-y: 0.5rem;
+  --dock-gap: 0.5rem;
+  --dock-item-height: 2.25rem;
+}
+
 .dark {
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);

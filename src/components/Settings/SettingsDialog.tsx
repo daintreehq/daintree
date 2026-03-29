@@ -291,6 +291,7 @@ export function SettingsDialog({
   const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
   const showGridAgentHighlights = usePreferencesStore((s) => s.showGridAgentHighlights);
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
+  const dockDensity = usePreferencesStore((s) => s.dockDensity);
 
   const modifiedTabs = useMemo(() => {
     const tabs = new Set<SettingsTab>();
@@ -319,12 +320,15 @@ export function SettingsDialog({
       tabs.add("terminal");
     }
 
+    if (dockDensity !== "normal") tabs.add("terminalAppearance");
+
     return tabs;
   }, [
     showProjectPulse,
     showDeveloperTools,
     showGridAgentHighlights,
     showDockAgentHighlights,
+    dockDensity,
     performanceMode,
     scrollbackLines,
     layoutConfig.strategy,
@@ -986,6 +990,7 @@ export function SettingsDialog({
                       activeTab={activeTab}
                       isSearching={isSearching}
                       matchCount={matchCounts.terminalAppearance}
+                      modified={modifiedTabs.has("terminalAppearance")}
                       onSelect={handleNavSelect}
                     />
                     <NavItem

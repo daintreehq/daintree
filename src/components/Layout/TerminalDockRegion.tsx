@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useDockRenderState } from "@/hooks/useDockRenderState";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import { ContentDock } from "./ContentDock";
 import { DockPanelOffscreenContainer } from "./DockPanelOffscreenContainer";
 
@@ -9,6 +10,7 @@ export function TerminalDockRegion() {
   const { shouldShowInLayout, isHydrated, hasDocked } = useDockRenderState();
   const dockRegionRef = useRef<HTMLDivElement>(null);
   const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "dock");
+  const dockDensity = usePreferencesStore((state) => state.dockDensity);
 
   useEffect(() => {
     useMacroFocusStore.getState().setVisibility("dock", hasDocked);
@@ -36,7 +38,7 @@ export function TerminalDockRegion() {
       <DockPanelOffscreenContainer>
         {shouldShowInLayout && (
           <ErrorBoundary variant="section" componentName="ContentDock">
-            <ContentDock density="normal" />
+            <ContentDock density={dockDensity} />
           </ErrorBoundary>
         )}
       </DockPanelOffscreenContainer>
