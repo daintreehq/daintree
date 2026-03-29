@@ -396,5 +396,36 @@ describe("appTheme handlers", () => {
         })
       );
     });
+
+    it("falls back to 'theme.json' when name is all forbidden characters", async () => {
+      (dialog.showSaveDialog as ReturnType<typeof vi.fn>).mockResolvedValue({
+        canceled: false,
+        filePath: "/tmp/theme.json",
+      });
+
+      const schemeWithBadName = { ...validScheme, name: '***???"' };
+
+      registerAppThemeHandlers();
+      const handler = getHandler(CHANNELS.APP_THEME_EXPORT);
+      await handler(mockEvent, schemeWithBadName);
+
+      expect(dialog.showSaveDialog).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ defaultPath: "theme.json" })
+      );
+    });
+
+    it("propagates fs.writeFile errors", async () => {
+      (dialog.showSaveDialog as ReturnType<typeof vi.fn>).mockResolvedValue({
+        canceled: false,
+        filePath: "/tmp/test.json",
+      });
+      fsMock.writeFile.mockRejectedValueOnce(new Error("ENOSPC: no space left"));
+
+      registerAppThemeHandlers();
+      const handler = getHandler(CHANNELS.APP_THEME_EXPORT);
+
+      await expect(handler(mockEvent, validScheme)).rejects.toThrow("ENOSPC");
+    });
   });
 });

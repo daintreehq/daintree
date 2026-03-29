@@ -321,7 +321,12 @@ export function AppThemePicker() {
 
   const handleExport = useCallback(async () => {
     if (!selectedScheme) return;
-    await appThemeClient.exportTheme(selectedScheme);
+    try {
+      await appThemeClient.exportTheme(selectedScheme);
+    } catch (error) {
+      console.error("Failed to export app theme:", error);
+      setImportMessage("Failed to export app theme.");
+    }
   }, [selectedScheme]);
 
   useEscapeStack(open, () => setOpen(false));
