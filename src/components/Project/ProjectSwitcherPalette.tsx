@@ -6,8 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
-  Circle,
-  CircleHelp,
+  Clipboard,
   FolderOpen,
   FolderPlus,
   Layers,
@@ -25,9 +24,17 @@ import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ProjectActionRow } from "./ProjectActionRow";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { useModifierKeys } from "@/hooks/useModifierKeys";
 import { useOverlayState } from "@/hooks";
 import { usePaletteStore } from "@/store/paletteStore";
 import type { ProjectSwitcherMode, SearchableProject } from "@/hooks/useProjectSwitcherPalette";
@@ -52,6 +59,8 @@ export interface ProjectSwitcherPaletteProps {
   onCloseProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
+  onCopyPath?: (path: string) => void;
+  onSelectBackground?: (project: SearchableProject) => void;
   onOpenProjectSettings?: () => void;
   dropdownAlign?: "start" | "center" | "end";
   children?: React.ReactNode;
@@ -80,6 +89,41 @@ interface ProjectListItemProps {
   onLocateProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onHoverProject?: (project: SearchableProject) => void;
+  onCopyPath?: (path: string) => void;
+}
+
+function StatusDot({ project }: { project: SearchableProject }) {
+  if (project.isMissing) return <div className="w-1.5 shrink-0" />;
+
+  const hasActive = project.activeAgentCount > 0;
+  const hasWaiting = project.waitingAgentCount > 0;
+  const hasProcesses = project.processCount > 0;
+
+  if (hasActive) {
+    return (
+      <div
+        className="w-1.5 h-1.5 rounded-full bg-canopy-accent animate-agent-pulse shrink-0"
+        aria-label="Agents working"
+      />
+    );
+  }
+  if (hasWaiting) {
+    return (
+      <div
+        className="w-1.5 h-1.5 rounded-full bg-status-warning shrink-0"
+        aria-label="Agents waiting"
+      />
+    );
+  }
+  if (hasProcesses || project.isBackground) {
+    return (
+      <div
+        className="w-1.5 h-1.5 rounded-full bg-status-success shrink-0"
+        aria-label="Running in background"
+      />
+    );
+  }
+  return <div className="w-1.5 shrink-0" />;
 }
 
 function ProjectListItem({
@@ -92,10 +136,11 @@ function ProjectListItem({
   onLocateProject,
   onTogglePinProject,
   onHoverProject,
+  onCopyPath,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0 && !project.isMissing;
 
-  return (
+  const row = (
     <div
       id={`project-option-${project.id}`}
       role="option"
@@ -103,7 +148,7 @@ function ProjectListItem({
       aria-disabled={project.isMissing || undefined}
       onMouseEnter={onHoverProject ? () => onHoverProject(project) : undefined}
       className={cn(
-        "group relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
+        "group relative w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
         project.isActive
           ? cn(
               "text-canopy-text",
@@ -122,6 +167,8 @@ function ProjectListItem({
       )}
       onClick={() => !project.isActive && !project.isMissing && onSelect(project)}
     >
+      <StatusDot project={project} />
+
       <div
         className={cn(
           "flex items-center justify-center rounded-[var(--radius-lg)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)] shrink-0 transition-all duration-200",
@@ -149,11 +196,8 @@ function ProjectListItem({
             {project.name}
           </span>
 
-          {project.isBackground && !project.isActive && (
-            <Circle
-              className="h-2 w-2 fill-status-success text-status-success shrink-0"
-              aria-label="Running in background"
-            />
+          {project.isPinned && (
+            <Pin className="w-3 h-3 text-canopy-accent/60 shrink-0" aria-label="Pinned" />
           )}
 
           {project.isMissing && (
@@ -171,51 +215,6 @@ function ProjectListItem({
           )}
 
           <div className="ml-auto flex items-center gap-1.5 shrink-0">
-            {onTogglePinProject && (
-              <div
-                className={cn(
-                  "flex items-center transition-opacity",
-                  project.isPinned
-                    ? "opacity-60"
-                    : index === selectedIndex
-                      ? "opacity-100"
-                      : "opacity-0 group-hover:opacity-100"
-                )}
-              >
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        tabIndex={-1}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onTogglePinProject(project.id);
-                        }}
-                        className={cn(
-                          "p-0.5 rounded transition-colors cursor-pointer",
-                          project.isPinned
-                            ? "text-canopy-accent/70 hover:text-canopy-accent"
-                            : "text-canopy-text/50 hover:bg-tint/[0.06] hover:text-canopy-text/80",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                        )}
-                        aria-label={project.isPinned ? "Unpin project" : "Pin project"}
-                      >
-                        {project.isPinned ? (
-                          <PinOff className="w-3.5 h-3.5" aria-hidden="true" />
-                        ) : (
-                          <Pin className="w-3.5 h-3.5" aria-hidden="true" />
-                        )}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">
-                      {project.isPinned ? "Unpin" : "Pin"}
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </div>
-            )}
-
             {project.isMissing ? (
               <div
                 className={cn(
@@ -357,6 +356,62 @@ function ProjectListItem({
         </div>
       </div>
     </div>
+  );
+
+  const hasContextActions = onTogglePinProject || onStopProject || onCloseProject || onCopyPath;
+  if (!hasContextActions) return row;
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent>
+        {onTogglePinProject && (
+          <ContextMenuItem onClick={() => onTogglePinProject(project.id)}>
+            {project.isPinned ? (
+              <>
+                <PinOff className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                Unpin project
+              </>
+            ) : (
+              <>
+                <Pin className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                Pin project
+              </>
+            )}
+          </ContextMenuItem>
+        )}
+        {onCopyPath && (
+          <ContextMenuItem onClick={() => onCopyPath(project.path)}>
+            <Clipboard className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Copy path
+          </ContextMenuItem>
+        )}
+        {(onTogglePinProject || onCopyPath) && (onStopProject || onCloseProject) && (
+          <ContextMenuSeparator />
+        )}
+        {showStop && onStopProject && (
+          <ContextMenuItem destructive onClick={() => onStopProject(project.id)}>
+            <Square className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Stop all agents
+          </ContextMenuItem>
+        )}
+        {onCloseProject && !project.isActive && (
+          <ContextMenuItem destructive onClick={() => onCloseProject(project.id)}>
+            <X className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Remove project
+          </ContextMenuItem>
+        )}
+        {project.isMissing && onLocateProject && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => onLocateProject(project.id)}>
+              <FolderOpen className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+              Locate folder
+            </ContextMenuItem>
+          </>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -630,6 +685,7 @@ interface ProjectListContentProps {
   onCloseProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
+  onCopyPath?: (path: string) => void;
   groups?: ProjectGroup[];
   onAssignProjectToGroup?: (projectId: string, groupId: string) => void;
   onRemoveProjectFromGroup?: (projectId: string) => void;
@@ -651,6 +707,7 @@ function ProjectListContent({
   onCloseProject,
   onLocateProject,
   onTogglePinProject,
+  onCopyPath,
   groups,
   onAssignProjectToGroup,
   onRemoveProjectFromGroup,
@@ -673,11 +730,16 @@ function ProjectListContent({
     }
     const pinned = results.filter((p) => p.isPinned && !p.isActive);
     const current = results.filter((p) => p.isActive);
-    const rest = results.filter((p) => !p.isActive && !p.isPinned);
+    const remaining = results.filter((p) => !p.isActive && !p.isPinned);
+    const isRunning = (p: SearchableProject) =>
+      p.activeAgentCount > 0 || p.waitingAgentCount > 0 || p.processCount > 0 || p.isBackground;
+    const running = remaining.filter(isRunning);
+    const recent = remaining.filter((p) => !isRunning(p));
     return [
       { key: "pinned", label: "Pinned", isUserGroup: false, items: pinned },
       { key: "current", label: null, isUserGroup: false, items: current },
-      { key: "other", label: null, isUserGroup: false, items: rest },
+      { key: "running", label: "Running", isUserGroup: false, items: running },
+      { key: "recent", label: "Recent", isUserGroup: false, items: recent },
     ].filter((s) => s.items.length > 0) as SwitcherSection[];
   }, [results, isSearching, hasGroups, groups]);
 
@@ -713,6 +775,7 @@ function ProjectListContent({
             onCloseProject={onCloseProject}
             onLocateProject={onLocateProject}
             onTogglePinProject={onTogglePinProject}
+            onCopyPath={onCopyPath}
             onHoverProject={onHoverProject}
           />
         </div>
@@ -836,6 +899,7 @@ function ProjectListContent({
                   onCloseProject={onCloseProject}
                   onLocateProject={onLocateProject}
                   onTogglePinProject={onTogglePinProject}
+                  onCopyPath={onCopyPath}
                   onHoverProject={onHoverProject}
                 />
               </div>
@@ -850,55 +914,29 @@ function ProjectListContent({
 const KBD_CLASS = "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60";
 
 function ProjectSwitcherFooter() {
-  const [helpOpen, setHelpOpen] = useState(false);
+  const modifiers = useModifierKeys();
+
+  const hint = modifiers.alt
+    ? { keys: "⌥↵", label: "Background" }
+    : modifiers.meta
+      ? { keys: "⌘↵", label: "New window" }
+      : { keys: "↵", label: "Switch" };
 
   return (
     <div className="w-full flex items-center justify-between">
-      <span>
-        <kbd className={KBD_CLASS}>↵</kbd>
-        <span className="ml-1.5">Switch</span>
+      <div className="flex items-center gap-3">
+        <span>
+          <kbd className={KBD_CLASS}>{hint.keys}</kbd>
+          <span className="ml-1.5">{hint.label}</span>
+        </span>
+        <span className="text-canopy-text/30">
+          <kbd className={KBD_CLASS}>⌘⌫</kbd>
+          <span className="ml-1.5">Remove</span>
+        </span>
+      </div>
+      <span className="text-canopy-text/30">
+        <span>Right-click for more</span>
       </span>
-      <Popover open={helpOpen} onOpenChange={setHelpOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="p-0.5 rounded transition-colors text-canopy-text/40 hover:text-canopy-text/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-            aria-label="Keyboard shortcuts"
-          >
-            <CircleHelp className="w-3.5 h-3.5" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent
-          side="top"
-          align="end"
-          className="w-auto p-3"
-          onOpenAutoFocus={(e) => e.preventDefault()}
-        >
-          <div className="flex flex-col gap-1.5 text-xs text-canopy-text/60">
-            <span>
-              <kbd className={KBD_CLASS}>↑</kbd>
-              <kbd className={cn(KBD_CLASS, "ml-1")}>↓</kbd>
-              <span className="ml-1.5">to navigate</span>
-            </span>
-            <span>
-              <kbd className={KBD_CLASS}>Tab</kbd>
-              <span className="ml-1.5">to buttons</span>
-            </span>
-            <span>
-              <kbd className={KBD_CLASS}>↵</kbd>
-              <span className="ml-1.5">to switch</span>
-            </span>
-            <span>
-              <kbd className={KBD_CLASS}>⌘⌫</kbd>
-              <span className="ml-1.5">to remove</span>
-            </span>
-            <span>
-              <kbd className={KBD_CLASS}>Esc</kbd>
-              <span className="ml-1.5">to close</span>
-            </span>
-          </div>
-        </PopoverContent>
-      </Popover>
     </div>
   );
 }
@@ -914,6 +952,7 @@ interface ProjectPaletteInnerProps {
   selectedIndex: number;
   onQueryChange: (query: string) => void;
   onSelect: (project: SearchableProject) => void;
+  onSelectBackground?: (project: SearchableProject) => void;
   onClose: () => void;
   onSelectPrevious: () => void;
   onSelectNext: () => void;
@@ -924,6 +963,7 @@ interface ProjectPaletteInnerProps {
   onCloseProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
+  onCopyPath?: (path: string) => void;
   groups?: ProjectGroup[];
   onAssignProjectToGroup?: (projectId: string, groupId: string) => void;
   onRemoveProjectFromGroup?: (projectId: string) => void;
@@ -943,6 +983,7 @@ function ProjectPaletteInner({
   selectedIndex,
   onQueryChange,
   onSelect,
+  onSelectBackground,
   onClose,
   onSelectPrevious,
   onSelectNext,
@@ -953,6 +994,7 @@ function ProjectPaletteInner({
   onCloseProject,
   onLocateProject,
   onTogglePinProject,
+  onCopyPath,
   groups,
   onAssignProjectToGroup,
   onRemoveProjectFromGroup,
@@ -993,7 +1035,12 @@ function ProjectPaletteInner({
           e.preventDefault();
           e.stopPropagation();
           if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-            onSelect(results[selectedIndex]);
+            const selected = results[selectedIndex];
+            if (e.altKey && onSelectBackground) {
+              onSelectBackground(selected);
+            } else {
+              onSelect(selected);
+            }
           }
           break;
         case "Escape":
@@ -1016,7 +1063,16 @@ function ProjectPaletteInner({
           break;
       }
     },
-    [results, selectedIndex, onSelectPrevious, onSelectNext, onSelect, onClose, onCloseProject]
+    [
+      results,
+      selectedIndex,
+      onSelectPrevious,
+      onSelectNext,
+      onSelect,
+      onSelectBackground,
+      onClose,
+      onCloseProject,
+    ]
   );
 
   const activeResult = results[selectedIndex];
@@ -1054,6 +1110,7 @@ function ProjectPaletteInner({
           onCloseProject={onCloseProject}
           onLocateProject={onLocateProject}
           onTogglePinProject={onTogglePinProject}
+          onCopyPath={onCopyPath}
           groups={groups}
           onAssignProjectToGroup={onAssignProjectToGroup}
           onRemoveProjectFromGroup={onRemoveProjectFromGroup}
@@ -1218,6 +1275,8 @@ function ModalContent({
           onCloseProject={innerProps.onCloseProject}
           onLocateProject={innerProps.onLocateProject}
           onTogglePinProject={innerProps.onTogglePinProject}
+          onCopyPath={innerProps.onCopyPath}
+          onSelectBackground={innerProps.onSelectBackground}
           groups={innerProps.groups}
           onAssignProjectToGroup={innerProps.onAssignProjectToGroup}
           onRemoveProjectFromGroup={innerProps.onRemoveProjectFromGroup}
@@ -1299,6 +1358,8 @@ function DropdownContent({
           onCloseProject={innerProps.onCloseProject}
           onLocateProject={innerProps.onLocateProject}
           onTogglePinProject={innerProps.onTogglePinProject}
+          onCopyPath={innerProps.onCopyPath}
+          onSelectBackground={innerProps.onSelectBackground}
           groups={innerProps.groups}
           onAssignProjectToGroup={innerProps.onAssignProjectToGroup}
           onRemoveProjectFromGroup={innerProps.onRemoveProjectFromGroup}
@@ -1331,6 +1392,8 @@ export function ProjectSwitcherPalette({
   onCloseProject,
   onLocateProject,
   onTogglePinProject,
+  onCopyPath,
+  onSelectBackground,
   onOpenProjectSettings,
   dropdownAlign,
   children,
@@ -1372,6 +1435,8 @@ export function ProjectSwitcherPalette({
         onCloseProject={onCloseProject}
         onLocateProject={onLocateProject}
         onTogglePinProject={onTogglePinProject}
+        onCopyPath={onCopyPath}
+        onSelectBackground={onSelectBackground}
         onOpenProjectSettings={onOpenProjectSettings}
         dropdownAlign={dropdownAlign}
         groups={groups}
@@ -1403,6 +1468,8 @@ export function ProjectSwitcherPalette({
         onCloseProject={onCloseProject}
         onLocateProject={onLocateProject}
         onTogglePinProject={onTogglePinProject}
+        onCopyPath={onCopyPath}
+        onSelectBackground={onSelectBackground}
         onOpenProjectSettings={onOpenProjectSettings}
         groups={groups}
         onCreateGroup={onCreateGroup}

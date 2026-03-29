@@ -132,7 +132,11 @@ export function buildSwitcherSections(
   const ungrouped = results.filter((p) => !groupedProjectIds.has(p.id));
   const pinned = ungrouped.filter((p) => p.isPinned && !p.isActive);
   const current = ungrouped.filter((p) => p.isActive);
-  const rest = ungrouped.filter((p) => !p.isActive && !p.isPinned);
+  const remaining = ungrouped.filter((p) => !p.isActive && !p.isPinned);
+  const isRunning = (p: SearchableProject) =>
+    p.activeAgentCount > 0 || p.waitingAgentCount > 0 || p.processCount > 0 || p.isBackground;
+  const running = remaining.filter(isRunning);
+  const recent = remaining.filter((p) => !isRunning(p));
 
   if (pinned.length > 0) {
     sections.push({ key: "pinned", label: "Pinned", isUserGroup: false, items: pinned });
@@ -140,8 +144,11 @@ export function buildSwitcherSections(
   if (current.length > 0) {
     sections.push({ key: "current", label: null, isUserGroup: false, items: current });
   }
-  if (rest.length > 0) {
-    sections.push({ key: "other", label: null, isUserGroup: false, items: rest });
+  if (running.length > 0) {
+    sections.push({ key: "running", label: "Running", isUserGroup: false, items: running });
+  }
+  if (recent.length > 0) {
+    sections.push({ key: "recent", label: "Recent", isUserGroup: false, items: recent });
   }
 
   return sections;

@@ -234,9 +234,32 @@ describe("buildSwitcherSections", () => {
     const groups: ProjectGroup[] = [];
 
     const sections = buildSwitcherSections(projects, groups);
-    expect(sections.map((s) => s.key)).toEqual(["current", "other"]);
+    expect(sections.map((s) => s.key)).toEqual(["current", "recent"]);
     expect(sections[0].items.map((p) => p.id)).toEqual(["a"]);
     expect(sections[1].items.map((p) => p.id)).toEqual(["b"]);
+  });
+
+  it("splits ungrouped into running and recent based on agent/process counts", () => {
+    const projects = [
+      makeSearchableProject({ id: "a", name: "A", activeAgentCount: 2 }),
+      makeSearchableProject({ id: "b", name: "B", waitingAgentCount: 1 }),
+      makeSearchableProject({ id: "c", name: "C", processCount: 3 }),
+      makeSearchableProject({ id: "d", name: "D" }),
+    ];
+
+    const groups: ProjectGroup[] = [];
+    const sections = buildSwitcherSections(projects, groups);
+
+    const runningSection = sections.find((s) => s.key === "running");
+    const recentSection = sections.find((s) => s.key === "recent");
+
+    expect(runningSection).toBeDefined();
+    expect(runningSection!.label).toBe("Running");
+    expect(runningSection!.items.map((p) => p.id)).toEqual(["a", "b", "c"]);
+
+    expect(recentSection).toBeDefined();
+    expect(recentSection!.label).toBe("Recent");
+    expect(recentSection!.items.map((p) => p.id)).toEqual(["d"]);
   });
 
   it("a project in a user group does not appear in automatic sections", () => {

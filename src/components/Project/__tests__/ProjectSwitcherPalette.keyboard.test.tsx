@@ -90,6 +90,18 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: () => null,
 }));
 
+vi.mock("@/components/ui/context-menu", () => ({
+  ContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuContent: () => null,
+  ContextMenuItem: () => null,
+  ContextMenuSeparator: () => null,
+}));
+
+vi.mock("@/hooks/useModifierKeys", () => ({
+  useModifierKeys: () => ({ meta: false, alt: false }),
+}));
+
 vi.mock("./ProjectActionRow", () => ({
   ProjectActionRow: () => null,
 }));
@@ -182,10 +194,6 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
         onStopProject={vi.fn()}
       />
     );
-    const pinButtons = screen.getAllByLabelText(/pin project/i);
-    for (const btn of pinButtons) {
-      expect(btn.getAttribute("tabindex")).toBe("-1");
-    }
     const closeButtons = screen.getAllByLabelText("Close project");
     for (const btn of closeButtons) {
       expect(btn.getAttribute("tabindex")).toBe("-1");
@@ -227,13 +235,11 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     expect(document.activeElement).toBe(focusable[focusable.length - 1]);
   });
 
-  it("displays condensed footer with keyboard shortcut help", () => {
+  it("displays condensed footer with dynamic modifier hints", () => {
     render(<ProjectSwitcherPalette {...defaultProps} />);
     const footer = screen.getByTestId("palette-footer");
     expect(footer.textContent).toContain("Switch");
-    expect(screen.getByLabelText("Keyboard shortcuts")).toBeTruthy();
-    expect(footer.textContent).toContain("Tab");
-    expect(footer.textContent).toContain("to navigate");
-    expect(footer.textContent).toContain("to close");
+    expect(footer.textContent).toContain("Remove");
+    expect(footer.textContent).toContain("Right-click for more");
   });
 });
