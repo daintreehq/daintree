@@ -232,26 +232,16 @@ test.describe.serial("Core: Settings Pages Load", () => {
     await expect(window.locator("#github-token")).toBeVisible({ timeout: T_SHORT });
   });
 
-  test("Editor tab loads", async () => {
+  test("Integrations tab loads", async () => {
     const { window } = ctx;
 
-    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Editor" }).click();
-    await expect(window.locator("h3", { hasText: "Editor Integration" })).toBeVisible({
+    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Integrations" }).click();
+    // Integrations tab combines Editor and Image Viewer sections
+    await expect(window.locator("h4", { hasText: "External Editor" })).toBeVisible({
       timeout: T_SHORT,
     });
-  });
-
-  test("Image Viewer tab loads", async () => {
-    const { window } = ctx;
-
-    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Image Viewer" }).click();
-    await expect(window.locator("h3", { hasText: "Image Viewer" })).toBeVisible({
+    await expect(window.locator("h4", { hasText: "Image Viewer" })).toBeVisible({
       timeout: T_SHORT,
-    });
-
-    // Should show image viewer radio options after loading
-    await expect(window.locator('input[name="imageViewerMode"]').first()).toBeVisible({
-      timeout: T_MEDIUM,
     });
   });
 

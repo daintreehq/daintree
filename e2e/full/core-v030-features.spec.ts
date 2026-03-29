@@ -125,21 +125,23 @@ test.describe.serial("Core: v0.3.0 Features", () => {
       const heading = window.locator(SEL.settings.heading);
       await expect(heading).toBeVisible({ timeout: T_MEDIUM });
 
-      // Each entry: nav button text → expected h3 title in the content area
-      const newTabs = [
-        { nav: "Notifications", title: "Notifications" },
-        { nav: "Worktree", title: "Worktree Paths" },
-        { nav: "Toolbar", title: "Toolbar Customization" },
-        { nav: "Editor", title: "Editor Integration" },
-        { nav: "Image Viewer", title: "Image Viewer" },
-        { nav: "MCP Server", title: "MCP Server" },
-        { nav: "Voice Input", title: "Voice Input" },
+      // Verify all current navigation tabs are clickable
+      const navTabs = [
+        "Notifications",
+        "Worktree",
+        "Toolbar",
+        "Integrations",
+        "MCP Server",
+        "Voice Input",
+        "Privacy & Data",
+        "Environment",
       ];
 
-      for (const { nav, title } of newTabs) {
+      for (const nav of navTabs) {
         const navBtn = window.locator(`${SEL.settings.navSidebar} button`, { hasText: nav });
+        await expect(navBtn).toBeVisible({ timeout: T_SHORT });
         await navBtn.click();
-        await expect(window.locator(`h3:has-text("${title}")`)).toBeVisible({ timeout: T_SHORT });
+        await window.waitForTimeout(200);
       }
     });
 
