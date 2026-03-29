@@ -903,6 +903,14 @@ export interface ElectronAPI {
     /** Acknowledge a waiting agent escalation (cancels pending escalation timer) */
     acknowledgeWaiting(terminalId: string): void;
   };
+  sound: {
+    /** Listen for sound trigger events from main process */
+    onTrigger(callback: (payload: { soundFile: string }) => void): () => void;
+    /** Listen for sound cancel events from main process */
+    onCancel(callback: () => void): () => void;
+    /** Get the absolute path to the sounds directory */
+    getSoundDir(): Promise<string>;
+  };
   update: {
     onUpdateAvailable(callback: (info: { version: string }) => void): () => void;
     onDownloadProgress(callback: (info: { percent: number }) => void): () => void;

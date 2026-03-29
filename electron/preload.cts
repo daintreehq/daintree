@@ -521,6 +521,10 @@ const CHANNELS = {
   WINDOW_DISK_SPACE_STATUS: "window:disk-space-status",
 
   // Notification channels
+  SOUND_TRIGGER: "sound:trigger",
+  SOUND_CANCEL: "sound:cancel",
+  SOUND_GET_DIR: "sound:get-dir",
+
   NOTIFICATION_UPDATE: "notification:update",
   NOTIFICATION_SETTINGS_GET: "notification:settings-get",
   NOTIFICATION_SETTINGS_SET: "notification:settings-set",
@@ -1929,6 +1933,18 @@ const api: ElectronAPI = {
         action?: { label: string; ipcChannel: string };
       }) => void
     ) => _typedOn(CHANNELS.NOTIFICATION_SHOW_TOAST, callback),
+  },
+
+  // Sound API (Web Audio playback via main → renderer push)
+  sound: {
+    onTrigger: (callback: (payload: { soundFile: string }) => void) =>
+      _typedOn(CHANNELS.SOUND_TRIGGER, callback),
+    onCancel: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(CHANNELS.SOUND_CANCEL, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.SOUND_CANCEL, handler);
+    },
+    getSoundDir: (): Promise<string> => _unwrappingInvoke(CHANNELS.SOUND_GET_DIR),
   },
 
   // Auto-Update API

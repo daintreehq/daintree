@@ -317,6 +317,10 @@ export const CHANNELS = {
   WINDOW_DESTROY_HIDDEN_WEBVIEWS: "window:destroy-hidden-webviews",
   WINDOW_DISK_SPACE_STATUS: "window:disk-space-status",
 
+  SOUND_TRIGGER: "sound:trigger",
+  SOUND_CANCEL: "sound:cancel",
+  SOUND_GET_DIR: "sound:get-dir",
+
   NOTIFICATION_UPDATE: "notification:update",
   NOTIFICATION_SETTINGS_GET: "notification:settings-get",
   NOTIFICATION_SETTINGS_SET: "notification:settings-set",

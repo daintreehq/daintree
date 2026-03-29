@@ -2,8 +2,10 @@ import path from "path";
 import { existsSync, readdirSync } from "fs";
 import { app } from "electron";
 import { playSound, type SoundHandle } from "../utils/soundPlayer.js";
+import { getMainWindow } from "../window/windowRef.js";
+import { CHANNELS } from "../ipc/channels.js";
 
-function getSoundsDir(): string {
+export function getSoundsDir(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, "sounds")
     : path.join(app.getAppPath(), "electron", "resources", "sounds");
@@ -49,6 +51,13 @@ const PRIORITY_MAP: Record<string, number> = {
   ping: 4,
 };
 
+/**
+ * Central sound playback service.  Handles variant discovery, no-repeat
+ * round-robin selection, dampening, and playback cancellation.
+ *
+ * Playback is routed to the renderer's Web Audio API via IPC when available,
+ * falling back to OS process spawning (soundPlayer.ts) otherwise.
+ */
 class SoundService {
   private variantCache = new Map<string, string[]>();
   private lastVariant = new Map<string, number>();
@@ -94,6 +103,10 @@ class SoundService {
   }
 
   cancel(): void {
+    const win = getMainWindow();
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(CHANNELS.SOUND_CANCEL);
+    }
     for (const voice of this.activeVoices) {
       voice.handle.cancel();
     }
@@ -114,6 +127,15 @@ class SoundService {
   private playBypassed(soundFile: string): void {
     const soundPath = path.join(getSoundsDir(), soundFile);
     if (!existsSync(soundPath)) return;
+
+    // Try Web Audio via renderer first
+    const win = getMainWindow();
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(CHANNELS.SOUND_TRIGGER, { soundFile });
+      return;
+    }
+
+    // Fallback to OS process spawning when no renderer is available
     const handle = playSound(soundPath);
     this.activeVoices.push({ handle, priority: 0, startedAt: Date.now() });
   }
@@ -136,7 +158,17 @@ class SoundService {
     // Compute volume via exponential decay
     const effectiveVolume = opts.volume ?? this.computeVolume(now);
 
-    // Voice pool management
+    // Try Web Audio via renderer first
+    const win = getMainWindow();
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(CHANNELS.SOUND_TRIGGER, {
+        soundFile,
+        volume: effectiveVolume,
+      });
+      return;
+    }
+
+    // Fallback to OS process spawning when no renderer is available
     this.pruneStaleVoices(now);
     if (!this.acquireVoiceSlot(opts.priority)) return;
 

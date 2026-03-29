@@ -45,6 +45,20 @@ const appMock = vi.hoisted(() => ({
   },
 }));
 
+const mockWebContentsSend = vi.hoisted(() => vi.fn());
+const mockIsDestroyed = vi.hoisted(() => vi.fn(() => false));
+const mockGetMainWindow = vi.hoisted(() =>
+  vi.fn(
+    (): {
+      isDestroyed: () => boolean;
+      webContents: { send: (...args: unknown[]) => void };
+    } | null => ({
+      isDestroyed: mockIsDestroyed,
+      webContents: { send: mockWebContentsSend },
+    })
+  )
+);
+
 vi.mock("fs", () => ({
   default: fsMock,
   ...fsMock,
@@ -56,6 +70,10 @@ vi.mock("electron", () => ({
 
 vi.mock("../../utils/soundPlayer.js", () => ({
   playSound: mockPlaySound,
+}));
+
+vi.mock("../../window/windowRef.js", () => ({
+  getMainWindow: mockGetMainWindow,
 }));
 
 const originalResourcesPath = process.resourcesPath;
@@ -98,6 +116,7 @@ describe("SoundService", () => {
     mockPlaySound.mockImplementation(() => ({ cancel: mockCancel }));
     appMock.app.isPackaged = false;
     appMock.app.getAppPath.mockReturnValue("/repo");
+    mockIsDestroyed.mockReturnValue(false);
     Object.defineProperty(process, "resourcesPath", {
       value: "/app/resources",
       writable: true,
@@ -110,6 +129,69 @@ describe("SoundService", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  // -- Web Audio IPC routing --
+
+  it("sends sound:trigger IPC when renderer is available", () => {
+    mockGetMainWindow.mockReturnValue({
+      isDestroyed: () => false,
+      webContents: { send: mockWebContentsSend },
+    });
+
+    soundService.preview("error");
+
+    expect(mockWebContentsSend).toHaveBeenCalledWith("sound:trigger", {
+      soundFile: "error.wav",
+    });
+    expect(mockPlaySound).not.toHaveBeenCalled();
+  });
+
+  it("falls back to OS process when no main window", () => {
+    soundService.play("chime");
+
+    expect(mockPlaySound).toHaveBeenCalledWith(
+      expect.stringContaining("chime"),
+      expect.any(Number)
+    );
+  });
+
+  it("falls back to OS process when window is destroyed", () => {
+    mockGetMainWindow.mockReturnValue({
+      isDestroyed: () => true,
+      webContents: { send: mockWebContentsSend },
+    });
+
+    soundService.play("error");
+
+    expect(mockPlaySound).toHaveBeenCalled();
+    expect(mockWebContentsSend).not.toHaveBeenCalled();
+  });
+
+  it("cancel sends sound:cancel IPC when window available", () => {
+    mockGetMainWindow.mockReturnValue({
+      isDestroyed: () => false,
+      webContents: { send: mockWebContentsSend },
+    });
+
+    soundService.cancel();
+
+    expect(mockWebContentsSend).toHaveBeenCalledWith("sound:cancel");
+  });
+
+  it("preview sends the base file without variant selection via IPC", () => {
+    mockGetMainWindow.mockReturnValue({
+      isDestroyed: () => false,
+      webContents: { send: mockWebContentsSend },
+    });
+
+    soundService.preview("chime");
+
+    expect(mockWebContentsSend).toHaveBeenCalledWith("sound:trigger", {
+      soundFile: "chime.wav",
+    });
+  });
+
+  // -- Path resolution --
 
   it("resolves sounds directory from app path in dev mode", () => {
     soundService.play("chime");

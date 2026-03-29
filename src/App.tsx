@@ -48,6 +48,7 @@ import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
+import { useSoundPlaybackListener } from "./hooks/useSoundPlaybackListener";
 import { removeStartupSkeleton } from "./utils/removeStartupSkeleton";
 import { createTooltipWithShortcut } from "./lib/platform";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./components/ui/tooltip";
@@ -1251,6 +1252,7 @@ function App() {
   useMainProcessToastListener();
   useWorkflowListener();
   useMcpBridge();
+  useSoundPlaybackListener();
   const { homeDir } = useHomeDir();
 
   // Grid navigation hook for directional terminal switching
