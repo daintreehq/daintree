@@ -87,12 +87,17 @@ export function useDeferredNewsletterPrompt(
       if (!eligibleRef.current || firedRef.current) return;
       const hasAgent = state.terminals.some((t) => t.kind === "agent");
       if (hasAgent && !checklistVisibleRef.current) {
+        if (timerRef.current !== null) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => fire(), BREATHING_ROOM_MS);
       }
     });
 
     return () => {
       unsubscribe();
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
     };
   }, [isStateLoaded, fire]);
 
@@ -104,8 +109,16 @@ export function useDeferredNewsletterPrompt(
 
     const hasAgent = useTerminalStore.getState().terminals.some((t) => t.kind === "agent");
     if (hasAgent) {
+      if (timerRef.current !== null) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => fire(), BREATHING_ROOM_MS);
     }
+
+    return () => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
   }, [checklistVisible, isStateLoaded, fire]);
 
   return { visible, dismiss };

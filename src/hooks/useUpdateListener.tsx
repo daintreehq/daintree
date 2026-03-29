@@ -20,7 +20,7 @@ function DownloadProgress({ percent }: { percent: number }) {
 export function useUpdateListener(suppressToasts = false): void {
   const toastIdRef = useRef<string | null>(null);
   const suppressRef = useRef(suppressToasts);
-  const pendingUpdateRef = useRef<{ version: string } | null>(null);
+  const pendingUpdateRef = useRef<{ version: string; downloaded: boolean } | null>(null);
 
   // Keep ref in sync
   useEffect(() => {
@@ -32,17 +32,33 @@ export function useUpdateListener(suppressToasts = false): void {
     if (suppressToasts) return;
     if (!pendingUpdateRef.current) return;
 
-    const { version } = pendingUpdateRef.current;
+    const { version, downloaded } = pendingUpdateRef.current;
     pendingUpdateRef.current = null;
-    const id = notify({
-      type: "info",
-      title: "Update Available",
-      message: `Version ${version} is downloading...`,
-      inboxMessage: `Version ${version} is downloading`,
-      priority: "high",
-      duration: 0,
-    });
-    toastIdRef.current = id || null;
+
+    if (downloaded) {
+      toastIdRef.current = useNotificationStore.getState().addNotification({
+        type: "success",
+        title: "Update Ready",
+        message: `Version ${version} is ready to install.`,
+        inboxMessage: `Version ${version} ready to install`,
+        priority: "high",
+        duration: 0,
+        action: {
+          label: "Restart to Update",
+          onClick: () => window.electron?.update?.quitAndInstall(),
+        },
+      });
+    } else {
+      const id = notify({
+        type: "info",
+        title: "Update Available",
+        message: `Version ${version} is downloading...`,
+        inboxMessage: `Version ${version} is downloading`,
+        priority: "high",
+        duration: 0,
+      });
+      toastIdRef.current = id || null;
+    }
   }, [suppressToasts]);
 
   useEffect(() => {
@@ -50,7 +66,7 @@ export function useUpdateListener(suppressToasts = false): void {
 
     const cleanupAvailable = window.electron.update.onUpdateAvailable((info) => {
       if (suppressRef.current) {
-        pendingUpdateRef.current = { version: info.version };
+        pendingUpdateRef.current = { version: info.version, downloaded: false };
         return;
       }
       const id = notify({
@@ -74,6 +90,10 @@ export function useUpdateListener(suppressToasts = false): void {
     });
 
     const cleanupDownloaded = window.electron.update.onUpdateDownloaded((info) => {
+      if (suppressRef.current) {
+        pendingUpdateRef.current = { version: info.version, downloaded: true };
+        return;
+      }
       if (toastIdRef.current) {
         useNotificationStore.getState().updateNotification(toastIdRef.current, {
           type: "success",
