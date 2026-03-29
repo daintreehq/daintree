@@ -29,6 +29,16 @@ function installPortDataHandler(port: MessagePort): void {
           cb(msg.data);
         }
       }
+      // Send ack back over port for backpressure flow control
+      const byteCount =
+        typeof msg.data === "string"
+          ? new TextEncoder().encode(msg.data).length
+          : (msg.data as Uint8Array).byteLength;
+      try {
+        port.postMessage({ type: "ack", id: msg.id, bytes: byteCount });
+      } catch {
+        // Port may be closed; IPC fallback will take over
+      }
     }
   });
 }
