@@ -15,7 +15,7 @@
 }
 
 .pulse-card-header {
-  background: var(--pulse-card-header-bg);
+  background: var(--pulse-card-header-bg, transparent);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
 }
 
