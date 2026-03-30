@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { PortQueueManager, type PortQueueDeps } from "../portQueue.js";
+import type { PtyPauseCoordinator } from "../PtyPauseCoordinator.js";
 
 function createMockDeps(): PortQueueDeps {
   const mockCoordinator = {
@@ -8,7 +9,7 @@ function createMockDeps(): PortQueueDeps {
     get isPaused() {
       return false;
     },
-  } as unknown as any;
+  } as unknown as PtyPauseCoordinator;
   return {
     getTerminal: vi.fn(() => ({ ptyProcess: { pause: vi.fn(), resume: vi.fn() } })),
     getPauseCoordinator: vi.fn(() => mockCoordinator),
@@ -30,7 +31,7 @@ function createMockPort() {
     removeListener: vi.fn(),
     close: vi.fn(),
     start: vi.fn(),
-    _emit(event: string, ...args: any[]) {
+    _emit(event: string, ...args: unknown[]) {
       for (const cb of listeners.get(event) ?? []) cb(...args);
     },
   };
@@ -103,7 +104,7 @@ describe("Multi-port pty-host infrastructure", () => {
       // Simulate disconnect of old port
       const oldHandler = handlers.get(1);
       if (oldPort && oldHandler) {
-        oldPort.removeListener("message", oldHandler as any);
+        oldPort.removeListener("message", oldHandler as (...args: unknown[]) => void);
       }
       oldPort.close();
       ports.set(1, newPort);

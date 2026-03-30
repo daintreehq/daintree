@@ -1447,13 +1447,13 @@ function cleanup(): void {
   ipcQueueManager.dispose();
 
   // Dispose all per-window port queue managers
-  for (const [winId, pqm] of portQueueManagers) {
+  for (const [, pqm] of portQueueManagers) {
     pqm.dispose();
   }
   portQueueManagers.clear();
 
   // Close all renderer ports
-  for (const [winId, wPort] of rendererPorts) {
+  for (const [, wPort] of rendererPorts) {
     try {
       wPort.close();
     } catch {
