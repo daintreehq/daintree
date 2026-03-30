@@ -1,4 +1,5 @@
-import { useCallback } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   BUILT_IN_SCHEMES,
@@ -68,7 +69,12 @@ export function ColorSchemePicker() {
   const addCustomScheme = useTerminalColorSchemeStore((s) => s.addCustomScheme);
   const appThemeId = useAppThemeStore((s) => s.selectedSchemeId);
 
-  const allSchemes = [...BUILT_IN_SCHEMES, ...customSchemes];
+  const [filterQuery, setFilterQuery] = useState("");
+  const allSchemes = useMemo(() => [...BUILT_IN_SCHEMES, ...customSchemes], [customSchemes]);
+  const filteredSchemes = useMemo(() => {
+    const q = filterQuery.trim().toLowerCase();
+    return q ? allSchemes.filter((s) => s.name.toLowerCase().includes(q)) : allSchemes;
+  }, [allSchemes, filterQuery]);
 
   const handleSelect = useCallback(
     async (id: string) => {
@@ -103,8 +109,18 @@ export function ColorSchemePicker() {
 
   return (
     <div className="space-y-3">
+      <div className="flex items-center gap-1.5">
+        <Search size={14} className="shrink-0 text-canopy-text/40" aria-hidden="true" />
+        <input
+          type="text"
+          placeholder="Filter schemes…"
+          value={filterQuery}
+          onChange={(e) => setFilterQuery(e.target.value)}
+          className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder:text-canopy-text/40 focus:outline-none border-b border-canopy-border pb-1"
+        />
+      </div>
       <div className="grid grid-cols-2 gap-2">
-        {allSchemes.map((scheme) => {
+        {filteredSchemes.map((scheme) => {
           const resolved = resolveSchemeForPreview(scheme, appThemeId);
           return (
             <button
@@ -128,6 +144,11 @@ export function ColorSchemePicker() {
           );
         })}
       </div>
+      {filteredSchemes.length === 0 && filterQuery && (
+        <div className="px-2 py-3 text-xs text-canopy-text/40 text-center">
+          No schemes match &ldquo;{filterQuery}&rdquo;
+        </div>
+      )}
       <button
         onClick={handleImport}
         className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"

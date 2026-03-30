@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ChevronDown, Monitor, Shuffle } from "lucide-react";
+import { AlertTriangle, ChevronDown, Monitor, Search, Shuffle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { useAppThemeStore } from "@/store/appThemeStore";
@@ -200,6 +200,7 @@ export function AppThemePicker() {
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [filterQuery, setFilterQuery] = useState("");
 
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -208,8 +209,18 @@ export function AppThemePicker() {
   const shuffleQueueRef = useRef<string[]>([]);
 
   const allSchemes = useMemo(() => [...BUILT_IN_APP_SCHEMES, ...customSchemes], [customSchemes]);
-  const darkSchemes = useMemo(() => allSchemes.filter((s) => s.type !== "light"), [allSchemes]);
-  const lightSchemes = useMemo(() => allSchemes.filter((s) => s.type === "light"), [allSchemes]);
+  const darkSchemes = useMemo(() => {
+    const q = filterQuery.trim().toLowerCase();
+    return allSchemes
+      .filter((s) => s.type !== "light")
+      .filter((s) => !q || s.name.toLowerCase().includes(q));
+  }, [allSchemes, filterQuery]);
+  const lightSchemes = useMemo(() => {
+    const q = filterQuery.trim().toLowerCase();
+    return allSchemes
+      .filter((s) => s.type === "light")
+      .filter((s) => !q || s.name.toLowerCase().includes(q));
+  }, [allSchemes, filterQuery]);
   const flatList = useMemo(() => [...darkSchemes, ...lightSchemes], [darkSchemes, lightSchemes]);
 
   const selectedScheme = useMemo(
@@ -371,7 +382,15 @@ export function AppThemePicker() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [open]);
 
-  const handleKeyDown = useCallback(
+  useEffect(() => {
+    if (!open) setFilterQuery("");
+  }, [open]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [filterQuery]);
+
+  const handleTriggerKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (!open) {
         if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === " ") {
@@ -380,9 +399,13 @@ export function AppThemePicker() {
           const idx = flatList.findIndex((s) => s.id === selectedSchemeId);
           setActiveIndex(idx >= 0 ? idx : 0);
         }
-        return;
       }
+    },
+    [open, flatList, selectedSchemeId]
+  );
 
+  const handleSearchKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
@@ -401,7 +424,6 @@ export function AppThemePicker() {
           setActiveIndex(flatList.length - 1);
           break;
         case "Enter":
-        case " ":
           e.preventDefault();
           if (activeIndex >= 0 && activeIndex < flatList.length) {
             handleSelect(flatList[activeIndex].id);
@@ -409,7 +431,7 @@ export function AppThemePicker() {
           break;
       }
     },
-    [open, flatList, activeIndex, selectedSchemeId, handleSelect]
+    [flatList, activeIndex, handleSelect]
   );
 
   const activeDescendant =
@@ -490,7 +512,7 @@ export function AppThemePicker() {
                 setActiveIndex(idx >= 0 ? idx : 0);
               }
             }}
-            onKeyDown={handleKeyDown}
+            onKeyDown={handleTriggerKeyDown}
             onBlur={(e) => {
               if (!listRef.current?.contains(e.relatedTarget as Node)) {
                 setOpen(false);
@@ -548,51 +570,77 @@ export function AppThemePicker() {
             <div
               ref={listRef}
               id="theme-listbox"
-              role="listbox"
               aria-label="Theme list"
-              onMouseDown={(e) => e.preventDefault()}
+              onMouseDown={(e) => {
+                if ((e.target as HTMLElement).tagName !== "INPUT") e.preventDefault();
+              }}
               className="absolute z-50 left-0 right-0 mt-1 max-h-[280px] overflow-y-auto rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg shadow-[var(--theme-shadow-floating)]"
             >
-              {darkSchemes.length > 0 && (
-                <>
-                  <div className="sticky top-0 bg-canopy-bg/90 backdrop-blur-sm px-2 py-1 z-10">
-                    <p className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/40 select-none">
-                      Dark
-                    </p>
+              <div className="sticky top-0 z-20 flex items-center gap-1.5 px-2 py-1.5 bg-canopy-bg border-b border-canopy-border">
+                <Search size={14} className="shrink-0 text-canopy-text/40" aria-hidden="true" />
+                <input
+                  type="text"
+                  autoFocus
+                  placeholder="Filter themes…"
+                  value={filterQuery}
+                  onChange={(e) => setFilterQuery(e.target.value)}
+                  onKeyDown={handleSearchKeyDown}
+                  role="combobox"
+                  aria-label="Filter themes"
+                  aria-expanded={open}
+                  aria-autocomplete="list"
+                  aria-controls="theme-listbox-options"
+                  aria-activedescendant={activeDescendant}
+                  className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder:text-canopy-text/40 focus:outline-none"
+                />
+              </div>
+              <div role="listbox" id="theme-listbox-options">
+                {darkSchemes.length > 0 && (
+                  <>
+                    <div className="sticky top-[33px] bg-canopy-bg/90 backdrop-blur-sm px-2 py-1 z-10">
+                      <p className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/40 select-none">
+                        Dark
+                      </p>
+                    </div>
+                    {darkSchemes.map((scheme, i) => (
+                      <ThemeOption
+                        key={scheme.id}
+                        id={`theme-option-${scheme.id}`}
+                        scheme={scheme}
+                        selected={selectedSchemeId === scheme.id}
+                        highlighted={activeIndex === i}
+                        warnings={warningsByScheme.get(scheme.id) ?? []}
+                        onClick={() => handleSelect(scheme.id)}
+                      />
+                    ))}
+                  </>
+                )}
+                {lightSchemes.length > 0 && (
+                  <>
+                    <div className="sticky top-[33px] bg-canopy-bg/90 backdrop-blur-sm px-2 py-1 z-10">
+                      <p className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/40 select-none">
+                        Light
+                      </p>
+                    </div>
+                    {lightSchemes.map((scheme, i) => (
+                      <ThemeOption
+                        key={scheme.id}
+                        id={`theme-option-${scheme.id}`}
+                        scheme={scheme}
+                        selected={selectedSchemeId === scheme.id}
+                        highlighted={activeIndex === darkSchemes.length + i}
+                        warnings={warningsByScheme.get(scheme.id) ?? []}
+                        onClick={() => handleSelect(scheme.id)}
+                      />
+                    ))}
+                  </>
+                )}
+                {flatList.length === 0 && filterQuery && (
+                  <div className="px-2 py-3 text-xs text-canopy-text/40 text-center">
+                    No themes match &ldquo;{filterQuery}&rdquo;
                   </div>
-                  {darkSchemes.map((scheme, i) => (
-                    <ThemeOption
-                      key={scheme.id}
-                      id={`theme-option-${scheme.id}`}
-                      scheme={scheme}
-                      selected={selectedSchemeId === scheme.id}
-                      highlighted={activeIndex === i}
-                      warnings={warningsByScheme.get(scheme.id) ?? []}
-                      onClick={() => handleSelect(scheme.id)}
-                    />
-                  ))}
-                </>
-              )}
-              {lightSchemes.length > 0 && (
-                <>
-                  <div className="sticky top-0 bg-canopy-bg/90 backdrop-blur-sm px-2 py-1 z-10">
-                    <p className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/40 select-none">
-                      Light
-                    </p>
-                  </div>
-                  {lightSchemes.map((scheme, i) => (
-                    <ThemeOption
-                      key={scheme.id}
-                      id={`theme-option-${scheme.id}`}
-                      scheme={scheme}
-                      selected={selectedSchemeId === scheme.id}
-                      highlighted={activeIndex === darkSchemes.length + i}
-                      warnings={warningsByScheme.get(scheme.id) ?? []}
-                      onClick={() => handleSelect(scheme.id)}
-                    />
-                  ))}
-                </>
-              )}
+                )}
+              </div>
             </div>
           )}
         </div>
