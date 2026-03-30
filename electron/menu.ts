@@ -4,7 +4,7 @@ import { CHANNELS } from "./ipc/channels.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
 import * as CliInstallService from "./services/CliInstallService.js";
-import { getProjectSwitchServiceRef } from "./window/windowServices.js";
+import { getWindowRegistry } from "./window/windowRef.js";
 import { autoUpdaterService } from "./services/AutoUpdaterService.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 
@@ -362,7 +362,9 @@ export async function handleDirectoryOpen(
   if (targetWindow.isDestroyed()) return;
 
   try {
-    const switchService = getProjectSwitchServiceRef();
+    const registry = getWindowRegistry();
+    const wCtx = registry?.getByWindowId(targetWindow.id);
+    const switchService = wCtx?.services.projectSwitchService;
     if (!switchService) {
       console.error("[menu] ProjectSwitchService not available yet, cannot switch project");
       return;
