@@ -49,6 +49,25 @@ describe("CORE_CORRECTION_PROMPT", () => {
   it("is identified as a speech-to-text correction engine", () => {
     expect(CORE_CORRECTION_PROMPT).toContain("speech-to-text correction engine");
   });
+
+  it("instructs LLM to convert standalone paragraph voice commands to newlines", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("new paragraph");
+    expect(CORE_CORRECTION_PROMPT).toContain("next paragraph");
+    expect(CORE_CORRECTION_PROMPT).toContain("start a new paragraph");
+    expect(CORE_CORRECTION_PROMPT).toContain("\\n\\n");
+  });
+
+  it("instructs LLM to convert standalone line break voice commands to newlines", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("new line");
+    expect(CORE_CORRECTION_PROMPT).toContain("next line");
+    expect(CORE_CORRECTION_PROMPT).toContain("line break");
+    expect(CORE_CORRECTION_PROMPT).toContain("\\n");
+  });
+
+  it("scopes voice commands to standalone formatting instructions only", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("standalone");
+    expect(CORE_CORRECTION_PROMPT).toMatch(/not.+part of a.+sentence/i);
+  });
 });
 
 describe("buildCorrectionSystemPrompt", () => {
@@ -160,6 +179,12 @@ describe("MICRO_CORRECTION_PROMPT", () => {
   it("describes adjacent word merging", () => {
     expect(MICRO_CORRECTION_PROMPT).toContain("zoo stand");
     expect(MICRO_CORRECTION_PROMPT).toContain("Zustand");
+  });
+
+  it("does not contain paragraph voice command handling", () => {
+    expect(MICRO_CORRECTION_PROMPT).not.toContain("standalone");
+    expect(MICRO_CORRECTION_PROMPT).not.toContain("next paragraph");
+    expect(MICRO_CORRECTION_PROMPT).not.toContain("line break");
   });
 });
 
