@@ -18,6 +18,7 @@ import {
   Square,
   Trash2,
   X,
+  AppWindow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
@@ -61,6 +62,7 @@ export interface ProjectSwitcherPaletteProps {
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
   onSelectBackground?: (project: SearchableProject) => void;
+  onSelectNewWindow?: (project: SearchableProject) => void;
   onOpenProjectSettings?: () => void;
   dropdownAlign?: "start" | "center" | "end";
   children?: React.ReactNode;
@@ -90,6 +92,7 @@ interface ProjectListItemProps {
   onTogglePinProject?: (projectId: string) => void;
   onHoverProject?: (project: SearchableProject) => void;
   onCopyPath?: (path: string) => void;
+  onSelectNewWindow?: (project: SearchableProject) => void;
 }
 
 function StatusDot({ project }: { project: SearchableProject }) {
@@ -137,6 +140,7 @@ function ProjectListItem({
   onTogglePinProject,
   onHoverProject,
   onCopyPath,
+  onSelectNewWindow,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0 && !project.isMissing;
 
@@ -358,13 +362,20 @@ function ProjectListItem({
     </div>
   );
 
-  const hasContextActions = onTogglePinProject || onStopProject || onCloseProject || onCopyPath;
+  const hasContextActions =
+    onTogglePinProject || onStopProject || onCloseProject || onCopyPath || onSelectNewWindow;
   if (!hasContextActions) return row;
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
       <ContextMenuContent>
+        {onSelectNewWindow && !project.isActive && !project.isMissing && (
+          <ContextMenuItem onClick={() => onSelectNewWindow(project)}>
+            <AppWindow className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Open in new window
+          </ContextMenuItem>
+        )}
         {onTogglePinProject && (
           <ContextMenuItem onClick={() => onTogglePinProject(project.id)}>
             {project.isPinned ? (
@@ -686,6 +697,7 @@ interface ProjectListContentProps {
   onLocateProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
+  onSelectNewWindow?: (project: SearchableProject) => void;
   groups?: ProjectGroup[];
   onAssignProjectToGroup?: (projectId: string, groupId: string) => void;
   onRemoveProjectFromGroup?: (projectId: string) => void;
@@ -708,6 +720,7 @@ function ProjectListContent({
   onLocateProject,
   onTogglePinProject,
   onCopyPath,
+  onSelectNewWindow,
   groups,
   onAssignProjectToGroup,
   onRemoveProjectFromGroup,
@@ -777,6 +790,7 @@ function ProjectListContent({
             onTogglePinProject={onTogglePinProject}
             onCopyPath={onCopyPath}
             onHoverProject={onHoverProject}
+            onSelectNewWindow={onSelectNewWindow}
           />
         </div>
         {onAssignProjectToGroup && onCreateGroup && onRemoveProjectFromGroup && (
@@ -901,6 +915,7 @@ function ProjectListContent({
                   onTogglePinProject={onTogglePinProject}
                   onCopyPath={onCopyPath}
                   onHoverProject={onHoverProject}
+                  onSelectNewWindow={onSelectNewWindow}
                 />
               </div>
             ))}
@@ -953,6 +968,7 @@ interface ProjectPaletteInnerProps {
   onQueryChange: (query: string) => void;
   onSelect: (project: SearchableProject) => void;
   onSelectBackground?: (project: SearchableProject) => void;
+  onSelectNewWindow?: (project: SearchableProject) => void;
   onClose: () => void;
   onSelectPrevious: () => void;
   onSelectNext: () => void;
@@ -984,6 +1000,7 @@ function ProjectPaletteInner({
   onQueryChange,
   onSelect,
   onSelectBackground,
+  onSelectNewWindow,
   onClose,
   onSelectPrevious,
   onSelectNext,
@@ -1038,6 +1055,13 @@ function ProjectPaletteInner({
             const selected = results[selectedIndex];
             if (e.altKey && onSelectBackground) {
               onSelectBackground(selected);
+            } else if (
+              (e.metaKey || e.ctrlKey) &&
+              onSelectNewWindow &&
+              !selected.isActive &&
+              !selected.isMissing
+            ) {
+              onSelectNewWindow(selected);
             } else {
               onSelect(selected);
             }
@@ -1070,6 +1094,7 @@ function ProjectPaletteInner({
       onSelectNext,
       onSelect,
       onSelectBackground,
+      onSelectNewWindow,
       onClose,
       onCloseProject,
     ]
@@ -1111,6 +1136,7 @@ function ProjectPaletteInner({
           onLocateProject={onLocateProject}
           onTogglePinProject={onTogglePinProject}
           onCopyPath={onCopyPath}
+          onSelectNewWindow={onSelectNewWindow}
           groups={groups}
           onAssignProjectToGroup={onAssignProjectToGroup}
           onRemoveProjectFromGroup={onRemoveProjectFromGroup}
@@ -1277,6 +1303,7 @@ function ModalContent({
           onTogglePinProject={innerProps.onTogglePinProject}
           onCopyPath={innerProps.onCopyPath}
           onSelectBackground={innerProps.onSelectBackground}
+          onSelectNewWindow={innerProps.onSelectNewWindow}
           groups={innerProps.groups}
           onAssignProjectToGroup={innerProps.onAssignProjectToGroup}
           onRemoveProjectFromGroup={innerProps.onRemoveProjectFromGroup}
@@ -1360,6 +1387,7 @@ function DropdownContent({
           onTogglePinProject={innerProps.onTogglePinProject}
           onCopyPath={innerProps.onCopyPath}
           onSelectBackground={innerProps.onSelectBackground}
+          onSelectNewWindow={innerProps.onSelectNewWindow}
           groups={innerProps.groups}
           onAssignProjectToGroup={innerProps.onAssignProjectToGroup}
           onRemoveProjectFromGroup={innerProps.onRemoveProjectFromGroup}
@@ -1394,6 +1422,7 @@ export function ProjectSwitcherPalette({
   onTogglePinProject,
   onCopyPath,
   onSelectBackground,
+  onSelectNewWindow,
   onOpenProjectSettings,
   dropdownAlign,
   children,
@@ -1437,6 +1466,7 @@ export function ProjectSwitcherPalette({
         onTogglePinProject={onTogglePinProject}
         onCopyPath={onCopyPath}
         onSelectBackground={onSelectBackground}
+        onSelectNewWindow={onSelectNewWindow}
         onOpenProjectSettings={onOpenProjectSettings}
         dropdownAlign={dropdownAlign}
         groups={groups}
@@ -1470,6 +1500,7 @@ export function ProjectSwitcherPalette({
         onTogglePinProject={onTogglePinProject}
         onCopyPath={onCopyPath}
         onSelectBackground={onSelectBackground}
+        onSelectNewWindow={onSelectNewWindow}
         onOpenProjectSettings={onOpenProjectSettings}
         groups={groups}
         onCreateGroup={onCreateGroup}

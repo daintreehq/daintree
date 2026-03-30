@@ -136,7 +136,11 @@ if (!gotTheLock) {
   async function createWindow(initialProjectPath?: string | null): Promise<void> {
     const { win, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } = setupBrowserWindow(
       __dirname,
-      { onRecreateWindow: () => createWindow(initialProjectPath), projectPath: initialProjectPath }
+      {
+        onRecreateWindow: () => createWindow(initialProjectPath),
+        onCreateWindow: (projectPath?: string) => createWindow(projectPath),
+        projectPath: initialProjectPath,
+      }
     );
     setMainWindow(win);
     windowRegistry.register(win, { projectPath: initialProjectPath ?? undefined });

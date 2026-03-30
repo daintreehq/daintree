@@ -81,6 +81,7 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
         const menuToActionMap: Record<string, ActionId> = {
           "duplicate-panel": "terminal.duplicate",
           "new-terminal": "terminal.new",
+          "new-window": "app.newWindow",
           "new-worktree": "worktree.createDialog.open",
           "open-settings": "app.settings",
           "toggle-sidebar": "nav.toggleSidebar",

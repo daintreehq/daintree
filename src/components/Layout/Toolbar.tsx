@@ -62,6 +62,7 @@ import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import { useKeybindingDisplay } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
+import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useProjectStore } from "@/store/projectStore";
 import {
   usePortalStore,
@@ -255,6 +256,19 @@ export function Toolbar({
   const handleCloseProject = useCallback(
     (projectId: string) => {
       void projectSwitcher.removeProject(projectId);
+    },
+    [projectSwitcher]
+  );
+
+  const handleSelectNewWindow = useCallback(
+    (project: SearchableProject) => {
+      if (project.isMissing) return;
+      projectSwitcher.close();
+      void actionService.dispatch(
+        "app.newWindow",
+        { projectPath: project.path },
+        { source: "user" }
+      );
     },
     [projectSwitcher]
   );
@@ -1443,6 +1457,7 @@ export function Toolbar({
             onCloseProject={handleCloseProject}
             onTogglePinProject={(projectId) => projectSwitcher.togglePinProject(projectId)}
             onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
+            onSelectNewWindow={handleSelectNewWindow}
             dropdownAlign="center"
             removeConfirmProject={projectSwitcher.removeConfirmProject}
             onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}

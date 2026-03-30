@@ -526,6 +526,7 @@ const CHANNELS = {
   WINDOW_ZOOM_OUT: "window:zoom-out",
   WINDOW_ZOOM_RESET: "window:zoom-reset",
   WINDOW_CLOSE: "window:close",
+  WINDOW_NEW: "window:new",
   WINDOW_RECLAIM_MEMORY: "window:reclaim-memory",
   WINDOW_DESTROY_HIDDEN_WEBVIEWS: "window:destroy-hidden-webviews",
   WINDOW_DISK_SPACE_STATUS: "window:disk-space-status",
@@ -1846,6 +1847,8 @@ const api: ElectronAPI = {
     zoomReset: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_ZOOM_RESET),
     getZoomFactor: (): number => webFrame.getZoomFactor(),
     close: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_CLOSE),
+    openNew: (projectPath?: string): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.WINDOW_NEW, projectPath),
     onDestroyHiddenWebviews: (callback: (payload: { tier: 1 | 2 }) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: { tier: 1 | 2 }) =>
         callback(payload);

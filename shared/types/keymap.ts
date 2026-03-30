@@ -173,6 +173,7 @@ export type BuiltInKeyAction =
   | "layout.redo"
 
   // System actions
+  | "app.newWindow"
   | "app.quit"
   | "app.forceQuit"
   | "modal.close";
@@ -314,6 +315,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "voiceInput.toggle",
   "layout.undo",
   "layout.redo",
+  "app.newWindow",
   "app.quit",
   "app.forceQuit",
   "modal.close",

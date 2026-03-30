@@ -25,9 +25,15 @@ const oomRecreationTimestamps: number[] = [];
 
 let windowIpcHandlersRegistered = false;
 
-function registerWindowIpcHandlers(): void {
+function registerWindowIpcHandlers(onCreateWindow?: (projectPath?: string) => Promise<void>): void {
   if (windowIpcHandlersRegistered) return;
   windowIpcHandlersRegistered = true;
+
+  if (onCreateWindow) {
+    ipcMain.handle(CHANNELS.WINDOW_NEW, (_event, projectPath?: string) =>
+      onCreateWindow(projectPath ?? undefined)
+    );
+  }
 
   ipcMain.handle(CHANNELS.WINDOW_TOGGLE_FULLSCREEN, (event) => {
     const bw = BrowserWindow.fromWebContents(event.sender);
@@ -77,6 +83,7 @@ function registerWindowIpcHandlers(): void {
 
 export interface SetupBrowserWindowOptions {
   onRecreateWindow?: () => Promise<void>;
+  onCreateWindow?: (projectPath?: string) => Promise<void>;
   projectPath?: string | null;
 }
 
@@ -91,7 +98,7 @@ export function setupBrowserWindow(
   dirname: string,
   options: SetupBrowserWindowOptions = {}
 ): CreateWindowResult {
-  const { onRecreateWindow, projectPath } = options;
+  const { onRecreateWindow, onCreateWindow, projectPath } = options;
   let smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
   let _smokeRendererUnresponsive = false;
 
@@ -440,7 +447,7 @@ export function setupBrowserWindow(
     }
   });
 
-  registerWindowIpcHandlers();
+  registerWindowIpcHandlers(onCreateWindow);
 
   function getRecoveryUrl(reason: string, exitCode: number): string {
     const params = new URLSearchParams({ reason, exitCode: String(exitCode) });

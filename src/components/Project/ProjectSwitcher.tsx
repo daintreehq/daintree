@@ -100,6 +100,19 @@ export function ProjectSwitcher() {
     [projectSwitcher]
   );
 
+  const handleSelectNewWindow = useCallback(
+    (project: SearchableProject) => {
+      if (project.isMissing) return;
+      projectSwitcher.close();
+      void actionService.dispatch(
+        "app.newWindow",
+        { projectPath: project.path },
+        { source: "user" }
+      );
+    },
+    [projectSwitcher]
+  );
+
   const badgeStatus = useMemo(() => {
     const bgProjects = projectSwitcher.results.filter((p) => !p.isActive);
     const totalWaiting = bgProjects.reduce((sum, p) => sum + p.waitingAgentCount, 0);
@@ -151,6 +164,7 @@ export function ProjectSwitcher() {
             onTogglePinProject={handleTogglePinProject}
             onCopyPath={handleCopyPath}
             onSelectBackground={handleSelectBackground}
+            onSelectNewWindow={handleSelectNewWindow}
             removeConfirmProject={projectSwitcher.removeConfirmProject}
             onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
             onConfirmRemove={projectSwitcher.confirmRemoveProject}

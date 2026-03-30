@@ -1724,6 +1724,14 @@ function App() {
         onMoveGroupUp={projectSwitcherPalette.moveGroupUp}
         onMoveGroupDown={projectSwitcherPalette.moveGroupDown}
         onHoverProject={projectSwitcherPalette.prefetchProject}
+        onSelectNewWindow={(project) => {
+          projectSwitcherPalette.close();
+          void actionService.dispatch(
+            "app.newWindow",
+            { projectPath: project.path },
+            { source: "user" }
+          );
+        }}
       />
       <ConfirmDialog
         isOpen={projectSwitcherPalette.stopConfirmProjectId != null}

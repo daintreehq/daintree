@@ -18,6 +18,21 @@ async function refreshRendererConfig(): Promise<void> {
 }
 
 export function registerAppActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
+  actions.set("app.newWindow", () => ({
+    id: "app.newWindow",
+    title: "New Window",
+    description: "Open a new Canopy window",
+    category: "app",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ projectPath: z.string().optional() }).optional(),
+    run: async (args: unknown) => {
+      const projectPath = (args as { projectPath?: string } | undefined)?.projectPath;
+      await window.electron.window.openNew(projectPath);
+    },
+  }));
+
   actions.set("app.settings", () => ({
     id: "app.settings",
     title: "Open Settings",

@@ -680,6 +680,14 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Help",
   },
   {
+    actionId: "app.newWindow",
+    combo: "Cmd+Shift+Alt+N",
+    scope: "global",
+    priority: 0,
+    description: "Open a new window",
+    category: "System",
+  },
+  {
     actionId: "app.settings",
     combo: "Cmd+,",
     scope: "global",

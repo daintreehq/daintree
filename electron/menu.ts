@@ -105,6 +105,12 @@ export function createApplicationMenu(
           },
         },
         {
+          label: "New Window",
+          accelerator: "CommandOrControl+Shift+Alt+N",
+          click: (_item, browserWindow) =>
+            sendAction("new-window", getTargetBrowserWindow(browserWindow)),
+        },
+        {
           label: "New Worktree...",
           accelerator: "CommandOrControl+N",
           click: (_item, browserWindow) =>

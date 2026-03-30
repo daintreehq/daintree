@@ -857,6 +857,8 @@ export interface ElectronAPI {
     getZoomFactor(): number;
     /** Close window */
     close(): Promise<void>;
+    /** Open a new window, optionally for a specific project path */
+    openNew(projectPath?: string): Promise<void>;
     /** Subscribe to hidden webview destruction events from memory pressure */
     onDestroyHiddenWebviews(callback: (payload: { tier: 1 | 2 }) => void): () => void;
     /** Subscribe to disk space status changes */
