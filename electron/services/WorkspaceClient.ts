@@ -272,27 +272,26 @@ export class WorkspaceClient extends EventEmitter {
       this.releaseWindow(windowId);
     }
 
-    let entry = this.entries.get(normalizedPath);
-    if (entry) {
+    const existingEntry = this.entries.get(normalizedPath);
+    if (existingEntry) {
       // Check if this entry has a failed initPromise (poisoned by prior crash)
-      const isInitFailed = await entry.initPromise.then(
+      const isInitFailed = await existingEntry.initPromise.then(
         () => false,
         () => true
       );
       if (isInitFailed) {
         // Clean up poisoned entry and fall through to create a fresh one
-        entry.host.dispose();
+        existingEntry.host.dispose();
         this.entries.delete(normalizedPath);
-        entry = undefined;
       } else {
         // Existing healthy entry — increment refcount, reuse process
-        if (!entry.windowIds.has(windowId)) {
-          entry.refCount++;
-          entry.windowIds.add(windowId);
+        if (!existingEntry.windowIds.has(windowId)) {
+          existingEntry.refCount++;
+          existingEntry.windowIds.add(windowId);
         }
-        if (entry.cleanupTimeout) {
-          clearTimeout(entry.cleanupTimeout);
-          entry.cleanupTimeout = null;
+        if (existingEntry.cleanupTimeout) {
+          clearTimeout(existingEntry.cleanupTimeout);
+          existingEntry.cleanupTimeout = null;
         }
         this.windowToProject.set(windowId, normalizedPath);
         return;
@@ -314,7 +313,7 @@ export class WorkspaceClient extends EventEmitter {
       });
     })();
 
-    entry = {
+    const newEntry: ProcessEntry = {
       host,
       refCount: 1,
       initPromise,
@@ -324,18 +323,18 @@ export class WorkspaceClient extends EventEmitter {
       projectPath: normalizedPath,
     };
 
-    this.entries.set(normalizedPath, entry);
+    this.entries.set(normalizedPath, newEntry);
     this.windowToProject.set(windowId, normalizedPath);
-    this.wireHostEvents(entry);
+    this.wireHostEvents(newEntry);
 
     try {
       await initPromise;
     } catch (error) {
       // Clean up failed entry so subsequent loadProject calls create a fresh host
-      if (this.entries.get(normalizedPath) === entry) {
+      if (this.entries.get(normalizedPath) === newEntry) {
         this.entries.delete(normalizedPath);
         this.windowToProject.delete(windowId);
-        entry.host.dispose();
+        newEntry.host.dispose();
       }
       throw error;
     }

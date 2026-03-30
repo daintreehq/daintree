@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {

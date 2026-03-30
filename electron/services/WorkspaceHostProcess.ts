@@ -33,6 +33,7 @@ export class WorkspaceHostProcess extends EventEmitter {
   private pendingRequests = new Map<
     string,
     {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       resolve: (value: any) => void;
       reject: (error: Error) => void;
       timeout: NodeJS.Timeout;
