@@ -21,10 +21,22 @@ const dataCallbacks = new Map<string, Set<(data: string | Uint8Array) => void>>(
 const earlyDataBuffer = new Map<string, Array<string | Uint8Array>>();
 const MAX_EARLY_BUFFER_CHUNKS = 500;
 
+const textEncoder = new TextEncoder();
+
 function installPortDataHandler(port: MessagePort): void {
   port.addEventListener("message", (event: MessageEvent) => {
     const msg = event.data as PtyHostToRendererMessage;
     if (msg?.type === "data" && typeof msg.id === "string") {
+      // Send ack immediately on receipt — before dispatching to callbacks or buffering.
+      // This ensures the PTY host queue drains even for early-buffered data,
+      // preventing the high watermark from triggering before callbacks register.
+      const byteCount = textEncoder.encode(msg.data as string).length;
+      try {
+        port.postMessage({ type: "ack", id: msg.id, bytes: byteCount });
+      } catch {
+        // Port closed — ack lost, safety timeout will resume PTY
+      }
+
       const cbs = dataCallbacks.get(msg.id);
       if (cbs) {
         for (const cb of cbs) {

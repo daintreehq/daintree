@@ -390,7 +390,8 @@ export interface TerminalReliabilityMetricPayload {
  */
 export type RendererToPtyHostMessage =
   | { type: "write"; id: string; data: string; traceId?: string }
-  | { type: "resize"; id: string; cols: number; rows: number };
+  | { type: "resize"; id: string; cols: number; rows: number }
+  | { type: "ack"; id: string; bytes: number };
 
 /**
  * Messages sent from Pty Host → Renderer via MessagePort (direct channel).
