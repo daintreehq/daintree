@@ -1,9 +1,4 @@
-export type PauseToken =
-  | "resource-governor"
-  | "backpressure"
-  | "ipc-queue"
-  | "port-queue"
-  | "system-sleep";
+export type PauseToken = "resource-governor" | "backpressure" | "ipc-queue" | "system-sleep";
 
 export class PtyPauseCoordinator {
   private readonly holds = new Set<PauseToken>();

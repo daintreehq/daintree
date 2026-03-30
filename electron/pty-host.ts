@@ -30,7 +30,6 @@ import {
   ResourceGovernor,
   BackpressureManager,
   IpcQueueManager,
-  PortQueueManager,
   metricsEnabled,
   parseSpawnError,
   toHostSnapshot,
@@ -134,15 +133,6 @@ const backpressureManager = new BackpressureManager({
 });
 
 const ipcQueueManager = new IpcQueueManager({
-  getTerminal: (id) => ptyManager.getTerminal(id),
-  getPauseCoordinator,
-  sendEvent,
-  metricsEnabled,
-  emitTerminalStatus: (...args) => backpressureManager.emitTerminalStatus(...args),
-  emitReliabilityMetric: (payload) => backpressureManager.emitReliabilityMetric(payload),
-});
-
-const portQueueManager = new PortQueueManager({
   getTerminal: (id) => ptyManager.getTerminal(id),
   getPauseCoordinator,
   sendEvent,
@@ -298,21 +288,13 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
 
   // Direct MessagePort output: send data directly to renderer, bypassing main process
   if (!visualWritten && !isBackgrounded && !isSuspended && rendererPort) {
-    const bytes = Buffer.from(data);
-    const byteCount = bytes.length;
-
-    if (!portQueueManager.isAtCapacity(id, byteCount)) {
-      try {
-        rendererPort.postMessage({ type: "data", id, data: bytes }, [bytes.buffer]);
-        portQueueManager.addBytes(id, byteCount);
-        portQueueManager.applyBackpressure(id, portQueueManager.getUtilization(id));
-        visualWritten = true;
-      } catch {
-        rendererPort = null;
-        rendererPortMessageHandler = null;
-      }
+    try {
+      rendererPort.postMessage({ type: "data", id, data: toStringForIpc(data) });
+      visualWritten = true;
+    } catch {
+      rendererPort = null;
+      rendererPortMessageHandler = null;
     }
-    // If at capacity, fall through to IPC fallback (no silent drops)
   }
 
   // IPC Data Mirror: Always send data via IPC for terminals that need main-process
@@ -381,9 +363,8 @@ ptyManager.on("exit", (id: string, exitCode: number) => {
   // Clean up any active backpressure monitoring for this terminal
   backpressureManager.cleanupTerminal(id);
 
-  // Clean up IPC and port backpressure state
+  // Clean up IPC backpressure state
   ipcQueueManager.clearQueue(id);
-  portQueueManager.clearQueue(id);
 
   // Clean up IPC data mirror state
   ipcDataMirrorTerminals.delete(id);
@@ -664,13 +645,6 @@ port.on("message", async (rawMsg: any) => {
                 typeof portMsg.rows === "number"
               ) {
                 ptyManager.resize(portMsg.id, portMsg.cols, portMsg.rows);
-              } else if (
-                portMsg.type === "ack" &&
-                typeof portMsg.id === "string" &&
-                typeof portMsg.bytes === "number"
-              ) {
-                portQueueManager.removeBytes(portMsg.id, portMsg.bytes);
-                portQueueManager.tryResume(portMsg.id);
               } else {
                 console.warn(
                   "[PtyHost] Unknown or invalid MessagePort message type:",
@@ -688,7 +662,6 @@ port.on("message", async (rawMsg: any) => {
             if (rendererPort === receivedPort) {
               rendererPort = null;
               rendererPortMessageHandler = null;
-              portQueueManager.dispose();
               console.log("[PtyHost] MessagePort closed, falling back to IPC");
             }
           });
@@ -1228,9 +1201,8 @@ port.on("message", async (rawMsg: any) => {
           // Clear suspended flag to allow output to flow again
           backpressureManager.clearSuspended(msg.id);
 
-          // Also clear IPC and port queue backpressure state
+          // Also clear IPC queue backpressure state
           ipcQueueManager.clearQueue(msg.id);
-          portQueueManager.clearQueue(msg.id);
 
           // Emit resume status
           const utilization =
@@ -1384,7 +1356,6 @@ function cleanup(): void {
 
   backpressureManager.dispose();
   ipcQueueManager.dispose();
-  portQueueManager.dispose();
 
   terminalResourceMonitor.dispose();
   processTreeCache.stop();
