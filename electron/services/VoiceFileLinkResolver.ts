@@ -37,13 +37,15 @@ export class VoiceFileLinkResolver {
         return null;
       }
 
+      const tokens = this.extractTokens(description);
       const topScore = this.computeScore(description, candidates[0]);
-      if (topScore !== null && topScore >= NL_CONFIDENCE_THRESHOLD) {
-        const tokens = this.extractTokens(description);
-        if (tokens.length >= MIN_MATCHING_TOKENS || tokens.length <= 1) {
-          logDebug(`${P} High-confidence match: ${candidates[0]} (score=${topScore.toFixed(2)})`);
-          return candidates[0];
-        }
+      if (
+        topScore !== null &&
+        topScore >= NL_CONFIDENCE_THRESHOLD &&
+        tokens.length >= MIN_MATCHING_TOKENS
+      ) {
+        logDebug(`${P} High-confidence match: ${candidates[0]} (score=${topScore.toFixed(2)})`);
+        return candidates[0];
       }
 
       return await this.aiRerank(description, candidates, apiKey);
@@ -157,7 +159,7 @@ export class VoiceFileLinkResolver {
         return parsed.matched_file;
       }
 
-      return parsed.matched_file ? null : null;
+      return null;
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       logWarn(`${P} AI rerank failed, using top candidate`, { error: msg });

@@ -295,12 +295,10 @@ class VoiceRecordingService {
           inputStore.setDraftInput(panelId, before + replacement + after, projectId);
           inputStore.bumpVoiceDraftRevision();
         } else {
-          logDebug(`${LOG_PREFIX} File token description not found in draft, appending`, {
+          logDebug(`${LOG_PREFIX} File token description not found in draft, discarding`, {
             description,
             replacement,
           });
-          inputStore.setDraftInput(panelId, draft + " " + replacement, projectId);
-          inputStore.bumpVoiceDraftRevision();
         }
       })
     );
