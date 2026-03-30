@@ -353,8 +353,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       throw new Error(`Recipe ${recipeId} not found`);
     }
 
+    const now = Date.now();
+    const prevHistory = recipe.usageHistory ?? [];
+    const usageHistory = [...prevHistory, now].slice(-20);
     get()
-      .updateRecipe(recipeId, { lastUsedAt: Date.now() })
+      .updateRecipe(recipeId, { lastUsedAt: now, usageHistory })
       .catch((error) => {
         console.warn("Failed to update lastUsedAt for recipe:", error);
       });

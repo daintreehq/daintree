@@ -76,16 +76,20 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({
-      worktreeId: z.string(),
+      worktreeId: z.string().optional(),
+      recipeId: z.string().optional(),
       initialTerminals: z.any().optional(),
     }),
     run: async (args: unknown) => {
-      const { worktreeId, initialTerminals } = args as {
-        worktreeId: string;
+      const { worktreeId, recipeId, initialTerminals } = args as {
+        worktreeId?: string;
+        recipeId?: string;
         initialTerminals?: unknown;
       };
       window.dispatchEvent(
-        new CustomEvent("canopy:open-recipe-editor", { detail: { worktreeId, initialTerminals } })
+        new CustomEvent("canopy:open-recipe-editor", {
+          detail: { worktreeId, recipeId, initialTerminals },
+        })
       );
     },
   }));

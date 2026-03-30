@@ -13,8 +13,6 @@ import {
   type TerminalInstance,
 } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
-import { useRecipeStore } from "@/store/recipeStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { GridPanel } from "./GridPanel";
 import { GridTabGroup } from "./GridTabGroup";
 import { GridNotificationBar } from "./GridNotificationBar";
@@ -28,7 +26,7 @@ import {
   GRID_PLACEHOLDER_ID,
   SortableGridPlaceholder,
 } from "@/components/DragDrop";
-import { AlertTriangle, Settings, Play, Pin, Plus, Search } from "lucide-react";
+import { AlertTriangle, Settings } from "lucide-react";
 import { CanopyIcon } from "@/components/icons";
 import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
@@ -57,7 +55,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { getRecipeTerminalSummary } from "./utils/recipeUtils";
+import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
@@ -244,78 +242,6 @@ function EmptyState({
   projectIconSvg?: string;
   defaultCwd?: string;
 }) {
-  const allRecipes = useRecipeStore((state) => state.recipes);
-  const runRecipe = useRecipeStore((state) => state.runRecipe);
-  const recipes = useMemo(() => {
-    return allRecipes.filter(
-      (r) => r.worktreeId === activeWorktreeId || r.worktreeId === undefined
-    );
-  }, [allRecipes, activeWorktreeId]);
-
-  const [searchQuery, setSearchQuery] = useState("");
-  const [focusedIndex, setFocusedIndex] = useState(0);
-  const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
-
-  // Split recipes into pinned and recent groups
-  const { pinnedRecipes, recentRecipes, showSearch } = useMemo(() => {
-    const MAX_RECIPES = 6;
-
-    const pinned = recipes
-      .filter((r) => r.showInEmptyState)
-      .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0));
-
-    const pinnedIds = new Set(pinned.map((r) => r.id));
-    const remainingSlots = Math.max(0, MAX_RECIPES - pinned.length);
-    const recent = recipes
-      .filter((r) => !r.showInEmptyState && r.lastUsedAt != null && !pinnedIds.has(r.id))
-      .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))
-      .slice(0, remainingSlots);
-
-    return {
-      pinnedRecipes: pinned.slice(0, MAX_RECIPES),
-      recentRecipes: recent,
-      showSearch: recipes.length > 6,
-    };
-  }, [recipes]);
-
-  // Filter by search query
-  const filteredPinned = useMemo(() => {
-    if (!searchQuery) return pinnedRecipes;
-    const q = searchQuery.toLowerCase();
-    return pinnedRecipes.filter((r) => r.name.toLowerCase().includes(q));
-  }, [pinnedRecipes, searchQuery]);
-
-  const filteredRecent = useMemo(() => {
-    if (!searchQuery) return recentRecipes;
-    const q = searchQuery.toLowerCase();
-    return recentRecipes.filter((r) => r.name.toLowerCase().includes(q));
-  }, [recentRecipes, searchQuery]);
-
-  // Flat list for keyboard navigation (recipes + create button)
-  const totalRows = filteredPinned.length + filteredRecent.length + 1; // +1 for "Create new recipe"
-
-  // Reset focused index when list changes
-  useEffect(() => {
-    setFocusedIndex(0);
-  }, [activeWorktreeId, searchQuery]);
-
-  const handleListKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        const next = (focusedIndex + 1) % totalRows;
-        setFocusedIndex(next);
-        rowRefs.current[next]?.focus();
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        const prev = (focusedIndex - 1 + totalRows) % totalRows;
-        setFocusedIndex(prev);
-        rowRefs.current[prev]?.focus();
-      }
-    },
-    [focusedIndex, totalRows]
-  );
-
   const handleOpenHelp = () => {
     void actionService.dispatch(
       "system.openExternal",
@@ -332,23 +258,6 @@ function EmptyState({
     );
   };
 
-  const handleRunRecipe = async (recipeId: string) => {
-    if (!defaultCwd) return;
-    try {
-      const worktreeData = activeWorktreeId
-        ? useWorktreeDataStore.getState().worktrees.get(activeWorktreeId)
-        : null;
-      await runRecipe(recipeId, defaultCwd, activeWorktreeId ?? undefined, {
-        issueNumber: worktreeData?.issueNumber,
-        prNumber: worktreeData?.prNumber,
-        worktreePath: defaultCwd,
-        branchName: worktreeData?.branch,
-      });
-    } catch (error) {
-      console.error("Failed to run recipe:", error);
-    }
-  };
-
   return (
     <div className="flex flex-col items-center justify-center h-full w-full p-8 animate-in fade-in duration-500">
       <div className="max-w-3xl w-full flex flex-col items-center">
@@ -356,7 +265,6 @@ function EmptyState({
           <div className="relative group mb-4">
             {projectIconSvg ? (
               (() => {
-                // Defense-in-depth: sanitize SVG at render time
                 const sanitized = sanitizeSvg(projectIconSvg);
                 if (!sanitized.ok) {
                   return <CanopyIcon className="h-28 w-28 text-tint/65" />;
@@ -405,132 +313,8 @@ function EmptyState({
         )}
 
         {hasActiveWorktree && (
-          <div className="mb-6 w-full max-w-lg">
-            {showSearch && (
-              <div className="mb-2 px-1">
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-text-muted pointer-events-none" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search recipes…"
-                    className="w-full pl-8 pr-3 py-2 text-sm bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-md)] text-canopy-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-canopy-accent/40 focus:border-canopy-accent/40"
-                    aria-label="Search recipes"
-                  />
-                </div>
-              </div>
-            )}
-
-            <div
-              role="list"
-              aria-label="Recipes"
-              onKeyDown={handleListKeyDown}
-              className="flex flex-col gap-1"
-            >
-              {filteredPinned.length > 0 && filteredRecent.length > 0 && (
-                <div className="px-3 pt-1 pb-0.5 text-xs font-medium text-text-muted uppercase tracking-wide">
-                  Pinned
-                </div>
-              )}
-              {filteredPinned.map((recipe, i) => {
-                const recipeSummary = getRecipeTerminalSummary(recipe.terminals);
-                return (
-                  <button
-                    key={recipe.id}
-                    ref={(el) => {
-                      rowRefs.current[i] = el;
-                    }}
-                    role="listitem"
-                    type="button"
-                    tabIndex={focusedIndex === i ? 0 : -1}
-                    onClick={() => handleRunRecipe(recipe.id)}
-                    disabled={!defaultCwd}
-                    className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <Play
-                      className="h-3.5 w-3.5 text-status-success/50 group-hover:text-status-success transition-colors shrink-0"
-                      aria-hidden
-                    />
-                    <span className="flex-1 text-sm font-medium text-canopy-text truncate">
-                      {recipe.name}
-                    </span>
-                    {recipeSummary && recipeSummary !== recipe.name && (
-                      <span className="text-xs text-text-muted truncate max-w-[30%]">
-                        {recipeSummary}
-                      </span>
-                    )}
-                    <Pin className="h-3 w-3 text-canopy-accent/60 shrink-0" aria-hidden />
-                  </button>
-                );
-              })}
-
-              {filteredPinned.length > 0 && filteredRecent.length > 0 && (
-                <div className="px-3 pt-2 pb-0.5 text-xs font-medium text-text-muted uppercase tracking-wide">
-                  Recent
-                </div>
-              )}
-              {filteredRecent.map((recipe, i) => {
-                const idx = filteredPinned.length + i;
-                const recipeSummary = getRecipeTerminalSummary(recipe.terminals);
-                return (
-                  <button
-                    key={recipe.id}
-                    ref={(el) => {
-                      rowRefs.current[idx] = el;
-                    }}
-                    role="listitem"
-                    type="button"
-                    tabIndex={focusedIndex === idx ? 0 : -1}
-                    onClick={() => handleRunRecipe(recipe.id)}
-                    disabled={!defaultCwd}
-                    className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <Play
-                      className="h-3.5 w-3.5 text-status-success/50 group-hover:text-status-success transition-colors shrink-0"
-                      aria-hidden
-                    />
-                    <span className="flex-1 text-sm font-medium text-canopy-text truncate">
-                      {recipe.name}
-                    </span>
-                    {recipeSummary && recipeSummary !== recipe.name && (
-                      <span className="text-xs text-text-muted truncate max-w-[30%]">
-                        {recipeSummary}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-
-              {filteredPinned.length === 0 && filteredRecent.length === 0 && searchQuery && (
-                <div className="px-3 py-2 text-sm text-text-muted">No recipes match</div>
-              )}
-
-              <button
-                ref={(el) => {
-                  rowRefs.current[filteredPinned.length + filteredRecent.length] = el;
-                }}
-                role="listitem"
-                type="button"
-                tabIndex={focusedIndex === filteredPinned.length + filteredRecent.length ? 0 : -1}
-                onClick={() => {
-                  void actionService.dispatch(
-                    "recipe.editor.open",
-                    { worktreeId: activeWorktreeId },
-                    { source: "user" }
-                  );
-                }}
-                className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
-              >
-                <Plus
-                  className="h-3.5 w-3.5 text-text-muted group-hover:text-canopy-accent transition-colors shrink-0"
-                  aria-hidden
-                />
-                <span className="flex-1 text-sm text-text-muted group-hover:text-canopy-text transition-colors">
-                  Create new recipe…
-                </span>
-              </button>
-            </div>
+          <div className="mb-6 w-full flex justify-center">
+            <RecipeRunner activeWorktreeId={activeWorktreeId} defaultCwd={defaultCwd} />
           </div>
         )}
 

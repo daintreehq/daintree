@@ -182,6 +182,7 @@ import { terminalInstanceService } from "./services/terminal/TerminalInstanceSer
 import { SIDEBAR_TOGGLE_LOCK_MS } from "./lib/terminalLayout";
 import { useRenderProfiler } from "./utils/renderProfiler";
 import { useWorktreeDataStore } from "./store/worktreeDataStore";
+import { useRecipeStore } from "./store/recipeStore";
 import type { WorktreeActions } from "./hooks/useWorktreeActions";
 import type { UseAgentLauncherReturn } from "./hooks/useAgentLauncher";
 
@@ -777,11 +778,27 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     const handleOpenRecipeEditorEvent = (event: Event) => {
       if (!(event instanceof CustomEvent)) return;
       const detail = event.detail as unknown;
-      if (!detail || typeof (detail as { worktreeId?: unknown }).worktreeId !== "string") return;
-      const worktreeId = (detail as { worktreeId: string }).worktreeId;
-      const initialTerminalsRaw = (detail as { initialTerminals?: unknown }).initialTerminals;
-      const initialTerminals = Array.isArray(initialTerminalsRaw)
-        ? (initialTerminalsRaw as RecipeTerminal[])
+      if (!detail) return;
+      const d = detail as { worktreeId?: unknown; recipeId?: unknown; initialTerminals?: unknown };
+
+      // If recipeId is provided, open the editor for that recipe
+      if (typeof d.recipeId === "string") {
+        const recipe = useRecipeStore.getState().getRecipeById(d.recipeId);
+        if (recipe) {
+          setIsRecipeManagerOpen(false);
+          setRecipeEditorWorktreeId(recipe.worktreeId);
+          setRecipeEditorDefaultScope(recipe.projectId === undefined ? "global" : "project");
+          setRecipeEditorInitialTerminals(undefined);
+          recipeManagerEditRef.current = recipe;
+          setIsRecipeEditorOpen(true);
+          return;
+        }
+      }
+
+      if (typeof d.worktreeId !== "string") return;
+      const worktreeId = d.worktreeId;
+      const initialTerminals = Array.isArray(d.initialTerminals)
+        ? (d.initialTerminals as RecipeTerminal[])
         : undefined;
       handleOpenRecipeEditor(worktreeId, initialTerminals);
     };
