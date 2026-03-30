@@ -126,6 +126,7 @@ export const theme: BuiltInThemeSource = {
     "pulse-heat-high-opacity": "0.85",
     "pulse-heat-low-opacity": "0.38",
     "pulse-heat-medium-opacity": "0.62",
+    "pulse-heat-color": "#0C9AB4",
     "pulse-missed-bg": "rgba(142,52,44,0.08)",
     "pulse-range-bg": "#F5F6F8",
     "pulse-ring-offset": "#FDFDFE",
