@@ -275,7 +275,7 @@ describe("GitHubListItem", () => {
     );
     const option = container.querySelector("[role='option']");
     expect(option?.getAttribute("aria-selected")).toBe("true");
-    expect(option?.className).toContain("bg-accent-soft");
+    expect(option?.className).toContain("bg-muted/80");
   });
 
   it("shows checked checkbox when selected", () => {
