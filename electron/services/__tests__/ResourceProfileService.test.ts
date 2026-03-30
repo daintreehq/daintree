@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
+import type { PtyClient } from "../PtyClient.js";
+import type { WorkspaceClient } from "../WorkspaceClient.js";
+import type { HibernationService } from "../HibernationService.js";
 
 // Mock electron modules before importing
 vi.mock("electron", () => ({
@@ -19,13 +22,15 @@ vi.mock("../../ipc/utils.js", () => ({
 
 vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
-  logWarn: vi.fn(),
 }));
 
 import { app, powerMonitor } from "electron";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { ResourceProfileService, type ResourceProfileDeps } from "../ResourceProfileService.js";
 import { RESOURCE_PROFILE_CONFIGS } from "../../../shared/types/resourceProfile.js";
+
+const mockGetAppMetrics = app.getAppMetrics as Mock;
+const mockIsOnBatteryPower = powerMonitor.isOnBatteryPower as unknown as Mock;
 
 function makeMetric(type: string, privateMb: number): Electron.ProcessMetric {
   return {
@@ -43,22 +48,33 @@ function makeMetric(type: string, privateMb: number): Electron.ProcessMetric {
   } as unknown as Electron.ProcessMetric;
 }
 
+interface MockPtyClient {
+  setResourceProfile: Mock;
+}
+interface MockWorkspaceClient {
+  updateMonitorConfig: Mock;
+  getAllStatesAsync: Mock;
+}
+interface MockHibernationService {
+  setMemoryPressureThresholdMs: Mock;
+}
+
 function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDeps {
-  const mockPtyClient = {
+  const mockPtyClient: MockPtyClient = {
     setResourceProfile: vi.fn(),
   };
-  const mockWorkspaceClient = {
+  const mockWorkspaceClient: MockWorkspaceClient = {
     updateMonitorConfig: vi.fn(),
     getAllStatesAsync: vi.fn().mockResolvedValue([]),
   };
-  const mockHibernationService = {
+  const mockHibernationService: MockHibernationService = {
     setMemoryPressureThresholdMs: vi.fn(),
   };
 
   return {
-    getPtyClient: () => mockPtyClient as any,
-    getWorkspaceClient: () => mockWorkspaceClient as any,
-    getHibernationService: () => mockHibernationService as any,
+    getPtyClient: () => mockPtyClient as unknown as PtyClient,
+    getWorkspaceClient: () => mockWorkspaceClient as unknown as WorkspaceClient,
+    getHibernationService: () => mockHibernationService as unknown as HibernationService,
     ...overrides,
   };
 }
@@ -67,8 +83,8 @@ describe("ResourceProfileService", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
-    (app.getAppMetrics as any).mockReturnValue([]);
-    (powerMonitor.isOnBatteryPower as any).mockReturnValue(false);
+    mockGetAppMetrics.mockReturnValue([]);
+    mockIsOnBatteryPower.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -86,12 +102,8 @@ describe("ResourceProfileService", () => {
     const service = new ResourceProfileService(deps);
     service.start();
 
-    // High memory to trigger efficiency candidate
-    (app.getAppMetrics as any).mockReturnValue([
-      makeMetric("Browser", 800),
-      makeMetric("Tab", 500),
-    ]);
-    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 800), makeMetric("Tab", 500)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
 
     // Advance through 2 warmup ticks
     vi.advanceTimersByTime(30_000);
@@ -107,11 +119,8 @@ describe("ResourceProfileService", () => {
     service.start();
 
     // High memory + battery = pressure score >= 3
-    (app.getAppMetrics as any).mockReturnValue([
-      makeMetric("Browser", 800),
-      makeMetric("Tab", 500),
-    ]);
-    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 800), makeMetric("Tab", 500)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
 
     // 2 warmup ticks
     vi.advanceTimersByTime(60_000);
@@ -134,8 +143,8 @@ describe("ResourceProfileService", () => {
     service.start();
 
     // High pressure
-    (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 1300)]);
-    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
 
     // Past warmup
     vi.advanceTimersByTime(60_000);
@@ -144,8 +153,8 @@ describe("ResourceProfileService", () => {
     expect(service.getProfile()).toBe("balanced");
 
     // Pressure relieved before hold completes
-    (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 200)]);
-    (powerMonitor.isOnBatteryPower as any).mockReturnValue(false);
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
     vi.advanceTimersByTime(30_000);
 
     // Should still be balanced — candidate reset
@@ -159,8 +168,8 @@ describe("ResourceProfileService", () => {
     service.start();
 
     // Low pressure = performance candidate (score 0)
-    (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 200)]);
-    (powerMonitor.isOnBatteryPower as any).mockReturnValue(false);
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
 
     // Past warmup
     vi.advanceTimersByTime(60_000);
@@ -182,8 +191,8 @@ describe("ResourceProfileService", () => {
     const service = new ResourceProfileService(deps);
     service.start();
 
-    (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 1300)]);
-    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
 
     // Past warmup + hysteresis
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
@@ -204,19 +213,19 @@ describe("ResourceProfileService", () => {
     const service = new ResourceProfileService(deps);
     service.start();
 
-    (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 1300)]);
-    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
 
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
 
-    const ws = deps.getWorkspaceClient();
-    const hib = deps.getHibernationService();
+    const ws = deps.getWorkspaceClient() as unknown as MockWorkspaceClient;
+    const hib = deps.getHibernationService() as unknown as MockHibernationService;
 
-    expect(ws!.updateMonitorConfig).toHaveBeenCalledWith({
+    expect(ws.updateMonitorConfig).toHaveBeenCalledWith({
       pollIntervalActive: RESOURCE_PROFILE_CONFIGS.efficiency.pollIntervalActive,
       pollIntervalBackground: RESOURCE_PROFILE_CONFIGS.efficiency.pollIntervalBackground,
     });
-    expect(hib!.setMemoryPressureThresholdMs).toHaveBeenCalledWith(
+    expect(hib.setMemoryPressureThresholdMs).toHaveBeenCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.memoryPressureInactiveMs
     );
 
@@ -232,8 +241,8 @@ describe("ResourceProfileService", () => {
     const service = new ResourceProfileService(deps);
     service.start();
 
-    (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 1300)]);
-    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
 
     // Should not throw
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
@@ -257,8 +266,8 @@ describe("ResourceProfileService", () => {
     service.start();
 
     // Battery only (score 2) + moderate memory (score 1) = 3 => efficiency
-    (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 700)]);
-    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
 
     // Past warmup + hysteresis for downgrade
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
@@ -274,8 +283,8 @@ describe("ResourceProfileService", () => {
     service.start();
 
     // Battery (2) + worktrees (1) = 3 => efficiency
-    (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 200)]);
-    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
 
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
