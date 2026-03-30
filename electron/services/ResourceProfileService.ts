@@ -1,7 +1,7 @@
 import { app, powerMonitor } from "electron";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
-import { logInfo, logWarn } from "../utils/logger.js";
+import { logInfo } from "../utils/logger.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import type { HibernationService } from "./HibernationService.js";
@@ -125,7 +125,7 @@ export class ResourceProfileService {
 
     // Battery signal
     try {
-      if (powerMonitor.isOnBatteryPower) {
+      if (powerMonitor.isOnBatteryPower()) {
         pressureScore += 2;
       }
     } catch {

@@ -6,7 +6,7 @@ vi.mock("electron", () => ({
     getAppMetrics: vi.fn(() => []),
   },
   powerMonitor: {
-    isOnBatteryPower: false,
+    isOnBatteryPower: vi.fn(() => false),
   },
   BrowserWindow: {
     getAllWindows: vi.fn(() => []),
@@ -68,7 +68,7 @@ describe("ResourceProfileService", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     (app.getAppMetrics as any).mockReturnValue([]);
-    (powerMonitor as any).isOnBatteryPower = false;
+    (powerMonitor.isOnBatteryPower as any).mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -91,7 +91,7 @@ describe("ResourceProfileService", () => {
       makeMetric("Browser", 800),
       makeMetric("Tab", 500),
     ]);
-    (powerMonitor as any).isOnBatteryPower = true;
+    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
 
     // Advance through 2 warmup ticks
     vi.advanceTimersByTime(30_000);
@@ -111,7 +111,7 @@ describe("ResourceProfileService", () => {
       makeMetric("Browser", 800),
       makeMetric("Tab", 500),
     ]);
-    (powerMonitor as any).isOnBatteryPower = true;
+    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
 
     // 2 warmup ticks
     vi.advanceTimersByTime(60_000);
@@ -135,7 +135,7 @@ describe("ResourceProfileService", () => {
 
     // High pressure
     (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 1300)]);
-    (powerMonitor as any).isOnBatteryPower = true;
+    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
 
     // Past warmup
     vi.advanceTimersByTime(60_000);
@@ -145,7 +145,7 @@ describe("ResourceProfileService", () => {
 
     // Pressure relieved before hold completes
     (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 200)]);
-    (powerMonitor as any).isOnBatteryPower = false;
+    (powerMonitor.isOnBatteryPower as any).mockReturnValue(false);
     vi.advanceTimersByTime(30_000);
 
     // Should still be balanced — candidate reset
@@ -160,7 +160,7 @@ describe("ResourceProfileService", () => {
 
     // Low pressure = performance candidate (score 0)
     (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 200)]);
-    (powerMonitor as any).isOnBatteryPower = false;
+    (powerMonitor.isOnBatteryPower as any).mockReturnValue(false);
 
     // Past warmup
     vi.advanceTimersByTime(60_000);
@@ -183,7 +183,7 @@ describe("ResourceProfileService", () => {
     service.start();
 
     (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 1300)]);
-    (powerMonitor as any).isOnBatteryPower = true;
+    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
 
     // Past warmup + hysteresis
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
@@ -205,7 +205,7 @@ describe("ResourceProfileService", () => {
     service.start();
 
     (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 1300)]);
-    (powerMonitor as any).isOnBatteryPower = true;
+    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
 
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
 
@@ -233,7 +233,7 @@ describe("ResourceProfileService", () => {
     service.start();
 
     (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 1300)]);
-    (powerMonitor as any).isOnBatteryPower = true;
+    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
 
     // Should not throw
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
@@ -258,7 +258,7 @@ describe("ResourceProfileService", () => {
 
     // Battery only (score 2) + moderate memory (score 1) = 3 => efficiency
     (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 700)]);
-    (powerMonitor as any).isOnBatteryPower = true;
+    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
 
     // Past warmup + hysteresis for downgrade
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
@@ -275,7 +275,7 @@ describe("ResourceProfileService", () => {
 
     // Battery (2) + worktrees (1) = 3 => efficiency
     (app.getAppMetrics as any).mockReturnValue([makeMetric("Browser", 200)]);
-    (powerMonitor as any).isOnBatteryPower = true;
+    (powerMonitor.isOnBatteryPower as any).mockReturnValue(true);
 
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("efficiency");
