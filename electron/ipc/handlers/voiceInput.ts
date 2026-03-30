@@ -13,6 +13,7 @@ import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 import { CONFIDENCE_TAG_THRESHOLD } from "../../../shared/config/voiceCorrection.js";
 import { logDebug, logWarn } from "../../utils/logger.js";
 import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
+import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
 
 let service: VoiceTranscriptionService | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
@@ -181,6 +182,7 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   correctionModel: "gpt-5-mini",
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
+  resolveFileLinks: true,
 };
 
 /** Read voiceInput settings with defaults for fields added after initial store creation. */
@@ -512,6 +514,39 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           const clusters = sessionBuffer.append(voiceEvent.confidence.words);
           for (const cluster of clusters) {
             fireMicroCorrection(cluster, win, correctionService);
+          }
+        }
+
+        // File link detection: scan the complete utterance for file-reference voice commands
+        if (
+          correctionEnabled &&
+          liveSettings.resolveFileLinks &&
+          correctionService &&
+          correctionPool &&
+          rawText.length > 0
+        ) {
+          const projectPath = sessionProjectInfo.path;
+          const apiKey = liveSettings.correctionApiKey;
+          if (projectPath && apiKey) {
+            correctionPool.add(async () => {
+              if (!correctionService) return;
+              const tokens = await correctionService.detectFileLinkTokens(rawText, { apiKey });
+              for (const { description } of tokens) {
+                const resolved = await voiceFileLinkResolver.resolve({
+                  cwd: projectPath,
+                  description,
+                  apiKey,
+                });
+                const replacement = resolved ? `@${resolved}` : `@?${description}`;
+                if (!win.isDestroyed()) {
+                  win.webContents.send(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, {
+                    description,
+                    replacement,
+                    resolved: !!resolved,
+                  });
+                }
+              }
+            });
           }
         }
       } else if (voiceEvent.type === "paragraph_boundary") {

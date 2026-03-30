@@ -131,6 +131,7 @@ function buildElectronStub() {
       paragraphBoundaryCallback = cb;
       return () => {};
     }),
+    onFileTokenResolved: vi.fn(() => () => {}),
     onError: vi.fn(() => () => {}),
     onStatus: vi.fn(() => () => {}),
     getSettings: vi.fn().mockResolvedValue({

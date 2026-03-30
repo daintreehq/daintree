@@ -34,6 +34,7 @@ describe("VoiceTranscriptionService integration", () => {
         correctionModel: "gpt-5-mini",
         correctionCustomInstructions: "",
         paragraphingStrategy: "spoken-command",
+        resolveFileLinks: true,
       });
 
       expect(result).toEqual({ ok: true });

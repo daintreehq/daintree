@@ -93,6 +93,7 @@ function buildElectronStub() {
       onCorrectionQueued: vi.fn(() => () => {}),
       onCorrectionReplace: vi.fn(() => () => {}),
       onParagraphBoundary: vi.fn(() => () => {}),
+      onFileTokenResolved: vi.fn(() => () => {}),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
       getSettings: vi.fn().mockResolvedValue({
