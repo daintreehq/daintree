@@ -387,7 +387,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
               {activeWorktreeId && <RunningTaskList worktreeId={activeWorktreeId} />}
               <div
                 className={cn(
-                  "relative flex items-center rounded-[var(--radius-md)] border border-border-subtle bg-overlay-soft",
+                  "relative flex items-center rounded-[var(--radius-md)] border border-border-interactive bg-surface-input",
                   "transition-all focus-within:border-canopy-accent/45 focus-within:ring-1 focus-within:ring-canopy-accent/16"
                 )}
               >
@@ -509,7 +509,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                     onMouseDown={(e) => e.preventDefault()}
                     className="absolute bottom-full left-0 right-0 z-50 mb-1 flex max-h-64 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated shadow-[var(--theme-shadow-floating)]"
                   >
-                    <div className="shrink-0 border-b border-border-subtle bg-overlay-soft px-3 py-1 text-[11px] font-sans tracking-wider text-text-muted">
+                    <div className="shrink-0 border-b border-border-subtle bg-surface-input px-3 py-1 text-[11px] font-sans tracking-wider text-text-muted">
                       COMMANDS
                     </div>
                     <div className="overflow-y-auto flex-1">
