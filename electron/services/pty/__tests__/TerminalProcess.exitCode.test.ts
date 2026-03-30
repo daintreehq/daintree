@@ -102,16 +102,17 @@ describe("TerminalProcess exit code persistence", () => {
     expect(state.exitCode).toBe(0);
   });
 
-  it("stores non-zero exitCode when agent terminal shouldPreserveOnExit returns false", () => {
+  it("preserves agent terminal and stores exitCode on non-zero exit", () => {
     const terminal = createTerminal({ kind: "agent", type: "claude" });
 
     expect(exitHandler).not.toBeNull();
     exitHandler!({ exitCode: 1 });
 
-    // Non-zero exit for agent terminal: shouldPreserveOnExit returns false,
-    // so the terminal is disposed (not preserved) and exitCode is NOT stored
+    // Agent terminals are always preserved on exit (unless explicitly killed),
+    // so exitCode is stored even for non-zero exit codes
     const state = terminal.getPublicState();
-    expect(state.exitCode).toBeUndefined();
+    expect(state.isExited).toBe(true);
+    expect(state.exitCode).toBe(1);
   });
 
   it("does not store exitCode for non-agent terminals", () => {

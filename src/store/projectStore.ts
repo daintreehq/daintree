@@ -1,7 +1,7 @@
 import { create, type StateCreator } from "zustand";
 import { persist, subscribeWithSelector } from "zustand/middleware";
 import type { Project, ProjectCloseResult, TerminalSnapshot } from "@shared/types";
-import { projectClient } from "@/clients";
+import { projectClient, terminalClient } from "@/clients";
 import { resetAllStoresForProjectSwitch } from "./resetStores";
 import {
   forceReinitializeWorktreeDataStore,
@@ -9,7 +9,11 @@ import {
   snapshotProjectWorktrees,
 } from "./worktreeDataStore";
 import { flushTerminalPersistence } from "./slices";
-import { terminalPersistence, terminalToSnapshot } from "./persistence/terminalPersistence";
+import {
+  terminalPersistence,
+  terminalToSnapshot,
+  backendTerminalToSnapshot,
+} from "./persistence/terminalPersistence";
 import { notify } from "@/lib/notify";
 import { useTerminalStore } from "./terminalStore";
 import { useWorktreeSelectionStore } from "./worktreeStore";
@@ -19,6 +23,7 @@ import {
   prePopulateProjectSettings,
 } from "./projectSettingsStore";
 import { logErrorWithContext } from "@/utils/errorContext";
+import { logDebug as rendererLogDebug, logInfo as rendererLogInfo } from "@/utils/logger";
 import { useUrlHistoryStore } from "./urlHistoryStore";
 import { useProjectGroupsStore } from "./projectGroupsStore";
 import {
@@ -302,12 +307,61 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
         // Get current terminals from store and save to per-project state
         const currentTerminals = useTerminalStore.getState().terminals;
-        const terminalsToSave: TerminalSnapshot[] = currentTerminals
+        let terminalsToSave: TerminalSnapshot[] = currentTerminals
           .filter(
             (t) =>
               t.location !== "trash" && t.location !== "background" && !isSmokeTestTerminalId(t.id)
           )
           .map(terminalToSnapshot);
+
+        // Fix #4556: Cross-reference renderer terminals with the backend to ensure
+        // we only save terminals that actually belong to this project. Without this,
+        // orphan terminals from other projects leak into per-project saved state and
+        // cause ghost panels + duplicate agent spawns during rapid switching.
+        try {
+          const backendTerminals = await terminalClient.getForProject(oldProjectId);
+          const backendIds = new Set(backendTerminals.map((t) => t.id));
+
+          if (terminalsToSave.length === 0 && backendTerminals.length > 0) {
+            // Renderer store empty (hydration not complete) — use backend as source of truth
+            const backendFiltered = backendTerminals.filter(
+              (t) => !t.isTrashed && !isSmokeTestTerminalId(t.id)
+            );
+            rendererLogInfo(
+              `[ProjectSwitch] Renderer store empty, falling back to backend: ${backendFiltered.length} terminal(s)`
+            );
+            terminalsToSave = backendFiltered.map(backendTerminalToSnapshot);
+          } else if (terminalsToSave.length > 0) {
+            // Normal path: filter renderer terminals to only those the backend confirms
+            const before = terminalsToSave.length;
+            terminalsToSave = terminalsToSave.filter((t) => backendIds.has(t.id));
+            if (terminalsToSave.length < before) {
+              rendererLogInfo(
+                `[ProjectSwitch] Filtered ${before - terminalsToSave.length} cross-project terminal(s) from save`
+              );
+            }
+            flushTerminalPersistence();
+            void terminalPersistence.whenIdle().catch((error) => {
+              logErrorWithContext(error, {
+                operation: "wait_terminal_persistence_before_switch",
+                component: "projectStore",
+                errorType: "filesystem",
+                details: { oldProjectId },
+              });
+            });
+          }
+        } catch (fallbackError) {
+          logErrorWithContext(fallbackError, {
+            operation: "backend_terminal_crossref_switch",
+            component: "projectStore",
+            errorType: "process",
+            details: { oldProjectId },
+          });
+          if (terminalsToSave.length > 0) {
+            flushTerminalPersistence();
+            void terminalPersistence.whenIdle().catch(() => {});
+          }
+        }
 
         const terminalSizes: Record<string, { cols: number; rows: number }> = {};
         for (const terminal of currentTerminals) {
@@ -320,7 +374,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           }
         }
 
-        console.log(
+        rendererLogDebug(
           `[ProjectSwitch] Saving ${terminalsToSave.length} panel(s) to per-project state`
         );
         // Await terminal saves before the main process switch — the switch calls
@@ -641,12 +695,56 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
         // Get current terminals from store and save to per-project state
         const currentTerminals = useTerminalStore.getState().terminals;
-        const terminalsToSave: TerminalSnapshot[] = currentTerminals
+        let terminalsToSave: TerminalSnapshot[] = currentTerminals
           .filter(
             (t) =>
               t.location !== "trash" && t.location !== "background" && !isSmokeTestTerminalId(t.id)
           )
           .map(terminalToSnapshot);
+
+        // Fix #4556: Cross-reference renderer terminals with the backend (same as performSwitch)
+        try {
+          const backendTerminals = await terminalClient.getForProject(oldProjectId);
+          const backendIds = new Set(backendTerminals.map((t) => t.id));
+
+          if (terminalsToSave.length === 0 && backendTerminals.length > 0) {
+            const backendFiltered = backendTerminals.filter(
+              (t) => !t.isTrashed && !isSmokeTestTerminalId(t.id)
+            );
+            rendererLogInfo(
+              `[ProjectStore] Renderer store empty, falling back to backend: ${backendFiltered.length} terminal(s)`
+            );
+            terminalsToSave = backendFiltered.map(backendTerminalToSnapshot);
+          } else if (terminalsToSave.length > 0) {
+            const before = terminalsToSave.length;
+            terminalsToSave = terminalsToSave.filter((t) => backendIds.has(t.id));
+            if (terminalsToSave.length < before) {
+              rendererLogInfo(
+                `[ProjectStore] Filtered ${before - terminalsToSave.length} cross-project terminal(s) from save`
+              );
+            }
+            flushTerminalPersistence();
+            void terminalPersistence.whenIdle().catch((error) => {
+              logErrorWithContext(error, {
+                operation: "wait_terminal_persistence_before_reopen",
+                component: "projectStore",
+                errorType: "filesystem",
+                details: { oldProjectId },
+              });
+            });
+          }
+        } catch (fallbackError) {
+          logErrorWithContext(fallbackError, {
+            operation: "backend_terminal_crossref_reopen",
+            component: "projectStore",
+            errorType: "process",
+            details: { oldProjectId },
+          });
+          if (terminalsToSave.length > 0) {
+            flushTerminalPersistence();
+            void terminalPersistence.whenIdle().catch(() => {});
+          }
+        }
 
         const terminalSizes: Record<string, { cols: number; rows: number }> = {};
         for (const terminal of currentTerminals) {
@@ -659,7 +757,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           }
         }
 
-        console.log(`[ProjectStore] Saving ${terminalsToSave.length} panel(s) before reopen`);
+        rendererLogDebug(`[ProjectStore] Saving ${terminalsToSave.length} panel(s) before reopen`);
         try {
           await projectClient.setTerminals(oldProjectId, terminalsToSave);
           await projectClient.setTerminalSizes(oldProjectId, terminalSizes);

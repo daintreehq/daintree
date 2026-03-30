@@ -99,6 +99,17 @@ export class PtyManager extends EventEmitter {
     const previousProjectId = this.activeProjectId;
     this.activeProjectId = projectId;
 
+    // Fix #4556: Claim orphaned terminals (no projectId) for the newly active project.
+    // The default terminal spawns at app startup before any project is loaded.
+    if (projectId) {
+      for (const [, terminalProcess] of this.registry.entries()) {
+        const info = terminalProcess.getInfo();
+        if (!info.projectId) {
+          info.projectId = projectId;
+        }
+      }
+    }
+
     if (process.env.CANOPY_VERBOSE) {
       logDebug(`Active project changed: ${previousProjectId || "none"} → ${projectId || "none"}`);
     }
@@ -196,6 +207,15 @@ export class PtyManager extends EventEmitter {
       );
       this.kill(id);
     }
+    // Fix #4556: Ensure projectId is set at spawn time so terminals never
+    // rely on lastKnownProjectId inference during rapid project switching.
+    if (!options.projectId) {
+      const activeProjectId = this.registry.getLastKnownProjectId();
+      if (activeProjectId) {
+        options.projectId = activeProjectId;
+      }
+    }
+
     logInfo(`Spawning terminal ${id} (kind: ${options.kind}, type: ${options.type})`);
 
     const spawnContext = computeSpawnContext(id, options);

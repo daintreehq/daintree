@@ -367,8 +367,12 @@ export async function hydrateAppState(
                     saved,
                     projectRoot || ""
                   );
-                  // Assign to active worktree if terminal has no worktreeId
-                  if (!args.worktreeId && activeWorktreeId) {
+                  // Fix #4556: Ensure terminal's worktreeId matches the active worktree.
+                  // Saved terminals are always from the current project (per-project state),
+                  // so reassigning here is safe and ensures visibility in the grid filter.
+                  // A stale worktreeId (from a previous session or before worktrees loaded)
+                  // would make the terminal invisible since the grid filters by worktreeId.
+                  if (activeWorktreeId) {
                     args.worktreeId = activeWorktreeId;
                   }
                   const location = args.location as "grid" | "dock";
@@ -489,6 +493,16 @@ export async function hydrateAppState(
                         });
                       }
                     } else {
+                      // Fix #4556: During project switch, don't respawn agent terminals
+                      // that failed to reconnect. They belong to another project and will
+                      // reappear when switching back. Respawning creates duplicate agents.
+                      if (_switchId && (kind === "agent" || saved.agentId)) {
+                        logHydrationInfo(
+                          `Skipping agent respawn during switch: ${saved.id} (belongs to another project)`
+                        );
+                        return;
+                      }
+
                       const respawnArgs = buildArgsForRespawn(
                         saved,
                         kind,
@@ -498,8 +512,8 @@ export async function hydrateAppState(
                         clipboardDirectory
                       );
 
-                      // Assign to active worktree if the saved terminal has no worktreeId
-                      if (!respawnArgs.worktreeId && activeWorktreeId) {
+                      // Fix #4556: Ensure respawned terminal matches active worktree
+                      if (activeWorktreeId) {
                         respawnArgs.worktreeId = activeWorktreeId;
                       }
 
@@ -625,9 +639,20 @@ export async function hydrateAppState(
         const hasSavedPanels = appState.terminals && appState.terminals.length > 0;
         const orphanedTerminals = hydrateResult.safeMode
           ? []
-          : Array.from(backendTerminalMap.values()).filter(
-              (t) => !(t.id === "default" && !hasSavedPanels)
-            );
+          : Array.from(backendTerminalMap.values()).filter((t) => {
+              // Skip the default terminal for brand-new projects (no saved panels)
+              if (t.id === "default" && !hasSavedPanels) return false;
+              // Skip orphans that belong to a different project (#4556).
+              // Without this, terminals from project A appear as ghosts in project B
+              // during rapid switching, then disappear when hydration re-runs.
+              if (t.projectId && currentProjectId && t.projectId !== currentProjectId) {
+                logHydrationInfo(
+                  `Skipping orphan ${t.id.slice(0, 12)} — belongs to project ${t.projectId.slice(0, 8)}, not ${currentProjectId.slice(0, 8)}`
+                );
+                return false;
+              }
+              return true;
+            });
         if (orphanedTerminals.length > 0) {
           logHydrationInfo(
             `${orphanedTerminals.length} orphaned terminal(s) not in saved order, appending at end`
@@ -642,9 +667,10 @@ export async function hydrateAppState(
                 logHydrationInfo(`Reconnecting to orphaned terminal: ${terminal.id}`);
 
                 const orphanArgs = buildArgsForOrphanedTerminal(terminal, projectRoot || "");
-                // Assign orphaned terminals to the active worktree if they have none,
-                // so they appear in the grid filter (which matches on worktreeId).
-                if (!orphanArgs.worktreeId && activeWorktreeId) {
+                // Fix #4556: Ensure orphaned terminal matches active worktree.
+                // Orphans are already filtered to the current project (line 631),
+                // so reassigning worktreeId is safe.
+                if (activeWorktreeId) {
                   orphanArgs.worktreeId = activeWorktreeId;
                 }
                 const restoredTerminalId = await addTerminal(orphanArgs);

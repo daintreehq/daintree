@@ -264,7 +264,11 @@ export class TerminalRegistry {
 
     // Only fallback to lastKnownProjectId if we couldn't infer anything from the filesystem.
     if (!candidates.mainProjectId && !candidates.worktreeProjectId) {
-      return this.lastKnownProjectId === projectId;
+      if (this.lastKnownProjectId === projectId) {
+        // Fix #4556: Pin projectId so it survives lastKnownProjectId changes
+        info.projectId = projectId;
+        return true;
+      }
     }
 
     return false;

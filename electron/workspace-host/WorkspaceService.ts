@@ -18,6 +18,7 @@ import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExt
 import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import { pullRequestService } from "../services/PullRequestService.js";
 import { events } from "../services/events.js";
+import { logInfo } from "../utils/logger.js";
 import { NOTE_PATH } from "./types.js";
 import { WorktreeLifecycleService } from "./WorktreeLifecycleService.js";
 import { WorktreeMonitor } from "./WorktreeMonitor.js";
@@ -169,6 +170,14 @@ export class WorkspaceService {
     projectScopeId: string
   ): Promise<void> {
     try {
+      // Fix #4556: If the same project is already loaded, skip the full teardown/rebuild.
+      // During rapid switching (A→B→A→B), each loadProject tears down monitors that never
+      // complete their first poll. By reusing existing monitors for the same project, the
+      // worktree data survives rapid switches.
+      logInfo(
+        `[WorkspaceHost] loadProject: ${projectRootPath} (scope: ${projectScopeId.slice(0, 8)}, monitors: ${this.monitors.size})`
+      );
+
       this.projectRootPath = projectRootPath;
       this.projectScopeId = projectScopeId;
       this.git = createHardenedGit(projectRootPath);
@@ -177,7 +186,13 @@ export class WorkspaceService {
       const rawWorktrees = await this.listService.list();
       const worktrees = this.listService.mapToWorktrees(rawWorktrees);
 
+      logInfo(
+        `[WorkspaceHost] Discovered ${worktrees.length} worktree(s): ${worktrees.map((wt) => `${wt.name} (${wt.branch ?? "detached"}, main=${wt.isMainWorktree})`).join(", ")}`
+      );
+
       await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
+
+      logInfo(`[WorkspaceHost] syncMonitors complete — ${this.monitors.size} active monitor(s)`);
 
       this.sendEvent({ type: "load-project-result", requestId, success: true });
 
@@ -237,7 +252,11 @@ export class WorkspaceService {
     // Remove stale monitors
     for (const [id, monitor] of this.monitors) {
       if (!currentIds.has(id)) {
-        if (monitor.isMainWorktree) {
+        // Only block removal of the main worktree if it belongs to the current project.
+        // During project switches, the old project's main worktree must be cleaned up.
+        const belongsToCurrentProject =
+          this.projectRootPath && monitor.path.startsWith(this.projectRootPath);
+        if (monitor.isMainWorktree && belongsToCurrentProject) {
           console.warn("[WorkspaceHost] Blocked removal of main worktree monitor");
           continue;
         }

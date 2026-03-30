@@ -1,4 +1,5 @@
 import type { TerminalInstance, TerminalSnapshot, TabGroup } from "@/types";
+import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
 import { projectClient } from "@/clients";
 import { debounce } from "@/utils/debounce";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
@@ -76,6 +77,24 @@ export function terminalToSnapshot(t: TerminalInstance): TerminalSnapshot {
       ...(t.browserConsoleOpen !== undefined && { browserConsoleOpen: t.browserConsoleOpen }),
     };
   }
+}
+
+export function backendTerminalToSnapshot(t: BackendTerminalInfo): TerminalSnapshot {
+  return {
+    id: t.id,
+    kind: t.kind,
+    type: t.type,
+    agentId: t.agentId,
+    title: t.title ?? "",
+    cwd: t.cwd,
+    worktreeId: t.worktreeId,
+    location: "grid",
+    ...(t.agentState && { agentState: t.agentState }),
+    ...(t.lastStateChange !== undefined && { lastStateChange: t.lastStateChange }),
+    ...(t.agentSessionId && { agentSessionId: t.agentSessionId }),
+    ...(t.agentLaunchFlags?.length && { agentLaunchFlags: t.agentLaunchFlags }),
+    ...(t.agentModelId && { agentModelId: t.agentModelId }),
+  };
 }
 
 const DEFAULT_OPTIONS: Required<Omit<TerminalPersistenceOptions, "getProjectId">> &

@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { hydrateAppState, type HydrationOptions } from "../../utils/stateHydration";
 import { isElectronAvailable } from "../useElectron";
 import { projectClient } from "@/clients";
+import { logDebug as rendererLogDebug } from "@/utils/logger";
 import {
   useProjectStore,
   useTerminalStore,
@@ -84,7 +85,7 @@ export function useProjectSwitchRehydration() {
 
       currentSwitchIdRef.current = switchId;
 
-      console.log(
+      rendererLogDebug(
         `[useProjectSwitchRehydration] Received project-switched event (switchId: ${switchId}), re-hydrating state...`
       );
 
@@ -100,7 +101,7 @@ export function useProjectSwitchRehydration() {
         await hydrateAppState(callbacks, switchId, () => currentSwitchIdRef.current === switchId);
 
         if (currentSwitchIdRef.current !== switchId) {
-          console.log(
+          rendererLogDebug(
             `[useProjectSwitchRehydration] Skipping wake - hydration superseded by newer switch (current: ${currentSwitchIdRef.current}, this: ${switchId})`
           );
           return;
@@ -111,7 +112,9 @@ export function useProjectSwitchRehydration() {
 
         for (const terminal of terminals) {
           if (currentSwitchIdRef.current !== switchId) {
-            console.log(`[useProjectSwitchRehydration] Aborting wake loop - switch superseded`);
+            rendererLogDebug(
+              `[useProjectSwitchRehydration] Aborting wake loop - switch superseded`
+            );
             break;
           }
 
@@ -133,7 +136,7 @@ export function useProjectSwitchRehydration() {
         }
 
         if (currentSwitchIdRef.current === switchId) {
-          console.log("[useProjectSwitchRehydration] State re-hydration complete");
+          rendererLogDebug("[useProjectSwitchRehydration] State re-hydration complete");
         }
       } catch (error) {
         console.error(

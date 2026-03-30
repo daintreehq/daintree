@@ -1045,14 +1045,19 @@ export class TerminalProcess {
     return linesToReplay;
   }
 
-  shouldPreserveOnExit(exitCode: number): boolean {
+  shouldPreserveOnExit(_exitCode: number): boolean {
     if (!this.isAgentTerminal) {
       return false;
     }
     if (this.terminalInfo.wasKilled) {
       return false;
     }
-    return exitCode === 0;
+    // Fix #4556: Preserve agent terminals regardless of exit code.
+    // During rapid project switching, the agent process may exit unexpectedly
+    // (e.g., cwd becomes invalid when worktree monitor hasn't loaded yet).
+    // Preserving the terminal in the registry ensures the save/restore path
+    // can still find it when the user switches back.
+    return true;
   }
 
   getPtyProcess(): pty.IPty {

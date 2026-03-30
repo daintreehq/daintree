@@ -489,4 +489,77 @@ describe("projectStore safety timeout", () => {
       })
     );
   });
+
+  it("saves correct terminals for each project after 20 rapid switch cycles", async () => {
+    const CYCLES = 20;
+
+    // Claude terminal in project A
+    const claudeTerminalA = {
+      id: "claude-a",
+      kind: "agent",
+      type: "claude",
+      cwd: "/project-a",
+      location: "grid" as const,
+      worktreeId: "wt-a",
+      agentId: "claude",
+    };
+
+    // Claude terminal in project B
+    const claudeTerminalB = {
+      id: "claude-b",
+      kind: "agent",
+      type: "claude",
+      cwd: "/project-b",
+      location: "grid" as const,
+      worktreeId: "wt-b",
+      agentId: "claude",
+    };
+
+    projectClientMock.switch.mockImplementation(async (id: string) => {
+      const project = [projectA, projectB].find((p) => p.id === id);
+      if (!project) throw new Error("unknown project");
+      return project;
+    });
+
+    const savedTerminals: Record<string, unknown[]> = {};
+    projectClientMock.setTerminals.mockImplementation(
+      async (projectId: string, terminals: unknown[]) => {
+        savedTerminals[projectId] = [...terminals];
+      }
+    );
+
+    for (let i = 0; i < CYCLES; i++) {
+      // Simulate project A has its Claude terminal
+      terminalState.terminals = [claudeTerminalA];
+      worktreeSelectionState.activeWorktreeId = "wt-a";
+      useProjectStore.setState({ currentProject: projectA });
+
+      await useProjectStore.getState().switchProject("project-b");
+
+      // Simulate project B has its Claude terminal
+      terminalState.terminals = [claudeTerminalB];
+      worktreeSelectionState.activeWorktreeId = "wt-b";
+      useProjectStore.setState({ currentProject: projectB });
+
+      await useProjectStore.getState().switchProject("project-a");
+    }
+
+    // Verify: project A should have saved claude-a (not claude-b)
+    const savedA = savedTerminals["project-a"] as Array<{ id: string }> | undefined;
+    const savedB = savedTerminals["project-b"] as Array<{ id: string }> | undefined;
+
+    if (savedA && savedA.length > 0) {
+      const hasOnlyA = savedA.every((t) => t.id === "claude-a");
+      const hasB = savedA.some((t) => t.id === "claude-b");
+      expect(hasB).toBe(false);
+      expect(hasOnlyA).toBe(true);
+    }
+
+    if (savedB && savedB.length > 0) {
+      const hasOnlyB = savedB.every((t) => t.id === "claude-b");
+      const hasA = savedB.some((t) => t.id === "claude-a");
+      expect(hasA).toBe(false);
+      expect(hasOnlyB).toBe(true);
+    }
+  });
 });
