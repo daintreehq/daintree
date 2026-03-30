@@ -840,6 +840,7 @@ export class WorkspaceClient extends EventEmitter {
 
   async onProjectSwitch(windowId: number): Promise<void> {
     this.windowScopes.delete(windowId);
+    this.windowLoadGeneration.delete(windowId);
     this.windowMismatchWarnAt.delete(windowId);
     const requestId = this.generateRequestId();
 
