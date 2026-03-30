@@ -31,35 +31,38 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
       timeout: T_SHORT,
     });
 
-    // "App" subtab is the default — theme select control should be visible
+    // "App" subtab is the default — click the theme picker trigger to open the list
     const settingsPanel = window.locator('[role="dialog"]');
-    const themeTrigger = settingsPanel.locator('[role="combobox"]');
+    const themeTrigger = settingsPanel.locator('[aria-controls="theme-listbox"]');
     await expect(themeTrigger).toBeVisible({ timeout: T_SHORT });
-
-    // Open the theme dropdown
     await themeTrigger.click();
-    const themeListbox = settingsPanel.locator('[role="listbox"]');
+    const themeListbox = settingsPanel.locator('[role="listbox"][aria-label="Theme list"]');
     await expect(themeListbox).toBeVisible({ timeout: T_SHORT });
 
-    // Select a different theme option
+    // Select a different theme option from the list
     const options = themeListbox.locator('[role="option"]');
     const optionCount = await options.count();
     expect(optionCount).toBeGreaterThanOrEqual(2);
 
-    // Find an option that is NOT currently selected
+    // Find an option that is NOT currently selected and get its name
     let targetOption = options.first();
+    let targetName = "";
     for (let i = 0; i < optionCount; i++) {
       const option = options.nth(i);
       const selected = await option.getAttribute("aria-selected");
       if (selected !== "true") {
         targetOption = option;
+        targetName = (await option.textContent()) ?? "";
         break;
       }
     }
 
     await targetOption.click();
-    // Dropdown should close after selection
+    // Picker closes on selection — verify trigger now shows the selected theme name
     await expect(themeListbox).not.toBeVisible({ timeout: T_SHORT });
+    if (targetName) {
+      await expect(themeTrigger).toContainText(targetName, { timeout: T_SHORT });
+    }
 
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });

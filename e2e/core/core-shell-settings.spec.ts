@@ -80,7 +80,6 @@ test.describe.serial("Core: Shell & Settings", () => {
         "Integrations",
         "Portal",
         "MCP Server",
-        "Voice Input",
         "Privacy & Data",
         "Environment",
         "Troubleshooting",
@@ -308,12 +307,23 @@ test.describe.serial("Core: Shell & Settings", () => {
       await expect(settingsBtn).toBeVisible({ timeout: T_SHORT });
       await settingsBtn.click();
 
-      const heading = window.locator('h2:has-text("Project Settings")');
+      // Settings dialog opens in project scope
+      const heading = window.locator('h2:has-text("Settings")');
       await expect(heading).toBeVisible({ timeout: T_MEDIUM });
+
+      // Verify project scope is selected
+      const scopeSelect = window.locator(".settings-sidebar select");
+      await expect(scopeSelect).toHaveValue("project", { timeout: T_SHORT });
     });
 
     test("project name is displayed", async () => {
       const { window } = ctx;
+
+      // Navigate to General tab which shows project identity
+      const generalBtn = window.locator(`${SEL.settings.navSidebar} button`, {
+        hasText: "General",
+      });
+      await generalBtn.click();
 
       const nameInput = window.locator('input[aria-label="Project name"]');
       if (await nameInput.isVisible().catch(() => false)) {
@@ -337,7 +347,7 @@ test.describe.serial("Core: Shell & Settings", () => {
       const closeBtn = window.locator('[aria-label="Close settings"]');
       await closeBtn.click();
 
-      const heading = window.locator('h2:has-text("Project Settings")');
+      const heading = window.locator('h2:has-text("Settings")');
       await expect(heading).not.toBeVisible({ timeout: T_SHORT });
     });
   });

@@ -122,6 +122,7 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
 
     test("Cmd+K Cmd+S opens keyboard shortcuts reference", async () => {
       const { window } = ctx;
+      await window.waitForTimeout(200);
       await pressChord(window, `${mod}+k`, `${mod}+s`);
 
       const title = window.locator('[role="dialog"] h1, [role="dialog"] h2').filter({

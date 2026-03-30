@@ -132,7 +132,6 @@ test.describe.serial("Core: v0.3.0 Features", () => {
         "Toolbar",
         "Integrations",
         "MCP Server",
-        "Voice Input",
         "Privacy & Data",
         "Environment",
       ];

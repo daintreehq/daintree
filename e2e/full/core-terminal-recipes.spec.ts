@@ -111,6 +111,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
     test("edit reopens with saved values and cancel confirms unsaved changes", async () => {
       const { window } = ctx;
       await openRecipesTab();
+      await window.waitForTimeout(300);
 
       // Click edit on the saved recipe (button is opacity-0 until hover)
       await window
@@ -165,6 +166,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
 
     test("edit and save updates the recipe", async () => {
       const { window } = ctx;
+      await window.waitForTimeout(500);
       await openRecipesTab();
 
       await window

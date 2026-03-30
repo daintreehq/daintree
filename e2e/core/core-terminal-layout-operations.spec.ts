@@ -220,8 +220,12 @@ test.describe.serial("Core: Terminal Layout Operations", () => {
     test("click dock item opens popover with terminal content", async () => {
       const { window } = ctx;
 
-      // Dismiss any auto-opened popover first
-      await window.keyboard.press("Escape");
+      // Dismiss any auto-opened popover by clicking outside the dock area
+      // (Escape is blocked by the dock guard when terminal is focused inside the portal)
+      await window.locator(SEL.toolbar.toggleSidebar).click();
+      await window.waitForTimeout(T_SETTLE);
+      // Toggle sidebar back
+      await window.locator(SEL.toolbar.toggleSidebar).click();
       await window.waitForTimeout(T_SETTLE);
       await expect(window.locator("[data-dock-portal-target]")).not.toBeVisible({
         timeout: T_SHORT,

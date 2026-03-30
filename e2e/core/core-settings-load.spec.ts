@@ -69,9 +69,11 @@ test.describe.serial("Core: Settings Pages Load", () => {
       timeout: T_SHORT,
     });
 
-    // App subtab (default) should show theme combobox
+    // App subtab (default) should show the theme picker trigger
     const settingsPanel = window.locator('[role="dialog"]');
-    await expect(settingsPanel.locator('[role="combobox"]')).toBeVisible({ timeout: T_SHORT });
+    await expect(settingsPanel.locator('[aria-haspopup="listbox"]')).toBeVisible({
+      timeout: T_SHORT,
+    });
 
     // Switch to Terminal subtab
     await window
@@ -267,23 +269,6 @@ test.describe.serial("Core: Settings Pages Load", () => {
     await expect(mcpToggle).toBeVisible({ timeout: T_SHORT });
     // Toggle should not be disabled (loading=false)
     await expect(mcpToggle).not.toBeDisabled({ timeout: T_MEDIUM });
-  });
-
-  test("Voice Input tab loads", async () => {
-    const { window } = ctx;
-
-    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
-    await expect(window.locator("h3", { hasText: "Voice Input" })).toBeVisible({
-      timeout: T_SHORT,
-    });
-
-    // Wait for loading to finish
-    await expect(window.locator("text=Loading voice input settings...")).not.toBeVisible({
-      timeout: T_MEDIUM,
-    });
-
-    // Voice input toggle should be visible
-    await expect(window.locator("text=Speech-to-Text")).toBeVisible({ timeout: T_SHORT });
   });
 
   test("Troubleshooting tab loads", async () => {

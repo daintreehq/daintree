@@ -941,6 +941,7 @@ export function SettingsDialog({
               <div className="relative flex items-center">
                 <select
                   value={activeScope}
+                  aria-label="Settings scope"
                   onChange={(e) => {
                     handleScopeSwitch(e.target.value as SettingsScope);
                     e.target.blur();

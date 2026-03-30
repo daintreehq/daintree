@@ -30,6 +30,10 @@ test.describe.serial("Core: Focus Management", () => {
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);
 
+    // Click the main content area to ensure the app has keyboard focus
+    await window.locator("main").click({ force: true });
+    await window.waitForTimeout(200);
+
     const before = await getGridPanelCount(window);
     await window.keyboard.press(`${mod}+Alt+t`);
     await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
