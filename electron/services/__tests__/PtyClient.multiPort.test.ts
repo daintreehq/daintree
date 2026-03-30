@@ -13,8 +13,6 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { utilityProcess } from "electron";
-
 interface MockUtilityProcess extends EventEmitter {
   postMessage: Mock;
   kill: Mock;
@@ -80,7 +78,7 @@ describe("PtyClient multi-port support", () => {
     mockChild.postMessage.mockClear();
 
     const port = createMockPort();
-    client.connectMessagePort(1, port as any);
+    client.connectMessagePort(1, port as unknown as import("electron").MessagePortMain);
 
     expect(mockChild.postMessage).toHaveBeenCalledWith({ type: "connect-port", windowId: 1 }, [
       port,
@@ -94,8 +92,8 @@ describe("PtyClient multi-port support", () => {
     const port1 = createMockPort();
     const port2 = createMockPort();
 
-    client.connectMessagePort(1, port1 as any);
-    client.connectMessagePort(2, port2 as any);
+    client.connectMessagePort(1, port1 as unknown as import("electron").MessagePortMain);
+    client.connectMessagePort(2, port2 as unknown as import("electron").MessagePortMain);
 
     expect(mockChild.postMessage).toHaveBeenCalledTimes(2);
     expect(mockChild.postMessage).toHaveBeenCalledWith({ type: "connect-port", windowId: 1 }, [
@@ -171,10 +169,10 @@ describe("PtyClient multi-port support", () => {
 
     // Should replay both windows' project contexts
     const setActiveCalls = newChild.postMessage.mock.calls.filter(
-      (c: unknown[]) => (c[0] as any)?.type === "set-active-project"
+      (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "set-active-project"
     );
     const switchCalls = newChild.postMessage.mock.calls.filter(
-      (c: unknown[]) => (c[0] as any)?.type === "project-switch"
+      (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "project-switch"
     );
 
     expect(setActiveCalls.length).toBe(1);
@@ -215,10 +213,10 @@ describe("PtyClient multi-port support", () => {
 
     // Should only replay window 2's context, not window 1
     const setActiveCalls = newChild.postMessage.mock.calls.filter(
-      (c: unknown[]) => (c[0] as any)?.type === "set-active-project"
+      (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "set-active-project"
     );
     const switchCalls = newChild.postMessage.mock.calls.filter(
-      (c: unknown[]) => (c[0] as any)?.type === "project-switch"
+      (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "project-switch"
     );
 
     expect(setActiveCalls.length).toBe(0);

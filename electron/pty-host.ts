@@ -119,7 +119,7 @@ function getOrCreatePauseCoordinator(id: string): PtyPauseCoordinator | undefine
 // Per-window MessagePort connections for direct Renderer ↔ Pty Host communication
 interface RendererConnection {
   port: MessagePort;
-  handler: (e: any) => void;
+  handler: (e: MessageEvent) => void;
   portQueueManager: PortQueueManager;
 }
 const rendererConnections = new Map<number, RendererConnection>();
@@ -709,7 +709,7 @@ port.on("message", async (rawMsg: any) => {
             `[PtyHost] MessagePort received from Main for window ${windowId}, starting listener...`
           );
 
-          const handler = (event: any) => {
+          const handler = (event: MessageEvent) => {
             const portMsg = event?.data ? event.data : event;
 
             if (!portMsg || typeof portMsg !== "object") {
