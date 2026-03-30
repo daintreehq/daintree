@@ -37,6 +37,7 @@ import {
   MAX_PACKET_PAYLOAD,
   BACKPRESSURE_SAFETY_TIMEOUT_MS,
 } from "./pty-host/index.js";
+import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
 
 // Validate we're running in UtilityProcess context
 if (!process.parentPort) {
@@ -297,7 +298,15 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   }
 
   // Direct MessagePort output: send data directly to renderer, bypassing main process
-  if (!visualWritten && !isBackgrounded && !isSuspended && rendererPort) {
+  // Skip MessagePort for smoke test terminals — the smoke test monitors data via PtyClient
+  // (IPC events in the main process), so these must always use the IPC fallback path.
+  if (
+    !visualWritten &&
+    !isBackgrounded &&
+    !isSuspended &&
+    rendererPort &&
+    !isSmokeTestTerminalId(id)
+  ) {
     const dataString = toStringForIpc(data);
     const byteCount = Buffer.byteLength(dataString, "utf8");
 
