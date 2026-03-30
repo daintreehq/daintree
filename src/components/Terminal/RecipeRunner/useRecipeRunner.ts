@@ -64,10 +64,7 @@ export function useRecipeRunner({
 
   const showSearch = recipes.length > 6;
 
-  const sections = useMemo(
-    () => buildRecipeSections(recipes, activeWorktreeId),
-    [recipes, activeWorktreeId]
-  );
+  const sections = useMemo(() => buildRecipeSections(recipes), [recipes]);
 
   const searchResults = useMemo(() => {
     if (!searchQuery.trim()) return [];

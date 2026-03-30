@@ -18,27 +18,20 @@ export interface RecipeSections {
   all: TerminalRecipe[];
 }
 
-export function buildRecipeSections(
-  recipes: TerminalRecipe[],
-  activeWorktreeId: string | null | undefined
-): RecipeSections {
-  const visible = recipes.filter(
-    (r) => r.worktreeId === activeWorktreeId || r.worktreeId === undefined
-  );
-
-  const pinned = visible
+export function buildRecipeSections(recipes: TerminalRecipe[]): RecipeSections {
+  const pinned = recipes
     .filter((r) => r.showInEmptyState)
     .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0));
 
   const pinnedIds = new Set(pinned.map((r) => r.id));
 
-  const recent = visible
+  const recent = recipes
     .filter((r) => !r.showInEmptyState && r.lastUsedAt != null && !pinnedIds.has(r.id))
     .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))
     .slice(0, 5);
 
   const usedIds = new Set([...pinnedIds, ...recent.map((r) => r.id)]);
-  const all = visible
+  const all = recipes
     .filter((r) => !usedIds.has(r.id))
     .sort((a, b) => a.name.localeCompare(b.name));
 

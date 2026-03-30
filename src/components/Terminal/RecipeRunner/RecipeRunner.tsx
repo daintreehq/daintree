@@ -49,7 +49,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
 
   return (
     <div className="w-full max-w-lg">
-      {runner.showSearch || runner.recipes.length > 6 ? (
+      {runner.showSearch ? (
         <RecipeRunnerList
           sections={runner.sections}
           searchQuery={runner.searchQuery}

@@ -47,7 +47,7 @@ describe("buildRecipeSections", () => {
       makeRecipe({ id: "1", name: "A", showInEmptyState: true }),
       makeRecipe({ id: "2", name: "B", showInEmptyState: false, lastUsedAt: Date.now() }),
     ];
-    const sections = buildRecipeSections(recipes, undefined);
+    const sections = buildRecipeSections(recipes);
     expect(sections.pinned.map((r) => r.id)).toEqual(["1"]);
     expect(sections.recent.map((r) => r.id)).toEqual(["2"]);
   });
@@ -56,7 +56,7 @@ describe("buildRecipeSections", () => {
     const recipes = Array.from({ length: 8 }, (_, i) =>
       makeRecipe({ id: String(i), name: `R${i}`, lastUsedAt: Date.now() - i * 1000 })
     );
-    const sections = buildRecipeSections(recipes, undefined);
+    const sections = buildRecipeSections(recipes);
     expect(sections.recent).toHaveLength(5);
   });
 
@@ -66,21 +66,20 @@ describe("buildRecipeSections", () => {
       makeRecipe({ id: "2", name: "Apple" }),
       makeRecipe({ id: "3", name: "Mango", showInEmptyState: true }),
     ];
-    const sections = buildRecipeSections(recipes, undefined);
+    const sections = buildRecipeSections(recipes);
     expect(sections.all.map((r) => r.name)).toEqual(["Apple", "Zebra"]);
   });
 
-  it("filters by worktreeId", () => {
+  it("includes all passed recipes without additional filtering", () => {
     const recipes = [
       makeRecipe({ id: "1", name: "Global", worktreeId: undefined }),
       makeRecipe({ id: "2", name: "WT1", worktreeId: "wt-1" }),
-      makeRecipe({ id: "3", name: "WT2", worktreeId: "wt-2" }),
     ];
-    const sections = buildRecipeSections(recipes, "wt-1");
+    const sections = buildRecipeSections(recipes);
     const allIds = [...sections.pinned, ...sections.recent, ...sections.all].map((r) => r.id);
     expect(allIds).toContain("1");
     expect(allIds).toContain("2");
-    expect(allIds).not.toContain("3");
+    expect(allIds).toHaveLength(2);
   });
 });
 
@@ -109,7 +108,31 @@ describe("rankSearchResults", () => {
     ];
     const results = rankSearchResults(recipes, "test", now);
     expect(results.length).toBe(2);
-    // Recipe 2 should be boosted by frecency
     expect(results[0].recipe.id).toBe("2");
+  });
+
+  it("returns empty for empty recipe array", () => {
+    const results = rankSearchResults([], "query", Date.now());
+    expect(results).toHaveLength(0);
+  });
+});
+
+describe("buildRecipeSections edge cases", () => {
+  it("returns empty sections for empty recipes", () => {
+    const sections = buildRecipeSections([]);
+    expect(sections.pinned).toHaveLength(0);
+    expect(sections.recent).toHaveLength(0);
+    expect(sections.all).toHaveLength(0);
+  });
+
+  it("handles all recipes pinned", () => {
+    const recipes = [
+      makeRecipe({ id: "1", name: "A", showInEmptyState: true }),
+      makeRecipe({ id: "2", name: "B", showInEmptyState: true }),
+    ];
+    const sections = buildRecipeSections(recipes);
+    expect(sections.pinned).toHaveLength(2);
+    expect(sections.recent).toHaveLength(0);
+    expect(sections.all).toHaveLength(0);
   });
 });
