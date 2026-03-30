@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState } from "../../types";
 import type { GitHubIssue } from "@shared/types/github";
 import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
-import { useWorktreeColorMap } from "../../hooks/useWorktreeColorMap";
+
 import { useDroppable } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { useIsWorktreeSortDragging } from "../DragDrop/DndProvider";
@@ -150,7 +150,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   worktree,
   isActive,
   isFocused,
-  isSingleWorktree,
+  isSingleWorktree: _isSingleWorktree,
   aggregateCounts,
   onSelect,
   onCopyTree,
@@ -168,9 +168,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   projectHealth,
 }: WorktreeCardProps) {
   "use memo";
-  const worktreeColorMap = useWorktreeColorMap();
-  const worktreeAccentColor = worktreeColorMap?.[worktree.id];
-
   const isExpanded = useWorktreeSelectionStore(
     useCallback((state) => state.expandedWorktrees.has(worktree.id), [worktree.id])
   );
@@ -559,11 +556,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
       <ContextMenuTrigger asChild>
         <div
           ref={droppableRef}
-          style={
-            worktreeAccentColor
-              ? ({ "--worktree-color": worktreeAccentColor } as React.CSSProperties)
-              : undefined
-          }
           className={cn(
             "sidebar-worktree-card group/card relative transition-all duration-200",
             variant === "sidebar" && "border-b border-border-default",
@@ -575,16 +567,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               variant === "grid" &&
               "hover:bg-[var(--sidebar-hover-bg,var(--theme-overlay-hover))]",
             variant === "sidebar" && !isActive && "bg-transparent",
-            isActive &&
-              !isSingleWorktree &&
-              variant === "sidebar" &&
-              "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[3px] before:rounded-r before:content-[''] before:z-10 motion-safe:before:animate-in motion-safe:before:fade-in motion-safe:before:duration-200",
-            isActive &&
-              !isSingleWorktree &&
-              variant === "sidebar" &&
-              (worktreeAccentColor
-                ? "before:bg-[var(--worktree-color)]"
-                : "before:bg-accent-primary"),
             variant === "grid" &&
               isActive &&
               "border-accent-primary/70 shadow-[var(--theme-shadow-floating)]",
