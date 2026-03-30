@@ -237,7 +237,7 @@ function PulseSkeleton({ className }: { className?: string }) {
         className
       )}
     >
-      <div className="px-4 py-3 border-b border-canopy-border flex items-center justify-between">
+      <div className="pulse-card-header px-4 py-3 border-b border-canopy-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded-[2px] pulse-skeleton-shimmer shrink-0" />
           <div className="h-4 pulse-skeleton-shimmer rounded w-36" />
@@ -429,7 +429,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
         className
       )}
     >
-      <div className="px-4 py-3 border-b border-canopy-border flex items-center justify-between">
+      <div className="pulse-card-header px-4 py-3 border-b border-canopy-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-status-success" />
           <span className="text-sm font-medium text-canopy-text/90">{title}</span>
