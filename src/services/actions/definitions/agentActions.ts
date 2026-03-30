@@ -69,7 +69,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       scope: "renderer",
       run: async () => {
         const terminalId = await callbacks.onLaunchAgent(id);
-        notifyAgentSpawned(config.name);
         return { terminalId };
       },
     }));
