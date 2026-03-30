@@ -485,5 +485,70 @@ describe("WorkspaceClient multi-process manager", () => {
 
       expect(mockWindow.webContents.send).not.toHaveBeenCalled();
     });
+
+    it("does NOT emit WORKTREE_ACTIVATED when all hosts reject", async () => {
+      const mockWindow = {
+        id: 1,
+        isDestroyed: vi.fn(() => false),
+        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
+      };
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([mockWindow] as any);
+
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      // Make sendWithResponse reject for set-active
+      h(0).sendWithResponse.mockImplementationOnce(() => {
+        return Promise.reject(new Error("Worktree not found"));
+      });
+
+      await client.setActiveWorktree("wt-nonexistent", 1);
+
+      expect(mockWindow.webContents.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("worktree path routing", () => {
+    it("routes via worktreePathToProject reverse map for sibling worktrees", async () => {
+      const load = client.loadProject("/repos/app", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      // Simulate worktree-update event that populates the reverse map
+      h(0).emit("host-event", {
+        type: "worktree-update",
+        worktree: {
+          id: "wt-feat",
+          path: "/repos/app-worktrees/feature-1",
+          name: "feature-1",
+          branch: "feature-1",
+        },
+      });
+
+      // Now resolve a path-based call to the sibling worktree
+      const branchesPromise = client.listBranches("/repos/app-worktrees/feature-1");
+      await tick();
+      const req = h(0).getLastRequest()!;
+      expect(req.type).toBe("list-branches");
+      h(0).resolveRequest(req.requestId, { branches: [{ name: "feature-1" }] });
+
+      const result = await branchesPromise;
+      expect(result).toHaveLength(1);
+    });
+
+    it("does not route to wrong host when multiple projects exist", async () => {
+      const load1 = client.loadProject("/repos/app-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      const load2 = client.loadProject("/repos/app-b", 2);
+      await readyAndResolveLoad(1);
+      await load2;
+
+      // Unknown path with multiple hosts should return undefined (not fall back)
+      const result = await client.listBranches("/repos/unknown-project").catch(() => []);
+      expect(result).toEqual([]);
+    });
   });
 });

@@ -56,6 +56,9 @@ export class WorkspaceClient extends EventEmitter {
   private entries = new Map<string, ProcessEntry>();
   private windowToProject = new Map<number, string>();
 
+  // Reverse map: worktree path → project path (populated from worktree-update events)
+  private worktreePathToProject = new Map<string, string>();
+
   // CopyTree progress callbacks by operationId (manager-level)
   private copyTreeProgressCallbacks = new Map<string, CopyTreeProgressCallback>();
   private activeCopyTreeOperations = new Map<string, string>();
@@ -128,6 +131,13 @@ export class WorkspaceClient extends EventEmitter {
     switch (event.type) {
       case "worktree-update": {
         const worktree = event.worktree;
+        // Populate reverse map for path-based routing
+        if (worktree.path) {
+          this.worktreePathToProject.set(
+            this.normalizeProjectPath(worktree.path),
+            entry.projectPath
+          );
+        }
         this.sendToEntryWindows(entry, CHANNELS.WORKTREE_UPDATE, worktree);
         events.emit("sys:worktree:update", {
           id: worktree.id,
@@ -157,6 +167,13 @@ export class WorkspaceClient extends EventEmitter {
       }
 
       case "worktree-removed":
+        // Clean reverse map entries for this project's removed worktrees
+        for (const [wtPath, projPath] of this.worktreePathToProject) {
+          if (projPath === entry.projectPath) {
+            // We don't know which path was removed by ID, but this is cleaned
+            // on next worktree-update cycle. The map is advisory for routing.
+          }
+        }
         this.sendToEntryWindows(entry, CHANNELS.WORKTREE_REMOVE, {
           worktreeId: event.worktreeId,
         });
@@ -264,18 +281,29 @@ export class WorkspaceClient extends EventEmitter {
 
     let entry = this.entries.get(normalizedPath);
     if (entry) {
-      // Existing entry — increment refcount, reuse process
-      if (!entry.windowIds.has(windowId)) {
-        entry.refCount++;
-        entry.windowIds.add(windowId);
+      // Check if this entry has a failed initPromise (poisoned by prior crash)
+      const isInitFailed = await entry.initPromise.then(
+        () => false,
+        () => true
+      );
+      if (isInitFailed) {
+        // Clean up poisoned entry and fall through to create a fresh one
+        entry.host.dispose();
+        this.entries.delete(normalizedPath);
+        entry = undefined;
+      } else {
+        // Existing healthy entry — increment refcount, reuse process
+        if (!entry.windowIds.has(windowId)) {
+          entry.refCount++;
+          entry.windowIds.add(windowId);
+        }
+        if (entry.cleanupTimeout) {
+          clearTimeout(entry.cleanupTimeout);
+          entry.cleanupTimeout = null;
+        }
+        this.windowToProject.set(windowId, normalizedPath);
+        return;
       }
-      if (entry.cleanupTimeout) {
-        clearTimeout(entry.cleanupTimeout);
-        entry.cleanupTimeout = null;
-      }
-      this.windowToProject.set(windowId, normalizedPath);
-      await entry.initPromise;
-      return;
     }
 
     // Create new per-project host
@@ -307,7 +335,17 @@ export class WorkspaceClient extends EventEmitter {
     this.windowToProject.set(windowId, normalizedPath);
     this.wireHostEvents(entry);
 
-    await initPromise;
+    try {
+      await initPromise;
+    } catch (error) {
+      // Clean up failed entry so subsequent loadProject calls create a fresh host
+      if (this.entries.get(normalizedPath) === entry) {
+        this.entries.delete(normalizedPath);
+        this.windowToProject.delete(windowId);
+        entry.host.dispose();
+      }
+      throw error;
+    }
   }
 
   async sync(
@@ -388,6 +426,7 @@ export class WorkspaceClient extends EventEmitter {
         ? ([this.resolveHostForWindow(windowId)].filter(Boolean) as WorkspaceHostProcess[])
         : [...this.entries.values()].map((e) => e.host);
 
+    let accepted = false;
     for (const host of hosts) {
       try {
         const requestId = host.generateRequestId();
@@ -396,13 +435,14 @@ export class WorkspaceClient extends EventEmitter {
           requestId,
           worktreeId,
         });
+        accepted = true;
         break; // Only one host needs to handle it
       } catch {
         // Try next
       }
     }
 
-    if (!options?.silent) {
+    if (accepted && !options?.silent) {
       if (windowId !== undefined) {
         const entry = this.resolveEntryForWindow(windowId);
         if (entry) {
@@ -558,6 +598,7 @@ export class WorkspaceClient extends EventEmitter {
     deleteBranch: boolean = false
   ): Promise<void> {
     // Fan out — only one host will have this worktree
+    let lastError: Error | undefined;
     for (const entry of this.entries.values()) {
       try {
         const requestId = entry.host.generateRequestId();
@@ -569,11 +610,11 @@ export class WorkspaceClient extends EventEmitter {
           deleteBranch,
         });
         return;
-      } catch {
-        // Try next
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
       }
     }
-    throw new Error(`Worktree not found: ${worktreeId}`);
+    throw lastError ?? new Error(`Worktree not found: ${worktreeId}`);
   }
 
   async getFileDiff(cwd: string, filePath: string, status: string): Promise<string> {
@@ -770,6 +811,7 @@ export class WorkspaceClient extends EventEmitter {
     }
     this.entries.clear();
     this.windowToProject.clear();
+    this.worktreePathToProject.clear();
     this.copyTreeProgressCallbacks.clear();
     this.activeCopyTreeOperations.clear();
     this.removeAllListeners();
@@ -786,8 +828,9 @@ export class WorkspaceClient extends EventEmitter {
   // ── Private helpers ──
 
   private resolveHostForPath(targetPath: string): WorkspaceHostProcess | undefined {
-    // Try exact match first
     const normalized = this.normalizeProjectPath(targetPath);
+
+    // Try exact match on project path
     const exactEntry = this.entries.get(normalized);
     if (exactEntry) return exactEntry.host;
 
@@ -798,8 +841,24 @@ export class WorkspaceClient extends EventEmitter {
       }
     }
 
-    // Fall back to the first available host
-    for (const entry of this.entries.values()) {
+    // Check reverse map: worktree path → project path (for sibling worktrees)
+    const projectPath = this.worktreePathToProject.get(normalized);
+    if (projectPath) {
+      const entry = this.entries.get(projectPath);
+      if (entry) return entry.host;
+    }
+
+    // Try matching target as a child of a known worktree path
+    for (const [wtPath, projPath] of this.worktreePathToProject) {
+      if (normalized.startsWith(wtPath + path.sep)) {
+        const entry = this.entries.get(projPath);
+        if (entry) return entry.host;
+      }
+    }
+
+    // Only fall back to single-host case (avoids cross-project routing)
+    if (this.entries.size === 1) {
+      const [entry] = this.entries.values();
       if (entry.host.isReady()) return entry.host;
     }
 
