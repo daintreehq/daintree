@@ -60,8 +60,8 @@ vi.mock("../GitHubListItem", () => ({
   ),
 }));
 
-vi.mock("../IssueBulkActionBar", () => ({
-  IssueBulkActionBar: () => null,
+vi.mock("../BulkActionBar", () => ({
+  BulkActionBar: () => null,
 }));
 
 vi.mock("../GitHubDropdownSkeletons", () => ({
