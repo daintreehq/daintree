@@ -195,6 +195,8 @@ export interface TerminalRecipe {
   showInEmptyState?: boolean;
   /** Timestamp of last run (milliseconds since epoch) */
   lastUsedAt?: number;
+  /** Timestamps of recent runs for frecency scoring (capped at 20 entries) */
+  usageHistory?: number[];
   /** Controls whether the linked GitHub issue is auto-assigned during quick worktree creation */
   autoAssign?: "always" | "never" | "prompt";
 }
