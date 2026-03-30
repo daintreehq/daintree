@@ -11,36 +11,43 @@ import { terminalConfigClient } from "@/clients/terminalConfigClient";
 import { ThemeSelector } from "./ThemeSelector";
 
 function SchemePreview({ scheme }: { scheme: TerminalColorScheme }) {
-  const colors = scheme.colors;
-  const swatchColors = [
-    colors.black,
-    colors.red,
-    colors.green,
-    colors.yellow,
-    colors.blue,
-    colors.magenta,
-    colors.cyan,
-    colors.white,
-    colors.brightBlack,
-    colors.brightRed,
-    colors.brightGreen,
-    colors.brightYellow,
-    colors.brightBlue,
-    colors.brightMagenta,
-    colors.brightCyan,
-    colors.brightWhite,
-  ];
+  const c = scheme.colors;
+  const fg = c.foreground ?? "#ccc";
 
   return (
-    <div className="rounded p-1.5" style={{ backgroundColor: colors.background ?? "#000" }}>
-      <div className="grid grid-cols-8 gap-0.5">
-        {swatchColors.map((color, i) => (
-          <div
-            key={i}
-            className="w-3 h-3 rounded-sm"
-            style={{ backgroundColor: color ?? "#888" }}
-          />
-        ))}
+    <div
+      className="rounded overflow-hidden"
+      style={{
+        backgroundColor: c.background ?? "#000",
+        padding: "6px 8px",
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        fontSize: "9px",
+        lineHeight: "1.4",
+        whiteSpace: "nowrap",
+        WebkitFontSmoothing: "antialiased",
+      }}
+    >
+      <div>
+        <span style={{ color: c.green ?? fg }}>$ </span>
+        <span style={{ color: fg }}>ls src/</span>
+      </div>
+      <div>
+        <span style={{ color: c.cyan ?? fg }}>components/</span>
+        <span style={{ color: fg }}> </span>
+        <span style={{ color: c.cyan ?? fg }}>utils/</span>
+        <span style={{ color: fg }}> index.ts</span>
+      </div>
+      <div>
+        <span style={{ color: c.green ?? fg }}>$ </span>
+        <span style={{ color: fg }}>git status</span>
+      </div>
+      <div>
+        <span style={{ color: c.brightBlack ?? fg }}>modified: </span>
+        <span style={{ color: c.yellow ?? fg }}>main.ts</span>
+      </div>
+      <div>
+        <span style={{ color: c.green ?? fg }}>✓ </span>
+        <span style={{ color: fg }}>3 tests passed</span>
       </div>
     </div>
   );
