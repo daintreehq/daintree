@@ -55,15 +55,21 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     danger: "safe",
     scope: "renderer",
     run: async () => {
+      // Main process reloads config and broadcasts APP_CONFIG_RELOADED,
+      // which triggers the onConfigReloaded subscription below to refresh renderer stores.
       await window.electron.app.reloadConfig();
-      await refreshRendererConfig();
     },
   }));
 
-  // Subscribe to config reloaded events from main process (e.g. menu item trigger)
+  // Subscribe to config reloaded events from main process.
+  // Fires after both action-triggered and menu-triggered reloads.
   if (typeof window.electron?.app?.onConfigReloaded === "function") {
     window.electron.app.onConfigReloaded(async () => {
-      await refreshRendererConfig();
+      try {
+        await refreshRendererConfig();
+      } catch (e) {
+        console.error("[app.reloadConfig] Failed to refresh renderer config:", e);
+      }
     });
   }
 
