@@ -226,7 +226,7 @@ const storeOptions = {
       enabled: true,
       completedEnabled: false,
       waitingEnabled: false,
-      soundEnabled: false,
+      soundEnabled: true,
       completedSoundFile: "complete.wav",
       waitingSoundFile: "waiting.wav",
       escalationSoundFile: "ping.wav",
@@ -234,7 +234,7 @@ const storeOptions = {
       waitingEscalationDelayMs: 180_000,
       workingPulseEnabled: false,
       workingPulseSoundFile: "pulse.wav",
-      uiFeedbackSoundEnabled: false,
+      uiFeedbackSoundEnabled: true,
     },
     userAgentRegistry: {},
     agentUpdateSettings: {
