@@ -122,13 +122,12 @@ export function suggestFilename(language: string, content: string): string | und
 }
 
 export function stripAnsiCodes(text: string): string {
-  // eslint-disable-next-line no-control-regex
+  /* eslint-disable no-control-regex */
   let result = text.replace(
     /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
     ""
   );
-  // Strip OSC 8 hyperlinks: \x1b]8;params;uri\x1b\\ or \x1b]8;params;uri\x07
-  // eslint-disable-next-line no-control-regex
   result = result.replace(/\x1b\]8;[^;]*;[^\x1b\x07]*(?:\x1b\\|\x07)/g, "");
+  /* eslint-enable no-control-regex */
   return result;
 }
