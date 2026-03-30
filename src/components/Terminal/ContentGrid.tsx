@@ -226,6 +226,7 @@ export interface ContentGridProps {
   className?: string;
   defaultCwd?: string;
   agentAvailability?: CliAvailability;
+  emptyContent?: React.ReactNode;
 }
 
 function EmptyState({
@@ -560,7 +561,12 @@ function EmptyState({
   );
 }
 
-export function ContentGrid({ className, defaultCwd, agentAvailability }: ContentGridProps) {
+export function ContentGrid({
+  className,
+  defaultCwd,
+  agentAvailability,
+  emptyContent,
+}: ContentGridProps) {
   "use memo";
   const {
     terminals,
@@ -1225,14 +1231,16 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
               >
                 {isEmpty && !showPlaceholder ? (
                   <div className="col-span-full row-span-full">
-                    <EmptyState
-                      hasActiveWorktree={hasActiveWorktree}
-                      activeWorktreeName={activeWorktreeName}
-                      activeWorktreeId={activeWorktreeId}
-                      showProjectPulse={showProjectPulse}
-                      projectIconSvg={projectIconSvg}
-                      defaultCwd={defaultCwd}
-                    />
+                    {emptyContent ?? (
+                      <EmptyState
+                        hasActiveWorktree={hasActiveWorktree}
+                        activeWorktreeName={activeWorktreeName}
+                        activeWorktreeId={activeWorktreeId}
+                        showProjectPulse={showProjectPulse}
+                        projectIconSvg={projectIconSvg}
+                        defaultCwd={defaultCwd}
+                      />
+                    )}
                   </div>
                 ) : (
                   <>

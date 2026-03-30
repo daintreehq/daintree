@@ -7,6 +7,7 @@ import { useWorktrees } from "./useWorktrees";
 import { isElectronAvailable } from "./useElectron";
 
 import { agentSettingsClient, systemClient } from "@/clients";
+import { useHomeDir } from "@/hooks/app/useHomeDir";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { generateAgentCommand, buildAgentLaunchFlags } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent, getAgentDisplayTitle } from "@/config/agents";
@@ -35,6 +36,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
   const { worktreeMap } = useWorktrees();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const currentProject = useProjectStore((state) => state.currentProject);
+  const { homeDir } = useHomeDir();
   const availability = useCliAvailabilityStore((state) => state.availability);
   const isLoading = useCliAvailabilityStore((state) => state.isLoading);
   const isRefreshing = useCliAvailabilityStore((state) => state.isRefreshing);
@@ -92,7 +94,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         return null;
       }
 
-      const cwd = launchOptions?.cwd ?? targetWorktree?.path ?? currentProject?.path ?? "";
+      const cwd =
+        launchOptions?.cwd ?? targetWorktree?.path ?? currentProject?.path ?? homeDir ?? "";
 
       // Handle browser pane specially
       if (agentId === "browser") {
@@ -188,7 +191,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         return null;
       }
     },
-    [activeWorktreeId, worktreeMap, addTerminal, currentProject, agentSettings]
+    [activeWorktreeId, worktreeMap, addTerminal, currentProject, agentSettings, homeDir]
   );
 
   return {
