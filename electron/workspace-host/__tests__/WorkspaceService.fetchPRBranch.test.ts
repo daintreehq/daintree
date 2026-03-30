@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import type { WorkspaceService } from "../WorkspaceService.js";
+import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
 
 const mockSimpleGit = {
   raw: vi.fn().mockResolvedValue(undefined),
@@ -126,7 +127,9 @@ describe("WorkspaceService.fetchPRBranch", () => {
     mockSendEvent = vi.fn();
 
     const WorkspaceServiceModule = await import("../WorkspaceService.js");
-    service = new WorkspaceServiceModule.WorkspaceService(mockSendEvent);
+    service = new WorkspaceServiceModule.WorkspaceService(
+      mockSendEvent as unknown as (event: WorkspaceHostEvent) => void
+    );
   });
 
   afterEach(() => {
