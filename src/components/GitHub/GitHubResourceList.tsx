@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { githubClient } from "@/clients/githubClient";
 import { actionService } from "@/services/ActionService";
 import { GitHubListItem } from "./GitHubListItem";
-import { IssueBulkActionBar } from "./IssueBulkActionBar";
+import { BulkActionBar } from "./BulkActionBar";
 import { useIssueSelection } from "@/hooks/useIssueSelection";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
@@ -85,16 +85,18 @@ export function GitHubResourceList({
 
   const selection = useIssueSelection();
   const issueCacheRef = useRef<Map<number, GitHubIssue>>(new Map());
+  const prCacheRef = useRef<Map<number, GitHubPR>>(new Map());
 
-  // Accumulate issue objects into the session cache whenever data changes
+  // Accumulate item objects into the session cache whenever data changes
   useEffect(() => {
-    if (type !== "issue") return;
     for (const item of data) {
-      if (!("isDraft" in item)) {
+      if ("isDraft" in item) {
+        prCacheRef.current.set(item.number, item as GitHubPR);
+      } else {
         issueCacheRef.current.set(item.number, item as GitHubIssue);
       }
     }
-  }, [data, type]);
+  }, [data]);
 
   const debouncedSearch = useDebounce(searchQuery, 300);
 
@@ -363,6 +365,7 @@ export function GitHubResourceList({
   const handleClose = useCallback(() => {
     selection.clear();
     issueCacheRef.current.clear();
+    prCacheRef.current.clear();
     onClose?.();
   }, [onClose, selection]);
 
@@ -693,13 +696,15 @@ export function GitHubResourceList({
           </Popover>
         </div>
 
-        {type === "issue" &&
-          searchQuery.trim() !== "" &&
+        {searchQuery.trim() !== "" &&
           data.length > 0 &&
           !loading &&
           (() => {
             const allSelected = data.every((item) => selection.selectedIds.has(item.number));
-            const unassigned = data.filter((item) => (item as GitHubIssue).assignees.length === 0);
+            const unassigned =
+              type === "issue"
+                ? data.filter((item) => (item as GitHubIssue).assignees.length === 0)
+                : [];
             return (
               <div
                 className="flex items-center gap-1.5"
@@ -805,7 +810,7 @@ export function GitHubResourceList({
               ref={listRef}
               id={listId}
               role="listbox"
-              aria-multiselectable={type === "issue" ? true : undefined}
+              aria-multiselectable={true}
               className="divide-y divide-[var(--border-divider)]"
             >
               {data.map((item, index) => (
@@ -817,19 +822,15 @@ export function GitHubResourceList({
                   onSwitchToWorktree={handleSwitchToWorktree}
                   optionId={`github-${type}-option-${item.number}`}
                   isActive={activeIndex === index}
-                  isSelected={type === "issue" ? selection.selectedIds.has(item.number) : false}
-                  isSelectionActive={type === "issue" ? selection.isSelectionActive : false}
-                  onToggleSelect={
-                    type === "issue"
-                      ? (e: React.MouseEvent) => {
-                          if (e.shiftKey) {
-                            selection.toggleRange(index, (i) => data[i].number);
-                          } else {
-                            selection.toggle(item.number, index);
-                          }
-                        }
-                      : undefined
-                  }
+                  isSelected={selection.selectedIds.has(item.number)}
+                  isSelectionActive={selection.isSelectionActive}
+                  onToggleSelect={(e: React.MouseEvent) => {
+                    if (e.shiftKey) {
+                      selection.toggleRange(index, (i) => data[i].number);
+                    } else {
+                      selection.toggle(item.number, index);
+                    }
+                  }}
                 />
               ))}
             </div>
@@ -937,15 +938,25 @@ export function GitHubResourceList({
         </Button>
       </div>
 
-      {type === "issue" && (
-        <IssueBulkActionBar
-          selectedIssues={Array.from(selection.selectedIds)
-            .map((id) => issueCacheRef.current.get(id))
-            .filter((issue): issue is GitHubIssue => issue !== undefined)}
-          onClear={selection.clear}
-          onCloseDropdown={onClose}
-        />
-      )}
+      <BulkActionBar
+        mode={type === "issue" ? "issue" : "pr"}
+        selectedIssues={
+          type === "issue"
+            ? Array.from(selection.selectedIds)
+                .map((id) => issueCacheRef.current.get(id))
+                .filter((issue): issue is GitHubIssue => issue !== undefined)
+            : []
+        }
+        selectedPRs={
+          type === "pr"
+            ? Array.from(selection.selectedIds)
+                .map((id) => prCacheRef.current.get(id))
+                .filter((pr): pr is GitHubPR => pr !== undefined)
+            : []
+        }
+        onClear={selection.clear}
+        onCloseDropdown={onClose}
+      />
     </div>
   );
 }

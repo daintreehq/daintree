@@ -3,11 +3,12 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, act } from "@testing-library/react";
-import type { GitHubIssue } from "@shared/types/github";
+import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 
 const mockWorktreeCreate = vi.fn();
 const mockGetAvailableBranch = vi.fn();
 const mockGetDefaultPath = vi.fn();
+const mockListBranches = vi.fn();
 const mockAssignIssue = vi.fn();
 
 vi.mock("@/clients", () => ({
@@ -15,6 +16,7 @@ vi.mock("@/clients", () => ({
     create: (...args: unknown[]) => mockWorktreeCreate(...args),
     getAvailableBranch: (...args: unknown[]) => mockGetAvailableBranch(...args),
     getDefaultPath: (...args: unknown[]) => mockGetDefaultPath(...args),
+    listBranches: (...args: unknown[]) => mockListBranches(...args),
   },
   githubClient: {
     assignIssue: (...args: unknown[]) => mockAssignIssue(...args),
@@ -195,7 +197,22 @@ function setupWorktreeCreateMocks() {
     callIndex++;
     return Promise.resolve(`wt-${callIndex}`);
   });
+  mockListBranches.mockResolvedValue([
+    { name: "main", current: true, remote: false },
+    { name: "origin/main", current: false, remote: true },
+  ]);
 }
+
+const makePR = (n: number, title?: string, headRefName?: string): GitHubPR => ({
+  number: n,
+  title: title ?? `PR ${n}`,
+  url: `https://github.com/test/repo/pull/${n}`,
+  state: "OPEN",
+  isDraft: false,
+  updatedAt: "2026-01-01",
+  author: { login: "user", avatarUrl: "" },
+  headRefName: headRefName ?? `feature/pr-${n}`,
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -214,7 +231,9 @@ describe("BulkCreateWorktreeDialog", () => {
   const defaultProps = {
     isOpen: true,
     onClose: vi.fn(),
+    mode: "issue" as const,
     selectedIssues: [makeIssue(1), makeIssue(2), makeIssue(3)],
+    selectedPRs: [] as GitHubPR[],
     onComplete: vi.fn(),
   };
 
@@ -1002,5 +1021,133 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
     expect(onComplete).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("BulkCreateWorktreeDialog — PR mode", () => {
+  const prProps = {
+    isOpen: true,
+    onClose: vi.fn(),
+    mode: "pr" as const,
+    selectedIssues: [] as GitHubIssue[],
+    selectedPRs: [makePR(10), makePR(20), makePR(30)],
+    onComplete: vi.fn(),
+  };
+
+  it("renders PR list with branch names in idle state", () => {
+    mockListBranches.mockResolvedValue([
+      { name: "origin/feature/pr-10", current: false, remote: true },
+      { name: "origin/feature/pr-20", current: false, remote: true },
+      { name: "origin/feature/pr-30", current: false, remote: true },
+    ]);
+
+    render(<BulkCreateWorktreeDialog {...prProps} />);
+    expect(screen.getByText("#10")).toBeTruthy();
+    expect(screen.getByText("#20")).toBeTruthy();
+    expect(screen.getByText("#30")).toBeTruthy();
+    expect(screen.getByText("feature/pr-10")).toBeTruthy();
+    expect(screen.getByTestId("bulk-create-confirm-button")).toBeTruthy();
+  });
+
+  it("creates worktrees from remote PR branches", async () => {
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: true, remote: false },
+      { name: "origin/feature/pr-10", current: false, remote: true },
+      { name: "origin/feature/pr-20", current: false, remote: true },
+      { name: "origin/feature/pr-30", current: false, remote: true },
+    ]);
+
+    render(<BulkCreateWorktreeDialog {...prProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    await advanceTimersGradually(5000);
+
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+
+    // Should have called create with fromRemote: true
+    const createCalls = mockWorktreeCreate.mock.calls;
+    expect(createCalls.length).toBe(3);
+    expect(createCalls[0][0].fromRemote).toBe(true);
+    expect(createCalls[0][0].baseBranch).toBe("origin/feature/pr-10");
+    expect(createCalls[0][0].newBranch).toBe("feature/pr-10");
+  });
+
+  it("skips fork PRs with reason", () => {
+    const forkPR: GitHubPR = {
+      ...makePR(99),
+      isFork: true,
+    };
+    const props = { ...prProps, selectedPRs: [forkPR] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    expect(screen.getByText("Fork PR")).toBeTruthy();
+    expect(screen.getByTestId("bulk-create-confirm-button").hasAttribute("disabled")).toBe(true);
+  });
+
+  it("skips merged PRs with reason", () => {
+    const mergedPR: GitHubPR = {
+      ...makePR(99),
+      state: "MERGED",
+    };
+    const props = { ...prProps, selectedPRs: [mergedPR] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    expect(screen.getByText("Merged")).toBeTruthy();
+  });
+
+  it("skips PRs without headRefName", () => {
+    const noRefPR: GitHubPR = {
+      ...makePR(99),
+      headRefName: undefined,
+    };
+    const props = { ...prProps, selectedPRs: [noRefPR] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    expect(screen.getByText("No branch info")).toBeTruthy();
+  });
+
+  it("does not show assign-to-self toggle in PR mode", () => {
+    render(<BulkCreateWorktreeDialog {...prProps} />);
+    expect(screen.queryByText("Assign to me")).toBeNull();
+  });
+
+  it("falls back to local branch when remote not found", async () => {
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: true, remote: false },
+      { name: "feature/pr-10", current: false, remote: false },
+    ]);
+
+    const props = { ...prProps, selectedPRs: [makePR(10)] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    await advanceTimersGradually(5000);
+
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    const createCalls = mockWorktreeCreate.mock.calls;
+    expect(createCalls[0][0].useExistingBranch).toBe(true);
+    expect(createCalls[0][0].fromRemote).toBe(false);
+  });
+
+  it("fails when branch not found locally or on remote", async () => {
+    mockListBranches.mockResolvedValue([{ name: "main", current: true, remote: false }]);
+
+    const props = { ...prProps, selectedPRs: [makePR(10)] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    await advanceTimersGradually(5000);
+
+    expect(screen.getByText(/not found locally or on remote/)).toBeTruthy();
+    expect(screen.getByText(/1 failed/)).toBeTruthy();
   });
 });
