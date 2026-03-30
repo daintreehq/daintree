@@ -31,7 +31,6 @@ import {
   Settings2,
   LifeBuoy,
   Bell,
-  Mic,
   Plug,
   Search,
   ChevronRight,
@@ -60,7 +59,7 @@ const importKeyboardShortcutsTab = () => import("./KeyboardShortcutsTab");
 const importWorktreeSettingsTab = () => import("./WorktreeSettingsTab");
 const importToolbarSettingsTab = () => import("./ToolbarSettingsTab");
 const importIntegrationsTab = () => import("./IntegrationsTab");
-const importVoiceInputSettingsTab = () => import("./VoiceInputSettingsTab");
+
 const importMcpServerSettingsTab = () => import("./McpServerSettingsTab");
 const importEnvironmentSettingsTab = () => import("./EnvironmentSettingsTab");
 const importPrivacyDataTab = () => import("./PrivacyDataTab");
@@ -98,9 +97,7 @@ const LazyToolbarSettingsTab = lazy(() =>
 const LazyIntegrationsTab = lazy(() =>
   importIntegrationsTab().then((m) => ({ default: m.IntegrationsTab }))
 );
-const LazyVoiceInputSettingsTab = lazy(() =>
-  importVoiceInputSettingsTab().then((m) => ({ default: m.VoiceInputSettingsTab }))
-);
+
 const LazyMcpServerSettingsTab = lazy(() =>
   importMcpServerSettingsTab().then((m) => ({ default: m.McpServerSettingsTab }))
 );
@@ -123,7 +120,7 @@ function preloadAllSettingsTabs() {
   importWorktreeSettingsTab();
   importToolbarSettingsTab();
   importIntegrationsTab();
-  importVoiceInputSettingsTab();
+
   importMcpServerSettingsTab();
   importEnvironmentSettingsTab();
   importPrivacyDataTab();
@@ -191,7 +188,6 @@ export type SettingsTab =
   | "toolbar"
   | "notifications"
   | "integrations"
-  | "voice"
   | "mcp"
   | "environment"
   | "privacy"
@@ -874,7 +870,7 @@ export function SettingsDialog({
     toolbar: "Toolbar Customization",
     notifications: "Notifications",
     integrations: "Integrations",
-    voice: "Voice Input",
+
     mcp: "MCP Server",
     environment: "Environment Variables",
     privacy: "Privacy & Data",
@@ -900,7 +896,7 @@ export function SettingsDialog({
     toolbar: <SettingsIcon className="w-5 h-5 text-text-secondary" />,
     notifications: <Bell className="w-5 h-5 text-text-secondary" />,
     integrations: <Blocks className="w-5 h-5 text-text-secondary" />,
-    voice: <Mic className="w-5 h-5 text-text-secondary" />,
+
     mcp: <Plug className="w-5 h-5 text-text-secondary" />,
     environment: <KeyRound className="w-5 h-5 text-text-secondary" />,
     privacy: <Shield className="w-5 h-5 text-text-secondary" />,
@@ -1144,17 +1140,7 @@ export function SettingsDialog({
                       onSelect={handleNavSelect}
                     />
                   </NavGroup>
-                  <NavGroup label="Input">
-                    <NavItem
-                      tab="voice"
-                      icon={<Mic className="w-4 h-4" />}
-                      label="Voice Input"
-                      activeTab={activeTab}
-                      isSearching={isSearching}
-                      matchCount={matchCounts.voice}
-                      onSelect={handleNavSelect}
-                    />
-                  </NavGroup>
+
                   <NavGroup label="Support">
                     <NavItem
                       tab="troubleshooting"
@@ -1458,20 +1444,6 @@ export function SettingsDialog({
                   {visitedTabs.has("integrations") && (
                     <Suspense fallback={null}>
                       <LazyIntegrationsTab />
-                    </Suspense>
-                  )}
-                </div>
-
-                <div
-                  role="tabpanel"
-                  id="settings-panel-voice"
-                  aria-labelledby="settings-tab-voice"
-                  tabIndex={0}
-                  className={activeTab === "voice" ? "" : "hidden"}
-                >
-                  {visitedTabs.has("voice") && (
-                    <Suspense fallback={null}>
-                      <LazyVoiceInputSettingsTab />
                     </Suspense>
                   )}
                 </div>

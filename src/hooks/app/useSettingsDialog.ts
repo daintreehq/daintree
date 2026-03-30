@@ -27,7 +27,7 @@ export function useSettingsDialog() {
       "toolbar",
       "notifications",
       "integrations",
-      "voice",
+
       "mcp",
       "environment",
       "privacy",

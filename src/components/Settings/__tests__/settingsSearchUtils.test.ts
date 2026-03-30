@@ -260,7 +260,6 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       "toolbar",
       "notifications",
       "integrations",
-      "voice",
       "mcp",
       "environment",
       "privacy",
@@ -312,7 +311,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       toolbar: "Toolbar Customization",
       notifications: "Notifications",
       integrations: "Integrations",
-      voice: "Voice Input",
+
       mcp: "MCP Server",
       environment: "Environment Variables",
       privacy: "Privacy & Data",
@@ -346,7 +345,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       toolbar: "Toolbar Customization",
       notifications: "Notifications",
       integrations: "Integrations",
-      voice: "Voice Input",
+
       mcp: "MCP Server",
       environment: "Environment Variables",
       privacy: "Privacy & Data",
@@ -369,7 +368,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
 describe("voice tab coverage", () => {
   it("returns results for 'voice' query", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "voice");
-    expect(results.some((r) => r.tab === "voice")).toBe(true);
+    expect(results.some((r) => r.tab === "integrations")).toBe(true);
   });
 
   it("returns results for 'microphone' query", () => {
@@ -379,23 +378,23 @@ describe("voice tab coverage", () => {
 
   it("returns results for 'deepgram' query", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "deepgram");
-    expect(results.some((r) => r.tab === "voice")).toBe(true);
+    expect(results.some((r) => r.tab === "integrations")).toBe(true);
   });
 
   it("returns results for 'speech' query", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "speech");
-    expect(results.some((r) => r.tab === "voice")).toBe(true);
+    expect(results.some((r) => r.tab === "integrations")).toBe(true);
   });
 
   it("returns results for 'transcription' query", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "transcription");
-    expect(results.some((r) => r.tab === "voice")).toBe(true);
+    expect(results.some((r) => r.tab === "integrations")).toBe(true);
   });
 });
 
 describe("tab-name ranking", () => {
   it("tab-nav entry ranks first for exact tab name queries", () => {
-    const queries = ["Panel Grid", "Keyboard Shortcuts", "Voice Input", "GitHub Integration"];
+    const queries = ["Panel Grid", "Keyboard Shortcuts", "GitHub Integration"];
     for (const query of queries) {
       const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
       expect(
@@ -415,7 +414,7 @@ describe("tab-name ranking", () => {
   });
 
   it("nav group label queries return tab-nav results", () => {
-    const groups = ["general", "terminal", "integrations", "input", "support"];
+    const groups = ["general", "terminal", "integrations", "support"];
     for (const group of groups) {
       const results = filterSettings(SETTINGS_SEARCH_INDEX, group);
       expect(

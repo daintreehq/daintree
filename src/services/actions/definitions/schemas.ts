@@ -17,7 +17,7 @@ export const SettingsTabSchema = z.enum([
   "toolbar",
   "integrations",
   "notifications",
-  "voice",
+
   "mcp",
   "troubleshooting",
 ]);
