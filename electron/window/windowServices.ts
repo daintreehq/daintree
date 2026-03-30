@@ -581,7 +581,7 @@ export async function setupWindowServices(
   console.log("[MAIN] Waiting for remaining services to initialize...");
   let ptyReady = false;
   // Workspace client is always "ready" — per-project hosts start on-demand via loadProject()
-  let workspaceReady = true;
+  const workspaceReady = true;
 
   try {
     const results = await Promise.allSettled([

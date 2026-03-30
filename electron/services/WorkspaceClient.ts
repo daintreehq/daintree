@@ -167,13 +167,6 @@ export class WorkspaceClient extends EventEmitter {
       }
 
       case "worktree-removed":
-        // Clean reverse map entries for this project's removed worktrees
-        for (const [wtPath, projPath] of this.worktreePathToProject) {
-          if (projPath === entry.projectPath) {
-            // We don't know which path was removed by ID, but this is cleaned
-            // on next worktree-update cycle. The map is advisory for routing.
-          }
-        }
         this.sendToEntryWindows(entry, CHANNELS.WORKTREE_REMOVE, {
           worktreeId: event.worktreeId,
         });
