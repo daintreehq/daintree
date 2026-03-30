@@ -123,6 +123,9 @@ export interface TerminalInputState {
   ) => string | null;
   resetHistoryIndex: (terminalId: string, projectId?: string) => void;
   getHistoryLength: (terminalId: string, projectId?: string) => number;
+  voiceSubmittingPanels: Set<string>;
+  setVoiceSubmitting: (panelId: string, submitting: boolean) => void;
+  isVoiceSubmitting: (panelId: string) => boolean;
   clearTerminalState: (terminalId: string) => void;
   resetForProjectSwitch: (projectId: string, preserveTerminalIds?: Set<string>) => void;
 }
@@ -138,6 +141,22 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
   pendingDrafts: new Map(),
   pendingDraftRevision: 0,
   stashedEditorStates: new Map(),
+  voiceSubmittingPanels: new Set(),
+
+  setVoiceSubmitting: (panelId, submitting) =>
+    set((state) => {
+      if (submitting === state.voiceSubmittingPanels.has(panelId)) return state;
+      const next = new Set(state.voiceSubmittingPanels);
+      if (submitting) {
+        next.add(panelId);
+      } else {
+        next.delete(panelId);
+      }
+      return { voiceSubmittingPanels: next };
+    }),
+
+  isVoiceSubmitting: (panelId) => get().voiceSubmittingPanels.has(panelId),
+
   setHybridInputEnabled: (enabled) => set({ hybridInputEnabled: enabled }),
   setHybridInputAutoFocus: (enabled) => set({ hybridInputAutoFocus: enabled }),
   getDraftInput: (terminalId, projectId) => {
@@ -351,6 +370,13 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       const newHistory = deleteTerminalKeys(state.commandHistory, terminalId);
       const newIndex = deleteTerminalKeys(state.historyIndex, terminalId);
       const newTempDraft = deleteTerminalKeys(state.tempDraft, terminalId);
+      const newVoiceSubmitting = state.voiceSubmittingPanels.has(terminalId)
+        ? (() => {
+            const s = new Set(state.voiceSubmittingPanels);
+            s.delete(terminalId);
+            return s;
+          })()
+        : state.voiceSubmittingPanels;
 
       const changed =
         newDraftInputs !== state.draftInputs ||
@@ -358,7 +384,8 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         newStashed !== state.stashedEditorStates ||
         newHistory !== state.commandHistory ||
         newIndex !== state.historyIndex ||
-        newTempDraft !== state.tempDraft;
+        newTempDraft !== state.tempDraft ||
+        newVoiceSubmitting !== state.voiceSubmittingPanels;
 
       if (!changed) return state;
 
@@ -369,6 +396,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         commandHistory: newHistory,
         historyIndex: newIndex,
         tempDraft: newTempDraft,
+        voiceSubmittingPanels: newVoiceSubmitting,
       };
     }),
 

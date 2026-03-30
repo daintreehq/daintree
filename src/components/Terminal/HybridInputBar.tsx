@@ -38,7 +38,8 @@ import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalStore, useVoiceRecordingStore, useWorktreeDataStore } from "@/store";
 import { VoiceInputButton } from "./VoiceInputButton";
-import { Archive } from "lucide-react";
+import { Archive, Loader2 } from "lucide-react";
+import { useVoiceWaitSubmit } from "./hooks/useVoiceWaitSubmit";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
 import type { CommandContext, CommandResult } from "@shared/types/commands";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
@@ -216,6 +217,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isVoiceConnecting = activeVoicePanelId === terminalId && voiceStatus === "connecting";
     const isVoiceFinishing = activeVoicePanelId === terminalId && voiceStatus === "finishing";
     const isVoiceActiveForPanel = isVoiceRecording || isVoiceConnecting || isVoiceFinishing;
+    const isVoiceSubmitting = useTerminalInputStore(
+      useCallback((s) => s.voiceSubmittingPanels.has(terminalId), [terminalId])
+    );
 
     const commandContext = useMemo(
       (): CommandContext => ({ terminalId, cwd, projectId }),
@@ -591,6 +595,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       sendText(text);
     }, [sendText]);
 
+    const { startVoiceWaitSubmit, cancelVoiceWaitSubmit } = useVoiceWaitSubmit({
+      terminalId,
+      editorViewRef,
+      editableCompartmentRef,
+      sendFromEditor,
+    });
+
     const collapseEditor = useCallback(() => setIsExpanded(false), []);
 
     const focusEditor = useCallback(() => {
@@ -830,6 +841,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       applyAutocompleteSelection,
       handleHistoryNavigation,
       sendFromEditor,
+      startVoiceWaitSubmit,
+      cancelVoiceWaitSubmit,
       stashEditorState,
       popStashedEditorState,
       setAtContext,
@@ -868,6 +881,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               submitAfterCompositionRef.current = true;
               return true;
             }
+            if (useTerminalInputStore.getState().isVoiceSubmitting(latest.terminalId)) {
+              event.preventDefault();
+              return true;
+            }
             const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
             if (text.trim().length === 0) {
               if (latest.onSendKey) latest.onSendKey("enter");
@@ -886,6 +903,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             isComposingRef.current = false;
             if (!submitAfterCompositionRef.current) return false;
             submitAfterCompositionRef.current = false;
+            const latest = latestRef.current;
+            if (latest && useTerminalInputStore.getState().isVoiceSubmitting(latest.terminalId)) {
+              return false;
+            }
             setTimeout(sendFromEditor, 0);
             return false;
           },
@@ -1185,6 +1206,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             {isDragOverFiles && (
               <div className="absolute inset-0 z-10 flex items-center justify-center rounded-sm bg-canopy-bg/80 pointer-events-none">
                 <span className="text-xs font-medium text-canopy-accent">Drop to attach</span>
+              </div>
+            )}
+            {isVoiceSubmitting && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-sm bg-canopy-bg/80 pointer-events-none">
+                <Loader2 className="h-4 w-4 animate-spin text-canopy-accent" />
               </div>
             )}
             <button
