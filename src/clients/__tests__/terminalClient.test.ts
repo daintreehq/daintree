@@ -178,6 +178,27 @@ describe("terminalClient MessagePort data routing", () => {
     expect(handler).toBeUndefined();
   });
 
+  it("buffers early MessagePort data and flushes on onData registration", () => {
+    const port = acquirePort();
+
+    // Send data BEFORE any onData callback is registered
+    port.postMessage({ type: "data", id: "term-early", data: "chunk-1" });
+    port.postMessage({ type: "data", id: "term-early", data: "chunk-2" });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        // Now register a callback — buffered data should flush immediately
+        const received: string[] = [];
+        terminalClient.onData("term-early", (data) => {
+          received.push(typeof data === "string" ? data : new TextDecoder().decode(data));
+        });
+
+        expect(received).toEqual(["chunk-1", "chunk-2"]);
+        resolve();
+      }, 50);
+    });
+  });
+
   it("dispatches to correct terminal only", () => {
     const port = acquirePort();
     const received1: string[] = [];

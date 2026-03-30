@@ -18,6 +18,8 @@ let pendingToken: string | null = null;
 let messagePortConnected = false;
 
 const dataCallbacks = new Map<string, Set<(data: string | Uint8Array) => void>>();
+const earlyDataBuffer = new Map<string, Array<string | Uint8Array>>();
+const MAX_EARLY_BUFFER_CHUNKS = 500;
 
 function installPortDataHandler(port: MessagePort): void {
   port.addEventListener("message", (event: MessageEvent) => {
@@ -27,6 +29,15 @@ function installPortDataHandler(port: MessagePort): void {
       if (cbs) {
         for (const cb of cbs) {
           cb(msg.data);
+        }
+      } else {
+        let buf = earlyDataBuffer.get(msg.id);
+        if (!buf) {
+          buf = [];
+          earlyDataBuffer.set(msg.id, buf);
+        }
+        if (buf.length < MAX_EARLY_BUFFER_CHUNKS) {
+          buf.push(msg.data);
         }
       }
       // Send ack back over port for backpressure flow control
@@ -167,10 +178,12 @@ export const terminalClient = {
   },
 
   kill: (id: string): Promise<void> => {
+    earlyDataBuffer.delete(id);
     return window.electron.terminal.kill(id);
   },
 
   trash: (id: string): Promise<void> => {
+    earlyDataBuffer.delete(id);
     return window.electron.terminal.trash(id);
   },
 
@@ -186,6 +199,15 @@ export const terminalClient = {
       dataCallbacks.set(id, cbs);
     }
     cbs.add(callback);
+
+    // Flush any data that arrived before callbacks were registered
+    const buffered = earlyDataBuffer.get(id);
+    if (buffered) {
+      earlyDataBuffer.delete(id);
+      for (const data of buffered) {
+        callback(data);
+      }
+    }
 
     // IPC fallback: skip dispatch when MessagePort is delivering data
     const ipcCleanup = window.electron.terminal.onData(id, (data: string | Uint8Array) => {
