@@ -387,7 +387,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
               {activeWorktreeId && <RunningTaskList worktreeId={activeWorktreeId} />}
               <div
                 className={cn(
-                  "relative flex items-center rounded-[var(--radius-md)] border border-border-interactive bg-surface-input",
+                  "relative flex items-center rounded-[var(--radius-md)] border border-border-subtle bg-surface-input",
                   "transition-all focus-within:border-canopy-accent/45 focus-within:ring-1 focus-within:ring-canopy-accent/16"
                 )}
               >
