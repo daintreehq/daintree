@@ -17,7 +17,9 @@ vi.mock("@/store/agentPreferencesStore", () => ({
 
 import { registerPreferencesActions } from "../preferencesActions";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
-import type { ActionDefinition } from "@shared/types/actions";
+import type { ActionContext, ActionDefinition } from "@shared/types/actions";
+
+const stubCtx: ActionContext = {};
 
 function extractHelpLaunchAgent(): ActionDefinition {
   const registry = new Map<string, () => ActionDefinition>();
@@ -52,7 +54,7 @@ describe("help.launchAgent", () => {
     );
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: undefined });
 
-    await action.run();
+    await action.run(undefined, stubCtx);
 
     expect(window.electron.help.getFolderPath).toHaveBeenCalled();
     expect(mockDispatch).toHaveBeenCalledWith(
@@ -69,7 +71,7 @@ describe("help.launchAgent", () => {
     );
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "gemini" });
 
-    await action.run();
+    await action.run(undefined, stubCtx);
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
@@ -84,7 +86,7 @@ describe("help.launchAgent", () => {
     );
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "claude" });
 
-    await action.run({ agentId: "codex" });
+    await action.run({ agentId: "codex" }, stubCtx);
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
@@ -96,7 +98,7 @@ describe("help.launchAgent", () => {
   it("shows notification and does not dispatch when help folder is null", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
-    await action.run();
+    await action.run(undefined, stubCtx);
 
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({
