@@ -145,8 +145,8 @@ export function GitHubListItem({
       aria-selected={isSelected}
       className={cn(
         "hover:bg-muted/50 transition-colors group cursor-default select-none",
-        isActive && "bg-muted/50",
-        isSelected && "bg-accent-soft"
+        isActive && !isSelected && "bg-muted/50",
+        isSelected && "bg-muted/80 hover:bg-muted/80"
       )}
       onClick={isSelectionActive && onToggleSelect ? (e) => onToggleSelect(e) : undefined}
     >

@@ -931,7 +931,10 @@ export function SettingsDialog({
               <div className="relative flex items-center">
                 <select
                   value={activeScope}
-                  onChange={(e) => handleScopeSwitch(e.target.value as SettingsScope)}
+                  onChange={(e) => {
+                    handleScopeSwitch(e.target.value as SettingsScope);
+                    e.target.blur();
+                  }}
                   className="appearance-none text-xs py-1 pl-2 pr-6 rounded-[var(--radius-md)] bg-transparent border border-canopy-border text-text-secondary hover:text-canopy-text hover:border-canopy-text/30 focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/20 outline-none cursor-pointer transition-colors"
                 >
                   <option value="global">Global</option>
