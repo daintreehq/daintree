@@ -51,8 +51,9 @@ export type PtyHostRequest =
   | { type: "restore"; id: string }
   | { type: "set-activity-tier"; id: string; tier: PtyHostActivityTier }
   | { type: "wake-terminal"; id: string; requestId: string }
-  | { type: "set-active-project"; projectId: string | null }
-  | { type: "project-switch"; projectId: string }
+  | { type: "set-active-project"; windowId: number; projectId: string | null }
+  | { type: "project-switch"; windowId: number; projectId: string }
+  | { type: "disconnect-port"; windowId: number }
   | { type: "kill-by-project"; projectId: string; requestId: string }
   | { type: "get-project-stats"; projectId: string; requestId: string }
   | { type: "get-snapshot"; id: string; requestId: string }
@@ -81,7 +82,7 @@ export type PtyHostRequest =
       analysisBuffer: SharedArrayBuffer;
       visualSignalBuffer: SharedArrayBuffer;
     }
-  | { type: "connect-port" }
+  | { type: "connect-port"; windowId: number }
   | { type: "get-terminal-info"; id: string; requestId: string }
   | { type: "force-resume"; id: string }
   | { type: "acknowledge-data"; id: string; charCount: number }

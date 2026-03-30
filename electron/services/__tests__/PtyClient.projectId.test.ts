@@ -68,7 +68,7 @@ describe("PtyClient projectId assignment", () => {
 
   it("defaults spawn() projectId to activeProjectId when omitted", () => {
     const client = createClient();
-    client.setActiveProject("project-a");
+    client.setActiveProject(1, "project-a");
     mockChild.postMessage.mockClear();
 
     client.spawn("t1", {
@@ -88,7 +88,7 @@ describe("PtyClient projectId assignment", () => {
 
   it("does not override an explicit spawn() projectId", () => {
     const client = createClient();
-    client.setActiveProject("project-a");
+    client.setActiveProject(1, "project-a");
     mockChild.postMessage.mockClear();
 
     client.spawn("t2", {
@@ -109,7 +109,7 @@ describe("PtyClient projectId assignment", () => {
 
   it("treats blank projectId as missing and falls back to activeProjectId", () => {
     const client = createClient();
-    client.setActiveProject("project-a");
+    client.setActiveProject(1, "project-a");
     mockChild.postMessage.mockClear();
 
     client.spawn("t3", {
