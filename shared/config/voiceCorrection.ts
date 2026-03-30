@@ -99,6 +99,28 @@ const MICRO_GUARDRAIL_SUFFIX = `Return a JSON object that matches the response s
 - Use "replace" and put the full corrected <target> span (with fixes applied) in corrected_text.
 - Do not add explanation outside the JSON object.`;
 
+export const FILE_LINK_DETECTION_PROMPT = `You are a voice-command detector for a developer IDE. Your job is to find file-reference commands in a dictated utterance.
+
+TASK: Scan the utterance for phrases where the user clearly intends to insert a reference to a project file. Output a JSON array of detected file descriptions.
+
+TRIGGER PHRASES (the user must say something like):
+- "link to [description]"
+- "at file [description]"
+- "reference [description]"
+- "add file [description]"
+- "insert file [description]"
+- "open [description]"
+- "at [description] file"
+- "at [description] component"
+
+RULES:
+- Only emit a detection when the user's intent to reference a file is unambiguous.
+- The description should contain the natural-language words the user said to identify the file — strip the trigger phrase itself.
+- If no file-reference commands are found, return an empty array.
+- Never fabricate file references that the user did not request.
+
+Return a JSON array matching the response schema. Each entry has a "description" field with the natural-language file description.`;
+
 export interface CorrectionPromptContext {
   projectName?: string;
   projectPath?: string;

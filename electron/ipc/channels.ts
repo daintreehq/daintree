@@ -466,6 +466,7 @@ export const CHANNELS = {
   VOICE_INPUT_VALIDATE_CORRECTION_API_KEY: "voice-input:validate-correction-api-key",
   VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
   VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
+  VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
 
   // Onboarding channels
   ONBOARDING_GET: "onboarding:get",

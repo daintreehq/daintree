@@ -277,6 +277,35 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
+      voiceInput.onFileTokenResolved(({ description, replacement }) => {
+        logDebug(`${LOG_PREFIX} Received file token resolved`, { description, replacement });
+        const voiceState = useVoiceRecordingStore.getState();
+        const currentTarget = voiceState.activeTarget;
+        if (!currentTarget) return;
+
+        const { panelId, projectId } = currentTarget;
+        const inputStore = useTerminalInputStore.getState();
+        const draft = inputStore.getDraftInput(panelId, projectId);
+
+        // Best-effort replacement: search for the description text in the draft
+        const idx = draft.lastIndexOf(description);
+        if (idx >= 0) {
+          const before = draft.slice(0, idx);
+          const after = draft.slice(idx + description.length);
+          inputStore.setDraftInput(panelId, before + replacement + after, projectId);
+          inputStore.bumpVoiceDraftRevision();
+        } else {
+          logDebug(`${LOG_PREFIX} File token description not found in draft, appending`, {
+            description,
+            replacement,
+          });
+          inputStore.setDraftInput(panelId, draft + " " + replacement, projectId);
+          inputStore.bumpVoiceDraftRevision();
+        }
+      })
+    );
+
+    this.unsubscribers.push(
       voiceInput.onParagraphBoundary(({ rawText, correctionId }) => {
         logDebug(`${LOG_PREFIX} Received paragraph boundary from Deepgram`, {
           rawText,

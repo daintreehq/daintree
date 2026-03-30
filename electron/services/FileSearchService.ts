@@ -180,6 +180,74 @@ async function loadGitFiles(cwd: string): Promise<string[]> {
   return [...files, ...dirPaths];
 }
 
+const NL_STOP_WORDS = new Set([
+  "component",
+  "file",
+  "the",
+  "a",
+  "an",
+  "to",
+  "for",
+  "of",
+  "and",
+  "or",
+  "in",
+  "my",
+  "this",
+]);
+
+function splitCamelCase(name: string): string[] {
+  return name
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/[\s_\-./]+/)
+    .filter(Boolean)
+    .map((w) => w.toLowerCase());
+}
+
+function scorePathNaturalLanguage(tokens: string[], file: string): number | null {
+  if (tokens.length === 0) return null;
+
+  const lastSlash = file.lastIndexOf("/");
+  const basename = file.slice(lastSlash + 1);
+  const nameWithoutExt = basename.replace(/\.[^.]+$/, "");
+  const words = splitCamelCase(nameWithoutExt);
+
+  let matched = 0;
+  for (const token of tokens) {
+    if (words.some((w) => w === token || w.startsWith(token) || token.startsWith(w))) {
+      matched++;
+    }
+  }
+
+  if (matched === 0) return null;
+  return matched / tokens.length;
+}
+
+function pickTopNaturalLanguageMatches(
+  files: string[],
+  description: string,
+  limit: number
+): string[] {
+  const rawTokens = description
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t.length > 0 && !NL_STOP_WORDS.has(t));
+
+  if (rawTokens.length === 0) return [];
+
+  const scored: Array<{ file: string; score: number; pathLen: number }> = [];
+  for (const file of files) {
+    if (file.endsWith("/")) continue;
+    const score = scorePathNaturalLanguage(rawTokens, file);
+    if (score === null) continue;
+    scored.push({ file, score, pathLen: file.length });
+  }
+
+  scored.sort((a, b) => b.score - a.score || a.pathLen - b.pathLen);
+  return scored.slice(0, limit).map((s) => s.file);
+}
+
 export class FileSearchService {
   async search(payload: { cwd: string; query: string; limit?: number }): Promise<string[]> {
     try {
@@ -196,6 +264,30 @@ export class FileSearchService {
         })());
 
       return pickTopMatches(files, payload.query, limit);
+    } catch {
+      return [];
+    }
+  }
+
+  async searchNaturalLanguage(payload: {
+    cwd: string;
+    description: string;
+    limit?: number;
+  }): Promise<string[]> {
+    try {
+      const resolvedCwd = path.resolve(payload.cwd);
+      const limit = clampInt(payload.limit, 1, 100, 20);
+
+      const cached = FILE_LIST_CACHE.get(resolvedCwd);
+      const files =
+        cached?.files ??
+        (await (async () => {
+          const loaded = await this.loadFileList(resolvedCwd);
+          FILE_LIST_CACHE.set(resolvedCwd, { files: loaded });
+          return loaded;
+        })());
+
+      return pickTopNaturalLanguageMatches(files, payload.description, limit);
     } catch {
       return [];
     }

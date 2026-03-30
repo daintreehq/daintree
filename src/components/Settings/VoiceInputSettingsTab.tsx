@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ChevronUp,
   AlignLeft,
+  FileSearch,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
@@ -90,6 +91,7 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   correctionModel: "gpt-5-mini",
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
+  resolveFileLinks: true,
 };
 
 type LoadState = "loading" | "ready" | "error";
@@ -329,6 +331,17 @@ export function VoiceInputSettingsTab() {
 
               {settings.correctionApiKey && (
                 <>
+                  <SettingsSwitchCard
+                    icon={FileSearch}
+                    title="Resolve File References"
+                    subtitle={
+                      'Voice commands like "link to the input component" insert @file references'
+                    }
+                    isEnabled={settings.resolveFileLinks}
+                    onChange={() => update({ resolveFileLinks: !settings.resolveFileLinks })}
+                    ariaLabel="Toggle file reference resolution from voice commands"
+                  />
+
                   <CustomInstructionsRow
                     value={settings.correctionCustomInstructions}
                     onChange={(v) => update({ correctionCustomInstructions: v })}

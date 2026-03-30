@@ -2220,6 +2220,7 @@ const api: ElectronAPI = {
         correctionModel: "gpt-5-nano" | "gpt-5-mini";
         correctionCustomInstructions: string;
         paragraphingStrategy: "spoken-command" | "manual";
+        resolveFileLinks: boolean;
       }>
     ) => _unwrappingInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
     start: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_START),
@@ -2250,6 +2251,9 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, apiKey),
     validateCorrectionApiKey: (apiKey: string) =>
       _unwrappingInvoke(CHANNELS.VOICE_INPUT_VALIDATE_CORRECTION_API_KEY, apiKey),
+    onFileTokenResolved: (
+      callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
+    ) => _typedOn(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, callback),
   },
 
   mcpServer: {
