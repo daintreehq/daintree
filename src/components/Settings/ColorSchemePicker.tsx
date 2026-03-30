@@ -1,5 +1,4 @@
 import { useCallback } from "react";
-import { cn } from "@/lib/utils";
 import {
   BUILT_IN_SCHEMES,
   DEFAULT_SCHEME_ID,
@@ -9,6 +8,7 @@ import {
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
+import { ThemeSelector } from "./ThemeSelector";
 
 function SchemePreview({ scheme }: { scheme: TerminalColorScheme }) {
   const colors = scheme.colors;
@@ -103,31 +103,26 @@ export function ColorSchemePicker() {
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2">
-        {allSchemes.map((scheme) => {
+      <ThemeSelector<TerminalColorScheme>
+        items={allSchemes}
+        selectedId={selectedSchemeId}
+        onSelect={handleSelect}
+        renderPreview={(scheme) => (
+          <SchemePreview scheme={resolveSchemeForPreview(scheme, appThemeId)} />
+        )}
+        renderMeta={(scheme) => {
           const resolved = resolveSchemeForPreview(scheme, appThemeId);
           return (
-            <button
-              key={scheme.id}
-              onClick={() => handleSelect(scheme.id)}
-              className={cn(
-                "flex flex-col gap-1.5 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
-                selectedSchemeId === scheme.id
-                  ? "border-canopy-accent bg-canopy-accent/10"
-                  : "border-canopy-border bg-canopy-bg hover:border-canopy-text/30"
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-canopy-text truncate">{scheme.name}</span>
+              {resolved.type === "light" && (
+                <span className="text-[10px] text-canopy-text/50 shrink-0">light</span>
               )}
-            >
-              <SchemePreview scheme={resolved} />
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-canopy-text truncate">{scheme.name}</span>
-                {resolved.type === "light" && (
-                  <span className="text-[10px] text-canopy-text/50 shrink-0">light</span>
-                )}
-              </div>
-            </button>
+            </div>
           );
-        })}
-      </div>
+        }}
+        getName={(s) => s.name}
+      />
       <button
         onClick={handleImport}
         className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
