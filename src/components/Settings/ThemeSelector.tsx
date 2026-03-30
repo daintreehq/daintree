@@ -7,9 +7,7 @@ interface ThemeSelectorGroup<T> {
   items: T[];
 }
 
-export interface ThemeSelectorProps<T extends { id: string }> {
-  items?: T[];
-  groups?: ThemeSelectorGroup<T>[];
+interface ThemeSelectorCommon<T extends { id: string }> {
   selectedId: string;
   onSelect: (id: string) => void;
   renderPreview: (item: T) => ReactNode;
@@ -19,6 +17,10 @@ export interface ThemeSelectorProps<T extends { id: string }> {
   className?: string;
   id?: string;
 }
+
+export type ThemeSelectorProps<T extends { id: string }> =
+  | (ThemeSelectorCommon<T> & { items: T[]; groups?: never })
+  | (ThemeSelectorCommon<T> & { items?: never; groups: ThemeSelectorGroup<T>[] });
 
 export function ThemeSelector<T extends { id: string }>({
   items,
