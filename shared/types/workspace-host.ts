@@ -186,6 +186,8 @@ export type WorkspaceHostRequest =
       rootPath: string;
       options?: CopyTreeOptions;
     }
+  // Resource profile config update
+  | { type: "update-monitor-config"; requestId: string; config: MonitorConfig }
   // GitHub token propagation
   | { type: "update-github-token"; token: string | null }
   // File tree operations
@@ -220,6 +222,7 @@ export type WorkspaceHostEvent =
   // Project lifecycle responses
   | { type: "load-project-result"; requestId: string; success: boolean; error?: string }
   | { type: "sync-result"; requestId: string; success: boolean; error?: string }
+  | { type: "update-monitor-config-result"; requestId: string; success: boolean; error?: string }
   | { type: "project-switch-result"; requestId: string; success: boolean }
   // Worktree query responses
   | { type: "all-states"; requestId: string; states: WorktreeSnapshot[] }

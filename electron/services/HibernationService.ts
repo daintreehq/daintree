@@ -19,7 +19,7 @@ const DEFAULT_CONFIG: HibernationConfig = {
   inactiveThresholdHours: 24,
 };
 
-const MEMORY_PRESSURE_INACTIVE_MS = 30 * 60 * 1000;
+const DEFAULT_MEMORY_PRESSURE_INACTIVE_MS = 30 * 60 * 1000;
 const GIT_SENTINEL_NAMES = new Set([
   "index.lock",
   "MERGE_HEAD",
@@ -58,6 +58,11 @@ export class HibernationService {
   private initialCheckTimer: NodeJS.Timeout | null = null;
   private readonly CHECK_INTERVAL_MS = 60 * 60 * 1000; // Every hour
   private readonly hibernationCallbacks: Array<(projectId: string) => void | Promise<void>> = [];
+  private memoryPressureInactiveMs = DEFAULT_MEMORY_PRESSURE_INACTIVE_MS;
+
+  setMemoryPressureThresholdMs(ms: number): void {
+    this.memoryPressureInactiveMs = ms;
+  }
 
   onProjectHibernated(callback: (projectId: string) => void | Promise<void>): () => void {
     this.hibernationCallbacks.push(callback);
@@ -280,7 +285,7 @@ export class HibernationService {
       if (!project.lastOpened) continue;
 
       const inactiveDuration = now - project.lastOpened;
-      if (inactiveDuration < MEMORY_PRESSURE_INACTIVE_MS) continue;
+      if (inactiveDuration < this.memoryPressureInactiveMs) continue;
 
       const projectTerminals = allTerminals.filter((t) => t.projectId === project.id);
       if (projectTerminals.length === 0) continue;
@@ -290,7 +295,7 @@ export class HibernationService {
       );
       if (hasActiveAgent) continue;
 
-      if (await this.hasActiveGitOperation(project.path, MEMORY_PRESSURE_INACTIVE_MS)) {
+      if (await this.hasActiveGitOperation(project.path, this.memoryPressureInactiveMs)) {
         logInfo("memory-pressure-hibernate-skip-git-operation", {
           project: project.name,
           projectId: project.id,

@@ -9,6 +9,7 @@
 
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
 import type { TerminalType, TerminalKind, TerminalFlowStatus } from "./panel.js";
+import type { ResourceProfile } from "./resourceProfile.js";
 
 export type { TerminalFlowStatus };
 
@@ -93,7 +94,8 @@ export type PtyHostRequest =
   | { type: "graceful-kill-by-project"; projectId: string; requestId: string }
   | { type: "trim-state"; targetLines: number }
   | { type: "set-resource-monitoring"; enabled: boolean }
-  | { type: "set-session-persist-suppressed"; suppressed: boolean };
+  | { type: "set-session-persist-suppressed"; suppressed: boolean }
+  | { type: "set-resource-profile"; profile: ResourceProfile };
 
 /**
  * Terminal snapshot data sent from Host → Main for state queries.

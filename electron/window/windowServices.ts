@@ -65,6 +65,7 @@ import {
   startProcessMemoryMonitor,
 } from "../utils/performance.js";
 import { startAppMetricsMonitor } from "../services/ProcessMemoryMonitor.js";
+import { ResourceProfileService } from "../services/ResourceProfileService.js";
 import { startDiskSpaceMonitor, getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
 import { logInfo } from "../utils/logger.js";
@@ -87,6 +88,7 @@ let stopEventLoopLagMonitor: (() => void) | null = null;
 let stopProcessMemoryMonitor: (() => void) | null = null;
 let stopAppMetricsMonitor: (() => void) | null = null;
 let stopDiskSpaceMonitor: (() => void) | null = null;
+let resourceProfileService: ResourceProfileService | null = null;
 
 // Guard: IPC handlers are globally scoped (ipcMain.handle throws on re-registration)
 let ipcHandlersRegistered = false;
@@ -866,6 +868,16 @@ export async function setupWindowServices(
     });
   }
 
+  // Resource Profile Service
+  if (!resourceProfileService) {
+    resourceProfileService = new ResourceProfileService({
+      getPtyClient: () => ptyClient,
+      getWorkspaceClient: () => workspaceClient,
+      getHibernationService: () => getHibernationService(),
+    });
+    resourceProfileService.start();
+  }
+
   // ── Last-window-close: dispose global services ──
   // Per-window cleanup is handled by ctx.cleanup (run by WindowRegistry.unregister).
   // This handler only disposes global singletons when the last window closes.
@@ -891,6 +903,10 @@ export async function setupWindowServices(
     if (stopDiskSpaceMonitor) {
       stopDiskSpaceMonitor();
       stopDiskSpaceMonitor = null;
+    }
+    if (resourceProfileService) {
+      resourceProfileService.stop();
+      resourceProfileService = null;
     }
 
     if (workspaceClient) workspaceClient.dispose();

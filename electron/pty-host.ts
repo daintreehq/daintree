@@ -15,6 +15,7 @@ import { PtyManager } from "./services/PtyManager.js";
 import { PtyPool, getPtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
 import { TerminalResourceMonitor } from "./services/pty/TerminalResourceMonitor.js";
+import { RESOURCE_PROFILE_CONFIGS, type ResourceProfile } from "../shared/types/resourceProfile.js";
 import { events } from "./services/events.js";
 import { SharedRingBuffer, PacketFramer } from "../shared/utils/SharedRingBuffer.js";
 import { selectShard } from "../shared/utils/shardSelection.js";
@@ -1347,6 +1348,17 @@ port.on("message", async (rawMsg: any) => {
       case "set-resource-monitoring":
         terminalResourceMonitor.setEnabled(msg.enabled === true);
         break;
+
+      case "set-resource-profile": {
+        const profileConfig = RESOURCE_PROFILE_CONFIGS[msg.profile as ResourceProfile];
+        if (profileConfig) {
+          processTreeCache.setPollInterval(profileConfig.processTreePollInterval);
+          console.log(
+            `[PtyHost] Resource profile set to: ${msg.profile} (processTree poll: ${profileConfig.processTreePollInterval}ms)`
+          );
+        }
+        break;
+      }
 
       case "dispose":
         cleanup();

@@ -50,6 +50,7 @@ import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId } from "../../shared/types/agent.js";
 import type { TerminalType, TerminalKind } from "../../shared/types/panel.js";
+import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -911,6 +912,10 @@ export class PtyClient extends EventEmitter {
   setResourceMonitoring(enabled: boolean): void {
     this.resourceMonitoringEnabled = enabled;
     this.send({ type: "set-resource-monitoring", enabled });
+  }
+
+  setResourceProfile(profile: ResourceProfile): void {
+    this.send({ type: "set-resource-profile", profile });
   }
 
   /**

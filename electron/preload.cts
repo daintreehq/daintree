@@ -67,6 +67,7 @@ import type {
   PortalShowNewTabMenuPayload,
 } from "../shared/types/portal.js";
 import type { ShowContextMenuPayload } from "../shared/types/menu.js";
+import type { ResourceProfilePayload } from "../shared/types/resourceProfile.js";
 
 export type { ElectronAPI };
 
@@ -711,6 +712,8 @@ const CHANNELS = {
   PLUGIN_INVOKE: "plugin:invoke",
   PLUGIN_TOOLBAR_BUTTONS: "plugin:toolbar-buttons",
   PLUGIN_MENU_ITEMS: "plugin:menu-items",
+
+  RESOURCE_PROFILE_CHANGED: "resource:profile-changed",
 } as const;
 
 const api: ElectronAPI = {
@@ -1083,6 +1086,13 @@ const api: ElectronAPI = {
       ) => callback(data);
       ipcRenderer.on(CHANNELS.SYSTEM_WAKE, handler);
       return () => ipcRenderer.removeListener(CHANNELS.SYSTEM_WAKE, handler);
+    },
+
+    onResourceProfileChanged: (callback: (payload: ResourceProfilePayload) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: ResourceProfilePayload) =>
+        callback(payload);
+      ipcRenderer.on(CHANNELS.RESOURCE_PROFILE_CHANGED, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.RESOURCE_PROFILE_CHANGED, handler);
     },
   },
 

@@ -534,6 +534,8 @@ export const CHANNELS = {
   PLUGIN_INVOKE: "plugin:invoke",
   PLUGIN_TOOLBAR_BUTTONS: "plugin:toolbar-buttons",
   PLUGIN_MENU_ITEMS: "plugin:menu-items",
+
+  RESOURCE_PROFILE_CHANGED: "resource:profile-changed",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

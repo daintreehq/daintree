@@ -260,6 +260,24 @@ port.on("message", async (rawMsg: any) => {
         break;
       }
 
+      case "update-monitor-config":
+        try {
+          workspaceService.updateMonitorConfig(request.config);
+          sendEvent({
+            type: "update-monitor-config-result",
+            requestId: request.requestId,
+            success: true,
+          });
+        } catch (error) {
+          sendEvent({
+            type: "update-monitor-config-result",
+            requestId: request.requestId,
+            success: false,
+            error: (error as Error).message,
+          });
+        }
+        break;
+
       case "update-github-token":
         workspaceService.updateGitHubToken(request.token);
         break;

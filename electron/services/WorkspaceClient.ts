@@ -798,6 +798,11 @@ export class WorkspaceClient extends EventEmitter {
     this.send({ type: "set-polling-enabled", enabled });
   }
 
+  updateMonitorConfig(config: MonitorConfig): void {
+    const requestId = this.generateRequestId();
+    this.send({ type: "update-monitor-config", requestId, config });
+  }
+
   async onProjectSwitch(): Promise<void> {
     this.currentProjectScopeId = null;
     this.currentRootPath = null;

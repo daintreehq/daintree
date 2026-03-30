@@ -14,6 +14,7 @@ import type { OnboardingState, ChecklistState, ChecklistItemId } from "./maps.js
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { VoiceInputStatus } from "../voice.js";
 export type { VoiceInputStatus };
+import type { ResourceProfilePayload } from "../resourceProfile.js";
 import type {
   CreateWorktreeOptions,
   BranchInfo,
@@ -310,6 +311,7 @@ export interface ElectronAPI {
     getHeapStats(): Promise<import("./system.js").HeapStats>;
     getDiagnosticsInfo(): Promise<import("./system.js").DiagnosticsInfo>;
     onWake(callback: (data: SystemWakePayload) => void): () => void;
+    onResourceProfileChanged(callback: (payload: ResourceProfilePayload) => void): () => void;
   };
   app: {
     getState(): Promise<AppState>;

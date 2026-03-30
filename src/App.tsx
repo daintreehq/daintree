@@ -76,6 +76,7 @@ import {
   useErrorRetry,
   useActiveWorktreeSync,
 } from "./hooks/app";
+import { useResourceProfile } from "./hooks/useResourceProfile";
 import { AppLayout } from "./components/Layout";
 import { ContentGrid } from "./components/Terminal";
 import { PanelTransitionOverlay } from "./components/Panel";
@@ -1196,6 +1197,7 @@ function App() {
   useHibernationNotifications();
   useDiskSpaceWarnings();
   useUnloadCleanup();
+  useResourceProfile();
   useEffect(() => removeStartupSkeleton(), []);
 
   useEffect(() => {

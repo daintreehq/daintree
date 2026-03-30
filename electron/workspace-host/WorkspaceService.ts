@@ -1042,6 +1042,27 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
   }
 
+  updateMonitorConfig(config: MonitorConfig): void {
+    if (config.pollIntervalActive !== undefined) {
+      this.pollIntervalActive = config.pollIntervalActive;
+    }
+    if (config.pollIntervalBackground !== undefined) {
+      this.pollIntervalBackground = config.pollIntervalBackground;
+    }
+    if (config.adaptiveBackoff !== undefined) {
+      this.adaptiveBackoff = config.adaptiveBackoff;
+    }
+    if (config.pollIntervalMax !== undefined) {
+      this.pollIntervalMax = config.pollIntervalMax;
+    }
+
+    for (const [worktreeId, monitor] of this.monitors) {
+      const isActive = worktreeId === this.activeWorktreeId;
+      const baseInterval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
+      monitor.updateConfig({ basePollingInterval: baseInterval });
+    }
+  }
+
   setPollingEnabled(enabled: boolean): void {
     if (this.pollingEnabled === enabled) return;
 
