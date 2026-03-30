@@ -636,6 +636,19 @@ export class WorkspaceClient extends EventEmitter {
     return result.branches;
   }
 
+  async fetchPRBranch(rootPath: string, prNumber: number, headRefName: string): Promise<void> {
+    const host = this.resolveHostForPath(rootPath);
+    if (!host) throw new Error("No workspace host for project");
+    const requestId = host.generateRequestId();
+    await host.sendWithResponse({
+      type: "fetch-pr-branch",
+      requestId,
+      rootPath,
+      prNumber,
+      headRefName,
+    });
+  }
+
   async createWorktree(rootPath: string, options: CreateWorktreeOptions): Promise<string> {
     const host = this.resolveHostForPath(rootPath);
     if (!host) throw new Error("No workspace host for project");

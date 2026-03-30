@@ -407,10 +407,10 @@ describe("GitHubListItem", () => {
     expect(screen.queryByLabelText("Create worktree")).toBeNull();
   });
 
-  it("does not show create worktree for fork PRs", () => {
+  it("shows create worktree for fork PRs", () => {
     const forkPR: GitHubPR = { ...basePR, isFork: true };
     render(<GitHubListItem item={forkPR} type="pr" onCreateWorktree={vi.fn()} />);
-    expect(screen.queryByLabelText("Create worktree")).toBeNull();
+    expect(screen.getByLabelText("Create worktree")).toBeTruthy();
   });
 
   it("shows comment count for issues with commentCount >= 1", () => {

@@ -301,13 +301,39 @@ export function NewWorktreeDialog({
             setFromRemote(false);
             setPrBranchResolved(true);
           } else {
-            setPrBranchResolved(false);
-            const mainBranch =
-              branchList.find((b) => b.name === "main") ||
-              branchList.find((b) => b.name === "master");
-            const fallback = mainBranch?.name || branchList[0]?.name || "";
-            setBaseBranch(fallback);
-            setFromRemote(false);
+            // Branch not found locally — try fetching from GitHub's PR refs
+            try {
+              await worktreeClient.fetchPRBranch(rootPath, initialPR.number, initialPR.headRefName);
+              if (!isCurrent) return;
+              // Re-list branches after fetch
+              const updatedBranches = await worktreeClient.listBranches(rootPath);
+              if (!isCurrent) return;
+              setBranches(updatedBranches);
+              const fetchedLocal = updatedBranches.find(
+                (b) => b.name === initialPR.headRefName && !b.remote
+              );
+              if (fetchedLocal) {
+                setBaseBranch(fetchedLocal.name);
+                setFromRemote(false);
+                setPrBranchResolved(true);
+              } else {
+                setPrBranchResolved(false);
+                const mainBranch =
+                  updatedBranches.find((b) => b.name === "main") ||
+                  updatedBranches.find((b) => b.name === "master");
+                setBaseBranch(mainBranch?.name || updatedBranches[0]?.name || "");
+                setFromRemote(false);
+              }
+            } catch {
+              if (!isCurrent) return;
+              setPrBranchResolved(false);
+              const mainBranch =
+                branchList.find((b) => b.name === "main") ||
+                branchList.find((b) => b.name === "master");
+              const fallback = mainBranch?.name || branchList[0]?.name || "";
+              setBaseBranch(fallback);
+              setFromRemote(false);
+            }
           }
         } else {
           const currentBranch = branchList.find((b) => b.current);
@@ -1160,9 +1186,11 @@ export function NewWorktreeDialog({
                 <div className="flex items-start gap-2 p-3 bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)]">
                   <AlertCircle className="w-4 h-4 text-status-warning mt-0.5 flex-shrink-0" />
                   <p className="text-sm text-status-warning">
-                    Branch <span className="font-mono">{initialPR.headRefName ?? "unknown"}</span>{" "}
-                    has not been fetched from the remote yet. Run{" "}
-                    <span className="font-mono">git fetch origin</span> and reopen this dialog.
+                    Could not fetch branch{" "}
+                    <span className="font-mono">{initialPR.headRefName ?? "unknown"}</span> from the
+                    remote. The worktree will be created from the fallback branch instead. You can
+                    try running <span className="font-mono">git fetch origin</span> manually and
+                    reopening this dialog.
                   </p>
                 </div>
               )}

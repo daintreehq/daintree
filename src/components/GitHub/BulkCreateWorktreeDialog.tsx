@@ -301,16 +301,6 @@ function planPRWorktrees(prs: GitHubPR[], existingPRNumbers: Set<number>): Plann
         skipReason: pr.state === "MERGED" ? "Merged" : "Closed",
       };
     }
-    if (pr.isFork) {
-      return {
-        item: pr,
-        mode: "pr",
-        branchName: "",
-        prefix: "",
-        skipped: true,
-        skipReason: "Fork PR",
-      };
-    }
     if (!pr.headRefName) {
       return {
         item: pr,
@@ -558,9 +548,26 @@ export function BulkCreateWorktreeDialog({
                     createUseExisting = true;
                     createBaseBranch = localBranch.name;
                   } else {
-                    throw new Error(
-                      `Branch "${planned.headRefName}" not found locally or on remote. Try fetching first.`
+                    // Branch not found — fetch from GitHub's PR refs
+                    const prItem = planned.item as GitHubPR;
+                    await worktreeClient.fetchPRBranch(
+                      rootPath,
+                      prItem.number,
+                      planned.headRefName
                     );
+                    // Re-check after fetch
+                    const updatedBranches = await worktreeClient.listBranches(rootPath);
+                    const fetchedLocal = updatedBranches.find(
+                      (b) => b.name === planned.headRefName && !b.remote
+                    );
+                    if (fetchedLocal) {
+                      createUseExisting = true;
+                      createBaseBranch = fetchedLocal.name;
+                    } else {
+                      throw new Error(
+                        `Branch "${planned.headRefName}" could not be fetched from the remote.`
+                      );
+                    }
                   }
 
                   const path = await worktreeClient.getDefaultPath(rootPath, planned.headRefName);

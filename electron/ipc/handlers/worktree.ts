@@ -121,6 +121,22 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   ipcMain.handle(CHANNELS.WORKTREE_LIST_BRANCHES, handleWorktreeListBranches);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_LIST_BRANCHES));
 
+  const handleWorktreeFetchPRBranch = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { rootPath: string; prNumber: number; headRefName: string }
+  ) => {
+    if (!deps.worktreeService) {
+      throw new Error("Workspace client not initialized");
+    }
+    return await deps.worktreeService.fetchPRBranch(
+      payload.rootPath,
+      payload.prNumber,
+      payload.headRefName
+    );
+  };
+  ipcMain.handle(CHANNELS.WORKTREE_FETCH_PR_BRANCH, handleWorktreeFetchPRBranch);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_FETCH_PR_BRANCH));
+
   const handleWorktreeGetRecentBranches = async (
     _event: Electron.IpcMainInvokeEvent,
     payload: { rootPath: string }

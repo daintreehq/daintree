@@ -494,10 +494,7 @@ export function GitHubResourceList({
               }
               if (matchedWt) {
                 handleSwitchToWorktree(matchedWt.id);
-              } else if (
-                activeItem.state === "OPEN" &&
-                !(type === "pr" && "isFork" in activeItem && activeItem.isFork)
-              ) {
+              } else if (activeItem.state === "OPEN") {
                 handleCreateWorktree(activeItem);
               }
             }

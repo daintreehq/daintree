@@ -741,6 +741,9 @@ const api: ElectronAPI = {
     listBranches: (rootPath: string) =>
       _unwrappingInvoke(CHANNELS.WORKTREE_LIST_BRANCHES, { rootPath }),
 
+    fetchPRBranch: (rootPath: string, prNumber: number, headRefName: string) =>
+      _unwrappingInvoke(CHANNELS.WORKTREE_FETCH_PR_BRANCH, { rootPath, prNumber, headRefName }),
+
     getRecentBranches: (rootPath: string) =>
       _unwrappingInvoke(CHANNELS.WORKTREE_GET_RECENT_BRANCHES, { rootPath }),
 

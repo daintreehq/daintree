@@ -917,6 +917,26 @@ export class WorkspaceService {
     }
   }
 
+  async fetchPRBranch(
+    requestId: string,
+    rootPath: string,
+    prNumber: number,
+    headRefName: string
+  ): Promise<void> {
+    try {
+      const git = createHardenedGit(rootPath);
+      await git.raw(["fetch", "origin", `pull/${prNumber}/head:${headRefName}`]);
+      this.sendEvent({ type: "fetch-pr-branch-result", requestId, success: true });
+    } catch (error) {
+      this.sendEvent({
+        type: "fetch-pr-branch-result",
+        requestId,
+        success: false,
+        error: (error as Error).message,
+      });
+    }
+  }
+
   async getRecentBranches(requestId: string, rootPath: string): Promise<void> {
     try {
       const git = createHardenedGit(rootPath);

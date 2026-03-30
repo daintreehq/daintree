@@ -168,6 +168,7 @@ export interface ElectronAPI {
     setActive(worktreeId: string): Promise<void>;
     create(options: CreateWorktreeOptions, rootPath: string): Promise<string>;
     listBranches(rootPath: string): Promise<BranchInfo[]>;
+    fetchPRBranch(rootPath: string, prNumber: number, headRefName: string): Promise<void>;
     getRecentBranches(rootPath: string): Promise<string[]>;
     getDefaultPath(rootPath: string, branchName: string): Promise<string>;
     getAvailableBranch(rootPath: string, branchName: string): Promise<string>;

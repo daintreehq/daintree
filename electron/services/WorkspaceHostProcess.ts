@@ -436,6 +436,7 @@ export class WorkspaceHostProcess extends EventEmitter {
       case "reset-pr-state-result":
       case "create-worktree-result":
       case "delete-worktree-result":
+      case "fetch-pr-branch-result":
         this.handleRequestResult(event);
         break;
 
