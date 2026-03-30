@@ -1,7 +1,7 @@
-import { ipcMain, webContents } from "electron";
+import { BrowserWindow, ipcMain, webContents } from "electron";
 import { CHANNELS } from "../channels.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
-import { broadcastToRenderer } from "../utils.js";
+import { broadcastToRenderer, sendToRenderer } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   CdpRemoteArg,
@@ -17,6 +17,7 @@ interface CdpSession {
   navigationGeneration: number;
   groupDepthByPane: Map<string, number>;
   objectIdsByPane: Map<string, Set<string>>;
+  ownerWindow: BrowserWindow | null;
   messageListener: ((event: Electron.Event, method: string, params: unknown) => void) | null;
   detachListener: ((event: Electron.Event, reason: string) => void) | null;
 }
@@ -33,6 +34,7 @@ function getOrCreateSession(wcId: number): CdpSession {
       navigationGeneration: 0,
       groupDepthByPane: new Map(),
       objectIdsByPane: new Map(),
+      ownerWindow: null,
       messageListener: null,
       detachListener: null,
     };
@@ -263,6 +265,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     session.paneIds.add(paneId);
     session.groupDepthByPane.set(paneId, 0);
 
+    if (session.ownerWindow === null) {
+      const hostWc = wc.hostWebContents;
+      session.ownerWindow = hostWc ? BrowserWindow.fromWebContents(hostWc) : null;
+    }
+
     if (!session.objectIdsByPane.has(paneId)) {
       session.objectIdsByPane.set(paneId, new Set());
     }
@@ -286,10 +293,19 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
             for (const pid of session.paneIds) {
               session.groupDepthByPane.set(pid, 0);
               session.objectIdsByPane.get(pid)?.clear();
-              broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, {
+              const payload = {
                 paneId: pid,
                 navigationGeneration: session.navigationGeneration,
-              });
+              };
+              if (session.ownerWindow && !session.ownerWindow.isDestroyed()) {
+                sendToRenderer(
+                  session.ownerWindow,
+                  CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED,
+                  payload
+                );
+              } else {
+                broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, payload);
+              }
             }
           }
         };
@@ -307,10 +323,19 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
           for (const pid of session.paneIds) {
             session.groupDepthByPane.set(pid, 0);
             session.objectIdsByPane.get(pid)?.clear();
-            broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, {
+            const payload = {
               paneId: pid,
               navigationGeneration: session.navigationGeneration,
-            });
+            };
+            if (session.ownerWindow && !session.ownerWindow.isDestroyed()) {
+              sendToRenderer(
+                session.ownerWindow,
+                CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED,
+                payload
+              );
+            } else {
+              broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, payload);
+            }
           }
         };
         session.detachListener = detachListener;
@@ -372,7 +397,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         navigationGeneration: session.navigationGeneration,
       };
 
-      broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
+      if (session.ownerWindow && !session.ownerWindow.isDestroyed()) {
+        sendToRenderer(session.ownerWindow, CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
+      } else {
+        broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
+      }
 
       // Adjust depth AFTER emitting the group header row
       if (cdpType === "startGroup" || cdpType === "startGroupCollapsed") {

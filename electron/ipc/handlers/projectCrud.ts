@@ -1,10 +1,10 @@
-import { ipcMain, dialog, BrowserWindow } from "electron";
+import { BrowserWindow, ipcMain, dialog } from "electron";
 import path from "path";
 import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { runCommandDetector } from "../../services/RunCommandDetector.js";
 import { ProjectSwitchService } from "../../services/ProjectSwitchService.js";
-import { broadcastToRenderer } from "../utils.js";
+import { broadcastToRenderer, sendToRenderer } from "../utils.js";
 import { randomUUID } from "crypto";
 import type { HandlerDependencies } from "../types.js";
 import type { Project, ProjectSettings } from "../../types/index.js";
@@ -282,12 +282,13 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
   ipcMain.handle(CHANNELS.PROJECT_CLOSE, handleProjectClose);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CLOSE));
 
-  const handleProjectReopen = async (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
+  const handleProjectReopen = async (event: Electron.IpcMainInvokeEvent, projectId: string) => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
 
     console.log(`[IPC] project:reopen: ${projectId}`);
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
 
     const project = projectStore.getProjectById(projectId);
     if (!project) {
@@ -299,10 +300,12 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
         `[IPC] project:reopen: Project ${projectId} already active, emitting switch event`
       );
       const switchId = randomUUID();
-      broadcastToRenderer(CHANNELS.PROJECT_ON_SWITCH, {
-        project,
-        switchId,
-      });
+      const switchPayload = { project, switchId };
+      if (senderWindow && !senderWindow.isDestroyed()) {
+        sendToRenderer(senderWindow, CHANNELS.PROJECT_ON_SWITCH, switchPayload);
+      } else {
+        broadcastToRenderer(CHANNELS.PROJECT_ON_SWITCH, switchPayload);
+      }
       return project;
     }
 
@@ -497,12 +500,14 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_INIT_GIT));
 
   const handleProjectInitGitGuided = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     options: GitInitOptions
   ): Promise<GitInitResult> => {
     if (!options || typeof options !== "object") {
       throw new Error("Invalid options object");
     }
+
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
 
     const {
       directoryPath,
@@ -527,14 +532,18 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       message: string,
       error?: string
     ) => {
-      const event: GitInitProgressEvent = {
+      const progressEvent: GitInitProgressEvent = {
         step,
         status,
         message,
         error,
         timestamp: Date.now(),
       };
-      broadcastToRenderer(CHANNELS.PROJECT_INIT_GIT_PROGRESS, event);
+      if (senderWindow && !senderWindow.isDestroyed()) {
+        sendToRenderer(senderWindow, CHANNELS.PROJECT_INIT_GIT_PROGRESS, progressEvent);
+      } else {
+        broadcastToRenderer(CHANNELS.PROJECT_INIT_GIT_PROGRESS, progressEvent);
+      }
     };
 
     try {
@@ -706,12 +715,14 @@ Thumbs.db
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_INIT_GIT_GUIDED));
 
   const handleProjectCloneRepo = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     options: CloneRepoOptions
   ): Promise<CloneRepoResult> => {
     if (!options || typeof options !== "object") {
       throw new Error("Invalid options object");
     }
+
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
 
     const { url, parentPath, folderName } = options;
 
@@ -772,13 +783,17 @@ Thumbs.db
     }
 
     const emitProgress = (stage: string, progress: number, message: string) => {
-      const event: CloneRepoProgressEvent = {
+      const progressEvent: CloneRepoProgressEvent = {
         stage,
         progress,
         message,
         timestamp: Date.now(),
       };
-      broadcastToRenderer(CHANNELS.PROJECT_CLONE_PROGRESS, event);
+      if (senderWindow && !senderWindow.isDestroyed()) {
+        sendToRenderer(senderWindow, CHANNELS.PROJECT_CLONE_PROGRESS, progressEvent);
+      } else {
+        broadcastToRenderer(CHANNELS.PROJECT_CLONE_PROGRESS, progressEvent);
+      }
     };
 
     try {

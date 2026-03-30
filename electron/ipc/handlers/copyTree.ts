@@ -1,9 +1,9 @@
-import { ipcMain, clipboard } from "electron";
+import { BrowserWindow, ipcMain, clipboard } from "electron";
 import crypto from "crypto";
 import path from "path";
 import { pathToFileURL } from "url";
 import { CHANNELS } from "../channels.js";
-import { broadcastToRenderer, checkRateLimit } from "../utils.js";
+import { broadcastToRenderer, checkRateLimit, sendToRenderer } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   CopyTreeGeneratePayload,
@@ -150,11 +150,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   const handlers: Array<() => void> = [];
 
   const handleCopyTreeGenerate = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: CopyTreeGeneratePayload
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_GENERATE, 5, 10_000);
     const traceId = crypto.randomUUID();
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(`[${traceId}] CopyTree generate started for worktree ${requestedWorktreeId}`);
 
@@ -190,7 +191,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     const onProgress = (progress: CopyTreeProgress) => {
-      broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
+      const progressPayload = { ...progress, traceId };
+      if (senderWindow && !senderWindow.isDestroyed()) {
+        sendToRenderer(senderWindow, CHANNELS.COPYTREE_PROGRESS, progressPayload);
+      } else {
+        broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, progressPayload);
+      }
     };
 
     // Merge project settings with runtime options
@@ -203,11 +209,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_GENERATE));
 
   const handleCopyTreeGenerateAndCopyFile = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: CopyTreeGenerateAndCopyFilePayload
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, 5, 10_000);
     const traceId = crypto.randomUUID();
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(
       `[${traceId}] CopyTree generate-and-copy-file started for worktree ${requestedWorktreeId}`
@@ -248,7 +255,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     const onProgress = (progress: CopyTreeProgress) => {
-      broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
+      const progressPayload = { ...progress, traceId };
+      if (senderWindow && !senderWindow.isDestroyed()) {
+        sendToRenderer(senderWindow, CHANNELS.COPYTREE_PROGRESS, progressPayload);
+      } else {
+        broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, progressPayload);
+      }
     };
 
     // Merge project settings with runtime options
@@ -328,11 +340,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE));
 
   const handleCopyTreeInject = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: CopyTreeInjectPayload
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_INJECT, 5, 10_000);
     const traceId = crypto.randomUUID();
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
     const requestedTerminalId = getStringField(payload, "terminalId") ?? "unknown";
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(
@@ -391,7 +404,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       }
 
       const onProgress = (progress: CopyTreeProgress) => {
-        broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
+        const progressPayload = { ...progress, traceId };
+        if (senderWindow && !senderWindow.isDestroyed()) {
+          sendToRenderer(senderWindow, CHANNELS.COPYTREE_PROGRESS, progressPayload);
+        } else {
+          broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, progressPayload);
+        }
       };
 
       // Merge project settings with runtime options
