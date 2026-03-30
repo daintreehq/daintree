@@ -14,6 +14,11 @@
   box-shadow: var(--_shadow);
 }
 
+.pulse-card-header {
+  background: var(--pulse-card-header-bg);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
 .pulse-range {
   background: var(--pulse-range-bg, var(--theme-surface-canvas));
 }
