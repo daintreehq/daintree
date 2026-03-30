@@ -1,5 +1,5 @@
 import { CHANNELS } from "../channels.js";
-import { typedHandle, typedSend } from "../utils.js";
+import { typedHandle, typedBroadcast } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import { getWorkflowEngine } from "../../services/WorkflowEngine.js";
 import { workflowLoader } from "../../services/WorkflowLoader.js";
@@ -85,27 +85,27 @@ export function registerWorkflowHandlers(deps: HandlerDependencies): () => void 
 
   if (deps.events) {
     const unsubStarted = deps.events.on("workflow:started", (payload) => {
-      typedSend(deps.mainWindow, CHANNELS.WORKFLOW_STARTED, payload);
+      typedBroadcast(CHANNELS.WORKFLOW_STARTED, payload);
     });
     handlers.push(unsubStarted);
 
     const unsubCompleted = deps.events.on("workflow:completed", (payload) => {
-      typedSend(deps.mainWindow, CHANNELS.WORKFLOW_COMPLETED, payload);
+      typedBroadcast(CHANNELS.WORKFLOW_COMPLETED, payload);
     });
     handlers.push(unsubCompleted);
 
     const unsubFailed = deps.events.on("workflow:failed", (payload) => {
-      typedSend(deps.mainWindow, CHANNELS.WORKFLOW_FAILED, payload);
+      typedBroadcast(CHANNELS.WORKFLOW_FAILED, payload);
     });
     handlers.push(unsubFailed);
 
     const unsubApprovalRequested = deps.events.on("workflow:approval-requested", (payload) => {
-      typedSend(deps.mainWindow, CHANNELS.WORKFLOW_APPROVAL_REQUESTED, payload);
+      typedBroadcast(CHANNELS.WORKFLOW_APPROVAL_REQUESTED, payload);
     });
     handlers.push(unsubApprovalRequested);
 
     const unsubApprovalCleared = deps.events.on("workflow:approval-cleared", (payload) => {
-      typedSend(deps.mainWindow, CHANNELS.WORKFLOW_APPROVAL_CLEARED, payload);
+      typedBroadcast(CHANNELS.WORKFLOW_APPROVAL_CLEARED, payload);
     });
     handlers.push(unsubApprovalCleared);
   }

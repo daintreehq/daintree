@@ -7,7 +7,7 @@ import { taskQueueService } from "./TaskQueueService.js";
 import { taskWorktreeService } from "./TaskWorktreeService.js";
 import { contextInjectionTracker } from "./ContextInjectionTracker.js";
 import { CHANNELS } from "../ipc/channels.js";
-import { sendToRenderer } from "../ipc/utils.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
 import { randomUUID } from "crypto";
 import { store } from "../store.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
@@ -92,7 +92,7 @@ export class ProjectSwitchService {
       ]);
 
       const switchId = randomUUID();
-      sendToRenderer(this.deps.mainWindow, CHANNELS.PROJECT_ON_SWITCH, {
+      broadcastToRenderer(CHANNELS.PROJECT_ON_SWITCH, {
         project: updatedProject,
         switchId,
         ...(worktreeLoadError ? { worktreeLoadError } : {}),

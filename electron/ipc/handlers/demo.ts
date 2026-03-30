@@ -35,6 +35,10 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     return () => {};
   }
 
+  function getMainWindow() {
+    return deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
+  }
+
   function sendCommandAndAwait(execChannel: string, payload?: unknown): Promise<void> {
     const requestId = randomBytes(8).toString("hex");
     return new Promise<void>((resolve, reject) => {
@@ -59,7 +63,10 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
       };
 
       ipcMain.on(CHANNELS.DEMO_COMMAND_DONE, listener);
-      deps.mainWindow.webContents.send(execChannel, { ...((payload as object) ?? {}), requestId });
+      const win = getMainWindow();
+      if (win && !win.isDestroyed()) {
+        win.webContents.send(execChannel, { ...((payload as object) ?? {}), requestId });
+      }
     });
   }
 
@@ -96,7 +103,11 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
   };
 
   const handleScreenshot = async (): Promise<DemoScreenshotResult> => {
-    const image = await deps.mainWindow.webContents.capturePage();
+    const win = getMainWindow();
+    if (!win || win.isDestroyed()) {
+      throw new Error("No window available for screenshot");
+    }
+    const image = await win.webContents.capturePage();
     const pngBuffer = image.toPNG();
     const size = image.getSize();
     return {
@@ -179,7 +190,9 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
         }
         captureBusy = true;
         try {
-          const image = await deps.mainWindow.webContents.capturePage();
+          const captureWin = getMainWindow();
+          if (!captureWin || captureWin.isDestroyed()) return;
+          const image = await captureWin.webContents.capturePage();
           if (!captureActive || token !== captureToken) return;
           const filename = `frame-${String(captureFrameCount + 1).padStart(6, "0")}.png`;
           await writeFile(`${captureSessionDir}/${filename}`, image.toPNG());

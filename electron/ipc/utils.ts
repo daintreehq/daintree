@@ -302,6 +302,15 @@ export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
   return () => ipcMain.removeHandler(channel as string);
 }
 
+export function typedBroadcast<K extends keyof IpcEventMap>(
+  channel: K,
+  payload: IpcEventMap[K]
+): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    typedSend(win, channel, payload);
+  }
+}
+
 export function typedSend<K extends keyof IpcEventMap>(
   window: BrowserWindow,
   channel: K,

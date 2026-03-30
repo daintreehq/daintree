@@ -4,7 +4,7 @@ import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { runCommandDetector } from "../../services/RunCommandDetector.js";
 import { ProjectSwitchService } from "../../services/ProjectSwitchService.js";
-import { sendToRenderer } from "../utils.js";
+import { broadcastToRenderer } from "../utils.js";
 import { randomUUID } from "crypto";
 import type { HandlerDependencies } from "../types.js";
 import type { Project, ProjectSettings } from "../../types/index.js";
@@ -23,7 +23,7 @@ import { createHardenedGit, HARDENED_GIT_CONFIG } from "../../utils/hardenedGit.
 import { simpleGit } from "simple-git";
 
 export function registerProjectCrudHandlers(deps: HandlerDependencies): () => void {
-  const { mainWindow } = deps;
+  const mainWindow = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
   const handlers: Array<() => void> = [];
 
   const projectSwitchService = deps.projectSwitchService ?? new ProjectSwitchService(deps);
@@ -125,10 +125,13 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SWITCH));
 
   const handleProjectOpenDialog = async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ["openDirectory", "createDirectory"],
+    const dialogOpts = {
+      properties: ["openDirectory" as const, "createDirectory" as const],
       title: "Open Git Repository",
-    });
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, dialogOpts)
+      : await dialog.showOpenDialog(dialogOpts);
 
     if (result.canceled || result.filePaths.length === 0) {
       return null;
@@ -292,7 +295,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
         `[IPC] project:reopen: Project ${projectId} already active, emitting switch event`
       );
       const switchId = randomUUID();
-      sendToRenderer(mainWindow, CHANNELS.PROJECT_ON_SWITCH, {
+      broadcastToRenderer(CHANNELS.PROJECT_ON_SWITCH, {
         project,
         switchId,
       });
@@ -520,9 +523,6 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       message: string,
       error?: string
     ) => {
-      if (mainWindow.isDestroyed()) {
-        return;
-      }
       const event: GitInitProgressEvent = {
         step,
         status,
@@ -530,7 +530,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
         error,
         timestamp: Date.now(),
       };
-      mainWindow.webContents.send(CHANNELS.PROJECT_INIT_GIT_PROGRESS, event);
+      broadcastToRenderer(CHANNELS.PROJECT_INIT_GIT_PROGRESS, event);
     };
 
     try {
@@ -768,14 +768,13 @@ Thumbs.db
     }
 
     const emitProgress = (stage: string, progress: number, message: string) => {
-      if (mainWindow.isDestroyed()) return;
       const event: CloneRepoProgressEvent = {
         stage,
         progress,
         message,
         timestamp: Date.now(),
       };
-      mainWindow.webContents.send(CHANNELS.PROJECT_CLONE_PROGRESS, event);
+      broadcastToRenderer(CHANNELS.PROJECT_CLONE_PROGRESS, event);
     };
 
     try {

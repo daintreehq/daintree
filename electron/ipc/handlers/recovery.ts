@@ -15,7 +15,7 @@ export function registerRecoveryHandlers(deps: HandlerDependencies): () => void 
   const handlers: Array<() => void> = [];
 
   ipcMain.handle(CHANNELS.RECOVERY_RELOAD_APP, () => {
-    const win = deps.mainWindow;
+    const win = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
     if (win && !win.isDestroyed()) {
       console.log("[MAIN] Recovery: reloading app");
       win.loadURL(getAppUrl());
@@ -24,7 +24,7 @@ export function registerRecoveryHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.RECOVERY_RELOAD_APP));
 
   ipcMain.handle(CHANNELS.RECOVERY_RESET_AND_RELOAD, () => {
-    const win = deps.mainWindow;
+    const win = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
     if (win && !win.isDestroyed()) {
       console.log("[MAIN] Recovery: resetting state and reloading app");
       getCrashRecoveryService().resetToFresh();

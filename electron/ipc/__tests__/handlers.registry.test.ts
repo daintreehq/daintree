@@ -1,5 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
+vi.mock("electron", () => ({
+  ipcMain: {
+    handle: vi.fn(),
+    removeHandler: vi.fn(),
+  },
+  BrowserWindow: {
+    getAllWindows: () => [],
+    fromWebContents: vi.fn(),
+  },
+}));
+
 const registerMocks = vi.hoisted(() => ({
   registerWorktreeHandlers: vi.fn(),
   registerTerminalHandlers: vi.fn(),

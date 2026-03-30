@@ -143,19 +143,46 @@ export function isVerboseLogging(): boolean {
   return verboseLogging;
 }
 
-let mainWindow: BrowserWindow | null = null;
-
 const LOG_THROTTLE_MS = 16;
 let lastLogTime = 0;
 let pendingLogs: LogEntry[] = [];
 let throttleTimeout: NodeJS.Timeout | null = null;
 
-export function setLoggerWindow(window: BrowserWindow | null): void {
-  mainWindow = window;
+/** @deprecated No-op. Logger now broadcasts to all windows via broadcastToRenderer. */
+export function setLoggerWindow(_window: BrowserWindow | null): void {
+  // No-op — kept for backward compatibility with existing call sites.
+}
+
+let cachedBroadcast: typeof import("../ipc/utils.js").broadcastToRenderer | null | undefined;
+let cachedBW: typeof import("electron").BrowserWindow | null | undefined;
+
+function getBroadcast(): typeof import("../ipc/utils.js").broadcastToRenderer | null {
+  if (cachedBroadcast !== undefined) return cachedBroadcast;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const utils = require("../ipc/utils.js") as typeof import("../ipc/utils.js");
+    cachedBroadcast = utils.broadcastToRenderer;
+  } catch {
+    cachedBroadcast = null;
+  }
+  return cachedBroadcast;
+}
+
+function hasAnyWindow(): boolean {
+  if (cachedBW === undefined) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      cachedBW = (require("electron") as typeof import("electron")).BrowserWindow;
+    } catch {
+      cachedBW = null;
+    }
+  }
+  if (!cachedBW) return false;
+  return cachedBW.getAllWindows().length > 0;
 }
 
 function sendLogToRenderer(entry: LogEntry): void {
-  if (!mainWindow || mainWindow.isDestroyed()) {
+  if (!hasAnyWindow()) {
     return;
   }
 
@@ -175,7 +202,7 @@ function flushLogs(): void {
     throttleTimeout = null;
   }
 
-  if (pendingLogs.length === 0 || !mainWindow || mainWindow.isDestroyed()) {
+  if (pendingLogs.length === 0 || !hasAnyWindow()) {
     pendingLogs = [];
     return;
   }
@@ -183,14 +210,14 @@ function flushLogs(): void {
   const MAX_LOGS_PER_FLUSH = 60;
   const logsToSend = pendingLogs.slice(0, MAX_LOGS_PER_FLUSH);
 
-  const webContents = mainWindow.webContents;
-  if (webContents.isDestroyed()) {
+  const broadcast = getBroadcast();
+  if (!broadcast) {
     pendingLogs = [];
     return;
   }
 
   try {
-    webContents.send(CHANNELS.LOGS_BATCH, logsToSend);
+    broadcast(CHANNELS.LOGS_BATCH, logsToSend);
   } catch {
     pendingLogs = [];
     return;

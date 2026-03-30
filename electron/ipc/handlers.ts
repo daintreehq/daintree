@@ -51,12 +51,20 @@ import { events } from "../services/events.js";
 import {
   typedHandle,
   typedSend,
+  typedBroadcast,
   sendToRenderer,
   broadcastToRenderer,
   sendToRendererContext,
 } from "./utils.js";
 
-export { typedHandle, typedSend, sendToRenderer, broadcastToRenderer, sendToRendererContext };
+export {
+  typedHandle,
+  typedSend,
+  typedBroadcast,
+  sendToRenderer,
+  broadcastToRenderer,
+  sendToRendererContext,
+};
 
 type CleanupFn = () => void;
 

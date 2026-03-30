@@ -17,7 +17,7 @@ export interface IpcContext {
 }
 
 export interface HandlerDependencies {
-  mainWindow: BrowserWindow;
+  mainWindow?: BrowserWindow;
   ptyClient?: PtyClient;
   worktreeService?: WorkspaceClient;
   eventBuffer?: EventBuffer;

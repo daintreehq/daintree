@@ -3,7 +3,7 @@ import crypto from "crypto";
 import path from "path";
 import { pathToFileURL } from "url";
 import { CHANNELS } from "../channels.js";
-import { sendToRenderer, checkRateLimit } from "../utils.js";
+import { broadcastToRenderer, checkRateLimit } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   CopyTreeGeneratePayload,
@@ -146,7 +146,7 @@ async function getCurrentProjectSettings(): Promise<
 }
 
 export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void {
-  const { mainWindow } = deps;
+  // copyTree progress is broadcast to all windows
   const handlers: Array<() => void> = [];
 
   const handleCopyTreeGenerate = async (
@@ -190,7 +190,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     const onProgress = (progress: CopyTreeProgress) => {
-      sendToRenderer(mainWindow, CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
+      broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
     };
 
     // Merge project settings with runtime options
@@ -248,7 +248,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     const onProgress = (progress: CopyTreeProgress) => {
-      sendToRenderer(mainWindow, CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
+      broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
     };
 
     // Merge project settings with runtime options
@@ -391,7 +391,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       }
 
       const onProgress = (progress: CopyTreeProgress) => {
-        sendToRenderer(mainWindow, CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
+        broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
       };
 
       // Merge project settings with runtime options

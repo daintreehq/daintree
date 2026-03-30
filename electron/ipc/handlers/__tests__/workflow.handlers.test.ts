@@ -16,11 +16,19 @@ vi.mock("../../../services/WorkflowEngine.js", () => ({
 
 const mockIpcMainHandle = vi.fn();
 const mockIpcMainRemoveHandler = vi.fn();
+const mockBroadcastWindow = vi.hoisted(() => ({
+  isDestroyed: () => false,
+  webContents: {
+    isDestroyed: () => false,
+    send: vi.fn(),
+  },
+}));
 vi.mock("electron", () => ({
   ipcMain: {
     handle: (...args: unknown[]) => mockIpcMainHandle(...args),
     removeHandler: (...args: unknown[]) => mockIpcMainRemoveHandler(...args),
   },
+  BrowserWindow: { getAllWindows: () => [mockBroadcastWindow] },
 }));
 
 vi.mock("../../../utils/performance.js", () => ({
@@ -286,8 +294,10 @@ describe("registerWorkflowHandlers", () => {
       const payload = { runId: "r1", workflowId: "w1", workflowVersion: "1.0.0", timestamp: 123 };
       callback(payload);
 
-      const wc = deps.mainWindow.webContents as unknown as { send: ReturnType<typeof vi.fn> };
-      expect(wc.send).toHaveBeenCalledWith("workflow:started", payload);
+      expect(mockBroadcastWindow.webContents.send).toHaveBeenCalledWith(
+        "workflow:started",
+        payload
+      );
     });
 
     it("forwards workflow:completed to renderer", () => {
@@ -306,8 +316,10 @@ describe("registerWorkflowHandlers", () => {
       };
       callback(payload);
 
-      const wc = deps.mainWindow.webContents as unknown as { send: ReturnType<typeof vi.fn> };
-      expect(wc.send).toHaveBeenCalledWith("workflow:completed", payload);
+      expect(mockBroadcastWindow.webContents.send).toHaveBeenCalledWith(
+        "workflow:completed",
+        payload
+      );
     });
 
     it("forwards workflow:failed to renderer", () => {
@@ -326,8 +338,7 @@ describe("registerWorkflowHandlers", () => {
       };
       callback(payload);
 
-      const wc = deps.mainWindow.webContents as unknown as { send: ReturnType<typeof vi.fn> };
-      expect(wc.send).toHaveBeenCalledWith("workflow:failed", payload);
+      expect(mockBroadcastWindow.webContents.send).toHaveBeenCalledWith("workflow:failed", payload);
     });
   });
 

@@ -1,4 +1,6 @@
-import { BrowserWindow, app, Notification } from "electron";
+import { app, Notification } from "electron";
+import type { WindowRegistry, WindowContext } from "../window/WindowRegistry.js";
+import { sendToRenderer } from "../ipc/utils.js";
 
 export interface NotificationState {
   waitingCount: number;
@@ -13,33 +15,42 @@ export interface WatchNotificationContext {
 const DEBOUNCE_MS = 300;
 const DEFAULT_TITLE = "Canopy";
 
+interface TrackedWindow {
+  browserWindow: import("electron").BrowserWindow;
+  focusHandler: () => void;
+  blurHandler: () => void;
+}
+
 class NotificationService {
-  private mainWindow: BrowserWindow | null = null;
+  private registry: WindowRegistry | null = null;
   private debounceTimer: NodeJS.Timeout | null = null;
   private currentState: NotificationState = { waitingCount: 0 };
-  private windowFocused = true;
-  private focusHandler: (() => void) | null = null;
-  private blurHandler: (() => void) | null = null;
+  private focusedWindows = new Set<number>();
+  private trackedWindows = new Map<number, TrackedWindow>();
   private activeNotifications = new Set<Notification>();
 
-  private detachWindowListeners(): void {
-    if (!this.mainWindow || !this.focusHandler || !this.blurHandler) {
-      return;
+  private detachAllWindowListeners(): void {
+    for (const [, tracked] of this.trackedWindows) {
+      if (!tracked.browserWindow.isDestroyed()) {
+        tracked.browserWindow.off("focus", tracked.focusHandler);
+        tracked.browserWindow.off("blur", tracked.blurHandler);
+      }
     }
-
-    this.mainWindow.off("focus", this.focusHandler);
-    this.mainWindow.off("blur", this.blurHandler);
+    this.trackedWindows.clear();
+    this.focusedWindows.clear();
   }
 
-  initialize(window: BrowserWindow): void {
-    this.detachWindowListeners();
-    this.mainWindow = window;
+  private attachWindowListeners(ctx: WindowContext): void {
+    const windowId = ctx.windowId;
 
-    // Initialize with actual focus state
-    this.windowFocused = window.isFocused();
+    if (this.trackedWindows.has(windowId)) return;
 
-    this.focusHandler = () => {
-      this.windowFocused = true;
+    if (ctx.browserWindow.isFocused()) {
+      this.focusedWindows.add(windowId);
+    }
+
+    const focusHandler = () => {
+      this.focusedWindows.add(windowId);
       this.currentState = { waitingCount: 0 };
 
       if (this.debounceTimer) {
@@ -50,12 +61,27 @@ class NotificationService {
       this.clearNotifications();
     };
 
-    this.blurHandler = () => {
-      this.windowFocused = false;
+    const blurHandler = () => {
+      this.focusedWindows.delete(windowId);
     };
 
-    window.on("focus", this.focusHandler);
-    window.on("blur", this.blurHandler);
+    ctx.browserWindow.on("focus", focusHandler);
+    ctx.browserWindow.on("blur", blurHandler);
+
+    this.trackedWindows.set(windowId, {
+      browserWindow: ctx.browserWindow,
+      focusHandler,
+      blurHandler,
+    });
+  }
+
+  initialize(registry: WindowRegistry): void {
+    this.detachAllWindowListeners();
+    this.registry = registry;
+
+    for (const ctx of registry.all()) {
+      this.attachWindowListeners(ctx);
+    }
   }
 
   updateNotifications(state: NotificationState): void {
@@ -73,36 +99,35 @@ class NotificationService {
   }
 
   private applyNotifications(): void {
-    if (!this.mainWindow || this.mainWindow.isDestroyed()) return;
+    if (!this.registry) return;
 
-    // Don't show notifications when window is focused
-    if (this.windowFocused) {
+    if (this.isWindowFocused()) {
       this.clearNotifications();
       return;
     }
 
     const { waitingCount } = this.currentState;
+    const title = waitingCount > 0 ? `(${waitingCount}) ${DEFAULT_TITLE}` : DEFAULT_TITLE;
 
-    if (waitingCount > 0) {
-      this.mainWindow.setTitle(`(${waitingCount}) ${DEFAULT_TITLE}`);
-    } else {
-      this.mainWindow.setTitle(DEFAULT_TITLE);
+    for (const ctx of this.registry.all()) {
+      if (!ctx.browserWindow.isDestroyed()) {
+        ctx.browserWindow.setTitle(title);
+      }
     }
 
-    // Update macOS dock badge
     if (process.platform === "darwin") {
-      if (waitingCount > 0) {
-        app.setBadgeCount(waitingCount);
-      } else {
-        app.setBadgeCount(0);
-      }
+      app.setBadgeCount(waitingCount > 0 ? waitingCount : 0);
     }
   }
 
   private clearNotifications(): void {
-    if (!this.mainWindow || this.mainWindow.isDestroyed()) return;
-
-    this.mainWindow.setTitle(DEFAULT_TITLE);
+    if (this.registry) {
+      for (const ctx of this.registry.all()) {
+        if (!ctx.browserWindow.isDestroyed()) {
+          ctx.browserWindow.setTitle(DEFAULT_TITLE);
+        }
+      }
+    }
 
     if (process.platform === "darwin") {
       app.setBadgeCount(0);
@@ -110,7 +135,7 @@ class NotificationService {
   }
 
   isWindowFocused(): boolean {
-    return this.windowFocused;
+    return this.focusedWindows.size > 0;
   }
 
   showNativeNotification(title: string, body: string): void {
@@ -148,13 +173,14 @@ class NotificationService {
 
     notification.on("click", () => {
       cleanup();
-      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        if (this.mainWindow.isMinimized()) {
-          this.mainWindow.restore();
+      const targetWin = this.registry?.getPrimary()?.browserWindow;
+      if (targetWin && !targetWin.isDestroyed()) {
+        if (targetWin.isMinimized()) {
+          targetWin.restore();
         }
-        this.mainWindow.show();
-        this.mainWindow.focus();
-        this.mainWindow.webContents.send(navigateChannel, context);
+        targetWin.show();
+        targetWin.focus();
+        sendToRenderer(targetWin, navigateChannel, context);
       }
     });
 
@@ -167,13 +193,11 @@ class NotificationService {
       this.debounceTimer = null;
     }
 
-    this.detachWindowListeners();
+    this.detachAllWindowListeners();
     this.clearNotifications();
     this.activeNotifications.clear();
 
-    this.focusHandler = null;
-    this.blurHandler = null;
-    this.mainWindow = null;
+    this.registry = null;
   }
 }
 

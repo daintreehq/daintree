@@ -26,6 +26,9 @@ const webContentsMock = vi.hoisted(() => ({
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   webContents: webContentsMock,
+  BrowserWindow: {
+    getAllWindows: () => [mainWindowMock],
+  },
 }));
 
 const mockDialogService = vi.hoisted(() => ({
@@ -52,6 +55,9 @@ vi.mock("../../utils.js", () => ({
       mainWindow.webContents.send(channel, ...args);
     }
   ),
+  broadcastToRenderer: vi.fn((channel: string, ...args: unknown[]) => {
+    mainWindowMock.webContents.send(channel, ...args);
+  }),
 }));
 
 import { registerWebviewHandlers } from "../webview.js";

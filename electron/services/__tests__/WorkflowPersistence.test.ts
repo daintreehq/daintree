@@ -1,4 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+
+vi.mock("../persistence/db.js", () => ({
+  openDb: vi.fn(),
+  getSharedDb: vi.fn(),
+}));
+
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { WorkflowPersistence } from "../persistence/WorkflowPersistence.js";

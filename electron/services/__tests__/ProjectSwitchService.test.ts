@@ -52,6 +52,7 @@ vi.mock("../ContextInjectionTracker.js", () => ({
 
 vi.mock("../../ipc/utils.js", () => ({
   sendToRenderer: sendToRendererMock,
+  broadcastToRenderer: sendToRendererMock,
 }));
 
 vi.mock("crypto", () => ({
@@ -164,7 +165,6 @@ describe("ProjectSwitchService", () => {
     expect(worktreeService.loadProject).toHaveBeenCalledWith("/tmp/new");
     expect(eventBuffer.onProjectSwitch).toHaveBeenCalled();
     expect(sendToRendererMock).toHaveBeenCalledWith(
-      expect.anything(),
       CHANNELS.PROJECT_ON_SWITCH,
       expect.objectContaining({
         project: expect.objectContaining({ id: "project-new" }),
@@ -274,7 +274,6 @@ describe("ProjectSwitchService", () => {
     await service.switchProject("project-new");
 
     expect(sendToRendererMock).toHaveBeenCalledWith(
-      expect.anything(),
       CHANNELS.PROJECT_ON_SWITCH,
       expect.objectContaining({
         project: expect.objectContaining({ id: "project-new" }),
@@ -289,7 +288,7 @@ describe("ProjectSwitchService", () => {
 
     await service.switchProject("project-new");
 
-    const payload = sendToRendererMock.mock.calls[0][2];
+    const payload = sendToRendererMock.mock.calls[0][1];
     expect(payload).not.toHaveProperty("worktreeLoadError");
   });
 

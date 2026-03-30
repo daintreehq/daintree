@@ -1,5 +1,6 @@
 import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
+import { broadcastToRenderer } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   DevPreviewEnsureRequest,
@@ -13,23 +14,9 @@ import { getHibernationService } from "../../services/HibernationService.js";
 export function registerDevPreviewHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const sendToRenderer = (channel: string, data: unknown) => {
-    if (
-      deps.mainWindow &&
-      !deps.mainWindow.isDestroyed() &&
-      !deps.mainWindow.webContents.isDestroyed()
-    ) {
-      try {
-        deps.mainWindow.webContents.send(channel, data);
-      } catch {
-        // Ignore send failures during window disposal.
-      }
-    }
-  };
-
   const sessionService = new DevPreviewSessionService(deps.ptyClient!, (state) => {
     const payload: DevPreviewStateChangedPayload = { state };
-    sendToRenderer(CHANNELS.DEV_PREVIEW_STATE_CHANGED, payload);
+    broadcastToRenderer(CHANNELS.DEV_PREVIEW_STATE_CHANGED, payload);
   });
 
   const handleEnsure = async (

@@ -197,13 +197,31 @@ function createMockWindow(options?: {
     ),
   };
 
-  const window = {
+  const browserWindow = {
     isDestroyed: vi.fn(() => false),
     webContents,
   };
 
+  const windowContext = {
+    windowId: 1,
+    webContentsId: 1,
+    browserWindow,
+    projectPath: null,
+    abortController: new AbortController(),
+    services: {},
+    cleanup: [],
+  };
+
+  const registry = {
+    all: () => [windowContext],
+    getPrimary: () => windowContext,
+    getByWindowId: () => windowContext,
+    getByWebContentsId: () => windowContext,
+    size: 1,
+  };
+
   return {
-    window: window as never,
+    window: registry as never,
     webContents,
   };
 }

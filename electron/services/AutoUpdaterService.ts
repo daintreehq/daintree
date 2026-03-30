@@ -1,9 +1,10 @@
 import { existsSync, readFileSync } from "fs";
 import path from "path";
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, ipcMain } from "electron";
 import electronUpdater from "electron-updater";
 import type { UpdateInfo, ProgressInfo } from "electron-updater";
 import { CHANNELS } from "../ipc/channels.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
 import { getCrashRecoveryService } from "./CrashRecoveryService.js";
 import { store } from "../store.js";
 
@@ -15,7 +16,6 @@ const { autoUpdater } = electronUpdater;
 class AutoUpdaterService {
   private checkInterval: NodeJS.Timeout | null = null;
   private initialized = false;
-  private window: BrowserWindow | null = null;
   private updateDownloaded = false;
   private isManualCheck = false;
   private checkingHandler: (() => void) | null = null;
@@ -32,16 +32,6 @@ class AutoUpdaterService {
       channel: channel === "nightly" ? "nightly" : "latest",
     });
     autoUpdater.allowDowngrade = true;
-  }
-
-  private sendToWindow(channel: string, payload: unknown): void {
-    if (this.window && !this.window.isDestroyed() && !this.window.webContents.isDestroyed()) {
-      try {
-        this.window.webContents.send(channel, payload);
-      } catch {
-        // Silently ignore send failures during window disposal.
-      }
-    }
   }
 
   private runUpdateCheck(context: "Initial" | "Periodic"): void {
@@ -73,18 +63,11 @@ class AutoUpdaterService {
     }
   }
 
-  initialize(window?: BrowserWindow): void {
+  initialize(): void {
     if (this.initialized) {
       console.log("[MAIN] Auto-updater already initialized, skipping");
       return;
     }
-
-    if (!window) {
-      console.warn("[MAIN] Auto-updater requires a window, skipping initialization");
-      return;
-    }
-
-    this.window = window;
 
     if (!app.isPackaged) {
       console.log("[MAIN] Auto-updater disabled in non-packaged mode");
@@ -128,7 +111,7 @@ class AutoUpdaterService {
       this.availableHandler = (info: UpdateInfo) => {
         console.log("[MAIN] Update available:", info.version);
         this.isManualCheck = false;
-        this.sendToWindow(CHANNELS.UPDATE_AVAILABLE, { version: info.version });
+        broadcastToRenderer(CHANNELS.UPDATE_AVAILABLE, { version: info.version });
       };
       autoUpdater.on("update-available", this.availableHandler);
 
@@ -136,7 +119,7 @@ class AutoUpdaterService {
         console.log("[MAIN] Update not available");
         if (this.isManualCheck) {
           this.isManualCheck = false;
-          this.sendToWindow(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
             type: "info",
             title: "No Updates Available",
             message: `Canopy ${app.getVersion()} is the latest version.`,
@@ -150,7 +133,7 @@ class AutoUpdaterService {
         const wasManual = this.isManualCheck;
         this.isManualCheck = false;
         if (wasManual) {
-          this.sendToWindow(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
             type: "error",
             title: "Update Failed",
             message: err.message,
@@ -165,14 +148,14 @@ class AutoUpdaterService {
 
       this.progressHandler = (progress: ProgressInfo) => {
         console.log(`[MAIN] Download progress: ${Math.round(progress.percent)}%`);
-        this.sendToWindow(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, { percent: progress.percent });
+        broadcastToRenderer(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, { percent: progress.percent });
       };
       autoUpdater.on("download-progress", this.progressHandler);
 
       this.downloadedHandler = (info: UpdateInfo) => {
         console.log("[MAIN] Update downloaded:", info.version);
         this.updateDownloaded = true;
-        this.sendToWindow(CHANNELS.UPDATE_DOWNLOADED, { version: info.version });
+        broadcastToRenderer(CHANNELS.UPDATE_DOWNLOADED, { version: info.version });
       };
       autoUpdater.on("update-downloaded", this.downloadedHandler);
 
@@ -276,7 +259,6 @@ class AutoUpdaterService {
       // Handler may not have been registered
     }
 
-    this.window = null;
     this.updateDownloaded = false;
     this.isManualCheck = false;
     this.initialized = false;

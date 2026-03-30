@@ -190,7 +190,8 @@ function createAndDistributePorts(win: BrowserWindow): void {
 async function initializeDeferredServices(
   window: BrowserWindow,
   cliService: CliAvailabilityService,
-  eventBuf: EventBuffer
+  eventBuf: EventBuffer,
+  windowRegistry?: import("./WindowRegistry.js").WindowRegistry
 ): Promise<void> {
   console.log("[MAIN] Initializing deferred services in background...");
   const startTime = Date.now();
@@ -220,9 +221,11 @@ async function initializeDeferredServices(
   eventBuf.start();
   console.log("[MAIN] EventBuffer started");
 
-  mcpServerService.start(window).catch((err) => {
-    console.error("[MAIN] MCP server failed to start:", err);
-  });
+  if (windowRegistry) {
+    mcpServerService.start(windowRegistry).catch((err) => {
+      console.error("[MAIN] MCP server failed to start:", err);
+    });
+  }
 
   // Fire-and-forget session file eviction
   (async () => {
@@ -329,7 +332,9 @@ export async function setupWindowServices(
   cliAvailabilityService = new CliAvailabilityService();
   createApplicationMenu(win, cliAvailabilityService);
 
-  notificationService.initialize(win);
+  if (opts.windowRegistry) {
+    notificationService.initialize(opts.windowRegistry);
+  }
   agentNotificationService.initialize();
   preAgentSnapshotService.initialize();
   console.log("[MAIN] NotificationService initialized");
@@ -452,7 +457,7 @@ export async function setupWindowServices(
 
   opts.loadRenderer("after-services-ready");
 
-  cleanupErrorHandlers = registerErrorHandlers(win, workspaceClient, ptyClient);
+  cleanupErrorHandlers = registerErrorHandlers(workspaceClient, ptyClient);
 
   console.log("[MAIN] All critical services ready");
 
@@ -615,7 +620,7 @@ export async function setupWindowServices(
   };
 
   // Auto-updater
-  autoUpdaterService.initialize(win);
+  autoUpdaterService.initialize();
 
   // Smoke test
   if (isSmokeTest) {
@@ -660,9 +665,11 @@ export async function setupWindowServices(
   }
 
   // Deferred services
-  initializeDeferredServices(win, cliAvailabilityService!, eventBuffer!).catch((error) => {
-    console.error("[MAIN] Deferred services initialization failed:", error);
-  });
+  initializeDeferredServices(win, cliAvailabilityService!, eventBuffer!, opts.windowRegistry).catch(
+    (error) => {
+      console.error("[MAIN] Deferred services initialization failed:", error);
+    }
+  );
 
   getCrashRecoveryService().startBackupTimer();
 

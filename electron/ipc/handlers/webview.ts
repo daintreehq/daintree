@@ -1,7 +1,7 @@
 import { ipcMain, webContents } from "electron";
 import { CHANNELS } from "../channels.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
-import { sendToRenderer } from "../utils.js";
+import { broadcastToRenderer } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   CdpRemoteArg,
@@ -211,7 +211,7 @@ function cleanupSession(wcId: number): void {
   sessions.delete(wcId);
 }
 
-export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
+export function registerWebviewHandlers(_deps: HandlerDependencies): () => void {
   const handleSetLifecycleState = async (
     _event: Electron.IpcMainInvokeEvent,
     webContentsId: unknown,
@@ -286,7 +286,7 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
             for (const pid of session.paneIds) {
               session.groupDepthByPane.set(pid, 0);
               session.objectIdsByPane.get(pid)?.clear();
-              sendToRenderer(deps.mainWindow, CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, {
+              broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, {
                 paneId: pid,
                 navigationGeneration: session.navigationGeneration,
               });
@@ -307,7 +307,7 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
           for (const pid of session.paneIds) {
             session.groupDepthByPane.set(pid, 0);
             session.objectIdsByPane.get(pid)?.clear();
-            sendToRenderer(deps.mainWindow, CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, {
+            broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, {
               paneId: pid,
               navigationGeneration: session.navigationGeneration,
             });
@@ -372,7 +372,7 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
         navigationGeneration: session.navigationGeneration,
       };
 
-      sendToRenderer(deps.mainWindow, CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
+      broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
 
       // Adjust depth AFTER emitting the group header row
       if (cdpType === "startGroup" || cdpType === "startGroupCollapsed") {
