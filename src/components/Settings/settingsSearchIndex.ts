@@ -15,6 +15,13 @@ export interface SettingsSearchEntry {
   title: string;
   description: string;
   keywords?: string[];
+  /** When set, indicates this setting is only visible when a parent setting is enabled. */
+  requiresEnabled?: {
+    /** id of the gate entry in the search index (e.g. "mcp-server-enable") */
+    settingId: string;
+    /** Human-readable label shown in warnings (e.g. "MCP Server") */
+    label: string;
+  };
 }
 
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
@@ -858,6 +865,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     title: "Deepgram API Key",
     description: "Configure your Deepgram API key for speech recognition",
     keywords: ["deepgram", "api", "key", "speech-to-text", "stt", "nova"],
+    requiresEnabled: { settingId: "voice-enable", label: "Voice Input" },
   },
   {
     id: "voice-language",
@@ -868,6 +876,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     title: "Transcription Language",
     description: "Select the language for speech transcription",
     keywords: ["language", "locale", "english", "multilingual", "transcription"],
+    requiresEnabled: { settingId: "voice-enable", label: "Voice Input" },
   },
   {
     id: "voice-transcription-model",
@@ -878,6 +887,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     title: "Transcription Model",
     description: "Choose the Deepgram model for transcription accuracy",
     keywords: ["nova-3", "nova-2", "model", "deepgram", "accuracy", "transcription"],
+    requiresEnabled: { settingId: "voice-enable", label: "Voice Input" },
   },
   {
     id: "voice-paragraph-breaks",
@@ -888,6 +898,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     title: "Paragraph Breaks",
     description: "Insert paragraph breaks via spoken commands",
     keywords: ["paragraph", "break", "enter", "formatting", "spoken"],
+    requiresEnabled: { settingId: "voice-enable", label: "Voice Input" },
   },
   {
     id: "voice-custom-dictionary",
@@ -898,6 +909,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     title: "Custom Dictionary",
     description: "Add domain-specific terms to improve recognition accuracy",
     keywords: ["dictionary", "terms", "domain", "vocabulary", "recognition", "custom"],
+    requiresEnabled: { settingId: "voice-enable", label: "Voice Input" },
   },
   {
     id: "voice-ai-correction-enable",
@@ -908,6 +920,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     title: "AI Text Correction",
     description: "Enable AI-powered post-processing to clean up transcribed text",
     keywords: ["correction", "ai", "cleanup", "post-process", "filler"],
+    requiresEnabled: { settingId: "voice-enable", label: "Voice Input" },
   },
   {
     id: "voice-openai-key",
@@ -918,6 +931,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     title: "OpenAI API Key",
     description: "Configure your OpenAI API key for AI text correction",
     keywords: ["openai", "api", "key", "correction", "gpt"],
+    requiresEnabled: { settingId: "voice-ai-correction-enable", label: "AI Text Correction" },
   },
   {
     id: "voice-correction-model",
@@ -928,6 +942,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     title: "Correction Model",
     description: "Choose the OpenAI model used for text correction",
     keywords: ["gpt", "model", "correction", "openai"],
+    requiresEnabled: { settingId: "voice-ai-correction-enable", label: "AI Text Correction" },
   },
   {
     id: "voice-custom-instructions",
@@ -938,6 +953,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     title: "Custom Instructions",
     description: "Add project-specific rules for AI text correction",
     keywords: ["instructions", "prompt", "rules", "custom", "project-specific"],
+    requiresEnabled: { settingId: "voice-ai-correction-enable", label: "AI Text Correction" },
   },
 
   // Privacy & Data
@@ -1167,6 +1183,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     description:
       "Copy the MCP server config snippet (JSON) to paste into your MCP client configuration",
     keywords: ["mcp", "config", "copy", "snippet", "json", "client", "cursor", "claude"],
+    requiresEnabled: { settingId: "mcp-server-enable", label: "MCP Server" },
   },
   {
     id: "mcp-server-port",
@@ -1178,6 +1195,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     description:
       "Set a fixed port for the MCP server or leave empty for automatic ephemeral port assignment",
     keywords: ["mcp", "port", "fixed", "ephemeral", "network", "bind"],
+    requiresEnabled: { settingId: "mcp-server-enable", label: "MCP Server" },
   },
   {
     id: "mcp-server-auth",
@@ -1189,6 +1207,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     description:
       "Generate a bearer token to secure MCP connections. Clients must include the token in the Authorization header.",
     keywords: ["mcp", "api", "key", "auth", "token", "bearer", "security", "password"],
+    requiresEnabled: { settingId: "mcp-server-enable", label: "MCP Server" },
   },
 
   // Environment Variables

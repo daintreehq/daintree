@@ -41,6 +41,7 @@ import {
   GitBranch,
   Command,
   CookingPot,
+  AlertTriangle,
 } from "lucide-react";
 import { WorktreeIcon, CanopyAgentIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
@@ -727,10 +728,19 @@ export function SettingsDialog({
   // deferredQuery drives the expensive filtering computation only.
   const isSearching = searchQuery.trim().length > 0;
 
-  const handleResultClick = ({ tab, subtab, sectionId }: SettingsNavTarget) => {
+  const [hiddenSettingBanner, setHiddenSettingBanner] = useState<{
+    label: string;
+    settingId: string;
+  } | null>(null);
+
+  const handleResultClick = (
+    { tab, subtab, sectionId }: SettingsNavTarget,
+    requiresEnabled?: { settingId: string; label: string }
+  ) => {
     markTabVisited(tab);
     setSearchQuery("");
     setScrollToSection(sectionId ?? null);
+    setHiddenSettingBanner(requiresEnabled ?? null);
     if (subtab !== undefined) {
       setActiveSubtabs((prev) => ({ ...prev, [tab]: subtab }));
     }
@@ -762,7 +772,10 @@ export function SettingsDialog({
       } else if (e.key === "Enter" && activeResultIndex >= 0) {
         e.preventDefault();
         const result = searchResults[activeResultIndex];
-        handleResultClick({ tab: result.tab, subtab: result.subtab, sectionId: result.id });
+        handleResultClick(
+          { tab: result.tab, subtab: result.subtab, sectionId: result.id },
+          result.requiresEnabled
+        );
       }
     }
   };
@@ -802,6 +815,7 @@ export function SettingsDialog({
       markTabVisited(tab);
       setSearchQuery("");
       setScrollToSection(null);
+      setHiddenSettingBanner(null);
       startTransition(() => setActiveTab(tab));
     },
     [markTabVisited]
@@ -1271,6 +1285,45 @@ export function SettingsDialog({
               </div>
             ) : (
               <>
+                {hiddenSettingBanner && (
+                  <div
+                    className="text-sm text-status-warning bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)] p-3 mb-4 flex items-start justify-between gap-3"
+                    role="alert"
+                  >
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                      <span>
+                        This setting is only visible when{" "}
+                        <button
+                          className="underline font-medium hover:opacity-80"
+                          onClick={() => {
+                            const parent = SETTINGS_SEARCH_INDEX.find(
+                              (e) => e.id === hiddenSettingBanner.settingId
+                            );
+                            if (parent) {
+                              setHiddenSettingBanner(null);
+                              handleResultClick({
+                                tab: parent.tab,
+                                subtab: parent.subtab,
+                                sectionId: parent.id,
+                              });
+                            }
+                          }}
+                        >
+                          {hiddenSettingBanner.label}
+                        </button>{" "}
+                        is enabled.
+                      </span>
+                    </div>
+                    <button
+                      aria-label="Dismiss"
+                      onClick={() => setHiddenSettingBanner(null)}
+                      className="shrink-0 opacity-60 hover:opacity-100"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
                 <div
                   role="tabpanel"
                   id="settings-panel-general"
@@ -1790,7 +1843,10 @@ interface SearchResultsProps {
   results: ReturnType<typeof filterSettings>;
   query: string;
   cleanQuery: string;
-  onResultClick: (target: SettingsNavTarget) => void;
+  onResultClick: (
+    target: SettingsNavTarget,
+    requiresEnabled?: { settingId: string; label: string }
+  ) => void;
   activeIndex?: number;
 }
 
@@ -1840,7 +1896,10 @@ function SearchResults({
           key={result.id}
           ref={index === activeIndex ? activeRef : undefined}
           onClick={() =>
-            onResultClick({ tab: result.tab, subtab: result.subtab, sectionId: result.id })
+            onResultClick(
+              { tab: result.tab, subtab: result.subtab, sectionId: result.id },
+              result.requiresEnabled
+            )
           }
           className={cn(
             "group w-full text-left p-3 rounded-[var(--radius-md)] border transition-all",
@@ -1864,6 +1923,12 @@ function SearchResults({
                 )}
                 <span className="text-[10px] text-canopy-text/30">›</span>
                 <span className="text-[10px] text-canopy-text/50">{result.section}</span>
+                {result.requiresEnabled && (
+                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-status-warning shrink-0">
+                    <AlertTriangle className="w-3 h-3" />
+                    Requires {result.requiresEnabled.label}
+                  </span>
+                )}
               </div>
               <div className="text-sm font-medium text-canopy-text">
                 <HighlightText text={result.title} query={query} />

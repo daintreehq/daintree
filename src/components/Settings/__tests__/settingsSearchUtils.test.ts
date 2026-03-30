@@ -621,3 +621,66 @@ describe("scope filtering", () => {
     }
   });
 });
+
+describe("requiresEnabled metadata", () => {
+  const byId = (id: string) => SETTINGS_SEARCH_INDEX.find((e) => e.id === id);
+
+  it("MCP hidden entries reference mcp-server-enable", () => {
+    for (const id of ["mcp-server-config", "mcp-server-port", "mcp-server-auth"]) {
+      const entry = byId(id);
+      expect(entry?.requiresEnabled?.settingId).toBe("mcp-server-enable");
+      expect(entry?.requiresEnabled?.label).toBe("MCP Server");
+    }
+  });
+
+  it("Voice speech-to-text sub-settings reference voice-enable", () => {
+    for (const id of [
+      "voice-deepgram-key",
+      "voice-language",
+      "voice-transcription-model",
+      "voice-paragraph-breaks",
+      "voice-custom-dictionary",
+      "voice-ai-correction-enable",
+    ]) {
+      const entry = byId(id);
+      expect(entry?.requiresEnabled?.settingId, `${id} should require voice-enable`).toBe(
+        "voice-enable"
+      );
+      expect(entry?.requiresEnabled?.label).toBe("Voice Input");
+    }
+  });
+
+  it("Voice AI correction sub-settings reference voice-ai-correction-enable", () => {
+    for (const id of ["voice-openai-key", "voice-correction-model", "voice-custom-instructions"]) {
+      const entry = byId(id);
+      expect(
+        entry?.requiresEnabled?.settingId,
+        `${id} should require voice-ai-correction-enable`
+      ).toBe("voice-ai-correction-enable");
+      expect(entry?.requiresEnabled?.label).toBe("AI Text Correction");
+    }
+  });
+
+  it("gate entries themselves do NOT have requiresEnabled", () => {
+    for (const id of ["mcp-server-enable", "voice-enable"]) {
+      expect(byId(id)?.requiresEnabled).toBeUndefined();
+    }
+  });
+
+  it("every requiresEnabled.settingId references an existing entry", () => {
+    const allIds = new Set(SETTINGS_SEARCH_INDEX.map((e) => e.id));
+    for (const entry of SETTINGS_SEARCH_INDEX) {
+      if (entry.requiresEnabled) {
+        expect(
+          allIds.has(entry.requiresEnabled.settingId),
+          `${entry.id} references non-existent entry "${entry.requiresEnabled.settingId}"`
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("hidden settings still appear in search results", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "MCP port");
+    expect(results.some((r) => r.id === "mcp-server-port")).toBe(true);
+  });
+});
