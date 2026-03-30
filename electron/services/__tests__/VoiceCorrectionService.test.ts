@@ -165,7 +165,7 @@ describe("VoiceCorrectionService", () => {
     expect(body.reasoning).toBeUndefined();
     expect(body.max_output_tokens).toBe(1024);
     expect(body.text.format.type).toBe("json_schema");
-    expect(body.prompt_cache_key).toContain("voice-correction-v4");
+    expect(body.prompt_cache_key).toContain("voice-correction-v5");
   });
 
   it("skips LLM call when all words are high confidence", async () => {
@@ -426,6 +426,120 @@ describe("VoiceCorrectionService", () => {
 
       expect(fetchMock).not.toHaveBeenCalled();
       expect(result.action).toBe("no_change");
+    });
+  });
+
+  describe("detectFileLinkTokens", () => {
+    it("returns detected file references from the API", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            output_text: JSON.stringify({
+              file_references: [{ description: "hybrid input bar" }],
+            }),
+          }),
+        } as unknown as Response)
+      );
+
+      const svc = new VoiceCorrectionService();
+      const result = await svc.detectFileLinkTokens("link to the hybrid input bar", {
+        apiKey: "sk-test",
+      });
+
+      expect(result).toEqual([{ description: "hybrid input bar" }]);
+    });
+
+    it("returns empty array on API error", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 500,
+        } as unknown as Response)
+      );
+
+      const svc = new VoiceCorrectionService();
+      const result = await svc.detectFileLinkTokens("link to something", { apiKey: "sk-test" });
+
+      expect(result).toEqual([]);
+    });
+
+    it("returns empty array for empty utterance", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const svc = new VoiceCorrectionService();
+      const result = await svc.detectFileLinkTokens("", { apiKey: "sk-test" });
+
+      expect(result).toEqual([]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("returns empty array on malformed JSON", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            output_text: "not json",
+          }),
+        } as unknown as Response)
+      );
+
+      const svc = new VoiceCorrectionService();
+      const result = await svc.detectFileLinkTokens("link to something", { apiKey: "sk-test" });
+
+      expect(result).toEqual([]);
+    });
+
+    it("filters out empty descriptions", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            output_text: JSON.stringify({
+              file_references: [{ description: "valid" }, { description: "  " }],
+            }),
+          }),
+        } as unknown as Response)
+      );
+
+      const svc = new VoiceCorrectionService();
+      const result = await svc.detectFileLinkTokens("link to valid and nothing", {
+        apiKey: "sk-test",
+      });
+
+      expect(result).toEqual([{ description: "valid" }]);
+    });
+
+    it("returns empty array on timeout", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation(
+          (_url: string, init: RequestInit) =>
+            new Promise((_resolve, reject) => {
+              const timer = setTimeout(() => {}, 30000);
+              init.signal!.addEventListener(
+                "abort",
+                () => {
+                  clearTimeout(timer);
+                  reject(init.signal!.reason);
+                },
+                { once: true }
+              );
+            })
+        )
+      );
+
+      const svc = new VoiceCorrectionService();
+      const resultPromise = svc.detectFileLinkTokens("link to something", { apiKey: "sk-test" });
+      await vi.advanceTimersByTimeAsync(5000);
+      const result = await resultPromise;
+
+      expect(result).toEqual([]);
     });
   });
 

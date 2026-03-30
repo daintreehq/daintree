@@ -136,4 +136,115 @@ describe("FileSearchService", () => {
 
     expect(result).toEqual(["a.ts", "src/", "README.md"]);
   });
+
+  describe("searchNaturalLanguage", () => {
+    it("resolves 'hybrid input bar component' to HybridInputBar.tsx", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      gitClientMock.raw.mockResolvedValue(
+        "src/components/HybridInputBar.tsx\nsrc/components/Button.tsx\nsrc/App.tsx\n"
+      );
+
+      const service = await createService();
+      const result = await service.searchNaturalLanguage({
+        cwd: dir,
+        description: "hybrid input bar component",
+        limit: 5,
+      });
+
+      expect(result[0]).toBe("src/components/HybridInputBar.tsx");
+    });
+
+    it("resolves 'app layout' to AppLayout.tsx", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      gitClientMock.raw.mockResolvedValue(
+        "src/components/AppLayout.tsx\nsrc/App.tsx\nsrc/layout/Sidebar.tsx\n"
+      );
+
+      const service = await createService();
+      const result = await service.searchNaturalLanguage({
+        cwd: dir,
+        description: "app layout",
+        limit: 5,
+      });
+
+      expect(result[0]).toBe("src/components/AppLayout.tsx");
+    });
+
+    it("returns empty array for query with only stop words", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      gitClientMock.raw.mockResolvedValue("src/App.tsx\n");
+
+      const service = await createService();
+      const result = await service.searchNaturalLanguage({
+        cwd: dir,
+        description: "the component file",
+        limit: 5,
+      });
+
+      expect(result).toEqual([]);
+    });
+
+    it("returns empty array for empty description", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      gitClientMock.raw.mockResolvedValue("src/App.tsx\n");
+
+      const service = await createService();
+      const result = await service.searchNaturalLanguage({
+        cwd: dir,
+        description: "",
+        limit: 5,
+      });
+
+      expect(result).toEqual([]);
+    });
+
+    it("skips directory entries", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      gitClientMock.raw.mockResolvedValue("src/app/App.tsx\n");
+
+      const service = await createService();
+      const result = await service.searchNaturalLanguage({
+        cwd: dir,
+        description: "app",
+        limit: 5,
+      });
+
+      expect(result).toEqual(["src/app/App.tsx"]);
+      expect(result.every((r) => !r.endsWith("/"))).toBe(true);
+    });
+
+    it("handles snake_case and kebab-case filenames", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      gitClientMock.raw.mockResolvedValue(
+        "src/voice_recording_service.ts\nsrc/file-search-service.ts\nsrc/other.ts\n"
+      );
+
+      const service = await createService();
+      const result = await service.searchNaturalLanguage({
+        cwd: dir,
+        description: "voice recording service",
+        limit: 5,
+      });
+
+      expect(result[0]).toBe("src/voice_recording_service.ts");
+    });
+  });
 });

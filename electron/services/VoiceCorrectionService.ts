@@ -2,6 +2,7 @@ import { logDebug, logWarn } from "../utils/logger.js";
 import {
   CORE_CORRECTION_PROMPT,
   CONFIDENCE_SKIP_THRESHOLD,
+  FILE_LINK_DETECTION_PROMPT,
   buildCorrectionSystemPrompt,
   buildMicroCorrectionSystemPrompt,
   type CorrectionPromptContext,
@@ -14,9 +15,30 @@ const CORRECTION_TIMEOUT_MS = 7000;
 const MICRO_CORRECTION_TIMEOUT_MS = 3000;
 const MAX_OUTPUT_TOKENS = 1024;
 const MICRO_MAX_OUTPUT_TOKENS = 128;
-const PROMPT_CACHE_PREFIX = "voice-correction-v4";
+const PROMPT_CACHE_PREFIX = "voice-correction-v5";
 const MICRO_PROMPT_CACHE_PREFIX = "voice-micro-correction-v1";
 const MICRO_CORRECTION_MODEL = "gpt-5-nano";
+const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
+const FILE_LINK_CACHE_PREFIX = "voice-file-link-v1";
+
+const FILE_LINK_DETECTION_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    file_references: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          description: { type: "string" },
+        },
+        required: ["description"],
+      },
+    },
+  },
+  required: ["file_references"],
+} as const;
 
 const CORRECTION_RESULT_SCHEMA = {
   type: "object",
@@ -258,6 +280,61 @@ export class VoiceCorrectionService {
         confidence: "low",
         confirmedText: request.rawSpan,
       };
+    }
+  }
+
+  async detectFileLinkTokens(
+    utterance: string,
+    settings: Pick<VoiceCorrectionSettings, "apiKey">
+  ): Promise<Array<{ description: string }>> {
+    const trimmed = utterance.trim();
+    if (!trimmed) return [];
+
+    try {
+      const response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${settings.apiKey}`,
+        },
+        signal: AbortSignal.timeout(FILE_LINK_DETECTION_TIMEOUT_MS),
+        body: JSON.stringify({
+          model: MICRO_CORRECTION_MODEL,
+          instructions: FILE_LINK_DETECTION_PROMPT,
+          input: trimmed,
+          prompt_cache_key: FILE_LINK_CACHE_PREFIX,
+          service_tier: "auto",
+          reasoning: { effort: "minimal" },
+          text: {
+            format: {
+              type: "json_schema",
+              name: "voice_file_link_detection",
+              strict: true,
+              schema: FILE_LINK_DETECTION_SCHEMA,
+            },
+          },
+          max_output_tokens: MICRO_MAX_OUTPUT_TOKENS,
+        }),
+      });
+
+      if (!response.ok) {
+        logWarn(`${P} File link detection API error: ${response.status}`);
+        return [];
+      }
+
+      const data = (await response.json()) as {
+        output_text?: string;
+        output?: Array<{ content?: Array<{ text?: string }> }>;
+      };
+      const parsed = JSON.parse(this.extractResponseText(data)) as {
+        file_references: Array<{ description: string }>;
+      };
+
+      return parsed.file_references.filter((r) => r.description.trim().length > 0);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logWarn(`${P} File link detection failed`, { error: msg });
+      return [];
     }
   }
 

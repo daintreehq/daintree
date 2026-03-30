@@ -1106,6 +1106,9 @@ export interface ElectronAPI {
     openMicSettings(): Promise<void>;
     validateApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
     validateCorrectionApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
+    onFileTokenResolved(
+      callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
+    ): () => void;
   };
   mcpServer: {
     /** Get current MCP server status and configuration */
@@ -1262,4 +1265,6 @@ export interface VoiceInputSettings {
   correctionCustomInstructions: string;
   /** Controls how paragraph breaks are inserted during dictation. Defaults to "spoken-command". */
   paragraphingStrategy: VoiceParagraphingStrategy;
+  /** When enabled, voice commands like "link to X" resolve to @file references. Defaults to true. */
+  resolveFileLinks: boolean;
 }

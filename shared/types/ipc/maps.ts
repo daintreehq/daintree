@@ -1894,6 +1894,11 @@ export interface IpcEventMap {
   };
   "voice-input:correction-replace": { correctionId: string; correctedText: string };
   "voice-input:paragraph-boundary": { rawText: string | null; correctionId: string | null };
+  "voice-input:file-token-resolved": {
+    description: string;
+    replacement: string;
+    resolved: boolean;
+  };
   "voice-input:error": string;
   "voice-input:status": "idle" | "connecting" | "recording" | "error";
 

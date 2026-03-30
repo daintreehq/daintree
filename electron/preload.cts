@@ -641,6 +641,7 @@ const CHANNELS = {
   VOICE_INPUT_VALIDATE_CORRECTION_API_KEY: "voice-input:validate-correction-api-key",
   VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
   VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
+  VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
 
   // MCP Server channels
   MCP_SERVER_GET_STATUS: "mcp-server:get-status",
@@ -2220,6 +2221,7 @@ const api: ElectronAPI = {
         correctionModel: "gpt-5-nano" | "gpt-5-mini";
         correctionCustomInstructions: string;
         paragraphingStrategy: "spoken-command" | "manual";
+        resolveFileLinks: boolean;
       }>
     ) => _unwrappingInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
     start: () => _unwrappingInvoke(CHANNELS.VOICE_INPUT_START),
@@ -2250,6 +2252,9 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, apiKey),
     validateCorrectionApiKey: (apiKey: string) =>
       _unwrappingInvoke(CHANNELS.VOICE_INPUT_VALIDATE_CORRECTION_API_KEY, apiKey),
+    onFileTokenResolved: (
+      callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
+    ) => _typedOn(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, callback),
   },
 
   mcpServer: {
