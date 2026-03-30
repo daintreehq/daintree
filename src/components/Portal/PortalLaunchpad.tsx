@@ -41,11 +41,11 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
               }}
               className="flex items-center gap-4 p-4 rounded-[var(--radius-xl)] bg-canopy-border hover:bg-canopy-border/80 border border-canopy-border hover:border-canopy-border transition-all group focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
             >
-              <div className="w-8 h-8 flex items-center justify-center text-foreground group-hover:text-text-inverse transition-colors">
+              <div className="w-8 h-8 flex items-center justify-center text-foreground group-hover:text-canopy-text transition-colors">
                 <PortalIcon icon={link.icon} size="launchpad" url={link.url} type={link.type} />
               </div>
               <div className="text-left">
-                <div className="font-medium text-foreground group-hover:text-text-inverse transition-colors">
+                <div className="font-medium text-foreground group-hover:text-canopy-text transition-colors">
                   {link.title}
                 </div>
                 <div className="text-xs text-canopy-text/70">Open web client</div>

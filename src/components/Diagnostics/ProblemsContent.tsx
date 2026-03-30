@@ -118,7 +118,7 @@ function ErrorRow({
         <td className="px-3 py-2 text-sm text-canopy-text max-w-md">
           <button
             onClick={onToggleExpand}
-            className="text-left w-full hover:text-text-inverse transition-colors"
+            className="text-left w-full hover:text-canopy-text transition-colors"
             aria-expanded={isExpanded}
             aria-controls={`error-details-${error.id}`}
           >
