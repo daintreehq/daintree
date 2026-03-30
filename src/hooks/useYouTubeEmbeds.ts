@@ -53,7 +53,11 @@ function addEmbed(terminalId: string, videoId: string): void {
 function removeEmbed(terminalId: string, videoId: string): void {
   const current = embedStore.get(terminalId) ?? [];
   const updated = current.filter((e) => e.videoId !== videoId);
-  embedStore.set(terminalId, updated);
+  if (updated.length === 0) {
+    embedStore.delete(terminalId);
+  } else {
+    embedStore.set(terminalId, updated);
+  }
   notifyListeners(terminalId, updated);
 }
 
@@ -83,6 +87,7 @@ function unsubscribeFromData(terminalId: string): void {
     cleanup();
     dataCleanups.delete(terminalId);
     lineBuffers.delete(terminalId);
+    embedStore.delete(terminalId);
   }
 }
 
