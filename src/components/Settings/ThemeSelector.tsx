@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useRef, useMemo, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Search } from "lucide-react";
 
@@ -35,6 +35,8 @@ export function ThemeSelector<T extends { id: string }>({
   id,
 }: ThemeSelectorProps<T>) {
   const [query, setQuery] = useState("");
+  const getNameRef = useRef(getName);
+  getNameRef.current = getName;
 
   const filteredGroups = useMemo(() => {
     if (!groups) return null;
@@ -42,10 +44,11 @@ export function ThemeSelector<T extends { id: string }>({
     return groups
       .map((g) => ({
         ...g,
-        items: lq ? g.items.filter((item) => getName(item).toLowerCase().includes(lq)) : g.items,
+        items: lq
+          ? g.items.filter((item) => getNameRef.current(item).toLowerCase().includes(lq))
+          : g.items,
       }))
       .filter((g) => g.items.length > 0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groups, query]);
 
   const filteredItems = useMemo(() => {
@@ -53,8 +56,7 @@ export function ThemeSelector<T extends { id: string }>({
     const all = items ?? [];
     if (!query) return all;
     const lq = query.toLowerCase();
-    return all.filter((item) => getName(item).toLowerCase().includes(lq));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return all.filter((item) => getNameRef.current(item).toLowerCase().includes(lq));
   }, [items, groups, query]);
 
   const isEmpty = filteredGroups ? filteredGroups.length === 0 : (filteredItems?.length ?? 0) === 0;
