@@ -55,7 +55,7 @@ const registerMocks = vi.hoisted(() => ({
   registerMcpServerHandlers: vi.fn(),
   registerWebviewHandlers: vi.fn(),
   registerDiagnosticsHandlers: vi.fn(),
-  registerWorkflowHandlers: vi.fn(),
+
   registerAccessibilityHandlers: vi.fn(),
   registerDemoHandlers: vi.fn(),
   registerRecoveryHandlers: vi.fn(),
@@ -190,9 +190,6 @@ vi.mock("../handlers/webview.js", () => ({
 }));
 vi.mock("../handlers/diagnostics.js", () => ({
   registerDiagnosticsHandlers: registerMocks.registerDiagnosticsHandlers,
-}));
-vi.mock("../handlers/workflow.js", () => ({
-  registerWorkflowHandlers: registerMocks.registerWorkflowHandlers,
 }));
 vi.mock("../handlers/accessibility.js", () => ({
   registerAccessibilityHandlers: registerMocks.registerAccessibilityHandlers,

@@ -81,11 +81,6 @@ vi.mock("../githubFilterStore", () => ({
   resetGitHubFilterStore: resetGitHubFilterStoreMock,
 }));
 
-const workflowResetMock = vi.fn();
-vi.mock("../workflowStore", () => ({
-  useWorkflowStore: { getState: () => ({ reset: workflowResetMock }) },
-}));
-
 const clearHistoryMock = vi.fn();
 vi.mock("../layoutUndoStore", () => ({
   useLayoutUndoStore: { getState: () => ({ clearHistory: clearHistoryMock }) },
@@ -153,7 +148,7 @@ describe("resetAllStoresForProjectSwitch with skipTerminalStateReset", () => {
     expect(cleanupNotesStoreMock).toHaveBeenCalledOnce();
     expect(resetNoteSearchCacheMock).toHaveBeenCalledOnce();
     expect(resetGitHubFilterStoreMock).toHaveBeenCalledOnce();
-    expect(workflowResetMock).toHaveBeenCalledOnce();
+
     expect(clearHistoryMock).toHaveBeenCalledOnce();
     expect(invalidateBrandingCacheMock).toHaveBeenCalledOnce();
   });

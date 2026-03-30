@@ -1250,38 +1250,6 @@ export interface IpcInvokeMap {
     };
   };
 
-  // Workflow channels
-  "workflow:list": {
-    args: [];
-    result: import("../workflow.js").WorkflowSummary[];
-  };
-  "workflow:start": {
-    args: [workflowId: string];
-    result: string;
-  };
-  "workflow:cancel": {
-    args: [runId: string];
-    result: void;
-  };
-  "workflow:get-run": {
-    args: [runId: string];
-    result: import("./api.js").WorkflowRunIpc | null;
-  };
-  "workflow:list-runs": {
-    args: [];
-    result: import("./api.js").WorkflowRunIpc[];
-  };
-
-  // Workflow approval channels
-  "workflow:list-pending-approvals": {
-    args: [];
-    result: import("../workflowRun.js").PendingWorkflowApproval[];
-  };
-  "workflow:resolve-approval": {
-    args: [payload: { runId: string; nodeId: string; approved: boolean; feedback?: string }];
-    result: void;
-  };
-
   // Plugin channels
   "plugin:list": {
     args: [];
@@ -1895,28 +1863,6 @@ export interface IpcEventMap {
     notePath: string;
     title: string;
     action: "created" | "updated" | "deleted";
-  };
-
-  // Workflow events
-  "workflow:started": import("./api.js").WorkflowStartedPayload;
-  "workflow:completed": import("./api.js").WorkflowCompletedPayload;
-  "workflow:failed": import("./api.js").WorkflowFailedPayload;
-  "workflow:approval-requested": {
-    runId: string;
-    nodeId: string;
-    workflowId: string;
-    workflowName: string;
-    prompt: string;
-    requestedAt: number;
-    timeoutMs?: number;
-    timeoutAt?: number;
-    timestamp: number;
-  };
-  "workflow:approval-cleared": {
-    runId: string;
-    nodeId: string;
-    reason: string;
-    timestamp: number;
   };
 
   // Webview console events

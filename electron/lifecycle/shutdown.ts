@@ -9,7 +9,7 @@ import {
 } from "../services/AgentAvailabilityStore.js";
 import { disposePowerSaveBlockerService } from "../services/PowerSaveBlockerService.js";
 import { disposeAgentRouter } from "../services/AgentRouter.js";
-import { disposeWorkflowEngine } from "../services/WorkflowEngine.js";
+
 import { disposeTaskOrchestrator } from "../services/TaskOrchestrator.js";
 import { disposePtyClient } from "../services/PtyClient.js";
 import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
@@ -139,8 +139,6 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
             disposeAgentRouter();
             disposePowerSaveBlockerService();
             disposeAgentAvailabilityStore();
-            disposeWorkflowEngine();
-
             if (ptyClient) {
               ptyClient.dispose();
               deps.setPtyClient(null);

@@ -60,10 +60,6 @@ vi.mock("../../services/AgentRouter.js", () => ({
   disposeAgentRouter: vi.fn(),
 }));
 
-vi.mock("../../services/WorkflowEngine.js", () => ({
-  disposeWorkflowEngine: vi.fn(),
-}));
-
 vi.mock("../../services/TaskOrchestrator.js", () => ({
   disposeTaskOrchestrator: vi.fn(),
 }));

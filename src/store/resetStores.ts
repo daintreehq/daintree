@@ -11,7 +11,7 @@ import { cleanupNotesStore } from "./notesStore";
 import { resetNoteSearchCache } from "@/hooks/useNoteSearch";
 import { useRecipeStore } from "./recipeStore";
 import { resetGitHubFilterStore } from "./githubFilterStore";
-import { useWorkflowStore } from "./workflowStore";
+
 import { useTerminalInputStore } from "./terminalInputStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
@@ -53,7 +53,7 @@ export async function resetAllStoresForProjectSwitch(
   cleanupNotesStore();
   resetNoteSearchCache();
   resetGitHubFilterStore();
-  useWorkflowStore.getState().reset();
+
   useLayoutUndoStore.getState().clearHistory();
   useVoiceRecordingStore.setState({ panelBuffers: {} });
   invalidateBrandingCache();

@@ -40,7 +40,7 @@ import { useDiskSpaceWarnings } from "./hooks/useDiskSpaceWarnings";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener";
-import { useWorkflowListener } from "./hooks/useWorkflowListener";
+
 import { useActionPalette } from "./hooks/useActionPalette";
 import { useQuickSwitcher } from "./hooks/useQuickSwitcher";
 import { useWorktreePalette } from "./hooks/useWorktreePalette";
@@ -118,7 +118,7 @@ import { PanelLimitConfirmDialog } from "./components/Terminal/PanelLimitConfirm
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { RecipeManager } from "./components/TerminalRecipe/RecipeManager";
 import { NotesPalette } from "./components/Notes";
-import { WorkflowSection } from "./components/Workflow";
+
 function preloadSettingsDialog() {
   return import("./components/Settings/SettingsDialog");
 }
@@ -1137,8 +1137,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           <ScrollIndicator direction="below" count={hiddenBelow} onClick={scrollToBottom} />
         </div>
 
-        <WorkflowSection />
-
         <RecipeEditor
           recipe={recipeManagerEditRef.current}
           worktreeId={recipeEditorWorktreeId}
@@ -1248,7 +1246,7 @@ function App() {
   useWatchedPanelNotifications();
   const reEntrySummary = useReEntrySummary();
   useMainProcessToastListener();
-  useWorkflowListener();
+
   useMcpBridge();
   useSoundPlaybackListener();
   const { homeDir } = useHomeDir();
