@@ -2,7 +2,7 @@
  * Artifact handlers - save to file, apply patch.
  */
 
-import { ipcMain, dialog } from "electron";
+import { ipcMain, dialog, BrowserWindow } from "electron";
 import os from "os";
 import path from "path";
 import { CHANNELS } from "../../channels.js";
@@ -82,7 +82,7 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.ARTIFACT_SAVE_TO_FILE));
 
   const handleArtifactApplyPatch = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     options: unknown
   ): Promise<{ success: boolean; error?: string; modifiedFiles?: string[] }> => {
     try {
@@ -127,7 +127,8 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
         }
 
         if (deps.worktreeService) {
-          const states = await deps.worktreeService.getAllStatesAsync();
+          const senderWindowPatch = BrowserWindow.fromWebContents(event.sender);
+          const states = await deps.worktreeService.getAllStatesAsync(senderWindowPatch?.id);
           const isValidWorktree = states.some(
             (wt: { path: string }) => path.resolve(wt.path) === resolvedCwd
           );

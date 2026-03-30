@@ -1,799 +1,555 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EventEmitter } from "events";
 
-const forkMock = vi.hoisted(() => vi.fn());
-const getAllWindowsMock = vi.hoisted(() => vi.fn(() => []));
-const showMessageBoxMock = vi.hoisted(() => vi.fn().mockResolvedValue({ response: 0 }));
+const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { EventEmitter } = require("events") as typeof import("events");
 
-class MockUtilityProcess extends EventEmitter {
-  postMessage = vi.fn();
-  kill = vi.fn();
-  pid = 12345;
-}
+  const mockHosts: any[] = [];
+
+  class MockWorkspaceHostProcess extends EventEmitter {
+    projectPath: string;
+    private _isReady = false;
+    private _isDisposed = false;
+    private readyResolve: (() => void) | null = null;
+    private readyPromise: Promise<void>;
+    private responseHandlers = new Map<string, (result: any) => void>();
+
+    constructor(projectPath: string) {
+      super();
+      this.projectPath = projectPath;
+      this.readyPromise = new Promise((resolve) => {
+        this.readyResolve = resolve;
+      });
+      mockHosts.push(this);
+    }
+
+    waitForReady(): Promise<void> {
+      return this.readyPromise;
+    }
+
+    isReady(): boolean {
+      return this._isReady && !this._isDisposed;
+    }
+
+    generateRequestId(): string {
+      return `req-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+    }
+
+    send = vi.fn(() => true);
+
+    sendWithResponse = vi.fn(<T>(request: { requestId: string; type: string }): Promise<T> => {
+      return new Promise<T>((resolve) => {
+        this.responseHandlers.set(request.requestId, resolve);
+      });
+    });
+
+    pauseHealthCheck = vi.fn();
+    resumeHealthCheck = vi.fn();
+    dispose = vi.fn(() => {
+      this._isDisposed = true;
+    });
+
+    // Test helpers
+    simulateReady(): void {
+      this._isReady = true;
+      if (this.readyResolve) {
+        this.readyResolve();
+        this.readyResolve = null;
+      }
+    }
+
+    resolveRequest(requestId: string, result: any = {}): void {
+      const handler = this.responseHandlers.get(requestId);
+      if (handler) {
+        this.responseHandlers.delete(requestId);
+        handler(result);
+      }
+    }
+
+    getLastRequest(): { requestId: string; type: string; [key: string]: any } | undefined {
+      const calls = this.sendWithResponse.mock.calls;
+      if (calls.length === 0) return undefined;
+      return calls[calls.length - 1][0] as any;
+    }
+
+    getAllRequests(): Array<{ requestId: string; type: string; [key: string]: any }> {
+      return this.sendWithResponse.mock.calls.map(([req]: any) => req);
+    }
+  }
+
+  return { mockHosts, MockWorkspaceHostProcess };
+});
+
+vi.mock("../WorkspaceHostProcess.js", () => ({
+  WorkspaceHostProcess: MockWorkspaceHostProcess,
+}));
 
 vi.mock("electron", () => ({
-  utilityProcess: {
-    fork: forkMock,
-  },
-  UtilityProcess: class {},
-  dialog: {
-    showMessageBox: showMessageBoxMock,
-  },
-  app: {
-    getPath: vi.fn(() => "/tmp"),
-  },
   BrowserWindow: {
-    getAllWindows: getAllWindowsMock,
+    getAllWindows: vi.fn(() => []),
   },
 }));
 
-vi.mock("../github/GitHubAuth.js", () => ({
-  GitHubAuth: {
-    getToken: vi.fn(() => undefined),
+vi.mock("../events.js", () => ({
+  events: {
+    emit: vi.fn(),
   },
 }));
 
 import { WorkspaceClient } from "../WorkspaceClient.js";
+import { BrowserWindow } from "electron";
 
-describe("WorkspaceClient resilience", () => {
+type MockHost = InstanceType<typeof MockWorkspaceHostProcess>;
+
+// After simulateReady(), sendWithResponse is called asynchronously (next microtask).
+// This helper waits for that to happen.
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+describe("WorkspaceClient multi-process manager", () => {
   let client: WorkspaceClient;
-  let child: MockUtilityProcess;
 
   beforeEach(() => {
-    vi.useFakeTimers();
-    vi.clearAllMocks();
-    child = new MockUtilityProcess();
-    forkMock.mockReturnValue(child);
+    mockHosts.length = 0;
 
     client = new WorkspaceClient({
-      maxRestartAttempts: 0,
+      maxRestartAttempts: 3,
       showCrashDialog: false,
       healthCheckIntervalMs: 1000,
-    });
-
-    void client.waitForReady().catch(() => {
-      // ignore host-ready failures for resilience tests
     });
   });
 
   afterEach(() => {
     client.dispose();
-    vi.runOnlyPendingTimers();
-    vi.useRealTimers();
   });
 
-  it("rejects immediately when host is not running", async () => {
-    child.emit("exit", 1);
+  function h(index: number): MockHost {
+    return mockHosts[index];
+  }
 
-    await expect(client.listBranches("/repo")).rejects.toThrow("Workspace Host not running");
-    expect(
-      (client as never as { pendingRequests: Map<string, unknown> }).pendingRequests.size
-    ).toBe(0);
-  });
+  /** Helper: simulateReady + wait for initPromise's sendWithResponse + resolve it */
+  async function readyAndResolveLoad(hostIndex: number): Promise<void> {
+    h(hostIndex).simulateReady();
+    await tick();
+    const req = h(hostIndex).getLastRequest()!;
+    h(hostIndex).resolveRequest(req.requestId);
+    await tick();
+  }
 
-  it("cleans up pending request when postMessage throws", async () => {
-    child.postMessage.mockImplementation((request: { type?: string }) => {
-      if (request?.type === "dispose") {
-        return;
-      }
-      throw new Error("post failed");
+  describe("loadProject", () => {
+    it("creates a new host process for a new project", async () => {
+      const loadPromise = client.loadProject("/project-a", 1);
+
+      expect(mockHosts).toHaveLength(1);
+      expect(h(0).projectPath).toBe("/project-a");
+
+      h(0).simulateReady();
+      await tick();
+      const req = h(0).getLastRequest()!;
+      expect(req.type).toBe("load-project");
+      expect(req.rootPath).toBe("/project-a");
+      h(0).resolveRequest(req.requestId);
+
+      await loadPromise;
     });
 
-    await expect(client.listBranches("/repo")).rejects.toThrow("post failed");
-    expect(
-      (client as never as { pendingRequests: Map<string, unknown> }).pendingRequests.size
-    ).toBe(0);
-  });
+    it("reuses existing host for same project from different window", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
 
-  it("rejects waitForReady when disposed before ready", async () => {
-    const readyPromise = client.waitForReady();
-
-    client.dispose();
-
-    await expect(readyPromise).rejects.toThrow("disposed");
-  });
-
-  it("resumes health checks after ready when resumed before host initialization completes", async () => {
-    client.pauseHealthCheck();
-    client.resumeHealthCheck();
-
-    child.emit("message", { type: "ready" });
-    child.postMessage.mockClear();
-
-    vi.advanceTimersByTime(1001);
-
-    expect(
-      child.postMessage.mock.calls.some(
-        ([request]) => (request as { type?: string })?.type === "health-check"
-      )
-    ).toBe(true);
-  });
-
-  it("swallows child kill errors during dispose", () => {
-    const badChild = child;
-    badChild.kill.mockImplementation(() => {
-      throw new Error("kill failed");
+      const load2 = client.loadProject("/project-a", 2);
+      expect(mockHosts).toHaveLength(1);
+      await load2;
     });
 
-    expect(() => client.dispose()).not.toThrow();
-    expect(() => vi.runAllTimers()).not.toThrow();
-  });
+    it("creates separate hosts for different projects", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
 
-  it("times out stalled requests and clears pending state", async () => {
-    const request = client.listBranches("/repo");
+      const load2 = client.loadProject("/project-b", 2);
+      expect(mockHosts).toHaveLength(2);
+      expect(h(1).projectPath).toBe("/project-b");
 
-    vi.advanceTimersByTime(30001);
-
-    await expect(request).rejects.toThrow("Request timeout");
-    expect(
-      (client as never as { pendingRequests: Map<string, unknown> }).pendingRequests.size
-    ).toBe(0);
-  });
-
-  it("discards getAllStatesAsync response when project scope changed before response arrives", async () => {
-    const clientPrivate = client as never as {
-      windowScopes: Map<number, { scopeId: string; rootPath: string }>;
-    };
-
-    clientPrivate.windowScopes.set(1, { scopeId: "scope-project-a", rootPath: "/a" });
-
-    // getAllStatesAsync with windowId uses per-window scope guard
-    const getAllPromise = client.getAllStatesAsync(1);
-
-    const lastCall = child.postMessage.mock.calls.at(-1)!;
-    const requestId = (lastCall[0] as { requestId: string }).requestId;
-
-    // Simulate project switch: scope is cleared for window 1
-    clientPrivate.windowScopes.delete(1);
-
-    child.emit("message", {
-      type: "all-states",
-      requestId,
-      states: [{ id: "stale-worktree", name: "Stale Worktree" }],
+      await readyAndResolveLoad(1);
+      await load2;
     });
 
-    const result = await getAllPromise;
-    expect(result).toEqual([]);
+    it("switches window from one project to another", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      const load2 = client.loadProject("/project-b", 1);
+      expect(mockHosts).toHaveLength(2);
+
+      await readyAndResolveLoad(1);
+      await load2;
+    });
   });
 
-  it("discards getAllStatesAsync response when scope was null at call time (no project loaded)", async () => {
-    // Window 1 has no scope registered
-    const getAllPromise = client.getAllStatesAsync(1);
+  describe("getAllStatesAsync", () => {
+    it("routes to window-specific host when windowId provided", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
 
-    const lastCall = child.postMessage.mock.calls.at(-1)!;
-    const requestId = (lastCall[0] as { requestId: string }).requestId;
-
-    child.emit("message", {
-      type: "all-states",
-      requestId,
-      states: [{ id: "no-scope-worktree", name: "No Scope Worktree" }],
-    });
-
-    const result = await getAllPromise;
-    expect(result).toEqual([]);
-  });
-
-  it("returns getAllStatesAsync results when project scope is unchanged", async () => {
-    const clientPrivate = client as never as {
-      windowScopes: Map<number, { scopeId: string; rootPath: string }>;
-    };
-
-    clientPrivate.windowScopes.set(1, { scopeId: "scope-project-a", rootPath: "/a" });
-
-    const getAllPromise = client.getAllStatesAsync(1);
-
-    const lastCall = child.postMessage.mock.calls.at(-1)!;
-    const requestId = (lastCall[0] as { requestId: string }).requestId;
-
-    child.emit("message", {
-      type: "all-states",
-      requestId,
-      states: [{ id: "valid-worktree", name: "Valid Worktree" }],
-    });
-
-    const result = await getAllPromise;
-    expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("valid-worktree");
-  });
-
-  it("returns getAllStatesAsync results without stale guard when no windowId provided", async () => {
-    // No windowId — background caller, bypass stale guard
-    const getAllPromise = client.getAllStatesAsync();
-
-    const lastCall = child.postMessage.mock.calls.at(-1)!;
-    const requestId = (lastCall[0] as { requestId: string }).requestId;
-
-    child.emit("message", {
-      type: "all-states",
-      requestId,
-      states: [{ id: "bg-worktree", name: "BG Worktree" }],
-    });
-
-    const result = await getAllPromise;
-    expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("bg-worktree");
-  });
-
-  describe("loadProject race serialization", () => {
-    beforeEach(() => {
-      child.emit("message", { type: "ready" });
-    });
-
-    it("second loadProject supersedes the first (latest wins)", async () => {
-      const p1 = client.loadProject("/project-a", 1);
-      const p2 = client.loadProject("/project-b", 1);
-
-      // Capture the scope IDs sent in each request
-      const call1 = child.postMessage.mock.calls.at(-2)!;
-      const call2 = child.postMessage.mock.calls.at(-1)!;
-      const scopeA = (call1[0] as { projectScopeId: string }).projectScopeId;
-      const scopeB = (call2[0] as { projectScopeId: string }).projectScopeId;
-
-      // Resolve first call (stale), then second call (current)
-      child.emit("message", {
-        type: "load-project-result",
-        requestId: (call1[0] as { requestId: string }).requestId,
-      });
-      child.emit("message", {
-        type: "load-project-result",
-        requestId: (call2[0] as { requestId: string }).requestId,
+      const statesPromise = client.getAllStatesAsync(1);
+      await tick();
+      const req = h(0).getLastRequest()!;
+      expect(req.type).toBe("get-all-states");
+      h(0).resolveRequest(req.requestId, {
+        states: [{ id: "wt-1", name: "Main" }],
       });
 
-      await p1;
-      await p2;
-
-      const clientPrivate = client as never as {
-        windowScopes: Map<number, { scopeId: string; rootPath: string }>;
-        windowLoadGeneration: Map<number, number>;
-      };
-      const scope = clientPrivate.windowScopes.get(1)!;
-      expect(scope.rootPath).toBe("/project-b");
-      expect(scope.scopeId).toBe(scopeB);
-      expect(scope.scopeId).not.toBe(scopeA);
-      expect(clientPrivate.windowLoadGeneration.get(1)).toBe(2);
+      const result = await statesPromise;
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("wt-1");
     });
 
-    it("restart auto-reload is skipped when superseded by user loadProject", async () => {
-      // Give restartClient its own dedicated mock to avoid cross-contamination
-      const dedicatedChild = new MockUtilityProcess();
-      forkMock.mockReturnValue(dedicatedChild);
-
-      const restartClient = new WorkspaceClient({
-        maxRestartAttempts: 1,
-        showCrashDialog: false,
-        healthCheckIntervalMs: 1000,
-      });
-
-      // Make it ready and load a project for window 1
-      dedicatedChild.emit("message", { type: "ready" });
-      const loadCall = restartClient.loadProject("/original-project", 1);
-      const origCall = dedicatedChild.postMessage.mock.calls.at(-1)!;
-      dedicatedChild.emit("message", {
-        type: "load-project-result",
-        requestId: (origCall[0] as { requestId: string }).requestId,
-      });
-      await loadCall;
-
-      // Simulate host crash
-      const restartChild2 = new MockUtilityProcess();
-      forkMock.mockReturnValue(restartChild2);
-      dedicatedChild.emit("exit", 1);
-
-      // Advance timer to trigger restart
-      vi.advanceTimersByTime(2001);
-
-      // The restart path has captured generationAtRestart and is waiting for ready.
-      // Now user switches project before the new host is ready.
-      const userLoad = restartClient.loadProject("/user-project", 1);
-      const userCall = restartChild2.postMessage.mock.calls.at(-1)!;
-
-      // Make the restarted host ready — this resolves waitForReady in the restart path
-      restartChild2.emit("message", { type: "ready" });
-
-      // Resolve the user's loadProject
-      restartChild2.emit("message", {
-        type: "load-project-result",
-        requestId: (userCall[0] as { requestId: string }).requestId,
-      });
-      await userLoad;
-
-      // Flush microtasks so the restart path .then() runs
-      await Promise.resolve();
-      await Promise.resolve();
-
-      const clientPrivate = restartClient as never as {
-        windowScopes: Map<number, { scopeId: string; rootPath: string }>;
-      };
-      // The restart path should have been skipped — user's project wins
-      expect(clientPrivate.windowScopes.get(1)!.rootPath).toBe("/user-project");
-
-      // The restart path should NOT have issued another loadProject call
-      // (only the original load + user load = 2 loadProject calls total)
-      const loadProjectCalls = [
-        ...dedicatedChild.postMessage.mock.calls,
-        ...restartChild2.postMessage.mock.calls,
-      ].filter(([msg]) => (msg as { type: string }).type === "load-project");
-      expect(loadProjectCalls).toHaveLength(2);
-
-      restartClient.dispose();
+    it("returns empty array when window has no project", async () => {
+      const result = await client.getAllStatesAsync(999);
+      expect(result).toEqual([]);
     });
 
-    it("restart auto-reload proceeds when not superseded", async () => {
-      // Give restartClient its own dedicated mock to avoid cross-contamination
-      const dedicatedChild = new MockUtilityProcess();
-      forkMock.mockReturnValue(dedicatedChild);
+    it("aggregates from all hosts when no windowId", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
 
-      const restartClient = new WorkspaceClient({
-        maxRestartAttempts: 1,
-        showCrashDialog: false,
-        healthCheckIntervalMs: 1000,
+      const load2 = client.loadProject("/project-b", 2);
+      await readyAndResolveLoad(1);
+      await load2;
+
+      // getAllStatesAsync iterates sequentially — must resolve host 0 before host 1 is called
+      const statesPromise = client.getAllStatesAsync();
+      await tick();
+
+      // Host 0 is awaited first
+      const reqA = h(0).getLastRequest()!;
+      h(0).resolveRequest(reqA.requestId, {
+        states: [{ id: "wt-a", name: "A" }],
       });
 
-      // Make it ready and load a project for window 1
-      dedicatedChild.emit("message", { type: "ready" });
-      const loadCall = restartClient.loadProject("/my-project", 1);
-      const origCall = dedicatedChild.postMessage.mock.calls.at(-1)!;
-      dedicatedChild.emit("message", {
-        type: "load-project-result",
-        requestId: (origCall[0] as { requestId: string }).requestId,
-      });
-      await loadCall;
-
-      // Simulate host crash
-      const restartChild2 = new MockUtilityProcess();
-      forkMock.mockReturnValue(restartChild2);
-      dedicatedChild.emit("exit", 1);
-
-      // Advance timer to trigger restart
-      vi.advanceTimersByTime(2001);
-
-      // Make the restarted host ready
-      restartChild2.emit("message", { type: "ready" });
-
-      // Flush microtasks for the .then() chain
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-
-      // The restart path should have issued a loadProject call
-      const reloadCall = restartChild2.postMessage.mock.calls.find(
-        ([msg]) => (msg as { type: string }).type === "load-project"
-      );
-      expect(reloadCall).toBeDefined();
-      expect((reloadCall![0] as { rootPath: string }).rootPath).toBe("/my-project");
-
-      // Resolve the reload
-      restartChild2.emit("message", {
-        type: "load-project-result",
-        requestId: (reloadCall![0] as { requestId: string }).requestId,
+      // After host 0 resolves, host 1 is called next
+      await tick();
+      const reqB = h(1).getLastRequest()!;
+      h(1).resolveRequest(reqB.requestId, {
+        states: [{ id: "wt-b", name: "B" }],
       });
 
-      await Promise.resolve();
-
-      restartClient.dispose();
+      const result = await statesPromise;
+      expect(result).toHaveLength(2);
+      expect(result.map((s) => s.id)).toEqual(["wt-a", "wt-b"]);
     });
   });
 
-  describe("watchdog", () => {
-    let killSpy: ReturnType<typeof vi.spyOn>;
+  describe("onProjectSwitch / releaseWindow", () => {
+    it("releases window refcount on project switch", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
 
-    beforeEach(() => {
-      killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-      child.emit("message", { type: "ready" });
-      child.postMessage.mockClear();
+      await client.onProjectSwitch(1);
+
+      const result = await client.getAllStatesAsync(1);
+      expect(result).toEqual([]);
     });
 
-    afterEach(() => {
-      killSpy.mockRestore();
-    });
+    it("does not dispose host immediately when other windows still reference it", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
 
-    it("force-kills host after 3 missed heartbeats", () => {
-      // Advance through 3 health check intervals without sending pong
-      vi.advanceTimersByTime(1001); // tick 1: missedHeartbeats = 1
-      vi.advanceTimersByTime(1000); // tick 2: missedHeartbeats = 2
-      vi.advanceTimersByTime(1000); // tick 3: missedHeartbeats = 3
-      vi.advanceTimersByTime(1000); // tick 4: threshold hit, force-kill
+      const load2 = client.loadProject("/project-a", 2);
+      await load2;
 
-      expect(killSpy).toHaveBeenCalledWith(12345, "SIGKILL");
-    });
+      await client.onProjectSwitch(1);
 
-    it("pong resets missed heartbeat counter preventing force-kill", () => {
-      vi.advanceTimersByTime(1001); // tick 1: missedHeartbeats = 1
-      vi.advanceTimersByTime(1000); // tick 2: missedHeartbeats = 2
-
-      child.emit("message", { type: "pong" }); // reset to 0
-
-      vi.advanceTimersByTime(1000); // tick: missedHeartbeats = 1
-      vi.advanceTimersByTime(1000); // tick: missedHeartbeats = 2
-
-      expect(killSpy).not.toHaveBeenCalled();
-    });
-
-    it("skips kill when pid is undefined", () => {
-      child.pid = undefined as unknown as number;
-
-      vi.advanceTimersByTime(1001);
-      vi.advanceTimersByTime(1000);
-      vi.advanceTimersByTime(1000);
-      vi.advanceTimersByTime(1000);
-
-      expect(killSpy).not.toHaveBeenCalled();
-    });
-
-    it("watchdog kill triggers exit handler and restart flow", () => {
-      const crashHandler = vi.fn();
-      client.on("host-crash", crashHandler);
-
-      vi.advanceTimersByTime(4001); // 4 ticks, triggers kill on tick 4
-
-      expect(killSpy).toHaveBeenCalledWith(12345, "SIGKILL");
-
-      // Simulate the OS delivering the exit event after SIGKILL
-      child.emit("exit", null);
-
-      // With maxRestartAttempts: 0, host-crash should be emitted
-      expect(crashHandler).toHaveBeenCalled();
+      expect(h(0).dispose).not.toHaveBeenCalled();
     });
   });
 
-  describe("handshake", () => {
-    let killSpy: ReturnType<typeof vi.spyOn>;
-
-    beforeEach(() => {
-      killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-      child.emit("message", { type: "ready" });
-      child.postMessage.mockClear();
-    });
-
-    afterEach(() => {
-      killSpy.mockRestore();
-    });
-
-    it("resume sends immediate handshake ping", () => {
-      client.pauseHealthCheck();
-      client.resumeHealthCheck();
-
-      expect(
-        child.postMessage.mock.calls.some(
-          ([msg]) => (msg as { type?: string })?.type === "health-check"
-        )
-      ).toBe(true);
-    });
-
-    it("pong completes handshake and starts interval", () => {
-      client.pauseHealthCheck();
-      client.resumeHealthCheck();
-      child.postMessage.mockClear();
-
-      // Send pong to complete handshake
-      child.emit("message", { type: "pong" });
-
-      // Now advance past one interval — health check should fire
-      vi.advanceTimersByTime(1001);
-
-      expect(
-        child.postMessage.mock.calls.some(
-          ([msg]) => (msg as { type?: string })?.type === "health-check"
-        )
-      ).toBe(true);
-    });
-
-    it("5s timeout falls back to starting interval", () => {
-      client.pauseHealthCheck();
-      client.resumeHealthCheck();
-      child.postMessage.mockClear();
-
-      // Advance past 5s handshake timeout
-      vi.advanceTimersByTime(5001);
-
-      // Handshake timed out, interval should have started — advance one more interval
-      vi.advanceTimersByTime(1001);
-
-      expect(
-        child.postMessage.mock.calls.some(
-          ([msg]) => (msg as { type?: string })?.type === "health-check"
-        )
-      ).toBe(true);
-    });
-
-    it("late pong after timeout is harmless", () => {
-      client.pauseHealthCheck();
-      client.resumeHealthCheck();
-
-      // Timeout fires
-      vi.advanceTimersByTime(5001);
-
-      // Late pong arrives — should not crash or start duplicate interval
-      expect(() => child.emit("message", { type: "pong" })).not.toThrow();
-    });
-
-    it("pause clears handshake timeout", () => {
-      client.pauseHealthCheck();
-      client.resumeHealthCheck();
-      child.postMessage.mockClear();
-
-      // Re-pause before handshake completes
-      client.pauseHealthCheck();
-
-      // Advance past where handshake timeout would fire
-      vi.advanceTimersByTime(6000);
-
-      // No health checks should have been sent
-      expect(
-        child.postMessage.mock.calls.some(
-          ([msg]) => (msg as { type?: string })?.type === "health-check"
-        )
-      ).toBe(false);
-    });
-
-    it("dispose during handshake is clean", () => {
-      client.pauseHealthCheck();
-      client.resumeHealthCheck();
-
-      client.dispose();
-
-      // Advance past handshake timeout — should not crash
-      expect(() => vi.advanceTimersByTime(6000)).not.toThrow();
-    });
-
-    it("resume before host ready returns early without handshake", () => {
-      // Create a fresh client where host is not yet ready
-      const freshChild = new MockUtilityProcess();
-      forkMock.mockReturnValue(freshChild);
-      const freshClient = new WorkspaceClient({
-        maxRestartAttempts: 0,
-        showCrashDialog: false,
-        healthCheckIntervalMs: 1000,
-      });
-      void freshClient.waitForReady().catch(() => {});
-
-      freshClient.pauseHealthCheck();
-      freshChild.postMessage.mockClear();
-      freshClient.resumeHealthCheck();
-
-      // No handshake ping should be sent since host is not ready
-      expect(
-        freshChild.postMessage.mock.calls.some(
-          ([msg]) => (msg as { type?: string })?.type === "health-check"
-        )
-      ).toBe(false);
-
-      // But after ready, health checks should start
-      freshChild.emit("message", { type: "ready" });
-      freshChild.postMessage.mockClear();
-      vi.advanceTimersByTime(1001);
-
-      expect(
-        freshChild.postMessage.mock.calls.some(
-          ([msg]) => (msg as { type?: string })?.type === "health-check"
-        )
-      ).toBe(true);
-
-      freshClient.dispose();
-    });
-  });
-
-  describe("setActiveWorktree echo suppression", () => {
-    let mockWindow: {
-      isDestroyed: ReturnType<typeof vi.fn>;
-      webContents: { isDestroyed: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn> };
-    };
-
-    beforeEach(() => {
-      mockWindow = {
+  describe("host event routing", () => {
+    it("routes worktree-update to windows of the correct project", async () => {
+      const mockWindow1 = {
+        id: 1,
         isDestroyed: vi.fn(() => false),
         webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
       };
-      getAllWindowsMock.mockReturnValue([mockWindow] as never[]);
+      const mockWindow2 = {
+        id: 2,
+        isDestroyed: vi.fn(() => false),
+        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
+      };
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([mockWindow1, mockWindow2] as any);
 
-      // Make the host "ready" so requests go through
-      child.emit("message", { type: "ready" });
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      const load2 = client.loadProject("/project-b", 2);
+      await readyAndResolveLoad(1);
+      await load2;
+
+      h(0).emit("host-event", {
+        type: "worktree-update",
+        worktree: {
+          id: "wt-1",
+          path: "/a/wt",
+          name: "wt",
+          branch: "main",
+        },
+      });
+
+      expect(mockWindow1.webContents.send).toHaveBeenCalled();
+      expect(mockWindow2.webContents.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("broadcast methods", () => {
+    it("pauseHealthCheck fans out to all hosts", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      const load2 = client.loadProject("/project-b", 2);
+      await readyAndResolveLoad(1);
+      await load2;
+
+      client.pauseHealthCheck();
+
+      expect(h(0).pauseHealthCheck).toHaveBeenCalled();
+      expect(h(1).pauseHealthCheck).toHaveBeenCalled();
     });
 
-    function resolveSetActive() {
-      const lastCall = child.postMessage.mock.calls.at(-1)!;
-      const requestId = (lastCall[0] as { requestId: string }).requestId;
-      child.emit("message", { type: "set-active-result", requestId });
-    }
+    it("updateGitHubToken sends to all hosts", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
 
-    it("emits WORKTREE_ACTIVATED by default (backend-initiated)", async () => {
-      const clientPrivate = client as never as {
-        windowScopes: Map<number, { scopeId: string; rootPath: string }>;
+      client.updateGitHubToken("test-token");
+
+      expect(h(0).send).toHaveBeenCalledWith({
+        type: "update-github-token",
+        token: "test-token",
+      });
+    });
+  });
+
+  describe("dispose", () => {
+    it("disposes all host processes", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      const load2 = client.loadProject("/project-b", 2);
+      await readyAndResolveLoad(1);
+      await load2;
+
+      client.dispose();
+
+      expect(h(0).dispose).toHaveBeenCalled();
+      expect(h(1).dispose).toHaveBeenCalled();
+    });
+
+    it("rejects loadProject after dispose", async () => {
+      client.dispose();
+      await expect(client.loadProject("/project-a", 1)).rejects.toThrow("disposed");
+    });
+  });
+
+  describe("isReady", () => {
+    it("returns true when no entries exist and not disposed", () => {
+      expect(client.isReady()).toBe(true);
+    });
+
+    it("returns false after dispose", () => {
+      client.dispose();
+      expect(client.isReady()).toBe(false);
+    });
+
+    it("returns true when at least one host is ready", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      expect(client.isReady()).toBe(true);
+    });
+  });
+
+  describe("resolveHostForPath", () => {
+    it("routes listBranches to the correct host by path", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      const load2 = client.loadProject("/project-b", 2);
+      await readyAndResolveLoad(1);
+      await load2;
+
+      const branchesPromise = client.listBranches("/project-a");
+      await tick();
+      const req = h(0).getLastRequest()!;
+      expect(req.type).toBe("list-branches");
+      h(0).resolveRequest(req.requestId, { branches: [{ name: "main" }] });
+
+      const result = await branchesPromise;
+      expect(result).toHaveLength(1);
+
+      const hostBReqs = h(1)
+        .getAllRequests()
+        .filter((r: any) => r.type === "list-branches");
+      expect(hostBReqs).toHaveLength(0);
+    });
+
+    it("resolves child paths to parent project host", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      const branchesPromise = client.listBranches("/project-a/worktrees/feature-1");
+      await tick();
+      const req = h(0).getLastRequest()!;
+      expect(req.type).toBe("list-branches");
+      h(0).resolveRequest(req.requestId, { branches: [] });
+
+      await branchesPromise;
+    });
+  });
+
+  describe("restart recovery", () => {
+    it("re-sends loadProject after host restart", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      // Simulate restart — host is already "ready" from simulateReady
+      h(0).emit("restarted");
+
+      await vi.waitFor(() => {
+        const reqs = h(0)
+          .getAllRequests()
+          .filter((r: any) => r.type === "load-project");
+        expect(reqs).toHaveLength(2);
+      });
+
+      const reloadReq = h(0)
+        .getAllRequests()
+        .filter((r: any) => r.type === "load-project")[1];
+      expect(reloadReq.rootPath).toBe("/project-a");
+    });
+  });
+
+  describe("setActiveWorktree", () => {
+    it("emits WORKTREE_ACTIVATED by default", async () => {
+      const mockWindow = {
+        id: 1,
+        isDestroyed: vi.fn(() => false),
+        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
       };
-      clientPrivate.windowScopes.set(1, { scopeId: "scope-a", rootPath: "/a" });
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([mockWindow] as any);
 
-      const promise = client.setActiveWorktree("wt-1", 1);
-      resolveSetActive();
-      await promise;
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
 
-      expect(mockWindow.webContents.send).toHaveBeenCalledTimes(1);
+      const setActivePromise = client.setActiveWorktree("wt-1", 1);
+      await tick();
+      const req = h(0).getLastRequest()!;
+      h(0).resolveRequest(req.requestId);
+      await setActivePromise;
+
       expect(mockWindow.webContents.send).toHaveBeenCalledWith("worktree:activated", {
         worktreeId: "wt-1",
       });
     });
 
-    it("does NOT emit WORKTREE_ACTIVATED when silent: true (renderer-initiated)", async () => {
-      const clientPrivate = client as never as {
-        windowScopes: Map<number, { scopeId: string; rootPath: string }>;
+    it("does NOT emit WORKTREE_ACTIVATED when silent: true", async () => {
+      const mockWindow = {
+        id: 1,
+        isDestroyed: vi.fn(() => false),
+        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
       };
-      clientPrivate.windowScopes.set(1, { scopeId: "scope-a", rootPath: "/a" });
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([mockWindow] as any);
 
-      const promise = client.setActiveWorktree("wt-1", 1, { silent: true });
-      resolveSetActive();
-      await promise;
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      const setActivePromise = client.setActiveWorktree("wt-1", 1, { silent: true });
+      await tick();
+      const req = h(0).getLastRequest()!;
+      h(0).resolveRequest(req.requestId);
+      await setActivePromise;
 
       expect(mockWindow.webContents.send).not.toHaveBeenCalled();
     });
 
-    it("does NOT emit WORKTREE_ACTIVATED when project scope changed mid-flight", async () => {
-      const clientPrivate = client as never as {
-        windowScopes: Map<number, { scopeId: string; rootPath: string }>;
+    it("does NOT emit WORKTREE_ACTIVATED when all hosts reject", async () => {
+      const mockWindow = {
+        id: 1,
+        isDestroyed: vi.fn(() => false),
+        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
       };
-      clientPrivate.windowScopes.set(1, { scopeId: "scope-a", rootPath: "/a" });
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([mockWindow] as any);
 
-      const promise = client.setActiveWorktree("wt-1", 1);
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
 
-      // Simulate scope change before response arrives
-      clientPrivate.windowScopes.set(1, { scopeId: "scope-b", rootPath: "/b" });
+      // Make sendWithResponse reject for set-active
+      h(0).sendWithResponse.mockImplementationOnce(() => {
+        return Promise.reject(new Error("Worktree not found"));
+      });
 
-      resolveSetActive();
-      await promise;
+      await client.setActiveWorktree("wt-nonexistent", 1);
 
       expect(mockWindow.webContents.send).not.toHaveBeenCalled();
     });
   });
 
-  describe("per-window scope isolation", () => {
-    let mockWindow1: {
-      id: number;
-      isDestroyed: ReturnType<typeof vi.fn>;
-      webContents: { isDestroyed: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn> };
-    };
-    let mockWindow2: {
-      id: number;
-      isDestroyed: ReturnType<typeof vi.fn>;
-      webContents: { isDestroyed: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn> };
-    };
+  describe("worktree path routing", () => {
+    it("routes via worktreePathToProject reverse map for sibling worktrees", async () => {
+      const load = client.loadProject("/repos/app", 1);
+      await readyAndResolveLoad(0);
+      await load;
 
-    beforeEach(() => {
-      mockWindow1 = {
-        id: 1,
-        isDestroyed: vi.fn(() => false),
-        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
-      };
-      mockWindow2 = {
-        id: 2,
-        isDestroyed: vi.fn(() => false),
-        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
-      };
-      getAllWindowsMock.mockReturnValue([mockWindow1, mockWindow2] as never[]);
-
-      child.emit("message", { type: "ready" });
-    });
-
-    async function loadProjectForWindow(windowId: number, rootPath: string, scopeId: string) {
-      const p = client.loadProject(rootPath, windowId, scopeId);
-      const lastCall = child.postMessage.mock.calls.at(-1)!;
-      const requestId = (lastCall[0] as { requestId: string }).requestId;
-      child.emit("message", { type: "load-project-result", requestId });
-      await p;
-    }
-
-    it("sends worktree-update only to matching window", async () => {
-      await loadProjectForWindow(1, "/project-a", "scope-a");
-      await loadProjectForWindow(2, "/project-b", "scope-b");
-
-      child.emit("message", {
+      // Simulate worktree-update event that populates the reverse map
+      h(0).emit("host-event", {
         type: "worktree-update",
-        projectScopeId: "scope-a",
-        worktree: { id: "wt-1", path: "/a/wt", name: "wt", branch: "main" },
+        worktree: {
+          id: "wt-feat",
+          path: "/repos/app-worktrees/feature-1",
+          name: "feature-1",
+          branch: "feature-1",
+        },
       });
 
-      expect(mockWindow1.webContents.send).toHaveBeenCalledWith(
-        "worktree:update",
-        expect.objectContaining({ id: "wt-1" })
-      );
-      expect(mockWindow2.webContents.send).not.toHaveBeenCalled();
-    });
+      // Now resolve a path-based call to the sibling worktree
+      const branchesPromise = client.listBranches("/repos/app-worktrees/feature-1");
+      await tick();
+      const req = h(0).getLastRequest()!;
+      expect(req.type).toBe("list-branches");
+      h(0).resolveRequest(req.requestId, { branches: [{ name: "feature-1" }] });
 
-    it("sends to both windows when they share the same scopeId", async () => {
-      await loadProjectForWindow(1, "/shared-project", "scope-shared");
-      await loadProjectForWindow(2, "/shared-project", "scope-shared");
-
-      child.emit("message", {
-        type: "worktree-update",
-        projectScopeId: "scope-shared",
-        worktree: { id: "wt-2", path: "/s/wt", name: "wt2", branch: "dev" },
-      });
-
-      expect(mockWindow1.webContents.send).toHaveBeenCalled();
-      expect(mockWindow2.webContents.send).toHaveBeenCalled();
-    });
-
-    it("onProjectSwitch clears only target window scope", async () => {
-      await loadProjectForWindow(1, "/project-a", "scope-a");
-      await loadProjectForWindow(2, "/project-b", "scope-b");
-
-      const switchPromise = client.onProjectSwitch(1);
-      const lastCall = child.postMessage.mock.calls.at(-1)!;
-      const requestId = (lastCall[0] as { requestId: string }).requestId;
-      child.emit("message", { type: "project-switch-result", requestId });
-      await switchPromise;
-
-      const clientPrivate = client as never as {
-        windowScopes: Map<number, { scopeId: string; rootPath: string }>;
-      };
-      expect(clientPrivate.windowScopes.has(1)).toBe(false);
-      expect(clientPrivate.windowScopes.has(2)).toBe(true);
-
-      // Events for scope-a should not reach any window now
-      mockWindow1.webContents.send.mockClear();
-      mockWindow2.webContents.send.mockClear();
-
-      child.emit("message", {
-        type: "worktree-update",
-        projectScopeId: "scope-a",
-        worktree: { id: "wt-3", path: "/a/wt3", name: "wt3", branch: "main" },
-      });
-
-      expect(mockWindow1.webContents.send).not.toHaveBeenCalled();
-      expect(mockWindow2.webContents.send).not.toHaveBeenCalled();
-    });
-
-    it("unregisterWindow cleans up all per-window state", async () => {
-      await loadProjectForWindow(1, "/project-a", "scope-a");
-      await loadProjectForWindow(2, "/project-b", "scope-b");
-
-      client.unregisterWindow(1);
-
-      const clientPrivate = client as never as {
-        windowScopes: Map<number, { scopeId: string; rootPath: string }>;
-        windowLoadGeneration: Map<number, number>;
-        windowMismatchWarnAt: Map<number, number>;
-      };
-      expect(clientPrivate.windowScopes.has(1)).toBe(false);
-      expect(clientPrivate.windowLoadGeneration.has(1)).toBe(false);
-      expect(clientPrivate.windowScopes.has(2)).toBe(true);
-
-      // Events for scope-b still reach window 2
-      child.emit("message", {
-        type: "worktree-update",
-        projectScopeId: "scope-b",
-        worktree: { id: "wt-4", path: "/b/wt4", name: "wt4", branch: "feat" },
-      });
-
-      expect(mockWindow2.webContents.send).toHaveBeenCalled();
-    });
-
-    it("getAllStatesAsync per-window stale guard does not cross-contaminate windows", async () => {
-      await loadProjectForWindow(1, "/project-a", "scope-a");
-      await loadProjectForWindow(2, "/project-b", "scope-b");
-
-      // Window 1 issues getAllStatesAsync
-      const getAllPromise = client.getAllStatesAsync(1);
-      const lastCall = child.postMessage.mock.calls.at(-1)!;
-      const requestId = (lastCall[0] as { requestId: string }).requestId;
-
-      // Window 2 switches project — should NOT affect window 1
-      const switchP = client.loadProject("/project-c", 2, "scope-c");
-      const switchCall = child.postMessage.mock.calls.at(-1)!;
-      child.emit("message", {
-        type: "load-project-result",
-        requestId: (switchCall[0] as { requestId: string }).requestId,
-      });
-      await switchP;
-
-      // Now deliver window 1's response
-      child.emit("message", {
-        type: "all-states",
-        requestId,
-        states: [{ id: "wt-valid", name: "Valid" }],
-      });
-
-      const result = await getAllPromise;
+      const result = await branchesPromise;
       expect(result).toHaveLength(1);
-      expect(result[0].id).toBe("wt-valid");
+    });
+
+    it("does not route to wrong host when multiple projects exist", async () => {
+      const load1 = client.loadProject("/repos/app-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      const load2 = client.loadProject("/repos/app-b", 2);
+      await readyAndResolveLoad(1);
+      await load2;
+
+      // Unknown path with multiple hosts should return undefined (not fall back)
+      const result = await client.listBranches("/repos/unknown-project").catch(() => []);
+      expect(result).toEqual([]);
     });
   });
 });

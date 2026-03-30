@@ -523,12 +523,13 @@ export async function setupWindowServices(
     }
   }
 
-  // Wait for pty-host before workspace-host (first window only)
+  // Initialize workspace client (first window only) — per-project hosts
+  // are started on-demand when loadProject() is called, not at init time.
   if (!workspaceClient) {
-    console.log("[MAIN] Waiting for Pty Host to be ready before starting Workspace Host...");
+    console.log("[MAIN] Waiting for Pty Host to be ready before initializing Workspace Client...");
     try {
       await ptyClient!.waitForReady();
-      console.log("[MAIN] Pty Host ready, starting Workspace Host...");
+      console.log("[MAIN] Pty Host ready, initializing Workspace Client...");
     } catch (error) {
       console.error("[MAIN] Pty Host failed to start:", error);
     }
@@ -579,18 +580,17 @@ export async function setupWindowServices(
   // Wait for remaining services
   console.log("[MAIN] Waiting for remaining services to initialize...");
   let ptyReady = false;
-  let workspaceReady = false;
+  // Workspace client is always "ready" — per-project hosts start on-demand via loadProject()
+  const workspaceReady = true;
 
   try {
     const results = await Promise.allSettled([
       ptyClient!.waitForReady(),
-      workspaceClient!.waitForReady(),
       projectStore.initialize(),
     ]);
 
     ptyReady = results[0].status === "fulfilled";
-    workspaceReady = results[1].status === "fulfilled";
-    const projectStoreReady = results[2].status === "fulfilled";
+    const projectStoreReady = results[1].status === "fulfilled";
 
     if (ptyReady && workspaceReady && projectStoreReady) {
       console.log("[MAIN] All critical services ready");
@@ -600,13 +600,9 @@ export async function setupWindowServices(
         failures.push(
           `PTY service: ${results[0].status === "rejected" ? results[0].reason?.message || "unknown error" : "timeout"}`
         );
-      if (!workspaceReady)
-        failures.push(
-          `Workspace service: ${results[1].status === "rejected" ? results[1].reason?.message || "unknown error" : "timeout"}`
-        );
       if (!projectStoreReady)
         failures.push(
-          `Project store: ${results[2].status === "rejected" ? results[2].reason?.message || "unknown error" : "timeout"}`
+          `Project store: ${results[1].status === "rejected" ? results[1].reason?.message || "unknown error" : "timeout"}`
         );
 
       console.error("[MAIN] Service initialization failed:", failures);

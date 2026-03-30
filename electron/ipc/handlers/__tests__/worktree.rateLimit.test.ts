@@ -10,6 +10,9 @@ const checkRateLimitMock = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
+  BrowserWindow: {
+    fromWebContents: vi.fn().mockReturnValue(null),
+  },
 }));
 
 vi.mock("../../utils.js", () => ({

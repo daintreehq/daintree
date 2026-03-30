@@ -179,7 +179,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
-    const states = await deps.worktreeService.getAllStatesAsync();
+    const states = await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
     const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
     if (!worktree) {
@@ -243,7 +243,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
-    const states = await deps.worktreeService.getAllStatesAsync();
+    const states = await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
     const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
     if (!worktree) {
@@ -384,7 +384,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     contextInjectionTracker.beginInjection(validated.terminalId, injectionId);
 
     try {
-      const states = await deps.worktreeService.getAllStatesAsync();
+      const states = await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
       const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
       if (!worktree) {
@@ -539,7 +539,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_GET_FILE_TREE));
 
   const handleCopyTreeTestConfig = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: import("../../types/index.js").CopyTreeTestConfigPayload
   ): Promise<import("../../types/index.js").CopyTreeTestConfigResult> => {
     checkRateLimit(CHANNELS.COPYTREE_TEST_CONFIG, 5, 10_000);
@@ -573,7 +573,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
-    const states = await deps.worktreeService.getAllStatesAsync();
+    const senderWindowTestConfig = BrowserWindow.fromWebContents(event.sender);
+    const states = await deps.worktreeService.getAllStatesAsync(senderWindowTestConfig?.id);
     const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
     if (!worktree) {

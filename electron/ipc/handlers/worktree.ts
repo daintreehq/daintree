@@ -29,11 +29,12 @@ import { taskWorktreeService } from "../../services/TaskWorktreeService.js";
 export function registerWorktreeHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleWorktreeGetAll = async () => {
+  const handleWorktreeGetAll = async (event: Electron.IpcMainInvokeEvent) => {
     if (!deps.worktreeService) {
       return [];
     }
-    return await deps.worktreeService.getAllStatesAsync();
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    return await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
   };
   ipcMain.handle(CHANNELS.WORKTREE_GET_ALL, handleWorktreeGetAll);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_ALL));
@@ -192,7 +193,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH));
 
   const handleWorktreeDelete = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: WorktreeDeletePayload
   ) => {
     checkRateLimit(CHANNELS.WORKTREE_DELETE, 10, 10_000);
@@ -211,7 +212,8 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     if (payload.deleteBranch !== undefined && typeof payload.deleteBranch !== "boolean") {
       throw new Error("Invalid deleteBranch parameter");
     }
-    const states = await deps.worktreeService.getAllStatesAsync();
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    const states = await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
     const worktree = states.find((wt) => wt.id === payload.worktreeId);
     await deps.worktreeService.deleteWorktree(
       payload.worktreeId,
@@ -314,7 +316,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_GET_FILE_DIFF));
 
   const handleGitGetProjectPulse = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: {
       worktreeId: string;
       rangeDays: PulseRangeDays;
@@ -359,7 +361,8 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       throw new Error(`Worktree not found: ${worktreeId}`);
     }
 
-    const states = await deps.worktreeService.getAllStatesAsync();
+    const senderWindowPulse = BrowserWindow.fromWebContents(event.sender);
+    const states = await deps.worktreeService.getAllStatesAsync(senderWindowPulse?.id);
     const mainWorktree = states.find((wt) => wt.isMainWorktree);
     const mainBranch = mainWorktree?.branch ?? "main";
 
@@ -406,7 +409,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   // Task orchestration handlers
 
   const handleWorktreeCreateForTask = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: CreateForTaskPayload
   ): Promise<WorktreeState> => {
     await waitForRateLimitSlot(
@@ -438,7 +441,8 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     const rootPath = project.path;
 
     // Get all states to find the main worktree and determine base branch
-    const states = await deps.worktreeService.getAllStatesAsync();
+    const senderWindowCreate = BrowserWindow.fromWebContents(event.sender);
+    const states = await deps.worktreeService.getAllStatesAsync(senderWindowCreate?.id);
     const mainWorktree = states.find((wt) => wt.isMainWorktree);
 
     // Use provided baseBranch, or default to main worktree's branch, or "main"
@@ -645,7 +649,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_BY_TASK_ID));
 
   const handleWorktreeCleanupTask = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     taskId: string,
     options?: CleanupTaskOptions
   ): Promise<void> => {
@@ -685,9 +689,10 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     const errors: string[] = [];
 
     // Fetch all worktree states once for efficient main-worktree checking
+    const senderWindowCleanup = BrowserWindow.fromWebContents(event.sender);
     let allStates: Awaited<ReturnType<typeof deps.worktreeService.getAllStatesAsync>> = [];
     try {
-      allStates = await deps.worktreeService.getAllStatesAsync();
+      allStates = await deps.worktreeService.getAllStatesAsync(senderWindowCleanup?.id);
     } catch (error) {
       logDebug("Could not fetch worktree states for cleanup pre-check", {
         error: error instanceof Error ? error.message : String(error),

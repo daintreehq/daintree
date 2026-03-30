@@ -77,9 +77,7 @@ export class WorkspaceService {
     this.prService = new PRIntegrationService(pullRequestService, events, {
       onPRDetected: (worktreeId, data) => {
         const monitor = this.monitors.get(worktreeId);
-        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
-          return;
-        }
+        if (!monitor) return;
 
         monitor.setPRInfo({
           prNumber: data.prNumber,
@@ -108,9 +106,7 @@ export class WorkspaceService {
       },
       onPRCleared: (worktreeId) => {
         const monitor = this.monitors.get(worktreeId);
-        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
-          return;
-        }
+        if (!monitor) return;
 
         monitor.clearPRInfo();
         if (monitor.hasInitialStatus) {
@@ -127,9 +123,7 @@ export class WorkspaceService {
       },
       onIssueDetected: (worktreeId, data) => {
         const monitor = this.monitors.get(worktreeId);
-        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
-          return;
-        }
+        if (!monitor) return;
 
         monitor.setIssueTitle(data.issueTitle);
         if (monitor.hasInitialStatus) {
@@ -148,12 +142,8 @@ export class WorkspaceService {
       },
       onIssueNotFound: (worktreeId, issueNumber) => {
         const monitor = this.monitors.get(worktreeId);
-        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
-          return;
-        }
-        if (monitor.issueNumber !== issueNumber) {
-          return;
-        }
+        if (!monitor) return;
+        if (monitor.issueNumber !== issueNumber) return;
 
         monitor.setIssueNumber(undefined);
         monitor.setIssueTitle(undefined);
@@ -403,9 +393,6 @@ export class WorkspaceService {
     if (!this.projectScopeId) {
       return;
     }
-    if (monitor.projectScopeId !== this.projectScopeId) {
-      return;
-    }
     const snapshot = monitor.getSnapshot();
     this.sendEvent({
       type: "worktree-update",
@@ -417,9 +404,6 @@ export class WorkspaceService {
 
   private emitUpdate(monitor: WorktreeMonitor): void {
     if (!this.projectScopeId) {
-      return;
-    }
-    if (monitor.projectScopeId !== this.projectScopeId) {
       return;
     }
     const snapshot = monitor.getSnapshot();
@@ -481,9 +465,6 @@ export class WorkspaceService {
   getAllStates(requestId: string): void {
     const states: WorktreeSnapshot[] = [];
     for (const monitor of this.monitors.values()) {
-      if (this.projectScopeId && monitor.projectScopeId !== this.projectScopeId) {
-        continue;
-      }
       states.push(monitor.getSnapshot());
     }
     this.sendEvent({ type: "all-states", requestId, states });
