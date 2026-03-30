@@ -435,7 +435,9 @@ export function AppThemePicker() {
   );
 
   const activeDescendant =
-    open && activeIndex >= 0 ? `theme-option-${flatList[activeIndex]?.id}` : undefined;
+    open && activeIndex >= 0 && activeIndex < flatList.length
+      ? `theme-option-${flatList[activeIndex].id}`
+      : undefined;
 
   const selectedWarnings = warningsByScheme.get(selectedScheme.id) ?? [];
 

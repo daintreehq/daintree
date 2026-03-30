@@ -114,6 +114,7 @@ export function ColorSchemePicker() {
         <input
           type="text"
           placeholder="Filter schemes…"
+          aria-label="Filter schemes"
           value={filterQuery}
           onChange={(e) => setFilterQuery(e.target.value)}
           className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder:text-canopy-text/40 focus:outline-none border-b border-canopy-border pb-1"
