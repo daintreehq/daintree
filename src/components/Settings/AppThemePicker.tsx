@@ -371,7 +371,6 @@ export function AppThemePicker() {
         <div className="relative flex-1 min-w-0">
           <button
             ref={triggerRef}
-            role="combobox"
             aria-haspopup="listbox"
             aria-expanded={open}
             aria-controls="theme-listbox"
