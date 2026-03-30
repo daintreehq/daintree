@@ -20,7 +20,10 @@ CONFIDENCE TAGS: Words wrapped in <uncertain>word</uncertain> inside <target> we
 CORRECTION PRIORITY:
 1. REQUIRED TERMS / CUSTOM DICTIONARY — Always map phonetically similar words to their exact canonical form.
 2. TECHNICAL TERMS — Correct misheard programming terms using the <terms> dictionary below.
-3. PARAGRAPHS & PUNCTUATION — Add natural paragraph breaks, sentence punctuation, and casing.
+3. PARAGRAPHS & PUNCTUATION — Add natural paragraph breaks, sentence punctuation, and casing. When the speaker uses a standalone voice formatting command (a phrase whose sole purpose is to insert a break, not part of a grammatical sentence), remove the command text and insert the corresponding characters:
+   - Paragraph break (\\n\\n): "new paragraph", "next paragraph", "start a new paragraph", "start new paragraph"
+   - Line break (\\n): "new line", "next line", "line break"
+   Only treat these as commands when spoken as isolated formatting instructions between sentences, not when they appear naturally in speech (e.g. "explain the new paragraph feature" should NOT trigger a break).
 4. FILLER REMOVAL — Remove um, uh, like, you know only when clearly filler, not meaningful.
 5. HOMOPHONES — Fix their/there, its/it's, your/you're when context makes the correct form unambiguous.
 
