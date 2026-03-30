@@ -849,6 +849,7 @@ export function BulkCreateWorktreeDialog({
     }
   }, [
     planned,
+    mode,
     selectedRecipeId,
     projectId,
     recipeSelectionTouchedRef,
