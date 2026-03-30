@@ -128,4 +128,36 @@ describe("UserAgentRegistryService", () => {
       "valid-id": expect.objectContaining({ id: "valid-id" }),
     });
   });
+
+  it("reload() re-reads from store and updates shared registry", () => {
+    (storeMock.get as Mock).mockReturnValue({
+      alpha: createConfig("alpha"),
+    });
+
+    const service = new UserAgentRegistryService();
+    expect(service.getRegistry()).toEqual({
+      alpha: expect.objectContaining({ id: "alpha" }),
+    });
+
+    // Simulate external config change
+    (storeMock.get as Mock).mockReturnValue({
+      alpha: createConfig("alpha"),
+      beta: createConfig("beta"),
+    });
+
+    service.reload();
+
+    const registry = service.getRegistry();
+    expect(registry).toEqual({
+      alpha: expect.objectContaining({ id: "alpha" }),
+      beta: expect.objectContaining({ id: "beta" }),
+    });
+    // syncToSharedRegistry is called during reload
+    expect(setUserRegistryMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        alpha: expect.objectContaining({ id: "alpha" }),
+        beta: expect.objectContaining({ id: "beta" }),
+      })
+    );
+  });
 });

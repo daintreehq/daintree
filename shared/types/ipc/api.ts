@@ -321,6 +321,8 @@ export interface ElectronAPI {
     quit(): Promise<void>;
     forceQuit(): Promise<void>;
     onMenuAction(callback: (action: string) => void): () => void;
+    reloadConfig(): Promise<{ success: boolean }>;
+    onConfigReloaded(callback: () => void): () => void;
   };
   menu: {
     showContext(payload: ShowContextMenuPayload): Promise<string | null>;

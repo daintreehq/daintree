@@ -13,6 +13,7 @@ interface AgentSettingsState {
 
 interface AgentSettingsActions {
   initialize: () => Promise<void>;
+  refresh: () => Promise<void>;
   updateAgent: (agentId: string, updates: Partial<AgentSettingsEntry>) => Promise<void>;
   setAgentSelected: (agentId: string, selected: boolean) => Promise<void>;
   reset: (agentId?: string) => Promise<void>;
@@ -48,6 +49,17 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     })();
 
     return initPromise;
+  },
+
+  refresh: async () => {
+    set({ error: null });
+    try {
+      const settings = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
+      set({ settings });
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : "Failed to refresh agent settings" });
+      throw e;
+    }
   },
 
   updateAgent: async (agentId: string, updates: Partial<AgentSettingsEntry>) => {

@@ -15,6 +15,10 @@ const getRegistryMock = vi.hoisted(() => vi.fn(() => ({})));
 const addAgentMock = vi.hoisted(() => vi.fn(() => ({ success: true })));
 const updateAgentMock = vi.hoisted(() => vi.fn(() => ({ success: true })));
 const removeAgentMock = vi.hoisted(() => vi.fn(() => ({ success: true })));
+const reloadMock = vi.hoisted(() => vi.fn());
+const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+const createApplicationMenuMock = vi.hoisted(() => vi.fn());
+const eventsEmitMock = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
@@ -36,7 +40,16 @@ vi.mock("../../../services/UserAgentRegistryService.js", () => ({
     addAgent = addAgentMock;
     updateAgent = updateAgentMock;
     removeAgent = removeAgentMock;
+    reload = reloadMock;
   },
+}));
+
+vi.mock("../../utils.js", () => ({
+  broadcastToRenderer: broadcastToRendererMock,
+}));
+
+vi.mock("../../../menu.js", () => ({
+  createApplicationMenu: createApplicationMenuMock,
 }));
 
 import { CHANNELS } from "../../channels.js";
@@ -273,5 +286,54 @@ describe("ai handler payload validation", () => {
         }),
       })
     );
+  });
+});
+
+describe("APP_RELOAD_CONFIG handler", () => {
+  it("reloads the user agent registry, rebuilds menu, emits event, and broadcasts to renderer", async () => {
+    const mainWindow = { isDestroyed: () => false } as never;
+    const cliAvailabilityService = {} as never;
+    const events = { emit: eventsEmitMock } as never;
+
+    vi.clearAllMocks();
+    registerAiHandlers({ mainWindow, cliAvailabilityService, events } as never);
+
+    const handler = getInvokeHandler(CHANNELS.APP_RELOAD_CONFIG);
+    const result = await handler();
+
+    expect(reloadMock).toHaveBeenCalled();
+    expect(createApplicationMenuMock).toHaveBeenCalledWith(mainWindow, cliAvailabilityService);
+    expect(eventsEmitMock).toHaveBeenCalledWith("sys:config:reload");
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.APP_CONFIG_RELOADED);
+    expect(result).toEqual({ success: true });
+  });
+
+  it("skips menu rebuild when mainWindow is destroyed", async () => {
+    const mainWindow = { isDestroyed: () => true } as never;
+    const events = { emit: eventsEmitMock } as never;
+
+    vi.clearAllMocks();
+    registerAiHandlers({ mainWindow, events } as never);
+
+    const handler = getInvokeHandler(CHANNELS.APP_RELOAD_CONFIG);
+    await handler();
+
+    expect(reloadMock).toHaveBeenCalled();
+    expect(createApplicationMenuMock).not.toHaveBeenCalled();
+    expect(broadcastToRendererMock).toHaveBeenCalled();
+  });
+
+  it("skips menu rebuild and event emit when deps are missing", async () => {
+    vi.clearAllMocks();
+    registerAiHandlers({} as never);
+
+    const handler = getInvokeHandler(CHANNELS.APP_RELOAD_CONFIG);
+    const result = await handler();
+
+    expect(reloadMock).toHaveBeenCalled();
+    expect(createApplicationMenuMock).not.toHaveBeenCalled();
+    expect(eventsEmitMock).not.toHaveBeenCalled();
+    expect(broadcastToRendererMock).toHaveBeenCalled();
+    expect(result).toEqual({ success: true });
   });
 });

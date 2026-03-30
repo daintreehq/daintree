@@ -279,6 +279,12 @@ export function createApplicationMenu(
         },
         { type: "separator" },
         {
+          label: "Reload Configuration",
+          click: (_item, browserWindow) =>
+            sendAction("reload-config", getTargetBrowserWindow(browserWindow)),
+        },
+        { type: "separator" },
+        {
           label: "Learn More",
           click: async () => {
             await shell.openExternal("https://github.com/gregpriday/canopy-electron");
