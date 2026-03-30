@@ -527,6 +527,10 @@ export async function setupWindowServices(
     });
 
     handlerDeps.worktreeService = workspaceClient;
+
+    workspaceClient.on("host-crash", (code: number) => {
+      console.error(`[MAIN] Workspace Host crashed with code ${code}`);
+    });
   }
 
   const { armRestoreQuota } = await import("../ipc/utils.js");
@@ -558,12 +562,6 @@ export async function setupWindowServices(
       sendToRenderer(win, CHANNELS.WINDOW_DISK_SPACE_STATUS, diskStatus);
     }
   });
-
-  if (workspaceClient) {
-    workspaceClient.on("host-crash", (code: number) => {
-      console.error(`[MAIN] Workspace Host crashed with code ${code}`);
-    });
-  }
 
   // Wait for remaining services
   console.log("[MAIN] Waiting for remaining services to initialize...");
@@ -908,6 +906,18 @@ export async function setupWindowServices(
     if (ptyClient) ptyClient.dispose();
     ptyClient = null;
     disposePtyClient();
+
+    // Clean up IPC handlers and reset guards so next window re-registers fresh
+    if (cleanupIpcHandlers) {
+      cleanupIpcHandlers();
+      cleanupIpcHandlers = null;
+    }
+    if (cleanupErrorHandlers) {
+      cleanupErrorHandlers();
+      cleanupErrorHandlers = null;
+    }
+    ipcHandlersRegistered = false;
+    globalServicesInitialized = false;
 
     getSystemSleepService().dispose();
     notificationService.dispose();
