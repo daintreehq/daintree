@@ -22,7 +22,9 @@ interface QuickCreateState {
 
 interface BulkCreateDialogState {
   isOpen: boolean;
+  mode: "issue" | "pr";
   selectedIssues: GitHubIssue[];
+  selectedPRs: GitHubPR[];
 }
 
 interface CrossDiffDialogState {
@@ -60,6 +62,7 @@ interface WorktreeSelectionState {
   openCreateDialogForPR: (pr: GitHubPR) => void;
   closeCreateDialog: () => void;
   openBulkCreateDialog: (selectedIssues: GitHubIssue[]) => void;
+  openBulkCreateDialogForPRs: (selectedPRs: GitHubPR[]) => void;
   closeBulkCreateDialog: () => void;
   openQuickCreate: (context?: { issue?: GitHubIssue | null; pr?: GitHubPR | null }) => void;
   closeQuickCreate: () => void;
@@ -228,7 +231,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   expandedWorktrees: new Set<string>(),
   expandedTerminals: new Set<string>(),
   createDialog: { isOpen: false, initialIssue: null, initialPR: null, initialRecipeId: null },
-  bulkCreateDialog: { isOpen: false, selectedIssues: [] },
+  bulkCreateDialog: { isOpen: false, mode: "issue", selectedIssues: [], selectedPRs: [] },
   quickCreate: { isOpen: false, issue: null, pr: null },
   crossDiffDialog: { isOpen: false, initialWorktreeId: null },
   _policyGeneration: 0,
@@ -437,7 +440,14 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
       window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
     }
-    set({ bulkCreateDialog: { isOpen: true, selectedIssues } });
+    set({ bulkCreateDialog: { isOpen: true, mode: "issue", selectedIssues, selectedPRs: [] } });
+  },
+
+  openBulkCreateDialogForPRs: (selectedPRs) => {
+    if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
+    }
+    set({ bulkCreateDialog: { isOpen: true, mode: "pr", selectedIssues: [], selectedPRs } });
   },
 
   closeBulkCreateDialog: () =>
@@ -486,7 +496,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       expandedWorktrees: new Set<string>(),
       expandedTerminals: new Set<string>(),
       createDialog: { isOpen: false, initialIssue: null, initialPR: null, initialRecipeId: null },
-      bulkCreateDialog: { isOpen: false, selectedIssues: [] },
+      bulkCreateDialog: { isOpen: false, mode: "issue", selectedIssues: [], selectedPRs: [] },
       quickCreate: { isOpen: false, issue: null, pr: null },
       crossDiffDialog: { isOpen: false, initialWorktreeId: null },
       lastFocusedTerminalByWorktree: new Map<string, string>(),

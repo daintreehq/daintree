@@ -1186,7 +1186,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         <BulkCreateWorktreeDialog
           isOpen={bulkCreateDialog.isOpen}
           onClose={closeBulkCreateDialog}
+          mode={bulkCreateDialog.mode}
           selectedIssues={bulkCreateDialog.selectedIssues}
+          selectedPRs={bulkCreateDialog.selectedPRs}
           onComplete={closeBulkCreateDialog}
         />
       </div>

@@ -8,6 +8,7 @@ export interface RecipeContext {
 const VARIABLE_DEFINITIONS = [
   { name: "issue_number", description: "GitHub issue number" },
   { name: "pr_number", description: "GitHub PR number" },
+  { name: "number", description: "GitHub issue or PR number (whichever is set)" },
   { name: "worktree_path", description: "Absolute path to worktree directory" },
   { name: "branch_name", description: "Git branch name" },
 ] as const;
@@ -21,6 +22,10 @@ export function replaceRecipeVariables(text: string, context: RecipeContext): st
         return context.issueNumber != null ? `#${context.issueNumber}` : "";
       case "pr_number":
         return context.prNumber != null ? `#${context.prNumber}` : "";
+      case "number": {
+        const num = context.issueNumber ?? context.prNumber;
+        return num != null ? `#${num}` : "";
+      }
       case "worktree_path":
         return context.worktreePath ?? "";
       case "branch_name":
@@ -47,6 +52,12 @@ export function detectUnresolvedVariables(text: string, context: RecipeContext):
     const name = match[1].toLowerCase();
     if (seen.has(name)) continue;
     seen.add(name);
+    if (name === "number") {
+      if (context.issueNumber == null && context.prNumber == null) {
+        unresolved.push(name);
+      }
+      continue;
+    }
     const contextKey = VARIABLE_CONTEXT_MAP[name];
     if (contextKey && context[contextKey] == null) {
       unresolved.push(name);

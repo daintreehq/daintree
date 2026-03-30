@@ -20,12 +20,16 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useRecipePicker } from "@/components/Worktree/hooks/useRecipePicker";
 import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNewWorktreeProjectSettings";
-import type { GitHubIssue } from "@shared/types/github";
+import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+
+type BulkCreateMode = "issue" | "pr";
 
 interface BulkCreateWorktreeDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  mode: BulkCreateMode;
   selectedIssues: GitHubIssue[];
+  selectedPRs: GitHubPR[];
   onComplete: () => void;
 }
 
@@ -241,21 +245,24 @@ function nextBackoffDelay(prevDelay: number): number {
 }
 
 interface PlannedWorktree {
-  issue: GitHubIssue;
+  item: GitHubIssue | GitHubPR;
+  mode: BulkCreateMode;
   branchName: string;
   prefix: string;
   skipped: boolean;
   skipReason?: string;
+  headRefName?: string;
 }
 
-function planWorktrees(
+function planIssueWorktrees(
   issues: GitHubIssue[],
   existingIssueNumbers: Set<number>
 ): PlannedWorktree[] {
   return issues.map((issue) => {
     if (issue.state !== "OPEN") {
       return {
-        issue,
+        item: issue,
+        mode: "issue",
         branchName: "",
         prefix: "",
         skipped: true,
@@ -264,7 +271,8 @@ function planWorktrees(
     }
     if (existingIssueNumbers.has(issue.number)) {
       return {
-        issue,
+        item: issue,
+        mode: "issue",
         branchName: "",
         prefix: "",
         skipped: true,
@@ -277,7 +285,61 @@ function planWorktrees(
     const issuePrefix = `issue-${issue.number}-`;
     const branchName = buildBranchName(prefix, `${issuePrefix}${slug || "worktree"}`);
 
-    return { issue, branchName, prefix, skipped: false };
+    return { item: issue, mode: "issue", branchName, prefix, skipped: false };
+  });
+}
+
+function planPRWorktrees(prs: GitHubPR[], existingPRNumbers: Set<number>): PlannedWorktree[] {
+  return prs.map((pr) => {
+    if (pr.state !== "OPEN") {
+      return {
+        item: pr,
+        mode: "pr",
+        branchName: "",
+        prefix: "",
+        skipped: true,
+        skipReason: pr.state === "MERGED" ? "Merged" : "Closed",
+      };
+    }
+    if (pr.isFork) {
+      return {
+        item: pr,
+        mode: "pr",
+        branchName: "",
+        prefix: "",
+        skipped: true,
+        skipReason: "Fork PR",
+      };
+    }
+    if (!pr.headRefName) {
+      return {
+        item: pr,
+        mode: "pr",
+        branchName: "",
+        prefix: "",
+        skipped: true,
+        skipReason: "No branch info",
+      };
+    }
+    if (existingPRNumbers.has(pr.number)) {
+      return {
+        item: pr,
+        mode: "pr",
+        branchName: "",
+        prefix: "",
+        skipped: true,
+        skipReason: "Has worktree",
+      };
+    }
+
+    return {
+      item: pr,
+      mode: "pr",
+      branchName: pr.headRefName,
+      prefix: "",
+      skipped: false,
+      headRefName: pr.headRefName,
+    };
   });
 }
 
@@ -304,7 +366,9 @@ function getStageLabel(status: ItemStatus | undefined): string | null {
 export function BulkCreateWorktreeDialog({
   isOpen,
   onClose,
+  mode,
   selectedIssues,
+  selectedPRs,
   onComplete,
 }: BulkCreateWorktreeDialogProps) {
   const [progress, dispatchProgress] = useReducer(progressReducer, {
@@ -365,12 +429,19 @@ export function BulkCreateWorktreeDialog({
   // Plan worktrees
   const planned = useMemo(() => {
     const worktrees = useWorktreeDataStore.getState().worktrees;
+    if (mode === "pr") {
+      const existingPRNumbers = new Set<number>();
+      for (const wt of worktrees.values()) {
+        if (wt.prNumber) existingPRNumbers.add(wt.prNumber);
+      }
+      return planPRWorktrees(selectedPRs, existingPRNumbers);
+    }
     const existingIssueNumbers = new Set<number>();
     for (const wt of worktrees.values()) {
       if (wt.issueNumber) existingIssueNumbers.add(wt.issueNumber);
     }
-    return planWorktrees(selectedIssues, existingIssueNumbers);
-  }, [selectedIssues]);
+    return planIssueWorktrees(selectedIssues, existingIssueNumbers);
+  }, [mode, selectedIssues, selectedPRs]);
 
   const creatableCount = planned.filter((p) => !p.skipped).length;
 
@@ -426,16 +497,17 @@ export function BulkCreateWorktreeDialog({
         strict: true,
       });
       queueRef.current = queue;
-      const currentRunIssues = new Set(toCreate.map((item) => item.issue.number));
-      const succeededIssues = new Set<number>();
-      const failedIssues = new Set<number>();
+      const currentRunItems = new Set(toCreate.map((p) => p.item.number));
+      const succeededItems = new Set<number>();
+      const failedItems = new Set<number>();
       let lastSuccessfulWorktreeId: string | null = null;
 
-      for (const item of toCreate) {
+      for (const planned of toCreate) {
         void queue.add(async () => {
           if (runIdRef.current !== currentRunId) return;
 
-          const tracked = tracking.get(item.issue.number);
+          const itemNumber = planned.item.number;
+          const tracked = tracking.get(itemNumber);
           let backoffDelay = BACKOFF_BASE_MS;
 
           for (let attempt = 1; attempt <= MAX_AUTO_RETRIES + 1; attempt++) {
@@ -448,10 +520,9 @@ export function BulkCreateWorktreeDialog({
               let resolvedBranch = tracked?.resolvedBranch;
 
               if (!worktreeId) {
-                // Check if a worktree for this branch already exists (idempotent retry)
                 const worktrees = useWorktreeDataStore.getState().worktrees;
                 for (const wt of worktrees.values()) {
-                  if (wt.branch && wt.branch === item.branchName) {
+                  if (wt.branch && wt.branch === planned.branchName) {
                     worktreeId = wt.worktreeId;
                     worktreePath = wt.path;
                     resolvedBranch = wt.branch;
@@ -463,58 +534,102 @@ export function BulkCreateWorktreeDialog({
               if (!worktreeId) {
                 dispatchProgress({
                   type: "ITEM_WORKTREE_CREATING",
-                  issueNumber: item.issue.number,
+                  issueNumber: itemNumber,
                   attempt,
                 });
 
-                // Determine base branch
-                const mainWorktree = Array.from(
-                  useWorktreeDataStore.getState().worktrees.values()
-                ).find((w) => w.isMainWorktree);
-                const baseBranch = mainWorktree?.branch;
-                if (!baseBranch) throw new Error("No main worktree found for base branch");
+                if (planned.mode === "pr" && planned.headRefName) {
+                  // PR mode: resolve branch from headRefName
+                  const branches = await worktreeClient.listBranches(rootPath);
+                  const remoteBranchName = `origin/${planned.headRefName}`;
+                  const remoteBranch = branches.find((b) => b.name === remoteBranchName);
+                  const localBranch = branches.find(
+                    (b) => b.name === planned.headRefName && !b.remote
+                  );
 
-                const availableBranch = await worktreeClient.getAvailableBranch(
-                  rootPath,
-                  item.branchName
-                );
-                const path = await worktreeClient.getDefaultPath(rootPath, availableBranch);
+                  let createFromRemote = false;
+                  let createUseExisting = false;
+                  let createBaseBranch: string;
 
-                const createdId = await worktreeClient.create(
-                  {
-                    baseBranch,
-                    newBranch: availableBranch,
-                    path,
-                    fromRemote: false,
-                    useExistingBranch: false,
-                  },
-                  rootPath
-                );
+                  if (remoteBranch) {
+                    createFromRemote = true;
+                    createBaseBranch = remoteBranchName;
+                  } else if (localBranch) {
+                    createUseExisting = true;
+                    createBaseBranch = localBranch.name;
+                  } else {
+                    throw new Error(
+                      `Branch "${planned.headRefName}" not found locally or on remote. Try fetching first.`
+                    );
+                  }
 
-                if (!createdId) throw new Error("Failed to create worktree: no ID returned");
+                  const path = await worktreeClient.getDefaultPath(rootPath, planned.headRefName);
 
-                worktreeId = createdId;
-                worktreePath = path;
-                resolvedBranch = availableBranch;
+                  const createdId = await worktreeClient.create(
+                    {
+                      baseBranch: createBaseBranch,
+                      newBranch: planned.headRefName,
+                      path,
+                      fromRemote: createFromRemote,
+                      useExistingBranch: createUseExisting,
+                    },
+                    rootPath
+                  );
 
-                tracking.set(item.issue.number, {
+                  if (!createdId) throw new Error("Failed to create worktree: no ID returned");
+
+                  worktreeId = createdId;
+                  worktreePath = path;
+                  resolvedBranch = planned.headRefName;
+                } else {
+                  // Issue mode: create new branch from base
+                  const mainWorktree = Array.from(
+                    useWorktreeDataStore.getState().worktrees.values()
+                  ).find((w) => w.isMainWorktree);
+                  const baseBranch = mainWorktree?.branch;
+                  if (!baseBranch) throw new Error("No main worktree found for base branch");
+
+                  const availableBranch = await worktreeClient.getAvailableBranch(
+                    rootPath,
+                    planned.branchName
+                  );
+                  const path = await worktreeClient.getDefaultPath(rootPath, availableBranch);
+
+                  const createdId = await worktreeClient.create(
+                    {
+                      baseBranch,
+                      newBranch: availableBranch,
+                      path,
+                      fromRemote: false,
+                      useExistingBranch: false,
+                    },
+                    rootPath
+                  );
+
+                  if (!createdId) throw new Error("Failed to create worktree: no ID returned");
+
+                  worktreeId = createdId;
+                  worktreePath = path;
+                  resolvedBranch = availableBranch;
+                }
+
+                tracking.set(itemNumber, {
                   worktreeId,
-                  worktreePath: path,
-                  resolvedBranch: availableBranch,
+                  worktreePath: worktreePath!,
+                  resolvedBranch: resolvedBranch!,
                   spawnedTerminalIds: [],
                   failedTerminalIndices: [],
                 });
 
                 dispatchProgress({
                   type: "ITEM_WORKTREE_CREATED",
-                  issueNumber: item.issue.number,
+                  issueNumber: itemNumber,
                   worktreeId,
-                  worktreePath: path,
-                  branch: availableBranch,
+                  worktreePath: worktreePath!,
+                  branch: resolvedBranch!,
                 });
               } else if (!tracked?.worktreeId) {
-                // Existing worktree found in data store — record in tracking
-                tracking.set(item.issue.number, {
+                tracking.set(itemNumber, {
                   worktreeId,
                   worktreePath: worktreePath!,
                   resolvedBranch: resolvedBranch!,
@@ -523,7 +638,7 @@ export function BulkCreateWorktreeDialog({
                 });
                 dispatchProgress({
                   type: "ITEM_WORKTREE_CREATED",
-                  issueNumber: item.issue.number,
+                  issueNumber: itemNumber,
                   worktreeId,
                   worktreePath: worktreePath!,
                   branch: resolvedBranch!,
@@ -532,15 +647,20 @@ export function BulkCreateWorktreeDialog({
 
               // Step 2: Recipe execution (skip if no recipe)
               if (selectedRecipeId && worktreePath && worktreeId) {
-                const currentTracked = tracking.get(item.issue.number);
+                const currentTracked = tracking.get(itemNumber);
                 const failedIndices = currentTracked?.failedTerminalIndices;
                 const shouldRetryTerminals =
                   failedIndices && failedIndices.length > 0 ? failedIndices : undefined;
 
                 dispatchProgress({
                   type: "ITEM_TERMINALS_SPAWNING",
-                  issueNumber: item.issue.number,
+                  issueNumber: itemNumber,
                 });
+
+                const recipeContext =
+                  planned.mode === "pr"
+                    ? { worktreePath, branchName: resolvedBranch!, prNumber: itemNumber }
+                    : { worktreePath, branchName: resolvedBranch!, issueNumber: itemNumber };
 
                 const results: RecipeSpawnResults = await useRecipeStore
                   .getState()
@@ -548,16 +668,11 @@ export function BulkCreateWorktreeDialog({
                     selectedRecipeId,
                     worktreePath,
                     worktreeId,
-                    {
-                      worktreePath,
-                      branchName: resolvedBranch!,
-                      issueNumber: item.issue.number,
-                    },
+                    recipeContext,
                     shouldRetryTerminals
                   );
 
-                // Update local tracking with results
-                const updatedTracked = tracking.get(item.issue.number);
+                const updatedTracked = tracking.get(itemNumber);
                 if (updatedTracked) {
                   updatedTracked.spawnedTerminalIds = [
                     ...updatedTracked.spawnedTerminalIds,
@@ -568,7 +683,7 @@ export function BulkCreateWorktreeDialog({
 
                 dispatchProgress({
                   type: "ITEM_TERMINALS_RESULT",
-                  issueNumber: item.issue.number,
+                  issueNumber: itemNumber,
                   spawnedTerminalIds: results.spawned.map((s) => s.terminalId),
                   failedTerminalIndices: results.failed.map((f) => f.index),
                 });
@@ -581,10 +696,10 @@ export function BulkCreateWorktreeDialog({
                     continue;
                   }
                   const errorMsg = `${results.failed.length} terminal(s) failed to spawn`;
-                  failedIssues.add(item.issue.number);
+                  failedItems.add(itemNumber);
                   dispatchProgress({
                     type: "ITEM_FAILED",
-                    issueNumber: item.issue.number,
+                    issueNumber: itemNumber,
                     error: errorMsg,
                     attempts: attempt,
                     failedStep: "terminals",
@@ -593,16 +708,16 @@ export function BulkCreateWorktreeDialog({
                 }
               }
 
-              // Step 3: Issue assignment (best-effort)
-              if (assignWorktreeToSelf && item.issue.number) {
+              // Step 3: Issue assignment (best-effort, issues only)
+              if (planned.mode === "issue" && assignWorktreeToSelf && itemNumber) {
                 const username = useGitHubConfigStore.getState().config?.username;
                 if (username) {
                   dispatchProgress({
                     type: "ITEM_ASSIGNING",
-                    issueNumber: item.issue.number,
+                    issueNumber: itemNumber,
                   });
                   try {
-                    await githubClient.assignIssue(rootPath, item.issue.number, username);
+                    await githubClient.assignIssue(rootPath, itemNumber, username);
                   } catch {
                     // Best-effort — silent failure
                   }
@@ -612,8 +727,8 @@ export function BulkCreateWorktreeDialog({
               if (runIdRef.current !== currentRunId) return;
 
               lastSuccessfulWorktreeId = worktreeId!;
-              succeededIssues.add(item.issue.number);
-              dispatchProgress({ type: "ITEM_SUCCEEDED", issueNumber: item.issue.number });
+              succeededItems.add(itemNumber);
+              dispatchProgress({ type: "ITEM_SUCCEEDED", issueNumber: itemNumber });
               return;
             } catch (err) {
               if (runIdRef.current !== currentRunId) return;
@@ -625,10 +740,10 @@ export function BulkCreateWorktreeDialog({
                 continue;
               }
 
-              failedIssues.add(item.issue.number);
+              failedItems.add(itemNumber);
               dispatchProgress({
                 type: "ITEM_FAILED",
-                issueNumber: item.issue.number,
+                issueNumber: itemNumber,
                 error: errorMsg,
                 attempts: attempt,
                 failedStep: "worktree",
@@ -650,9 +765,8 @@ export function BulkCreateWorktreeDialog({
 
         const terminals = useTerminalStore.getState().terminals;
 
-        for (const [issueNumber, tracked] of tracking) {
-          // Only verify items from this run that succeeded with spawned terminals
-          if (!currentRunIssues.has(issueNumber)) continue;
+        for (const [itemNumber, tracked] of tracking) {
+          if (!currentRunItems.has(itemNumber)) continue;
           if (!tracked.worktreeId || tracked.spawnedTerminalIds.length === 0) continue;
           if (tracked.failedTerminalIndices.length > 0) continue;
 
@@ -662,19 +776,17 @@ export function BulkCreateWorktreeDialog({
           }).length;
 
           if (crashedCount > 0) {
-            // Only dispatch verifying/failed for items with crashed terminals
-            succeededIssues.delete(issueNumber);
-            failedIssues.add(issueNumber);
-            dispatchProgress({ type: "ITEM_VERIFYING", issueNumber });
+            succeededItems.delete(itemNumber);
+            failedItems.add(itemNumber);
+            dispatchProgress({ type: "ITEM_VERIFYING", issueNumber: itemNumber });
             dispatchProgress({
               type: "ITEM_FAILED",
-              issueNumber,
+              issueNumber: itemNumber,
               error: `${crashedCount} terminal(s) crashed after spawn`,
               attempts: 1,
               failedStep: "verification",
             });
           }
-          // Healthy items: no dispatch needed — already in succeeded state
         }
       }
 
@@ -685,8 +797,8 @@ export function BulkCreateWorktreeDialog({
 
       dispatchProgress({ type: "DONE" });
 
-      const sCount = succeededIssues.size;
-      const fCount = failedIssues.size;
+      const sCount = succeededItems.size;
+      const fCount = failedItems.size;
       if (fCount === 0) {
         notify({
           type: "success",
@@ -713,7 +825,10 @@ export function BulkCreateWorktreeDialog({
         notify({
           type: "info",
           title: "Nothing to Create",
-          message: "All selected issues already have worktrees or are closed",
+          message:
+            mode === "pr"
+              ? "All selected PRs already have worktrees or are ineligible"
+              : "All selected issues already have worktrees or are closed",
         });
         return;
       }
@@ -726,7 +841,7 @@ export function BulkCreateWorktreeDialog({
       batchTrackingRef.current = new Map();
       dispatchProgress({
         type: "START",
-        issueNumbers: toCreate.map((p) => p.issue.number),
+        issueNumbers: toCreate.map((p) => p.item.number),
       });
       await runBatch(toCreate);
     } finally {
@@ -734,6 +849,7 @@ export function BulkCreateWorktreeDialog({
     }
   }, [
     planned,
+    mode,
     selectedRecipeId,
     projectId,
     recipeSelectionTouchedRef,
@@ -757,7 +873,7 @@ export function BulkCreateWorktreeDialog({
       }
       if (failedIssueNumbers.size === 0) return;
 
-      const toRetry = planned.filter((p) => !p.skipped && failedIssueNumbers.has(p.issue.number));
+      const toRetry = planned.filter((p) => !p.skipped && failedIssueNumbers.has(p.item.number));
 
       // Reset terminal tracking for retried items so verification doesn't use stale data
       for (const issueNumber of failedIssueNumbers) {
@@ -855,8 +971,8 @@ export function BulkCreateWorktreeDialog({
       <AppDialog.Body>
         {progress.phase === "idle" ? (
           <div className="space-y-4">
-            {/* Assign to self */}
-            {currentUser && (
+            {/* Assign to self (issues only) */}
+            {mode === "issue" && currentUser && (
               <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-canopy-bg/50 border-canopy-border transition-colors">
                 {currentUserAvatar ? (
                   <img
@@ -1014,7 +1130,7 @@ export function BulkCreateWorktreeDialog({
               <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-canopy-border divide-y divide-canopy-border">
                 {planned.map((item) => (
                   <div
-                    key={item.issue.number}
+                    key={item.item.number}
                     className={cn(
                       "px-3 py-2 flex items-center gap-3 text-sm",
                       item.skipped && "opacity-50"
@@ -1023,9 +1139,9 @@ export function BulkCreateWorktreeDialog({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-canopy-text/50 text-xs font-mono shrink-0">
-                          #{item.issue.number}
+                          #{item.item.number}
                         </span>
-                        <span className="text-canopy-text truncate">{item.issue.title}</span>
+                        <span className="text-canopy-text truncate">{item.item.title}</span>
                       </div>
                       {!item.skipped && (
                         <div className="flex items-center gap-1.5 mt-0.5">
@@ -1053,7 +1169,7 @@ export function BulkCreateWorktreeDialog({
               {planned
                 .filter((p) => !p.skipped)
                 .map((item) => {
-                  const itemStatus = progress.items.get(item.issue.number);
+                  const itemStatus = progress.items.get(item.item.number);
                   const stageLabel = getStageLabel(itemStatus);
                   const isInProgress =
                     itemStatus &&
@@ -1062,7 +1178,7 @@ export function BulkCreateWorktreeDialog({
                     itemStatus.stage !== "failed";
                   return (
                     <div
-                      key={item.issue.number}
+                      key={item.item.number}
                       className="px-3 py-2 flex items-start gap-3 text-sm"
                     >
                       <div className="mt-0.5 shrink-0">
@@ -1079,9 +1195,9 @@ export function BulkCreateWorktreeDialog({
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="text-canopy-text/50 text-xs font-mono shrink-0">
-                            #{item.issue.number}
+                            #{item.item.number}
                           </span>
-                          <span className="text-canopy-text truncate">{item.issue.title}</span>
+                          <span className="text-canopy-text truncate">{item.item.title}</span>
                           {isInProgress && itemStatus.attempt > 1 && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-canopy-accent/10 text-canopy-accent shrink-0">
                               retry {itemStatus.attempt - 1}

@@ -4,29 +4,47 @@ import { WorktreeIcon } from "@/components/icons";
 import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import type { GitHubIssue } from "@shared/types/github";
+import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 
-interface IssueBulkActionBarProps {
+interface BulkActionBarProps {
+  mode: "issue" | "pr";
   selectedIssues: GitHubIssue[];
+  selectedPRs: GitHubPR[];
   onClear: () => void;
   onCloseDropdown?: () => void;
 }
 
-export function IssueBulkActionBar({
+export function BulkActionBar({
+  mode,
   selectedIssues,
+  selectedPRs,
   onClear,
   onCloseDropdown,
-}: IssueBulkActionBarProps) {
+}: BulkActionBarProps) {
   const openBulkCreateDialog = useWorktreeSelectionStore((s) => s.openBulkCreateDialog);
+  const openBulkCreateDialogForPRs = useWorktreeSelectionStore((s) => s.openBulkCreateDialogForPRs);
+
+  const count = mode === "pr" ? selectedPRs.length : selectedIssues.length;
 
   const handleOpenDialog = useCallback(() => {
-    openBulkCreateDialog(selectedIssues);
+    if (mode === "pr") {
+      openBulkCreateDialogForPRs(selectedPRs);
+    } else {
+      openBulkCreateDialog(selectedIssues);
+    }
     onCloseDropdown?.();
-  }, [selectedIssues, openBulkCreateDialog, onCloseDropdown]);
+  }, [
+    mode,
+    selectedIssues,
+    selectedPRs,
+    openBulkCreateDialog,
+    openBulkCreateDialogForPRs,
+    onCloseDropdown,
+  ]);
 
   return (
     <AnimatePresence>
-      {selectedIssues.length > 0 && (
+      {count > 0 && (
         <motion.div
           key="bulk-bar"
           role="toolbar"
@@ -39,7 +57,7 @@ export function IssueBulkActionBar({
         >
           <span className="inline-flex items-center gap-1.5 text-xs text-canopy-text/70">
             <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-canopy-accent/15 text-canopy-accent text-[10px] font-semibold tabular-nums">
-              {selectedIssues.length}
+              {count}
             </span>
             selected
           </span>
