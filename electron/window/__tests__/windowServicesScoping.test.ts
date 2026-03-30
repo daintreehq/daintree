@@ -213,8 +213,6 @@ describe("Per-window service scoping via WindowRegistry", () => {
     const win1 = makeMockWindow(1, 100);
     const ctx1 = registry.register(win1);
 
-    const subscribeFn = vi.fn();
-    const unsubscribeFn = vi.fn();
     const bufferUnsub = vi.fn();
 
     // This mimics the pattern from the refactored windowServices.ts

@@ -489,8 +489,8 @@ export async function setupWindowServices(
     eventBuffer: ctx.services.eventBuffer,
     portalManager: ctx.services.portalManager,
     cliAvailabilityService,
-    agentVersionService,
-    agentUpdateHandler,
+    agentVersionService: agentVersionService ?? undefined,
+    agentUpdateHandler: agentUpdateHandler ?? undefined,
     isDemoMode,
     windowRegistry,
   };
