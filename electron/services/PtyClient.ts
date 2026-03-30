@@ -142,7 +142,7 @@ export class PtyClient extends EventEmitter {
   private activeProjectId: string | null = null;
   private projectContextMode: "active" | "switch" = "active";
   private shouldResyncProjectContext = false;
-  private pendingMessagePort: MessagePortMain | null = null;
+  private pendingMessagePorts = new Map<number, MessagePortMain>();
   private terminalPids: Map<string, number> = new Map();
   private resourceMonitoringEnabled = false;
   private sessionPersistSuppressed = false;
@@ -448,7 +448,7 @@ export class PtyClient extends EventEmitter {
           this.shouldResyncProjectContext = false;
           this.syncProjectContext();
         }
-        this.flushPendingMessagePort();
+        this.flushPendingMessagePorts();
         break;
 
       case "data":
@@ -673,14 +673,14 @@ export class PtyClient extends EventEmitter {
   private respawnPending(): void {
     // Notify that ports need refresh after host restart
     if (this.onPortRefresh) {
-      if (this.pendingMessagePort) {
+      for (const pendingPort of this.pendingMessagePorts.values()) {
         try {
-          this.pendingMessagePort.close();
+          pendingPort.close();
         } catch {
           // ignore
         }
-        this.pendingMessagePort = null;
       }
+      this.pendingMessagePorts.clear();
       this.onPortRefresh();
     }
 
@@ -760,41 +760,55 @@ export class PtyClient extends EventEmitter {
     this.onPortRefresh = callback;
   }
 
-  private flushPendingMessagePort(): void {
-    if (!this.child || !this.pendingMessagePort) {
+  private flushPendingMessagePorts(): void {
+    if (!this.child || this.pendingMessagePorts.size === 0) {
       return;
     }
 
-    const port = this.pendingMessagePort;
-    this.pendingMessagePort = null;
-    this.connectMessagePort(port);
+    const pending = new Map(this.pendingMessagePorts);
+    this.pendingMessagePorts.clear();
+    for (const [windowId, mpPort] of pending) {
+      this.connectMessagePort(mpPort, windowId);
+    }
   }
 
   /** Forward MessagePort to Pty Host for direct Renderer↔PtyHost communication */
-  connectMessagePort(port: MessagePortMain): void {
-    if (this.pendingMessagePort && this.pendingMessagePort !== port) {
+  connectMessagePort(port: MessagePortMain, windowId: number): void {
+    const existingPending = this.pendingMessagePorts.get(windowId);
+    if (existingPending && existingPending !== port) {
       try {
-        this.pendingMessagePort.close();
+        existingPending.close();
       } catch {
         // ignore
       }
-      this.pendingMessagePort = null;
+      this.pendingMessagePorts.delete(windowId);
     }
 
     if (!this.child) {
       console.warn("[PtyClient] Cannot connect MessagePort - host not running, will retry");
-      this.pendingMessagePort = port;
+      this.pendingMessagePorts.set(windowId, port);
       return;
     }
 
     try {
-      this.child.postMessage({ type: "connect-port" }, [port]);
+      this.child.postMessage({ type: "connect-port", windowId }, [port]);
       if (process.env.CANOPY_VERBOSE) {
-        console.log("[PtyClient] MessagePort forwarded to Pty Host");
+        console.log(`[PtyClient] MessagePort forwarded to Pty Host for window ${windowId}`);
       }
     } catch (error) {
       console.error("[PtyClient] Failed to forward MessagePort to Pty Host:", error);
-      this.pendingMessagePort = port;
+      this.pendingMessagePorts.set(windowId, port);
+    }
+  }
+
+  /** Notify Pty Host that a window's port should be cleaned up */
+  disconnectWindowPort(windowId: number): void {
+    this.pendingMessagePorts.delete(windowId);
+    if (!this.child) return;
+    try {
+      this.child.postMessage({ type: "disconnect-window-port", windowId });
+    } catch {
+      // ignore - host may already be gone
     }
   }
 
@@ -958,7 +972,7 @@ export class PtyClient extends EventEmitter {
     this.send({ type: "set-active-project", projectId: this.activeProjectId });
   }
 
-  setActiveProject(projectId: string | null): void {
+  setActiveProject(projectId: string | null, windowId?: number): void {
     this.activeProjectId = projectId;
     this.projectContextMode = "active";
 
@@ -967,10 +981,10 @@ export class PtyClient extends EventEmitter {
       return;
     }
 
-    this.send({ type: "set-active-project", projectId });
+    this.send({ type: "set-active-project", projectId, windowId });
   }
 
-  onProjectSwitch(projectId: string): void {
+  onProjectSwitch(projectId: string, windowId?: number): void {
     this.activeProjectId = projectId;
     this.projectContextMode = "switch";
 
@@ -979,7 +993,7 @@ export class PtyClient extends EventEmitter {
       return;
     }
 
-    this.send({ type: "project-switch", projectId });
+    this.send({ type: "project-switch", projectId, windowId });
   }
 
   async gracefulKill(id: string): Promise<string | null> {
@@ -1372,14 +1386,14 @@ export class PtyClient extends EventEmitter {
     }
     this.isWaitingForHandshake = false;
 
-    if (this.pendingMessagePort) {
+    for (const pendingPort of this.pendingMessagePorts.values()) {
       try {
-        this.pendingMessagePort.close();
+        pendingPort.close();
       } catch {
         // ignore
       }
-      this.pendingMessagePort = null;
     }
+    this.pendingMessagePorts.clear();
 
     if (this.child) {
       this.send({ type: "dispose" });

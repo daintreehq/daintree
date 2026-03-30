@@ -114,10 +114,14 @@ function getOrCreatePauseCoordinator(id: string): PtyPauseCoordinator | undefine
   return coordinator;
 }
 
-// MessagePort for direct Renderer ↔ Pty Host communication (bypasses Main)
-// Note: This variable holds the port reference so the message handler stays active
-let rendererPort: MessagePort | null = null;
-let rendererPortMessageHandler: ((event: any) => void) | null = null;
+// MessagePorts for direct Renderer ↔ Pty Host communication (bypasses Main)
+// Each window gets its own port, keyed by windowId
+const rendererPorts = new Map<number, MessagePort>();
+const rendererPortMessageHandlers = new Map<number, (event: any) => void>();
+// Per-window active project context for data routing
+const windowProjectMap = new Map<number, string | null>();
+// Per-window backpressure managers for independent flow control
+const portQueueManagers = new Map<number, PortQueueManager>();
 
 // Helper to send events to Main process
 function sendEvent(event: PtyHostEvent): void {
@@ -141,6 +145,50 @@ const ipcQueueManager = new IpcQueueManager({
   emitReliabilityMetric: (payload) => backpressureManager.emitReliabilityMetric(payload),
 });
 
+/** Create a PortQueueManager for a specific window */
+function createPortQueueManager(): PortQueueManager {
+  return new PortQueueManager({
+    getTerminal: (id) => ptyManager.getTerminal(id),
+    getPauseCoordinator,
+    sendEvent,
+    metricsEnabled,
+    emitTerminalStatus: (...args) => backpressureManager.emitTerminalStatus(...args),
+    emitReliabilityMetric: (payload) => backpressureManager.emitReliabilityMetric(payload),
+  });
+}
+
+/** Clean up all state for a disconnected window */
+function disconnectWindow(windowId: number): void {
+  const handler = rendererPortMessageHandlers.get(windowId);
+  const wPort = rendererPorts.get(windowId);
+
+  if (wPort && handler) {
+    try {
+      wPort.removeListener("message", handler);
+    } catch {
+      // ignore
+    }
+  }
+  if (wPort) {
+    try {
+      wPort.close();
+    } catch {
+      // ignore
+    }
+  }
+
+  rendererPorts.delete(windowId);
+  rendererPortMessageHandlers.delete(windowId);
+  windowProjectMap.delete(windowId);
+
+  const pqm = portQueueManagers.get(windowId);
+  if (pqm) {
+    pqm.dispose();
+    portQueueManagers.delete(windowId);
+  }
+
+  console.log(`[PtyHost] Window ${windowId} disconnected, ${rendererPorts.size} port(s) remaining`);
+}
 const resourceGovernor = new ResourceGovernor({
   getTerminalIds: () => ptyManager.getAll().map((t) => t.id),
   getPauseCoordinator,
@@ -286,15 +334,33 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     }
   }
 
-  // Direct MessagePort output: send data directly to renderer, bypassing main process
-  if (!visualWritten && !isBackgrounded && !isSuspended && rendererPort) {
-    try {
-      rendererPort.postMessage({ type: "data", id, data: toStringForIpc(data) });
-      visualWritten = true;
-    } catch {
-      rendererPort = null;
-      rendererPortMessageHandler = null;
+  // Direct MessagePort output: send data to all connected renderer ports
+  if (!visualWritten && !isBackgrounded && !isSuspended && rendererPorts.size > 0) {
+    const termProjectId = terminalInfo?.projectId ?? null;
+
+    for (const [winId, wPort] of Array.from(rendererPorts)) {
+      const winProject = windowProjectMap.get(winId);
+      // Per-window project filter: if window has an active project, only send matching terminal data
+      if (winProject && termProjectId && winProject !== termProjectId) continue;
+
+      const pqm = portQueueManagers.get(winId);
+      if (!pqm) continue;
+
+      const bytes = Buffer.from(data);
+      const byteCount = bytes.length;
+
+      if (pqm.isAtCapacity(id, byteCount)) continue;
+
+      try {
+        wPort.postMessage({ type: "data", id, data: bytes }, [bytes.buffer]);
+        pqm.addBytes(id, byteCount);
+        pqm.applyBackpressure(id, pqm.getUtilization(id));
+        visualWritten = true;
+      } catch {
+        disconnectWindow(winId);
+      }
     }
+    // If all ports at capacity, fall through to IPC fallback (no silent drops)
   }
 
   // IPC Data Mirror: Always send data via IPC for terminals that need main-process
@@ -365,6 +431,9 @@ ptyManager.on("exit", (id: string, exitCode: number) => {
 
   // Clean up IPC backpressure state
   ipcQueueManager.clearQueue(id);
+  for (const pqm of portQueueManagers.values()) {
+    pqm.clearQueue(id);
+  }
 
   // Clean up IPC data mirror state
   ipcDataMirrorTerminals.delete(id);
@@ -589,43 +658,34 @@ port.on("message", async (rawMsg: any) => {
 
   try {
     switch (msg.type) {
-      case "connect-port":
+      case "connect-port": {
         // Receive MessagePort for direct Renderer ↔ Pty Host communication
+        const windowId: number | undefined = msg.windowId;
+
+        if (windowId === undefined || typeof windowId !== "number") {
+          console.warn("[PtyHost] connect-port missing windowId, ignoring");
+          break;
+        }
+
         if (ports && ports.length > 0) {
           const receivedPort = ports[0] as MessagePort;
-          if (rendererPort === receivedPort && rendererPortMessageHandler) {
-            try {
-              receivedPort.start();
-            } catch {
-              // ignore
-            }
-            console.log("[PtyHost] MessagePort already connected, ignoring duplicate connect-port");
-            break;
+
+          // Clean up existing port for this window if any
+          if (rendererPorts.has(windowId)) {
+            disconnectWindow(windowId);
           }
 
-          if (rendererPort) {
-            if (rendererPortMessageHandler) {
-              try {
-                rendererPort.removeListener("message", rendererPortMessageHandler);
-              } catch {
-                // ignore
-              }
-            }
-            try {
-              rendererPort.close();
-            } catch {
-              // ignore
-            }
-          }
-
-          rendererPort = receivedPort;
+          rendererPorts.set(windowId, receivedPort);
+          const pqm = createPortQueueManager();
+          portQueueManagers.set(windowId, pqm);
           receivedPort.start();
-          console.log("[PtyHost] MessagePort received from Main, starting listener...");
+          console.log(
+            `[PtyHost] MessagePort received for window ${windowId}, ${rendererPorts.size} port(s) active`
+          );
 
-          rendererPortMessageHandler = (event: any) => {
+          const handler = (event: any) => {
             const portMsg = event?.data ? event.data : event;
 
-            // Validate message structure
             if (!portMsg || typeof portMsg !== "object") {
               console.warn("[PtyHost] Invalid MessagePort message:", portMsg);
               return;
@@ -645,6 +705,16 @@ port.on("message", async (rawMsg: any) => {
                 typeof portMsg.rows === "number"
               ) {
                 ptyManager.resize(portMsg.id, portMsg.cols, portMsg.rows);
+              } else if (
+                portMsg.type === "ack" &&
+                typeof portMsg.id === "string" &&
+                typeof portMsg.bytes === "number"
+              ) {
+                const winPqm = portQueueManagers.get(windowId);
+                if (winPqm) {
+                  winPqm.removeBytes(portMsg.id, portMsg.bytes);
+                  winPqm.tryResume(portMsg.id);
+                }
               } else {
                 console.warn(
                   "[PtyHost] Unknown or invalid MessagePort message type:",
@@ -656,21 +726,31 @@ port.on("message", async (rawMsg: any) => {
             }
           };
 
-          receivedPort.on("message", rendererPortMessageHandler);
+          rendererPortMessageHandlers.set(windowId, handler);
+          receivedPort.on("message", handler);
 
           receivedPort.on("close", () => {
-            if (rendererPort === receivedPort) {
-              rendererPort = null;
-              rendererPortMessageHandler = null;
-              console.log("[PtyHost] MessagePort closed, falling back to IPC");
+            if (rendererPorts.get(windowId) === receivedPort) {
+              disconnectWindow(windowId);
+              console.log(`[PtyHost] MessagePort for window ${windowId} closed`);
             }
           });
 
-          console.log("[PtyHost] MessagePort listener installed");
+          console.log(`[PtyHost] MessagePort listener installed for window ${windowId}`);
         } else {
           console.warn("[PtyHost] connect-port message received but no ports provided");
         }
         break;
+      }
+
+      case "disconnect-window-port": {
+        const disconnectWindowId: number | undefined = msg.windowId;
+        if (typeof disconnectWindowId === "number" && rendererPorts.has(disconnectWindowId)) {
+          disconnectWindow(disconnectWindowId);
+          console.log(`[PtyHost] Explicit disconnect for window ${disconnectWindowId}`);
+        }
+        break;
+      }
 
       case "init-buffers": {
         const visualOk =
@@ -709,11 +789,17 @@ port.on("message", async (rawMsg: any) => {
       }
 
       case "set-active-project": {
+        if (typeof msg.windowId === "number") {
+          windowProjectMap.set(msg.windowId, msg.projectId);
+        }
         ptyManager.setActiveProject(msg.projectId);
         break;
       }
 
       case "project-switch": {
+        if (typeof msg.windowId === "number") {
+          windowProjectMap.set(msg.windowId, msg.projectId);
+        }
         ptyManager.onProjectSwitch(msg.projectId, (id, tier) => {
           backpressureManager.setActivityTier(id, tier);
         });
@@ -1203,6 +1289,9 @@ port.on("message", async (rawMsg: any) => {
 
           // Also clear IPC queue backpressure state
           ipcQueueManager.clearQueue(msg.id);
+          for (const pqm of portQueueManagers.values()) {
+            pqm.clearQueue(msg.id);
+          }
 
           // Emit resume status
           const utilization =
@@ -1356,6 +1445,24 @@ function cleanup(): void {
 
   backpressureManager.dispose();
   ipcQueueManager.dispose();
+
+  // Dispose all per-window port queue managers
+  for (const [winId, pqm] of portQueueManagers) {
+    pqm.dispose();
+  }
+  portQueueManagers.clear();
+
+  // Close all renderer ports
+  for (const [winId, wPort] of rendererPorts) {
+    try {
+      wPort.close();
+    } catch {
+      // ignore
+    }
+  }
+  rendererPorts.clear();
+  rendererPortMessageHandlers.clear();
+  windowProjectMap.clear();
 
   terminalResourceMonitor.dispose();
   processTreeCache.stop();
