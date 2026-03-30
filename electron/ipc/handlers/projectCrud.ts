@@ -1,4 +1,4 @@
-import { ipcMain, dialog } from "electron";
+import { ipcMain, dialog, BrowserWindow } from "electron";
 import path from "path";
 import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -34,12 +34,16 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
   ipcMain.handle(CHANNELS.PROJECT_GET_ALL, handleProjectGetAll);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_ALL));
 
-  const handleProjectGetCurrent = async () => {
+  const handleProjectGetCurrent = async (event: Electron.IpcMainInvokeEvent) => {
     const currentProject = projectStore.getCurrentProject();
 
     if (currentProject && deps.worktreeService) {
+      const senderWindow = BrowserWindow.fromWebContents(event.sender);
+      const windowId = senderWindow?.id ?? deps.mainWindow?.id;
       try {
-        await deps.worktreeService.loadProject(currentProject.path);
+        if (windowId !== undefined) {
+          await deps.worktreeService.loadProject(currentProject.path, windowId);
+        }
       } catch (err) {
         console.error("Failed to load worktrees for current project:", err);
       }

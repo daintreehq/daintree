@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { ipcMain, BrowserWindow } from "electron";
 import path from "path";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
@@ -66,13 +66,15 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_PR_STATUS));
 
   const handleWorktreeSetActive = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: WorktreeSetActivePayload
   ) => {
     if (!deps.worktreeService) {
       return;
     }
-    await deps.worktreeService.setActiveWorktree(payload.worktreeId, { silent: true });
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    const windowId = senderWindow?.id;
+    await deps.worktreeService.setActiveWorktree(payload.worktreeId, windowId, { silent: true });
   };
   ipcMain.handle(CHANNELS.WORKTREE_SET_ACTIVE, handleWorktreeSetActive);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_SET_ACTIVE));

@@ -96,14 +96,16 @@ describe("ProjectSwitchService", () => {
     taskQueueServiceMock.onProjectSwitch.mockResolvedValue(undefined);
   });
 
+  const MOCK_WINDOW_ID = 42;
+
   function createService(overrides?: {
     ptyClient?: Partial<{
       onProjectSwitch: (projectId: string | null) => unknown;
       setActiveProject: (projectId: string | null) => unknown;
     }>;
     worktreeService?: Partial<{
-      onProjectSwitch: () => unknown;
-      loadProject: (path: string) => Promise<void>;
+      onProjectSwitch: (windowId: number) => unknown;
+      loadProject: (path: string, windowId: number) => Promise<void>;
     }>;
     eventBuffer?: Partial<{
       onProjectSwitch: () => unknown;
@@ -122,8 +124,8 @@ describe("ProjectSwitchService", () => {
             loadProject: vi.fn(async () => undefined),
           }
         : (overrides.worktreeService as {
-            onProjectSwitch: () => unknown;
-            loadProject: (path: string) => Promise<void>;
+            onProjectSwitch: (windowId: number) => unknown;
+            loadProject: (path: string, windowId: number) => Promise<void>;
           });
 
     const eventBuffer = {
@@ -133,6 +135,7 @@ describe("ProjectSwitchService", () => {
 
     const service = new ProjectSwitchService({
       mainWindow: {
+        id: MOCK_WINDOW_ID,
         isDestroyed: () => false,
         webContents: {
           isDestroyed: () => false,
@@ -162,7 +165,7 @@ describe("ProjectSwitchService", () => {
       })
     );
     expect(ptyClient.onProjectSwitch).toHaveBeenCalledWith("project-new");
-    expect(worktreeService.loadProject).toHaveBeenCalledWith("/tmp/new");
+    expect(worktreeService.loadProject).toHaveBeenCalledWith("/tmp/new", MOCK_WINDOW_ID);
     expect(eventBuffer.onProjectSwitch).toHaveBeenCalled();
     expect(sendToRendererMock).toHaveBeenCalledWith(
       CHANNELS.PROJECT_ON_SWITCH,
@@ -255,7 +258,7 @@ describe("ProjectSwitchService", () => {
       await Promise.resolve();
     }
 
-    expect(loadProjectMock).toHaveBeenCalledWith("/tmp/new");
+    expect(loadProjectMock).toHaveBeenCalledWith("/tmp/new", MOCK_WINDOW_ID);
 
     resolveTaskQueue();
     await expect(switchPromise).resolves.toMatchObject({ id: "project-new" });

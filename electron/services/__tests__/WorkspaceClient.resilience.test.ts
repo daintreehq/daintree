@@ -132,22 +132,20 @@ describe("WorkspaceClient resilience", () => {
 
   it("discards getAllStatesAsync response when project scope changed before response arrives", async () => {
     const clientPrivate = client as never as {
-      currentProjectScopeId: string | null;
+      windowScopes: Map<number, { scopeId: string; rootPath: string }>;
     };
 
-    clientPrivate.currentProjectScopeId = "scope-project-a";
+    clientPrivate.windowScopes.set(1, { scopeId: "scope-project-a", rootPath: "/a" });
 
-    // getAllStatesAsync calls sendWithResponse which synchronously calls postMessage
-    const getAllPromise = client.getAllStatesAsync();
+    // getAllStatesAsync with windowId uses per-window scope guard
+    const getAllPromise = client.getAllStatesAsync(1);
 
-    // Capture the requestId from the postMessage call
     const lastCall = child.postMessage.mock.calls.at(-1)!;
     const requestId = (lastCall[0] as { requestId: string }).requestId;
 
-    // Simulate project switch: scope is cleared
-    clientPrivate.currentProjectScopeId = null;
+    // Simulate project switch: scope is cleared for window 1
+    clientPrivate.windowScopes.delete(1);
 
-    // Deliver the stale all-states response
     child.emit("message", {
       type: "all-states",
       requestId,
@@ -159,14 +157,8 @@ describe("WorkspaceClient resilience", () => {
   });
 
   it("discards getAllStatesAsync response when scope was null at call time (no project loaded)", async () => {
-    const clientPrivate = client as never as {
-      currentProjectScopeId: string | null;
-    };
-
-    // Scope is null both before and after the request (switch window)
-    clientPrivate.currentProjectScopeId = null;
-
-    const getAllPromise = client.getAllStatesAsync();
+    // Window 1 has no scope registered
+    const getAllPromise = client.getAllStatesAsync(1);
 
     const lastCall = child.postMessage.mock.calls.at(-1)!;
     const requestId = (lastCall[0] as { requestId: string }).requestId;
@@ -183,17 +175,16 @@ describe("WorkspaceClient resilience", () => {
 
   it("returns getAllStatesAsync results when project scope is unchanged", async () => {
     const clientPrivate = client as never as {
-      currentProjectScopeId: string | null;
+      windowScopes: Map<number, { scopeId: string; rootPath: string }>;
     };
 
-    clientPrivate.currentProjectScopeId = "scope-project-a";
+    clientPrivate.windowScopes.set(1, { scopeId: "scope-project-a", rootPath: "/a" });
 
-    const getAllPromise = client.getAllStatesAsync();
+    const getAllPromise = client.getAllStatesAsync(1);
 
     const lastCall = child.postMessage.mock.calls.at(-1)!;
     const requestId = (lastCall[0] as { requestId: string }).requestId;
 
-    // Scope has NOT changed - deliver a valid response
     child.emit("message", {
       type: "all-states",
       requestId,
@@ -205,14 +196,32 @@ describe("WorkspaceClient resilience", () => {
     expect(result[0].id).toBe("valid-worktree");
   });
 
+  it("returns getAllStatesAsync results without stale guard when no windowId provided", async () => {
+    // No windowId — background caller, bypass stale guard
+    const getAllPromise = client.getAllStatesAsync();
+
+    const lastCall = child.postMessage.mock.calls.at(-1)!;
+    const requestId = (lastCall[0] as { requestId: string }).requestId;
+
+    child.emit("message", {
+      type: "all-states",
+      requestId,
+      states: [{ id: "bg-worktree", name: "BG Worktree" }],
+    });
+
+    const result = await getAllPromise;
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("bg-worktree");
+  });
+
   describe("loadProject race serialization", () => {
     beforeEach(() => {
       child.emit("message", { type: "ready" });
     });
 
     it("second loadProject supersedes the first (latest wins)", async () => {
-      const p1 = client.loadProject("/project-a");
-      const p2 = client.loadProject("/project-b");
+      const p1 = client.loadProject("/project-a", 1);
+      const p2 = client.loadProject("/project-b", 1);
 
       // Capture the scope IDs sent in each request
       const call1 = child.postMessage.mock.calls.at(-2)!;
@@ -234,14 +243,14 @@ describe("WorkspaceClient resilience", () => {
       await p2;
 
       const clientPrivate = client as never as {
-        currentRootPath: string | null;
-        currentProjectScopeId: string | null;
-        loadProjectGeneration: number;
+        windowScopes: Map<number, { scopeId: string; rootPath: string }>;
+        windowLoadGeneration: Map<number, number>;
       };
-      expect(clientPrivate.currentRootPath).toBe("/project-b");
-      expect(clientPrivate.currentProjectScopeId).toBe(scopeB);
-      expect(clientPrivate.currentProjectScopeId).not.toBe(scopeA);
-      expect(clientPrivate.loadProjectGeneration).toBe(2);
+      const scope = clientPrivate.windowScopes.get(1)!;
+      expect(scope.rootPath).toBe("/project-b");
+      expect(scope.scopeId).toBe(scopeB);
+      expect(scope.scopeId).not.toBe(scopeA);
+      expect(clientPrivate.windowLoadGeneration.get(1)).toBe(2);
     });
 
     it("restart auto-reload is skipped when superseded by user loadProject", async () => {
@@ -255,9 +264,9 @@ describe("WorkspaceClient resilience", () => {
         healthCheckIntervalMs: 1000,
       });
 
-      // Make it ready and load a project
+      // Make it ready and load a project for window 1
       dedicatedChild.emit("message", { type: "ready" });
-      const loadCall = restartClient.loadProject("/original-project");
+      const loadCall = restartClient.loadProject("/original-project", 1);
       const origCall = dedicatedChild.postMessage.mock.calls.at(-1)!;
       dedicatedChild.emit("message", {
         type: "load-project-result",
@@ -270,16 +279,12 @@ describe("WorkspaceClient resilience", () => {
       forkMock.mockReturnValue(restartChild2);
       dedicatedChild.emit("exit", 1);
 
-      // User switches project before the restart timer fires
-      // We need to advance past the delay first, but the user call happens
-      // after the restart timer captures the generation but before waitForReady resolves
-
       // Advance timer to trigger restart
       vi.advanceTimersByTime(2001);
 
       // The restart path has captured generationAtRestart and is waiting for ready.
       // Now user switches project before the new host is ready.
-      const userLoad = restartClient.loadProject("/user-project");
+      const userLoad = restartClient.loadProject("/user-project", 1);
       const userCall = restartChild2.postMessage.mock.calls.at(-1)!;
 
       // Make the restarted host ready — this resolves waitForReady in the restart path
@@ -297,10 +302,10 @@ describe("WorkspaceClient resilience", () => {
       await Promise.resolve();
 
       const clientPrivate = restartClient as never as {
-        currentRootPath: string | null;
+        windowScopes: Map<number, { scopeId: string; rootPath: string }>;
       };
       // The restart path should have been skipped — user's project wins
-      expect(clientPrivate.currentRootPath).toBe("/user-project");
+      expect(clientPrivate.windowScopes.get(1)!.rootPath).toBe("/user-project");
 
       // The restart path should NOT have issued another loadProject call
       // (only the original load + user load = 2 loadProject calls total)
@@ -324,9 +329,9 @@ describe("WorkspaceClient resilience", () => {
         healthCheckIntervalMs: 1000,
       });
 
-      // Make it ready and load a project
+      // Make it ready and load a project for window 1
       dedicatedChild.emit("message", { type: "ready" });
-      const loadCall = restartClient.loadProject("/my-project");
+      const loadCall = restartClient.loadProject("/my-project", 1);
       const origCall = dedicatedChild.postMessage.mock.calls.at(-1)!;
       dedicatedChild.emit("message", {
         type: "load-project-result",
@@ -593,10 +598,12 @@ describe("WorkspaceClient resilience", () => {
     }
 
     it("emits WORKTREE_ACTIVATED by default (backend-initiated)", async () => {
-      const clientPrivate = client as never as { currentProjectScopeId: string | null };
-      clientPrivate.currentProjectScopeId = "scope-a";
+      const clientPrivate = client as never as {
+        windowScopes: Map<number, { scopeId: string; rootPath: string }>;
+      };
+      clientPrivate.windowScopes.set(1, { scopeId: "scope-a", rootPath: "/a" });
 
-      const promise = client.setActiveWorktree("wt-1");
+      const promise = client.setActiveWorktree("wt-1", 1);
       resolveSetActive();
       await promise;
 
@@ -607,10 +614,12 @@ describe("WorkspaceClient resilience", () => {
     });
 
     it("does NOT emit WORKTREE_ACTIVATED when silent: true (renderer-initiated)", async () => {
-      const clientPrivate = client as never as { currentProjectScopeId: string | null };
-      clientPrivate.currentProjectScopeId = "scope-a";
+      const clientPrivate = client as never as {
+        windowScopes: Map<number, { scopeId: string; rootPath: string }>;
+      };
+      clientPrivate.windowScopes.set(1, { scopeId: "scope-a", rootPath: "/a" });
 
-      const promise = client.setActiveWorktree("wt-1", { silent: true });
+      const promise = client.setActiveWorktree("wt-1", 1, { silent: true });
       resolveSetActive();
       await promise;
 
@@ -618,18 +627,173 @@ describe("WorkspaceClient resilience", () => {
     });
 
     it("does NOT emit WORKTREE_ACTIVATED when project scope changed mid-flight", async () => {
-      const clientPrivate = client as never as { currentProjectScopeId: string | null };
-      clientPrivate.currentProjectScopeId = "scope-a";
+      const clientPrivate = client as never as {
+        windowScopes: Map<number, { scopeId: string; rootPath: string }>;
+      };
+      clientPrivate.windowScopes.set(1, { scopeId: "scope-a", rootPath: "/a" });
 
-      const promise = client.setActiveWorktree("wt-1");
+      const promise = client.setActiveWorktree("wt-1", 1);
 
       // Simulate scope change before response arrives
-      clientPrivate.currentProjectScopeId = "scope-b";
+      clientPrivate.windowScopes.set(1, { scopeId: "scope-b", rootPath: "/b" });
 
       resolveSetActive();
       await promise;
 
       expect(mockWindow.webContents.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("per-window scope isolation", () => {
+    let mockWindow1: {
+      id: number;
+      isDestroyed: ReturnType<typeof vi.fn>;
+      webContents: { isDestroyed: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn> };
+    };
+    let mockWindow2: {
+      id: number;
+      isDestroyed: ReturnType<typeof vi.fn>;
+      webContents: { isDestroyed: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn> };
+    };
+
+    beforeEach(() => {
+      mockWindow1 = {
+        id: 1,
+        isDestroyed: vi.fn(() => false),
+        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
+      };
+      mockWindow2 = {
+        id: 2,
+        isDestroyed: vi.fn(() => false),
+        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
+      };
+      getAllWindowsMock.mockReturnValue([mockWindow1, mockWindow2] as never[]);
+
+      child.emit("message", { type: "ready" });
+    });
+
+    async function loadProjectForWindow(windowId: number, rootPath: string, scopeId: string) {
+      const p = client.loadProject(rootPath, windowId, scopeId);
+      const lastCall = child.postMessage.mock.calls.at(-1)!;
+      const requestId = (lastCall[0] as { requestId: string }).requestId;
+      child.emit("message", { type: "load-project-result", requestId });
+      await p;
+    }
+
+    it("sends worktree-update only to matching window", async () => {
+      await loadProjectForWindow(1, "/project-a", "scope-a");
+      await loadProjectForWindow(2, "/project-b", "scope-b");
+
+      child.emit("message", {
+        type: "worktree-update",
+        projectScopeId: "scope-a",
+        worktree: { id: "wt-1", path: "/a/wt", name: "wt", branch: "main" },
+      });
+
+      expect(mockWindow1.webContents.send).toHaveBeenCalledWith(
+        "worktree:update",
+        expect.objectContaining({ id: "wt-1" })
+      );
+      expect(mockWindow2.webContents.send).not.toHaveBeenCalled();
+    });
+
+    it("sends to both windows when they share the same scopeId", async () => {
+      await loadProjectForWindow(1, "/shared-project", "scope-shared");
+      await loadProjectForWindow(2, "/shared-project", "scope-shared");
+
+      child.emit("message", {
+        type: "worktree-update",
+        projectScopeId: "scope-shared",
+        worktree: { id: "wt-2", path: "/s/wt", name: "wt2", branch: "dev" },
+      });
+
+      expect(mockWindow1.webContents.send).toHaveBeenCalled();
+      expect(mockWindow2.webContents.send).toHaveBeenCalled();
+    });
+
+    it("onProjectSwitch clears only target window scope", async () => {
+      await loadProjectForWindow(1, "/project-a", "scope-a");
+      await loadProjectForWindow(2, "/project-b", "scope-b");
+
+      const switchPromise = client.onProjectSwitch(1);
+      const lastCall = child.postMessage.mock.calls.at(-1)!;
+      const requestId = (lastCall[0] as { requestId: string }).requestId;
+      child.emit("message", { type: "project-switch-result", requestId });
+      await switchPromise;
+
+      const clientPrivate = client as never as {
+        windowScopes: Map<number, { scopeId: string; rootPath: string }>;
+      };
+      expect(clientPrivate.windowScopes.has(1)).toBe(false);
+      expect(clientPrivate.windowScopes.has(2)).toBe(true);
+
+      // Events for scope-a should not reach any window now
+      mockWindow1.webContents.send.mockClear();
+      mockWindow2.webContents.send.mockClear();
+
+      child.emit("message", {
+        type: "worktree-update",
+        projectScopeId: "scope-a",
+        worktree: { id: "wt-3", path: "/a/wt3", name: "wt3", branch: "main" },
+      });
+
+      expect(mockWindow1.webContents.send).not.toHaveBeenCalled();
+      expect(mockWindow2.webContents.send).not.toHaveBeenCalled();
+    });
+
+    it("unregisterWindow cleans up all per-window state", async () => {
+      await loadProjectForWindow(1, "/project-a", "scope-a");
+      await loadProjectForWindow(2, "/project-b", "scope-b");
+
+      client.unregisterWindow(1);
+
+      const clientPrivate = client as never as {
+        windowScopes: Map<number, { scopeId: string; rootPath: string }>;
+        windowLoadGeneration: Map<number, number>;
+        windowMismatchWarnAt: Map<number, number>;
+      };
+      expect(clientPrivate.windowScopes.has(1)).toBe(false);
+      expect(clientPrivate.windowLoadGeneration.has(1)).toBe(false);
+      expect(clientPrivate.windowScopes.has(2)).toBe(true);
+
+      // Events for scope-b still reach window 2
+      child.emit("message", {
+        type: "worktree-update",
+        projectScopeId: "scope-b",
+        worktree: { id: "wt-4", path: "/b/wt4", name: "wt4", branch: "feat" },
+      });
+
+      expect(mockWindow2.webContents.send).toHaveBeenCalled();
+    });
+
+    it("getAllStatesAsync per-window stale guard does not cross-contaminate windows", async () => {
+      await loadProjectForWindow(1, "/project-a", "scope-a");
+      await loadProjectForWindow(2, "/project-b", "scope-b");
+
+      // Window 1 issues getAllStatesAsync
+      const getAllPromise = client.getAllStatesAsync(1);
+      const lastCall = child.postMessage.mock.calls.at(-1)!;
+      const requestId = (lastCall[0] as { requestId: string }).requestId;
+
+      // Window 2 switches project — should NOT affect window 1
+      const switchP = client.loadProject("/project-c", 2, "scope-c");
+      const switchCall = child.postMessage.mock.calls.at(-1)!;
+      child.emit("message", {
+        type: "load-project-result",
+        requestId: (switchCall[0] as { requestId: string }).requestId,
+      });
+      await switchP;
+
+      // Now deliver window 1's response
+      child.emit("message", {
+        type: "all-states",
+        requestId,
+        states: [{ id: "wt-valid", name: "Valid" }],
+      });
+
+      const result = await getAllPromise;
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("wt-valid");
     });
   });
 });

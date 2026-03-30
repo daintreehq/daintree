@@ -83,11 +83,10 @@ export class WorkspaceClient extends EventEmitter {
   private readyResolve: (() => void) | null = null;
   private readyReject: ((error: Error) => void) | null = null;
 
-  // Cached state
-  private currentRootPath: string | null = null;
-  private currentProjectScopeId: string | null = null;
-  private lastScopeMismatchWarnAt = 0;
-  private loadProjectGeneration = 0;
+  // Per-window project scope state
+  private windowScopes = new Map<number, { scopeId: string; rootPath: string }>();
+  private windowMismatchWarnAt = new Map<number, number>();
+  private windowLoadGeneration = new Map<number, number>();
 
   constructor(config: WorkspaceClientConfig = {}) {
     super();
@@ -254,22 +253,30 @@ export class WorkspaceClient extends EventEmitter {
         this.restartTimer = setTimeout(() => {
           this.restartTimer = null;
           this.startHost();
-          // Re-load project if we had one, preserving the existing scope ID
-          // so that events from the restarted host still match the client's scope.
+          // Re-load all per-window projects, preserving existing scope IDs
+          // so that events from the restarted host still match each window's scope.
           // Wait for the host to be ready before sending loadProject to avoid
           // racing with the 'ready' handshake (token-order contract).
-          if (this.currentRootPath) {
-            const rootPath = this.currentRootPath;
-            const preservedScopeId = this.currentProjectScopeId ?? undefined;
-            const generationAtRestart = this.loadProjectGeneration;
+          const scopeSnapshot = new Map(this.windowScopes);
+          const generationSnapshot = new Map(this.windowLoadGeneration);
+          if (scopeSnapshot.size > 0) {
+            // Deduplicate: only send one load-project per unique scopeId
+            const seenScopes = new Set<string>();
             void this.waitForReady()
               .then(() => {
-                if (generationAtRestart !== this.loadProjectGeneration) return;
-                return this.loadProject(rootPath, preservedScopeId);
+                const reloadPromises: Promise<void>[] = [];
+                for (const [windowId, { scopeId, rootPath }] of scopeSnapshot) {
+                  const genAtRestart = generationSnapshot.get(windowId) ?? 0;
+                  if (genAtRestart !== (this.windowLoadGeneration.get(windowId) ?? 0)) continue;
+                  if (seenScopes.has(scopeId)) continue;
+                  seenScopes.add(scopeId);
+                  reloadPromises.push(this.loadProject(rootPath, windowId, scopeId));
+                }
+                return Promise.all(reloadPromises);
               })
               .catch((err) => {
                 console.error(
-                  "[WorkspaceClient] Failed to reload project after host restart:",
+                  "[WorkspaceClient] Failed to reload projects after host restart:",
                   err
                 );
               });
@@ -286,26 +293,35 @@ export class WorkspaceClient extends EventEmitter {
     console.log("[WorkspaceClient] Workspace Host started");
   }
 
-  private isCurrentProjectEvent(eventScopeId: string): boolean {
-    if (!this.currentProjectScopeId || !eventScopeId) {
-      return false;
+  private getMatchingWindowIds(eventScopeId: string): number[] {
+    if (!eventScopeId) return [];
+    const matching: number[] = [];
+    for (const [windowId, { scopeId }] of this.windowScopes) {
+      if (scopeId === eventScopeId) {
+        matching.push(windowId);
+      }
     }
-    const isMatch = eventScopeId === this.currentProjectScopeId;
-    if (!isMatch) {
+    if (matching.length === 0 && this.windowScopes.size > 0) {
       const now = Date.now();
-      if (now - this.lastScopeMismatchWarnAt > 5000) {
-        this.lastScopeMismatchWarnAt = now;
+      // Per-window mismatch debounce: warn at most once per 5s globally
+      const globalLastWarn = Math.max(0, ...this.windowMismatchWarnAt.values());
+      if (now - globalLastWarn > 5000) {
+        for (const [wId] of this.windowScopes) {
+          this.windowMismatchWarnAt.set(wId, now);
+        }
         console.warn(
-          "[WorkspaceClient] Event scope mismatch (further mismatches suppressed for 5s)",
+          "[WorkspaceClient] Event scope mismatch — no window matches (suppressed for 5s)",
           {
             eventScopeId,
-            currentScopeId: this.currentProjectScopeId,
-            currentPath: this.currentRootPath,
+            registeredScopes: [...this.windowScopes.entries()].map(([id, s]) => ({
+              windowId: id,
+              scopeId: s.scopeId,
+            })),
           }
         );
       }
     }
-    return isMatch;
+    return matching;
   }
 
   private handleHostEvent(event: WorkspaceHostEvent): void {
@@ -421,12 +437,9 @@ export class WorkspaceClient extends EventEmitter {
 
       // Handle spontaneous events (forward to renderer)
       case "worktree-update": {
-        if (!this.isCurrentProjectEvent(event.projectScopeId)) {
-          return;
-        }
         const worktree = event.worktree;
-        this.sendToRenderer(CHANNELS.WORKTREE_UPDATE, worktree);
-        // Emit to internal event bus with explicit object construction
+        this.sendToMatchingWindows(CHANNELS.WORKTREE_UPDATE, event.projectScopeId, worktree);
+        // Emit to internal event bus (app-global, not per-window)
         events.emit("sys:worktree:update", {
           id: worktree.id,
           path: worktree.path,
@@ -455,16 +468,12 @@ export class WorkspaceClient extends EventEmitter {
       }
 
       case "worktree-removed":
-        if (!this.isCurrentProjectEvent(event.projectScopeId)) {
-          return;
-        }
-        this.sendToRenderer(CHANNELS.WORKTREE_REMOVE, { worktreeId: event.worktreeId });
+        this.sendToMatchingWindows(CHANNELS.WORKTREE_REMOVE, event.projectScopeId, {
+          worktreeId: event.worktreeId,
+        });
         break;
 
       case "pr-detected": {
-        if (!this.isCurrentProjectEvent(event.projectScopeId)) {
-          return;
-        }
         const prPayload = {
           worktreeId: event.worktreeId,
           prNumber: event.prNumber,
@@ -476,45 +485,36 @@ export class WorkspaceClient extends EventEmitter {
           timestamp: Date.now(),
         };
         events.emit("sys:pr:detected", prPayload);
-        this.sendToRenderer(CHANNELS.PR_DETECTED, prPayload);
+        this.sendToMatchingWindows(CHANNELS.PR_DETECTED, event.projectScopeId, prPayload);
         break;
       }
 
       case "pr-cleared": {
-        if (!this.isCurrentProjectEvent(event.projectScopeId)) {
-          return;
-        }
         const clearPayload = { worktreeId: event.worktreeId, timestamp: Date.now() };
         events.emit("sys:pr:cleared", clearPayload);
-        this.sendToRenderer(CHANNELS.PR_CLEARED, clearPayload);
+        this.sendToMatchingWindows(CHANNELS.PR_CLEARED, event.projectScopeId, clearPayload);
         break;
       }
 
       case "issue-detected": {
-        if (!this.isCurrentProjectEvent(event.projectScopeId)) {
-          return;
-        }
         const issuePayload = {
           worktreeId: event.worktreeId,
           issueNumber: event.issueNumber,
           issueTitle: event.issueTitle,
         };
         events.emit("sys:issue:detected", { ...issuePayload, timestamp: Date.now() });
-        this.sendToRenderer(CHANNELS.ISSUE_DETECTED, issuePayload);
+        this.sendToMatchingWindows(CHANNELS.ISSUE_DETECTED, event.projectScopeId, issuePayload);
         break;
       }
 
       case "issue-not-found": {
-        if (!this.isCurrentProjectEvent(event.projectScopeId)) {
-          return;
-        }
         const notFoundPayload = {
           worktreeId: event.worktreeId,
           issueNumber: event.issueNumber,
           timestamp: Date.now(),
         };
         events.emit("sys:issue:not-found", notFoundPayload);
-        this.sendToRenderer(CHANNELS.ISSUE_NOT_FOUND, notFoundPayload);
+        this.sendToMatchingWindows(CHANNELS.ISSUE_NOT_FOUND, event.projectScopeId, notFoundPayload);
         break;
       }
 
@@ -659,23 +659,40 @@ export class WorkspaceClient extends EventEmitter {
     }
   }
 
+  private sendToMatchingWindows(channel: string, scopeId: string, ...args: unknown[]): void {
+    const matchingIds = this.getMatchingWindowIds(scopeId);
+    if (matchingIds.length === 0) return;
+    const matchingSet = new Set(matchingIds);
+    const windows = BrowserWindow.getAllWindows();
+    for (const win of windows) {
+      if (win && !win.isDestroyed() && matchingSet.has(win.id) && !win.webContents.isDestroyed()) {
+        try {
+          win.webContents.send(channel, ...args);
+        } catch {
+          // Silently ignore send failures during window initialization/disposal.
+        }
+      }
+    }
+  }
+
   // Public API - matches WorktreeService interface
 
-  async loadProject(rootPath: string, scopeId?: string): Promise<void> {
-    const generation = ++this.loadProjectGeneration;
+  async loadProject(rootPath: string, windowId: number, scopeId?: string): Promise<void> {
+    const resolvedScopeId = scopeId ?? crypto.randomUUID();
+    const gen = (this.windowLoadGeneration.get(windowId) ?? 0) + 1;
+    this.windowLoadGeneration.set(windowId, gen);
+    this.windowScopes.set(windowId, { scopeId: resolvedScopeId, rootPath });
 
-    this.currentRootPath = rootPath;
-    this.currentProjectScopeId = scopeId ?? crypto.randomUUID();
     const requestId = this.generateRequestId();
 
     await this.sendWithResponse({
       type: "load-project",
       requestId,
       rootPath,
-      projectScopeId: this.currentProjectScopeId,
+      projectScopeId: resolvedScopeId,
     });
 
-    if (generation !== this.loadProjectGeneration) {
+    if (gen !== (this.windowLoadGeneration.get(windowId) ?? 0)) {
       return;
     }
   }
@@ -698,8 +715,9 @@ export class WorkspaceClient extends EventEmitter {
     });
   }
 
-  async getAllStatesAsync(): Promise<WorktreeSnapshot[]> {
-    const scopeAtStart = this.currentProjectScopeId;
+  async getAllStatesAsync(windowId?: number): Promise<WorktreeSnapshot[]> {
+    const scopeAtStart =
+      windowId !== undefined ? (this.windowScopes.get(windowId)?.scopeId ?? null) : null;
     const requestId = this.generateRequestId();
 
     const result = await this.sendWithResponse<{ states: WorktreeSnapshot[] }>({
@@ -707,11 +725,15 @@ export class WorkspaceClient extends EventEmitter {
       requestId,
     });
 
-    if (scopeAtStart === null || scopeAtStart !== this.currentProjectScopeId) {
-      console.warn(
-        "[WorkspaceClient] Discarding stale getAllStatesAsync response - project scope changed"
-      );
-      return [];
+    // If windowId provided, guard against stale responses from scope changes
+    if (windowId !== undefined) {
+      const currentScope = this.windowScopes.get(windowId)?.scopeId ?? null;
+      if (scopeAtStart === null || scopeAtStart !== currentScope) {
+        console.warn(
+          "[WorkspaceClient] Discarding stale getAllStatesAsync response - project scope changed"
+        );
+        return [];
+      }
     }
 
     return result.states;
@@ -729,9 +751,14 @@ export class WorkspaceClient extends EventEmitter {
     return result.state;
   }
 
-  async setActiveWorktree(worktreeId: string, options?: { silent?: boolean }): Promise<void> {
+  async setActiveWorktree(
+    worktreeId: string,
+    windowId?: number,
+    options?: { silent?: boolean }
+  ): Promise<void> {
     const requestId = this.generateRequestId();
-    const scopeAtStart = this.currentProjectScopeId;
+    const scopeAtStart =
+      windowId !== undefined ? (this.windowScopes.get(windowId)?.scopeId ?? null) : null;
 
     await this.sendWithResponse({
       type: "set-active",
@@ -742,8 +769,16 @@ export class WorkspaceClient extends EventEmitter {
     // Only notify the renderer if the project hasn't changed since we started the call
     // and the caller hasn't opted out (renderer-initiated activations pass silent: true
     // to avoid an echo loop where the renderer re-selects the worktree it just activated).
-    if (!options?.silent && scopeAtStart !== null && scopeAtStart === this.currentProjectScopeId) {
-      this.sendToRenderer(CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
+    if (!options?.silent) {
+      if (windowId !== undefined) {
+        const currentScope = this.windowScopes.get(windowId)?.scopeId ?? null;
+        if (scopeAtStart !== null && scopeAtStart === currentScope) {
+          this.sendToRenderer(CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
+        }
+      } else {
+        // No windowId — send to all windows (backward-compatible)
+        this.sendToRenderer(CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
+      }
     }
   }
 
@@ -803,15 +838,22 @@ export class WorkspaceClient extends EventEmitter {
     this.send({ type: "update-monitor-config", requestId, config });
   }
 
-  async onProjectSwitch(): Promise<void> {
-    this.currentProjectScopeId = null;
-    this.currentRootPath = null;
+  async onProjectSwitch(windowId: number): Promise<void> {
+    this.windowScopes.delete(windowId);
+    this.windowLoadGeneration.delete(windowId);
+    this.windowMismatchWarnAt.delete(windowId);
     const requestId = this.generateRequestId();
 
     await this.sendWithResponse({
       type: "project-switch",
       requestId,
     });
+  }
+
+  unregisterWindow(windowId: number): void {
+    this.windowScopes.delete(windowId);
+    this.windowLoadGeneration.delete(windowId);
+    this.windowMismatchWarnAt.delete(windowId);
   }
 
   async listBranches(rootPath: string): Promise<BranchInfo[]> {

@@ -482,6 +482,9 @@ export async function setupWindowServices(
       ctx.services.eventBuffer = undefined;
     }
     ctx.services.projectSwitchService = undefined;
+    if (workspaceClient) {
+      workspaceClient.unregisterWindow(win.id);
+    }
   });
 
   console.log("[MAIN] Registering IPC handlers...");
@@ -653,7 +656,7 @@ export async function setupWindowServices(
   if (currentProject && workspaceClient && workspaceReady) {
     console.log("[MAIN] Loading worktrees for current project:", currentProject.name);
     try {
-      await workspaceClient.loadProject(currentProject.path);
+      await workspaceClient.loadProject(currentProject.path, win.id);
       console.log("[MAIN] Worktrees loaded for current project");
     } catch (error) {
       console.error("[MAIN] Failed to load worktrees for current project:", error);

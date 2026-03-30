@@ -16,9 +16,11 @@ import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
 export class ProjectSwitchService {
   private deps: HandlerDependencies;
   private switchChain: Promise<void> = Promise.resolve();
+  private readonly windowId: number | null;
 
   constructor(deps: HandlerDependencies) {
     this.deps = deps;
+    this.windowId = deps.mainWindow?.id ?? null;
   }
 
   async switchProject(projectId: string): Promise<Project> {
@@ -155,12 +157,14 @@ export class ProjectSwitchService {
   }
 
   private async cleanupWorktreeService(): Promise<void> {
-    if (!this.deps.worktreeService?.onProjectSwitch) {
+    if (!this.deps.worktreeService?.onProjectSwitch || this.windowId === null) {
       return;
     }
 
     try {
-      await Promise.resolve().then(() => this.deps.worktreeService!.onProjectSwitch());
+      await Promise.resolve().then(() =>
+        this.deps.worktreeService!.onProjectSwitch(this.windowId!)
+      );
     } catch (error) {
       console.error("[ProjectSwitch] WorktreeService cleanup failed:", error);
     }
@@ -200,13 +204,13 @@ export class ProjectSwitchService {
   }
 
   private async loadNewProject(project: Project): Promise<string | undefined> {
-    if (!this.deps.worktreeService) {
+    if (!this.deps.worktreeService || this.windowId === null) {
       return undefined;
     }
 
     try {
       console.log("[ProjectSwitch] Loading worktrees for new project...");
-      await this.deps.worktreeService.loadProject(project.path);
+      await this.deps.worktreeService.loadProject(project.path, this.windowId);
       console.log("[ProjectSwitch] Worktrees loaded successfully");
       return undefined;
     } catch (err) {
