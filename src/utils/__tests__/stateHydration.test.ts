@@ -2024,15 +2024,23 @@ describe("hydrateAppState", () => {
   });
 
   describe("prefetchedHydrateResult", () => {
+    const fullProject = {
+      id: "project-1",
+      path: "/project",
+      name: "project-1",
+      emoji: "🌳",
+      lastOpened: Date.now(),
+    };
+
     it("skips appClient.hydrate() when prefetched result is provided", async () => {
-      const prefetched = {
+      const prefetched: import("@shared/types/ipc/app").HydrateResult = {
         appState: {
           terminals: [],
           sidebarWidth: 350,
         },
-        terminalConfig,
-        project,
-        agentSettings,
+        terminalConfig: terminalConfig as any,
+        project: fullProject as any,
+        agentSettings: agentSettings as any,
         gpuWebGLHardware: true,
         gpuHardwareAccelerationDisabled: false,
         safeMode: false,
@@ -2048,7 +2056,7 @@ describe("hydrateAppState", () => {
         },
         "switch-1",
         () => true,
-        prefetched as import("@shared/types/ipc/app").HydrateResult
+        prefetched
       );
 
       expect(appClientMock.hydrate).not.toHaveBeenCalled();
