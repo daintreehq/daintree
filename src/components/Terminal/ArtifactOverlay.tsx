@@ -153,7 +153,7 @@ function ArtifactItem({
               disabled={isProcessing}
               className={cn(
                 "px-3 py-1 text-xs rounded transition-colors",
-                "bg-canopy-border hover:bg-[color-mix(in_oklab,var(--color-canopy-border)_100%,white_20%)] text-text-inverse",
+                "bg-canopy-border hover:bg-[color-mix(in_oklab,var(--color-canopy-border)_100%,white_20%)] text-canopy-text",
                 "disabled:opacity-50 disabled:cursor-not-allowed"
               )}
             >
@@ -400,7 +400,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                               className={cn(
                                 "px-2 py-1 text-xs rounded transition-colors",
                                 includeAllTypes
-                                  ? "bg-canopy-border text-text-inverse"
+                                  ? "bg-canopy-border text-canopy-text"
                                   : "bg-canopy-sidebar text-canopy-text/60",
                                 "hover:brightness-110",
                                 "disabled:opacity-50 disabled:cursor-not-allowed"
@@ -424,7 +424,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     disabled={isBulkActionRunning}
                     className={cn(
                       "px-3 py-1 text-xs rounded transition-colors",
-                      "bg-canopy-border hover:bg-[color-mix(in_oklab,var(--color-canopy-border)_100%,white_20%)] text-text-inverse",
+                      "bg-canopy-border hover:bg-[color-mix(in_oklab,var(--color-canopy-border)_100%,white_20%)] text-canopy-text",
                       "disabled:opacity-50 disabled:cursor-not-allowed"
                     )}
                   >
