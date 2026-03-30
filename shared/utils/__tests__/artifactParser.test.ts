@@ -93,4 +93,23 @@ describe("artifactParser", () => {
     const cleaned = stripAnsiCodes("\u001b[31mError:\u001b[0m failed");
     expect(cleaned).toBe("Error: failed");
   });
+
+  it("strips OSC 8 hyperlinks with ST terminator", () => {
+    const input = "\x1b]8;;https://youtu.be/dQw4w9WgXcQ\x1b\\Click here\x1b]8;;\x1b\\";
+    const cleaned = stripAnsiCodes(input);
+    expect(cleaned).toBe("Click here");
+  });
+
+  it("strips OSC 8 hyperlinks with BEL terminator", () => {
+    const input = "\x1b]8;;https://youtu.be/dQw4w9WgXcQ\x07Click here\x1b]8;;\x07";
+    const cleaned = stripAnsiCodes(input);
+    expect(cleaned).toBe("Click here");
+  });
+
+  it("strips mixed ANSI codes and OSC 8 hyperlinks", () => {
+    const input =
+      "\x1b[36m\x1b]8;;https://youtube.com/watch?v=abc12345678\x1b\\https://youtube.com/watch?v=abc12345678\x1b]8;;\x1b\\\x1b[0m";
+    const cleaned = stripAnsiCodes(input);
+    expect(cleaned).toBe("https://youtube.com/watch?v=abc12345678");
+  });
 });
