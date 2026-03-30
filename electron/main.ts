@@ -129,8 +129,6 @@ if (!gotTheLock) {
   const windowRegistry = new WindowRegistry();
   setWindowRegistry(windowRegistry);
 
-  setupPermissionLockdown();
-
   let powerMonitorInitialized = false;
 
   async function createWindow(initialProjectPath?: string | null): Promise<void> {
@@ -191,6 +189,7 @@ if (!gotTheLock) {
 
   app.whenReady().then(async () => {
     try {
+      setupPermissionLockdown();
       registerAppProtocol(distPath);
       registerCanopyFileProtocol();
       setupWebviewCSP();
