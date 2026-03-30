@@ -275,30 +275,36 @@ describe("projectStore switching races", () => {
     });
 
     expect(terminalToSnapshotMock).toHaveBeenCalledTimes(3);
-    expect(projectClientMock.setTerminals).toHaveBeenCalledWith("project-a", [
-      {
-        id: "term-active",
-        cwd: "/project-a",
-        location: "grid",
-        worktreeId: "wt-active",
+    // Terminal state is now passed atomically with the switch call (not separate setTerminals/setTerminalSizes)
+    expect(projectClientMock.switch).toHaveBeenCalledWith("project-b", {
+      terminals: [
+        {
+          id: "term-active",
+          cwd: "/project-a",
+          location: "grid",
+          worktreeId: "wt-active",
+        },
+        {
+          id: "term-other",
+          cwd: "/project-a/feature",
+          location: "grid",
+          worktreeId: "wt-other",
+        },
+        {
+          id: "term-dock",
+          cwd: "/project-a",
+          location: "dock",
+          worktreeId: undefined,
+        },
+      ],
+      terminalSizes: {
+        "term-active": { cols: 120, rows: 40 },
+        "term-dock": { cols: 90, rows: 20 },
       },
-      {
-        id: "term-other",
-        cwd: "/project-a/feature",
-        location: "grid",
-        worktreeId: "wt-other",
-      },
-      {
-        id: "term-dock",
-        cwd: "/project-a",
-        location: "dock",
-        worktreeId: undefined,
-      },
-    ]);
-    expect(projectClientMock.setTerminalSizes).toHaveBeenCalledWith("project-a", {
-      "term-active": { cols: 120, rows: 40 },
-      "term-dock": { cols: 90, rows: 20 },
     });
+    // setTerminals and setTerminalSizes should NOT be called on the critical path
+    expect(projectClientMock.setTerminals).not.toHaveBeenCalled();
+    expect(projectClientMock.setTerminalSizes).not.toHaveBeenCalled();
     expect(prepareProjectSwitchRendererCacheMock).toHaveBeenCalledWith({
       outgoingProjectId: "project-a",
       targetProjectId: "project-b",

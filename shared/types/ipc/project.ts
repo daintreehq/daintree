@@ -1,5 +1,16 @@
-import type { Project } from "../project.js";
+import type { Project, TerminalSnapshot } from "../project.js";
 import type { HydrateResult } from "./app.js";
+
+/**
+ * Outgoing terminal state passed alongside project switch/reopen IPC calls.
+ * The main process applies this to the outgoing project's persisted state
+ * before `saveOutgoingProjectWorktreeState` runs, eliminating the race
+ * between the renderer's terminal saves and the switch's read-modify-write.
+ */
+export interface ProjectSwitchOutgoingState {
+  terminals?: TerminalSnapshot[];
+  terminalSizes?: Record<string, { cols: number; rows: number }>;
+}
 
 /** Payload for project:on-switch event with cancellation token */
 export interface ProjectSwitchPayload {

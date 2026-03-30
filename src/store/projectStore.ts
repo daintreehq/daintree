@@ -144,6 +144,36 @@ function clearSwitchSafetyTimeout(): void {
   }
 }
 
+import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
+
+/**
+ * Collect the current terminal snapshots and sizes for the outgoing project.
+ * Used by both switchProject and reopenProject to pass atomically with the IPC call.
+ */
+function collectOutgoingTerminalState(): Required<ProjectSwitchOutgoingState> {
+  const currentTerminals = useTerminalStore.getState().terminals;
+  const terminals: TerminalSnapshot[] = currentTerminals
+    .filter(
+      (t) => t.location !== "trash" && t.location !== "background" && !isSmokeTestTerminalId(t.id)
+    )
+    .map(terminalToSnapshot);
+
+  const terminalSizes: Record<string, { cols: number; rows: number }> = {};
+  for (const terminal of currentTerminals) {
+    if (terminal.location === "trash" || terminal.location === "background") continue;
+    if (isSmokeTestTerminalId(terminal.id)) continue;
+    const instance = terminalInstanceService.get(terminal.id);
+    if (instance) {
+      terminalSizes[terminal.id] = {
+        cols: instance.latestCols,
+        rows: instance.latestRows,
+      };
+    }
+  }
+
+  return { terminals, terminalSizes };
+}
+
 function evictRendererTerminalInstances(terminalIds: string[]): void {
   if (terminalIds.length === 0) {
     return;
@@ -277,6 +307,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     const currentProject = get().currentProject;
     const oldProjectId = currentProject?.id ?? null;
     let preserveTerminalIds = new Set<string>();
+    let outgoingState: Required<ProjectSwitchOutgoingState> | undefined;
 
     set({
       isLoading: true,
@@ -300,50 +331,21 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           });
         });
 
-        // Get current terminals from store and save to per-project state
-        const currentTerminals = useTerminalStore.getState().terminals;
-        const terminalsToSave: TerminalSnapshot[] = currentTerminals
-          .filter(
-            (t) =>
-              t.location !== "trash" && t.location !== "background" && !isSmokeTestTerminalId(t.id)
-          )
-          .map(terminalToSnapshot);
-
-        const terminalSizes: Record<string, { cols: number; rows: number }> = {};
-        for (const terminal of currentTerminals) {
-          const instance = terminalInstanceService.get(terminal.id);
-          if (instance) {
-            terminalSizes[terminal.id] = {
-              cols: instance.latestCols,
-              rows: instance.latestRows,
-            };
-          }
-        }
+        // Collect outgoing terminal state to pass with the switch IPC call.
+        // This is sent atomically with the switch payload so the main process
+        // can pre-apply it before saveOutgoingProjectWorktreeState runs,
+        // eliminating the race condition and removing two IPC round-trips.
+        outgoingState = collectOutgoingTerminalState();
 
         console.log(
-          `[ProjectSwitch] Saving ${terminalsToSave.length} panel(s) to per-project state`
+          `[ProjectSwitch] Collected ${outgoingState.terminals.length} panel(s) for atomic switch`
         );
-        // Await terminal saves before the main process switch — the switch calls
-        // saveOutgoingProjectWorktreeState which does a read-modify-write of the
-        // same ProjectState JSON. If this save hasn't landed yet, the switch will
-        // clobber terminals with the old (empty) value.
-        await projectClient
-          .setTerminals(oldProjectId, terminalsToSave)
-          .then(() => projectClient.setTerminalSizes(oldProjectId, terminalSizes))
-          .catch((saveError) => {
-            logErrorWithContext(saveError, {
-              operation: "save_panel_state_before_switch",
-              component: "projectStore",
-              errorType: "filesystem",
-              details: { oldProjectId, terminalCount: terminalsToSave.length },
-            });
-          });
 
         const preparedCache = prepareProjectSwitchRendererCache({
           outgoingProjectId: oldProjectId,
           targetProjectId: projectId,
           outgoingActiveWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId ?? null,
-          outgoingTerminals: terminalsToSave.map((terminal) => ({
+          outgoingTerminals: outgoingState.terminals.map((terminal) => ({
             id: terminal.id,
             worktreeId: terminal.worktreeId,
           })),
@@ -387,7 +389,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       console.log("[ProjectSwitch] Switching project in main process (background)...");
       const capturedEpoch = ++switchEpoch;
       projectClient
-        .switch(projectId)
+        .switch(projectId, outgoingState)
         .then((project) => {
           if (switchEpoch !== capturedEpoch) return; // Stale — user switched again
           // Update with the authoritative project data from the main process
@@ -616,6 +618,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     const currentProject = get().currentProject;
     const oldProjectId = currentProject?.id ?? null;
     let preserveTerminalIds = new Set<string>();
+    let outgoingState: Required<ProjectSwitchOutgoingState> | undefined;
 
     set({
       isLoading: true,
@@ -639,44 +642,18 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           });
         });
 
-        // Get current terminals from store and save to per-project state
-        const currentTerminals = useTerminalStore.getState().terminals;
-        const terminalsToSave: TerminalSnapshot[] = currentTerminals
-          .filter(
-            (t) =>
-              t.location !== "trash" && t.location !== "background" && !isSmokeTestTerminalId(t.id)
-          )
-          .map(terminalToSnapshot);
+        // Collect outgoing terminal state to pass with the reopen IPC call (same as switchProject)
+        outgoingState = collectOutgoingTerminalState();
 
-        const terminalSizes: Record<string, { cols: number; rows: number }> = {};
-        for (const terminal of currentTerminals) {
-          const instance = terminalInstanceService.get(terminal.id);
-          if (instance) {
-            terminalSizes[terminal.id] = {
-              cols: instance.latestCols,
-              rows: instance.latestRows,
-            };
-          }
-        }
-
-        console.log(`[ProjectStore] Saving ${terminalsToSave.length} panel(s) before reopen`);
-        try {
-          await projectClient.setTerminals(oldProjectId, terminalsToSave);
-          await projectClient.setTerminalSizes(oldProjectId, terminalSizes);
-        } catch (saveError) {
-          logErrorWithContext(saveError, {
-            operation: "save_panel_state_before_reopen",
-            component: "projectStore",
-            errorType: "filesystem",
-            details: { oldProjectId, terminalCount: terminalsToSave.length },
-          });
-        }
+        console.log(
+          `[ProjectStore] Collected ${outgoingState.terminals.length} panel(s) for atomic reopen`
+        );
 
         const preparedCache = prepareProjectSwitchRendererCache({
           outgoingProjectId: oldProjectId,
           targetProjectId: projectId,
           outgoingActiveWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId ?? null,
-          outgoingTerminals: terminalsToSave.map((terminal) => ({
+          outgoingTerminals: outgoingState.terminals.map((terminal) => ({
             id: terminal.id,
             worktreeId: terminal.worktreeId,
           })),
@@ -717,7 +694,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       console.log("[ProjectStore] Reopening project in main process (background)...");
       const capturedEpoch = ++switchEpoch;
       projectClient
-        .reopen(projectId)
+        .reopen(projectId, outgoingState)
         .then((project) => {
           if (switchEpoch !== capturedEpoch) return; // Stale — user switched again
           set({ currentProject: project, isLoading: false });
