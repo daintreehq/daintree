@@ -19,7 +19,7 @@ export const theme: BuiltInThemeSource = {
     text: {
       primary: "#2B2F42",
       secondary: "#6A708C",
-      muted: "#9BA3BE",
+      muted: "#667092",
       inverse: "#FDFCFF",
     },
     border: "#CED4E5",
@@ -170,5 +170,8 @@ export const theme: BuiltInThemeSource = {
     "toolbar-stats-divider": "rgba(206,212,229,0.5)",
     "toolbar-stats-hover-bg": "rgba(82,88,118,0.03)",
     "worktree-section-hover-bg": "rgba(82,88,118,0.03)",
+    "dock-bg": "#E4E8F2",
+    "dock-border": "rgba(82,88,118,0.12)",
+    "dock-shadow": "inset 0 1px 0 rgba(255,255,255,0.50), 0 -2px 8px rgba(86,81,118,0.10)",
   },
 };
