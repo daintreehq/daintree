@@ -87,7 +87,7 @@ describe("AppThemePicker shuffle button", () => {
 
   it("renders the shuffle button when multiple themes are available", () => {
     render(<AppThemePicker />);
-    expect(screen.getByLabelText("Pick random theme")).toBeTruthy();
+    expect(screen.getByText("Random theme")).toBeTruthy();
   });
 
   it("calls setSelectedSchemeId with a different theme on shuffle click", () => {
@@ -95,7 +95,7 @@ describe("AppThemePicker shuffle button", () => {
     storeState.setSelectedSchemeId = setSelectedSchemeId;
 
     render(<AppThemePicker />);
-    const shuffleBtn = screen.getByLabelText("Pick random theme");
+    const shuffleBtn = screen.getByText("Random theme");
     fireEvent.click(shuffleBtn);
 
     expect(setSelectedSchemeId).toHaveBeenCalledTimes(1);
@@ -109,7 +109,7 @@ describe("AppThemePicker shuffle button", () => {
     storeState.setSelectedSchemeId = setSelectedSchemeId;
 
     render(<AppThemePicker />);
-    const shuffleBtn = screen.getByLabelText("Pick random theme");
+    const shuffleBtn = screen.getByText("Random theme");
 
     // With 3 schemes and current being "theme-a", the queue has 2 items
     fireEvent.click(shuffleBtn);
