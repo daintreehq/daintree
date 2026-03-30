@@ -273,6 +273,12 @@ export function createApplicationMenu(
         },
         { type: "separator" },
         {
+          label: "Launch Help Agent",
+          click: (_item, browserWindow) =>
+            sendAction("launch-help-agent", getTargetBrowserWindow(browserWindow)),
+        },
+        { type: "separator" },
+        {
           label: "Learn More",
           click: async () => {
             await shell.openExternal("https://github.com/gregpriday/canopy-electron");

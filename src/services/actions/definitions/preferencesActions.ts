@@ -1,5 +1,5 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import { AgentSettingsEntrySchema } from "./schemas";
+import { AgentIdSchema, AgentSettingsEntrySchema } from "./schemas";
 import { z } from "zod";
 import {
   agentSettingsClient,
@@ -8,7 +8,9 @@ import {
   terminalConfigClient,
   worktreeConfigClient,
 } from "@/clients";
+import { notify } from "@/lib/notify";
 import { keybindingService } from "@/services/KeybindingService";
+import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -576,6 +578,39 @@ export function registerPreferencesActions(
     scope: "renderer",
     run: async () => {
       callbacks.onOpenShortcuts();
+    },
+  }));
+
+  actions.set("help.launchAgent", () => ({
+    id: "help.launchAgent",
+    title: "Launch Help Agent",
+    description: "Open an AI agent in the help workspace folder",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ agentId: AgentIdSchema.optional() }),
+    run: async (args?: unknown) => {
+      const folderPath = await window.electron.help.getFolderPath();
+      if (!folderPath) {
+        notify({
+          type: "error",
+          title: "Help Agent",
+          message: "Help folder not available. Please ensure the help workspace is configured.",
+        });
+        return;
+      }
+
+      const parsed = args as { agentId?: string } | undefined;
+      const agentId =
+        parsed?.agentId ?? useAgentPreferencesStore.getState().defaultAgent ?? "claude";
+
+      const { actionService } = await import("@/services/ActionService");
+      await actionService.dispatch(
+        "agent.launch",
+        { agentId, cwd: folderPath },
+        { source: "user" }
+      );
     },
   }));
 

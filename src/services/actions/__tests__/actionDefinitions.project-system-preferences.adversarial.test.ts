@@ -539,6 +539,7 @@ describe("preferences action hardening", () => {
       "worktreeConfig.setPattern",
       "help.shortcuts",
       "help.shortcutsAlt",
+      "help.launchAgent",
       "modal.close",
       "app.quit",
       "app.forceQuit",

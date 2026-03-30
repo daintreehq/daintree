@@ -672,6 +672,14 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Help",
   },
   {
+    actionId: "help.launchAgent",
+    combo: "Cmd+Shift+H",
+    scope: "global",
+    priority: 0,
+    description: "Launch help agent",
+    category: "Help",
+  },
+  {
     actionId: "app.settings",
     combo: "Cmd+,",
     scope: "global",
