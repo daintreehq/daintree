@@ -23,6 +23,58 @@ const CRASH_LOOP_THRESHOLD = 3;
 
 const oomRecreationTimestamps: number[] = [];
 
+let windowIpcHandlersRegistered = false;
+
+function registerWindowIpcHandlers(): void {
+  if (windowIpcHandlersRegistered) return;
+  windowIpcHandlersRegistered = true;
+
+  ipcMain.handle(CHANNELS.WINDOW_TOGGLE_FULLSCREEN, (event) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    if (bw && !bw.isDestroyed()) {
+      const isSimpleFullScreen = bw.isSimpleFullScreen();
+      bw.setSimpleFullScreen(!isSimpleFullScreen);
+      return !isSimpleFullScreen;
+    }
+    return false;
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_RELOAD, (event) => {
+    event.sender.reload();
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_FORCE_RELOAD, (event) => {
+    event.sender.reloadIgnoringCache();
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_TOGGLE_DEVTOOLS, (event) => {
+    if (!app.isPackaged) {
+      event.sender.toggleDevTools();
+    }
+  });
+
+  const getZoomStep = () => 0.5;
+
+  ipcMain.handle(CHANNELS.WINDOW_ZOOM_IN, (event) => {
+    const current = event.sender.getZoomLevel();
+    event.sender.setZoomLevel(current + getZoomStep());
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_ZOOM_OUT, (event) => {
+    const current = event.sender.getZoomLevel();
+    event.sender.setZoomLevel(current - getZoomStep());
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_ZOOM_RESET, (event) => {
+    event.sender.setZoomLevel(0);
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_CLOSE, (event) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    bw?.close();
+  });
+}
+
 export interface SetupBrowserWindowOptions {
   onRecreateWindow?: () => Promise<void>;
 }
@@ -384,50 +436,7 @@ export function setupBrowserWindow(
     }
   });
 
-  // Window IPC handlers
-  ipcMain.handle(CHANNELS.WINDOW_TOGGLE_FULLSCREEN, () => {
-    if (win && !win.isDestroyed()) {
-      const isSimpleFullScreen = win.isSimpleFullScreen();
-      win.setSimpleFullScreen(!isSimpleFullScreen);
-      return !isSimpleFullScreen;
-    }
-    return false;
-  });
-
-  ipcMain.handle(CHANNELS.WINDOW_RELOAD, (event) => {
-    event.sender.reload();
-  });
-
-  ipcMain.handle(CHANNELS.WINDOW_FORCE_RELOAD, (event) => {
-    event.sender.reloadIgnoringCache();
-  });
-
-  ipcMain.handle(CHANNELS.WINDOW_TOGGLE_DEVTOOLS, (event) => {
-    if (!app.isPackaged) {
-      event.sender.toggleDevTools();
-    }
-  });
-
-  const getZoomStep = () => 0.5;
-
-  ipcMain.handle(CHANNELS.WINDOW_ZOOM_IN, (event) => {
-    const current = event.sender.getZoomLevel();
-    event.sender.setZoomLevel(current + getZoomStep());
-  });
-
-  ipcMain.handle(CHANNELS.WINDOW_ZOOM_OUT, (event) => {
-    const current = event.sender.getZoomLevel();
-    event.sender.setZoomLevel(current - getZoomStep());
-  });
-
-  ipcMain.handle(CHANNELS.WINDOW_ZOOM_RESET, (event) => {
-    event.sender.setZoomLevel(0);
-  });
-
-  ipcMain.handle(CHANNELS.WINDOW_CLOSE, (event) => {
-    const bw = BrowserWindow.fromWebContents(event.sender);
-    bw?.close();
-  });
+  registerWindowIpcHandlers();
 
   function getRecoveryUrl(reason: string, exitCode: number): string {
     const params = new URLSearchParams({ reason, exitCode: String(exitCode) });
