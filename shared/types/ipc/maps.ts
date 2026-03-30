@@ -80,7 +80,12 @@ import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
 import type { RetryAction, AppError, RetryProgressPayload } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
-import type { ProjectCloseResult, ProjectStats, ProjectSwitchPayload } from "./project.js";
+import type {
+  ProjectCloseResult,
+  ProjectStats,
+  ProjectSwitchPayload,
+  ProjectSwitchOutgoingState,
+} from "./project.js";
 import type {
   RepositoryStats,
   ProjectHealthData,
@@ -659,7 +664,7 @@ export interface IpcInvokeMap {
     result: Project;
   };
   "project:switch": {
-    args: [projectId: string];
+    args: [projectId: string, outgoingState?: ProjectSwitchOutgoingState];
     result: Project;
   };
   "project:open-dialog": {
@@ -683,7 +688,7 @@ export interface IpcInvokeMap {
     result: ProjectCloseResult;
   };
   "project:reopen": {
-    args: [projectId: string];
+    args: [projectId: string, outgoingState?: ProjectSwitchOutgoingState];
     result: Project;
   };
   "project:get-stats": {

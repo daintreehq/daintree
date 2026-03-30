@@ -1213,7 +1213,10 @@ const api: ElectronAPI = {
     update: (projectId: string, updates: Partial<Project>) =>
       _unwrappingInvoke(CHANNELS.PROJECT_UPDATE, projectId, updates),
 
-    switch: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_SWITCH, projectId),
+    switch: (
+      projectId: string,
+      outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState
+    ) => _unwrappingInvoke(CHANNELS.PROJECT_SWITCH, projectId, outgoingState),
 
     openDialog: () => _unwrappingInvoke(CHANNELS.PROJECT_OPEN_DIALOG),
 
@@ -1237,7 +1240,10 @@ const api: ElectronAPI = {
     close: (projectId: string, options?: { killTerminals?: boolean }) =>
       _unwrappingInvoke(CHANNELS.PROJECT_CLOSE, projectId, options),
 
-    reopen: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_REOPEN, projectId),
+    reopen: (
+      projectId: string,
+      outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState
+    ) => _unwrappingInvoke(CHANNELS.PROJECT_REOPEN, projectId, outgoingState),
 
     getStats: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_GET_STATS, projectId),
 

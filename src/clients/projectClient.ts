@@ -9,6 +9,7 @@ import type {
   TerminalSnapshot,
   TabGroup,
 } from "@shared/types";
+import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
 import type {
   GitInitOptions,
   GitInitResult,
@@ -93,9 +94,9 @@ export const projectClient = {
     return window.electron.project.update(projectId, updates);
   },
 
-  switch: (projectId: string): Promise<Project> => {
+  switch: (projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project> => {
     invalidateCurrentCache();
-    return window.electron.project.switch(projectId);
+    return window.electron.project.switch(projectId, outgoingState);
   },
 
   openDialog: (): Promise<string | null> => {
@@ -133,9 +134,9 @@ export const projectClient = {
     return window.electron.project.close(projectId, options);
   },
 
-  reopen: (projectId: string): Promise<Project> => {
+  reopen: (projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project> => {
     invalidateCurrentCache();
-    return window.electron.project.reopen(projectId);
+    return window.electron.project.reopen(projectId, outgoingState);
   },
 
   getStats: (projectId: string): Promise<ProjectStats> => {

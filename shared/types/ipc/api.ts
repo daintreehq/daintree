@@ -76,7 +76,12 @@ import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
 import type { RetryAction, AppError, RetryProgressPayload } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
-import type { ProjectCloseResult, ProjectStats, BulkProjectStats } from "./project.js";
+import type {
+  ProjectCloseResult,
+  ProjectStats,
+  BulkProjectStats,
+  ProjectSwitchOutgoingState,
+} from "./project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { CloneRepoOptions, CloneRepoResult, CloneRepoProgressEvent } from "./gitClone.js";
 import type {
@@ -367,7 +372,7 @@ export interface ElectronAPI {
     add(path: string): Promise<Project>;
     remove(projectId: string): Promise<void>;
     update(projectId: string, updates: Partial<Project>): Promise<Project>;
-    switch(projectId: string): Promise<Project>;
+    switch(projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project>;
     openDialog(): Promise<string | null>;
     onSwitch(
       callback: (payload: {
@@ -390,7 +395,7 @@ export interface ElectronAPI {
      * Reopen a background project, making it the active project.
      * Terminals that were running in the background will be reconnected.
      */
-    reopen(projectId: string): Promise<Project>;
+    reopen(projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project>;
     getStats(projectId: string): Promise<ProjectStats>;
     getBulkStats(projectIds: string[]): Promise<BulkProjectStats>;
     createFolder(parentPath: string, folderName: string): Promise<string>;

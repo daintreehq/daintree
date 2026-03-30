@@ -8,7 +8,12 @@ import { broadcastToRenderer, sendToRenderer } from "../utils.js";
 import { randomUUID } from "crypto";
 import type { HandlerDependencies } from "../types.js";
 import type { Project, ProjectSettings } from "../../types/index.js";
-import type { BulkProjectStats, BulkProjectStatsEntry } from "../../../shared/types/ipc/project.js";
+import type {
+  BulkProjectStats,
+  BulkProjectStatsEntry,
+  ProjectSwitchOutgoingState,
+} from "../../../shared/types/ipc/project.js";
+import { sanitizeTerminals, sanitizeTerminalSizes } from "./terminalLayout.js";
 import type {
   GitInitOptions,
   GitInitResult,
@@ -118,9 +123,35 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
   ipcMain.handle(CHANNELS.PROJECT_UPDATE, handleProjectUpdate);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_UPDATE));
 
-  const handleProjectSwitch = async (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
+  const handleProjectSwitch = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    outgoingState?: ProjectSwitchOutgoingState
+  ) => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
+    }
+
+    // Pre-apply the renderer's outgoing terminal state to the current project's
+    // persisted state BEFORE the switch runs. This ensures saveOutgoingProjectWorktreeState
+    // (which does a read-modify-write) reads the already-updated cache and doesn't
+    // clobber the terminal data.
+    const previousProjectId = projectStore.getCurrentProjectId();
+    if (outgoingState && previousProjectId) {
+      const validTerminals = sanitizeTerminals(
+        outgoingState.terminals ?? [],
+        `project:switch/pre-apply(${previousProjectId})`
+      );
+      const validSizes = sanitizeTerminalSizes(
+        (outgoingState.terminalSizes ?? {}) as Record<string, unknown>
+      );
+      const existing = await projectStore.getProjectState(previousProjectId);
+      await projectStore.saveProjectState(previousProjectId, {
+        ...(existing ?? { projectId: previousProjectId, sidebarWidth: 350, terminals: [] }),
+        projectId: previousProjectId,
+        terminals: validTerminals,
+        terminalSizes: validSizes,
+      });
     }
 
     return await projectSwitchService.switchProject(projectId);
@@ -282,7 +313,11 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
   ipcMain.handle(CHANNELS.PROJECT_CLOSE, handleProjectClose);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CLOSE));
 
-  const handleProjectReopen = async (event: Electron.IpcMainInvokeEvent, projectId: string) => {
+  const handleProjectReopen = async (
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    outgoingState?: ProjectSwitchOutgoingState
+  ) => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
@@ -295,6 +330,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       throw new Error(`Project not found: ${projectId}`);
     }
 
+    // "already active" fast path — skip pre-apply (no project switch happening)
     if (project.status === "active") {
       console.log(
         `[IPC] project:reopen: Project ${projectId} already active, emitting switch event`
@@ -313,6 +349,25 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       throw new Error(
         `Cannot reopen project ${projectId} unless status is "background" (current: ${project.status ?? "unset"})`
       );
+    }
+
+    // Pre-apply outgoing terminal state (same logic as handleProjectSwitch)
+    const previousProjectId = projectStore.getCurrentProjectId();
+    if (outgoingState && previousProjectId) {
+      const validTerminals = sanitizeTerminals(
+        outgoingState.terminals ?? [],
+        `project:reopen/pre-apply(${previousProjectId})`
+      );
+      const validSizes = sanitizeTerminalSizes(
+        (outgoingState.terminalSizes ?? {}) as Record<string, unknown>
+      );
+      const existing = await projectStore.getProjectState(previousProjectId);
+      await projectStore.saveProjectState(previousProjectId, {
+        ...(existing ?? { projectId: previousProjectId, sidebarWidth: 350, terminals: [] }),
+        projectId: previousProjectId,
+        terminals: validTerminals,
+        terminalSizes: validSizes,
+      });
     }
 
     return await projectSwitchService.reopenProject(projectId);
