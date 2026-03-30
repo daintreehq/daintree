@@ -172,7 +172,7 @@ function createAndDistributePorts(win: BrowserWindow, ctx: WindowContext): void 
   ctx.services.activePtyHostPort = port2;
 
   if (ptyClient) {
-    ptyClient.connectMessagePort(port2);
+    ptyClient.connectMessagePort(ctx.windowId, port2);
   }
 
   if (win && !win.isDestroyed()) {
@@ -461,6 +461,10 @@ export async function setupWindowServices(
 
   // Per-window cleanup: ports, portalManager, eventBuffer
   ctx.cleanup.push(() => {
+    // Notify PTY host to disconnect this window's port before closing it
+    if (ptyClient) {
+      ptyClient.disconnectMessagePort(ctx.windowId);
+    }
     if (ctx.services.activeRendererPort) {
       try {
         ctx.services.activeRendererPort.close();
@@ -625,7 +629,7 @@ export async function setupWindowServices(
     createAndDistributePorts(win, ctx);
 
     const currentProjectId = projectStore.getCurrentProjectId();
-    ptyClient!.setActiveProject(currentProjectId);
+    ptyClient!.setActiveProject(win.id, currentProjectId);
 
     const availabilityStore = initializeAgentAvailabilityStore();
     const agentRouter = initializeAgentRouter(availabilityStore);

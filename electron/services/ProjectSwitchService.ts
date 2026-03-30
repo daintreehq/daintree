@@ -106,9 +106,9 @@ export class ProjectSwitchService {
       console.error("[ProjectSwitch] Project switch failed, rolling back:", error);
       try {
         if (previousProjectId) {
-          this.deps.ptyClient!.onProjectSwitch(previousProjectId);
+          this.deps.ptyClient!.onProjectSwitch(this.windowId!, previousProjectId);
         } else {
-          this.deps.ptyClient!.setActiveProject(null);
+          this.deps.ptyClient!.setActiveProject(this.windowId!, null);
         }
       } catch (rollbackError) {
         console.error("[ProjectSwitch] Rollback failed:", rollbackError);
@@ -178,7 +178,7 @@ export class ProjectSwitchService {
 
     const safeCall = (fn: () => unknown): Promise<unknown> => Promise.resolve().then(fn);
     const cleanupResults = await Promise.allSettled([
-      safeCall(() => this.deps.ptyClient!.onProjectSwitch(projectId)),
+      safeCall(() => this.deps.ptyClient!.onProjectSwitch(this.windowId!, projectId)),
       safeCall(() => logBuffer.onProjectSwitch()),
       this.deps.eventBuffer?.onProjectSwitch
         ? safeCall(() => this.deps.eventBuffer!.onProjectSwitch())

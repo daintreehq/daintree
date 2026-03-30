@@ -9,7 +9,7 @@ import type {
   TerminalFlowStatus,
   TerminalReliabilityMetricPayload,
 } from "../../shared/types/pty-host.js";
-import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
+import type { PtyPauseCoordinator, PauseToken } from "./PtyPauseCoordinator.js";
 
 export interface PortQueueDeps {
   getTerminal: (
@@ -25,14 +25,18 @@ export interface PortQueueDeps {
     pauseDuration?: number
   ) => void;
   emitReliabilityMetric: (payload: TerminalReliabilityMetricPayload) => void;
+  pauseToken?: PauseToken;
 }
 
 export class PortQueueManager {
   private readonly queuedBytes = new Map<string, number>();
   private readonly pausedTerminals = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pauseStartTimes = new Map<string, number>();
+  private readonly pauseToken: PauseToken;
 
-  constructor(private readonly deps: PortQueueDeps) {}
+  constructor(private readonly deps: PortQueueDeps) {
+    this.pauseToken = deps.pauseToken ?? "port-queue";
+  }
 
   getUtilization(id: string): number {
     const bytes = this.queuedBytes.get(id) ?? 0;
@@ -86,7 +90,7 @@ export class PortQueueManager {
     }
 
     try {
-      coordinator.pause("port-queue");
+      coordinator.pause(this.pauseToken);
       console.warn(
         `[PtyHost] Port queue high (${utilization.toFixed(1)}%). Pausing PTY ${id} for backpressure.`
       );
@@ -111,7 +115,7 @@ export class PortQueueManager {
 
         const coordinator = this.deps.getPauseCoordinator(id);
         if (coordinator) {
-          coordinator.resume("port-queue");
+          coordinator.resume(this.pauseToken);
           console.warn(
             `[PtyHost] Force resumed port PTY ${id} after ${pauseDuration}ms (queue at ${currentUtilization.toFixed(1)}%). Consumer may be stalled.`
           );
@@ -149,7 +153,7 @@ export class PortQueueManager {
 
     const coordinator = this.deps.getPauseCoordinator(id);
     if (coordinator) {
-      coordinator.resume("port-queue");
+      coordinator.resume(this.pauseToken);
       console.log(`[PtyHost] Port queue cleared to ${utilization.toFixed(1)}%. Resumed PTY ${id}`);
       if (!coordinator.isPaused) {
         this.deps.emitTerminalStatus(id, "running", utilization, pauseDuration);
@@ -179,6 +183,18 @@ export class PortQueueManager {
       this.pausedTerminals.delete(id);
     }
     this.pauseStartTimes.delete(id);
+  }
+
+  resumeAll(): void {
+    for (const [id, safetyTimeout] of this.pausedTerminals) {
+      clearTimeout(safetyTimeout);
+      const coordinator = this.deps.getPauseCoordinator(id);
+      if (coordinator) {
+        coordinator.resume(this.pauseToken);
+      }
+    }
+    this.pausedTerminals.clear();
+    this.pauseStartTimes.clear();
   }
 
   dispose(): void {

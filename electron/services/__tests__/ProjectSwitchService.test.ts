@@ -164,7 +164,7 @@ describe("ProjectSwitchService", () => {
         activeWorktreeId: "wt-old",
       })
     );
-    expect(ptyClient.onProjectSwitch).toHaveBeenCalledWith("project-new");
+    expect(ptyClient.onProjectSwitch).toHaveBeenCalledWith(MOCK_WINDOW_ID, "project-new");
     expect(worktreeService.loadProject).toHaveBeenCalledWith("/tmp/new", MOCK_WINDOW_ID);
     expect(eventBuffer.onProjectSwitch).toHaveBeenCalled();
     expect(sendToRendererMock).toHaveBeenCalledWith(

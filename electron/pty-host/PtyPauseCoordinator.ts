@@ -3,6 +3,7 @@ export type PauseToken =
   | "backpressure"
   | "ipc-queue"
   | "port-queue"
+  | `port-queue-${number}`
   | "system-sleep";
 
 export class PtyPauseCoordinator {
