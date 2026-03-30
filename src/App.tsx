@@ -1513,16 +1513,17 @@ function App() {
             projectSwitcherPalette={projectSwitcherPalette}
           >
             <Profiler id="content-grid" onRender={onContentGridRender}>
-              {currentProject === null ? (
-                <WelcomeScreen gettingStarted={gettingStarted} />
-              ) : (
-                <ContentGrid
-                  key={currentProject.id}
-                  className="h-full w-full"
-                  agentAvailability={availability}
-                  defaultCwd={defaultTerminalCwd}
-                />
-              )}
+              <ContentGrid
+                key={currentProject?.id ?? "no-project"}
+                className="h-full w-full"
+                agentAvailability={availability}
+                defaultCwd={defaultTerminalCwd}
+                emptyContent={
+                  currentProject === null ? (
+                    <WelcomeScreen gettingStarted={gettingStarted} />
+                  ) : undefined
+                }
+              />
             </Profiler>
           </AppLayout>
         </Profiler>

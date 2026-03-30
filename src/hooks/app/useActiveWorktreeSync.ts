@@ -3,12 +3,14 @@ import { useWorktrees } from "@/hooks";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store";
 import { worktreeClient } from "@/clients";
+import { useHomeDir } from "@/hooks/app/useHomeDir";
 
 export function useActiveWorktreeSync() {
   const { worktrees } = useWorktrees();
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
   const currentProject = useProjectStore((s) => s.currentProject);
+  const { homeDir } = useHomeDir();
 
   const lastSyncedActiveRef = useRef<{ projectId: string | null; worktreeId: string | null }>({
     projectId: null,
@@ -63,8 +65,8 @@ export function useActiveWorktreeSync() {
   }, [activeWorktreeId, currentProject?.id, worktrees]);
 
   const defaultTerminalCwd = useMemo(
-    () => activeWorktree?.path ?? currentProject?.path ?? "",
-    [activeWorktree, currentProject]
+    () => activeWorktree?.path ?? currentProject?.path ?? homeDir ?? "",
+    [activeWorktree, currentProject, homeDir]
   );
 
   return { activeWorktree, defaultTerminalCwd };
