@@ -525,6 +525,10 @@ export interface IpcInvokeMap {
     args: [];
     result: void;
   };
+  "app:reload-config": {
+    args: [];
+    result: { success: boolean };
+  };
   "menu:show-context": {
     args: [payload: ShowContextMenuPayload];
     result: string | null;
@@ -1922,6 +1926,9 @@ export interface IpcEventMap {
 
   // App theme events
   "app-theme:system-appearance-changed": { isDark: boolean; schemeId: string };
+
+  // Config reload events
+  "app:config-reloaded": void;
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];

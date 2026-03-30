@@ -715,6 +715,9 @@ const CHANNELS = {
   PLUGIN_MENU_ITEMS: "plugin:menu-items",
 
   RESOURCE_PROFILE_CHANGED: "resource:profile-changed",
+
+  APP_RELOAD_CONFIG: "app:reload-config",
+  APP_CONFIG_RELOADED: "app:config-reloaded",
 } as const;
 
 const api: ElectronAPI = {
@@ -1113,6 +1116,10 @@ const api: ElectronAPI = {
     forceQuit: () => _unwrappingInvoke(CHANNELS.APP_FORCE_QUIT),
 
     onMenuAction: (callback: (action: string) => void) => _typedOn(CHANNELS.MENU_ACTION, callback),
+
+    reloadConfig: () => _unwrappingInvoke(CHANNELS.APP_RELOAD_CONFIG),
+
+    onConfigReloaded: (callback: () => void) => _typedOn(CHANNELS.APP_CONFIG_RELOADED, callback),
   },
 
   menu: {

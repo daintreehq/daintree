@@ -537,6 +537,10 @@ export const CHANNELS = {
   PLUGIN_MENU_ITEMS: "plugin:menu-items",
 
   RESOURCE_PROFILE_CHANGED: "resource:profile-changed",
+
+  // Config reload channels
+  APP_RELOAD_CONFIG: "app:reload-config",
+  APP_CONFIG_RELOADED: "app:config-reloaded",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

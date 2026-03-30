@@ -6,6 +6,8 @@ import { DEFAULT_AGENT_SETTINGS, type UserAgentConfig } from "../../../shared/ty
 import { AgentHelpService } from "../../services/AgentHelpService.js";
 import { UserAgentRegistryService } from "../../services/UserAgentRegistryService.js";
 import type { AgentHelpRequest, AgentHelpResult } from "../../../shared/types/ipc/agent.js";
+import { broadcastToRenderer } from "../utils.js";
+import { createApplicationMenu } from "../../menu.js";
 
 const RESERVED_AGENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -51,7 +53,7 @@ function normalizeAgentSettings(value: unknown): NormalizedAgentSettings {
   return { root, agents };
 }
 
-export function registerAiHandlers(_deps: HandlerDependencies): () => void {
+export function registerAiHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
   const agentHelpService = new AgentHelpService();
   const userAgentRegistryService = new UserAgentRegistryService();
@@ -187,6 +189,24 @@ export function registerAiHandlers(_deps: HandlerDependencies): () => void {
   };
   ipcMain.handle(CHANNELS.USER_AGENT_REGISTRY_REMOVE, handleUserAgentRegistryRemove);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.USER_AGENT_REGISTRY_REMOVE));
+
+  const handleReloadConfig = async () => {
+    userAgentRegistryService.reload();
+
+    if (deps.mainWindow && !deps.mainWindow.isDestroyed()) {
+      createApplicationMenu(deps.mainWindow, deps.cliAvailabilityService);
+    }
+
+    if (deps.events) {
+      deps.events.emit("sys:config:reload");
+    }
+
+    broadcastToRenderer(CHANNELS.APP_CONFIG_RELOADED);
+
+    return { success: true };
+  };
+  ipcMain.handle(CHANNELS.APP_RELOAD_CONFIG, handleReloadConfig);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_RELOAD_CONFIG));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

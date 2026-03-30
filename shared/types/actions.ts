@@ -111,6 +111,7 @@ export type BuiltInActionId =
   | "project.getStats"
   | "project.settings.open"
   | "project.cloneRepo"
+  | "app.reloadConfig"
   | "app.developerMode.set"
   | "logs.openFile"
   | "logs.clear"
