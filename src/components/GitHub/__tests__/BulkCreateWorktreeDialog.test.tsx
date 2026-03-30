@@ -9,6 +9,7 @@ const mockWorktreeCreate = vi.fn();
 const mockGetAvailableBranch = vi.fn();
 const mockGetDefaultPath = vi.fn();
 const mockListBranches = vi.fn();
+const mockFetchPRBranch = vi.fn();
 const mockAssignIssue = vi.fn();
 
 vi.mock("@/clients", () => ({
@@ -17,6 +18,7 @@ vi.mock("@/clients", () => ({
     getAvailableBranch: (...args: unknown[]) => mockGetAvailableBranch(...args),
     getDefaultPath: (...args: unknown[]) => mockGetDefaultPath(...args),
     listBranches: (...args: unknown[]) => mockListBranches(...args),
+    fetchPRBranch: (...args: unknown[]) => mockFetchPRBranch(...args),
   },
   githubClient: {
     assignIssue: (...args: unknown[]) => mockAssignIssue(...args),
@@ -1075,7 +1077,7 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
     expect(createCalls[0][0].newBranch).toBe("feature/pr-10");
   });
 
-  it("skips fork PRs with reason", () => {
+  it("includes fork PRs in plan", () => {
     const forkPR: GitHubPR = {
       ...makePR(99),
       isFork: true,
@@ -1083,8 +1085,8 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
     const props = { ...prProps, selectedPRs: [forkPR] };
     render(<BulkCreateWorktreeDialog {...props} />);
 
-    expect(screen.getByText("Fork PR")).toBeTruthy();
-    expect(screen.getByTestId("bulk-create-confirm-button").hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByText("Fork PR")).toBeNull();
+    expect(screen.getByTestId("bulk-create-confirm-button").hasAttribute("disabled")).toBe(false);
   });
 
   it("skips merged PRs with reason", () => {
@@ -1135,8 +1137,9 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
     expect(createCalls[0][0].fromRemote).toBe(false);
   });
 
-  it("fails when branch not found locally or on remote", async () => {
+  it("fails when branch cannot be fetched from remote", async () => {
     mockListBranches.mockResolvedValue([{ name: "main", current: true, remote: false }]);
+    mockFetchPRBranch.mockRejectedValue(new Error("fatal: couldn't find remote ref pull/10/head"));
 
     const props = { ...prProps, selectedPRs: [makePR(10)] };
     render(<BulkCreateWorktreeDialog {...props} />);
@@ -1147,7 +1150,7 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
 
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/not found locally or on remote/)).toBeTruthy();
+    expect(screen.getByText(/couldn't find remote ref/)).toBeTruthy();
     expect(screen.getByText(/1 failed/)).toBeTruthy();
   });
 });

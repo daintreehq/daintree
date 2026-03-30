@@ -159,6 +159,7 @@ const CHANNELS = {
   WORKTREE_ACTIVATED: "worktree:activated",
   WORKTREE_CREATE: "worktree:create",
   WORKTREE_LIST_BRANCHES: "worktree:list-branches",
+  WORKTREE_FETCH_PR_BRANCH: "worktree:fetch-pr-branch",
   WORKTREE_GET_RECENT_BRANCHES: "worktree:get-recent-branches",
   WORKTREE_PR_REFRESH: "worktree:pr-refresh",
   WORKTREE_PR_STATUS: "worktree:pr-status",
@@ -740,6 +741,9 @@ const api: ElectronAPI = {
 
     listBranches: (rootPath: string) =>
       _unwrappingInvoke(CHANNELS.WORKTREE_LIST_BRANCHES, { rootPath }),
+
+    fetchPRBranch: (rootPath: string, prNumber: number, headRefName: string) =>
+      _unwrappingInvoke(CHANNELS.WORKTREE_FETCH_PR_BRANCH, { rootPath, prNumber, headRefName }),
 
     getRecentBranches: (rootPath: string) =>
       _unwrappingInvoke(CHANNELS.WORKTREE_GET_RECENT_BRANCHES, { rootPath }),

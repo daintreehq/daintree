@@ -7,6 +7,7 @@ export const CHANNELS = {
   WORKTREE_ACTIVATED: "worktree:activated",
   WORKTREE_CREATE: "worktree:create",
   WORKTREE_LIST_BRANCHES: "worktree:list-branches",
+  WORKTREE_FETCH_PR_BRANCH: "worktree:fetch-pr-branch",
   WORKTREE_GET_RECENT_BRANCHES: "worktree:get-recent-branches",
   WORKTREE_PR_REFRESH: "worktree:pr-refresh",
   WORKTREE_PR_STATUS: "worktree:pr-status",

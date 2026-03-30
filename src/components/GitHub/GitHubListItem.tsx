@@ -117,8 +117,6 @@ export function GitHubListItem({
   const hasWorktree = matchedWorktree !== undefined;
   const isActiveWorktree = hasWorktree && matchedWorktree.id === activeWorktreeId;
 
-  const isForkPR = isItemPR && (item as GitHubPR).isFork === true;
-
   const handleOpenExternal = () => {
     void actionService.dispatch("system.openExternal", { url: item.url }, { source: "user" });
   };
@@ -366,7 +364,7 @@ export function GitHubListItem({
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-            ) : item.state === "OPEN" && !isForkPR && onCreateWorktree ? (
+            ) : item.state === "OPEN" && onCreateWorktree ? (
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -422,24 +420,10 @@ export function GitHubListItem({
                 {!hasWorktree && onCreateWorktree && item.state === "OPEN" && (
                   <>
                     <DropdownMenuSeparator />
-                    {isForkPR ? (
-                      <DropdownMenuItem disabled>
-                        <div className="flex flex-col gap-0.5">
-                          <span className="flex items-center gap-2">
-                            <WorktreeIcon className="h-3.5 w-3.5" />
-                            Create Worktree
-                          </span>
-                          <span className="text-[10px] text-muted-foreground leading-tight">
-                            Not available for fork PRs
-                          </span>
-                        </div>
-                      </DropdownMenuItem>
-                    ) : (
-                      <DropdownMenuItem onSelect={() => onCreateWorktree(item)}>
-                        <WorktreeIcon className="h-3.5 w-3.5 mr-2" />
-                        Create Worktree
-                      </DropdownMenuItem>
-                    )}
+                    <DropdownMenuItem onSelect={() => onCreateWorktree(item)}>
+                      <WorktreeIcon className="h-3.5 w-3.5 mr-2" />
+                      Create Worktree
+                    </DropdownMenuItem>
                   </>
                 )}
               </DropdownMenuContent>
