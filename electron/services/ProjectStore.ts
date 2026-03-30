@@ -4,7 +4,6 @@ import type {
   ProjectSettings,
   ProjectStatus,
   TerminalRecipe,
-  WorkflowDefinition,
 } from "../types/index.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import path from "path";
@@ -571,36 +570,6 @@ export class ProjectStore {
 
   async deleteGlobalRecipe(recipeId: string): Promise<void> {
     return this.globalFileStore.deleteRecipe(recipeId);
-  }
-
-  // --- Workflows ---
-
-  async getWorkflows(projectId: string): Promise<WorkflowDefinition[]> {
-    return this.fileStore.getWorkflows(projectId);
-  }
-
-  async saveWorkflows(projectId: string, workflows: WorkflowDefinition[]): Promise<void> {
-    return this.fileStore.saveWorkflows(projectId, workflows);
-  }
-
-  async addWorkflow(projectId: string, workflow: WorkflowDefinition): Promise<void> {
-    return this.fileStore.addWorkflow(projectId, workflow);
-  }
-
-  async updateWorkflow(
-    projectId: string,
-    workflowId: string,
-    updates: Partial<Omit<WorkflowDefinition, "id">>
-  ): Promise<void> {
-    return this.fileStore.updateWorkflow(projectId, workflowId, updates);
-  }
-
-  async deleteWorkflow(projectId: string, workflowId: string): Promise<void> {
-    return this.fileStore.deleteWorkflow(projectId, workflowId);
-  }
-
-  async getWorkflow(projectId: string, workflowId: string): Promise<WorkflowDefinition | null> {
-    return this.fileStore.getWorkflow(projectId, workflowId);
   }
 }
 

@@ -311,16 +311,6 @@ const CHANNELS = {
   NOTES_SEARCH: "notes:search",
   NOTES_UPDATED: "notes:updated",
 
-  // Workflow channels
-  WORKFLOW_LIST: "workflow:list",
-  WORKFLOW_START: "workflow:start",
-  WORKFLOW_CANCEL: "workflow:cancel",
-  WORKFLOW_GET_RUN: "workflow:get-run",
-  WORKFLOW_LIST_RUNS: "workflow:list-runs",
-  WORKFLOW_STARTED: "workflow:started",
-  WORKFLOW_COMPLETED: "workflow:completed",
-  WORKFLOW_FAILED: "workflow:failed",
-
   // Dev Preview channels
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
   DEV_PREVIEW_RESTART: "dev-preview:restart",
@@ -721,12 +711,6 @@ const CHANNELS = {
   PLUGIN_INVOKE: "plugin:invoke",
   PLUGIN_TOOLBAR_BUTTONS: "plugin:toolbar-buttons",
   PLUGIN_MENU_ITEMS: "plugin:menu-items",
-
-  // Workflow approval channels
-  WORKFLOW_RESOLVE_APPROVAL: "workflow:resolve-approval",
-  WORKFLOW_LIST_PENDING_APPROVALS: "workflow:list-pending-approvals",
-  WORKFLOW_APPROVAL_REQUESTED: "workflow:approval-requested",
-  WORKFLOW_APPROVAL_CLEARED: "workflow:approval-cleared",
 } as const;
 
 const api: ElectronAPI = {
@@ -1534,97 +1518,6 @@ const api: ElectronAPI = {
         action: "created" | "updated" | "deleted";
       }) => void
     ) => _typedOn(CHANNELS.NOTES_UPDATED, callback),
-  },
-
-  // Workflow API
-  workflow: {
-    listWorkflows: () => _unwrappingInvoke(CHANNELS.WORKFLOW_LIST),
-
-    startWorkflow: (workflowId: string) => _unwrappingInvoke(CHANNELS.WORKFLOW_START, workflowId),
-
-    cancelWorkflow: (runId: string) => _unwrappingInvoke(CHANNELS.WORKFLOW_CANCEL, runId),
-
-    getWorkflowRun: (runId: string) => _unwrappingInvoke(CHANNELS.WORKFLOW_GET_RUN, runId),
-
-    listRuns: () => _unwrappingInvoke(CHANNELS.WORKFLOW_LIST_RUNS),
-
-    onStarted: (
-      callback: (data: {
-        runId: string;
-        workflowId: string;
-        workflowVersion: string;
-        timestamp: number;
-      }) => void
-    ) => _typedOn(CHANNELS.WORKFLOW_STARTED, callback),
-
-    onCompleted: (
-      callback: (data: {
-        runId: string;
-        workflowId: string;
-        workflowVersion: string;
-        duration: number;
-        timestamp: number;
-      }) => void
-    ) => _typedOn(CHANNELS.WORKFLOW_COMPLETED, callback),
-
-    onFailed: (
-      callback: (data: {
-        runId: string;
-        workflowId: string;
-        workflowVersion: string;
-        error: string;
-        timestamp: number;
-      }) => void
-    ) => _typedOn(CHANNELS.WORKFLOW_FAILED, callback),
-
-    listPendingApprovals: () => _unwrappingInvoke(CHANNELS.WORKFLOW_LIST_PENDING_APPROVALS),
-
-    resolveApproval: (payload: {
-      runId: string;
-      nodeId: string;
-      approved: boolean;
-      feedback?: string;
-    }) => _unwrappingInvoke(CHANNELS.WORKFLOW_RESOLVE_APPROVAL, payload),
-
-    onApprovalRequested: (
-      callback: (payload: {
-        runId: string;
-        nodeId: string;
-        workflowId: string;
-        workflowName: string;
-        prompt: string;
-        requestedAt: number;
-        timeoutMs?: number;
-        timeoutAt?: number;
-      }) => void
-    ) => {
-      const handler = (
-        _event: Electron.IpcRendererEvent,
-        payload: {
-          runId: string;
-          nodeId: string;
-          workflowId: string;
-          workflowName: string;
-          prompt: string;
-          requestedAt: number;
-          timeoutMs?: number;
-          timeoutAt?: number;
-        }
-      ) => callback(payload);
-      ipcRenderer.on(CHANNELS.WORKFLOW_APPROVAL_REQUESTED, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.WORKFLOW_APPROVAL_REQUESTED, handler);
-    },
-
-    onApprovalCleared: (
-      callback: (payload: { runId: string; nodeId: string; reason: string }) => void
-    ) => {
-      const handler = (
-        _event: Electron.IpcRendererEvent,
-        payload: { runId: string; nodeId: string; reason: string }
-      ) => callback(payload);
-      ipcRenderer.on(CHANNELS.WORKFLOW_APPROVAL_CLEARED, handler);
-      return () => ipcRenderer.removeListener(CHANNELS.WORKFLOW_APPROVAL_CLEARED, handler);
-    },
   },
 
   // Dev Preview API

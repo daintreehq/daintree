@@ -45,8 +45,7 @@ import {
   disposePowerSaveBlockerService,
 } from "../services/PowerSaveBlockerService.js";
 import { initializeAgentRouter, disposeAgentRouter } from "../services/AgentRouter.js";
-import { initializeWorkflowEngine, disposeWorkflowEngine } from "../services/WorkflowEngine.js";
-import { workflowLoader } from "../services/WorkflowLoader.js";
+
 import {
   initializeTaskOrchestrator,
   disposeTaskOrchestrator,
@@ -589,14 +588,6 @@ export async function setupWindowServices(
     } catch (error) {
       console.error("[MAIN] Failed to initialize task queue:", error);
     }
-
-    try {
-      await workflowLoader.initialize();
-      initializeWorkflowEngine();
-      console.log("[MAIN] WorkflowEngine initialized");
-    } catch (error) {
-      console.error("[MAIN] Failed to initialize workflow engine:", error);
-    }
   }
 
   // Event inspector
@@ -812,8 +803,6 @@ export async function setupWindowServices(
     disposeAgentRouter();
     disposePowerSaveBlockerService();
     disposeAgentAvailabilityStore();
-    disposeWorkflowEngine();
-
     projectSwitchService = null;
 
     if (ptyClient) ptyClient.dispose();

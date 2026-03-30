@@ -5,7 +5,7 @@ export const UTF8_BOM = "\uFEFF";
 
 const SETTINGS_FILENAME = "settings.json";
 const RECIPES_FILENAME = "recipes.json";
-const WORKFLOWS_FILENAME = "workflows.json";
+
 const STATE_FILENAME = "state.json";
 
 export function generateProjectId(projectPath: string): string {
@@ -44,10 +44,4 @@ export function recipesFilePath(projectsConfigDir: string, projectId: string): s
   const stateDir = getProjectStateDir(projectsConfigDir, projectId);
   if (!stateDir) return null;
   return path.join(stateDir, RECIPES_FILENAME);
-}
-
-export function workflowsFilePath(projectsConfigDir: string, projectId: string): string | null {
-  const stateDir = getProjectStateDir(projectsConfigDir, projectId);
-  if (!stateDir) return null;
-  return path.join(stateDir, WORKFLOWS_FILENAME);
 }

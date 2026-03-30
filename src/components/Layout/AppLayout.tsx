@@ -8,7 +8,7 @@ import { PortalDock, PortalVisibilityController } from "../Portal";
 import { ProjectSwitchOverlay } from "@/components/Project";
 import { ChordIndicator } from "./ChordIndicator";
 import { DemoCursor } from "../Demo";
-import { ApprovalQueue } from "../Workflow/ApprovalQueue";
+
 import { AllClearOverlay } from "../AllClearOverlay";
 import { useDiagnosticsStore, useDockStore, type PanelState } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
@@ -356,7 +356,7 @@ export function AppLayout({
         projectName={switchingToProjectName ?? undefined}
       />
       <ChordIndicator />
-      <ApprovalQueue />
+
       <AllClearOverlay />
       {window.electron?.demo && <DemoCursor />}
     </div>

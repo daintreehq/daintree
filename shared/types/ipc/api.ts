@@ -14,36 +14,6 @@ import type { OnboardingState, ChecklistState, ChecklistItemId } from "./maps.js
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { VoiceInputStatus } from "../voice.js";
 export type { VoiceInputStatus };
-import type { WorkflowRun } from "../workflowRun.js";
-import type { WorkflowSummary } from "../workflow.js";
-
-export type WorkflowRunIpc = Omit<WorkflowRun, "scheduledNodes"> & {
-  scheduledNodes: string[];
-};
-
-export interface WorkflowStartedPayload {
-  runId: string;
-  workflowId: string;
-  workflowVersion: string;
-  timestamp: number;
-}
-
-export interface WorkflowCompletedPayload {
-  runId: string;
-  workflowId: string;
-  workflowVersion: string;
-  duration: number;
-  timestamp: number;
-}
-
-export interface WorkflowFailedPayload {
-  runId: string;
-  workflowId: string;
-  workflowVersion: string;
-  error: string;
-  timestamp: number;
-}
-
 import type {
   CreateWorktreeOptions,
   BranchInfo,
@@ -1168,49 +1138,6 @@ export interface ElectronAPI {
     generateApiKey(): Promise<string>;
     /** Get the JSON config snippet to paste into an MCP client config */
     getConfigSnippet(): Promise<string>;
-  };
-  workflow: {
-    listWorkflows(): Promise<WorkflowSummary[]>;
-    startWorkflow(workflowId: string): Promise<string>;
-    cancelWorkflow(runId: string): Promise<void>;
-    getWorkflowRun(runId: string): Promise<WorkflowRunIpc | null>;
-    listRuns(): Promise<WorkflowRunIpc[]>;
-    onStarted(callback: (data: WorkflowStartedPayload) => void): () => void;
-    onCompleted(callback: (data: WorkflowCompletedPayload) => void): () => void;
-    onFailed(callback: (data: WorkflowFailedPayload) => void): () => void;
-    listPendingApprovals(): Promise<
-      Array<{
-        runId: string;
-        nodeId: string;
-        workflowId: string;
-        workflowName: string;
-        prompt: string;
-        requestedAt: number;
-        timeoutMs?: number;
-        timeoutAt?: number;
-      }>
-    >;
-    resolveApproval(payload: {
-      runId: string;
-      nodeId: string;
-      approved: boolean;
-      feedback?: string;
-    }): Promise<void>;
-    onApprovalRequested(
-      callback: (payload: {
-        runId: string;
-        nodeId: string;
-        workflowId: string;
-        workflowName: string;
-        prompt: string;
-        requestedAt: number;
-        timeoutMs?: number;
-        timeoutAt?: number;
-      }) => void
-    ): () => void;
-    onApprovalCleared(
-      callback: (payload: { runId: string; nodeId: string; reason: string }) => void
-    ): () => void;
   };
   mcpBridge: {
     /** Listen for manifest requests from main process */

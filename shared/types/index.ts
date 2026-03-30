@@ -429,52 +429,6 @@ export type {
   TaskStateChangePayload,
 } from "./task.js";
 
-// Workflow types - declarative workflow definitions
-export type {
-  WorkflowConditionOp,
-  WorkflowCondition,
-  WorkflowNodeType,
-  WorkflowActionConfig,
-  WorkflowApprovalConfig,
-  WorkflowLoopConfig,
-  ActionNode,
-  ApprovalNode,
-  LoopNode,
-  WorkflowNode,
-  WorkflowDefinition,
-  WorkflowValidationResult,
-  WorkflowValidationError,
-  LoadedWorkflow,
-  WorkflowSource,
-  WorkflowSummary,
-} from "./workflow.js";
-
-export {
-  WorkflowConditionOpSchema,
-  WorkflowConditionSchema,
-  WorkflowNodeTypeSchema,
-  WorkflowActionConfigSchema,
-  WorkflowApprovalConfigSchema,
-  WorkflowLoopConfigSchema,
-  WorkflowActionNodeSchema,
-  WorkflowApprovalNodeSchema,
-  WorkflowLoopNodeSchema,
-  WorkflowNodeSchema,
-  WorkflowDefinitionSchema,
-} from "./workflow.js";
-
-// Workflow Run types - runtime execution state
-export type {
-  WorkflowRunStatus,
-  NodeStatus,
-  NodeState,
-  ApprovalDecision,
-  PendingWorkflowApproval,
-  LoopNodeState,
-  EvaluatedCondition,
-  WorkflowRun,
-} from "./workflowRun.js";
-
 // Editor integration types - external editor configuration and discovery
 export type {
   KnownEditorId,
