@@ -374,6 +374,7 @@ export interface ElectronAPI {
         project: Project;
         switchId: string;
         worktreeLoadError?: string;
+        hydrateResult?: import("./app.js").HydrateResult;
       }) => void
     ): () => void;
     getSettings(projectId: string): Promise<ProjectSettings>;

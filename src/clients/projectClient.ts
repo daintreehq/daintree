@@ -103,7 +103,12 @@ export const projectClient = {
   },
 
   onSwitch: (
-    callback: (payload: { project: Project; switchId: string; worktreeLoadError?: string }) => void
+    callback: (payload: {
+      project: Project;
+      switchId: string;
+      worktreeLoadError?: string;
+      hydrateResult?: import("@shared/types/ipc/app").HydrateResult;
+    }) => void
   ): (() => void) => {
     return window.electron.project.onSwitch(callback);
   },

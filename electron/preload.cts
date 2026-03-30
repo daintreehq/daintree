@@ -1222,6 +1222,7 @@ const api: ElectronAPI = {
         project: Project;
         switchId: string;
         worktreeLoadError?: string;
+        hydrateResult?: import("../shared/types/ipc/app.js").HydrateResult;
       }) => void
     ) => _typedOn(CHANNELS.PROJECT_ON_SWITCH, callback),
 

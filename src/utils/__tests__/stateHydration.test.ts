@@ -2022,4 +2022,62 @@ describe("hydrateAppState", () => {
       expect(notifyMock.mock.calls[0][0].message).not.toContain("preserved at");
     });
   });
+
+  describe("prefetchedHydrateResult", () => {
+    it("skips appClient.hydrate() when prefetched result is provided", async () => {
+      const prefetched = {
+        appState: {
+          terminals: [],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        gpuHardwareAccelerationDisabled: false,
+        safeMode: false,
+        settingsRecovery: null,
+      };
+
+      await hydrateAppState(
+        {
+          addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+          setActiveWorktree: vi.fn(),
+          loadRecipes: vi.fn().mockResolvedValue(undefined),
+          openDiagnosticsDock: vi.fn(),
+        },
+        "switch-1",
+        () => true,
+        prefetched as any
+      );
+
+      expect(appClientMock.hydrate).not.toHaveBeenCalled();
+    });
+
+    it("calls appClient.hydrate() when no prefetched result is provided", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        gpuHardwareAccelerationDisabled: false,
+        safeMode: false,
+        settingsRecovery: null,
+      });
+
+      await hydrateAppState(
+        {
+          addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+          setActiveWorktree: vi.fn(),
+          loadRecipes: vi.fn().mockResolvedValue(undefined),
+          openDiagnosticsDock: vi.fn(),
+        },
+        "switch-1",
+        () => true
+      );
+
+      expect(appClientMock.hydrate).toHaveBeenCalledTimes(1);
+    });
+  });
 });

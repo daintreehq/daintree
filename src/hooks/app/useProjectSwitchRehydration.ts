@@ -27,6 +27,7 @@ interface ProjectSwitchedEventDetail {
   switchId: string;
   projectId: string;
   worktreeLoadError?: string;
+  hydrateResult?: import("@shared/types/ipc/app").HydrateResult;
 }
 
 export function useProjectSwitchRehydration() {
@@ -65,6 +66,7 @@ export function useProjectSwitchRehydration() {
       const switchId = customEvent.detail?.switchId;
       const projectId = customEvent.detail?.projectId;
       const worktreeLoadError = customEvent.detail?.worktreeLoadError;
+      const prefetchedHydrateResult = customEvent.detail?.hydrateResult;
 
       if (!switchId || !projectId) {
         console.error(
@@ -97,7 +99,12 @@ export function useProjectSwitchRehydration() {
       clearTerminalStoreForSwitch();
 
       try {
-        await hydrateAppState(callbacks, switchId, () => currentSwitchIdRef.current === switchId);
+        await hydrateAppState(
+          callbacks,
+          switchId,
+          () => currentSwitchIdRef.current === switchId,
+          prefetchedHydrateResult
+        );
 
         if (currentSwitchIdRef.current !== switchId) {
           console.log(
@@ -151,13 +158,13 @@ export function useProjectSwitchRehydration() {
     window.addEventListener("project-switched", handleProjectSwitch);
 
     const cleanup = projectClient.onSwitch((payload) => {
-      const { project, switchId, worktreeLoadError } = payload;
+      const { project, switchId, worktreeLoadError, hydrateResult } = payload;
       console.log(
-        `[useProjectSwitchRehydration] Received PROJECT_ON_SWITCH from main process (project: ${project.name}, switchId: ${switchId}), re-hydrating...`
+        `[useProjectSwitchRehydration] Received PROJECT_ON_SWITCH from main process (project: ${project.name}, switchId: ${switchId}, hasHydrateResult: ${Boolean(hydrateResult)}), re-hydrating...`
       );
       window.dispatchEvent(
         new CustomEvent<ProjectSwitchedEventDetail>("project-switched", {
-          detail: { switchId, projectId: project.id, worktreeLoadError },
+          detail: { switchId, projectId: project.id, worktreeLoadError, hydrateResult },
         })
       );
     });

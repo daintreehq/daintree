@@ -1,4 +1,5 @@
 import type { Project } from "../project.js";
+import type { HydrateResult } from "./app.js";
 
 /** Payload for project:on-switch event with cancellation token */
 export interface ProjectSwitchPayload {
@@ -8,6 +9,8 @@ export interface ProjectSwitchPayload {
   switchId: string;
   /** If the workspace host failed to load worktrees (e.g. non-git directory) */
   worktreeLoadError?: string;
+  /** Pre-built hydration data to skip the redundant APP_HYDRATE IPC round-trip */
+  hydrateResult?: HydrateResult;
 }
 
 /** Result from project:close operation */

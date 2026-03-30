@@ -12,6 +12,7 @@ import { randomUUID } from "crypto";
 import { store } from "../store.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
+import { buildSwitchHydrateResult } from "./AppHydrationService.js";
 
 export class ProjectSwitchService {
   private deps: HandlerDependencies;
@@ -94,10 +95,26 @@ export class ProjectSwitchService {
       ]);
 
       const switchId = randomUUID();
+
+      // Pre-build hydration data to embed in the switch payload, eliminating
+      // the ~50-150ms IPC round-trip the renderer would otherwise make via
+      // appClient.hydrate(). Soft-fail: if the builder throws, broadcast
+      // without it and the renderer falls back to the IPC pull model.
+      let hydrateResult: import("../../shared/types/ipc/app.js").HydrateResult | undefined;
+      try {
+        hydrateResult = await buildSwitchHydrateResult(projectId);
+      } catch (error) {
+        console.warn(
+          "[ProjectSwitch] Failed to pre-build hydrate result, renderer will fallback to IPC:",
+          error
+        );
+      }
+
       broadcastToRenderer(CHANNELS.PROJECT_ON_SWITCH, {
         project: updatedProject,
         switchId,
         ...(worktreeLoadError ? { worktreeLoadError } : {}),
+        ...(hydrateResult ? { hydrateResult } : {}),
       });
 
       console.log("[ProjectSwitch] Project switch complete, switchId:", switchId);

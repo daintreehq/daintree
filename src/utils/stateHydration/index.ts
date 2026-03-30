@@ -155,7 +155,8 @@ export interface HydrationOptions {
 export async function hydrateAppState(
   options: HydrationOptions,
   _switchId?: string,
-  isCurrent?: () => boolean
+  isCurrent?: () => boolean,
+  prefetchedHydrateResult?: import("@shared/types/ipc/app").HydrateResult
 ): Promise<void> {
   const { addTerminal, setActiveWorktree, loadRecipes, openDiagnosticsDock } = options;
   const hydrationStartedAt = Date.now();
@@ -181,11 +182,15 @@ export async function hydrateAppState(
     });
     if (!checkCurrent()) return;
 
-    // Batch fetch initial state
+    // Use pre-fetched hydration data from the project switch payload when available,
+    // eliminating a ~50-150ms IPC round-trip. Fall back to the IPC pull model for
+    // initial app load or when the switch payload didn't include hydration data.
     const [hydrateResult, tmpDir] = await Promise.all([
-      withRendererSpan(PERF_MARKS.HYDRATE_APP_CLIENT, () => appClient.hydrate(), {
-        switchId: _switchId ?? null,
-      }),
+      prefetchedHydrateResult
+        ? Promise.resolve(prefetchedHydrateResult)
+        : withRendererSpan(PERF_MARKS.HYDRATE_APP_CLIENT, () => appClient.hydrate(), {
+            switchId: _switchId ?? null,
+          }),
       systemClient.getTmpDir().catch(() => ""),
     ]);
     const {

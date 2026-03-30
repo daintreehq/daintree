@@ -63,6 +63,23 @@ vi.mock("../../store.js", () => ({
   store: storeMock,
 }));
 
+const buildSwitchHydrateResultMock = vi.hoisted(() =>
+  vi.fn(async () => ({
+    appState: { terminals: [], sidebarWidth: 350 },
+    terminalConfig: {},
+    project: { id: "project-new", name: "New Project", path: "/tmp/new" },
+    agentSettings: {},
+    gpuWebGLHardware: true,
+    gpuHardwareAccelerationDisabled: false,
+    safeMode: false,
+    settingsRecovery: null,
+  }))
+);
+
+vi.mock("../AppHydrationService.js", () => ({
+  buildSwitchHydrateResult: buildSwitchHydrateResultMock,
+}));
+
 import { CHANNELS } from "../../ipc/channels.js";
 import { ProjectSwitchService } from "../ProjectSwitchService.js";
 
@@ -293,6 +310,30 @@ describe("ProjectSwitchService", () => {
 
     const payload = sendToRendererMock.mock.calls[0][1];
     expect(payload).not.toHaveProperty("worktreeLoadError");
+  });
+
+  it("includes pre-built hydrateResult in switch payload", async () => {
+    const { service } = createService();
+
+    await service.switchProject("project-new");
+
+    const payload = sendToRendererMock.mock.calls[0][1];
+    expect(payload.hydrateResult).toBeDefined();
+    expect(payload.hydrateResult.safeMode).toBe(false);
+    expect(payload.hydrateResult.settingsRecovery).toBeNull();
+    expect(buildSwitchHydrateResultMock).toHaveBeenCalledWith("project-new");
+  });
+
+  it("broadcasts without hydrateResult when builder throws", async () => {
+    buildSwitchHydrateResultMock.mockRejectedValueOnce(new Error("builder failed"));
+    const { service } = createService();
+
+    await service.switchProject("project-new");
+
+    const payload = sendToRendererMock.mock.calls[0][1];
+    expect(payload).not.toHaveProperty("hydrateResult");
+    expect(payload.project).toMatchObject({ id: "project-new" });
+    expect(payload.switchId).toBe("switch-id-1");
   });
 
   it("preserves original switch error when rollback throws", async () => {
