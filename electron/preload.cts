@@ -1462,6 +1462,9 @@ const api: ElectronAPI = {
 
     locate: (projectId: string): Promise<Project | null> =>
       _unwrappingInvoke(CHANNELS.PROJECT_LOCATE, projectId),
+
+    prewarmHost: (projectId: string): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.PROJECT_PREWARM, projectId),
   },
 
   // Global Recipes API

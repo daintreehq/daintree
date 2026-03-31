@@ -1024,6 +1024,15 @@ Thumbs.db
   ipcMain.handle(CHANNELS.PROJECT_CHECK_MISSING, handleProjectCheckMissing);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CHECK_MISSING));
 
+  const handleProjectPrewarm = (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
+    if (typeof projectId !== "string" || !projectId) return;
+    const project = projectStore.getProjectById(projectId);
+    if (!project) return;
+    deps.worktreeService?.prewarmProject(project.path);
+  };
+  ipcMain.handle(CHANNELS.PROJECT_PREWARM, handleProjectPrewarm);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_PREWARM));
+
   const handleProjectLocate = async (
     _event: Electron.IpcMainInvokeEvent,
     projectId: string

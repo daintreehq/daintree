@@ -569,6 +569,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     if (project.isActive || project.isMissing) return;
     if (prefetchedProjects.has(project.id)) return;
 
+    void projectClient.prewarmHost(project.id).catch(() => {});
+
     if (prefetchTimerRef) {
       clearTimeout(prefetchTimerRef);
     }
