@@ -121,17 +121,13 @@ describe("ProjectViewManager — GC on deactivate", () => {
     vi.useRealTimers();
   });
 
-  it("does not trigger GC immediately on deactivate", async () => {
+  it("does not trigger GC before 100ms, triggers exactly at 100ms", async () => {
     await manager.switchTo("proj-b", "/path/b");
 
+    vi.advanceTimersByTime(99);
     expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
-  });
 
-  it("triggers GC after 100ms delay on deactivated view", async () => {
-    await manager.switchTo("proj-b", "/path/b");
-
-    vi.advanceTimersByTime(100);
-
+    vi.advanceTimersByTime(1);
     expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
     expect(initialWc.executeJavaScript).toHaveBeenCalledWith("window.gc && window.gc()");
   });
@@ -154,8 +150,8 @@ describe("ProjectViewManager — GC on deactivate", () => {
 
     vi.advanceTimersByTime(100);
 
-    // GC should NOT have fired — view was reactivated
-    expect(initialWc.executeJavaScript).not.toHaveBeenCalledWith("window.gc && window.gc()");
+    // GC should NOT have fired — view was reactivated (state is "active", not "cached")
+    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
   });
 
   it("skips GC if view entry was evicted from the map", async () => {
@@ -165,7 +161,7 @@ describe("ProjectViewManager — GC on deactivate", () => {
 
     vi.advanceTimersByTime(100);
 
-    expect(initialWc.executeJavaScript).not.toHaveBeenCalledWith("window.gc && window.gc()");
+    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
   });
 
   it("suppresses executeJavaScript rejection without unhandled promise", async () => {
