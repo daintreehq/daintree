@@ -15,6 +15,7 @@ import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
+import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
 import { useScrollbackStore } from "@/store/scrollbackStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -522,6 +523,30 @@ export function registerPreferencesActions(
         await terminalConfigClient.setScreenReaderMode(mode);
       } catch (error) {
         state.setScreenReaderMode(previous);
+        throw error;
+      }
+    },
+  }));
+
+  actions.set("terminalConfig.setCachedProjectViews", () => ({
+    id: "terminalConfig.setCachedProjectViews",
+    title: "Set Cached Project Views",
+    description: "Set the number of project views to keep cached in memory (1–5)",
+    category: "settings",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ cachedProjectViews: z.number().int().min(1).max(5) }),
+    run: async (args: unknown) => {
+      const { cachedProjectViews } = args as { cachedProjectViews: number };
+      const state = useCachedProjectViewsStore.getState();
+      const previous = state.cachedProjectViews;
+      state.setCachedProjectViews(cachedProjectViews);
+
+      try {
+        await terminalConfigClient.setCachedProjectViews(cachedProjectViews);
+      } catch (error) {
+        state.setCachedProjectViews(previous);
         throw error;
       }
     },

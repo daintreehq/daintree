@@ -28,4 +28,6 @@ export interface TerminalConfig {
   memoryLeakDetectionEnabled?: boolean;
   /** Auto-restart threshold in MB — restart terminal when RSS exceeds this (default: 8192) */
   memoryLeakAutoRestartThresholdMb?: number;
+  /** Number of project views to keep cached in memory (1–5, default: 2) */
+  cachedProjectViews?: number;
 }

@@ -1762,6 +1762,9 @@ const api: ElectronAPI = {
 
     setMemoryLeakAutoRestartThresholdMb: (thresholdMb: number) =>
       _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART, thresholdMb),
+
+    setCachedProjectViews: (cachedProjectViews: number) =>
+      _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS, cachedProjectViews),
   },
 
   // Accessibility API

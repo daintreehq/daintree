@@ -733,6 +733,7 @@ export interface ElectronAPI {
     setResourceMonitoring(enabled: boolean): Promise<void>;
     setMemoryLeakDetection(enabled: boolean): Promise<void>;
     setMemoryLeakAutoRestartThresholdMb(thresholdMb: number): Promise<void>;
+    setCachedProjectViews(cachedProjectViews: number): Promise<void>;
   };
   accessibility: {
     getEnabled(): Promise<boolean>;

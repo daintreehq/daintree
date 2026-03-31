@@ -233,6 +233,30 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
   );
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART));
 
+  const handleTerminalConfigSetCachedProjectViews = async (
+    _event: Electron.IpcMainInvokeEvent,
+    cachedProjectViews: number
+  ) => {
+    if (!Number.isFinite(cachedProjectViews) || !Number.isInteger(cachedProjectViews)) {
+      const error = `Invalid cachedProjectViews value (not a finite integer): ${cachedProjectViews}`;
+      console.warn(error);
+      throw new Error(error);
+    }
+    if (cachedProjectViews < 1 || cachedProjectViews > 5) {
+      const error = `Invalid cachedProjectViews value (out of range 1-5): ${cachedProjectViews}`;
+      console.warn(error);
+      throw new Error(error);
+    }
+    const currentConfig = getTerminalConfigObject();
+    store.set("terminalConfig", { ...currentConfig, cachedProjectViews });
+    deps?.projectViewManager?.setCachedViewLimit(cachedProjectViews);
+  };
+  ipcMain.handle(
+    CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS,
+    handleTerminalConfigSetCachedProjectViews
+  );
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS));
+
   const handleTerminalConfigImportColorScheme = async (event: Electron.IpcMainInvokeEvent) => {
     const win = getWindowForWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
     const dialogOptions = {

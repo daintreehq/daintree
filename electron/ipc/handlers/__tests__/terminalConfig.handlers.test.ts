@@ -77,6 +77,7 @@ describe("terminalConfig handlers", () => {
     expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_ENABLED);
     expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_AUTO_FOCUS);
     expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_SCREEN_READER_MODE);
+    expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS);
 
     cleanup();
     const removedChannels = (
@@ -183,6 +184,55 @@ describe("terminalConfig handlers", () => {
 
     await handler({}, true);
     expect(storeState.data.terminalConfig).toMatchObject({ screenReaderMode: "auto" });
+  });
+
+  it("setCachedProjectViews accepts valid values 1 through 5", async () => {
+    registerTerminalConfigHandlers();
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS);
+
+    await handler({}, 1);
+    expect(storeState.data.terminalConfig).toMatchObject({ cachedProjectViews: 1 });
+
+    await handler({}, 3);
+    expect(storeState.data.terminalConfig).toMatchObject({ cachedProjectViews: 3 });
+
+    await handler({}, 5);
+    expect(storeState.data.terminalConfig).toMatchObject({ cachedProjectViews: 5 });
+  });
+
+  it("setCachedProjectViews rejects out-of-range values", async () => {
+    registerTerminalConfigHandlers();
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS);
+
+    await expect(handler({}, 0)).rejects.toThrow("Invalid cachedProjectViews value");
+    await expect(handler({}, 6)).rejects.toThrow("Invalid cachedProjectViews value");
+    await expect(handler({}, -1)).rejects.toThrow("Invalid cachedProjectViews value");
+  });
+
+  it("setCachedProjectViews rejects non-integer and non-finite values", async () => {
+    registerTerminalConfigHandlers();
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS);
+
+    await expect(handler({}, 1.5)).rejects.toThrow("Invalid cachedProjectViews value");
+    await expect(handler({}, Number.NaN)).rejects.toThrow("Invalid cachedProjectViews value");
+    await expect(handler({}, Infinity)).rejects.toThrow("Invalid cachedProjectViews value");
+  });
+
+  it("setCachedProjectViews calls projectViewManager.setCachedViewLimit", async () => {
+    const mockPvm = { setCachedViewLimit: vi.fn() };
+    registerTerminalConfigHandlers({ projectViewManager: mockPvm } as never);
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS);
+
+    await handler({}, 4);
+    expect(mockPvm.setCachedViewLimit).toHaveBeenCalledWith(4);
+  });
+
+  it("setCachedProjectViews does not crash when deps is absent", async () => {
+    registerTerminalConfigHandlers();
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS);
+
+    await handler({}, 3);
+    expect(storeState.data.terminalConfig).toMatchObject({ cachedProjectViews: 3 });
   });
 
   it("normalizes malformed terminalConfig shape before writes", async () => {

@@ -16,6 +16,7 @@ import {
   Shield,
   Cpu,
   MemoryStick,
+  Layers,
 } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -41,6 +42,7 @@ import {
   PERFORMANCE_MODE_SCROLLBACK,
 } from "@/utils/scrollbackConfig";
 import { actionService } from "@/services/ActionService";
+import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { useMemoryLeakConfigStore } from "@/store/memoryLeakConfigStore";
@@ -77,6 +79,14 @@ const SCROLLBACK_OPTIONS = [
   { value: 1000, label: "1,000 lines", description: "Default" },
   { value: 2500, label: "2,500 lines", description: "Extended" },
   { value: 5000, label: "5,000 lines", description: "Full history" },
+] as const;
+
+const CACHED_VIEWS_OPTIONS = [
+  { value: 1, label: "1 project", description: "Min memory" },
+  { value: 2, label: "2 projects", description: "Default" },
+  { value: 3, label: "3 projects", description: "Balanced" },
+  { value: 4, label: "4 projects", description: "More cache" },
+  { value: 5, label: "5 projects", description: "Max cache" },
 ] as const;
 
 const TYPICAL_TERMINAL_COUNTS: Partial<Record<TerminalType, number>> = {
@@ -141,6 +151,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const autoRestartThresholdMb = useMemoryLeakConfigStore((s) => s.autoRestartThresholdMb);
   const setMemoryLeakDetectionEnabled = useMemoryLeakConfigStore((s) => s.setEnabled);
   const setAutoRestartThresholdMb = useMemoryLeakConfigStore((s) => s.setAutoRestartThresholdMb);
+
+  const cachedProjectViews = useCachedProjectViewsStore((s) => s.cachedProjectViews);
 
   const [hardwareInfo, setHardwareInfo] = useState<HardwareInfo | null>(null);
 
@@ -259,6 +271,21 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
       }
     } catch (error) {
       console.error("Failed to persist screen reader mode:", error);
+    }
+  };
+
+  const handleCachedProjectViewsChange = async (value: number) => {
+    try {
+      const result = await actionService.dispatch(
+        "terminalConfig.setCachedProjectViews",
+        { cachedProjectViews: value },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+    } catch (error) {
+      console.error("Failed to persist cached project views setting:", error);
     }
   };
 
@@ -532,6 +559,40 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             <RotateCcw className="w-3 h-3" />
             <span>Reset to hardware-recommended defaults</span>
           </button>
+        </SettingsSection>
+      )}
+
+      {effectiveSubtab === "performance" && (
+        <SettingsSection
+          icon={Layers}
+          title="Cached Project Views"
+          id="terminal-cached-project-views"
+          description="Number of project views to keep loaded in memory. Lower values save memory; switching to an evicted project takes ~500ms to reload."
+        >
+          <div
+            className="grid grid-cols-5 gap-2"
+            role="radiogroup"
+            aria-label="Cached project views"
+          >
+            {CACHED_VIEWS_OPTIONS.map(({ value, label, description }) => (
+              <button
+                key={value}
+                onClick={() => handleCachedProjectViewsChange(value)}
+                role="radio"
+                aria-checked={cachedProjectViews === value}
+                aria-label={`${label} - ${description}`}
+                className={cn(
+                  "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-all",
+                  cachedProjectViews === value
+                    ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
+                    : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"
+                )}
+              >
+                <span className="text-xs font-medium">{label}</span>
+                <span className="text-[11px] mt-0.5 opacity-60">{description}</span>
+              </button>
+            ))}
+          </div>
         </SettingsSection>
       )}
 

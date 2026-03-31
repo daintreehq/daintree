@@ -161,6 +161,7 @@ if (!gotTheLock) {
       dirname: __dirname,
       onRecreateWindow: () => createWindow(initialProjectPath),
       windowRegistry,
+      cachedProjectViews: store.get("terminalConfig")?.cachedProjectViews,
       onViewEvicted: (wcId) => {
         getWorkspaceClientRef()?.removeDirectPort(wcId);
       },
