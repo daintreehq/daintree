@@ -67,7 +67,8 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         isConfirmingQuit = true;
         let confirmed = false;
         try {
-          confirmed = await showQuitWarning(activeCount, dialog.showMessageBox);
+          const primaryWindow = deps.windowRegistry?.getPrimary()?.browserWindow ?? null;
+          confirmed = await showQuitWarning(activeCount, dialog.showMessageBox, primaryWindow);
         } catch (error) {
           console.error("[MAIN] Error showing quit warning:", error);
         } finally {

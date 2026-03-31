@@ -37,8 +37,6 @@ type WebContentsEventHandler = (event: unknown, ...args: unknown[]) => void;
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
 
-const oomRecreationTimestamps: number[] = [];
-
 function createMockWindow() {
   const listeners = new Map<string, EventHandler[]>();
   const wcListeners = new Map<string, WebContentsEventHandler[]>();
@@ -88,6 +86,7 @@ function setupCrashRecovery(
 ) {
   const { onRecreateWindow } = options;
   const rendererCrashTimestamps: number[] = [];
+  const oomRecreationTimestamps: number[] = [];
   const recordCrash = vi.fn();
 
   const getRecoveryUrl = (reason: string, exitCode: number): string => {
@@ -156,7 +155,7 @@ function setupCrashRecovery(
     }
   });
 
-  return { rendererCrashTimestamps, recordCrash };
+  return { rendererCrashTimestamps, oomRecreationTimestamps, recordCrash };
 }
 
 function setupUnresponsiveHandling(win: ReturnType<typeof createMockWindow>) {
@@ -205,7 +204,6 @@ describe("renderer crash recovery", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.mocked(notifyError).mockClear();
-    oomRecreationTimestamps.length = 0;
   });
 
   afterEach(() => {
@@ -451,6 +449,29 @@ describe("renderer crash recovery", () => {
     expect(win.webContents.reload).toHaveBeenCalledOnce();
     expect(onRecreateWindow).not.toHaveBeenCalled();
     expect(win.destroy).not.toHaveBeenCalled();
+  });
+
+  it("OOM crashes in one window do not affect another window's recreation budget", () => {
+    const winA = createMockWindow();
+    const onRecreateA = vi.fn().mockResolvedValue(undefined);
+    setupCrashRecovery(winA, { onRecreateWindow: onRecreateA });
+
+    const winB = createMockWindow();
+    const onRecreateB = vi.fn().mockResolvedValue(undefined);
+    setupCrashRecovery(winB, { onRecreateWindow: onRecreateB });
+
+    // Two OOM crashes on window A
+    winA._emitWc("render-process-gone", { reason: "oom", exitCode: 137 });
+    vi.advanceTimersByTime(0);
+    winA._emitWc("render-process-gone", { reason: "oom", exitCode: 137 });
+    vi.advanceTimersByTime(0);
+    expect(onRecreateA).toHaveBeenCalledTimes(2);
+
+    // First OOM crash on window B — should still recreate, not trigger recovery
+    winB._emitWc("render-process-gone", { reason: "oom", exitCode: 137 });
+    vi.advanceTimersByTime(0);
+    expect(onRecreateB).toHaveBeenCalledOnce();
+    expect(winB.webContents.loadURL).not.toHaveBeenCalled();
   });
 
   it("does not buffer notification when crash loop threshold is reached", () => {

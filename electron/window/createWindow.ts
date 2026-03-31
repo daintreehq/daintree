@@ -36,8 +36,6 @@ import { SMOKE_BOOT_TIMEOUT_MS } from "../services/smokeTest.js";
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
 
-const oomRecreationTimestamps: number[] = [];
-
 let windowIpcHandlersRegistered = false;
 
 function registerWindowIpcHandlers(onCreateWindow?: (projectPath?: string) => Promise<void>): void {
@@ -386,6 +384,7 @@ export function setupBrowserWindow(
 
   // Crash loop detection and renderer recovery
   const rendererCrashTimestamps: number[] = [];
+  const oomRecreationTimestamps: number[] = [];
 
   appWebContents.on("render-process-gone", (_event, details) => {
     if (details.reason === "clean-exit") return;
