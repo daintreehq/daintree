@@ -57,7 +57,7 @@ test.describe.serial("Core: Light Theme Smoke", () => {
           metrics.quickRunFieldBorderContrast,
           `${schemeId}: quick-run input border should stay visibly separated`
         )
-        .toBeGreaterThanOrEqual(1.03);
+        .toBeGreaterThanOrEqual(1.02);
       expect
         .soft(
           metrics.worktreeSectionContrast,

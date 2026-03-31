@@ -58,18 +58,21 @@ test.describe.serial("Core: Keyboard Terminal Navigation", () => {
 
     // Cycle forward: should move to a different panel
     await window.keyboard.press("Control+Tab");
-    await expect.poll(() => getFocusedPanelId(window), { timeout: T_MEDIUM }).not.toBe(startId);
+    await window.waitForTimeout(T_SETTLE);
+    await expect.poll(() => getFocusedPanelId(window), { timeout: T_LONG }).not.toBe(startId);
     const secondId = await getFocusedPanelId(window);
 
     // Cycle forward again: should move to yet another panel
     await window.keyboard.press("Control+Tab");
-    await expect.poll(() => getFocusedPanelId(window), { timeout: T_MEDIUM }).not.toBe(secondId);
+    await window.waitForTimeout(T_SETTLE);
+    await expect.poll(() => getFocusedPanelId(window), { timeout: T_LONG }).not.toBe(secondId);
     const thirdId = await getFocusedPanelId(window);
     expect(new Set([startId, secondId, thirdId]).size).toBe(3);
 
     // Cycle once more: should wrap back to start
     await window.keyboard.press("Control+Tab");
-    await expect.poll(() => getFocusedPanelId(window), { timeout: T_MEDIUM }).toBe(startId);
+    await window.waitForTimeout(T_SETTLE);
+    await expect.poll(() => getFocusedPanelId(window), { timeout: T_LONG }).toBe(startId);
   });
 
   test("Ctrl+Shift+Tab cycles backward through terminals", async () => {
@@ -84,26 +87,28 @@ test.describe.serial("Core: Keyboard Terminal Navigation", () => {
 
     // First discover the forward order by pressing Ctrl+Tab twice
     await window.keyboard.press("Control+Tab");
-    await expect.poll(() => getFocusedPanelId(window), { timeout: T_MEDIUM }).not.toBe(startId);
+    await window.waitForTimeout(T_SETTLE);
+    await expect.poll(() => getFocusedPanelId(window), { timeout: T_LONG }).not.toBe(startId);
     const forwardSecond = await getFocusedPanelId(window);
 
     await window.keyboard.press("Control+Tab");
-    await expect
-      .poll(() => getFocusedPanelId(window), { timeout: T_MEDIUM })
-      .not.toBe(forwardSecond);
+    await window.waitForTimeout(T_SETTLE);
+    await expect.poll(() => getFocusedPanelId(window), { timeout: T_LONG }).not.toBe(forwardSecond);
     const forwardThird = await getFocusedPanelId(window);
 
     // Return to start
     await window.locator(SEL.panel.gridPanel).first().locator(SEL.terminal.xtermRows).click();
     await window.waitForTimeout(T_SETTLE);
-    await expect.poll(() => getFocusedPanelId(window), { timeout: T_MEDIUM }).toBe(startId);
+    await expect.poll(() => getFocusedPanelId(window), { timeout: T_LONG }).toBe(startId);
 
     // Cycle backward: should wrap to last panel (same as forward's third)
     await window.keyboard.press("Control+Shift+Tab");
-    await expect.poll(() => getFocusedPanelId(window), { timeout: T_MEDIUM }).toBe(forwardThird);
+    await window.waitForTimeout(T_SETTLE);
+    await expect.poll(() => getFocusedPanelId(window), { timeout: T_LONG }).toBe(forwardThird);
 
     // Cycle backward again: should go to the second panel (reverse of forward)
     await window.keyboard.press("Control+Shift+Tab");
+    await window.waitForTimeout(T_SETTLE);
     await expect.poll(() => getFocusedPanelId(window), { timeout: T_MEDIUM }).toBe(forwardSecond);
   });
 

@@ -278,8 +278,10 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
       "start on project A",
       async () => {
         await switchViaEvaluate(page, PROJECT_A);
+        // Panels may take extra time to re-hydrate after prior test switches
+        await page.waitForTimeout(T_SETTLE * 2);
         await expect
-          .poll(() => getGridPanelCount(window), { timeout: T_LONG })
+          .poll(() => getGridPanelCount(window), { timeout: T_LONG * 2 })
           .toBeGreaterThanOrEqual(3);
       },
       { box: true }

@@ -169,9 +169,9 @@ test.describe.serial("Core: Terminal Recipes", () => {
       await window.waitForTimeout(500);
       await openRecipesTab();
 
-      await window
-        .locator(SEL.projectSettings.editRecipeButton("E2E Test Recipe"))
-        .click({ force: true });
+      const editBtn = window.locator(SEL.projectSettings.editRecipeButton("E2E Test Recipe"));
+      await expect(editBtn).toBeVisible({ timeout: T_MEDIUM });
+      await editBtn.click({ force: true });
 
       const editor = getRecipeEditor("Edit Recipe");
       await expect(editor).toBeVisible({ timeout: T_MEDIUM });

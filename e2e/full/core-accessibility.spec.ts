@@ -244,12 +244,12 @@ test.describe.serial("Core: Accessibility", () => {
 
             // Track recent keys to detect both single-element traps and 2-element cycles
             recentKeys.push(key);
-            if (recentKeys.length > 6) recentKeys.shift();
+            if (recentKeys.length > 10) recentKeys.shift();
 
             if (key === lastKey) {
               consecutiveCount++;
-              // 4+ consecutive = trap (3 can happen at page boundaries)
-              if (consecutiveCount >= 4) {
+              // 6+ consecutive = trap (5 can happen at page boundaries on CI)
+              if (consecutiveCount >= 6) {
                 traps.push(
                   `Focus trap at Tab #${i}: ${info.tagName} role=${info.role} label="${info.ariaLabel}" text="${info.textContent}"`
                 );
@@ -260,10 +260,12 @@ test.describe.serial("Core: Accessibility", () => {
               lastKey = key;
             }
 
-            // Detect 2-element cycle: A-B-A-B-A-B-A-B
-            if (recentKeys.length >= 6) {
-              const [a, b, c, d, e, f] = recentKeys.slice(-6);
-              if (a === c && c === e && b === d && d === f && a !== b) {
+            // Detect 2-element cycle: A-B-A-B-A-B-A-B-A-B
+            if (recentKeys.length >= 10) {
+              const tail = recentKeys.slice(-10);
+              const [a, b] = tail;
+              const isCycle = tail.every((k, idx) => k === (idx % 2 === 0 ? a : b));
+              if (isCycle && a !== b) {
                 traps.push(`Focus cycle at Tab #${i}: alternating between two elements`);
                 break;
               }

@@ -192,15 +192,15 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
     await dialog.getByRole("button", { name: "Remove Project" }).click();
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
 
-    await window.waitForTimeout(T_SETTLE);
+    await window.waitForTimeout(T_SETTLE * 2);
 
     // Active project A should still be active
     const trigger = window.locator(SEL.toolbar.projectSwitcherTrigger);
-    await expect(trigger).toContainText(PROJECT_A, { timeout: T_SHORT });
+    await expect(trigger).toContainText(PROJECT_A, { timeout: T_MEDIUM });
 
     // A's panels should still be present (poll to handle transient state)
     await expect
-      .poll(() => getGridPanelCount(window), { timeout: T_LONG })
+      .poll(() => getGridPanelCount(window), { timeout: T_LONG * 2 })
       .toBeGreaterThanOrEqual(1);
 
     // A's worktree cards should still be visible
