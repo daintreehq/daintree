@@ -753,7 +753,10 @@ describe("PortalManager destroyHiddenTabs()", () => {
     let flushResolved = false;
     let closeCalledBeforeFlush = false;
 
-    const { promise, resolve } = Promise.withResolvers<void>();
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => {
+      resolve = r;
+    });
     wc.session.flushStorageData.mockReturnValue(promise);
     wc.close.mockImplementation(() => {
       if (!flushResolved) closeCalledBeforeFlush = true;
