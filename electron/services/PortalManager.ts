@@ -35,9 +35,13 @@ export class PortalManager {
     this.lruOrder.set(tabId, true);
   }
 
-  private destroyView(tabId: string): void {
+  private async destroyView(tabId: string): Promise<void> {
     const view = this.viewMap.get(tabId);
     if (!view) return;
+
+    // Detach state synchronously first so hasTab() returns false immediately
+    this.viewMap.delete(tabId);
+    this.lruOrder.delete(tabId);
 
     if (this.activeView === view) {
       try {
@@ -49,14 +53,20 @@ export class PortalManager {
       this.activeTabId = null;
     }
 
+    // Flush storage before closing to prevent localStorage data loss
+    if (!view.webContents.isDestroyed()) {
+      try {
+        await view.webContents.session.flushStorageData();
+      } catch {
+        // Best-effort flush — proceed to close even if flush fails
+      }
+    }
+
     try {
       view.webContents.close();
     } catch (error) {
       console.error(`[PortalManager] Error closing view for tab ${tabId}:`, error);
     }
-
-    this.viewMap.delete(tabId);
-    this.lruOrder.delete(tabId);
   }
 
   private evictIfNeeded(): void {
@@ -69,7 +79,7 @@ export class PortalManager {
         continue;
       }
 
-      this.destroyView(tabId);
+      void this.destroyView(tabId);
 
       this.sendToApp(CHANNELS.PORTAL_TAB_EVICTED, { tabId });
       break;
@@ -321,8 +331,8 @@ export class PortalManager {
     }
   }
 
-  closeTab(tabId: string): void {
-    this.destroyView(tabId);
+  async closeTab(tabId: string): Promise<void> {
+    await this.destroyView(tabId);
   }
 
   navigate(tabId: string, url: string): void {
@@ -374,21 +384,9 @@ export class PortalManager {
     // Use lastShownTabId as fallback when activeTabId is null (e.g., hideAll was called for overlays)
     const skipId = this.activeTabId ?? this.lastShownTabId;
     const destroyed: string[] = [];
-    for (const [tabId, view] of this.viewMap) {
+    for (const tabId of [...this.viewMap.keys()]) {
       if (tabId === skipId) continue;
-
-      try {
-        this.window.contentView.removeChildView(view);
-      } catch {
-        // already removed
-      }
-      try {
-        view.webContents.close();
-      } catch {
-        // already destroyed
-      }
-
-      this.viewMap.delete(tabId);
+      void this.destroyView(tabId);
       destroyed.push(tabId);
     }
     if (destroyed.length > 0) {
@@ -402,7 +400,7 @@ export class PortalManager {
   destroy(): void {
     const tabIds = [...this.viewMap.keys()];
     for (const tabId of tabIds) {
-      this.destroyView(tabId);
+      void this.destroyView(tabId);
     }
     this.activeView = null;
     this.activeTabId = null;

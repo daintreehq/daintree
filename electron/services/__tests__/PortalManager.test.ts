@@ -17,6 +17,9 @@ const createMockWebContents = () => ({
   inspectElement: vi.fn(),
   paste: vi.fn(),
   isDestroyed: vi.fn().mockReturnValue(false),
+  session: {
+    flushStorageData: vi.fn().mockResolvedValue(undefined),
+  },
 });
 
 const createdWebContents: ReturnType<typeof createMockWebContents>[] = [];
@@ -272,17 +275,17 @@ describe("PortalManager", () => {
   });
 
   describe("closeTab()", () => {
-    it("closes an existing tab", () => {
+    it("closes an existing tab", async () => {
       const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-close", "http://localhost:3000");
       expect(manager.hasTab("tab-close")).toBe(true);
 
-      manager.closeTab("tab-close");
+      await manager.closeTab("tab-close");
       expect(manager.hasTab("tab-close")).toBe(false);
     });
 
-    it("clears active tab if closing active", () => {
+    it("clears active tab if closing active", async () => {
       const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-close-active", "http://localhost:3000");
@@ -290,16 +293,47 @@ describe("PortalManager", () => {
 
       expect(manager.getActiveTabId()).toBe("tab-close-active");
 
-      manager.closeTab("tab-close-active");
+      await manager.closeTab("tab-close-active");
 
       expect(manager.getActiveTabId()).toBeNull();
       expect(manager.hasTab("tab-close-active")).toBe(false);
     });
 
-    it("does nothing for non-existent tab", () => {
+    it("does nothing for non-existent tab", async () => {
       const manager = new PortalManagerClass(mockWindow);
 
-      expect(() => manager.closeTab("non-existent")).not.toThrow();
+      await expect(manager.closeTab("non-existent")).resolves.toBeUndefined();
+    });
+
+    it("flushes storage data before closing webContents", async () => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-flush", "http://localhost:3000");
+      const wc = createdWebContents[createdWebContents.length - 1];
+
+      const callOrder: string[] = [];
+      wc.session.flushStorageData.mockImplementation(() => {
+        callOrder.push("flush");
+        return Promise.resolve();
+      });
+      wc.close.mockImplementation(() => {
+        callOrder.push("close");
+      });
+
+      await manager.closeTab("tab-flush");
+
+      expect(callOrder).toEqual(["flush", "close"]);
+    });
+
+    it("still closes webContents if flushStorageData rejects", async () => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-flush-fail", "http://localhost:3000");
+      const wc = createdWebContents[createdWebContents.length - 1];
+      wc.session.flushStorageData.mockRejectedValueOnce(new Error("flush failed"));
+
+      await manager.closeTab("tab-flush-fail");
+
+      expect(wc.close).toHaveBeenCalled();
+      expect(manager.hasTab("tab-flush-fail")).toBe(false);
     });
   });
 
@@ -539,14 +573,14 @@ describe("PortalManager LRU eviction", () => {
     expect(evictedCalls()[1][1]).toEqual({ tabId: "tab-2" });
   });
 
-  it("closeTab does not emit eviction event", () => {
+  it("closeTab does not emit eviction event", async () => {
     const manager = new PortalManagerClass(mockWindow);
 
     manager.createTab("tab-1", "http://localhost:1001");
     manager.createTab("tab-2", "http://localhost:1002");
     (mockWindow.webContents.send as ReturnType<typeof vi.fn>).mockClear();
 
-    manager.closeTab("tab-2");
+    await manager.closeTab("tab-2");
 
     const evictedCalls = (
       mockWindow.webContents.send as ReturnType<typeof vi.fn>
@@ -614,7 +648,7 @@ describe("PortalManager LRU eviction", () => {
     expect(manager.hasTab("tab-4")).toBe(true);
   });
 
-  it("closeTab on already-evicted tab is a no-op", () => {
+  it("closeTab on already-evicted tab is a no-op", async () => {
     const manager = new PortalManagerClass(mockWindow);
 
     manager.createTab("tab-1", "http://localhost:1001");
@@ -626,10 +660,10 @@ describe("PortalManager LRU eviction", () => {
     expect(manager.hasTab("tab-1")).toBe(false);
 
     // Closing it again should not throw
-    expect(() => manager.closeTab("tab-1")).not.toThrow();
+    await expect(manager.closeTab("tab-1")).resolves.toBeUndefined();
   });
 
-  it("calls webContents.close() on evicted views", () => {
+  it("calls webContents.close() on evicted views", async () => {
     const manager = new PortalManagerClass(mockWindow);
 
     manager.createTab("tab-1", "http://localhost:1001");
@@ -638,6 +672,10 @@ describe("PortalManager LRU eviction", () => {
     manager.createTab("tab-3", "http://localhost:1003");
     manager.createTab("tab-4", "http://localhost:1004");
 
+    // Eviction is fire-and-forget async — wait for flush+close to settle
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(evictedWebContents.session.flushStorageData).toHaveBeenCalled();
     expect(evictedWebContents.close).toHaveBeenCalled();
   });
 
@@ -661,7 +699,7 @@ describe("PortalManager LRU eviction", () => {
     }
   });
 
-  it("destroy after evictions does not double-close", () => {
+  it("destroy after evictions does not double-close", async () => {
     const manager = new PortalManagerClass(mockWindow);
 
     manager.createTab("tab-1", "http://localhost:1001");
@@ -669,11 +707,17 @@ describe("PortalManager LRU eviction", () => {
     manager.createTab("tab-3", "http://localhost:1003");
     manager.createTab("tab-4", "http://localhost:1004");
 
+    // Wait for eviction flush+close to settle
+    await new Promise((r) => setTimeout(r, 0));
+
     // tab-1 was evicted, its close was already called
     const evictedWebContents = createdWebContents[0];
     const closeCallsBefore = evictedWebContents.close.mock.calls.length;
 
     expect(() => manager.destroy()).not.toThrow();
+
+    // Wait for destroy flush+close to settle
+    await new Promise((r) => setTimeout(r, 0));
 
     // tab-1 should not have been closed again (it was already evicted)
     expect(evictedWebContents.close.mock.calls.length).toBe(closeCallsBefore);

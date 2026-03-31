@@ -87,7 +87,7 @@ export function registerPortalHandlers(deps: HandlerDependencies): () => void {
     if (!payload || typeof payload !== "object" || typeof payload.tabId !== "string") {
       return;
     }
-    deps.portalManager.closeTab(payload.tabId);
+    await deps.portalManager.closeTab(payload.tabId);
   };
   ipcMain.handle(CHANNELS.PORTAL_CLOSE_TAB, handlePortalCloseTab);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PORTAL_CLOSE_TAB));

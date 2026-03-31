@@ -415,6 +415,7 @@ export class ProjectViewManager {
       webPreferences.sandbox = true;
       webPreferences.navigateOnDragDrop = false;
       webPreferences.disableBlinkFeatures = "Auxclick";
+      webPreferences.partition = params.partition;
     });
 
     wc.on("before-input-event", (_event, input) => {

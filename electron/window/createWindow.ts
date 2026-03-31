@@ -375,6 +375,7 @@ export function setupBrowserWindow(
     webPreferences.sandbox = true;
     webPreferences.navigateOnDragDrop = false;
     webPreferences.disableBlinkFeatures = "Auxclick";
+    webPreferences.partition = params.partition;
   });
 
   // Prevent Cmd+W / Ctrl+W from closing the window — listen on app view's webContents
