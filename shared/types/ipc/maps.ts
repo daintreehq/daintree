@@ -1893,6 +1893,12 @@ export interface IpcEventMap {
     shortcut: "find" | "next" | "prev" | "close";
   };
 
+  // Webview navigation blocked — cross-origin navigation was prevented
+  "webview:navigation-blocked": {
+    panelId: string;
+    url: string;
+  };
+
   // Voice input events
   "voice-input:transcription-delta": string;
   "voice-input:transcription-complete": { text: string; willCorrect: boolean };

@@ -77,6 +77,8 @@ const {
   const useUrlHistoryStoreMock = vi.fn(
     (selector: (state: typeof urlHistoryStoreState) => unknown) => selector(urlHistoryStoreState)
   );
+  (useUrlHistoryStoreMock as unknown as { getState: () => typeof urlHistoryStoreState }).getState =
+    () => urlHistoryStoreState;
   return {
     terminalStoreState,
     useTerminalStoreMock,
@@ -195,6 +197,7 @@ describe("BrowserPane webview lifecycle regression", () => {
         registerPanel: vi.fn(() => Promise.resolve()),
         respondToDialog: vi.fn(() => Promise.resolve()),
         onDialogRequest: vi.fn(() => vi.fn()),
+        onNavigationBlocked: vi.fn(() => vi.fn()),
       },
       window: {
         onDestroyHiddenWebviews: vi.fn(() => vi.fn()),
@@ -344,5 +347,118 @@ describe("BrowserPane webview lifecycle regression", () => {
     const webview = container.querySelector("webview");
     expect(webview?.className).not.toContain("invisible");
     expect(webview?.className).not.toContain("pointer-events-none");
+  });
+
+  describe("blocked navigation banner", () => {
+    function getNavigationBlockedCallback(): (payload: { panelId: string; url: string }) => void {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mock = (window as any).electron.webview.onNavigationBlocked;
+      const lastCall = mock.mock.calls[mock.mock.calls.length - 1];
+      return lastCall[0];
+    }
+
+    it("shows banner with hostname when navigation is blocked", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const callback = getNavigationBlockedCallback();
+
+      act(() => {
+        callback({ panelId: "browser-panel-1", url: "https://oauth.example.com/authorize" });
+        vi.advanceTimersByTime(150);
+      });
+
+      expect(container.textContent).toContain("oauth.example.com");
+      expect(container.textContent).toContain("Open in External Browser");
+    });
+
+    it("ignores events for different panelId", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const callback = getNavigationBlockedCallback();
+
+      act(() => {
+        callback({ panelId: "other-panel", url: "https://evil.com" });
+        vi.advanceTimersByTime(150);
+      });
+
+      expect(container.textContent).not.toContain("evil.com");
+    });
+
+    it("shows only the last URL when multiple events fire within 150ms", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const callback = getNavigationBlockedCallback();
+
+      act(() => {
+        callback({ panelId: "browser-panel-1", url: "https://first.com/step1" });
+        callback({ panelId: "browser-panel-1", url: "https://second.com/step2" });
+        callback({ panelId: "browser-panel-1", url: "https://final.com/done" });
+        vi.advanceTimersByTime(150);
+      });
+
+      expect(container.textContent).toContain("final.com");
+      expect(container.textContent).not.toContain("first.com");
+      expect(container.textContent).not.toContain("second.com");
+    });
+
+    it("dismiss button clears the banner", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const callback = getNavigationBlockedCallback();
+
+      act(() => {
+        callback({ panelId: "browser-panel-1", url: "https://example.com" });
+        vi.advanceTimersByTime(150);
+      });
+
+      const dismissButton = container.querySelector('[aria-label="Dismiss"]');
+      expect(dismissButton).not.toBeNull();
+
+      act(() => {
+        dismissButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.textContent).not.toContain("example.com");
+    });
+
+    it("Open in External Browser dispatches browser.openExternal with blocked URL", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const callback = getNavigationBlockedCallback();
+
+      act(() => {
+        callback({ panelId: "browser-panel-1", url: "https://oauth.provider.com/auth" });
+        vi.advanceTimersByTime(150);
+      });
+
+      const openButton = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Open in External Browser")
+      );
+      expect(openButton).toBeDefined();
+
+      act(() => {
+        openButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(actionDispatchMock).toHaveBeenCalledWith(
+        "browser.openExternal",
+        { terminalId: "browser-panel-1", url: "https://oauth.provider.com/auth" },
+        { source: "user" }
+      );
+    });
+
+    it("clears banner on did-navigate", () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+      const callback = getNavigationBlockedCallback();
+
+      act(() => {
+        callback({ panelId: "browser-panel-1", url: "https://blocked.com" });
+        vi.advanceTimersByTime(150);
+      });
+
+      expect(container.textContent).toContain("blocked.com");
+
+      act(() => {
+        emitWebviewEvent(webview, "did-navigate", { url: "http://localhost:5173/new" });
+      });
+
+      expect(container.textContent).not.toContain("blocked.com");
+    });
   });
 });

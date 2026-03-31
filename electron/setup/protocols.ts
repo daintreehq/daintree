@@ -213,6 +213,17 @@ export function setupWebviewCSP(): void {
         if (!isLocalhostUrl(navigationUrl)) {
           console.warn(`[MAIN] Blocked webview navigation to non-localhost URL: ${navigationUrl}`);
           event.preventDefault();
+
+          const panelId = getWebviewDialogService().getPanelId(contents.id);
+          if (panelId) {
+            const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
+            if (parentWindow && !parentWindow.isDestroyed()) {
+              getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, {
+                panelId,
+                url: navigationUrl,
+              });
+            }
+          }
         }
       });
 
@@ -220,6 +231,17 @@ export function setupWebviewCSP(): void {
         if (!isLocalhostUrl(redirectUrl)) {
           console.warn(`[MAIN] Blocked webview redirect to non-localhost URL: ${redirectUrl}`);
           event.preventDefault();
+
+          const panelId = getWebviewDialogService().getPanelId(contents.id);
+          if (panelId) {
+            const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
+            if (parentWindow && !parentWindow.isDestroyed()) {
+              getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, {
+                panelId,
+                url: redirectUrl,
+              });
+            }
+          }
         }
       });
 

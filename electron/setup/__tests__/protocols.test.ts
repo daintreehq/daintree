@@ -67,7 +67,10 @@ vi.mock("../../services/WebviewDialogService.js", () => ({
 }));
 
 vi.mock("../../ipc/channels.js", () => ({
-  CHANNELS: { WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut" },
+  CHANNELS: {
+    WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
+    WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",
+  },
 }));
 
 import { setupWebviewCSP } from "../protocols.js";
@@ -345,6 +348,121 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
         panelId: "panel-1",
         shortcut: "find",
       });
+    });
+  });
+
+  describe("navigation-blocked IPC routing", () => {
+    it("sends navigation-blocked to parent when will-navigate blocks a non-localhost URL", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-42"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://oauth.provider.com/authorize");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockSend).toHaveBeenCalledWith("webview:navigation-blocked", {
+        panelId: "panel-42",
+        url: "https://oauth.provider.com/authorize",
+      });
+    });
+
+    it("sends navigation-blocked to parent when will-redirect blocks a non-localhost URL", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-7"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-redirect")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://external-oauth.com/callback");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockSend).toHaveBeenCalledWith("webview:navigation-blocked", {
+        panelId: "panel-7",
+        url: "https://external-oauth.com/callback",
+      });
+    });
+
+    it("does not send IPC when panelId is not registered", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => undefined),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "https://example.com");
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it("does not crash when parent window is destroyed", () => {
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => true,
+        webContents: { send: vi.fn() },
+      });
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-1"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+
+      expect(() => handler(event, "https://example.com")).not.toThrow();
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not send IPC for localhost URLs", () => {
+      const mockSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { send: mockSend },
+      });
+
+      const contents = createMockWebContents("webview");
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(event, "http://localhost:3000/page");
+
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(mockSend).not.toHaveBeenCalled();
     });
   });
 
