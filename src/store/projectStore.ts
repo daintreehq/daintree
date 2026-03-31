@@ -699,8 +699,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           if (switchEpoch !== capturedEpoch) return; // Stale — user switched again
           set({ currentProject: project, isLoading: false });
 
-          console.log("[ProjectStore] Reinitializing worktree data store...");
-          forceReinitializeWorktreeDataStore(projectId);
+          // Worktree data store reinitialization is handled by
+          // useProjectSwitchRehydration's PROJECT_ON_SWITCH handler, which
+          // receives the worktreeScopeId for scope-based event filtering.
 
           void get().loadProjects();
         })

@@ -80,10 +80,10 @@ export function useProjectSwitchRehydration() {
       if (worktreeLoadError) {
         setWorktreeLoadError(projectId, worktreeLoadError);
       } else {
-        const storeState = useWorktreeDataStore.getState();
-        if (!(storeState.projectId === projectId && storeState.isInitialized)) {
-          forceReinitializeWorktreeDataStore(projectId, worktreeScopeId);
-        }
+        // Always call forceReinitialize — it clears the isSwitching lock set by
+        // prePopulateWorktreeSnapshot(), reattaches IPC listeners with the current
+        // scopeId, and fetches fresh worktree data from the backend.
+        forceReinitializeWorktreeDataStore(projectId, worktreeScopeId);
       }
 
       currentSwitchIdRef.current = switchId;
