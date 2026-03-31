@@ -276,6 +276,17 @@ export function SettingsDialog({
       }
       setScrollToSection(defaultSectionId ?? null);
       setSearchQuery("");
+    } else if (isOpen) {
+      // Untargeted open (toolbar/menu): always land on global scope
+      const tab = rememberedTab;
+      setActiveScope("global");
+      markTabVisited(tab);
+      if (tab !== activeTab) {
+        startTransition(() => setActiveTab(tab));
+      }
+      setScrollToSection(null);
+      setSearchQuery("");
+      setHiddenSettingBanner(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, defaultTab, defaultSubtab, defaultSectionId]);
