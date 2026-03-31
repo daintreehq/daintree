@@ -109,6 +109,7 @@ export const projectClient = {
       switchId: string;
       worktreeLoadError?: string;
       hydrateResult?: import("@shared/types/ipc/app").HydrateResult;
+      worktreeScopeId?: string;
     }) => void
   ): (() => void) => {
     return window.electron.project.onSwitch(callback);

@@ -119,13 +119,16 @@ describe("worktreeDataStore.refresh", () => {
       expect(onUpdateCallback).toBeTypeOf("function");
     });
 
-    onUpdateCallback?.({
-      ...feature,
-      prNumber: 42,
-      prUrl: "https://example.com/pr/42",
-      prState: "open",
-      prTitle: "WIP PR",
-    });
+    onUpdateCallback?.(
+      {
+        ...feature,
+        prNumber: 42,
+        prUrl: "https://example.com/pr/42",
+        prState: "open",
+        prTitle: "WIP PR",
+      },
+      "test-scope"
+    );
 
     // Refresh returns a partial snapshot (missing PR metadata) plus a newly created worktree.
     const created = createMockWorktree("feature-new");
@@ -304,7 +307,7 @@ describe("worktreeDataStore.refresh", () => {
 
     // Fire the OLD onUpdate callback (simulates a delayed IPC push from the outgoing project).
     // The generation guard must reject it — it must NOT insert foreignWorktree into the store.
-    oldOnUpdateCallback?.(foreignWorktree);
+    oldOnUpdateCallback?.(foreignWorktree, "old-scope");
 
     const state = useWorktreeDataStore.getState();
     expect(state.worktrees.has("foreign-wt")).toBe(false);

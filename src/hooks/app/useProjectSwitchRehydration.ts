@@ -20,7 +20,6 @@ import {
 import {
   forceReinitializeWorktreeDataStore,
   setWorktreeLoadError,
-  useWorktreeDataStore,
 } from "@/store/worktreeDataStore";
 
 interface ProjectSwitchedEventDetail {

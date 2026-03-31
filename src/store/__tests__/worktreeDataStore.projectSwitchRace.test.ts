@@ -457,7 +457,7 @@ describe("worktreeDataStore scope-based event filtering", () => {
     getAllMock.mockReset();
     refreshMock.mockReset();
     capturedOnUpdate = null;
-    vi.mocked(worktreeClient.onUpdate).mockImplementation((cb: any) => {
+    vi.mocked(worktreeClient.onUpdate).mockImplementation((cb) => {
       capturedOnUpdate = cb;
       return () => {
         capturedOnUpdate = null;
