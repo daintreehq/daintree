@@ -1517,12 +1517,7 @@ function App() {
         <AccessibilityAnnouncer />
         <Profiler id="app-layout" onRender={onLayoutRender}>
           <AppLayout
-            sidebarContent={
-              <SidebarContent
-                key={currentProject?.id ?? "no-project"}
-                onOpenOverview={openWorktreeOverview}
-              />
-            }
+            sidebarContent={<SidebarContent onOpenOverview={openWorktreeOverview} />}
             onLaunchAgent={handleLaunchAgent}
             onSettings={handleSettings}
             onPreloadSettings={handlePreloadSettings}
@@ -1535,7 +1530,6 @@ function App() {
           >
             <Profiler id="content-grid" onRender={onContentGridRender}>
               <ContentGrid
-                key={currentProject?.id ?? "no-project"}
                 className="h-full w-full"
                 agentAvailability={availability}
                 defaultCwd={defaultTerminalCwd}
