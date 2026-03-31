@@ -149,7 +149,7 @@ export function NotificationSettingsTab() {
                     <select
                       value={settings.waitingEscalationDelayMs}
                       onChange={(e) => update({ waitingEscalationDelayMs: Number(e.target.value) })}
-                      className="px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                      className="px-3 py-2 text-sm rounded-[var(--radius-md)] border border-border-interactive bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
                     >
                       {ESCALATION_DELAY_OPTIONS.map(({ value, label }) => (
                         <option key={value} value={value}>
@@ -214,7 +214,7 @@ export function NotificationSettingsTab() {
                       <select
                         value={settings[field]}
                         onChange={(e) => update({ [field]: e.target.value })}
-                        className="flex-1 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                        className="flex-1 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-border-interactive bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
                       >
                         {AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => (
                           <option key={file} value={file}>
@@ -225,7 +225,7 @@ export function NotificationSettingsTab() {
                       <button
                         onClick={() => handlePreview(settings[field])}
                         title={`Preview ${label.toLowerCase()}`}
-                        className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text hover:bg-tint/[0.06] transition-colors"
+                        className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-border-interactive bg-canopy-bg text-canopy-text hover:bg-tint/[0.06] transition-colors"
                       >
                         <Play className="h-3.5 w-3.5" />
                         Preview

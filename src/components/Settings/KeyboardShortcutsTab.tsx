@@ -137,7 +137,7 @@ function KeyRecorder({ onCapture, onCancel, excludeActionId }: KeyRecorderProps)
   const isChord = capturedCombos.length > 1;
 
   return (
-    <div className="bg-canopy-bg/50 border border-canopy-border rounded-[var(--radius-lg)] p-4 space-y-3">
+    <div className="bg-canopy-bg/50 border border-border-interactive rounded-[var(--radius-lg)] p-4 space-y-3">
       <div className="flex items-center gap-2">
         {recording ? (
           <div className="flex-1 px-4 py-2 border border-canopy-accent rounded bg-canopy-accent/10 text-canopy-accent animate-pulse text-center">
@@ -153,14 +153,14 @@ function KeyRecorder({ onCapture, onCancel, excludeActionId }: KeyRecorderProps)
             ) : null}
           </div>
         ) : capturedCombo ? (
-          <div className="flex-1 px-4 py-2 border border-canopy-border rounded bg-canopy-bg text-canopy-text text-center font-mono">
+          <div className="flex-1 px-4 py-2 border border-border-interactive rounded bg-canopy-bg text-canopy-text text-center font-mono">
             <span>{keybindingService.formatComboForDisplay(capturedCombo)}</span>
             {isChord && <span className="ml-2 text-xs text-canopy-text/50">(chord)</span>}
           </div>
         ) : (
           <button
             onClick={handleStartRecording}
-            className="flex-1 px-4 py-2 border border-canopy-border rounded bg-canopy-bg text-canopy-text/60 hover:text-canopy-text hover:border-canopy-accent transition-colors"
+            className="flex-1 px-4 py-2 border border-border-interactive rounded bg-canopy-bg text-canopy-text/60 hover:text-canopy-text hover:border-canopy-accent transition-colors"
           >
             Click to record shortcut
           </button>
@@ -415,7 +415,7 @@ export function KeyboardShortcutsTab() {
         <div
           className={cn(
             "flex items-center gap-1.5 px-2 py-1.5 flex-1 min-w-0 rounded-[var(--radius-md)]",
-            "bg-canopy-bg border border-canopy-border",
+            "bg-canopy-bg border border-border-interactive",
             "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
           )}
         >
@@ -449,7 +449,7 @@ export function KeyboardShortcutsTab() {
           onClick={handleOpenResetDialog}
           disabled={isResetting}
           className={cn(
-            "flex items-center gap-1.5 px-3 py-2 text-sm border border-canopy-border rounded transition-colors",
+            "flex items-center gap-1.5 px-3 py-2 text-sm border border-border-interactive rounded transition-colors",
             isResetting
               ? "opacity-50 cursor-not-allowed text-canopy-text/40"
               : hasOverrides

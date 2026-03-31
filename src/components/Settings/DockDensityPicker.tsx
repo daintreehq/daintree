@@ -23,7 +23,7 @@ export function DockDensityPicker() {
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
             dockDensity === option.id
               ? "border-canopy-accent bg-canopy-accent/10 text-canopy-text"
-              : "border-canopy-border bg-canopy-bg text-text-secondary hover:border-canopy-text/30 hover:text-canopy-text"
+              : "border-border-interactive bg-canopy-bg text-text-secondary hover:border-canopy-text/30 hover:text-canopy-text"
           )}
           aria-pressed={dockDensity === option.id}
         >

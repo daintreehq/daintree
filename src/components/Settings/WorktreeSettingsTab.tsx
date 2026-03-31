@@ -180,7 +180,7 @@ export function WorktreeSettingsTab() {
                   <TooltipTrigger asChild>
                     <button
                       onClick={handleReset}
-                      className="px-3 py-1.5 border border-canopy-border rounded-[var(--radius-md)] text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50 transition-colors"
+                      className="px-3 py-1.5 border border-border-interactive rounded-[var(--radius-md)] text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50 transition-colors"
                       aria-label="Reset to default"
                     >
                       <RotateCcw className="w-4 h-4" />

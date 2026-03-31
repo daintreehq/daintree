@@ -153,7 +153,7 @@ export function McpServerSettingsTab() {
                   <span className="text-xs text-canopy-text/60">Running on port {status.port}</span>
                 </div>
 
-                <div className="flex items-center gap-2 p-2.5 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border font-mono text-xs text-canopy-text/80 select-all">
+                <div className="flex items-center gap-2 p-2.5 rounded-[var(--radius-md)] bg-canopy-bg border border-border-interactive font-mono text-xs text-canopy-text/80 select-all">
                   {sseUrl}
                 </div>
 
@@ -161,7 +161,7 @@ export function McpServerSettingsTab() {
                   onClick={handleCopyConfig}
                   className={cn(
                     "flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
-                    "border border-canopy-border hover:bg-overlay-soft",
+                    "border border-border-interactive hover:bg-overlay-soft",
                     copied
                       ? "text-status-success border-status-success/30"
                       : "text-canopy-text/70 hover:text-canopy-text"
@@ -199,14 +199,14 @@ export function McpServerSettingsTab() {
                   if (e.key === "Enter") handlePortSave();
                 }}
                 placeholder="45454"
-                className="w-40 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 font-mono focus:outline-none focus:ring-1 focus:ring-canopy-accent"
+                className="w-40 bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 font-mono focus:outline-none focus:ring-1 focus:ring-canopy-accent"
               />
               <button
                 onClick={handlePortSave}
                 disabled={portInput === (status.configuredPort?.toString() ?? "")}
                 className={cn(
                   "px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] transition-colors",
-                  "border border-canopy-border",
+                  "border border-border-interactive",
                   portInput === (status.configuredPort?.toString() ?? "")
                     ? "text-canopy-text/30 cursor-not-allowed"
                     : "text-canopy-text/70 hover:text-canopy-text hover:bg-overlay-soft"
@@ -241,7 +241,7 @@ export function McpServerSettingsTab() {
                       type={showApiKey ? "text" : "password"}
                       value={status.apiKey}
                       readOnly
-                      className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 pr-10 font-mono text-xs text-canopy-text/80 focus:outline-none select-all"
+                      className="w-full bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-2 pr-10 font-mono text-xs text-canopy-text/80 focus:outline-none select-all"
                     />
                     <button
                       type="button"
@@ -258,7 +258,7 @@ export function McpServerSettingsTab() {
                   </div>
                   <button
                     onClick={handleGenerateApiKey}
-                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] border border-canopy-border text-canopy-text/70 hover:text-canopy-text hover:bg-overlay-soft transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] border border-border-interactive text-canopy-text/70 hover:text-canopy-text hover:bg-overlay-soft transition-colors"
                     title="Regenerate API key"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
@@ -266,7 +266,7 @@ export function McpServerSettingsTab() {
                   </button>
                   <button
                     onClick={handleClearApiKey}
-                    className="px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] border border-canopy-border text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20 transition-colors"
+                    className="px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] border border-border-interactive text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20 transition-colors"
                   >
                     Remove
                   </button>
@@ -274,7 +274,7 @@ export function McpServerSettingsTab() {
               </div>
             ) : (
               <div className="space-y-3">
-                <div className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
+                <div className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-border-interactive">
                   <div className="w-2 h-2 rounded-full bg-canopy-text/30" />
                   <span className="text-xs text-canopy-text/60">
                     No authentication — any local process can connect
@@ -282,7 +282,7 @@ export function McpServerSettingsTab() {
                 </div>
                 <button
                   onClick={handleGenerateApiKey}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-canopy-border text-canopy-text/70 hover:text-canopy-text hover:bg-overlay-soft transition-colors"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-border-interactive text-canopy-text/70 hover:text-canopy-text hover:bg-overlay-soft transition-colors"
                 >
                   <Key className="w-3.5 h-3.5" />
                   Generate API Key

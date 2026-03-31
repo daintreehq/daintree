@@ -188,7 +188,7 @@ export function TerminalAppearanceTab({
                     }
                   }}
                   onBlur={handleFontSizeBlur}
-                  className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-24 focus:border-canopy-accent focus:outline-none transition-colors"
+                  className="bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-24 focus:border-canopy-accent focus:outline-none transition-colors"
                   aria-label="Terminal font size"
                   aria-invalid={fontSizeError != null || undefined}
                   aria-describedby={fontSizeError ? fontSizeErrorId : undefined}
@@ -214,7 +214,7 @@ export function TerminalAppearanceTab({
                 value={selectedFontFamilyId}
                 onChange={(e) => handleFontFamilyChange(e.target.value)}
                 className={cn(
-                  "bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+                  "bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
                 )}
                 aria-label="Terminal font family"
               >

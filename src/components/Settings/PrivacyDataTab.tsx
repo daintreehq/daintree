@@ -171,7 +171,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
                   telemetryLevel === option.level
                     ? "border-canopy-accent/40 bg-canopy-accent/5"
-                    : "border-canopy-border hover:bg-tint/5"
+                    : "border-border-interactive hover:bg-tint/5"
                 )}
               >
                 <div className="flex items-center gap-3">
@@ -242,7 +242,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
                     logRetentionDays === option.value
                       ? "bg-canopy-accent/10 text-canopy-accent border border-canopy-accent/30"
-                      : "text-canopy-text/60 border border-canopy-border hover:bg-tint/5 hover:text-canopy-text"
+                      : "text-canopy-text/60 border border-border-interactive hover:bg-tint/5 hover:text-canopy-text"
                   )}
                 >
                   {option.label}

@@ -235,7 +235,7 @@ export function AgentSettings({
         {isGeneralActive && (
           <div
             id="agents-general"
-            className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4"
+            className="rounded-[var(--radius-lg)] border border-border-interactive bg-surface p-4 space-y-4"
           >
             <div className="pb-3 border-b border-canopy-border">
               <h4 className="text-sm font-medium text-canopy-text">Global Agent Settings</h4>
@@ -251,7 +251,7 @@ export function AgentSettings({
                 onChange={(e) =>
                   setDefaultAgent(e.target.value ? (e.target.value as DefaultAgentId) : undefined)
                 }
-                className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-interactive bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
               >
                 <option value="">None (first available)</option>
                 {agentOptions.map((agent) => (
@@ -271,7 +271,7 @@ export function AgentSettings({
 
         {/* Agent Configuration Card */}
         {!isGeneralActive && activeAgent && agentOptions.some((a) => a.id === activeAgent.id) && (
-          <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4">
+          <div className="rounded-[var(--radius-lg)] border border-border-interactive bg-surface p-4 space-y-4">
             {/* Header with agent info */}
             <div className="flex items-center justify-between pb-3 border-b border-canopy-border">
               <div className="flex items-center gap-3">
@@ -420,7 +420,7 @@ export function AgentSettings({
             <div id="agents-custom-args" className="space-y-2 pt-2 border-t border-canopy-border">
               <label className="text-sm font-medium text-canopy-text">Custom Arguments</label>
               <input
-                className="w-full rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-text-muted"
+                className="w-full rounded-[var(--radius-md)] border border-border-interactive bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-text-muted"
                 value={activeEntry.customFlags ?? ""}
                 onChange={(e) => updateAgent(activeAgent.id, { customFlags: e.target.value })}
                 placeholder="--verbose --max-tokens=4096"
@@ -497,7 +497,7 @@ export function AgentSettings({
                       {installBlocks.map((block, blockIndex) => (
                         <div
                           key={blockIndex}
-                          className="rounded-[var(--radius-md)] border border-canopy-border bg-surface p-3 space-y-2"
+                          className="rounded-[var(--radius-md)] border border-border-interactive bg-surface p-3 space-y-2"
                         >
                           {block.label && (
                             <div className="text-xs font-medium text-canopy-text/70">
@@ -521,7 +521,7 @@ export function AgentSettings({
                               {block.commands.map((command, cmdIndex) => (
                                 <div
                                   key={cmdIndex}
-                                  className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
+                                  className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-canopy-bg border border-border-interactive"
                                 >
                                   <code className="flex-1 text-xs font-mono text-canopy-text">
                                     {command}

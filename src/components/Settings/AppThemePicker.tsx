@@ -111,7 +111,7 @@ function PreferredSchemePicker({
               "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] border text-xs transition-colors",
               selectedId === scheme.id
                 ? "border-canopy-accent/30 bg-canopy-accent/10 text-canopy-text"
-                : "border-canopy-border text-canopy-text/70 hover:bg-surface-hover"
+                : "border-border-interactive text-canopy-text/70 hover:bg-surface-hover"
             )}
           >
             <div
@@ -382,7 +382,7 @@ export function AppThemePicker() {
             }}
             className={cn(
               "w-full flex items-center gap-3 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
-              "border-canopy-border bg-canopy-bg hover:border-canopy-text/30",
+              "border-border-interactive bg-canopy-bg hover:border-canopy-text/30",
               open && "border-canopy-accent"
             )}
           >
@@ -432,7 +432,7 @@ export function AppThemePicker() {
             <div
               ref={listRef}
               onMouseDown={(e) => e.preventDefault()}
-              className="absolute z-50 left-0 right-0 mt-1 max-h-[280px] overflow-y-auto rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg shadow-[var(--theme-shadow-floating)]"
+              className="absolute z-50 left-0 right-0 mt-1 max-h-[280px] overflow-y-auto rounded-[var(--radius-md)] border border-border-interactive bg-canopy-bg shadow-[var(--theme-shadow-floating)]"
             >
               <ThemeSelector<AppColorScheme>
                 groups={[

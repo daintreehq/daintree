@@ -155,7 +155,7 @@ function SortableButtonItem({
     <div
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30"
+      className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] border border-border-interactive bg-canopy-bg/30"
     >
       <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing">
         <GripVertical className="h-4 w-4 text-canopy-text/50" />
@@ -172,7 +172,7 @@ function SortableButtonItem({
         checked={isVisible}
         onChange={() => onToggle(buttonId)}
         aria-label={`Toggle ${metadata.label} visibility`}
-        className="w-4 h-4 rounded border-canopy-border bg-canopy-bg text-canopy-accent focus:ring-canopy-accent focus:ring-2"
+        className="w-4 h-4 rounded border-border-interactive bg-canopy-bg text-canopy-accent focus:ring-canopy-accent focus:ring-2"
       />
     </div>
   );
@@ -344,7 +344,7 @@ export function ToolbarSettingsTab() {
                   e.target.value ? (e.target.value as typeof launcher.defaultSelection) : undefined
                 )
               }
-              className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+              className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-interactive bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
             >
               <option value="">None (first available)</option>
               <option value="terminal">Terminal</option>
@@ -365,7 +365,7 @@ export function ToolbarSettingsTab() {
         <button
           onClick={reset}
           className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border",
+            "flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-interactive",
             "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/5 transition-colors"
           )}
         >
