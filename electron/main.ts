@@ -88,9 +88,8 @@ app.commandLine.appendSwitch(
   "--max-old-space-size=768 --max-semi-space-size=64 --expose-gc"
 );
 
-// Keep the renderer process at full priority and prevent AudioContext suspension
-app.commandLine.appendSwitch("disable-renderer-backgrounding");
-app.commandLine.appendSwitch("disable-background-timer-throttling");
+// Allow autoplay without user gesture (voice input, media panels).
+// Per-view throttling is managed by ProjectViewManager.setBackgroundThrottling().
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // Disable unused Chromium features: BackForwardCache wastes memory (no browser navigation),
 // CalculateNativeWinOcclusion causes unnecessary power usage on macOS

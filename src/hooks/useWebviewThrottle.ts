@@ -7,8 +7,8 @@ import { useTerminalStore } from "@/store";
  * becomes visible (dock popover opened or restored to grid).
  *
  * Uses `Page.setWebLifecycleState` via the main process CDP debugger because
- * `webContents.setBackgroundThrottling` is overridden by the parent window's
- * `disable-renderer-backgrounding` app switch flag.
+ * it provides a full JS lifecycle freeze — stronger than the timer/frame
+ * throttling that `webContents.setBackgroundThrottling` applies.
  */
 export function useWebviewThrottle(
   panelId: string,
