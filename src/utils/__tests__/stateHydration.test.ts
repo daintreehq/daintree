@@ -918,6 +918,21 @@ describe("hydrateAppState", () => {
 
     isTerminalWarmInProjectSwitchCacheMock.mockReturnValue(true);
 
+    // Warm cached terminals already have their scrollback loaded, so
+    // scheduleScrollbackRestore skips them (scrollbackRestoreState !== "none").
+    getManagedTerminalMock.mockImplementation((id: string) => {
+      if (id === "terminal-cached") {
+        return {
+          id,
+          scrollbackRestoreState: "done",
+          scrollbackRestoreDisposable: undefined,
+          hostElement: document.createElement("div"),
+          listeners: [] as Array<() => void>,
+        };
+      }
+      return makeMockManagedTerminal(id);
+    });
+
     const addTerminal = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
       return options.existingId ?? options.requestedId ?? "terminal-id";
     });

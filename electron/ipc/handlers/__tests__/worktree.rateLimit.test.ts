@@ -59,6 +59,14 @@ vi.mock("../../../store.js", () => ({
   store: { get: vi.fn(() => ({})), set: vi.fn() },
 }));
 
+vi.mock("../../../window/webContentsRegistry.js", () => ({
+  getWindowForWebContents: vi.fn().mockReturnValue(null),
+}));
+
+vi.mock("../../../services/SoundService.js", () => ({
+  soundService: { play: vi.fn() },
+}));
+
 import { CHANNELS } from "../../channels.js";
 import { registerWorktreeHandlers } from "../worktree.js";
 

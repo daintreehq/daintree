@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeState } from "@shared/types";
+import type { useWorktreeDataStore as UseWorktreeDataStoreType } from "../worktreeDataStore";
 
 let onUpdateCallback: ((state: WorktreeState, scopeId: string) => void) | null = null;
 
@@ -55,7 +56,15 @@ vi.mock("../notificationStore", () => ({
   },
 }));
 
-const { useWorktreeDataStore } = await import("../worktreeDataStore");
+vi.mock("../pulseStore", () => ({
+  usePulseStore: {
+    getState: vi.fn(() => ({
+      invalidate: vi.fn(),
+    })),
+  },
+}));
+
+let useWorktreeDataStore: typeof UseWorktreeDataStoreType;
 
 function createMockWorktree(id: string, overrides: Partial<WorktreeState> = {}): WorktreeState {
   return {
@@ -73,18 +82,16 @@ function createMockWorktree(id: string, overrides: Partial<WorktreeState> = {}):
 }
 
 describe("worktreeDataStore branch-change clearing", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetAllMocks();
     getAllMock.mockResolvedValue([]);
     refreshMock.mockResolvedValue(undefined);
     getAllIssueAssociationsMock.mockResolvedValue({});
     onUpdateCallback = null;
-    useWorktreeDataStore.setState({
-      worktrees: new Map(),
-      isLoading: true,
-      error: null,
-      isInitialized: false,
-    });
+
+    vi.resetModules();
+    const mod = await import("../worktreeDataStore");
+    useWorktreeDataStore = mod.useWorktreeDataStore;
   });
 
   describe("onUpdate handler", () => {

@@ -14,6 +14,30 @@ vi.mock("electron", () => ({
     fromWebContents: browserWindowFromWebContentsMock,
     getAllWindows: browserWindowGetAllWindowsMock,
   }),
+  webContents: {
+    fromId: vi.fn(() => null),
+  },
+}));
+
+vi.mock("../../window/webContentsRegistry.js", () => ({
+  getWindowForWebContents: browserWindowFromWebContentsMock,
+  getAppWebContents: vi.fn(
+    (win: { webContents?: unknown }) =>
+      win.webContents ?? { send: undefined, isDestroyed: () => true }
+  ),
+  getAllAppWebContents: vi.fn(() => {
+    const windows = browserWindowGetAllWindowsMock() as Array<{
+      isDestroyed: () => boolean;
+      webContents?: { isDestroyed: () => boolean; send: (...args: unknown[]) => void };
+    }>;
+    return windows
+      .filter((w) => !w.isDestroyed() && w.webContents && !w.webContents.isDestroyed())
+      .map((w) => w.webContents);
+  }),
+}));
+
+vi.mock("../../window/windowRef.js", () => ({
+  getProjectViewManager: vi.fn(() => null),
 }));
 
 import {

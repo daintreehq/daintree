@@ -6,17 +6,22 @@ import type {
   IssueDetectedPayload,
   IssueNotFoundPayload,
 } from "../../types";
+import type { useWorktreeDataStore as UseWorktreeDataStoreType } from "../worktreeDataStore";
 
 let mockOnPRDetectedCallback: ((data: PRDetectedPayload) => void) | null = null;
 let mockOnPRClearedCallback: ((data: PRClearedPayload) => void) | null = null;
 let mockOnIssueDetectedCallback: ((data: IssueDetectedPayload) => void) | null = null;
 let mockOnIssueNotFoundCallback: ((data: IssueNotFoundPayload) => void) | null = null;
 
+const getAllMock = vi.fn().mockResolvedValue([]);
+const refreshMock = vi.fn().mockResolvedValue(undefined);
+const getAllIssueAssociationsMock = vi.fn().mockResolvedValue({});
+
 vi.mock("@/clients", () => ({
   worktreeClient: {
-    getAll: vi.fn().mockResolvedValue([]),
-    refresh: vi.fn().mockResolvedValue(undefined),
-    getAllIssueAssociations: vi.fn().mockResolvedValue({}),
+    getAll: getAllMock,
+    refresh: refreshMock,
+    getAllIssueAssociations: getAllIssueAssociationsMock,
     onUpdate: vi.fn(() => () => {}),
     onRemove: vi.fn(() => () => {}),
     onActivated: vi.fn(() => () => {}),
@@ -75,8 +80,15 @@ vi.mock("../notificationStore", () => ({
   },
 }));
 
-const { useWorktreeDataStore } = await import("../worktreeDataStore");
-const { worktreeClient } = await import("@/clients");
+vi.mock("../pulseStore", () => ({
+  usePulseStore: {
+    getState: vi.fn(() => ({
+      invalidate: vi.fn(),
+    })),
+  },
+}));
+
+let useWorktreeDataStore: typeof UseWorktreeDataStoreType;
 
 async function waitForInitialized() {
   await vi.waitFor(
@@ -110,20 +122,26 @@ function createMockWorktree(id: string, prNumber?: number): WorktreeState {
 }
 
 describe("worktreeDataStore PR events", () => {
-  beforeEach(() => {
-    useWorktreeDataStore.setState({ isInitialized: false });
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getAllMock.mockResolvedValue([]);
+    refreshMock.mockResolvedValue(undefined);
+    getAllIssueAssociationsMock.mockResolvedValue({});
     mockOnPRDetectedCallback = null;
     mockOnPRClearedCallback = null;
     mockOnIssueDetectedCallback = null;
     mockOnIssueNotFoundCallback = null;
+
+    vi.resetModules();
+    const mod = await import("../worktreeDataStore");
+    useWorktreeDataStore = mod.useWorktreeDataStore;
   });
 
   it("merges PR detected event into existing worktree", async () => {
-    const store = useWorktreeDataStore;
     const mockWorktree = createMockWorktree("wt-1");
 
-    vi.mocked(worktreeClient.getAll).mockResolvedValueOnce([mockWorktree]);
-    store.getState().initialize();
+    getAllMock.mockResolvedValueOnce([mockWorktree]);
+    useWorktreeDataStore.getState().initialize();
     await waitForInitialized();
 
     expect(mockOnPRDetectedCallback).toBeTruthy();
@@ -138,7 +156,7 @@ describe("worktreeDataStore PR events", () => {
       timestamp: Date.now(),
     });
 
-    const updated = store.getState().worktrees.get("wt-1");
+    const updated = useWorktreeDataStore.getState().worktrees.get("wt-1");
     expect(updated?.prNumber).toBe(123);
     expect(updated?.prUrl).toBe("https://github.com/test/repo/pull/123");
     expect(updated?.prState).toBe("open");
@@ -148,12 +166,10 @@ describe("worktreeDataStore PR events", () => {
   });
 
   it("ignores PR detected event for non-existent worktree", async () => {
-    const store = useWorktreeDataStore;
-
-    store.getState().initialize();
+    useWorktreeDataStore.getState().initialize();
     await waitForInitialized();
 
-    const initialWorktrees = new Map(store.getState().worktrees);
+    const initialWorktrees = new Map(useWorktreeDataStore.getState().worktrees);
 
     mockOnPRDetectedCallback!({
       worktreeId: "non-existent",
@@ -163,25 +179,24 @@ describe("worktreeDataStore PR events", () => {
       timestamp: Date.now(),
     });
 
-    expect(store.getState().worktrees).toEqual(initialWorktrees);
+    expect(useWorktreeDataStore.getState().worktrees).toEqual(initialWorktrees);
   });
 
   it("clears PR fields when PR cleared event fires", async () => {
-    const store = useWorktreeDataStore;
     const mockWorktree = createMockWorktree("wt-2", 789);
 
-    vi.mocked(worktreeClient.getAll).mockResolvedValueOnce([mockWorktree]);
-    store.getState().initialize();
+    getAllMock.mockResolvedValueOnce([mockWorktree]);
+    useWorktreeDataStore.getState().initialize();
     await waitForInitialized();
 
-    expect(store.getState().worktrees.get("wt-2")?.prNumber).toBe(789);
+    expect(useWorktreeDataStore.getState().worktrees.get("wt-2")?.prNumber).toBe(789);
 
     mockOnPRClearedCallback!({
       worktreeId: "wt-2",
       timestamp: Date.now(),
     });
 
-    const updated = store.getState().worktrees.get("wt-2");
+    const updated = useWorktreeDataStore.getState().worktrees.get("wt-2");
     expect(updated?.prNumber).toBeUndefined();
     expect(updated?.prUrl).toBeUndefined();
     expect(updated?.prState).toBeUndefined();
@@ -190,27 +205,24 @@ describe("worktreeDataStore PR events", () => {
   });
 
   it("ignores PR cleared event for non-existent worktree", async () => {
-    const store = useWorktreeDataStore;
-
-    store.getState().initialize();
+    useWorktreeDataStore.getState().initialize();
     await waitForInitialized();
 
-    const initialWorktrees = new Map(store.getState().worktrees);
+    const initialWorktrees = new Map(useWorktreeDataStore.getState().worktrees);
 
     mockOnPRClearedCallback!({
       worktreeId: "non-existent",
       timestamp: Date.now(),
     });
 
-    expect(store.getState().worktrees).toEqual(initialWorktrees);
+    expect(useWorktreeDataStore.getState().worktrees).toEqual(initialWorktrees);
   });
 
   it("handles merged PR state", async () => {
-    const store = useWorktreeDataStore;
     const mockWorktree = createMockWorktree("wt-3");
 
-    vi.mocked(worktreeClient.getAll).mockResolvedValueOnce([mockWorktree]);
-    store.getState().initialize();
+    getAllMock.mockResolvedValueOnce([mockWorktree]);
+    useWorktreeDataStore.getState().initialize();
     await waitForInitialized();
 
     mockOnPRDetectedCallback!({
@@ -222,18 +234,17 @@ describe("worktreeDataStore PR events", () => {
       timestamp: Date.now(),
     });
 
-    const updated = store.getState().worktrees.get("wt-3");
+    const updated = useWorktreeDataStore.getState().worktrees.get("wt-3");
     expect(updated?.prNumber).toBe(999);
     expect(updated?.prState).toBe("merged");
     expect(updated?.prTitle).toBe("Merged feature");
   });
 
   it("handles closed PR state", async () => {
-    const store = useWorktreeDataStore;
     const mockWorktree = createMockWorktree("wt-4");
 
-    vi.mocked(worktreeClient.getAll).mockResolvedValueOnce([mockWorktree]);
-    store.getState().initialize();
+    getAllMock.mockResolvedValueOnce([mockWorktree]);
+    useWorktreeDataStore.getState().initialize();
     await waitForInitialized();
 
     mockOnPRDetectedCallback!({
@@ -245,21 +256,20 @@ describe("worktreeDataStore PR events", () => {
       timestamp: Date.now(),
     });
 
-    const updated = store.getState().worktrees.get("wt-4");
+    const updated = useWorktreeDataStore.getState().worktrees.get("wt-4");
     expect(updated?.prNumber).toBe(888);
     expect(updated?.prState).toBe("closed");
     expect(updated?.prTitle).toBe("Closed PR");
   });
 
   it("overwrites existing PR with new PR", async () => {
-    const store = useWorktreeDataStore;
     const mockWorktree = createMockWorktree("wt-5", 100);
 
-    vi.mocked(worktreeClient.getAll).mockResolvedValueOnce([mockWorktree]);
-    store.getState().initialize();
+    getAllMock.mockResolvedValueOnce([mockWorktree]);
+    useWorktreeDataStore.getState().initialize();
     await waitForInitialized();
 
-    expect(store.getState().worktrees.get("wt-5")?.prNumber).toBe(100);
+    expect(useWorktreeDataStore.getState().worktrees.get("wt-5")?.prNumber).toBe(100);
 
     mockOnPRDetectedCallback!({
       worktreeId: "wt-5",
@@ -270,7 +280,7 @@ describe("worktreeDataStore PR events", () => {
       timestamp: Date.now(),
     });
 
-    const updated = store.getState().worktrees.get("wt-5");
+    const updated = useWorktreeDataStore.getState().worktrees.get("wt-5");
     expect(updated?.prNumber).toBe(200);
     expect(updated?.prUrl).toBe("https://github.com/test/repo/pull/200");
     expect(updated?.prState).toBe("open");
@@ -278,18 +288,17 @@ describe("worktreeDataStore PR events", () => {
   });
 
   it("clears issueNumber when issue not found event fires", async () => {
-    const store = useWorktreeDataStore;
     const mockWorktree: WorktreeState = {
       ...createMockWorktree("wt-6"),
       issueNumber: 2348,
       issueTitle: undefined,
     };
 
-    vi.mocked(worktreeClient.getAll).mockResolvedValueOnce([mockWorktree]);
-    store.getState().initialize();
+    getAllMock.mockResolvedValueOnce([mockWorktree]);
+    useWorktreeDataStore.getState().initialize();
     await waitForInitialized();
 
-    expect(store.getState().worktrees.get("wt-6")?.issueNumber).toBe(2348);
+    expect(useWorktreeDataStore.getState().worktrees.get("wt-6")?.issueNumber).toBe(2348);
 
     mockOnIssueNotFoundCallback!({
       worktreeId: "wt-6",
@@ -297,19 +306,17 @@ describe("worktreeDataStore PR events", () => {
       timestamp: Date.now(),
     });
 
-    const updated = store.getState().worktrees.get("wt-6");
+    const updated = useWorktreeDataStore.getState().worktrees.get("wt-6");
     expect(updated?.issueNumber).toBeUndefined();
     expect(updated?.issueTitle).toBeUndefined();
     expect(updated?.name).toBe("worktree-wt-6");
   });
 
   it("ignores issue not found event for non-existent worktree", async () => {
-    const store = useWorktreeDataStore;
-
-    store.getState().initialize();
+    useWorktreeDataStore.getState().initialize();
     await waitForInitialized();
 
-    const initialWorktrees = new Map(store.getState().worktrees);
+    const initialWorktrees = new Map(useWorktreeDataStore.getState().worktrees);
 
     mockOnIssueNotFoundCallback!({
       worktreeId: "non-existent",
@@ -317,22 +324,21 @@ describe("worktreeDataStore PR events", () => {
       timestamp: Date.now(),
     });
 
-    expect(store.getState().worktrees).toEqual(initialWorktrees);
+    expect(useWorktreeDataStore.getState().worktrees).toEqual(initialWorktrees);
   });
 
   it("ignores issue not found event when issueNumber does not match current worktree", async () => {
-    const store = useWorktreeDataStore;
     const mockWorktree: WorktreeState = {
       ...createMockWorktree("wt-7"),
       issueNumber: 100,
       issueTitle: "Real issue",
     };
 
-    vi.mocked(worktreeClient.getAll).mockResolvedValueOnce([mockWorktree]);
-    store.getState().initialize();
+    getAllMock.mockResolvedValueOnce([mockWorktree]);
+    useWorktreeDataStore.getState().initialize();
     await waitForInitialized();
 
-    expect(store.getState().worktrees.get("wt-7")?.issueNumber).toBe(100);
+    expect(useWorktreeDataStore.getState().worktrees.get("wt-7")?.issueNumber).toBe(100);
 
     mockOnIssueNotFoundCallback!({
       worktreeId: "wt-7",
@@ -340,17 +346,16 @@ describe("worktreeDataStore PR events", () => {
       timestamp: Date.now(),
     });
 
-    const updated = store.getState().worktrees.get("wt-7");
+    const updated = useWorktreeDataStore.getState().worktrees.get("wt-7");
     expect(updated?.issueNumber).toBe(100);
     expect(updated?.issueTitle).toBe("Real issue");
   });
 
   it("updates issueNumber on issue detected event", async () => {
-    const store = useWorktreeDataStore;
     const mockWorktree = createMockWorktree("wt-8");
 
-    vi.mocked(worktreeClient.getAll).mockResolvedValueOnce([mockWorktree]);
-    store.getState().initialize();
+    getAllMock.mockResolvedValueOnce([mockWorktree]);
+    useWorktreeDataStore.getState().initialize();
     await waitForInitialized();
 
     mockOnIssueDetectedCallback!({
@@ -359,7 +364,7 @@ describe("worktreeDataStore PR events", () => {
       issueTitle: "Fix the thing",
     });
 
-    const updated = store.getState().worktrees.get("wt-8");
+    const updated = useWorktreeDataStore.getState().worktrees.get("wt-8");
     expect(updated?.issueNumber).toBe(42);
     expect(updated?.issueTitle).toBe("Fix the thing");
   });

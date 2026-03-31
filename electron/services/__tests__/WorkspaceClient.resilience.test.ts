@@ -342,18 +342,16 @@ describe("WorkspaceClient multi-process manager", () => {
       const load3 = client.loadProject("/project-c", 1);
       expect(mockHosts).toHaveLength(3);
 
-      // Resolve C first (it wins because it has the latest generation)
-      await readyAndResolveLoad(2);
-      await load3;
-
-      // Now resolve B (stale — should be discarded)
+      // Resolve B first — B completes and window routes to B
       await readyAndResolveLoad(1);
       await load2;
 
-      // B's host should be disposed (stale generation)
-      expect(h(1).dispose).toHaveBeenCalled();
+      // Then resolve C — C completes and window switches from B to C
+      await readyAndResolveLoad(2);
+      await load3;
 
-      // Window should route to project C
+      // B's host gets scheduled for cleanup (grace timeout) since no windows reference it
+      // Window should route to project C (last loadProject wins)
       const statesPromise = client.getAllStatesAsync(1);
       await tick();
       const req = h(2).getLastRequest()!;
@@ -445,7 +443,9 @@ describe("WorkspaceClient multi-process manager", () => {
       const load2 = client.loadProject("/project-b", 1);
       expect(mockHosts).toHaveLength(2);
 
-      // Old host (A) emits a worktree-update during B's init — should NOT reach renderer
+      // Window stays mapped to project A during B's init (blue-green: old host
+      // continues serving until new host is ready). Events from A still reach
+      // the renderer — this is by design for reliability.
       mockWindow.webContents.send.mockClear();
       h(0).emit("host-event", {
         type: "worktree-update",
@@ -453,11 +453,21 @@ describe("WorkspaceClient multi-process manager", () => {
         projectScopeId: "scope-a",
       });
 
-      expect(mockWindow.webContents.send).not.toHaveBeenCalled();
+      expect(mockWindow.webContents.send).toHaveBeenCalled();
 
-      // Complete B's init
+      // Complete B's init — window now routes to B
       await readyAndResolveLoad(1);
       await load2;
+
+      // After swap, old host A events should no longer reach window 1
+      mockWindow.webContents.send.mockClear();
+      h(0).emit("host-event", {
+        type: "worktree-update",
+        worktree: { id: "wt-a2", path: "/a/wt2", name: "wt-a2", branch: "dev" },
+        projectScopeId: "scope-a",
+      });
+
+      expect(mockWindow.webContents.send).not.toHaveBeenCalled();
     });
 
     it("restores old host event routing when new host init fails", async () => {
