@@ -23,7 +23,6 @@ import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { injectSkeletonCss } from "./skeletonCss.js";
 
-const MAX_CACHED_VIEWS = 2;
 const GC_DELAY_MS = 100;
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
@@ -47,12 +46,15 @@ export interface ProjectViewManagerOptions {
   onViewEvicted?: (webContentsId: number) => void;
   /** Called on every did-finish-load for any managed view (initial load and reloads) */
   onViewReady?: (webContents: Electron.WebContents) => void;
+  /** Number of project views to keep cached in memory (1–5, default: 2) */
+  cachedProjectViews?: number;
 }
 
 export class ProjectViewManager {
   private views = new Map<string, ViewEntry>();
   private webContentsToProject = new Map<number, string>();
   private activeProjectId: string | null = null;
+  private maxCachedViews = 2;
   private win: BrowserWindow;
   private dirname: string;
   private onRecreateWindow?: () => Promise<void>;
@@ -69,6 +71,9 @@ export class ProjectViewManager {
     this.onViewEvicted = opts.onViewEvicted;
     this.onViewReady = opts.onViewReady;
     this.windowRegistry = opts.windowRegistry;
+    if (opts.cachedProjectViews != null) {
+      this.maxCachedViews = opts.cachedProjectViews;
+    }
 
     // Single resize handler that always updates the active view's bounds.
     // Before registerInitialView() is called, falls back to the first child view
@@ -215,6 +220,11 @@ export class ProjectViewManager {
 
   getAllWebContentsIds(): number[] {
     return Array.from(this.webContentsToProject.keys());
+  }
+
+  setCachedViewLimit(n: number): void {
+    this.maxCachedViews = n;
+    this.evictStaleViews();
   }
 
   destroyView(projectId: string): void {
@@ -538,13 +548,13 @@ export class ProjectViewManager {
   }
 
   private evictStaleViews(): void {
-    if (this.views.size <= MAX_CACHED_VIEWS) return;
+    if (this.views.size <= this.maxCachedViews) return;
 
     const evictable = Array.from(this.views.entries())
       .filter(([id]) => id !== this.activeProjectId)
       .sort(([, a], [, b]) => a.lastUsed - b.lastUsed);
 
-    while (this.views.size > MAX_CACHED_VIEWS && evictable.length > 0) {
+    while (this.views.size > this.maxCachedViews && evictable.length > 0) {
       const [projectId] = evictable.shift()!;
       console.log(`[ProjectViewManager] Evicting cached view for project: ${projectId}`);
       this.cleanupEntry(projectId);

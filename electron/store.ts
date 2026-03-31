@@ -33,6 +33,7 @@ export interface StoreSchema {
     resourceMonitoringEnabled?: boolean;
     memoryLeakDetectionEnabled?: boolean;
     memoryLeakAutoRestartThresholdMb?: number;
+    cachedProjectViews?: number;
   };
   hibernation: {
     enabled: boolean;

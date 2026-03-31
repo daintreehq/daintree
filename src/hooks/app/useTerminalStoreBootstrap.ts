@@ -8,6 +8,7 @@
 
 import { useEffect } from "react";
 import { setupTerminalStoreListeners } from "../../store/terminalStore";
+import { useCachedProjectViewsStore } from "../../store/cachedProjectViewsStore";
 import { useResourceMonitoringStore } from "../../store/resourceMonitoringStore";
 import { isElectronAvailable } from "../useElectron";
 import { useMemoryLeakDetection } from "../useMemoryLeakDetection";
@@ -40,6 +41,8 @@ export function useTerminalStoreBootstrap() {
         .setAutoRestartThresholdMb(
           config.memoryLeakAutoRestartThresholdMb ?? DEFAULT_AUTO_RESTART_THRESHOLD_MB
         );
+
+      useCachedProjectViewsStore.getState().setCachedProjectViews(config.cachedProjectViews ?? 2);
     });
 
     return () => {

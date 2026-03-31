@@ -43,6 +43,7 @@ export type BuiltInActionId =
   | "terminalConfig.setHybridInputEnabled"
   | "terminalConfig.setHybridInputAutoFocus"
   | "terminalConfig.setScreenReaderMode"
+  | "terminalConfig.setCachedProjectViews"
   | "worktreeConfig.get"
   | "worktreeConfig.setPattern"
   | "files.search"

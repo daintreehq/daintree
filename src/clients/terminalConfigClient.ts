@@ -44,4 +44,8 @@ export const terminalConfigClient = {
   setScreenReaderMode: (mode: "auto" | "on" | "off"): Promise<void> => {
     return window.electron.terminalConfig.setScreenReaderMode(mode);
   },
+
+  setCachedProjectViews: (cachedProjectViews: number): Promise<void> => {
+    return window.electron.terminalConfig.setCachedProjectViews(cachedProjectViews);
+  },
 } as const;
