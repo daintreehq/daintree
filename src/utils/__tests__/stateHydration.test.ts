@@ -2038,6 +2038,134 @@ describe("hydrateAppState", () => {
     });
   });
 
+  describe("orphan filter for default terminals", () => {
+    it("filters out default-N orphan when no saved panels exist (brand-new project)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "default-1",
+          hasPty: true,
+          cwd: "/home/user",
+          kind: "terminal",
+          title: "Terminal",
+        },
+      ]);
+
+      const addTerminal = vi.fn().mockResolvedValue("default-1");
+
+      await hydrateAppState({
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addTerminal).not.toHaveBeenCalled();
+    });
+
+    it("allows non-default orphans through when no saved panels exist", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "orphan-term-1",
+          hasPty: true,
+          cwd: "/project",
+          kind: "terminal",
+          title: "Orphan",
+        },
+      ]);
+
+      const addTerminal = vi.fn().mockResolvedValue("orphan-term-1");
+
+      await hydrateAppState({
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addTerminal).toHaveBeenCalledTimes(1);
+      expect(addTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ existingId: "orphan-term-1" })
+      );
+    });
+
+    it("allows default-N orphan through when saved panels exist (restart scenario)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "terminal-1",
+              kind: "terminal",
+              title: "Saved Terminal",
+              cwd: "/project",
+              location: "grid",
+              type: "terminal",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "terminal-1",
+          hasPty: true,
+          cwd: "/project",
+          kind: "terminal",
+          title: "Saved Terminal",
+        },
+        {
+          id: "default-1",
+          hasPty: true,
+          cwd: "/home/user",
+          kind: "terminal",
+          title: "Default",
+        },
+      ]);
+
+      const addTerminal = vi
+        .fn()
+        .mockImplementation((opts: { existingId?: string; requestedId?: string }) =>
+          Promise.resolve(opts.existingId ?? opts.requestedId ?? "id")
+        );
+
+      await hydrateAppState({
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      // terminal-1 is restored from saved state, default-1 passes through as orphan
+      expect(addTerminal).toHaveBeenCalledTimes(2);
+      expect(addTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ existingId: "default-1" })
+      );
+    });
+  });
+
   describe("prefetchedHydrateResult", () => {
     const fullProject = {
       id: "project-1",

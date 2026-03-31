@@ -626,9 +626,12 @@ export async function setupWindowServices(
     console.log("[MAIN] TaskOrchestrator initialized");
 
     const processArgvCli = !processArgvCliHandled ? extractCliPath(process.argv) : null;
-    const skipDefaultSpawn = opts.initialProjectPath || processArgvCli || getPendingCliPath();
+    const skipDefaultSpawn =
+      opts.initialProjectPath || processArgvCli || getPendingCliPath() || currentProjectId;
     if (skipDefaultSpawn) {
-      console.log("[MAIN] CLI path or initial project path set, skipping default terminal spawn");
+      console.log(
+        "[MAIN] CLI path, initial project path, or existing project set, skipping default terminal spawn"
+      );
     } else {
       const terminalId = `${DEFAULT_TERMINAL_ID}-${win.id}`;
       console.log("[MAIN] Spawning default terminal:", terminalId);
