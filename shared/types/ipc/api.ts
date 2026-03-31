@@ -497,6 +497,7 @@ export interface ElectronAPI {
      * Returns the updated Project, or null if the user cancelled.
      */
     locate(projectId: string): Promise<Project | null>;
+    prewarmHost(projectId: string): Promise<void>;
   };
   globalRecipes: {
     getRecipes(): Promise<TerminalRecipe[]>;

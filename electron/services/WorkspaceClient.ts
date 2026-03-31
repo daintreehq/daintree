@@ -414,6 +414,47 @@ export class WorkspaceClient extends EventEmitter {
     }
   }
 
+  prewarmProject(rootPath: string): void {
+    if (this.isDisposed) return;
+
+    const normalizedPath = this.normalizeProjectPath(rootPath);
+
+    if (this.entries.has(normalizedPath)) return;
+
+    const host = new WorkspaceHostProcess(normalizedPath, this.config);
+
+    const initPromise = (async () => {
+      await host.waitForReady();
+      const requestId = host.generateRequestId();
+      await host.sendWithResponse({
+        type: "load-project",
+        requestId,
+        rootPath: normalizedPath,
+      });
+    })();
+
+    const entry: ProcessEntry = {
+      host,
+      refCount: 0,
+      initPromise,
+      cleanupTimeout: null,
+      windowIds: new Set(),
+      projectPath: normalizedPath,
+      directPortViews: new Map(),
+    };
+
+    this.entries.set(normalizedPath, entry);
+    this.wireHostEvents(entry);
+    this.scheduleDormantCleanup(normalizedPath, entry);
+
+    initPromise.catch(() => {
+      if (this.entries.get(normalizedPath) === entry) {
+        this.entries.delete(normalizedPath);
+        entry.host.dispose();
+      }
+    });
+  }
+
   private releaseOldProject(windowId: number, oldProjectPath: string): void {
     const oldEntry = this.entries.get(oldProjectPath);
     if (!oldEntry) return;
