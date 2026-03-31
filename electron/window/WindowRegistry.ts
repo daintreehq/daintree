@@ -2,11 +2,13 @@ import type { BrowserWindow, MessagePortMain } from "electron";
 import type { EventBuffer } from "../services/EventBuffer.js";
 import type { PortalManager } from "../services/PortalManager.js";
 import type { ProjectSwitchService } from "../services/ProjectSwitchService.js";
+import type { ProjectViewManager } from "./ProjectViewManager.js";
 
 export interface WindowServices {
   portalManager?: PortalManager;
   eventBuffer?: EventBuffer;
   projectSwitchService?: ProjectSwitchService;
+  projectViewManager?: ProjectViewManager;
   activeRendererPort?: MessagePortMain;
   activePtyHostPort?: MessagePortMain;
 }

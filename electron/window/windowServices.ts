@@ -663,6 +663,7 @@ export async function setupWindowServices(
   // Add ProjectViewManager to handler deps for IPC handlers
   if (opts.projectViewManager) {
     handlerDeps.projectViewManager = opts.projectViewManager;
+    ctx.services.projectViewManager = opts.projectViewManager;
   }
 
   // Load worktrees — prefer initialProjectPath for windows opened with a specific path
