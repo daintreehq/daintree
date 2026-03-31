@@ -292,9 +292,9 @@ describe("Chromium feature flags", () => {
 
     const { app } = await import("electron");
     const calls = vi.mocked(app.commandLine.appendSwitch).mock.calls;
-    const enableCall = calls.find(([key]) => key === "enable-features");
-    expect(enableCall).toBeDefined();
-    expect(enableCall![1]).toBe("PartitionAllocMemoryReclaimer");
+    const enableCalls = calls.filter(([key]) => key === "enable-features");
+    expect(enableCalls).toHaveLength(1);
+    expect(enableCalls[0][1]).toBe("PartitionAllocMemoryReclaimer");
   });
 
   it("merges WaylandWindowDecorations with PartitionAllocMemoryReclaimer on Linux Wayland", async () => {
@@ -319,8 +319,9 @@ describe("Chromium feature flags", () => {
 
     const { app } = await import("electron");
     const calls = vi.mocked(app.commandLine.appendSwitch).mock.calls;
-    const enableCall = calls.find(([key]) => key === "enable-features");
-    expect(enableCall![1]).toBe("PartitionAllocMemoryReclaimer");
+    const enableCalls = calls.filter(([key]) => key === "enable-features");
+    expect(enableCalls).toHaveLength(1);
+    expect(enableCalls[0][1]).toBe("PartitionAllocMemoryReclaimer");
     const imeCalls = calls.filter(([key]) => key === "enable-wayland-ime");
     expect(imeCalls).toHaveLength(0);
   });

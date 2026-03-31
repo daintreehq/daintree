@@ -82,10 +82,10 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-// V8 tuning for renderer processes: heap limits, GC exposure, and bytecode flushing
+// V8 tuning for renderer processes: heap limits and GC exposure
 app.commandLine.appendSwitch(
   "js-flags",
-  "--max-old-space-size=768 --max-semi-space-size=64 --expose-gc --flush-bytecode-on-context-dispose"
+  "--max-old-space-size=768 --max-semi-space-size=64 --expose-gc"
 );
 
 // Keep the renderer process at full priority and prevent AudioContext suspension
