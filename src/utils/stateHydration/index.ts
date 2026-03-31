@@ -614,7 +614,7 @@ export async function hydrateAppState(
         const orphanedTerminals = hydrateResult.safeMode
           ? []
           : Array.from(backendTerminalMap.values()).filter(
-              (t) => !(t.id === "default" && !hasSavedPanels)
+              (t) => !(t.id.startsWith("default-") && !hasSavedPanels)
             );
         if (orphanedTerminals.length > 0) {
           logHydrationInfo(
