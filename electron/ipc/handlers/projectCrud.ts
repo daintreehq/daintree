@@ -42,7 +42,11 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
 
   const handleProjectGetCurrent = async (event: Electron.IpcMainInvokeEvent) => {
     // Multi-view: resolve the project from the sender's view
-    const pvm = deps.projectViewManager;
+    const senderWinForPvm = getWindowForWebContents(event.sender);
+    const pvmCtx = senderWinForPvm
+      ? deps.windowRegistry?.getByWindowId(senderWinForPvm.id)
+      : undefined;
+    const pvm = pvmCtx?.services?.projectViewManager ?? deps.projectViewManager;
     if (pvm) {
       const viewProjectId = pvm.getProjectIdForWebContents(event.sender.id);
       if (viewProjectId) {
@@ -169,7 +173,11 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       });
     }
 
-    const pvm = deps.projectViewManager;
+    const senderWindowForPvm = getWindowForWebContents(_event.sender);
+    const pvmCtx = senderWindowForPvm
+      ? deps.windowRegistry?.getByWindowId(senderWindowForPvm.id)
+      : undefined;
+    const pvm = pvmCtx?.services?.projectViewManager ?? deps.projectViewManager;
     if (pvm) {
       // Multi-view path: swap WebContentsViews instead of resetting stores
       const { view, isNew } = await pvm.switchTo(projectId, project.path);
@@ -431,7 +439,11 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       });
     }
 
-    const pvm = deps.projectViewManager;
+    const senderWindowForPvm = getWindowForWebContents(event.sender);
+    const pvmCtx = senderWindowForPvm
+      ? deps.windowRegistry?.getByWindowId(senderWindowForPvm.id)
+      : undefined;
+    const pvm = pvmCtx?.services?.projectViewManager ?? deps.projectViewManager;
     if (pvm) {
       // Multi-view path: swap views
       const { view, isNew } = await pvm.switchTo(projectId, project.path);
