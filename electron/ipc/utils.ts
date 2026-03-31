@@ -1,5 +1,9 @@
 import { BrowserWindow, ipcMain } from "electron";
-import { getWindowForWebContents } from "../window/webContentsRegistry.js";
+import {
+  getWindowForWebContents,
+  getAppWebContents,
+  getAllAppWebContents,
+} from "../window/webContentsRegistry.js";
 import type { IpcInvokeMap, IpcEventMap } from "../types/index.js";
 import type { IpcContext } from "./types.js";
 import { performance } from "node:perf_hooks";
@@ -167,10 +171,11 @@ export function sendToRenderer(
   channel: string,
   ...args: unknown[]
 ): void {
-  const webContents = mainWindow?.webContents;
-  if (!mainWindow || mainWindow.isDestroyed() || !webContents) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
     return;
   }
+
+  const webContents = getAppWebContents(mainWindow);
 
   if (typeof webContents.send !== "function") {
     return;
@@ -188,8 +193,14 @@ export function sendToRenderer(
 }
 
 export function broadcastToRenderer(channel: string, ...args: unknown[]): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    sendToRenderer(win, channel, ...args);
+  for (const wc of getAllAppWebContents()) {
+    if (!wc.isDestroyed()) {
+      try {
+        wc.send(channel, ...args);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
   }
 }
 
@@ -307,8 +318,14 @@ export function typedBroadcast<K extends keyof IpcEventMap>(
   channel: K,
   payload: IpcEventMap[K]
 ): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    typedSend(win, channel, payload);
+  for (const wc of getAllAppWebContents()) {
+    if (!wc.isDestroyed()) {
+      try {
+        wc.send(channel as string, payload);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
   }
 }
 
@@ -317,10 +334,11 @@ export function typedSend<K extends keyof IpcEventMap>(
   channel: K,
   payload: IpcEventMap[K]
 ): void {
-  const webContents = window?.webContents;
-  if (!window || window.isDestroyed() || !webContents) {
+  if (!window || window.isDestroyed()) {
     return;
   }
+
+  const webContents = getAppWebContents(window);
 
   if (typeof webContents.send !== "function") {
     return;

@@ -12,6 +12,7 @@ import path from "path";
 import crypto from "crypto";
 import { events } from "./events.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { getAppWebContents } from "../window/webContentsRegistry.js";
 import { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
 import type {
   WorkspaceClientConfig,
@@ -101,16 +102,14 @@ export class WorkspaceClient extends EventEmitter {
     if (entry.windowIds.size === 0) return;
     const windows = BrowserWindow.getAllWindows();
     for (const win of windows) {
-      if (
-        win &&
-        !win.isDestroyed() &&
-        entry.windowIds.has(win.id) &&
-        !win.webContents.isDestroyed()
-      ) {
-        try {
-          win.webContents.send(channel, ...args);
-        } catch {
-          // Silently ignore send failures during window initialization/disposal.
+      if (win && !win.isDestroyed() && entry.windowIds.has(win.id)) {
+        const wc = getAppWebContents(win);
+        if (!wc.isDestroyed()) {
+          try {
+            wc.send(channel, ...args);
+          } catch {
+            // Silently ignore send failures during window initialization/disposal.
+          }
         }
       }
     }
@@ -530,11 +529,14 @@ export class WorkspaceClient extends EventEmitter {
       } else {
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
-          if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
-            try {
-              win.webContents.send(CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
-            } catch {
-              // ignore
+          if (win && !win.isDestroyed()) {
+            const wc = getAppWebContents(win);
+            if (!wc.isDestroyed()) {
+              try {
+                wc.send(CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
+              } catch {
+                // ignore
+              }
             }
           }
         }

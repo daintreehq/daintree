@@ -2,6 +2,7 @@ import { BrowserWindow, Menu, WebContentsView, app, clipboard } from "electron";
 import type { PortalBounds, PortalNavEvent } from "../../shared/types/portal.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
+import { getAppWebContents } from "../window/webContentsRegistry.js";
 
 export const PORTAL_MAX_LIVE_TABS = 3;
 
@@ -15,6 +16,18 @@ export class PortalManager {
 
   constructor(window: BrowserWindow) {
     this.window = window;
+  }
+
+  private sendToApp(channel: string, ...args: unknown[]): void {
+    if (this.window?.isDestroyed()) return;
+    const wc = getAppWebContents(this.window);
+    if (!wc.isDestroyed()) {
+      try {
+        wc.send(channel, ...args);
+      } catch {
+        // Silently ignore send failures during window disposal.
+      }
+    }
   }
 
   private touchLru(tabId: string): void {
@@ -58,9 +71,7 @@ export class PortalManager {
 
       this.destroyView(tabId);
 
-      if (!this.window?.isDestroyed()) {
-        this.window.webContents.send(CHANNELS.PORTAL_TAB_EVICTED, { tabId });
-      }
+      this.sendToApp(CHANNELS.PORTAL_TAB_EVICTED, { tabId });
       break;
     }
   }
@@ -101,9 +112,7 @@ export class PortalManager {
       });
 
       const sendNavEvent = (navEvent: PortalNavEvent) => {
-        if (!this.window?.isDestroyed()) {
-          this.window.webContents.send(CHANNELS.PORTAL_NAV_EVENT, navEvent);
-        }
+        this.sendToApp(CHANNELS.PORTAL_NAV_EVENT, navEvent);
       };
 
       view.webContents.on("page-title-updated", (_, title) => {
@@ -145,15 +154,11 @@ export class PortalManager {
       });
 
       view.webContents.on("focus", () => {
-        if (!this.window?.isDestroyed()) {
-          this.window.webContents.send(CHANNELS.PORTAL_FOCUS);
-        }
+        this.sendToApp(CHANNELS.PORTAL_FOCUS);
       });
 
       view.webContents.on("blur", () => {
-        if (!this.window?.isDestroyed()) {
-          this.window.webContents.send(CHANNELS.PORTAL_BLUR);
-        }
+        this.sendToApp(CHANNELS.PORTAL_BLUR);
       });
 
       view.webContents.on("context-menu", (_event, params) => {

@@ -1,5 +1,9 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
-import { getWindowForWebContents, registerWebContents } from "./webContentsRegistry.js";
+import { app, BrowserWindow, WebContentsView, dialog, ipcMain, nativeTheme } from "electron";
+import {
+  getWindowForWebContents,
+  registerWebContents,
+  registerAppView,
+} from "./webContentsRegistry.js";
 import path from "path";
 import { createWindowWithState } from "../windowState.js";
 import { store } from "../store.js";
@@ -90,6 +94,7 @@ export interface SetupBrowserWindowOptions {
 
 export interface CreateWindowResult {
   win: BrowserWindow;
+  appView: WebContentsView;
   loadRenderer: (reason: string) => void;
   smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
   smokeRendererUnresponsive: () => boolean;
@@ -149,21 +154,15 @@ export function setupBrowserWindow(
   const scheme = resolveAppTheme(colorSchemeId, customSchemes);
   const windowBg = scheme.tokens["surface-canvas"];
 
+  // ── Create BrowserWindow as a thin host ──
+  // The BrowserWindow itself does NOT load the app — it's a shell.
+  // The React app lives in a WebContentsView attached to win.contentView.
   console.log("[MAIN] Creating window...");
   const win = createWindowWithState(
     {
       show: false,
       minWidth: 800,
       minHeight: 600,
-      webPreferences: {
-        preload: path.join(dirname, "preload.cjs"),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        webviewTag: true,
-        navigateOnDragDrop: false,
-        v8CacheOptions: "code",
-      },
       ...(process.platform === "darwin"
         ? {
             titleBarStyle: "hiddenInset" as const,
@@ -185,9 +184,42 @@ export function setupBrowserWindow(
   );
   markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
 
-  // Register the window's own webContents so getWindowForWebContents() works
-  // for both direct BrowserWindow webContents and future WebContentsView webContents.
+  // Register the window's own webContents for getWindowForWebContents() fallback
   registerWebContents(win.webContents, win);
+
+  // ── Create WebContentsView for the React app ──
+  const appView = new WebContentsView({
+    webPreferences: {
+      preload: path.join(dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webviewTag: true,
+      navigateOnDragDrop: false,
+      v8CacheOptions: "code",
+    },
+  });
+
+  // Register the app view so IPC helpers route to the correct webContents
+  registerAppView(win, appView);
+
+  // Attach the view to the window and size it to fill the content area
+  win.contentView.addChildView(appView);
+  const updateAppViewBounds = () => {
+    if (win.isDestroyed()) return;
+    const { width, height } = win.getContentBounds();
+    appView.setBounds({ x: 0, y: 0, width, height });
+  };
+  updateAppViewBounds();
+  win.on("resize", updateAppViewBounds);
+  // Also update on maximize/unmaximize/restore which may not fire resize on all platforms
+  win.on("maximize", updateAppViewBounds);
+  win.on("unmaximize", updateAppViewBounds);
+  win.on("enter-full-screen", updateAppViewBounds);
+  win.on("leave-full-screen", updateAppViewBounds);
+
+  // The app view's webContents is the "renderer" for all purposes
+  const appWebContents = appView.webContents;
 
   // Defer showing the window until first paint to prevent background flash
   let isShown = false;
@@ -197,7 +229,7 @@ export function setupBrowserWindow(
     clearTimeout(showTimeout);
     win.show();
   };
-  win.once("ready-to-show", showWindow);
+  appWebContents.once("did-finish-load", showWindow);
   const showTimeout = setTimeout(showWindow, 2500);
   win.once("closed", () => clearTimeout(showTimeout));
 
@@ -229,7 +261,7 @@ export function setupBrowserWindow(
           if (dialogId !== unresponsiveDialogId) return;
           unresponsiveDialogOpen = false;
           if (response === 1 && !win.isDestroyed()) {
-            win.webContents.reload();
+            appWebContents.reload();
           }
         })
         .catch(() => {
@@ -254,15 +286,15 @@ export function setupBrowserWindow(
     if (process.env.NODE_ENV === "development") {
       const devServerUrl = getDevServerUrl();
       console.log(`[MAIN] Loading Vite dev server at ${devServerUrl}`);
-      win.loadURL(devServerUrl);
+      appWebContents.loadURL(devServerUrl);
     } else {
       console.log("[MAIN] Loading production build via app:// protocol");
-      win.loadURL("app://canopy/index.html");
+      appWebContents.loadURL("app://canopy/index.html");
     }
   };
 
-  // Window open handler
-  win.webContents.setWindowOpenHandler(({ url }) => {
+  // Window open handler — on the app view's webContents
+  appWebContents.setWindowOpenHandler(({ url }) => {
     if (url && canOpenExternalUrl(url)) {
       void openExternalUrl(url).catch((error) => {
         console.error("[MAIN] Failed to open external URL:", error);
@@ -274,33 +306,32 @@ export function setupBrowserWindow(
   });
 
   // Block same-window navigations to untrusted origins
-  const webContents = win.webContents;
-  webContents.on("will-navigate", (event, navigationUrl) => {
+  appWebContents.on("will-navigate", (event, navigationUrl) => {
     if (!isTrustedRendererUrl(navigationUrl)) {
       console.error(
         "[MAIN] Blocked navigation to untrusted URL:",
         navigationUrl,
         "from:",
-        webContents.getURL()
+        appWebContents.getURL()
       );
       event.preventDefault();
     }
   });
 
-  webContents.on("will-redirect", (event, redirectUrl) => {
+  appWebContents.on("will-redirect", (event, redirectUrl) => {
     if (!isTrustedRendererUrl(redirectUrl)) {
       console.error(
         "[MAIN] Blocked redirect to untrusted URL:",
         redirectUrl,
         "from:",
-        webContents.getURL()
+        appWebContents.getURL()
       );
       event.preventDefault();
     }
   });
 
-  // Harden webview security
-  win.webContents.on("will-attach-webview", (event, webPreferences, params) => {
+  // Harden webview security — on the app view's webContents
+  appWebContents.on("will-attach-webview", (event, webPreferences, params) => {
     const allowedPartitions = ["persist:browser", "persist:dev-preview"];
     const isAllowedLocalhostUrl = isLocalhostUrl(params.src);
     const isValidPartition =
@@ -323,9 +354,8 @@ export function setupBrowserWindow(
     webPreferences.disableBlinkFeatures = "Auxclick";
   });
 
-  // Prevent Cmd+W / Ctrl+W from closing the window
-  const wc = win.webContents;
-  wc.on("before-input-event", (_event, input) => {
+  // Prevent Cmd+W / Ctrl+W from closing the window — listen on app view's webContents
+  appWebContents.on("before-input-event", (_event, input) => {
     const isMac = process.platform === "darwin";
     const isCloseShortcut =
       input.type === "keyDown" &&
@@ -333,13 +363,13 @@ export function setupBrowserWindow(
       ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
       !input.alt;
 
-    wc.setIgnoreMenuShortcuts(isCloseShortcut);
+    appWebContents.setIgnoreMenuShortcuts(isCloseShortcut);
   });
 
   // Crash loop detection and renderer recovery
   const rendererCrashTimestamps: number[] = [];
 
-  win.webContents.on("render-process-gone", (_event, details) => {
+  appWebContents.on("render-process-gone", (_event, details) => {
     if (details.reason === "clean-exit") return;
     console.error("[MAIN] Renderer process gone:", details.reason, details.exitCode);
     getCrashRecoveryService().recordCrash(
@@ -364,7 +394,7 @@ export function setupBrowserWindow(
       setImmediate(() => {
         if (win.isDestroyed()) return;
         const recoveryUrl = getRecoveryUrl(details.reason, details.exitCode);
-        win.webContents.loadURL(recoveryUrl);
+        appWebContents.loadURL(recoveryUrl);
       });
     } else if (isOom && onRecreateWindow) {
       const now2 = Date.now();
@@ -381,7 +411,7 @@ export function setupBrowserWindow(
         setImmediate(() => {
           if (win.isDestroyed()) return;
           const recoveryUrl = getRecoveryUrl(details.reason, details.exitCode);
-          win.webContents.loadURL(recoveryUrl);
+          appWebContents.loadURL(recoveryUrl);
         });
       } else {
         console.warn("[MAIN] OOM crash detected, destroying and recreating window");
@@ -405,7 +435,7 @@ export function setupBrowserWindow(
       });
       setImmediate(() => {
         if (win.isDestroyed()) return;
-        win.webContents.reload();
+        appWebContents.reload();
       });
     }
   });
@@ -450,6 +480,11 @@ export function setupBrowserWindow(
       clearTimeout(reclaimTimer);
       reclaimTimer = null;
     }
+    // Explicitly close the app view's webContents — Electron does NOT auto-destroy
+    // WebContentsView renderers when the host window closes.
+    if (!appWebContents.isDestroyed()) {
+      appWebContents.close();
+    }
   });
 
   registerWindowIpcHandlers(onCreateWindow);
@@ -465,6 +500,7 @@ export function setupBrowserWindow(
 
   return {
     win,
+    appView,
     loadRenderer,
     smokeTestTimer,
     smokeRendererUnresponsive: () => _smokeRendererUnresponsive,

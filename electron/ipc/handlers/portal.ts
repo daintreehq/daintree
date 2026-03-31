@@ -1,5 +1,5 @@
 import { Menu, ipcMain } from "electron";
-import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
+import { getWindowForWebContents, getAppWebContents } from "../../window/webContentsRegistry.js";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
@@ -205,13 +205,13 @@ export function registerPortalHandlers(deps: HandlerDependencies): () => void {
           ...(links.length > 0 ? [{ type: "separator" as const }] : []),
           {
             label: "Manage Portal Settings...",
-            click: () => win.webContents.send(CHANNELS.MENU_ACTION, "open-settings:portal"),
+            click: () => getAppWebContents(win).send(CHANNELS.MENU_ACTION, "open-settings:portal"),
           },
         ],
       },
       {
         label: "Manage Portal Settings...",
-        click: () => win.webContents.send(CHANNELS.MENU_ACTION, "open-settings:portal"),
+        click: () => getAppWebContents(win).send(CHANNELS.MENU_ACTION, "open-settings:portal"),
       },
     ]);
 

@@ -132,16 +132,15 @@ if (!gotTheLock) {
   let powerMonitorInitialized = false;
 
   async function createWindow(initialProjectPath?: string | null): Promise<void> {
-    const { win, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } = setupBrowserWindow(
-      __dirname,
-      {
+    const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
+      setupBrowserWindow(__dirname, {
         onRecreateWindow: () => createWindow(initialProjectPath),
         onCreateWindow: (projectPath?: string) => createWindow(projectPath),
         projectPath: initialProjectPath,
-      }
-    );
+      });
     setMainWindow(win);
-    windowRegistry.register(win, { projectPath: initialProjectPath ?? undefined });
+    const ctx = windowRegistry.register(win, { projectPath: initialProjectPath ?? undefined });
+    windowRegistry.registerAppViewWebContents(ctx.windowId, appView.webContents.id);
 
     await setupWindowServices(win, {
       loadRenderer,

@@ -13,6 +13,7 @@ import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 import { CONFIDENCE_TAG_THRESHOLD } from "../../../shared/config/voiceCorrection.js";
 import { logDebug, logWarn } from "../../utils/logger.js";
 import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
+import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
 
 let service: VoiceTranscriptionService | null = null;
@@ -388,7 +389,7 @@ function fireMicroCorrection(
 
   // Notify renderer that a correction is pending
   if (!win.isDestroyed()) {
-    win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_QUEUED, {
+    getAppWebContents(win).send(CHANNELS.VOICE_INPUT_CORRECTION_QUEUED, {
       correctionId,
       rawText: rawSpan,
       reason: "streaming",
@@ -422,7 +423,7 @@ function fireMicroCorrection(
     const edits = computeCompactCorrectionEdits(rawSpan, result.confirmedText);
 
     if (!win.isDestroyed()) {
-      win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
+      getAppWebContents(win).send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
         correctionId,
         correctedText: result.confirmedText,
         action: result.action,
@@ -490,12 +491,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (!win || win.isDestroyed()) return;
 
       if (voiceEvent.type === "delta") {
-        win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, voiceEvent.text);
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, voiceEvent.text);
       } else if (voiceEvent.type === "complete") {
         const rawText = voiceEvent.text.trim();
 
         // Notify the renderer so it can finalize the utterance in the draft.
-        win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
           text: rawText,
           willCorrect: false,
         });
@@ -539,7 +540,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
                 });
                 const replacement = resolved ? `@${resolved}` : `@?${description}`;
                 if (!win.isDestroyed()) {
-                  win.webContents.send(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, {
+                  getAppWebContents(win).send(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, {
                     description,
                     replacement,
                     resolved: !!resolved,
@@ -550,14 +551,14 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           }
         }
       } else if (voiceEvent.type === "paragraph_boundary") {
-        win.webContents.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
           rawText: null,
           correctionId: null,
         });
       } else if (voiceEvent.type === "error") {
-        win.webContents.send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);
       } else if (voiceEvent.type === "status") {
-        win.webContents.send(CHANNELS.VOICE_INPUT_STATUS, voiceEvent.status);
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_STATUS, voiceEvent.status);
       }
     });
 

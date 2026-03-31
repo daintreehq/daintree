@@ -3,6 +3,7 @@ import os from "os";
 import { randomBytes } from "crypto";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { registerIpcHandlers, sendToRenderer } from "../ipc/handlers.js";
+import { getAppWebContents } from "./webContentsRegistry.js";
 import { registerErrorHandlers, flushPendingErrors } from "../ipc/errorHandlers.js";
 import { PtyClient, disposePtyClient } from "../services/PtyClient.js";
 import {
@@ -176,8 +177,11 @@ function createAndDistributePorts(win: BrowserWindow, ctx: WindowContext): void 
   }
 
   if (win && !win.isDestroyed()) {
-    win.webContents.postMessage("terminal-port-token", { token: handshakeToken });
-    win.webContents.postMessage("terminal-port", { token: handshakeToken }, [port1]);
+    const wc = getAppWebContents(win);
+    if (!wc.isDestroyed()) {
+      wc.postMessage("terminal-port-token", { token: handshakeToken });
+      wc.postMessage("terminal-port", { token: handshakeToken }, [port1]);
+    }
   }
 }
 
@@ -378,16 +382,19 @@ export async function setupWindowServices(
       if (windowRegistry) {
         for (const wCtx of windowRegistry.all()) {
           const w = wCtx.browserWindow;
-          if (!w.isDestroyed() && !w.webContents.isDestroyed()) {
-            try {
-              w.webContents.send(CHANNELS.TERMINAL_BACKEND_CRASHED, {
-                crashType: details.crashType,
-                code: details.code,
-                signal: details.signal,
-                timestamp: details.timestamp,
-              });
-            } catch {
-              // Silently ignore send failures during window disposal.
+          if (!w.isDestroyed()) {
+            const wc = getAppWebContents(w);
+            if (!wc.isDestroyed()) {
+              try {
+                wc.send(CHANNELS.TERMINAL_BACKEND_CRASHED, {
+                  crashType: details.crashType,
+                  code: details.code,
+                  signal: details.signal,
+                  timestamp: details.timestamp,
+                });
+              } catch {
+                // Silently ignore send failures during window disposal.
+              }
             }
           }
         }
@@ -433,10 +440,13 @@ export async function setupWindowServices(
         for (const wCtx of windowRegistry.all()) {
           if (!wCtx.browserWindow.isDestroyed()) {
             createAndDistributePorts(wCtx.browserWindow, wCtx);
-            try {
-              wCtx.browserWindow.webContents.send(CHANNELS.TERMINAL_BACKEND_READY);
-            } catch {
-              // Silently ignore send failures during window disposal.
+            const wc = getAppWebContents(wCtx.browserWindow);
+            if (!wc.isDestroyed()) {
+              try {
+                wc.send(CHANNELS.TERMINAL_BACKEND_READY);
+              } catch {
+                // Silently ignore send failures during window disposal.
+              }
             }
           }
         }
@@ -550,18 +560,11 @@ export async function setupWindowServices(
   const { armRestoreQuota } = await import("../ipc/utils.js");
   armRestoreQuota(50, 120_000);
 
-  opts.loadRenderer("after-services-ready");
-
-  // Error handlers also use ipcMain.handle — register once
-  if (!cleanupErrorHandlers) {
-    cleanupErrorHandlers = registerErrorHandlers(workspaceClient, ptyClient);
-  }
-
-  console.log("[MAIN] All critical services ready");
-
-  // Handle reloads (per-window)
-  win.webContents.on("did-finish-load", () => {
-    const currentUrl = win.webContents.getURL();
+  // Handle reloads (per-window) — listen on the app view's webContents.
+  // MUST be attached BEFORE loadRenderer() to avoid missing the first did-finish-load.
+  const appWc = getAppWebContents(win);
+  appWc.on("did-finish-load", () => {
+    const currentUrl = appWc.getURL();
     if (currentUrl.includes("recovery.html")) {
       console.log("[MAIN] Recovery page loaded, skipping normal renderer bootstrap");
       return;
@@ -576,6 +579,15 @@ export async function setupWindowServices(
       sendToRenderer(win, CHANNELS.WINDOW_DISK_SPACE_STATUS, diskStatus);
     }
   });
+
+  opts.loadRenderer("after-services-ready");
+
+  // Error handlers also use ipcMain.handle — register once
+  if (!cleanupErrorHandlers) {
+    cleanupErrorHandlers = registerErrorHandlers(workspaceClient, ptyClient);
+  }
+
+  console.log("[MAIN] All critical services ready");
 
   // Wait for remaining services
   console.log("[MAIN] Waiting for remaining services to initialize...");

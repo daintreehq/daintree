@@ -2,6 +2,7 @@ import { BrowserWindow, powerMonitor } from "electron";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { getAppWebContents } from "./webContentsRegistry.js";
 
 let resumeTimeout: NodeJS.Timeout | null = null;
 
@@ -54,14 +55,17 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
         }
         const sleepDuration = suspendTime ? Date.now() - suspendTime : 0;
         BrowserWindow.getAllWindows().forEach((win) => {
-          if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
-            try {
-              win.webContents.send(CHANNELS.SYSTEM_WAKE, {
-                sleepDuration,
-                timestamp: Date.now(),
-              });
-            } catch {
-              // Silently ignore send failures during window disposal.
+          if (win && !win.isDestroyed()) {
+            const wc = getAppWebContents(win);
+            if (!wc.isDestroyed()) {
+              try {
+                wc.send(CHANNELS.SYSTEM_WAKE, {
+                  sleepDuration,
+                  timestamp: Date.now(),
+                });
+              } catch {
+                // Silently ignore send failures during window disposal.
+              }
             }
           }
         });

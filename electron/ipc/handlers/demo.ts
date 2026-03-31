@@ -8,6 +8,7 @@ import * as path from "path";
 import { spawn, type ChildProcess } from "child_process";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
+import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import type {
   DemoMoveToPayload,
   DemoMoveToSelectorPayload,
@@ -65,7 +66,10 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
       ipcMain.on(CHANNELS.DEMO_COMMAND_DONE, listener);
       const win = getMainWindow();
       if (win && !win.isDestroyed()) {
-        win.webContents.send(execChannel, { ...((payload as object) ?? {}), requestId });
+        const wc = getAppWebContents(win);
+        if (!wc.isDestroyed()) {
+          wc.send(execChannel, { ...((payload as object) ?? {}), requestId });
+        }
       }
     });
   }
@@ -107,7 +111,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     if (!win || win.isDestroyed()) {
       throw new Error("No window available for screenshot");
     }
-    const image = await win.webContents.capturePage();
+    const image = await getAppWebContents(win).capturePage();
     const pngBuffer = image.toPNG();
     const size = image.getSize();
     return {
@@ -192,7 +196,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
         try {
           const captureWin = getMainWindow();
           if (!captureWin || captureWin.isDestroyed()) return;
-          const image = await captureWin.webContents.capturePage();
+          const image = await getAppWebContents(captureWin).capturePage();
           if (!captureActive || token !== captureToken) return;
           const filename = `frame-${String(captureFrameCount + 1).padStart(6, "0")}.png`;
           await writeFile(`${captureSessionDir}/${filename}`, image.toPNG());
