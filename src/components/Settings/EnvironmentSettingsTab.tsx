@@ -278,7 +278,7 @@ export function EnvironmentSettingsTab() {
                       onChange={(e) => updateRow(index, "key", e.target.value)}
                       spellCheck={false}
                       autoCapitalize="none"
-                      className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                      className="flex-1 bg-transparent border border-border-interactive rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
                       placeholder="VARIABLE_NAME"
                       aria-label="Environment variable name"
                     />
@@ -292,7 +292,7 @@ export function EnvironmentSettingsTab() {
                         autoCapitalize="none"
                         autoComplete={isSensitive ? "new-password" : "off"}
                         className={cn(
-                          "w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30",
+                          "w-full bg-canopy-sidebar border border-border-interactive rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30",
                           isSensitive && "pr-8"
                         )}
                         placeholder="value"

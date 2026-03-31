@@ -102,7 +102,7 @@ export function AgentSelectorDropdown({
           aria-haspopup="listbox"
           className={cn(
             "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-            "border border-canopy-border bg-canopy-bg text-canopy-text",
+            "border border-border-interactive bg-canopy-bg text-canopy-text",
             "hover:border-canopy-accent/50 transition-colors",
             "focus:outline-none focus:ring-2 focus:ring-canopy-accent/50"
           )}

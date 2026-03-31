@@ -240,7 +240,7 @@ export function VoiceInputSettingsTab() {
               <select
                 value={settings.language}
                 onChange={(e) => update({ language: e.target.value })}
-                className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
+                className="bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
               >
                 {LANGUAGES.map(({ code, label }) => (
                   <option key={code} value={code}>
@@ -256,7 +256,7 @@ export function VoiceInputSettingsTab() {
                 onChange={(e) =>
                   update({ transcriptionModel: e.target.value as VoiceTranscriptionModel })
                 }
-                className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
+                className="bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
               >
                 {TRANSCRIPTION_MODELS.map(({ value, label, description }) => (
                   <option key={value} value={value}>
@@ -319,7 +319,7 @@ export function VoiceInputSettingsTab() {
                   onChange={(e) =>
                     update({ correctionModel: e.target.value as VoiceCorrectionModel })
                   }
-                  className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
+                  className="bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
                 >
                   {CORRECTION_MODELS.map(({ value, label, description }) => (
                     <option key={value} value={value}>
@@ -486,7 +486,7 @@ function ApiKeyRow({
               }
             }}
             placeholder={value ? "Enter new key to replace" : placeholder}
-            className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors"
+            className="w-full bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors"
             autoComplete="new-password"
             spellCheck={false}
             disabled={validation === "testing"}
@@ -690,7 +690,7 @@ function ParagraphingStrategyRow({
         <select
           value={value}
           onChange={(e) => onChange(e.target.value as VoiceParagraphingStrategy)}
-          className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
+          className="bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
         >
           <option value="spoken-command">Spoken commands</option>
           <option value="manual">Manual Enter only</option>
@@ -747,7 +747,7 @@ function DictionarySection({
             }
           }}
           placeholder="Add term…"
-          className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors"
+          className="flex-1 bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors"
         />
         <Button
           onClick={onAdd}
@@ -766,7 +766,7 @@ function DictionarySection({
           {words.map((word) => (
             <span
               key={word}
-              className="inline-flex items-center gap-1 rounded-full border border-canopy-border bg-canopy-bg px-2.5 py-0.5 text-xs text-canopy-text"
+              className="inline-flex items-center gap-1 rounded-full border border-border-interactive bg-canopy-bg px-2.5 py-0.5 text-xs text-canopy-text"
             >
               {word}
               <button
@@ -806,7 +806,7 @@ function CustomInstructionsRow({
         onChange={(e) => onChange(e.target.value)}
         rows={3}
         placeholder='e.g., "Always capitalize ProductName as one word"'
-        className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors resize-y"
+        className="w-full bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors resize-y"
         spellCheck={false}
       />
       <p className="text-xs text-canopy-text/40 select-text">

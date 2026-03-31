@@ -319,7 +319,7 @@ export function GeneralTab({
         <>
           <div
             id="general-about"
-            className="settings-card flex items-start gap-4 p-4 rounded-[var(--radius-md)] border border-canopy-border"
+            className="settings-card flex items-start gap-4 p-4 rounded-[var(--radius-md)] border border-border-interactive"
           >
             <div
               className="h-12 w-12 rounded-xl flex items-center justify-center shrink-0"
@@ -383,7 +383,7 @@ export function GeneralTab({
                         "flex items-center justify-between text-sm px-3 py-2 rounded-[var(--radius-md)] border w-full text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
                         isUnavailable
                           ? "border-[color-mix(in_oklab,var(--color-status-warning)_30%,transparent)] bg-[color-mix(in_oklab,var(--color-status-warning)_6%,transparent)] hover:bg-[color-mix(in_oklab,var(--color-status-warning)_10%,transparent)]"
-                          : "settings-list-item border-canopy-border hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]"
+                          : "settings-list-item border-border-interactive hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]"
                       )}
                       aria-label={`Go to ${name} agent settings`}
                       onClick={() => onNavigateToAgents?.(id)}
@@ -436,7 +436,7 @@ export function GeneralTab({
                     "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-all capitalize",
                     updateChannel === ch
                       ? "bg-canopy-accent/10 border border-canopy-accent text-canopy-accent"
-                      : "border border-canopy-border hover:bg-tint/5 text-canopy-text/70"
+                      : "border border-border-interactive hover:bg-tint/5 text-canopy-text/70"
                   )}
                 >
                   {ch}
@@ -545,7 +545,7 @@ export function GeneralTab({
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-all",
                           hibernationConfig.inactiveThresholdHours === value
                             ? "bg-canopy-accent/10 border border-canopy-accent text-canopy-accent"
-                            : "border border-canopy-border hover:bg-tint/5 text-canopy-text/70"
+                            : "border border-border-interactive hover:bg-tint/5 text-canopy-text/70"
                         )}
                       >
                         {label}

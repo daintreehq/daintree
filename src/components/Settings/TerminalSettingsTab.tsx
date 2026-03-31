@@ -429,7 +429,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 }
               }}
               disabled={!memoryLeakDetectionEnabled || !resourceMonitoringEnabled}
-              className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+              className="bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
             />
             <p className="text-xs text-canopy-text/40 select-text">
               Automatically restart a terminal when its RSS exceeds this threshold. Set between
@@ -491,7 +491,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   if (!isNaN(val)) setSoftWarningLimit(val);
                 }}
                 disabled={panelLimits.warningsDisabled}
-                className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+                className="bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
               />
               <p className="text-xs text-canopy-text/40 select-text">
                 Show a dismissible banner when panel count reaches this number.
@@ -513,7 +513,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   if (!isNaN(val)) setConfirmationLimit(val);
                 }}
                 disabled={panelLimits.warningsDisabled}
-                className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+                className="bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
               />
               <p className="text-xs text-canopy-text/40 select-text">
                 Require explicit confirmation before adding panels beyond this count.
@@ -535,7 +535,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 const val = parseInt(e.target.value, 10);
                 if (!isNaN(val)) setPanelHardLimit(val);
               }}
-              className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+              className="bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
             />
             <p className="text-xs text-canopy-text/40 select-text">
               Absolute maximum number of panels. Cannot be bypassed.
@@ -759,7 +759,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                     "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-all",
                     layoutConfig.strategy === id
                       ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-                      : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"
+                      : "border-border-interactive hover:bg-tint/5 text-canopy-text/70"
                   )}
                 >
                   <Icon className="w-6 h-6 mb-2" />
@@ -782,7 +782,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   max="10"
                   value={layoutConfig.value}
                   onChange={(e) => handleValueChange(e.target.value)}
-                  className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+                  className="bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
                 />
                 <p className="text-xs text-canopy-text/40 select-text">
                   {layoutConfig.strategy === "fixed-columns"
@@ -826,7 +826,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   performanceMode && "opacity-50 cursor-not-allowed",
                   scrollbackLines === value
                     ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-                    : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"
+                    : "border-border-interactive hover:bg-tint/5 text-canopy-text/70"
                 )}
               >
                 <span className="text-xs font-medium">{label}</span>
@@ -922,7 +922,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-all",
                   screenReaderMode === value
                     ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-                    : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"
+                    : "border-border-interactive hover:bg-tint/5 text-canopy-text/70"
                 )}
               >
                 <span className="text-xs font-medium">{label}</span>

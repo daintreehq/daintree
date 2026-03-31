@@ -280,7 +280,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
             placeholder="Search commands..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-canopy-bg border border-canopy-border rounded text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent"
+            className="w-full pl-9 pr-3 py-2 bg-canopy-bg border border-border-interactive rounded text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent"
             aria-label="Search commands"
           />
         </div>
@@ -491,7 +491,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                 onChange={(e) =>
                                   updateDefault(command.id, arg.name, e.target.value)
                                 }
-                                className="w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1.5 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                                className="w-full bg-canopy-sidebar border border-border-interactive rounded px-2 py-1.5 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
                                 placeholder={
                                   arg.default ? `Default: ${arg.default}` : `Enter ${arg.name}`
                                 }
@@ -573,7 +573,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
                           "text-[11px] px-2 py-0.5 rounded font-mono transition-colors",
                           usedVariables.includes(arg.name)
                             ? "bg-canopy-accent/20 text-canopy-accent border border-canopy-accent/30"
-                            : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border border border-canopy-border"
+                            : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border border border-border-interactive"
                         )}
                       >
                         {"{"}
@@ -604,7 +604,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
             "w-full bg-canopy-sidebar border rounded px-2 py-1.5 text-sm text-canopy-text font-mono focus:outline-none focus:ring-1 min-h-[120px] resize-y",
             validation && !validation.valid
               ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
-              : "border-canopy-border focus:border-canopy-accent focus:ring-canopy-accent/30"
+              : "border-border-interactive focus:border-canopy-accent focus:ring-canopy-accent/30"
           )}
           placeholder={`Example: Work on issue {issueNumber}...\n\nUse {variableName} to include argument values.`}
         />

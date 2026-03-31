@@ -197,20 +197,20 @@ export function PortalSettingsTab() {
       return (
         <div
           key={link.id}
-          className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30"
+          className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] border border-border-interactive bg-canopy-bg/30"
         >
           <input
             type="text"
             value={editName}
             onChange={(e) => setEditName(e.target.value)}
-            className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-2 py-1 text-sm text-canopy-text w-32 focus:border-canopy-accent focus:outline-none"
+            className="bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-2 py-1 text-sm text-canopy-text w-32 focus:border-canopy-accent focus:outline-none"
             placeholder="Name"
           />
           <input
             type="text"
             value={editUrl}
             onChange={(e) => setEditUrl(e.target.value)}
-            className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-2 py-1 text-sm text-canopy-text flex-1 focus:border-canopy-accent focus:outline-none"
+            className="bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-2 py-1 text-sm text-canopy-text flex-1 focus:border-canopy-accent focus:outline-none"
             placeholder="URL"
           />
           <button
@@ -232,7 +232,7 @@ export function PortalSettingsTab() {
     return (
       <div
         key={link.id}
-        className="flex items-center justify-between p-3 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30"
+        className="flex items-center justify-between p-3 rounded-[var(--radius-md)] border border-border-interactive bg-canopy-bg/30"
       >
         <div className="flex items-center gap-3">
           {allowDelete ? <FaviconIcon url={link.url} /> : <ServiceIcon name={link.icon} />}
@@ -325,7 +325,7 @@ export function PortalSettingsTab() {
                     : defaultNewTabUrl
             }
             onChange={(e) => handleDefaultAgentChange(e.target.value)}
-            className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+            className="w-full bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
           >
             <option value="none">None (show Launchpad)</option>
             {enabledLinks.map((link) => (
@@ -346,7 +346,7 @@ export function PortalSettingsTab() {
                   setCustomDefaultUrl(e.target.value);
                   setCustomUrlError("");
                 }}
-                className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                className="flex-1 bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleCustomUrlSave();
                   if (e.key === "Escape") handleCustomUrlCancel();
@@ -367,7 +367,7 @@ export function PortalSettingsTab() {
                 type="button"
                 onClick={handleCustomUrlCancel}
                 aria-label="Cancel custom URL"
-                className="px-3 py-1.5 rounded-[var(--radius-md)] border border-canopy-border text-canopy-text/70 text-sm hover:bg-canopy-border/50 transition-colors"
+                className="px-3 py-1.5 rounded-[var(--radius-md)] border border-border-interactive text-canopy-text/70 text-sm hover:bg-canopy-border/50 transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -414,7 +414,7 @@ export function PortalSettingsTab() {
                 setNewLinkName(e.target.value);
                 setUrlError("");
               }}
-              className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-32 focus:border-canopy-accent focus:outline-none transition-colors"
+              className="bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-32 focus:border-canopy-accent focus:outline-none transition-colors"
             />
             <input
               type="text"
@@ -424,7 +424,7 @@ export function PortalSettingsTab() {
                 setNewLinkUrl(e.target.value);
                 setUrlError("");
               }}
-              className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text flex-1 focus:border-canopy-accent focus:outline-none transition-colors"
+              className="bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text flex-1 focus:border-canopy-accent focus:outline-none transition-colors"
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleAddLink();
               }}

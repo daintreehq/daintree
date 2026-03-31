@@ -4,19 +4,19 @@ import { cn } from "@/lib/utils";
 
 const COLOR_SCHEMES = {
   accent: {
-    enabled: "border-canopy-border text-canopy-text",
+    enabled: "border-border-interactive text-canopy-text",
     icon: "text-canopy-accent",
     toggle: "bg-canopy-accent",
     focus: "focus-visible:outline-canopy-accent",
   },
   amber: {
-    enabled: "border-canopy-border text-canopy-text",
+    enabled: "border-border-interactive text-canopy-text",
     icon: "text-status-warning",
     toggle: "bg-status-warning",
     focus: "focus-visible:outline-status-warning",
   },
   danger: {
-    enabled: "border-canopy-border text-canopy-text",
+    enabled: "border-border-interactive text-canopy-text",
     icon: "text-status-error",
     toggle: "bg-status-error",
     focus: "focus-visible:outline-status-error",
@@ -69,7 +69,7 @@ export function SettingsSwitchCard({
       className={cn(
         "relative w-full flex items-center justify-between transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
         isCard ? "p-4 rounded-[var(--radius-lg)] border hover:bg-tint/5" : "py-2",
-        isEnabled ? scheme.enabled : "border-canopy-border text-canopy-text/70",
+        isEnabled ? scheme.enabled : "border-border-interactive text-canopy-text/70",
         scheme.focus,
         disabled && "opacity-50 cursor-not-allowed"
       )}

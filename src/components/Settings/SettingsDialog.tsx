@@ -957,7 +957,7 @@ export function SettingsDialog({
                     handleScopeSwitch(e.target.value as SettingsScope);
                     e.target.blur();
                   }}
-                  className="appearance-none text-xs py-1 pl-2 pr-6 rounded-[var(--radius-md)] bg-transparent border border-canopy-border text-text-secondary hover:text-canopy-text hover:border-canopy-text/30 focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/20 outline-none cursor-pointer transition-colors"
+                  className="appearance-none text-xs py-1 pl-2 pr-6 rounded-[var(--radius-md)] bg-transparent border border-border-interactive text-text-secondary hover:text-canopy-text hover:border-canopy-text/30 focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/20 outline-none cursor-pointer transition-colors"
                 >
                   <option value="global">Global</option>
                   <option value="project">Project</option>
@@ -973,7 +973,7 @@ export function SettingsDialog({
           <div
             className={cn(
               "flex items-center gap-1.5 px-2 py-1.5 mb-3 rounded-[var(--radius-md)]",
-              "settings-search border border-canopy-border",
+              "settings-search border border-border-interactive",
               "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
             )}
           >

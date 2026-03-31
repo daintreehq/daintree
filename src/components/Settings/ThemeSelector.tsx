@@ -73,7 +73,7 @@ export function ThemeSelector<T extends { id: string }>({
         "flex flex-col gap-1.5 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
         item.id === selectedId
           ? "border-canopy-accent bg-canopy-accent/10"
-          : "border-canopy-border bg-canopy-bg hover:border-canopy-text/30"
+          : "border-border-interactive bg-canopy-bg hover:border-canopy-text/30"
       )}
     >
       {renderPreview(item)}
@@ -102,7 +102,7 @@ export function ThemeSelector<T extends { id: string }>({
             }}
             placeholder="Filter themes..."
             aria-label="Filter themes"
-            className="w-full pl-7 pr-2 py-1.5 text-xs rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent"
+            className="w-full pl-7 pr-2 py-1.5 text-xs rounded-[var(--radius-md)] border border-border-interactive bg-canopy-bg text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent"
           />
         </div>
       </div>

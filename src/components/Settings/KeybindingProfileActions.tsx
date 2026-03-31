@@ -78,7 +78,7 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
         onClick={handleExport}
         disabled={isLoading}
         className={cn(
-          "flex items-center gap-1.5 px-3 py-2 text-sm border border-canopy-border rounded transition-colors",
+          "flex items-center gap-1.5 px-3 py-2 text-sm border border-border-interactive rounded transition-colors",
           isLoading
             ? "opacity-50 cursor-not-allowed text-canopy-text/40"
             : "text-canopy-text/60 hover:text-canopy-text hover:border-canopy-accent"
@@ -91,7 +91,7 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
         onClick={handleImport}
         disabled={isLoading}
         className={cn(
-          "flex items-center gap-1.5 px-3 py-2 text-sm border border-canopy-border rounded transition-colors",
+          "flex items-center gap-1.5 px-3 py-2 text-sm border border-border-interactive rounded transition-colors",
           isLoading
             ? "opacity-50 cursor-not-allowed text-canopy-text/40"
             : "text-canopy-text/60 hover:text-canopy-text hover:border-canopy-accent"

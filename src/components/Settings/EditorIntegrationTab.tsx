@@ -157,7 +157,7 @@ export function EditorIntegrationTab() {
               <select
                 value={selectedId}
                 onChange={(e) => setSelectedId(e.target.value as KnownEditorId)}
-                className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
+                className="flex-1 bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
               >
                 {ORDERED_KNOWN_IDS.map((id) => {
                   const disc = availabilityMap.get(id);
@@ -174,7 +174,7 @@ export function EditorIntegrationTab() {
                 onClick={handleRescan}
                 disabled={isRescanning}
                 title="Re-scan for installed editors"
-                className="p-2 rounded-[var(--radius-md)] border border-canopy-border hover:bg-tint/5 text-canopy-text/60 hover:text-canopy-text transition-colors disabled:opacity-40"
+                className="p-2 rounded-[var(--radius-md)] border border-border-interactive hover:bg-tint/5 text-canopy-text/60 hover:text-canopy-text transition-colors disabled:opacity-40"
               >
                 <RefreshCw className={cn("w-4 h-4", isRescanning && "animate-spin")} />
               </button>
@@ -215,7 +215,7 @@ export function EditorIntegrationTab() {
                   value={customCommand}
                   onChange={(e) => setCustomCommand(e.target.value)}
                   placeholder="e.g. code, nvim, subl"
-                  className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors font-mono"
+                  className="w-full bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors font-mono"
                 />
               </div>
               <div className="space-y-1">
@@ -225,7 +225,7 @@ export function EditorIntegrationTab() {
                   value={customTemplate}
                   onChange={(e) => setCustomTemplate(e.target.value)}
                   placeholder="{file}:{line}:{col}"
-                  className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors font-mono"
+                  className="w-full bg-canopy-bg border border-border-interactive rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors font-mono"
                 />
                 <p className="text-xs text-canopy-text/40 select-text">
                   Use <code className="font-mono">{"{file}"}</code>,{" "}
@@ -248,7 +248,7 @@ export function EditorIntegrationTab() {
             <button
               onClick={handleTest}
               disabled={isTesting}
-              className="px-4 py-2 rounded-[var(--radius-md)] border border-canopy-border text-sm text-canopy-text/70 hover:text-canopy-text hover:bg-tint/5 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+              className="px-4 py-2 rounded-[var(--radius-md)] border border-border-interactive text-sm text-canopy-text/70 hover:text-canopy-text hover:bg-tint/5 disabled:opacity-50 transition-colors flex items-center gap-1.5"
             >
               <ExternalLink className="w-3.5 h-3.5" />
               {isTesting ? "Testing…" : "Test"}
