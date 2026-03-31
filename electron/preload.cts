@@ -479,6 +479,7 @@ const CHANNELS = {
   PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
   PROJECT_CHECK_MISSING: "project:check-missing",
   PROJECT_LOCATE: "project:locate",
+  PROJECT_PREWARM: "project:prewarm",
 
   // Agent settings channels
   AGENT_SETTINGS_GET: "agent-settings:get",

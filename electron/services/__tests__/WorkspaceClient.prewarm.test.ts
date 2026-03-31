@@ -121,8 +121,6 @@ import { WorkspaceClient } from "../WorkspaceClient.js";
 
 type MockHost = InstanceType<typeof MockWorkspaceHostProcess>;
 
-const tick = () => new Promise((r) => setTimeout(r, 0));
-
 describe("WorkspaceClient.prewarmProject", () => {
   let client: WorkspaceClient;
 
