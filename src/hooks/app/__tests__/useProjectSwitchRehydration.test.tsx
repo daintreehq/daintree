@@ -374,11 +374,11 @@ describe("useProjectSwitchRehydration", () => {
       expect(finishProjectSwitchMock).toHaveBeenCalledTimes(1);
     });
 
-    expect(forceReinitializeWorktreeDataStoreMock).toHaveBeenCalledWith("project-new");
+    expect(forceReinitializeWorktreeDataStoreMock).toHaveBeenCalledWith("project-new", undefined);
     expect(setWorktreeLoadErrorMock).not.toHaveBeenCalled();
   });
 
-  it("skips reinit when store already initialized for the target project", async () => {
+  it("always reinits even when store already initialized for the target project", async () => {
     hydrateAppStateMock.mockResolvedValue(undefined);
     worktreeDataStoreState.projectId = "project-same";
     worktreeDataStoreState.isInitialized = true;
@@ -394,7 +394,8 @@ describe("useProjectSwitchRehydration", () => {
       expect(finishProjectSwitchMock).toHaveBeenCalledTimes(1);
     });
 
-    expect(forceReinitializeWorktreeDataStoreMock).not.toHaveBeenCalled();
+    // Always reinitialize to clear isSwitching lock and set targetScopeId
+    expect(forceReinitializeWorktreeDataStoreMock).toHaveBeenCalledWith("project-same", undefined);
     expect(setWorktreeLoadErrorMock).not.toHaveBeenCalled();
   });
 

@@ -344,8 +344,9 @@ describe("projectStore switching races", () => {
 
     expect(useProjectStore.getState().currentProject?.id).toBe("project-c");
     expect(useProjectStore.getState().error).toBeNull();
-    expect(forceReinitializeWorktreeDataStoreMock).toHaveBeenCalledTimes(1);
-    expect(forceReinitializeWorktreeDataStoreMock).toHaveBeenCalledWith("project-c");
+    // forceReinitializeWorktreeDataStore is no longer called in the success path —
+    // it's now handled by useProjectSwitchRehydration's PROJECT_ON_SWITCH handler.
+    // Only the error path for project-b calls it (to restore old project state).
     expect(notifyMock).not.toHaveBeenCalled();
     expect(cancelPreparedProjectSwitchRendererCacheMock).not.toHaveBeenCalled();
   });
