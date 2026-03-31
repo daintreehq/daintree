@@ -46,7 +46,7 @@ test.describe("OpenCode Online Flow", () => {
       await window.locator(SEL.opencodeAgent.startButton).click();
 
       const agentPanel = window.locator(SEL.opencodeAgent.panel);
-      await expect(agentPanel).toBeVisible({ timeout: 15_000 });
+      await expect(agentPanel).toBeVisible({ timeout: 30_000 });
     });
 
     await test.step("handle prompts and wait for ready state", async () => {

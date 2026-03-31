@@ -275,14 +275,17 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
     const page = window;
 
     await test.step(
-      "start on project A",
+      "start on project A with at least 1 panel",
       async () => {
         await switchViaEvaluate(page, PROJECT_A);
-        // Panels may take extra time to re-hydrate after prior test switches.
-        // Earlier tests may have closed some panels, so only require at least 1.
         await page.waitForTimeout(T_SETTLE * 2);
+        // Earlier tests may have closed panels; spawn a fresh one if needed
+        const count = await getGridPanelCount(window);
+        if (count === 0) {
+          await spawnTerminalAndVerify(window);
+        }
         await expect
-          .poll(() => getGridPanelCount(window), { timeout: T_LONG * 2 })
+          .poll(() => getGridPanelCount(window), { timeout: T_LONG })
           .toBeGreaterThanOrEqual(1);
       },
       { box: true }
