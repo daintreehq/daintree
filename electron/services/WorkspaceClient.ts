@@ -129,9 +129,8 @@ export class WorkspaceClient extends EventEmitter {
   private routeHostEvent(entry: ProcessEntry, event: WorkspaceHostEvent): void {
     if (this.isDisposed) return;
 
-    // Events delivered via direct MessagePort skip the IPC relay to renderers.
-    // Main-process event emissions (events.emit) are still processed.
-    const hasDirectPorts = entry.directPortViews.size > 0;
+    // IPC relay always runs for reliability. Views with direct MessagePorts
+    // receive events twice; stores handle dedup via equality checks.
 
     switch (event.type) {
       case "worktree-update": {
@@ -143,12 +142,10 @@ export class WorkspaceClient extends EventEmitter {
             entry.projectPath
           );
         }
-        if (!hasDirectPorts) {
-          this.sendToEntryWindows(entry, CHANNELS.WORKTREE_UPDATE, {
-            worktree,
-            scopeId: entry.scopeId,
-          });
-        }
+        this.sendToEntryWindows(entry, CHANNELS.WORKTREE_UPDATE, {
+          worktree,
+          scopeId: entry.scopeId,
+        });
         events.emit("sys:worktree:update", {
           id: worktree.id,
           path: worktree.path,
@@ -177,11 +174,9 @@ export class WorkspaceClient extends EventEmitter {
       }
 
       case "worktree-removed":
-        if (!hasDirectPorts) {
-          this.sendToEntryWindows(entry, CHANNELS.WORKTREE_REMOVE, {
-            worktreeId: event.worktreeId,
-          });
-        }
+        this.sendToEntryWindows(entry, CHANNELS.WORKTREE_REMOVE, {
+          worktreeId: event.worktreeId,
+        });
         break;
 
       case "pr-detected": {
@@ -196,18 +191,14 @@ export class WorkspaceClient extends EventEmitter {
           timestamp: Date.now(),
         };
         events.emit("sys:pr:detected", prPayload);
-        if (!hasDirectPorts) {
-          this.sendToEntryWindows(entry, CHANNELS.PR_DETECTED, prPayload);
-        }
+        this.sendToEntryWindows(entry, CHANNELS.PR_DETECTED, prPayload);
         break;
       }
 
       case "pr-cleared": {
         const clearPayload = { worktreeId: event.worktreeId, timestamp: Date.now() };
         events.emit("sys:pr:cleared", clearPayload);
-        if (!hasDirectPorts) {
-          this.sendToEntryWindows(entry, CHANNELS.PR_CLEARED, clearPayload);
-        }
+        this.sendToEntryWindows(entry, CHANNELS.PR_CLEARED, clearPayload);
         break;
       }
 
@@ -218,9 +209,7 @@ export class WorkspaceClient extends EventEmitter {
           issueTitle: event.issueTitle,
         };
         events.emit("sys:issue:detected", { ...issuePayload, timestamp: Date.now() });
-        if (!hasDirectPorts) {
-          this.sendToEntryWindows(entry, CHANNELS.ISSUE_DETECTED, issuePayload);
-        }
+        this.sendToEntryWindows(entry, CHANNELS.ISSUE_DETECTED, issuePayload);
         break;
       }
 
@@ -231,9 +220,7 @@ export class WorkspaceClient extends EventEmitter {
           timestamp: Date.now(),
         };
         events.emit("sys:issue:not-found", notFoundPayload);
-        if (!hasDirectPorts) {
-          this.sendToEntryWindows(entry, CHANNELS.ISSUE_NOT_FOUND, notFoundPayload);
-        }
+        this.sendToEntryWindows(entry, CHANNELS.ISSUE_NOT_FOUND, notFoundPayload);
         break;
       }
 

@@ -575,6 +575,10 @@ export async function setupWindowServices(
     if (isSmokeTest) console.error("[SMOKE] CHECK: Renderer did-finish-load — OK");
     markPerformance(PERF_MARKS.RENDERER_READY);
     createAndDistributePorts(win, ctx);
+    // Refresh workspace direct port on reload (preload context is reset)
+    if (workspaceClient) {
+      workspaceClient.attachDirectPort(win.id, appWc);
+    }
     flushPendingErrors();
     const diskStatus = getCurrentDiskSpaceStatus();
     if (diskStatus.status !== "normal") {
