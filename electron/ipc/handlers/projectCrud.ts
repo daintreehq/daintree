@@ -1036,11 +1036,15 @@ Thumbs.db
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    const result = await dialog.showOpenDialog({
+    const senderWindow = getWindowForWebContents(_event.sender);
+    const openOpts: Electron.OpenDialogOptions = {
       title: `Locate "${project.name}"`,
       properties: ["openDirectory"],
       defaultPath: path.dirname(project.path),
-    });
+    };
+    const result = senderWindow
+      ? await dialog.showOpenDialog(senderWindow, openOpts)
+      : await dialog.showOpenDialog(openOpts);
 
     if (result.canceled || result.filePaths.length === 0) {
       return null;

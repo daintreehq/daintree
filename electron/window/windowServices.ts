@@ -273,11 +273,15 @@ export async function setupWindowServices(
     } catch (error) {
       console.error("[MAIN] Store migration failed:", error);
       const message = error instanceof Error ? error.message : String(error);
-      dialog.showErrorBox(
-        "Migration Failed",
-        `Failed to migrate application data:\n\n${message}\n\nThe application will now exit. Please check the logs for details.`
-      );
-      app.exit(1);
+      dialog
+        .showMessageBox(win, {
+          type: "error",
+          title: "Migration Failed",
+          message: `Failed to migrate application data:\n\n${message}\n\nThe application will now exit. Please check the logs for details.`,
+          buttons: ["OK"],
+        })
+        .then(() => app.exit(1))
+        .catch(() => app.exit(1));
       return;
     }
 
@@ -598,7 +602,7 @@ export async function setupWindowServices(
       console.error("[MAIN] Service initialization failed:", failures);
 
       dialog
-        .showMessageBox({
+        .showMessageBox(win, {
           type: "error",
           title: "Service Initialization Failed",
           message: `One or more services failed to start:\n\n${failures.join("\n")}\n\nThe application will continue in degraded mode. Some features may be unavailable.\n\nTry restarting the application if problems persist.`,

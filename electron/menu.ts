@@ -242,12 +242,12 @@ export function createApplicationMenu(
         {
           label: "Install Canopy Command Line Tool",
           enabled: process.platform === "darwin" || process.platform === "linux",
-          click: async () => {
+          click: async (_item, browserWindow) => {
+            const targetWin = getTargetBrowserWindow(browserWindow);
             try {
               const status = await CliInstallService.install();
-              const win = BrowserWindow.getFocusedWindow() ?? mainWindow;
-              if (win && !win.isDestroyed()) {
-                const wc = getAppWebContents(win);
+              if (targetWin && !targetWin.isDestroyed()) {
+                const wc = getAppWebContents(targetWin);
                 if (!wc.isDestroyed()) {
                   wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
                     type: "success",
@@ -259,9 +259,8 @@ export function createApplicationMenu(
               createApplicationMenu(mainWindow, cliAvailabilityService);
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);
-              const win = BrowserWindow.getFocusedWindow() ?? mainWindow;
-              if (win && !win.isDestroyed()) {
-                const wc = getAppWebContents(win);
+              if (targetWin && !targetWin.isDestroyed()) {
+                const wc = getAppWebContents(targetWin);
                 if (!wc.isDestroyed()) {
                   wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
                     type: "error",
@@ -426,6 +425,13 @@ export async function handleDirectoryOpen(
       }
     }
 
-    dialog.showErrorBox("Failed to Open Project", errorMessage);
+    dialog
+      .showMessageBox(targetWindow, {
+        type: "error",
+        title: "Failed to Open Project",
+        message: errorMessage,
+        buttons: ["OK"],
+      })
+      .catch(console.error);
   }
 }
