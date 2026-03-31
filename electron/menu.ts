@@ -4,7 +4,7 @@ import { CHANNELS } from "./ipc/channels.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
 import * as CliInstallService from "./services/CliInstallService.js";
-import { getWindowRegistry } from "./window/windowRef.js";
+import { getWindowRegistry, getProjectViewManager } from "./window/windowRef.js";
 import { autoUpdaterService } from "./services/AutoUpdaterService.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
@@ -390,16 +390,24 @@ export async function handleDirectoryOpen(
   if (targetWindow.isDestroyed()) return;
 
   try {
-    const registry = getWindowRegistry();
-    const wCtx = registry?.getByWindowId(targetWindow.id);
-    const switchService = wCtx?.services.projectSwitchService;
-    if (!switchService) {
-      console.error("[menu] ProjectSwitchService not available yet, cannot switch project");
-      return;
-    }
-
     const project = await projectStore.addProject(directoryPath);
-    await switchService.switchProject(project.id);
+
+    // Use ProjectViewManager for multi-view switching when available
+    const pvm = getProjectViewManager();
+    if (pvm) {
+      await pvm.switchTo(project.id, project.path);
+      await projectStore.setCurrentProject(project.id);
+    } else {
+      // Fallback: legacy single-view switch
+      const registry = getWindowRegistry();
+      const wCtx = registry?.getByWindowId(targetWindow.id);
+      const switchService = wCtx?.services.projectSwitchService;
+      if (!switchService) {
+        console.error("[menu] ProjectSwitchService not available yet, cannot switch project");
+        return;
+      }
+      await switchService.switchProject(project.id);
+    }
 
     createApplicationMenu(targetWindow, cliAvailabilityService);
   } catch (error) {
