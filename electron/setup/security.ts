@@ -163,7 +163,7 @@ function logPermissionDenial(
   );
 }
 
-// Electron 40 permission types (from electron.d.ts) — kept as reference for auditing.
+// Electron 41 permission types (from electron.d.ts) — kept as reference for auditing.
 // setPermissionRequestHandler: clipboard-read, clipboard-sanitized-write, display-capture,
 //   fullscreen, geolocation, idle-detection, media, mediaKeySystem, midi, midiSysex,
 //   notifications, pointerLock, keyboardLock, openExternal, speaker-selection,

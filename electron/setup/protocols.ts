@@ -184,7 +184,7 @@ export function setupWebviewCSP(): void {
       });
 
       // Intercept JavaScript dialogs (alert/confirm/prompt) from webview guests.
-      // Electron 40 emits "js-dialog" but its TS types omit it from the overload union.
+      // Electron 40+ emits "js-dialog" but its TS types omit it from the overload union.
       (contents as { on: (event: string, listener: (...args: unknown[]) => void) => void }).on(
         "js-dialog",
         (
