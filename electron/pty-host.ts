@@ -9,6 +9,17 @@
  * pattern matching or AI classification.
  */
 
+// Silence EPIPE on stdout/stderr — the main process may close the pipe
+// at any time during shutdown or host restart.
+for (const stream of [process.stdout, process.stderr]) {
+  if (stream && typeof stream.on === "function") {
+    stream.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EPIPE") return;
+      throw err;
+    });
+  }
+}
+
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
 import { PtyManager } from "./services/PtyManager.js";

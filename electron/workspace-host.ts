@@ -1,3 +1,14 @@
+// Silence EPIPE on stdout/stderr — the main process may close the pipe
+// at any time during shutdown or host restart.
+for (const stream of [process.stdout, process.stderr]) {
+  if (stream && typeof stream.on === "function") {
+    stream.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EPIPE") return;
+      throw err;
+    });
+  }
+}
+
 import { MessagePort } from "node:worker_threads";
 import { initializeLogger } from "./utils/logger.js";
 import { copyTreeService } from "./services/CopyTreeService.js";

@@ -1,3 +1,15 @@
+// Silence EPIPE errors on stdout/stderr. When the parent terminal is closed
+// (e.g. user quits Terminal.app while Canopy runs), writes to the broken pipe
+// throw an uncaught EPIPE that would crash the main process. These are harmless.
+for (const stream of [process.stdout, process.stderr]) {
+  if (stream && typeof stream.on === "function") {
+    stream.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EPIPE") return;
+      throw err;
+    });
+  }
+}
+
 import nodeV8 from "node:v8";
 import vm from "node:vm";
 import { execFile } from "child_process";
