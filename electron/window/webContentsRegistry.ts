@@ -10,13 +10,21 @@
  * WebContentsView without breaking 30+ IPC handlers.
  */
 
-import { BrowserWindow, WebContentsView, type WebContents } from "electron";
+import {
+  BrowserWindow,
+  WebContentsView,
+  webContents as webContentsModule,
+  type WebContents,
+} from "electron";
 
 const webContentsToWindow = new Map<number, BrowserWindow>();
 
 // App view tracking: maps BrowserWindow.id → the WebContentsView hosting the React app.
 // When no app view is registered (Phase 1 compat), helpers fall back to win.webContents.
 const windowToAppView = new Map<number, WebContentsView>();
+
+// Project view tracking: maps webContents.id → projectId for scoped IPC routing.
+const viewToProject = new Map<number, string>();
 
 /**
  * Register a webContents → BrowserWindow mapping.
@@ -122,6 +130,51 @@ export function getAllAppWebContents(): WebContents[] {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
         result.push(win.webContents);
       }
+    }
+  }
+  return result;
+}
+
+// ── Project-scoped view tracking ──
+
+/**
+ * Associate a webContents with a projectId for scoped IPC routing.
+ * Call when a view is created or switched to a project.
+ */
+export function registerProjectView(projectId: string, webContents: WebContents): void {
+  viewToProject.set(webContents.id, projectId);
+  webContents.once("destroyed", () => {
+    viewToProject.delete(webContents.id);
+  });
+}
+
+/**
+ * Remove a webContents → projectId mapping.
+ */
+export function unregisterProjectView(webContentsId: number): void {
+  viewToProject.delete(webContentsId);
+}
+
+/**
+ * Get the projectId associated with a webContents.
+ */
+export function getProjectForWebContents(webContentsId: number): string | null {
+  return viewToProject.get(webContentsId) ?? null;
+}
+
+/**
+ * Get all non-destroyed webContents for a given projectId.
+ * Used for project-scoped IPC broadcasts.
+ */
+export function getWebContentsForProject(projectId: string): WebContents[] {
+  const result: WebContents[] = [];
+  for (const [wcId, pid] of viewToProject) {
+    if (pid !== projectId) continue;
+    const wc = webContentsModule.fromId(wcId);
+    if (wc && !wc.isDestroyed()) {
+      result.push(wc);
+    } else {
+      viewToProject.delete(wcId);
     }
   }
   return result;

@@ -429,6 +429,16 @@ export class WorkspaceClient extends EventEmitter {
     entry.directPortViews.set(webContents.id, webContents);
   }
 
+  /**
+   * Remove a direct port mapping when a view is evicted/destroyed.
+   * Called by ProjectViewManager.onViewEvicted callback.
+   */
+  removeDirectPort(webContentsId: number): void {
+    for (const entry of this.entries.values()) {
+      entry.directPortViews.delete(webContentsId);
+    }
+  }
+
   async sync(
     worktrees: import("../../shared/types/worktree.js").Worktree[],
     activeWorktreeId: string | null = null,

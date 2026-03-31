@@ -152,6 +152,9 @@ if (!gotTheLock) {
       dirname: __dirname,
       onRecreateWindow: () => createWindow(initialProjectPath),
       windowRegistry,
+      onViewEvicted: (wcId) => {
+        getWorkspaceClientRef()?.removeDirectPort(wcId);
+      },
     });
     setProjectViewManager(pvm);
 

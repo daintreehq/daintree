@@ -203,20 +203,14 @@ export function setupBrowserWindow(
   // Register the app view so IPC helpers route to the correct webContents
   registerAppView(win, appView);
 
-  // Attach the view to the window and size it to fill the content area
+  // Attach the view to the window and size it to fill the content area.
+  // Ongoing resize handling is delegated to ProjectViewManager (which tracks the active view).
+  // We only need to set the initial bounds here.
   win.contentView.addChildView(appView);
-  const updateAppViewBounds = () => {
-    if (win.isDestroyed()) return;
+  if (!win.isDestroyed()) {
     const { width, height } = win.getContentBounds();
     appView.setBounds({ x: 0, y: 0, width, height });
-  };
-  updateAppViewBounds();
-  win.on("resize", updateAppViewBounds);
-  // Also update on maximize/unmaximize/restore which may not fire resize on all platforms
-  win.on("maximize", updateAppViewBounds);
-  win.on("unmaximize", updateAppViewBounds);
-  win.on("enter-full-screen", updateAppViewBounds);
-  win.on("leave-full-screen", updateAppViewBounds);
+  }
 
   // The app view's webContents is the "renderer" for all purposes
   const appWebContents = appView.webContents;

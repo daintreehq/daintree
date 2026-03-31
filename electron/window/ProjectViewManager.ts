@@ -5,12 +5,14 @@
  * Switching projects swaps the visible view (<16ms for cached views).
  */
 
-import { BrowserWindow, WebContentsView } from "electron";
+import { BrowserWindow, WebContentsView, session } from "electron";
 import path from "path";
 import {
   registerWebContents,
   registerAppView,
   unregisterWebContents,
+  registerProjectView,
+  unregisterProjectView,
 } from "./webContentsRegistry.js";
 import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
@@ -38,6 +40,8 @@ export interface ProjectViewManagerOptions {
   dirname: string;
   onRecreateWindow?: () => Promise<void>;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
+  /** Called when a view is evicted (destroyed) with its webContents.id, for port cleanup */
+  onViewEvicted?: (webContentsId: number) => void;
 }
 
 export class ProjectViewManager {
@@ -47,6 +51,7 @@ export class ProjectViewManager {
   private win: BrowserWindow;
   private dirname: string;
   private onRecreateWindow?: () => Promise<void>;
+  private onViewEvicted?: (webContentsId: number) => void;
   private windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
   private resizeHandler: (() => void) | null = null;
@@ -55,6 +60,7 @@ export class ProjectViewManager {
     this.win = win;
     this.dirname = opts.dirname;
     this.onRecreateWindow = opts.onRecreateWindow;
+    this.onViewEvicted = opts.onViewEvicted;
     this.windowRegistry = opts.windowRegistry;
 
     // Single resize handler that always updates the active view's bounds
@@ -87,6 +93,7 @@ export class ProjectViewManager {
     };
     this.views.set(projectId, entry);
     this.webContentsToProject.set(view.webContents.id, projectId);
+    registerProjectView(projectId, view.webContents);
     this.activeProjectId = projectId;
   }
 
@@ -137,7 +144,7 @@ export class ProjectViewManager {
       this.cleanupEntry(projectId);
     }
 
-    const view = this.createView();
+    const view = this.createView(projectId);
     const entry: ViewEntry = {
       view,
       projectId,
@@ -148,6 +155,7 @@ export class ProjectViewManager {
     };
     this.views.set(projectId, entry);
     this.webContentsToProject.set(view.webContents.id, projectId);
+    registerProjectView(projectId, view.webContents);
 
     // Set up security handlers and attach to window
     this.setupViewHandlers(view);
@@ -167,6 +175,11 @@ export class ProjectViewManager {
     // Load the renderer with projectId context
     await this.loadView(view, projectId);
     entry.state = "active";
+
+    // Explicit focus after load
+    if (!view.webContents.isDestroyed()) {
+      view.webContents.focus();
+    }
 
     // Evict LRU views if over limit
     this.evictStaleViews();
@@ -256,15 +269,22 @@ export class ProjectViewManager {
 
     this.win.contentView.addChildView(entry.view);
     this.updateViewBounds(entry.view);
+
+    // Explicit focus — addChildView does not auto-focus
+    if (!entry.view.webContents.isDestroyed()) {
+      entry.view.webContents.focus();
+    }
+
     entry.state = "active";
     entry.lastUsed = Date.now();
     this.activeProjectId = entry.projectId;
   }
 
-  private createView(): WebContentsView {
+  private createView(projectId: string): WebContentsView {
     return new WebContentsView({
       webPreferences: {
         preload: path.join(this.dirname, "preload.cjs"),
+        session: session.fromPartition(`persist:project-${projectId}`),
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -453,6 +473,10 @@ export class ProjectViewManager {
     }
 
     this.webContentsToProject.delete(wcId);
+    unregisterProjectView(wcId);
+
+    // Notify listeners (e.g. WorkspaceClient) so they can clean up direct ports
+    this.onViewEvicted?.(wcId);
 
     // Close webContents — only unregister from webContentsRegistry, NOT unregisterAppView
     // (which would remove the active view's registration)
