@@ -1042,6 +1042,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   }
 
   pause(): void {
+    console.log("[WorkspaceService] Pausing (backgrounded)");
     this.setPollingEnabled(false);
     pullRequestService.stop();
     try {
@@ -1055,6 +1056,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   }
 
   resume(): void {
+    console.log("[WorkspaceService] Resuming (foregrounded)");
     try {
       os.setPriority(process.pid, os.constants.priority.PRIORITY_NORMAL);
     } catch {
