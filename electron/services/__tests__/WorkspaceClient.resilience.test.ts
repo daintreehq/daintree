@@ -87,6 +87,8 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
     getAllRequests(): Array<{ requestId: string; type: string; [key: string]: any }> {
       return this.sendWithResponse.mock.calls.map(([req]: any) => req);
     }
+
+    attachRendererPort = vi.fn(() => true);
   }
 
   return { mockHosts, MockWorkspaceHostProcess };
@@ -96,11 +98,18 @@ vi.mock("../WorkspaceHostProcess.js", () => ({
   WorkspaceHostProcess: MockWorkspaceHostProcess,
 }));
 
-vi.mock("electron", () => ({
-  BrowserWindow: {
-    getAllWindows: vi.fn(() => []),
-  },
-}));
+vi.mock("electron", () => {
+  class MockMessageChannelMain {
+    port1 = { close: vi.fn() };
+    port2 = { close: vi.fn() };
+  }
+  return {
+    BrowserWindow: {
+      getAllWindows: vi.fn(() => []),
+    },
+    MessageChannelMain: MockMessageChannelMain,
+  };
+});
 
 vi.mock("../events.js", () => ({
   events: {
@@ -117,6 +126,17 @@ type MockHost = InstanceType<typeof MockWorkspaceHostProcess>;
 // After simulateReady(), sendWithResponse is called asynchronously (next microtask).
 // This helper waits for that to happen.
 const tick = () => new Promise((r) => setTimeout(r, 0));
+
+let nextWcId = 100;
+/** Create a mock webContents with the properties needed by attachDirectPort. */
+function createMockWebContents() {
+  return {
+    id: nextWcId++,
+    isDestroyed: vi.fn(() => false),
+    send: vi.fn(),
+    postMessage: vi.fn(),
+  };
+}
 
 describe("WorkspaceClient multi-process manager", () => {
   let client: WorkspaceClient;
@@ -364,26 +384,19 @@ describe("WorkspaceClient multi-process manager", () => {
   });
 
   describe("host event routing", () => {
-    it("routes worktree-update to windows of the correct project", async () => {
-      const mockWindow1 = {
-        id: 1,
-        isDestroyed: vi.fn(() => false),
-        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
-      };
-      const mockWindow2 = {
-        id: 2,
-        isDestroyed: vi.fn(() => false),
-        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
-      };
-      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([mockWindow1, mockWindow2] as any);
+    it("routes worktree-update to views of the correct project", async () => {
+      const wc1 = createMockWebContents();
+      const wc2 = createMockWebContents();
 
       const load1 = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
       await load1;
+      client.attachDirectPort(1, wc1 as any);
 
       const load2 = client.loadProject("/project-b", 2);
       await readyAndResolveLoad(1);
       await load2;
+      client.attachDirectPort(2, wc2 as any);
 
       h(0).emit("host-event", {
         type: "worktree-update",
@@ -396,21 +409,17 @@ describe("WorkspaceClient multi-process manager", () => {
         projectScopeId: "scope-a",
       });
 
-      expect(mockWindow1.webContents.send).toHaveBeenCalled();
-      expect(mockWindow2.webContents.send).not.toHaveBeenCalled();
+      expect(wc1.send).toHaveBeenCalled();
+      expect(wc2.send).not.toHaveBeenCalled();
     });
 
     it("includes scopeId in worktree-update payload sent to renderer", async () => {
-      const mockWindow = {
-        id: 1,
-        isDestroyed: vi.fn(() => false),
-        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
-      };
-      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([mockWindow] as any);
+      const wc = createMockWebContents();
 
       const load = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
       const scopeId = await load;
+      client.attachDirectPort(1, wc as any);
 
       h(0).emit("host-event", {
         type: "worktree-update",
@@ -418,7 +427,7 @@ describe("WorkspaceClient multi-process manager", () => {
         projectScopeId: "scope-a",
       });
 
-      expect(mockWindow.webContents.send).toHaveBeenCalledWith("worktree:update", {
+      expect(wc.send).toHaveBeenCalledWith("worktree:update", {
         worktree: expect.objectContaining({ id: "wt-1" }),
         scopeId,
       });
@@ -427,17 +436,13 @@ describe("WorkspaceClient multi-process manager", () => {
 
   describe("early windowId detachment during project switch", () => {
     it("prevents old host events from reaching renderer during new host init", async () => {
-      const mockWindow = {
-        id: 1,
-        isDestroyed: vi.fn(() => false),
-        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
-      };
-      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([mockWindow] as any);
+      const wcA = createMockWebContents();
 
       // Load project A
       const load1 = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
       await load1;
+      client.attachDirectPort(1, wcA as any);
 
       // Start switching to project B (don't resolve yet)
       const load2 = client.loadProject("/project-b", 1);
@@ -445,43 +450,46 @@ describe("WorkspaceClient multi-process manager", () => {
 
       // Window stays mapped to project A during B's init (blue-green: old host
       // continues serving until new host is ready). Events from A still reach
-      // the renderer — this is by design for reliability.
-      mockWindow.webContents.send.mockClear();
+      // the renderer via directPortViews — this is by design for reliability.
+      wcA.send.mockClear();
       h(0).emit("host-event", {
         type: "worktree-update",
         worktree: { id: "wt-a", path: "/a/wt", name: "wt-a", branch: "main" },
         projectScopeId: "scope-a",
       });
 
-      expect(mockWindow.webContents.send).toHaveBeenCalled();
+      expect(wcA.send).toHaveBeenCalled();
 
       // Complete B's init — window now routes to B
       await readyAndResolveLoad(1);
       await load2;
 
-      // After swap, old host A events should no longer reach window 1
-      mockWindow.webContents.send.mockClear();
+      // After swap, old host A events should no longer reach the view
+      // because releaseOldProject cleaned up directPortViews for destroyed entries.
+      // Note: wcA is still in entryA.directPortViews (it's not destroyed), so
+      // events still reach it — but they only go to project A's own view, not B's.
+      const wcB = createMockWebContents();
+      client.attachDirectPort(1, wcB as any);
+
+      wcB.send.mockClear();
       h(0).emit("host-event", {
         type: "worktree-update",
         worktree: { id: "wt-a2", path: "/a/wt2", name: "wt-a2", branch: "dev" },
         projectScopeId: "scope-a",
       });
 
-      expect(mockWindow.webContents.send).not.toHaveBeenCalled();
+      // Project A's events should NOT reach project B's view
+      expect(wcB.send).not.toHaveBeenCalled();
     });
 
     it("restores old host event routing when new host init fails", async () => {
-      const mockWindow = {
-        id: 1,
-        isDestroyed: vi.fn(() => false),
-        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
-      };
-      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([mockWindow] as any);
+      const wcA = createMockWebContents();
 
       // Load project A
       const load1 = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
       await load1;
+      client.attachDirectPort(1, wcA as any);
 
       // Start switching to project B
       const load2 = client.loadProject("/project-b", 1);
@@ -493,15 +501,15 @@ describe("WorkspaceClient multi-process manager", () => {
       h(1).rejectRequest(req.requestId, new Error("Init failed"));
       await expect(load2).rejects.toThrow("Init failed");
 
-      // Old host (A) events should work again after rollback
-      mockWindow.webContents.send.mockClear();
+      // Old host (A) events should work — wcA is still in entryA.directPortViews
+      wcA.send.mockClear();
       h(0).emit("host-event", {
         type: "worktree-update",
         worktree: { id: "wt-a", path: "/a/wt", name: "wt-a", branch: "main" },
         projectScopeId: "scope-a",
       });
 
-      expect(mockWindow.webContents.send).toHaveBeenCalled();
+      expect(wcA.send).toHaveBeenCalled();
     });
 
     it("returns scopeId from loadProject", async () => {
@@ -650,16 +658,12 @@ describe("WorkspaceClient multi-process manager", () => {
 
   describe("setActiveWorktree", () => {
     it("emits WORKTREE_ACTIVATED by default", async () => {
-      const mockWindow = {
-        id: 1,
-        isDestroyed: vi.fn(() => false),
-        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
-      };
-      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([mockWindow] as any);
+      const wc = createMockWebContents();
 
       const load = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
       await load;
+      client.attachDirectPort(1, wc as any);
 
       const setActivePromise = client.setActiveWorktree("wt-1", 1);
       await tick();
@@ -667,22 +671,18 @@ describe("WorkspaceClient multi-process manager", () => {
       h(0).resolveRequest(req.requestId);
       await setActivePromise;
 
-      expect(mockWindow.webContents.send).toHaveBeenCalledWith("worktree:activated", {
+      expect(wc.send).toHaveBeenCalledWith("worktree:activated", {
         worktreeId: "wt-1",
       });
     });
 
     it("does NOT emit WORKTREE_ACTIVATED when silent: true", async () => {
-      const mockWindow = {
-        id: 1,
-        isDestroyed: vi.fn(() => false),
-        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
-      };
-      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([mockWindow] as any);
+      const wc = createMockWebContents();
 
       const load = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
       await load;
+      client.attachDirectPort(1, wc as any);
 
       const setActivePromise = client.setActiveWorktree("wt-1", 1, { silent: true });
       await tick();
@@ -690,20 +690,16 @@ describe("WorkspaceClient multi-process manager", () => {
       h(0).resolveRequest(req.requestId);
       await setActivePromise;
 
-      expect(mockWindow.webContents.send).not.toHaveBeenCalled();
+      expect(wc.send).not.toHaveBeenCalled();
     });
 
     it("does NOT emit WORKTREE_ACTIVATED when all hosts reject", async () => {
-      const mockWindow = {
-        id: 1,
-        isDestroyed: vi.fn(() => false),
-        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
-      };
-      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([mockWindow] as any);
+      const wc = createMockWebContents();
 
       const load = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
       await load;
+      client.attachDirectPort(1, wc as any);
 
       // Make sendWithResponse reject for set-active
       h(0).sendWithResponse.mockImplementationOnce(() => {
@@ -712,7 +708,7 @@ describe("WorkspaceClient multi-process manager", () => {
 
       await client.setActiveWorktree("wt-nonexistent", 1);
 
-      expect(mockWindow.webContents.send).not.toHaveBeenCalled();
+      expect(wc.send).not.toHaveBeenCalled();
     });
   });
 

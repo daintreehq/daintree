@@ -176,25 +176,29 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       // Update the main process global state
       await projectStore.setCurrentProject(projectId);
 
-      // If this is a new view, start the workspace host for this project
-      if (isNew && deps.worktreeService) {
+      // Always call loadProject so the WorkspaceClient's windowToProject
+      // mapping points to the correct project.  Without this, reactivating a
+      // cached view leaves the mapping pointing at the *previous* project,
+      // causing sendToEntryWindows to route the old project's IPC events to
+      // the newly-active view (cross-project worktree contamination).
+      if (deps.worktreeService) {
         const senderWindow = getWindowForWebContents(_event.sender);
         const windowId = senderWindow?.id ?? deps.mainWindow?.id;
         if (windowId !== undefined) {
           try {
             await deps.worktreeService.loadProject(project.path, windowId);
 
-            // Attach direct MessagePort for workspace events
-            if (!view.webContents.isDestroyed()) {
+            // Attach direct MessagePort for new views (cached views already have one)
+            if (isNew && !view.webContents.isDestroyed()) {
               deps.worktreeService.attachDirectPort(windowId, view.webContents);
             }
           } catch (err) {
-            console.error("[ProjectSwitch] Failed to load worktrees for new view:", err);
+            console.error("[ProjectSwitch] Failed to load worktrees:", err);
           }
         }
 
         // Register the new view's webContents in WindowRegistry
-        if (deps.windowRegistry && senderWindow) {
+        if (isNew && deps.windowRegistry && senderWindow) {
           deps.windowRegistry.registerAppViewWebContents(senderWindow.id, view.webContents.id);
         }
       }
@@ -419,23 +423,23 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       await projectStore.setCurrentProject(projectId);
       projectStore.updateProjectStatus(projectId, "active");
 
-      if (isNew && deps.worktreeService) {
+      // Always call loadProject — see comment in handleProjectSwitch above.
+      if (deps.worktreeService) {
         const senderWindow = getWindowForWebContents(event.sender);
         const windowId = senderWindow?.id ?? deps.mainWindow?.id;
         if (windowId !== undefined) {
           try {
             await deps.worktreeService.loadProject(project.path, windowId);
 
-            // Attach direct MessagePort for workspace events
-            if (!view.webContents.isDestroyed()) {
+            if (isNew && !view.webContents.isDestroyed()) {
               deps.worktreeService.attachDirectPort(windowId, view.webContents);
             }
           } catch (err) {
-            console.error("[ProjectReopen] Failed to load worktrees for new view:", err);
+            console.error("[ProjectReopen] Failed to load worktrees:", err);
           }
         }
 
-        if (deps.windowRegistry && senderWindow) {
+        if (isNew && deps.windowRegistry && senderWindow) {
           deps.windowRegistry.registerAppViewWebContents(senderWindow.id, view.webContents.id);
         }
       }

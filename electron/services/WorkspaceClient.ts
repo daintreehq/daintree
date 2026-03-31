@@ -92,18 +92,19 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   private sendToEntryWindows(entry: ProcessEntry, channel: string, ...args: unknown[]): void {
-    if (entry.windowIds.size === 0) return;
-    const windows = BrowserWindow.getAllWindows();
-    for (const win of windows) {
-      if (win && !win.isDestroyed() && entry.windowIds.has(win.id)) {
-        const wc = getAppWebContents(win);
-        if (!wc.isDestroyed()) {
-          try {
-            wc.send(channel, ...args);
-          } catch {
-            // Silently ignore send failures during window initialization/disposal.
-          }
-        }
+    // Target this project's specific webContents via directPortViews rather
+    // than using getAppWebContents(win), which returns the *active* view for
+    // a window.  In multi-view mode the active view may belong to a different
+    // project, causing cross-project worktree contamination.
+    for (const [wcId, wc] of entry.directPortViews) {
+      if (wc.isDestroyed()) {
+        entry.directPortViews.delete(wcId);
+        continue;
+      }
+      try {
+        wc.send(channel, ...args);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
       }
     }
   }
