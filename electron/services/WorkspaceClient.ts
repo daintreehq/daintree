@@ -32,7 +32,8 @@ import type { ProjectPulse, PulseRangeDays } from "../../shared/types/pulse.js";
 
 export type CopyTreeProgressCallback = (progress: CopyTreeProgress) => void;
 
-const CLEANUP_GRACE_MS = 5000;
+const CLEANUP_GRACE_MS = 180_000; // 3 minutes
+const MAX_WARM_ENTRIES = 3;
 
 const DEFAULT_CONFIG: Required<WorkspaceClientConfig> = {
   maxRestartAttempts: 3,
@@ -256,6 +257,46 @@ export class WorkspaceClient extends EventEmitter {
     }
   }
 
+  private evictEntry(projectPath: string, entry: ProcessEntry): void {
+    if (entry.cleanupTimeout) {
+      clearTimeout(entry.cleanupTimeout);
+      entry.cleanupTimeout = null;
+    }
+    entry.host.dispose();
+    this.entries.delete(projectPath);
+  }
+
+  private enforceDormantCap(): void {
+    let dormantCount = 0;
+    for (const entry of this.entries.values()) {
+      if (entry.refCount <= 0 && entry.cleanupTimeout !== null) {
+        dormantCount++;
+      }
+    }
+
+    while (dormantCount > MAX_WARM_ENTRIES) {
+      // Find the LRU dormant entry (first in iteration order with refCount <= 0)
+      for (const [path, entry] of this.entries) {
+        if (entry.refCount <= 0 && entry.cleanupTimeout !== null) {
+          this.evictEntry(path, entry);
+          dormantCount--;
+          break;
+        }
+      }
+    }
+  }
+
+  private scheduleDormantCleanup(projectPath: string, entry: ProcessEntry): void {
+    if (entry.cleanupTimeout) {
+      clearTimeout(entry.cleanupTimeout);
+    }
+    entry.cleanupTimeout = setTimeout(() => {
+      entry.host.dispose();
+      this.entries.delete(projectPath);
+    }, CLEANUP_GRACE_MS);
+    this.enforceDormantCap();
+  }
+
   private releaseWindow(windowId: number): void {
     const projectPath = this.windowToProject.get(windowId);
     if (!projectPath) return;
@@ -275,10 +316,7 @@ export class WorkspaceClient extends EventEmitter {
     }
 
     if (entry.refCount <= 0) {
-      entry.cleanupTimeout = setTimeout(() => {
-        entry.host.dispose();
-        this.entries.delete(projectPath);
-      }, CLEANUP_GRACE_MS);
+      this.scheduleDormantCleanup(projectPath, entry);
     }
   }
 
@@ -304,7 +342,10 @@ export class WorkspaceClient extends EventEmitter {
         existingEntry.host.dispose();
         this.entries.delete(normalizedPath);
       } else {
-        // Existing healthy entry — attach window, then release old project
+        // Existing healthy entry — promote to MRU and attach window
+        this.entries.delete(normalizedPath);
+        this.entries.set(normalizedPath, existingEntry);
+
         if (!existingEntry.windowIds.has(windowId)) {
           existingEntry.refCount++;
           existingEntry.windowIds.add(windowId);
@@ -389,14 +430,7 @@ export class WorkspaceClient extends EventEmitter {
     oldEntry.refCount--;
 
     if (oldEntry.refCount <= 0) {
-      // Clear any existing cleanup timeout before scheduling a new one
-      if (oldEntry.cleanupTimeout) {
-        clearTimeout(oldEntry.cleanupTimeout);
-      }
-      oldEntry.cleanupTimeout = setTimeout(() => {
-        oldEntry.host.dispose();
-        this.entries.delete(oldProjectPath);
-      }, CLEANUP_GRACE_MS);
+      this.scheduleDormantCleanup(oldProjectPath, oldEntry);
     }
   }
 

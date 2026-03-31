@@ -801,4 +801,156 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(result).toEqual([]);
     });
   });
+
+  describe("warm cache LRU eviction", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** Ready + resolve using fake timers. */
+    async function readyAndResolveLoadFake(hostIndex: number): Promise<void> {
+      h(hostIndex).simulateReady();
+      await vi.advanceTimersByTimeAsync(0);
+      const req = h(hostIndex).getLastRequest()!;
+      h(hostIndex).resolveRequest(req.requestId);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    it("grace period: host not disposed before 180s, disposed at 180s", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoadFake(0);
+      await load;
+
+      // Unregister the window — entry becomes dormant
+      client.unregisterWindow(1);
+
+      // Just before 180s — host should still be alive
+      await vi.advanceTimersByTimeAsync(179_999);
+      expect(h(0).dispose).not.toHaveBeenCalled();
+
+      // At 180s — host should be disposed
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h(0).dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it("warm reuse: switch A→B→A within grace reuses host A", async () => {
+      // Load A on window 1
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoadFake(0);
+      await loadA;
+
+      // Switch to B — A becomes dormant
+      const loadB = client.loadProject("/project-b", 1);
+      await readyAndResolveLoadFake(1);
+      await loadB;
+
+      expect(mockHosts).toHaveLength(2);
+
+      // Switch back to A within grace — should reuse, no new host
+      const loadA2 = client.loadProject("/project-a", 1);
+      await loadA2;
+
+      expect(mockHosts).toHaveLength(2); // No 3rd host created
+      expect(h(0).dispose).not.toHaveBeenCalled(); // A was not disposed
+    });
+
+    it("LRU cap: 4th dormant entry evicts the LRU", async () => {
+      // Load 4 projects on separate windows, then release them in order
+      for (let i = 0; i < 4; i++) {
+        const load = client.loadProject(`/project-${i}`, i + 1);
+        await readyAndResolveLoadFake(i);
+        await load;
+      }
+
+      // Release windows in order: 1, 2, 3, 4 → projects 0, 1, 2, 3 become dormant
+      client.unregisterWindow(1); // project-0 dormant (LRU)
+      client.unregisterWindow(2); // project-1 dormant
+      client.unregisterWindow(3); // project-2 dormant
+      // At this point: 3 dormant entries (0, 1, 2) — at cap
+      expect(h(0).dispose).not.toHaveBeenCalled();
+
+      client.unregisterWindow(4); // project-3 dormant → 4 dormant, cap breached
+      // project-0 should have been evicted (first dormant in Map order = LRU)
+      expect(h(0).dispose).toHaveBeenCalledTimes(1);
+      // Others should still be alive
+      expect(h(1).dispose).not.toHaveBeenCalled();
+      expect(h(2).dispose).not.toHaveBeenCalled();
+      expect(h(3).dispose).not.toHaveBeenCalled();
+    });
+
+    it("LRU promotion: reactivated entry is not the eviction target", async () => {
+      // Load A, B, C on separate windows
+      for (let i = 0; i < 3; i++) {
+        const load = client.loadProject(`/project-${String.fromCharCode(97 + i)}`, i + 1);
+        await readyAndResolveLoadFake(i);
+        await load;
+      }
+
+      // Make all dormant: A, B, C (in that order)
+      client.unregisterWindow(1); // A dormant (LRU)
+      client.unregisterWindow(2); // B dormant
+      client.unregisterWindow(3); // C dormant
+
+      // Reactivate A — promotes it to MRU
+      const reloadA = client.loadProject("/project-a", 4);
+      await reloadA;
+      expect(h(0).dispose).not.toHaveBeenCalled();
+
+      // Now release window 4 to make A dormant again (but it's MRU now)
+      client.unregisterWindow(4);
+
+      // Load D on window 5 → D is active, A/B/C are dormant → cap at 3, no eviction yet
+      const loadD = client.loadProject("/project-d", 5);
+      await readyAndResolveLoadFake(3);
+      await loadD;
+
+      // Release D → 4 dormant entries. B should be evicted (oldest dormant, not A)
+      client.unregisterWindow(5);
+      expect(h(0).dispose).not.toHaveBeenCalled(); // A was promoted, not LRU
+      expect(h(1).dispose).toHaveBeenCalledTimes(1); // B is evicted (LRU)
+      expect(h(2).dispose).not.toHaveBeenCalled();
+      expect(h(3).dispose).not.toHaveBeenCalled();
+    });
+
+    it("active entries are never evicted regardless of cap", async () => {
+      // Load 4 projects, all active (each on its own window)
+      for (let i = 0; i < 4; i++) {
+        const load = client.loadProject(`/project-${i}`, i + 1);
+        await readyAndResolveLoadFake(i);
+        await load;
+      }
+
+      // All 4 active — no evictions should happen
+      expect(h(0).dispose).not.toHaveBeenCalled();
+      expect(h(1).dispose).not.toHaveBeenCalled();
+      expect(h(2).dispose).not.toHaveBeenCalled();
+      expect(h(3).dispose).not.toHaveBeenCalled();
+
+      // Make project-0 dormant — now 1 dormant + 3 active, under cap
+      client.unregisterWindow(1);
+      expect(h(0).dispose).not.toHaveBeenCalled();
+    });
+
+    it("dispose clears pending grace timers — no delayed disposals fire", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoadFake(0);
+      await load;
+
+      // Make dormant — starts 180s timer
+      client.unregisterWindow(1);
+      expect(h(0).dispose).not.toHaveBeenCalled();
+
+      // Dispose the client — should clear the timer and dispose immediately
+      client.dispose();
+      expect(h(0).dispose).toHaveBeenCalledTimes(1);
+
+      // Advance past the grace period — dispose should NOT be called again
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(h(0).dispose).toHaveBeenCalledTimes(1);
+    });
+  });
 });
