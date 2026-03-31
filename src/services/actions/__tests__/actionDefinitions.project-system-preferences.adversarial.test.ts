@@ -64,6 +64,7 @@ const mocks = vi.hoisted(() => ({
     setHybridInputEnabled: vi.fn(),
     setHybridInputAutoFocus: vi.fn(),
     setScreenReaderMode: vi.fn(),
+    setCachedProjectViews: vi.fn(),
   },
   worktreeConfigClient: {
     get: vi.fn(),
@@ -195,6 +196,7 @@ const { useTerminalFontStore } = await import("@/store/terminalFontStore");
 const { useTerminalInputStore } = await import("@/store/terminalInputStore");
 const { usePerformanceModeStore } = await import("@/store/performanceModeStore");
 const { useScreenReaderStore } = await import("@/store/screenReaderStore");
+const { useCachedProjectViewsStore } = await import("@/store/cachedProjectViewsStore");
 
 function createCallbacks(overrides: Partial<ActionCallbacks> = {}): ActionCallbacks {
   return {
@@ -535,6 +537,7 @@ describe("preferences action hardening", () => {
       "terminalConfig.setHybridInputEnabled",
       "terminalConfig.setHybridInputAutoFocus",
       "terminalConfig.setScreenReaderMode",
+      "terminalConfig.setCachedProjectViews",
       "worktreeConfig.get",
       "worktreeConfig.setPattern",
       "help.shortcuts",
@@ -644,6 +647,15 @@ describe("preferences action hardening", () => {
       initial: "auto",
       expected: "on",
       clientMock: mocks.terminalConfigClient.setScreenReaderMode,
+    },
+    {
+      actionId: "terminalConfig.setCachedProjectViews" as const,
+      successArgs: { cachedProjectViews: 4 },
+      failureArgs: { cachedProjectViews: 1 },
+      read: () => useCachedProjectViewsStore.getState().cachedProjectViews,
+      initial: 2,
+      expected: 4,
+      clientMock: mocks.terminalConfigClient.setCachedProjectViews,
     },
   ])("$actionId rolls state forward on success and back on failure", async (testCase) => {
     testCase.clientMock.mockResolvedValueOnce(undefined);
