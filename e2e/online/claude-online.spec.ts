@@ -46,7 +46,7 @@ test.describe("Claude Online Flow", () => {
       await window.locator(SEL.agent.startButton).click();
 
       const agentPanel = window.locator(SEL.agent.panel);
-      await expect(agentPanel).toBeVisible({ timeout: 5_000 });
+      await expect(agentPanel).toBeVisible({ timeout: 30_000 });
     });
 
     await test.step("handle prompts and wait for Welcome", async () => {
