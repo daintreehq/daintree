@@ -199,6 +199,26 @@ describe("registerDemoHandlers", () => {
       ).rejects.toThrow("No PNG frames matching frame-NNNNNN.png found");
     });
 
+    it("rejects old underscore-format frame names", async () => {
+      const fsMod = await import("fs");
+      (fsMod.readdirSync as ReturnType<typeof vi.fn>).mockReturnValueOnce([
+        "frame_0001.png",
+        "frame_0002.png",
+        "frame_0003.png",
+      ]);
+
+      const handler = getEncodeHandler();
+      const event = makeEvent();
+
+      await expect(
+        handler(event, {
+          framesDir: "/tmp/old-format",
+          outputPath: "/tmp/out.mp4",
+          preset: "youtube-4k",
+        })
+      ).rejects.toThrow("No PNG frames matching frame-NNNNNN.png found");
+    });
+
     it("rejects on spawn error event", async () => {
       const handler = getEncodeHandler();
       const event = makeEvent();
