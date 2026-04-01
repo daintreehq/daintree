@@ -73,14 +73,42 @@ describe("toolbarPreferencesStore", () => {
     });
   });
 
-  describe("reset", () => {
-    it("clears hiddenButtons to empty array", async () => {
+  describe("moveButton preserves hiddenButtons", () => {
+    it("does not lose hiddenButtons when reordering", async () => {
       const store = await loadStore();
       store.getState().toggleButtonVisibility("notes", "right");
-      expect(store.getState().layout.hiddenButtons.length).toBeGreaterThan(0);
+      expect(store.getState().layout.hiddenButtons).toContain("notes");
+
+      store.getState().moveButton("settings", "right", "right", 0);
+      expect(store.getState().layout.hiddenButtons).toContain("notes");
+    });
+  });
+
+  describe("setLeftButtons/setRightButtons preserves hiddenButtons", () => {
+    it("preserves hiddenButtons when setting new button order", async () => {
+      const store = await loadStore();
+      store.getState().toggleButtonVisibility("terminal", "left");
+
+      const reordered = [...store.getState().layout.leftButtons].reverse();
+      store.getState().setLeftButtons(reordered);
+
+      expect(store.getState().layout.hiddenButtons).toContain("terminal");
+    });
+  });
+
+  describe("reset", () => {
+    it("clears hiddenButtons and restores default ordering", async () => {
+      const store = await loadStore();
+      const defaults = { ...store.getState().layout };
+
+      store.getState().toggleButtonVisibility("notes", "right");
+      store.getState().toggleButtonVisibility("terminal", "left");
+      store.getState().setLeftButtons([...store.getState().layout.leftButtons].reverse());
 
       store.getState().reset();
       expect(store.getState().layout.hiddenButtons).toEqual([]);
+      expect(store.getState().layout.leftButtons).toEqual(defaults.leftButtons);
+      expect(store.getState().layout.rightButtons).toEqual(defaults.rightButtons);
     });
   });
 
@@ -111,6 +139,20 @@ describe("toolbarPreferencesStore", () => {
       const store = await loadStore();
       expect(store.getState().layout.hiddenButtons).toContain("notes");
       expect(store.getState().layout.rightButtons).toContain("notes");
+    });
+
+    it("restores multiple hidden buttons across both sides", async () => {
+      setStoredState({
+        layout: {
+          leftButtons: ["terminal", "browser", "panel-palette"],
+          rightButtons: ["notes", "settings", "copy-tree"],
+          hiddenButtons: ["terminal", "notes", "copy-tree"],
+        },
+        launcher: { alwaysShowDevServer: false },
+      });
+
+      const store = await loadStore();
+      expect(store.getState().layout.hiddenButtons).toEqual(["terminal", "notes", "copy-tree"]);
     });
 
     it("merges new default buttons without re-inserting hidden ones", async () => {
