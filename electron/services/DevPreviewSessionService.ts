@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import fs from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
@@ -81,6 +82,37 @@ function getInvalidCommandMessage(command: string): string | null {
     return "Multi-line commands are not allowed";
   }
   return null;
+}
+
+const NEXT_DEV_DIRECT_RE = /\bnext\s+dev\b/;
+const TURBOPACK_FLAG_RE = /--turbo(?:pack)?\b/;
+const PKG_SCRIPT_RE = /^(?:npm\s+run|pnpm(?:\s+run)?|yarn(?:\s+run)?|bun(?:\s+run)?)\s+(\S+)$/;
+
+export async function normalizeNextjsDevCommand(command: string, cwd: string): Promise<string> {
+  if (TURBOPACK_FLAG_RE.test(command)) return command;
+
+  if (NEXT_DEV_DIRECT_RE.test(command)) {
+    return `${command} --turbopack`;
+  }
+
+  const scriptMatch = PKG_SCRIPT_RE.exec(command);
+  if (!scriptMatch) return command;
+
+  const scriptName = scriptMatch[1];
+  try {
+    const pkgRaw = await fs.readFile(path.join(cwd, "package.json"), "utf-8");
+    const pkg = JSON.parse(pkgRaw);
+    const scriptBody = pkg?.scripts?.[scriptName];
+    if (typeof scriptBody === "string" && NEXT_DEV_DIRECT_RE.test(scriptBody)) {
+      if (TURBOPACK_FLAG_RE.test(scriptBody)) return command;
+      const sep = command.trimStart().startsWith("bun ") ? " " : " -- ";
+      return `${command}${sep}--turbopack`;
+    }
+  } catch {
+    // No package.json or invalid — leave command unchanged
+  }
+
+  return command;
 }
 
 export class DevPreviewSessionService {
@@ -570,15 +602,25 @@ export class DevPreviewSessionService {
 
     const trimmedCommand = session.devCommand.trim();
 
-    setTimeout(() => {
-      try {
-        if (this.ptyClient.hasTerminal(terminalId)) {
-          this.ptyClient.submit(terminalId, trimmedCommand);
+    const submitCommand = (cmd: string) => {
+      setTimeout(() => {
+        try {
+          if (this.ptyClient.hasTerminal(terminalId)) {
+            this.ptyClient.submit(terminalId, cmd);
+          }
+        } catch (err) {
+          console.warn("[DevPreviewSessionService] Failed to submit dev command:", err);
         }
-      } catch (err) {
-        console.warn("[DevPreviewSessionService] Failed to submit dev command:", err);
-      }
-    }, 100);
+      }, 100);
+    };
+
+    void normalizeNextjsDevCommand(trimmedCommand, session.cwd)
+      .then((normalizedCommand) => {
+        submitCommand(normalizedCommand);
+      })
+      .catch(() => {
+        submitCommand(trimmedCommand);
+      });
 
     this.scheduleStartupReplay(session);
   }
