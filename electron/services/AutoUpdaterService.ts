@@ -69,6 +69,22 @@ class AutoUpdaterService {
       return;
     }
 
+    // Register channel-preference handlers unconditionally — they only
+    // read/write electron-store and don't depend on electron-updater.
+    ipcMain.handle(CHANNELS.UPDATE_GET_CHANNEL, () => {
+      return store.get("updateChannel") ?? "stable";
+    });
+
+    ipcMain.handle(CHANNELS.UPDATE_SET_CHANNEL, (_event, channel: unknown) => {
+      const validated: "stable" | "nightly" = channel === "nightly" ? "nightly" : "stable";
+      store.set("updateChannel", validated);
+      if (this.initialized) {
+        this.configureFeedForChannel(validated);
+      }
+      this.updateDownloaded = false;
+      return validated;
+    });
+
     if (!app.isPackaged) {
       console.log("[MAIN] Auto-updater disabled in non-packaged mode");
       return;
@@ -176,18 +192,6 @@ class AutoUpdaterService {
       // Handle manual check-for-updates request from renderer
       ipcMain.handle(CHANNELS.UPDATE_CHECK_FOR_UPDATES, () => {
         this.checkForUpdatesManually();
-      });
-
-      ipcMain.handle(CHANNELS.UPDATE_GET_CHANNEL, () => {
-        return store.get("updateChannel") ?? "stable";
-      });
-
-      ipcMain.handle(CHANNELS.UPDATE_SET_CHANNEL, (_event, channel: unknown) => {
-        const validated: "stable" | "nightly" = channel === "nightly" ? "nightly" : "stable";
-        store.set("updateChannel", validated);
-        this.configureFeedForChannel(validated);
-        this.updateDownloaded = false;
-        return validated;
       });
 
       this.runUpdateCheck("Initial");
