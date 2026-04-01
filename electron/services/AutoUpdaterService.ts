@@ -16,6 +16,7 @@ const { autoUpdater } = electronUpdater;
 class AutoUpdaterService {
   private checkInterval: NodeJS.Timeout | null = null;
   private initialized = false;
+  private channelHandlersRegistered = false;
   private updateDownloaded = false;
   private isManualCheck = false;
   private checkingHandler: (() => void) | null = null;
@@ -71,19 +72,23 @@ class AutoUpdaterService {
 
     // Register channel-preference handlers unconditionally — they only
     // read/write electron-store and don't depend on electron-updater.
-    ipcMain.handle(CHANNELS.UPDATE_GET_CHANNEL, () => {
-      return store.get("updateChannel") ?? "stable";
-    });
+    if (!this.channelHandlersRegistered) {
+      ipcMain.handle(CHANNELS.UPDATE_GET_CHANNEL, () => {
+        return store.get("updateChannel") ?? "stable";
+      });
 
-    ipcMain.handle(CHANNELS.UPDATE_SET_CHANNEL, (_event, channel: unknown) => {
-      const validated: "stable" | "nightly" = channel === "nightly" ? "nightly" : "stable";
-      store.set("updateChannel", validated);
-      if (this.initialized) {
-        this.configureFeedForChannel(validated);
-      }
-      this.updateDownloaded = false;
-      return validated;
-    });
+      ipcMain.handle(CHANNELS.UPDATE_SET_CHANNEL, (_event, channel: unknown) => {
+        const validated: "stable" | "nightly" = channel === "nightly" ? "nightly" : "stable";
+        store.set("updateChannel", validated);
+        if (this.initialized) {
+          this.configureFeedForChannel(validated);
+        }
+        this.updateDownloaded = false;
+        return validated;
+      });
+
+      this.channelHandlersRegistered = true;
+    }
 
     if (!app.isPackaged) {
       console.log("[MAIN] Auto-updater disabled in non-packaged mode");
@@ -265,6 +270,7 @@ class AutoUpdaterService {
 
     this.updateDownloaded = false;
     this.isManualCheck = false;
+    this.channelHandlersRegistered = false;
     this.initialized = false;
   }
 }
