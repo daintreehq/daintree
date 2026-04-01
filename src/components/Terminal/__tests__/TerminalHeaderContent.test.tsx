@@ -288,6 +288,16 @@ describe("TerminalHeaderContent — agent state chip tooltip", () => {
     expect(agentTooltip).toBeTruthy();
     expect(agentTooltip!.textContent).toContain("State: working");
     expect(agentTooltip!.textContent).not.toContain("stalled");
+
+    // Advance past 90s to ensure no timer-driven stall detection kicks in
+    act(() => {
+      vi.advanceTimersByTime(90_000);
+    });
+
+    expect(chip.getAttribute("aria-label")).toBe("Agent state: working");
+    expect(icon!.getAttribute("class")).toContain("animate-spin-slow");
+    expect(agentTooltip!.textContent).toContain("State: working");
+    expect(agentTooltip!.textContent).not.toContain("stalled");
   });
 
   it("shows 0% confidence when stateChangeConfidence is 0", () => {
