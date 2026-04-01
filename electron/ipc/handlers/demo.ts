@@ -239,6 +239,9 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     const maxFrames = payload.maxFrames ?? 9000;
     const { outputPath, preset } = payload;
     const presetConfig = CAPTURE_PRESETS[preset];
+    if (!presetConfig) {
+      throw new Error(`Unknown capture preset: ${preset}`);
+    }
 
     // Capture first frame to determine dimensions
     const win = getMainWindow();
@@ -321,6 +324,11 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     });
 
     ffmpegProc.on("close", (code) => {
+      session.stopping = true;
+      if (session.ticker !== null) {
+        clearInterval(session.ticker);
+        session.ticker = null;
+      }
       if (captureSession === session) {
         captureSession = null;
       }

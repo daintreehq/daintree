@@ -787,4 +787,23 @@ describe("frame capture pipeline", () => {
 
     cleanup();
   });
+
+  it("rejects startCapture when first capturePage fails", async () => {
+    const deps = makeDeps(true);
+    const capturePage = deps.mainWindow!.webContents.capturePage as ReturnType<typeof vi.fn>;
+    capturePage.mockRejectedValueOnce(new Error("GPU context lost"));
+
+    const cleanup = registerDemoHandlers(deps);
+
+    const { spawn: spawnMock } = await import("child_process");
+    const spawnCallsBefore = (spawnMock as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    const handler = getHandler("demo:start-capture");
+    await expect(handler({}, defaultPayload)).rejects.toThrow("GPU context lost");
+
+    // ffmpeg should not have been spawned
+    expect((spawnMock as ReturnType<typeof vi.fn>).mock.calls.length).toBe(spawnCallsBefore);
+
+    cleanup();
+  });
 });
