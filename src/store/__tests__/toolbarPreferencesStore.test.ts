@@ -9,18 +9,36 @@ let useToolbarPreferencesStore: typeof import("../toolbarPreferencesStore").useT
 
 const STORAGE_KEY = "canopy-toolbar-preferences";
 
-function setStoredState(state: Record<string, unknown>, version = 2) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ state, version }));
+let storage: Record<string, string> = {};
+
+const storageMock = {
+  getItem: (key: string) => storage[key] ?? null,
+  setItem: (key: string, value: string) => {
+    storage[key] = value;
+  },
+  removeItem: (key: string) => {
+    delete storage[key];
+  },
+  clear: () => {
+    storage = {};
+  },
+  get length() {
+    return Object.keys(storage).length;
+  },
+  key: (index: number) => Object.keys(storage)[index] ?? null,
+};
+
+function installStorageMock() {
+  Object.defineProperty(globalThis, "localStorage", {
+    value: storageMock,
+    configurable: true,
+    writable: true,
+  });
 }
 
-beforeEach(() => {
-  vi.resetModules();
-  localStorage.clear();
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+function setStoredState(state: Record<string, unknown>, version = 2) {
+  storageMock.setItem(STORAGE_KEY, JSON.stringify({ state, version }));
+}
 
 async function loadStore() {
   const mod = await import("../toolbarPreferencesStore");
@@ -34,6 +52,16 @@ async function loadStore() {
 }
 
 describe("toolbarPreferencesStore", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    storage = {};
+    installStorageMock();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   describe("toggleButtonVisibility", () => {
     it("adds button to hiddenButtons without removing from ordering array", async () => {
       const store = await loadStore();
@@ -119,7 +147,7 @@ describe("toolbarPreferencesStore", () => {
 
       // Wait for persist to write
       await vi.waitFor(() => {
-        const raw = localStorage.getItem(STORAGE_KEY);
+        const raw = storageMock.getItem(STORAGE_KEY);
         expect(raw).toBeTruthy();
         const parsed = JSON.parse(raw!);
         expect(parsed.state.layout.hiddenButtons).toContain("notes");
@@ -176,7 +204,7 @@ describe("toolbarPreferencesStore", () => {
 
   describe("migration", () => {
     it("migrates v1 state to add hiddenButtons field", async () => {
-      localStorage.setItem(
+      storageMock.setItem(
         STORAGE_KEY,
         JSON.stringify({
           state: {
@@ -195,7 +223,7 @@ describe("toolbarPreferencesStore", () => {
     });
 
     it("migrates v0 state through both migrations", async () => {
-      localStorage.setItem(
+      storageMock.setItem(
         STORAGE_KEY,
         JSON.stringify({
           state: {
