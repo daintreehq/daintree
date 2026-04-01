@@ -613,10 +613,20 @@ export function DemoCursor() {
           // Press down at source
           const sourceTarget = document.elementFromPoint(fromX, fromY) ?? fromEl;
           sourceTarget.dispatchEvent(
-            new PointerEvent("pointerdown", { ...eventOpts, clientX: fromX, clientY: fromY, buttons: 1 })
+            new PointerEvent("pointerdown", {
+              ...eventOpts,
+              clientX: fromX,
+              clientY: fromY,
+              buttons: 1,
+            })
           );
           sourceTarget.dispatchEvent(
-            new MouseEvent("mousedown", { ...eventOpts, clientX: fromX, clientY: fromY, buttons: 1 })
+            new MouseEvent("mousedown", {
+              ...eventOpts,
+              clientX: fromX,
+              clientY: fromY,
+              buttons: 1,
+            })
           );
 
           try {
@@ -630,7 +640,12 @@ export function DemoCursor() {
               await pauseAwareDelay(duration / steps);
               const moveTarget = document.elementFromPoint(cx, cy) ?? sourceTarget;
               moveTarget.dispatchEvent(
-                new PointerEvent("pointermove", { ...eventOpts, clientX: cx, clientY: cy, buttons: 1 })
+                new PointerEvent("pointermove", {
+                  ...eventOpts,
+                  clientX: cx,
+                  clientY: cy,
+                  buttons: 1,
+                })
               );
               moveTarget.dispatchEvent(
                 new MouseEvent("mousemove", { ...eventOpts, clientX: cx, clientY: cy, buttons: 1 })
@@ -643,7 +658,12 @@ export function DemoCursor() {
             // Release at target (guaranteed even on error)
             const releaseTarget = document.elementFromPoint(toX, toY) ?? toEl;
             releaseTarget.dispatchEvent(
-              new PointerEvent("pointerup", { ...eventOpts, clientX: toX, clientY: toY, buttons: 0 })
+              new PointerEvent("pointerup", {
+                ...eventOpts,
+                clientX: toX,
+                clientY: toY,
+                buttons: 0,
+              })
             );
             releaseTarget.dispatchEvent(
               new MouseEvent("mouseup", { ...eventOpts, clientX: toX, clientY: toY, buttons: 0 })
@@ -717,7 +737,8 @@ export function DemoCursor() {
 
             function check() {
               const hasAnimations = document.getAnimations().some((a) => {
-                if (a.playState !== "running" && a.playState !== "pending") return false;
+                const state = a.playState as string;
+                if (state !== "running" && state !== "pending") return false;
                 const effect = a.effect as KeyframeEffect | null;
                 // Skip demo-owned animations (cursor, overlay)
                 if (effect?.target && isDemoOwned(effect.target as Element)) return false;

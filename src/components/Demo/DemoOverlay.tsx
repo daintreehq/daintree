@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { DemoSpotlightPayload, DemoAnnotatePayload, DemoDismissAnnotationPayload } from "@shared/types/ipc/demo";
+import type {
+  DemoSpotlightPayload,
+  DemoAnnotatePayload,
+  DemoDismissAnnotationPayload,
+} from "@shared/types/ipc/demo";
 
 interface SpotlightState {
   x: number;
@@ -26,70 +30,67 @@ export function DemoOverlay() {
   const spotlightAnimRef = useRef<{ cancel: () => void } | null>(null);
   const rectRef = useRef<SVGRectElement>(null);
 
-  const animateSpotlightRect = useCallback(
-    (target: SpotlightState) => {
-      spotlightAnimRef.current?.cancel();
-      const rect = rectRef.current;
-      if (!rect) {
-        setSpotlight(target);
-        return;
-      }
-
-      // Spring-animate from current rect position to target
-      const current = {
-        x: parseFloat(rect.getAttribute("x") ?? "0"),
-        y: parseFloat(rect.getAttribute("y") ?? "0"),
-        width: parseFloat(rect.getAttribute("width") ?? "0"),
-        height: parseFloat(rect.getAttribute("height") ?? "0"),
-      };
-
-      let cancelled = false;
-      const stiffness = 70;
-      const damping = 20;
-      const vel = { x: 0, y: 0, width: 0, height: 0 };
-
-      let lastTime = performance.now();
-      function step(now: number) {
-        if (cancelled) return;
-        let dt = (now - lastTime) / 1000;
-        dt = Math.min(dt, 0.032);
-        lastTime = now;
-
-        let settled = true;
-        for (const key of ["x", "y", "width", "height"] as const) {
-          const force = -stiffness * (current[key] - target[key]) - damping * vel[key];
-          vel[key] += force * dt;
-          current[key] += vel[key] * dt;
-          if (Math.abs(vel[key]) > 0.5 || Math.abs(target[key] - current[key]) > 0.5) {
-            settled = false;
-          }
-        }
-
-        rect.setAttribute("x", String(current.x));
-        rect.setAttribute("y", String(current.y));
-        rect.setAttribute("width", String(Math.max(0, current.width)));
-        rect.setAttribute("height", String(Math.max(0, current.height)));
-
-        if (settled) {
-          rect.setAttribute("x", String(target.x));
-          rect.setAttribute("y", String(target.y));
-          rect.setAttribute("width", String(target.width));
-          rect.setAttribute("height", String(target.height));
-        } else {
-          requestAnimationFrame(step);
-        }
-      }
-
-      spotlightAnimRef.current = {
-        cancel: () => {
-          cancelled = true;
-        },
-      };
-      requestAnimationFrame(step);
+  const animateSpotlightRect = useCallback((target: SpotlightState) => {
+    spotlightAnimRef.current?.cancel();
+    const r = rectRef.current;
+    if (!r) {
       setSpotlight(target);
-    },
-    []
-  );
+      return;
+    }
+
+    // Spring-animate from current rect position to target
+    const current = {
+      x: parseFloat(r.getAttribute("x") ?? "0"),
+      y: parseFloat(r.getAttribute("y") ?? "0"),
+      width: parseFloat(r.getAttribute("width") ?? "0"),
+      height: parseFloat(r.getAttribute("height") ?? "0"),
+    };
+
+    let cancelled = false;
+    const stiffness = 70;
+    const damping = 20;
+    const vel = { x: 0, y: 0, width: 0, height: 0 };
+
+    let lastTime = performance.now();
+    function step(now: number) {
+      if (cancelled || !r) return;
+      let dt = (now - lastTime) / 1000;
+      dt = Math.min(dt, 0.032);
+      lastTime = now;
+
+      let settled = true;
+      for (const key of ["x", "y", "width", "height"] as const) {
+        const force = -stiffness * (current[key] - target[key]) - damping * vel[key];
+        vel[key] += force * dt;
+        current[key] += vel[key] * dt;
+        if (Math.abs(vel[key]) > 0.5 || Math.abs(target[key] - current[key]) > 0.5) {
+          settled = false;
+        }
+      }
+
+      r.setAttribute("x", String(current.x));
+      r.setAttribute("y", String(current.y));
+      r.setAttribute("width", String(Math.max(0, current.width)));
+      r.setAttribute("height", String(Math.max(0, current.height)));
+
+      if (settled) {
+        r.setAttribute("x", String(target.x));
+        r.setAttribute("y", String(target.y));
+        r.setAttribute("width", String(target.width));
+        r.setAttribute("height", String(target.height));
+      } else {
+        requestAnimationFrame(step);
+      }
+    }
+
+    spotlightAnimRef.current = {
+      cancel: () => {
+        cancelled = true;
+      },
+    };
+    requestAnimationFrame(step);
+    setSpotlight(target);
+  }, []);
 
   useEffect(() => {
     const demo = getDemoApi();
@@ -217,11 +218,7 @@ export function DemoOverlay() {
       }}
     >
       {spotlight && (
-        <svg
-          width="100%"
-          height="100%"
-          style={{ position: "absolute", inset: 0 }}
-        >
+        <svg width="100%" height="100%" style={{ position: "absolute", inset: 0 }}>
           <defs>
             <mask id="demo-spotlight-mask">
               <rect width="100%" height="100%" fill="white" />

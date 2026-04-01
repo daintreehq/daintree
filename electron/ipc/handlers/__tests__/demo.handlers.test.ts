@@ -471,10 +471,7 @@ describe("registerDemoHandlers", () => {
       }
     });
 
-    const result = await handler(
-      {},
-      { selector: ".my-el", text: "Hello", position: "top" }
-    );
+    const result = await handler({}, { selector: ".my-el", text: "Hello", position: "top" });
     expect(result).toEqual({ id: "test-request-id" });
     expect(deps.mainWindow!.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       "demo:exec-annotate",
@@ -497,10 +494,7 @@ describe("registerDemoHandlers", () => {
       }
     });
 
-    const result = await handler(
-      {},
-      { selector: ".my-el", text: "Hello", id: "custom-id" }
-    );
+    const result = await handler({}, { selector: ".my-el", text: "Hello", id: "custom-id" });
     expect(result).toEqual({ id: "custom-id" });
   });
 

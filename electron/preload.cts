@@ -2668,8 +2668,7 @@ const api: ElectronAPI = {
           }) => _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
           stopCapture: () => _unwrappingInvoke(CHANNELS.DEMO_STOP_CAPTURE),
           getCaptureStatus: () => _unwrappingInvoke(CHANNELS.DEMO_GET_CAPTURE_STATUS),
-          scroll: (selector: string) =>
-            _unwrappingInvoke(CHANNELS.DEMO_SCROLL, { selector }),
+          scroll: (selector: string) => _unwrappingInvoke(CHANNELS.DEMO_SCROLL, { selector }),
           drag: (fromSelector: string, toSelector: string, durationMs?: number) =>
             _unwrappingInvoke(CHANNELS.DEMO_DRAG, { fromSelector, toSelector, durationMs }),
           pressKey: (
