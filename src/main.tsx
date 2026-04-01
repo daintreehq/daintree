@@ -25,6 +25,12 @@ async function bootstrap() {
 
   applyDefaultAppTheme(document.documentElement);
 
+  try {
+    localStorage.removeItem("project-groups-storage");
+  } catch {
+    // localStorage may not be available
+  }
+
   cleanupOrchestrator = initStoreOrchestrator();
 
   await ensureTerminalFontLoaded();

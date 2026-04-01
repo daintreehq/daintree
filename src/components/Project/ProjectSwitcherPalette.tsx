@@ -34,12 +34,6 @@ import { usePaletteStore } from "@/store/paletteStore";
 import type { ProjectSwitcherMode, SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useUIStore } from "@/store/uiStore";
 
-interface SwitcherSection {
-  key: string;
-  label: string | null;
-  items: SearchableProject[];
-}
-
 export interface ProjectSwitcherPaletteProps {
   isOpen: boolean;
   query: string;
@@ -415,6 +409,18 @@ function ProjectListItem({
   );
 }
 
+interface TemporalSection {
+  key: string;
+  label: string | null;
+  items: SearchableProject[];
+}
+
+function getTemporalBucket(timestamp: number, todayStart: number, weekStart: number): string {
+  if (timestamp >= todayStart) return "today";
+  if (timestamp >= weekStart) return "this-week";
+  return "older";
+}
+
 interface ProjectListContentProps {
   results: SearchableProject[];
   selectedIndex: number;
@@ -446,21 +452,41 @@ function ProjectListContent({
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
 
-  const sections = useMemo(() => {
+  const sections = useMemo<TemporalSection[] | null>(() => {
     if (isSearching || results.length === 0) return null;
-    const pinned = results.filter((p) => p.isPinned && !p.isActive);
+
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const weekStart = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() - mondayOffset
+    ).getTime();
+
     const current = results.filter((p) => p.isActive);
+    const pinned = results.filter((p) => p.isPinned && !p.isActive);
     const remaining = results.filter((p) => !p.isActive && !p.isPinned);
-    const isRunning = (p: SearchableProject) =>
-      p.activeAgentCount > 0 || p.waitingAgentCount > 0 || p.processCount > 0 || p.isBackground;
-    const running = remaining.filter(isRunning);
-    const recent = remaining.filter((p) => !isRunning(p));
+
+    const buckets: Record<string, SearchableProject[]> = {
+      today: [],
+      "this-week": [],
+      older: [],
+    };
+    for (const p of remaining) {
+      buckets[getTemporalBucket(p.lastOpened, todayStart, weekStart)].push(p);
+    }
+
     return [
-      { key: "pinned", label: "Pinned", items: pinned },
-      { key: "current", label: null, items: current },
-      { key: "running", label: "Running", items: running },
-      { key: "recent", label: "Recent", items: recent },
-    ].filter((s) => s.items.length > 0) as SwitcherSection[];
+      current.length > 0 ? { key: "current", label: null, items: current } : null,
+      pinned.length > 0 ? { key: "pinned", label: "Pinned", items: pinned } : null,
+      buckets.today.length > 0 ? { key: "today", label: "Today", items: buckets.today } : null,
+      buckets["this-week"].length > 0
+        ? { key: "this-week", label: "This Week", items: buckets["this-week"] }
+        : null,
+      buckets.older.length > 0 ? { key: "older", label: "Older", items: buckets.older } : null,
+    ].filter((s): s is TemporalSection => s !== null);
   }, [results, isSearching]);
 
   const renderItem = (project: SearchableProject) => {

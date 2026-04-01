@@ -209,20 +209,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const results = useMemo<SearchableProject[]>(() => {
     if (!query.trim()) {
-      // Ensure pinned projects are always visible when browsing
-      const pinned = sortedProjects.filter((p) => p.isPinned);
-      const rest = sortedProjects.filter((p) => !p.isPinned);
-      const combined = [...pinned, ...rest];
-      // Deduplicate while preserving order (pinned first, then rest by recency)
-      const seen = new Set<string>();
-      const deduped: SearchableProject[] = [];
-      for (const p of combined) {
-        if (!seen.has(p.id)) {
-          seen.add(p.id);
-          deduped.push(p);
-        }
-      }
-      return deduped.slice(0, MAX_RESULTS);
+      // Order: active first, then pinned (non-active), then rest by recency
+      const active = sortedProjects.filter((p) => p.isActive);
+      const pinned = sortedProjects.filter((p) => p.isPinned && !p.isActive);
+      const rest = sortedProjects.filter((p) => !p.isPinned && !p.isActive);
+      return [...active, ...pinned, ...rest].slice(0, MAX_RESULTS);
     }
 
     return rankProjectMatches(query, sortedProjects).slice(0, MAX_RESULTS);
