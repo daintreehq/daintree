@@ -719,7 +719,11 @@ export function DemoCursor() {
               const hasAnimations = document.getAnimations().some((a) => {
                 if (a.playState !== "running" && a.playState !== "pending") return false;
                 const effect = a.effect as KeyframeEffect | null;
+                // Skip demo-owned animations (cursor, overlay)
                 if (effect?.target && isDemoOwned(effect.target as Element)) return false;
+                // Skip infinite CSS animations (spinners, pulses, breathe effects)
+                const timing = effect?.getComputedTiming?.();
+                if (timing && timing.iterations === Infinity) return false;
                 return true;
               });
 

@@ -192,7 +192,7 @@ export function DemoOverlay() {
       demo.onExecCommand("demo:exec-dismiss-annotation", (raw: Record<string, unknown>) => {
         const payload = raw as unknown as DemoDismissAnnotationPayload & { requestId: string };
         setAnnotations((prev) => {
-          if (!payload.id) return new Map();
+          if (payload.id === undefined) return new Map();
           const next = new Map(prev);
           next.delete(payload.id);
           return next;

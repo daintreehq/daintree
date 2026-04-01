@@ -82,7 +82,6 @@ export interface DemoEncodeResult {
 
 export interface DemoScrollPayload {
   selector: string;
-  durationMs?: number;
 }
 
 export interface DemoDragPayload {

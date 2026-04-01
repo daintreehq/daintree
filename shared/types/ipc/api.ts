@@ -1235,7 +1235,7 @@ export interface ElectronAPI {
     pause(): Promise<void>;
     resume(): Promise<void>;
     sleep(durationMs: number): Promise<void>;
-    scroll(selector: string, durationMs?: number): Promise<void>;
+    scroll(selector: string): Promise<void>;
     drag(fromSelector: string, toSelector: string, durationMs?: number): Promise<void>;
     pressKey(
       key: string,
