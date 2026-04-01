@@ -3,10 +3,11 @@
  * Called once at app startup to register terminal, agent, browser, and notes panels.
  */
 import { Suspense, lazy } from "react";
-import { Spinner } from "@/components/ui/Spinner";
 import { registerPanelComponent } from "./panelComponentRegistry";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { BrowserPaneSkeleton } from "@/components/Browser/BrowserPaneSkeleton";
+import { NotesPaneSkeleton } from "@/components/Notes/NotesPaneSkeleton";
 
 const LazyBrowserPane = lazy(() =>
   import("@/components/Browser/BrowserPane").then((m) => ({ default: m.BrowserPane }))
@@ -18,19 +19,11 @@ const LazyDevPreviewPane = lazy(() =>
   import("@/components/DevPreview/DevPreviewPane").then((m) => ({ default: m.DevPreviewPane }))
 );
 
-function PanelLoadingFallback() {
-  return (
-    <div className="flex h-full w-full items-center justify-center">
-      <Spinner size="lg" className="text-canopy-text/30" />
-    </div>
-  );
-}
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function BrowserPaneWrapper(props: any) {
   return (
     <ErrorBoundary variant="component" componentName="BrowserPane">
-      <Suspense fallback={<PanelLoadingFallback />}>
+      <Suspense fallback={<BrowserPaneSkeleton />}>
         <LazyBrowserPane {...props} />
       </Suspense>
     </ErrorBoundary>
@@ -41,7 +34,7 @@ function BrowserPaneWrapper(props: any) {
 function NotesPaneWrapper(props: any) {
   return (
     <ErrorBoundary variant="component" componentName="NotesPane">
-      <Suspense fallback={<PanelLoadingFallback />}>
+      <Suspense fallback={<NotesPaneSkeleton />}>
         <LazyNotesPane {...props} />
       </Suspense>
     </ErrorBoundary>
@@ -52,7 +45,7 @@ function NotesPaneWrapper(props: any) {
 function DevPreviewPaneWrapper(props: any) {
   return (
     <ErrorBoundary variant="component" componentName="DevPreviewPane">
-      <Suspense fallback={<PanelLoadingFallback />}>
+      <Suspense fallback={<BrowserPaneSkeleton label="Loading dev preview panel" />}>
         <LazyDevPreviewPane {...props} />
       </Suspense>
     </ErrorBoundary>
