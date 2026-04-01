@@ -1733,7 +1733,6 @@ function App() {
         onRemoveConfirmClose={() => projectSwitcherPalette.setRemoveConfirmProject(null)}
         onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
         isRemovingProject={projectSwitcherPalette.isRemovingProject}
-        onHoverProject={projectSwitcherPalette.prefetchProject}
         onSelectNewWindow={(project) => {
           projectSwitcherPalette.close();
           void actionService.dispatch(

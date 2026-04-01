@@ -61,7 +61,6 @@ export interface ProjectSwitcherPaletteProps {
   onRemoveConfirmClose?: () => void;
   onConfirmRemove?: () => void;
   isRemovingProject?: boolean;
-  onHoverProject?: (project: SearchableProject) => void;
 }
 
 interface ProjectListItemProps {
@@ -72,7 +71,6 @@ interface ProjectListItemProps {
   onCloseProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
-  onHoverProject?: (project: SearchableProject) => void;
   onCopyPath?: (path: string) => void;
   onSelectNewWindow?: (project: SearchableProject) => void;
 }
@@ -119,7 +117,6 @@ const ProjectListItem = memo(function ProjectListItem({
   onCloseProject,
   onLocateProject,
   onTogglePinProject,
-  onHoverProject,
   onCopyPath,
   onSelectNewWindow,
 }: ProjectListItemProps) {
@@ -131,7 +128,6 @@ const ProjectListItem = memo(function ProjectListItem({
       role="option"
       aria-selected={isSelected}
       aria-disabled={project.isMissing || undefined}
-      onMouseEnter={onHoverProject ? () => onHoverProject(project) : undefined}
       className={cn(
         "group relative w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
         project.isActive
@@ -414,7 +410,6 @@ interface ProjectListContentProps {
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
   onSelectNewWindow?: (project: SearchableProject) => void;
-  onHoverProject?: (project: SearchableProject) => void;
 }
 
 function ProjectListContent({
@@ -429,7 +424,6 @@ function ProjectListContent({
   onTogglePinProject,
   onCopyPath,
   onSelectNewWindow,
-  onHoverProject,
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
 
@@ -489,7 +483,6 @@ function ProjectListContent({
           onLocateProject={onLocateProject}
           onTogglePinProject={onTogglePinProject}
           onCopyPath={onCopyPath}
-          onHoverProject={onHoverProject}
           onSelectNewWindow={onSelectNewWindow}
         />
       </div>
@@ -544,7 +537,6 @@ function ProjectListContent({
                   onLocateProject={onLocateProject}
                   onTogglePinProject={onTogglePinProject}
                   onCopyPath={onCopyPath}
-                  onHoverProject={onHoverProject}
                   onSelectNewWindow={onSelectNewWindow}
                 />
               </div>
@@ -610,7 +602,6 @@ interface ProjectPaletteInnerProps {
   onLocateProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
-  onHoverProject?: (project: SearchableProject) => void;
 }
 
 function ProjectPaletteInner({
@@ -634,7 +625,6 @@ function ProjectPaletteInner({
   onLocateProject,
   onTogglePinProject,
   onCopyPath,
-  onHoverProject,
 }: ProjectPaletteInnerProps) {
   const projectSwitcherShortcut = useKeybindingDisplay("project.switcherPalette");
 
@@ -751,7 +741,6 @@ function ProjectPaletteInner({
           onTogglePinProject={onTogglePinProject}
           onCopyPath={onCopyPath}
           onSelectNewWindow={onSelectNewWindow}
-          onHoverProject={onHoverProject}
         />
       </AppPaletteDialog.Body>
 
@@ -910,7 +899,6 @@ function ModalContent({
           onCopyPath={innerProps.onCopyPath}
           onSelectBackground={innerProps.onSelectBackground}
           onSelectNewWindow={innerProps.onSelectNewWindow}
-          onHoverProject={innerProps.onHoverProject}
         />
       </div>
     </div>,
@@ -986,7 +974,6 @@ function DropdownContent({
           onCopyPath={innerProps.onCopyPath}
           onSelectBackground={innerProps.onSelectBackground}
           onSelectNewWindow={innerProps.onSelectNewWindow}
-          onHoverProject={innerProps.onHoverProject}
         />
       </PopoverContent>
     </Popover>
@@ -1020,7 +1007,6 @@ export function ProjectSwitcherPalette({
   onRemoveConfirmClose,
   onConfirmRemove,
   isRemovingProject = false,
-  onHoverProject,
 }: ProjectSwitcherPaletteProps) {
   const hasRunningProcesses = removeConfirmProject
     ? removeConfirmProject.processCount > 0 ||
@@ -1051,7 +1037,6 @@ export function ProjectSwitcherPalette({
         onSelectNewWindow={onSelectNewWindow}
         onOpenProjectSettings={onOpenProjectSettings}
         dropdownAlign={dropdownAlign}
-        onHoverProject={onHoverProject}
       >
         {children}
       </DropdownContent>
@@ -1076,7 +1061,6 @@ export function ProjectSwitcherPalette({
         onSelectBackground={onSelectBackground}
         onSelectNewWindow={onSelectNewWindow}
         onOpenProjectSettings={onOpenProjectSettings}
-        onHoverProject={onHoverProject}
       />
     );
 

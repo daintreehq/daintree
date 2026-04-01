@@ -169,7 +169,6 @@ export function ProjectSwitcher() {
             onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
             onConfirmRemove={projectSwitcher.confirmRemoveProject}
             isRemovingProject={projectSwitcher.isRemovingProject}
-            onHoverProject={projectSwitcher.prefetchProject}
           >
             <Button
               variant="outline"
@@ -228,7 +227,6 @@ export function ProjectSwitcher() {
         onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
         onConfirmRemove={projectSwitcher.confirmRemoveProject}
         isRemovingProject={projectSwitcher.isRemovingProject}
-        onHoverProject={projectSwitcher.prefetchProject}
       >
         <TooltipProvider>
           <Tooltip>

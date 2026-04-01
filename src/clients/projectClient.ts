@@ -265,8 +265,4 @@ export const projectClient = {
   locate: (projectId: string): Promise<Project | null> => {
     return window.electron.project.locate(projectId);
   },
-
-  prewarmHost: (projectId: string): Promise<void> => {
-    return window.electron.project.prewarmHost(projectId);
-  },
 } as const;

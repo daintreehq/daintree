@@ -5,7 +5,6 @@ import { usePaletteStore } from "@/store/paletteStore";
 import { notify } from "@/lib/notify";
 import type { Project, BulkProjectStatsEntry } from "@shared/types";
 import { projectClient } from "@/clients";
-import { warmSettingsCache } from "@/store/projectSettingsStore";
 
 export type ProjectSwitcherMode = "modal" | "dropdown";
 
@@ -55,14 +54,9 @@ export interface UseProjectSwitcherPaletteReturn {
   confirmRemoveProject: () => Promise<void>;
   isRemovingProject: boolean;
   backgroundWaitingCount: number;
-  prefetchProject: (project: SearchableProject) => void;
 }
 
 const MAX_RESULTS = 15;
-const PREFETCH_DEBOUNCE_MS = 150;
-
-const prefetchedProjects = new Set<string>();
-let prefetchTimerRef: ReturnType<typeof setTimeout> | null = null;
 
 export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const modalIsOpen = usePaletteStore((state) => state.activePaletteId === "project-switcher");
@@ -283,11 +277,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
     setQuery("");
     setSelectedIndex(0);
-    if (prefetchTimerRef) {
-      clearTimeout(prefetchTimerRef);
-      prefetchTimerRef = null;
-    }
-    prefetchedProjects.clear();
   }, [mode]);
 
   const toggle = useCallback(
@@ -472,39 +461,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
   }, [removeConfirmProject, isRemovingProject, closeActiveProject, removeProject]);
 
-  const prefetchProject = useCallback((project: SearchableProject) => {
-    if (project.isActive || project.isMissing) return;
-    if (prefetchedProjects.has(project.id)) return;
-
-    void projectClient.prewarmHost(project.id).catch(() => {});
-
-    if (prefetchTimerRef) {
-      clearTimeout(prefetchTimerRef);
-    }
-
-    prefetchTimerRef = setTimeout(() => {
-      prefetchTimerRef = null;
-      if (prefetchedProjects.has(project.id)) return;
-
-      void (async () => {
-        try {
-          const [data, detected] = await Promise.all([
-            projectClient.getSettings(project.id),
-            projectClient.detectRunners(project.id),
-          ]);
-
-          const savedCommandStrings = new Set(data.runCommands?.map((c) => c.command) || []);
-          const newDetected = detected.filter((d) => !savedCommandStrings.has(d.command));
-
-          warmSettingsCache(project.id, data, newDetected, detected);
-          prefetchedProjects.add(project.id);
-        } catch {
-          // Prefetch failures are non-critical
-        }
-      })();
-    }, PREFETCH_DEBOUNCE_MS);
-  }, []);
-
   return {
     isOpen,
     mode,
@@ -533,6 +489,5 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     confirmRemoveProject,
     isRemovingProject,
     backgroundWaitingCount,
-    prefetchProject,
   };
 }
