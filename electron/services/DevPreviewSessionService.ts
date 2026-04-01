@@ -88,13 +88,6 @@ const NEXT_DEV_DIRECT_RE = /\bnext\s+dev\b/;
 const TURBOPACK_FLAG_RE = /--turbo(?:pack)?\b/;
 const PKG_SCRIPT_RE = /^(?:npm\s+run|pnpm(?:\s+run)?|yarn(?:\s+run)?|bun(?:\s+run)?)\s+(\S+)$/;
 
-/**
- * Detects Next.js webpack dev commands and appends --turbopack.
- *
- * Webpack's style-loader injects CSS via CSSOM APIs (adoptedStyleSheets,
- * CSSStyleSheet.insertRule) which fail silently in Electron webviews.
- * Turbopack uses <link> tags instead, which work correctly.
- */
 export async function normalizeNextjsDevCommand(command: string, cwd: string): Promise<string> {
   if (TURBOPACK_FLAG_RE.test(command)) return command;
 
@@ -112,7 +105,8 @@ export async function normalizeNextjsDevCommand(command: string, cwd: string): P
     const scriptBody = pkg?.scripts?.[scriptName];
     if (typeof scriptBody === "string" && NEXT_DEV_DIRECT_RE.test(scriptBody)) {
       if (TURBOPACK_FLAG_RE.test(scriptBody)) return command;
-      return `${command} -- --turbopack`;
+      const sep = command.trimStart().startsWith("bun ") ? " " : " -- ";
+      return `${command}${sep}--turbopack`;
     }
   } catch {
     // No package.json or invalid — leave command unchanged
