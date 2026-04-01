@@ -11,19 +11,19 @@ interface ScrollbackPolicy {
 export const PERFORMANCE_MODE_SCROLLBACK = 100;
 
 const AGENT_SCROLLBACK_POLICY: ScrollbackPolicy = {
-  multiplier: 2.5,
+  multiplier: 1.5,
   maxLines: 5000,
   minLines: 500,
 };
 
 const SCROLLBACK_POLICIES: Record<string, ScrollbackPolicy> = {
-  terminal: { multiplier: 0.5, maxLines: 2000, minLines: 200 },
+  terminal: { multiplier: 0.3, maxLines: 2000, minLines: 200 },
   ...Object.fromEntries(BUILT_IN_AGENT_IDS.map((id) => [id, AGENT_SCROLLBACK_POLICY])),
 };
 
 /**
  * Get appropriate scrollback lines for a terminal type based on the user's
- * base scrollback setting. Agent terminals get full base, standard terminals get 20%,
+ * base scrollback setting. Agent terminals get 1.5x base, standard terminals get 30%,
  * all clamped to type-specific min/max limits.
  */
 export function getScrollbackForType(type: TerminalType, baseScrollback: number): number {

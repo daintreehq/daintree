@@ -202,8 +202,8 @@ describe("TerminalInstanceService - Scrollback", () => {
 
       service.restoreScrollback("t1");
 
-      // getScrollbackForType("terminal", 5000) = min(2000, max(200, floor(5000*0.5))) = 2000
-      expect(managed.terminal.options.scrollback).toBe(2000);
+      // getScrollbackForType("terminal", 5000) = min(2000, max(200, floor(5000*0.3))) = 1500
+      expect(managed.terminal.options.scrollback).toBe(1500);
     });
 
     it("uses project-level scrollback override for non-agent terminals", () => {
@@ -214,8 +214,8 @@ describe("TerminalInstanceService - Scrollback", () => {
 
       service.restoreScrollback("t1");
 
-      // getScrollbackForType("terminal", 2000) = min(2000, max(200, floor(2000*0.5))) = 1000
-      expect(managed.terminal.options.scrollback).toBe(1000);
+      // getScrollbackForType("terminal", 2000) = min(2000, max(200, floor(2000*0.3))) = 600
+      expect(managed.terminal.options.scrollback).toBe(600);
     });
 
     it("ignores project override for agent terminals", () => {
@@ -226,7 +226,7 @@ describe("TerminalInstanceService - Scrollback", () => {
 
       service.restoreScrollback("t1");
 
-      // getScrollbackForType("claude", 5000) = min(5000, max(500, floor(5000*2.5))) = 5000
+      // getScrollbackForType("claude", 5000) = min(5000, max(500, floor(5000*1.5))) = 5000
       expect(managed.terminal.options.scrollback).toBe(5000);
     });
   });
