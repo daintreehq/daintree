@@ -16,6 +16,7 @@ function makeProject(
     activeAgentCount: 0,
     waitingAgentCount: 0,
     processCount: 0,
+    displayPath: overrides.path.split("/").filter(Boolean).pop() ?? overrides.path,
     ...overrides,
   };
 }

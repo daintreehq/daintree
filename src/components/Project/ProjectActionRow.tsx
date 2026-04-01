@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 import type { AgentState } from "@/types";
 import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export interface ProjectActionRowProps {
   activeAgentCount: number | null;
@@ -62,11 +62,9 @@ export function ProjectActionRow({
   if (!label) return content;
 
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>{content}</TooltipTrigger>
-        <TooltipContent side="bottom">{label}</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>{content}</TooltipTrigger>
+      <TooltipContent side="bottom">{label}</TooltipContent>
+    </Tooltip>
   );
 }

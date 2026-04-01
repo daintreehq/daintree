@@ -260,6 +260,10 @@ export function Toolbar({
     [projectSwitcher]
   );
 
+  const handleRemoveConfirmClose = useCallback(() => {
+    projectSwitcher.setRemoveConfirmProject(null);
+  }, [projectSwitcher]);
+
   const handleSelectNewWindow = useCallback(
     (project: SearchableProject) => {
       if (project.isMissing) return;
@@ -1455,12 +1459,12 @@ export function Toolbar({
             onAddProject={projectSwitcher.addProject}
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
-            onTogglePinProject={(projectId) => projectSwitcher.togglePinProject(projectId)}
+            onTogglePinProject={projectSwitcher.togglePinProject}
             onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
             onSelectNewWindow={handleSelectNewWindow}
             dropdownAlign="center"
             removeConfirmProject={projectSwitcher.removeConfirmProject}
-            onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
+            onRemoveConfirmClose={handleRemoveConfirmClose}
             onConfirmRemove={projectSwitcher.confirmRemoveProject}
             isRemovingProject={projectSwitcher.isRemovingProject}
           >

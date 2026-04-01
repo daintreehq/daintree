@@ -125,6 +125,10 @@ function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProj
     processCount: 0,
     activeAgentCount: 0,
     waitingAgentCount: 0,
+    displayPath:
+      (overrides.path ?? "/tmp/test").replace(/\\/g, "/").split("/").filter(Boolean).pop() ??
+      overrides.path ??
+      "/tmp/test",
     ...overrides,
   };
 }

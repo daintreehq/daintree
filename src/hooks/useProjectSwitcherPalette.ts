@@ -24,6 +24,7 @@ export interface SearchableProject {
   activeAgentCount: number;
   waitingAgentCount: number;
   processCount: number;
+  displayPath: string;
 }
 
 export interface UseProjectSwitcherPaletteReturn {
@@ -186,6 +187,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         activeAgentCount: stats?.activeAgentCount ?? 0,
         waitingAgentCount: stats?.waitingAgentCount ?? 0,
         processCount: stats?.processCount ?? 0,
+        displayPath: p.path.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? p.path,
       };
     });
   }, [projects, bulkStats, currentProject?.id]);
