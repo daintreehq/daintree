@@ -57,12 +57,21 @@ export function registerTerminalSpawnActions(
         }
         await state.addTerminal(options);
       } else if (nonTrashed.length === 0) {
-        await state.addTerminal({
-          type: "terminal",
-          cwd: callbacks.getDefaultCwd(),
-          location: "grid",
-          worktreeId: callbacks.getActiveWorktreeId(),
-        });
+        const lastClosed = state.lastClosedConfig;
+        if (lastClosed) {
+          await state.addTerminal({
+            ...lastClosed,
+            location: "grid",
+            worktreeId: lastClosed.worktreeId ?? callbacks.getActiveWorktreeId(),
+          });
+        } else {
+          await state.addTerminal({
+            type: "terminal",
+            cwd: callbacks.getDefaultCwd(),
+            location: "grid",
+            worktreeId: callbacks.getActiveWorktreeId(),
+          });
+        }
       }
     },
   }));

@@ -66,6 +66,29 @@ function buildKindSpecificOptions(panel: TerminalInstance): Partial<AddTerminalO
 }
 
 /**
+ * Build a synchronous snapshot of a panel's config for last-closed fallback.
+ * Copies the same fields as buildPanelDuplicateOptions but preserves the
+ * existing command verbatim (no async agent command regeneration).
+ * Does not include location — callers inject it at use time.
+ */
+export function buildPanelSnapshotOptions(panel: TerminalInstance): AddTerminalOptions {
+  const kind = panel.kind ?? "terminal";
+  return {
+    kind,
+    type: panel.type,
+    agentId: panel.agentId,
+    cwd: panel.cwd || "",
+    worktreeId: panel.worktreeId,
+    exitBehavior: panel.exitBehavior,
+    isInputLocked: panel.isInputLocked,
+    agentModelId: panel.agentModelId,
+    agentLaunchFlags: panel.agentLaunchFlags ? [...panel.agentLaunchFlags] : undefined,
+    command: panel.command,
+    ...buildKindSpecificOptions(panel),
+  };
+}
+
+/**
  * Build the full AddTerminalOptions needed to duplicate a panel.
  * Callers pass the target location since it may differ from the source.
  * Target location must be "grid" or "dock" (not "trash").

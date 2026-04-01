@@ -40,6 +40,84 @@ function makePanel(overrides: Partial<TerminalInstance> = {}): TerminalInstance 
   } as TerminalInstance;
 }
 
+describe("buildPanelSnapshotOptions", () => {
+  let buildPanelSnapshotOptions: (panel: TerminalInstance) => AddTerminalOptions;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const mod = await import("../panelDuplicationService");
+    buildPanelSnapshotOptions = mod.buildPanelSnapshotOptions;
+  });
+
+  it("copies base fields for a plain terminal", () => {
+    const panel = makePanel({
+      command: "bash",
+      worktreeId: "wt-1",
+      exitBehavior: "keep",
+      isInputLocked: true,
+      agentModelId: "opus",
+      agentLaunchFlags: ["--flag"],
+    });
+
+    const result = buildPanelSnapshotOptions(panel);
+
+    expect(result).toMatchObject({
+      kind: "terminal",
+      type: "terminal",
+      cwd: "/home/user",
+      worktreeId: "wt-1",
+      exitBehavior: "keep",
+      isInputLocked: true,
+      agentModelId: "opus",
+      command: "bash",
+    });
+    // agentLaunchFlags should be a new array (deep copy)
+    expect(result.agentLaunchFlags).toEqual(["--flag"]);
+    expect(result.agentLaunchFlags).not.toBe(panel.agentLaunchFlags);
+  });
+
+  it("does not include title in the snapshot", () => {
+    const panel = makePanel({ title: "My Terminal" });
+    const result = buildPanelSnapshotOptions(panel);
+    expect(result.title).toBeUndefined();
+  });
+
+  it("does not include location in the snapshot", () => {
+    const panel = makePanel({ location: "dock" });
+    const result = buildPanelSnapshotOptions(panel);
+    expect(result.location).toBeUndefined();
+  });
+
+  it("includes kind-specific fields for browser panels", () => {
+    const panel = makePanel({
+      kind: "browser",
+      browserUrl: "https://example.com",
+      browserConsoleOpen: true,
+    });
+    const result = buildPanelSnapshotOptions(panel);
+    expect(result.browserUrl).toBe("https://example.com");
+    expect(result.browserConsoleOpen).toBe(true);
+  });
+
+  it("copies agent fields for agent panels", () => {
+    const panel = makePanel({
+      agentId: "claude",
+      agentModelId: "opus",
+      agentLaunchFlags: ["--verbose"],
+    });
+    const result = buildPanelSnapshotOptions(panel);
+    expect(result.agentId).toBe("claude");
+    expect(result.agentModelId).toBe("opus");
+    expect(result.agentLaunchFlags).toEqual(["--verbose"]);
+  });
+
+  it("handles undefined agentLaunchFlags", () => {
+    const panel = makePanel({ agentLaunchFlags: undefined });
+    const result = buildPanelSnapshotOptions(panel);
+    expect(result.agentLaunchFlags).toBeUndefined();
+  });
+});
+
 describe("panelDuplicationService", () => {
   let buildPanelDuplicateOptions: (
     panel: TerminalInstance,
