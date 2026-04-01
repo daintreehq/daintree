@@ -90,7 +90,7 @@ export function GettingStartedChecklist({
         {/* Collapsible body */}
         <div
           className={cn(
-            "overflow-hidden transition-all duration-300 ease-in-out",
+            "overflow-hidden transition-[height] duration-300 ease-in-out",
             collapsed ? "h-0" : "h-auto"
           )}
           {...(collapsed ? { inert: true } : {})}

@@ -102,7 +102,7 @@ function HeapBar({ heapStats }: { heapStats: HeapStats }) {
       </div>
       <div className="h-1.5 rounded-full bg-canopy-text/5 overflow-hidden">
         <div
-          className={`h-full rounded-full transition-all ${barColor}`}
+          className={`h-full rounded-full transition-[width] ${barColor}`}
           style={{ width: `${Math.min(heapStats.percent, 100)}%` }}
         />
       </div>

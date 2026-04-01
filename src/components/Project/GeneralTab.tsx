@@ -290,7 +290,7 @@ export function GeneralTab({
                 type="text"
                 value={name}
                 onChange={(e) => onNameChange(e.target.value)}
-                className="w-full bg-transparent border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-text-muted"
+                className="w-full bg-transparent border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition placeholder:text-text-muted"
                 placeholder="My Awesome Project"
               />
             </div>
@@ -317,7 +317,7 @@ export function GeneralTab({
                 aria-label={`Set project color to ${PRESET_SWATCHES[i].label}`}
                 onClick={() => onColorChange(hex)}
                 className={cn(
-                  "h-7 w-7 rounded-full transition-all border-2 shrink-0",
+                  "h-7 w-7 rounded-full transition border-2 shrink-0",
                   color === hex
                     ? "border-canopy-text scale-110 shadow-sm"
                     : "border-transparent hover:border-canopy-border hover:scale-105"
@@ -356,7 +356,7 @@ export function GeneralTab({
               autoComplete="off"
               aria-label="Hex color value"
               className={cn(
-                "w-28 bg-canopy-bg border rounded px-3 py-1.5 text-sm text-canopy-text font-mono focus:outline-none focus:ring-1 transition-all placeholder:text-text-muted",
+                "w-28 bg-canopy-bg border rounded px-3 py-1.5 text-sm text-canopy-text font-mono focus:outline-none focus:ring-1 transition placeholder:text-text-muted",
                 hexInput && !isValidHexColor(hexInput)
                   ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
                   : "border-canopy-border focus:border-canopy-accent focus:ring-canopy-accent/30"
@@ -392,7 +392,7 @@ export function GeneralTab({
           type="text"
           value={devServerCommand}
           onChange={(e) => onDevServerCommandChange(e.target.value)}
-          className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-text-muted"
+          className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition placeholder:text-text-muted"
           placeholder="npm run dev"
           spellCheck={false}
           autoCapitalize="off"
@@ -422,7 +422,7 @@ export function GeneralTab({
                 onDevServerLoadTimeoutChange(num);
               }
             }}
-            className="w-28 bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-text-muted"
+            className="w-28 bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition placeholder:text-text-muted"
             placeholder="30"
             aria-label="Dev server load timeout in seconds"
           />
@@ -537,7 +537,7 @@ export function GeneralTab({
           aria-checked={currentProject?.inRepoSettings ?? false}
           aria-label="Store settings in repository"
           className={cn(
-            "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-canopy-accent",
+            "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-canopy-accent",
             currentProject?.inRepoSettings
               ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
               : "border-canopy-border hover:bg-tint/5 text-canopy-text/70",

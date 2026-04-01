@@ -67,7 +67,7 @@ export function SettingsSwitchCard({
       aria-checked={isEnabled}
       aria-label={ariaLabel}
       className={cn(
-        "relative w-full flex items-center justify-between transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
+        "relative w-full flex items-center justify-between transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
         isCard ? "p-4 rounded-[var(--radius-lg)] border hover:bg-tint/5" : "py-2",
         isEnabled ? scheme.enabled : "border-canopy-border text-canopy-text/70",
         scheme.focus,

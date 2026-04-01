@@ -391,7 +391,7 @@ export function GitHubListItem({
                   type="button"
                   onClick={(e) => e.stopPropagation()}
                   className={cn(
-                    "shrink-0 p-0.5 rounded hover:bg-muted transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    "shrink-0 p-0.5 rounded hover:bg-muted transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     isActive
                       ? "opacity-100"
                       : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"

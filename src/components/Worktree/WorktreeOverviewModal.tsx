@@ -461,7 +461,7 @@ export function WorktreeOverviewModal({
                       />
                       <span
                         className={cn(
-                          "transition-all",
+                          "transition",
                           hideMainWorktree && "line-through decoration-canopy-text/30"
                         )}
                       >
@@ -566,7 +566,7 @@ export function WorktreeOverviewModal({
                             "rounded-lg overflow-hidden",
                             "border border-divider",
                             "bg-canopy-sidebar/50",
-                            "transition-all duration-200",
+                            "transition duration-200",
                             "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
                             worktree.id === activeWorktreeId &&
                               "border-[var(--color-state-active)]/70 shadow-md"
@@ -613,7 +613,7 @@ export function WorktreeOverviewModal({
                       "rounded-lg overflow-hidden",
                       "border border-divider",
                       "bg-canopy-sidebar/50",
-                      "transition-all duration-200",
+                      "transition duration-200",
                       "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
                       worktree.id === activeWorktreeId &&
                         "border-[var(--color-state-active)]/70 shadow-md"

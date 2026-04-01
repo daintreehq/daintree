@@ -98,7 +98,7 @@ const SortableTab = memo(function SortableTab({
             }
           }}
           className={cn(
-            "group relative flex items-center gap-2 px-3 py-1.5 text-xs font-medium cursor-pointer select-none transition-all",
+            "group relative flex items-center gap-2 px-3 py-1.5 text-xs font-medium cursor-pointer select-none transition",
             "rounded-full border shadow-[var(--theme-shadow-ambient)]",
             "min-w-[80px] max-w-[200px]",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
@@ -389,7 +389,7 @@ export function PortalToolbar({
                           defaultNewTabUrl,
                         });
                       }}
-                      className="flex items-center justify-center w-8 h-[26px] rounded-full bg-overlay-subtle hover:bg-overlay-soft text-canopy-text/70 hover:text-canopy-text border border-divider transition-all"
+                      className="flex items-center justify-center w-8 h-[26px] rounded-full bg-overlay-subtle hover:bg-overlay-soft text-canopy-text/70 hover:text-canopy-text border border-divider transition"
                       aria-label="New Tab"
                       aria-haspopup="menu"
                     >

@@ -197,7 +197,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       >
         <div
           className={cn(
-            "w-10 h-px rounded-full transition-all duration-150 delay-100 group-hover:h-0.5",
+            "w-10 h-px rounded-full transition-[height] duration-150 delay-100 group-hover:h-0.5",
             "bg-canopy-text/15",
             "group-hover:bg-canopy-text/30 group-focus-visible:bg-canopy-accent",
             isResizing && "bg-canopy-accent"

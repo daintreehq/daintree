@@ -100,7 +100,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
         "flex items-center justify-between gap-4 px-4 py-3 rounded-[var(--radius-lg)]",
         "bg-[color-mix(in_oklab,var(--color-status-warning)_12%,transparent)]",
         "border border-status-warning/30",
-        "transition-all duration-200",
+        "transition duration-200",
         isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2",
         className
       )}

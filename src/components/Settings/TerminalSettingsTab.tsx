@@ -582,7 +582,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 aria-checked={cachedProjectViews === value}
                 aria-label={`${label} - ${description}`}
                 className={cn(
-                  "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-all",
+                  "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
                   cachedProjectViews === value
                     ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
                     : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"
@@ -756,7 +756,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   key={id}
                   onClick={() => handleStrategyChange(id)}
                   className={cn(
-                    "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-all",
+                    "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-colors",
                     layoutConfig.strategy === id
                       ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
                       : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"
@@ -822,7 +822,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 aria-checked={scrollbackLines === value}
                 aria-label={`${label} - ${description}`}
                 className={cn(
-                  "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-all",
+                  "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
                   performanceMode && "opacity-50 cursor-not-allowed",
                   scrollbackLines === value
                     ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
@@ -919,7 +919,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 aria-checked={screenReaderMode === value}
                 aria-label={`${label} - ${description}`}
                 className={cn(
-                  "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-all",
+                  "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
                   screenReaderMode === value
                     ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
                     : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"

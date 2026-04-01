@@ -240,7 +240,7 @@ function InlineChecklist({
       {/* Progress bar */}
       <div className="w-full h-1 bg-canopy-border/50 rounded-full mb-4 overflow-hidden">
         <div
-          className="h-full bg-canopy-accent rounded-full transition-all duration-500"
+          className="h-full bg-canopy-accent rounded-full transition-[width] duration-500"
           style={{ width: `${(progressDone / progressTotal) * 100}%` }}
         />
       </div>

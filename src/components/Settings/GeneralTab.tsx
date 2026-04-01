@@ -433,7 +433,7 @@ export function GeneralTab({
                   disabled={channelSaving || updateChannel === null}
                   onClick={() => void handleChannelChange(ch)}
                   className={cn(
-                    "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-all capitalize",
+                    "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors capitalize",
                     updateChannel === ch
                       ? "bg-canopy-accent/10 border border-canopy-accent text-canopy-accent"
                       : "border border-canopy-border hover:bg-tint/5 text-canopy-text/70"
@@ -542,7 +542,7 @@ export function GeneralTab({
                         disabled={isSaving}
                         onClick={() => handleThresholdChange(value)}
                         className={cn(
-                          "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-all",
+                          "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                           hibernationConfig.inactiveThresholdHours === value
                             ? "bg-canopy-accent/10 border border-canopy-accent text-canopy-accent"
                             : "border border-canopy-border hover:bg-tint/5 text-canopy-text/70"

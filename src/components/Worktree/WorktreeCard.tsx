@@ -557,7 +557,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         <div
           ref={droppableRef}
           className={cn(
-            "sidebar-worktree-card group/card relative transition-all duration-200",
+            "sidebar-worktree-card group/card relative transition duration-200",
             variant === "sidebar" && "border-b border-border-default",
             variant === "grid" && "rounded-lg border border-divider bg-overlay-subtle",
             isActive &&
@@ -579,7 +579,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               "bg-[var(--sidebar-hover-bg,var(--theme-overlay-hover))]",
             isOver &&
               !isActive &&
-              "ring-2 ring-accent-primary bg-accent-primary/10 border-accent-primary/50 transition-all duration-200",
+              "ring-2 ring-accent-primary bg-accent-primary/10 border-accent-primary/50 transition-colors duration-200",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           )}
           data-active={isActive && variant === "sidebar" ? "true" : undefined}
