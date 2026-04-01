@@ -14,6 +14,7 @@ import type {
   ProjectSwitchOutgoingState,
 } from "../../../shared/types/ipc/project.js";
 import { sanitizeTerminals, sanitizeTerminalSizes } from "./terminalLayout.js";
+import { ProjectStatsService } from "../../services/ProjectStatsService.js";
 import type {
   GitInitOptions,
   GitInitResult,
@@ -32,6 +33,10 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
   const handlers: Array<() => void> = [];
 
   const projectSwitchService = deps.projectSwitchService ?? new ProjectSwitchService(deps);
+
+  const projectStatsService = new ProjectStatsService(deps.ptyClient);
+  projectStatsService.start();
+  handlers.push(() => projectStatsService.stop());
 
   const handleProjectGetAll = async () => {
     return projectStore.getAllProjects();

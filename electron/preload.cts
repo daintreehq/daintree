@@ -606,6 +606,7 @@ const CHANNELS = {
   PROJECT_REOPEN: "project:reopen",
   PROJECT_GET_STATS: "project:get-stats",
   PROJECT_GET_BULK_STATS: "project:get-bulk-stats",
+  PROJECT_STATS_UPDATED: "project:stats-updated",
   PROJECT_CREATE_FOLDER: "project:create-folder",
   PROJECT_INIT_GIT: "project:init-git",
   PROJECT_INIT_GIT_GUIDED: "project:init-git-guided",
@@ -1504,6 +1505,10 @@ const api: ElectronAPI = {
 
     getBulkStats: (projectIds: string[]) =>
       _unwrappingInvoke(CHANNELS.PROJECT_GET_BULK_STATS, projectIds),
+
+    onStatsUpdated: (
+      callback: (stats: import("../shared/types/ipc/project.js").ProjectStatusMap) => void
+    ) => _typedOn(CHANNELS.PROJECT_STATS_UPDATED, callback),
 
     createFolder: (parentPath: string, folderName: string): Promise<string> =>
       _unwrappingInvoke(CHANNELS.PROJECT_CREATE_FOLDER, { parentPath, folderName }),
