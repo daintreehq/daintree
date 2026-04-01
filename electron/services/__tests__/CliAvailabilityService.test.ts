@@ -150,6 +150,46 @@ describe("CliAvailabilityService", () => {
       }
     });
 
+    it("calls refreshPath on first check (cold start)", async () => {
+      mockedExecFileSync.mockImplementation(() => Buffer.from(""));
+
+      await service.checkAvailability();
+
+      expect(refreshPath).toHaveBeenCalledOnce();
+    });
+
+    it("does not call refreshPath on subsequent checks (warm cache)", async () => {
+      mockedExecFileSync.mockImplementation(() => Buffer.from(""));
+
+      await service.checkAvailability();
+      vi.mocked(refreshPath).mockClear();
+
+      // Second check — cache is warm, should not call refreshPath
+      await service.refresh();
+      // refresh() calls refreshPath explicitly, so clear again
+      vi.mocked(refreshPath).mockClear();
+
+      // Force a new check via the service's own checkAvailability
+      // After refresh completes, inFlightCheck is cleared and availability is set
+      // A subsequent checkAvailability should NOT call refreshPath since availability !== null
+      await service.checkAvailability();
+      expect(refreshPath).not.toHaveBeenCalled();
+    });
+
+    it("deduplicates refreshPath across concurrent cold-start calls", async () => {
+      mockedExecFileSync.mockImplementation(() => Buffer.from(""));
+
+      await Promise.all([
+        service.checkAvailability(),
+        service.checkAvailability(),
+        service.checkAvailability(),
+      ]);
+
+      // All concurrent calls share the same in-flight promise,
+      // so refreshPath should only be called once
+      expect(refreshPath).toHaveBeenCalledOnce();
+    });
+
     it("caches results after first check", async () => {
       mockedExecFileSync.mockImplementation(() => Buffer.from(""));
 

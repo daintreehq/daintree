@@ -29,7 +29,9 @@ try {
   // GC exposure not available — non-critical
 }
 
-fixPath();
+if (app.isPackaged) {
+  fixPath();
+}
 
 // In development, use a separate userData directory so the dev instance
 // doesn't conflict with the production app's single-instance lock or storage.

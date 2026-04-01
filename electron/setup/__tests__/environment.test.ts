@@ -7,18 +7,7 @@ const fsMock = vi.hoisted(() => ({
   rmSync: vi.fn(),
 }));
 
-vi.mock("fs", () => ({
-  default: {
-    existsSync: fsMock.existsSync,
-    readdirSync: fsMock.readdirSync,
-    rmSync: fsMock.rmSync,
-  },
-  existsSync: fsMock.existsSync,
-  readdirSync: fsMock.readdirSync,
-  rmSync: fsMock.rmSync,
-}));
-
-vi.mock("electron", () => ({
+const electronMock = vi.hoisted(() => ({
   app: {
     isPackaged: false,
     getPath: vi.fn(() => "/tmp/test-appdata"),
@@ -30,9 +19,24 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("fix-path", () => ({
+const fixPathMock = vi.hoisted(() => ({
   default: vi.fn(),
 }));
+
+vi.mock("fs", () => ({
+  default: {
+    existsSync: fsMock.existsSync,
+    readdirSync: fsMock.readdirSync,
+    rmSync: fsMock.rmSync,
+  },
+  existsSync: fsMock.existsSync,
+  readdirSync: fsMock.readdirSync,
+  rmSync: fsMock.rmSync,
+}));
+
+vi.mock("electron", () => electronMock);
+
+vi.mock("fix-path", () => fixPathMock);
 
 vi.mock("node:v8", () => ({
   default: { setFlagsFromString: vi.fn() },
@@ -427,5 +431,38 @@ describe("reset-data", () => {
     await import("../environment.js");
 
     expect(fsMock.readdirSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("fixPath packaging guard", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.argv = ["electron", "main.js"];
+  });
+
+  afterEach(() => {
+    electronMock.app.isPackaged = false;
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    process.argv = originalArgv;
+  });
+
+  it("does not call fixPath in dev mode (isPackaged=false)", async () => {
+    electronMock.app.isPackaged = false;
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    expect(fixPathMock.default).not.toHaveBeenCalled();
+  });
+
+  it("calls fixPath in packaged mode (isPackaged=true)", async () => {
+    electronMock.app.isPackaged = true;
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    expect(fixPathMock.default).toHaveBeenCalledOnce();
   });
 });
