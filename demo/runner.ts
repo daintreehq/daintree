@@ -12,7 +12,6 @@ const { values } = parseArgs({
     output: { type: "string", short: "o" },
     preset: { type: "string", short: "p" },
     fps: { type: "string", short: "f" },
-    "keep-frames": { type: "boolean", default: false },
   },
   allowPositionals: false,
 });
@@ -34,7 +33,8 @@ async function run(): Promise<void> {
 
   const outputPath = values.output ?? config.outputFile;
   const preset = (values.preset ?? config.preset) as DemoEncodePayload["preset"];
-  const fps = values.fps ? parseInt(values.fps, 10) : (config.fps ?? 30);
+  const parsedFps = values.fps ? parseInt(values.fps, 10) : (config.fps ?? 30);
+  const fps = Number.isFinite(parsedFps) && parsedFps > 0 ? parsedFps : 30;
 
   console.log(`Launching Electron in demo mode...`);
   const { app, window } = await launchApp({
