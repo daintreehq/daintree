@@ -63,11 +63,13 @@ function clampToDisplay(bounds: { x: number; y: number; width: number; height: n
   const display = screen.getDisplayMatching(bounds as Electron.Rectangle);
   if (!display) return bounds;
   const wa = display.workArea;
+  const clampedWidth = Math.round(Math.min(bounds.width, wa.width));
+  const clampedHeight = Math.round(Math.min(bounds.height, wa.height));
   return {
-    x: Math.max(wa.x, Math.min(bounds.x, wa.x + wa.width - bounds.width)),
-    y: Math.max(wa.y, Math.min(bounds.y, wa.y + wa.height - bounds.height)),
-    width: bounds.width,
-    height: bounds.height,
+    x: Math.max(wa.x, Math.min(bounds.x, wa.x + wa.width - clampedWidth)),
+    y: Math.max(wa.y, Math.min(bounds.y, wa.y + wa.height - clampedHeight)),
+    width: clampedWidth,
+    height: clampedHeight,
   };
 }
 
@@ -152,7 +154,14 @@ export function createWindowWithState(
     const visibleArea = Math.max(0, visibleWidth) * Math.max(0, visibleHeight);
     const totalArea = bounds.width * bounds.height;
 
-    if (visibleArea < totalArea * 0.5) {
+    if (
+      visibleArea < totalArea * 0.5 ||
+      bounds.width > workArea.width ||
+      bounds.height > workArea.height
+    ) {
+      const clampedWidth = Math.round(Math.min(bounds.width, workArea.width));
+      const clampedHeight = Math.round(Math.min(bounds.height, workArea.height));
+      win.setSize(clampedWidth, clampedHeight);
       win.center();
     }
   }
