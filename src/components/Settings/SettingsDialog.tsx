@@ -140,22 +140,7 @@ import {
   parseQuery,
 } from "./settingsSearchUtils";
 import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
-import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
-import { useProjectSettings } from "@/hooks";
-import { useProjectStore } from "@/store/projectStore";
-import { useWorktrees } from "@/hooks/useWorktrees";
-import { useRecipeStore } from "@/store/recipeStore";
-import { debounce } from "@/utils/debounce";
-import {
-  createProjectSettingsSnapshot,
-  areSnapshotsEqual,
-  type EnvVar,
-} from "@/components/Project/projectSettingsDirty";
-import { validatePathPattern } from "@shared/utils/pathPattern";
-import type { RunCommand, CopyTreeSettings } from "@/types";
-import type { ProjectTerminalSettings } from "@shared/types/project";
-import type { CommandOverride } from "@shared/types/commands";
-import type { NotificationSettings } from "@shared/types/ipc/api";
+import { useProjectSettingsForm } from "@/hooks/useProjectSettingsForm";
 import { GeneralTab as ProjectGeneralTab } from "@/components/Project/GeneralTab";
 import { ContextTab as ProjectContextTab } from "@/components/Project/ContextTab";
 import { AutomationTab as ProjectAutomationTab } from "@/components/Project/AutomationTab";
@@ -399,338 +384,17 @@ export function SettingsDialog({
     twoPaneSplitConfig.defaultRatio,
   ]);
 
-  // ── Project settings state machine ──
-  const {
-    settings: projectSettings,
-    saveSettings: saveProjectSettings,
-    isLoading: projectIsLoading,
-    error: projectError,
-  } = useProjectSettings(projectId ?? "");
-  const { projects, updateProject, enableInRepoSettings, disableInRepoSettings } =
-    useProjectStore();
-  const currentProject = projectId ? projects.find((p) => p.id === projectId) : undefined;
-
-  const [projectAutoSaveError, setProjectAutoSaveError] = useState<string | null>(null);
-  const [projectName, setProjectName] = useState("");
-  const [projectEmoji, setProjectEmoji] = useState("🌲");
-  const [projectColor, setProjectColor] = useState<string | undefined>(undefined);
-  const [runCommands, setRunCommands] = useState<RunCommand[]>([]);
-  const [environmentVariables, setEnvironmentVariables] = useState<EnvVar[]>([]);
-  const [excludedPaths, setExcludedPaths] = useState<string[]>([]);
-  const [projectIsInitialized, setProjectIsInitialized] = useState(false);
-  const [projectIconSvg, setProjectIconSvg] = useState<string | undefined>(undefined);
-  const [defaultWorktreeRecipeId, setDefaultWorktreeRecipeId] = useState<string | undefined>(
-    undefined
-  );
-  const [devServerCommand, setDevServerCommand] = useState<string>("");
-  const [devServerLoadTimeout, setDevServerLoadTimeout] = useState<number | undefined>(undefined);
-  const [commandOverrides, setCommandOverrides] = useState<CommandOverride[]>([]);
-  const [copyTreeSettings, setCopyTreeSettings] = useState<CopyTreeSettings>({});
-  const [branchPrefixMode, setBranchPrefixMode] = useState<"none" | "username" | "custom">("none");
-  const [branchPrefixCustom, setBranchPrefixCustom] = useState<string>("");
-  const [worktreePathPattern, setWorktreePathPattern] = useState<string>("");
-  const [terminalShell, setTerminalShell] = useState<string>("");
-  const [terminalShellArgs, setTerminalShellArgs] = useState<string>("");
-  const [terminalDefaultCwd, setTerminalDefaultCwd] = useState<string>("");
-  const [terminalScrollback, setTerminalScrollback] = useState<string>("");
-  const [notificationOverrides, setNotificationOverrides] = useState<Partial<NotificationSettings>>(
-    {}
-  );
-  const [githubRemote, setGithubRemote] = useState<string | undefined>(undefined);
-  const lastSavedSnapshotRef = useRef<ReturnType<typeof createProjectSettingsSnapshot> | null>(
-    null
-  );
-
-  const { recipes, isLoading: recipesLoading } = useRecipeStore();
-  const { worktreeMap, worktrees } = useWorktrees();
-
-  const currentTerminalSettings = useMemo((): ProjectTerminalSettings | undefined => {
-    const result: ProjectTerminalSettings = {};
-    if (terminalShell.trim()) result.shell = terminalShell.trim();
-    if (terminalShellArgs.trim()) result.shellArgs = terminalShellArgs.trim().split(/\s+/);
-    if (terminalDefaultCwd.trim()) result.defaultWorkingDirectory = terminalDefaultCwd.trim();
-    if (terminalScrollback.trim()) {
-      const num = Number(terminalScrollback);
-      if (Number.isFinite(num) && num >= SCROLLBACK_MIN && num <= SCROLLBACK_MAX) {
-        result.scrollbackLines = Math.trunc(num);
-      }
-    }
-    return Object.keys(result).length > 0 ? result : undefined;
-  }, [terminalShell, terminalShellArgs, terminalDefaultCwd, terminalScrollback]);
-
-  const currentProjectSnapshot = useMemo(() => {
-    if (!currentProject) return null;
-    return createProjectSettingsSnapshot(
-      projectName,
-      projectEmoji,
-      devServerCommand,
-      projectIconSvg,
-      excludedPaths,
-      environmentVariables,
-      runCommands,
-      defaultWorktreeRecipeId,
-      commandOverrides,
-      copyTreeSettings,
-      branchPrefixMode,
-      branchPrefixCustom,
-      devServerLoadTimeout,
-      githubRemote,
-      worktreePathPattern,
-      currentTerminalSettings,
-      notificationOverrides,
-      projectColor
-    );
-  }, [
-    projectName,
-    projectEmoji,
-    projectColor,
-    devServerCommand,
-    devServerLoadTimeout,
-    githubRemote,
-    projectIconSvg,
-    excludedPaths,
-    environmentVariables,
-    runCommands,
-    defaultWorktreeRecipeId,
-    commandOverrides,
-    copyTreeSettings,
-    branchPrefixMode,
-    branchPrefixCustom,
-    worktreePathPattern,
-    currentProject,
-    currentTerminalSettings,
-    notificationOverrides,
-  ]);
-
-  useEffect(() => {
-    if (isOpen && !projectIsLoading && projectSettings && currentProject && !projectIsInitialized) {
-      const initialRunCommands = projectSettings.runCommands || [];
-      const envVars = projectSettings.environmentVariables || {};
-      const initialEnvVars = Object.entries(envVars).map(([key, value]) => ({
-        id: `env-${Date.now()}-${Math.random()}`,
-        key,
-        value,
-      }));
-      const initialExcludedPaths = projectSettings.excludedPaths || [];
-      const initialProjectIconSvg = projectSettings.projectIconSvg;
-      const initialDefaultWorktreeRecipeId = projectSettings.defaultWorktreeRecipeId;
-      const initialDevServerCommand = projectSettings.devServerCommand || "";
-      const initialDevServerLoadTimeout = projectSettings.devServerLoadTimeout;
-      const initialCommandOverrides = projectSettings.commandOverrides || [];
-      const initialCopyTreeSettings = projectSettings.copyTreeSettings || {};
-      const initialBranchPrefixMode = projectSettings.branchPrefixMode ?? "none";
-      const initialBranchPrefixCustom = projectSettings.branchPrefixCustom ?? "";
-      const initialWorktreePathPattern = projectSettings.worktreePathPattern ?? "";
-      const initialTerminalSettings = projectSettings.terminalSettings;
-      const initialNotificationOverrides = projectSettings.notificationOverrides ?? {};
-      const initialGithubRemote = projectSettings.githubRemote;
-
-      setProjectName(currentProject.name);
-      setProjectEmoji(currentProject.emoji || "🌲");
-      setProjectColor(currentProject.color);
-      setRunCommands(initialRunCommands);
-      setEnvironmentVariables(initialEnvVars);
-      setExcludedPaths(initialExcludedPaths);
-      setProjectIconSvg(initialProjectIconSvg);
-      setDefaultWorktreeRecipeId(initialDefaultWorktreeRecipeId);
-      setDevServerCommand(initialDevServerCommand);
-      setDevServerLoadTimeout(initialDevServerLoadTimeout);
-      setCommandOverrides(initialCommandOverrides);
-      setCopyTreeSettings(initialCopyTreeSettings);
-      setBranchPrefixMode(initialBranchPrefixMode);
-      setBranchPrefixCustom(initialBranchPrefixCustom);
-      setWorktreePathPattern(initialWorktreePathPattern);
-      setTerminalShell(initialTerminalSettings?.shell ?? "");
-      setTerminalShellArgs(initialTerminalSettings?.shellArgs?.join(" ") ?? "");
-      setTerminalDefaultCwd(initialTerminalSettings?.defaultWorkingDirectory ?? "");
-      setTerminalScrollback(
-        initialTerminalSettings?.scrollbackLines !== undefined
-          ? String(initialTerminalSettings.scrollbackLines)
-          : ""
-      );
-      setNotificationOverrides(initialNotificationOverrides);
-      setGithubRemote(initialGithubRemote);
-
-      lastSavedSnapshotRef.current = createProjectSettingsSnapshot(
-        currentProject.name,
-        currentProject.emoji || "🌲",
-        initialDevServerCommand,
-        initialProjectIconSvg,
-        initialExcludedPaths,
-        initialEnvVars,
-        initialRunCommands,
-        initialDefaultWorktreeRecipeId,
-        initialCommandOverrides,
-        initialCopyTreeSettings,
-        initialBranchPrefixMode,
-        initialBranchPrefixCustom,
-        initialDevServerLoadTimeout,
-        initialGithubRemote,
-        initialWorktreePathPattern,
-        initialTerminalSettings,
-        initialNotificationOverrides,
-        currentProject.color
-      );
-      setProjectIsInitialized(true);
-    }
-    if (!isOpen) {
-      setProjectIsInitialized(false);
-      setEnvironmentVariables([]);
-      setProjectIconSvg(undefined);
-      setDefaultWorktreeRecipeId(undefined);
-      setDevServerCommand("");
-      setDevServerLoadTimeout(undefined);
-      setCommandOverrides([]);
-      setCopyTreeSettings({});
-      setProjectAutoSaveError(null);
-      setProjectColor(undefined);
-      setBranchPrefixMode("none");
-      setBranchPrefixCustom("");
-      setWorktreePathPattern("");
-      setTerminalShell("");
-      setTerminalShellArgs("");
-      setTerminalDefaultCwd("");
-      setTerminalScrollback("");
-      setNotificationOverrides({});
-      setGithubRemote(undefined);
-      lastSavedSnapshotRef.current = null;
-    }
-  }, [projectSettings, isOpen, projectIsInitialized, currentProject, projectIsLoading]);
-
-  useEffect(() => {
-    if (isOpen) {
-      setProjectIsInitialized(false);
-    }
-  }, [projectId, isOpen]);
-
-  const projectPersistRef = useRef<() => Promise<void>>(undefined);
-  projectPersistRef.current = async () => {
-    if (!projectSettings || !currentProject || !projectId) return;
-
-    const sanitizedRunCommands = runCommands
-      .map((cmd) => ({ ...cmd, name: cmd.name.trim(), command: cmd.command.trim() }))
-      .filter((cmd) => cmd.name && cmd.command);
-
-    const envVarRecord: Record<string, string> = {};
-    const seenKeys = new Set<string>();
-    for (const envVar of environmentVariables) {
-      const trimmedKey = envVar.key.trim();
-      if (!trimmedKey || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmedKey) || seenKeys.has(trimmedKey))
-        continue;
-      seenKeys.add(trimmedKey);
-      envVarRecord[trimmedKey] = envVar.value;
-    }
-
-    const sanitizedPaths = excludedPaths.map((p) => p.trim()).filter(Boolean);
-    const sanitizedCopyTreeSettings: CopyTreeSettings = {};
-    if (copyTreeSettings.maxContextSize !== undefined)
-      sanitizedCopyTreeSettings.maxContextSize = copyTreeSettings.maxContextSize;
-    if (copyTreeSettings.maxFileSize !== undefined)
-      sanitizedCopyTreeSettings.maxFileSize = copyTreeSettings.maxFileSize;
-    if (copyTreeSettings.charLimit !== undefined)
-      sanitizedCopyTreeSettings.charLimit = copyTreeSettings.charLimit;
-    if (copyTreeSettings.strategy) sanitizedCopyTreeSettings.strategy = copyTreeSettings.strategy;
-    if (copyTreeSettings.alwaysInclude && copyTreeSettings.alwaysInclude.length > 0) {
-      sanitizedCopyTreeSettings.alwaysInclude = copyTreeSettings.alwaysInclude
-        .map((p) => p.trim())
-        .filter(Boolean);
-      if (sanitizedCopyTreeSettings.alwaysInclude.length === 0)
-        delete sanitizedCopyTreeSettings.alwaysInclude;
-    }
-    if (copyTreeSettings.alwaysExclude && copyTreeSettings.alwaysExclude.length > 0) {
-      sanitizedCopyTreeSettings.alwaysExclude = copyTreeSettings.alwaysExclude
-        .map((p) => p.trim())
-        .filter(Boolean);
-      if (sanitizedCopyTreeSettings.alwaysExclude.length === 0)
-        delete sanitizedCopyTreeSettings.alwaysExclude;
-    }
-    const hasCopyTreeSettings = Object.keys(sanitizedCopyTreeSettings).length > 0;
-
-    const sanitizedBranchPrefixCustom = branchPrefixCustom.trim();
-    const effectivePrefixMode =
-      branchPrefixMode === "custom" && !sanitizedBranchPrefixCustom ? "none" : branchPrefixMode;
-    const sanitizedWorktreePathPattern = worktreePathPattern.trim() || undefined;
-    if (sanitizedWorktreePathPattern) {
-      const patternValidation = validatePathPattern(sanitizedWorktreePathPattern);
-      if (!patternValidation.valid) return;
-    }
-
-    setProjectAutoSaveError(null);
-    try {
-      const trimmedName = projectName.trim() || currentProject.name;
-      const identityChanged =
-        trimmedName !== currentProject.name ||
-        projectEmoji !== (currentProject.emoji || "🌲") ||
-        projectColor !== currentProject.color;
-      if (identityChanged) {
-        await updateProject(projectId, {
-          name: trimmedName,
-          emoji: projectEmoji,
-          color: projectColor,
-        });
-      }
-
-      await saveProjectSettings({
-        ...projectSettings,
-        runCommands: sanitizedRunCommands,
-        environmentVariables: Object.keys(envVarRecord).length > 0 ? envVarRecord : undefined,
-        excludedPaths: sanitizedPaths.length > 0 ? sanitizedPaths : undefined,
-        projectIconSvg,
-        defaultWorktreeRecipeId,
-        devServerCommand: devServerCommand.trim() || undefined,
-        devServerLoadTimeout,
-        commandOverrides: commandOverrides.length > 0 ? commandOverrides : undefined,
-        copyTreeSettings: hasCopyTreeSettings ? sanitizedCopyTreeSettings : undefined,
-        branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
-        branchPrefixCustom:
-          effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
-        githubRemote: githubRemote || undefined,
-        worktreePathPattern: sanitizedWorktreePathPattern,
-        terminalSettings: currentTerminalSettings,
-        notificationOverrides:
-          Object.keys(notificationOverrides).length > 0 ? notificationOverrides : undefined,
-        insecureEnvironmentVariables: undefined,
-        unresolvedSecureEnvironmentVariables: undefined,
-      });
-
-      if (currentProjectSnapshot) {
-        lastSavedSnapshotRef.current = currentProjectSnapshot;
-      }
-    } catch (err) {
-      console.error("Failed to auto-save project settings:", err);
-      setProjectAutoSaveError(err instanceof Error ? err.message : "Failed to save settings");
-    }
-  };
-
-  const debouncedProjectSaveRef = useRef(
-    debounce(() => {
-      projectPersistRef.current?.();
-    }, 500)
-  );
-
-  useEffect(() => {
-    if (!projectIsInitialized || !currentProjectSnapshot || !lastSavedSnapshotRef.current) return;
-    if (areSnapshotsEqual(lastSavedSnapshotRef.current, currentProjectSnapshot)) return;
-    debouncedProjectSaveRef.current();
-  }, [currentProjectSnapshot, projectIsInitialized]);
-
-  useEffect(() => {
-    const save = debouncedProjectSaveRef.current;
-    return () => {
-      save.cancel();
-    };
-  }, []);
+  const projectForm = useProjectSettingsForm({ projectId: projectId ?? null, isOpen });
 
   const handleBeforeClose = useCallback(async () => {
-    await debouncedProjectSaveRef.current.flush();
+    await projectForm.flush();
     return true;
-  }, []);
+  }, [projectForm]);
 
   const handleClose = useCallback(async () => {
-    await debouncedProjectSaveRef.current.flush();
+    await projectForm.flush();
     onClose();
-  }, [onClose]);
-  // ── End project settings state machine ──
+  }, [onClose, projectForm]);
 
   const searchResults = useMemo(
     () =>
@@ -1597,28 +1261,28 @@ export function SettingsDialog({
                 {/* Project settings panels */}
                 {activeScope === "project" && projectId && (
                   <>
-                    {projectIsLoading && (
+                    {projectForm.projectIsLoading && (
                       <div className="text-sm text-canopy-text/60 text-center py-8">
                         Loading settings...
                       </div>
                     )}
-                    {projectError && (
+                    {projectForm.projectError && (
                       <div
                         className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
                         role="alert"
                       >
-                        Failed to load settings: {projectError}
+                        Failed to load settings: {projectForm.projectError}
                       </div>
                     )}
-                    {projectAutoSaveError && (
+                    {projectForm.projectAutoSaveError && (
                       <div
                         className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
                         role="alert"
                       >
-                        {projectAutoSaveError}
+                        {projectForm.projectAutoSaveError}
                       </div>
                     )}
-                    {!projectIsLoading && !projectError && (
+                    {!projectForm.projectIsLoading && !projectForm.projectError && (
                       <>
                         <div
                           role="tabpanel"
@@ -1629,21 +1293,21 @@ export function SettingsDialog({
                         >
                           {visitedTabs.has("project:general") && (
                             <ProjectGeneralTab
-                              currentProject={currentProject}
-                              name={projectName}
-                              onNameChange={setProjectName}
-                              emoji={projectEmoji}
-                              onEmojiChange={setProjectEmoji}
-                              color={projectColor}
-                              onColorChange={setProjectColor}
-                              devServerCommand={devServerCommand}
-                              onDevServerCommandChange={setDevServerCommand}
-                              devServerLoadTimeout={devServerLoadTimeout}
-                              onDevServerLoadTimeoutChange={setDevServerLoadTimeout}
-                              projectIconSvg={projectIconSvg}
-                              onProjectIconSvgChange={setProjectIconSvg}
-                              enableInRepoSettings={enableInRepoSettings}
-                              disableInRepoSettings={disableInRepoSettings}
+                              currentProject={projectForm.currentProject}
+                              name={projectForm.projectName}
+                              onNameChange={projectForm.setProjectName}
+                              emoji={projectForm.projectEmoji}
+                              onEmojiChange={projectForm.setProjectEmoji}
+                              color={projectForm.projectColor}
+                              onColorChange={projectForm.setProjectColor}
+                              devServerCommand={projectForm.devServerCommand}
+                              onDevServerCommandChange={projectForm.setDevServerCommand}
+                              devServerLoadTimeout={projectForm.devServerLoadTimeout}
+                              onDevServerLoadTimeoutChange={projectForm.setDevServerLoadTimeout}
+                              projectIconSvg={projectForm.projectIconSvg}
+                              onProjectIconSvgChange={projectForm.setProjectIconSvg}
+                              enableInRepoSettings={projectForm.enableInRepoSettings}
+                              disableInRepoSettings={projectForm.disableInRepoSettings}
                               projectId={projectId}
                               isOpen={isOpen}
                             />
@@ -1659,14 +1323,14 @@ export function SettingsDialog({
                         >
                           {visitedTabs.has("project:context") && (
                             <ProjectContextTab
-                              excludedPaths={excludedPaths}
-                              onExcludedPathsChange={setExcludedPaths}
-                              copyTreeSettings={copyTreeSettings}
-                              onCopyTreeSettingsChange={setCopyTreeSettings}
-                              environmentVariables={environmentVariables}
-                              onEnvironmentVariablesChange={setEnvironmentVariables}
-                              worktrees={worktrees}
-                              settings={projectSettings}
+                              excludedPaths={projectForm.excludedPaths}
+                              onExcludedPathsChange={projectForm.setExcludedPaths}
+                              copyTreeSettings={projectForm.copyTreeSettings}
+                              onCopyTreeSettingsChange={projectForm.setCopyTreeSettings}
+                              environmentVariables={projectForm.environmentVariables}
+                              onEnvironmentVariablesChange={projectForm.setEnvironmentVariables}
+                              worktrees={projectForm.worktrees}
+                              settings={projectForm.projectSettings}
                               isOpen={isOpen}
                             />
                           )}
@@ -1681,27 +1345,29 @@ export function SettingsDialog({
                         >
                           {visitedTabs.has("project:automation") && (
                             <ProjectAutomationTab
-                              currentProject={currentProject}
-                              runCommands={runCommands}
-                              onRunCommandsChange={setRunCommands}
-                              defaultWorktreeRecipeId={defaultWorktreeRecipeId}
-                              onDefaultWorktreeRecipeIdChange={setDefaultWorktreeRecipeId}
-                              branchPrefixMode={branchPrefixMode}
-                              onBranchPrefixModeChange={setBranchPrefixMode}
-                              branchPrefixCustom={branchPrefixCustom}
-                              onBranchPrefixCustomChange={setBranchPrefixCustom}
-                              worktreePathPattern={worktreePathPattern}
-                              onWorktreePathPatternChange={setWorktreePathPattern}
-                              terminalShell={terminalShell}
-                              onTerminalShellChange={setTerminalShell}
-                              terminalShellArgs={terminalShellArgs}
-                              onTerminalShellArgsChange={setTerminalShellArgs}
-                              terminalDefaultCwd={terminalDefaultCwd}
-                              onTerminalDefaultCwdChange={setTerminalDefaultCwd}
-                              terminalScrollback={terminalScrollback}
-                              onTerminalScrollbackChange={setTerminalScrollback}
-                              recipes={recipes}
-                              recipesLoading={recipesLoading}
+                              currentProject={projectForm.currentProject}
+                              runCommands={projectForm.runCommands}
+                              onRunCommandsChange={projectForm.setRunCommands}
+                              defaultWorktreeRecipeId={projectForm.defaultWorktreeRecipeId}
+                              onDefaultWorktreeRecipeIdChange={
+                                projectForm.setDefaultWorktreeRecipeId
+                              }
+                              branchPrefixMode={projectForm.branchPrefixMode}
+                              onBranchPrefixModeChange={projectForm.setBranchPrefixMode}
+                              branchPrefixCustom={projectForm.branchPrefixCustom}
+                              onBranchPrefixCustomChange={projectForm.setBranchPrefixCustom}
+                              worktreePathPattern={projectForm.worktreePathPattern}
+                              onWorktreePathPatternChange={projectForm.setWorktreePathPattern}
+                              terminalShell={projectForm.terminalShell}
+                              onTerminalShellChange={projectForm.setTerminalShell}
+                              terminalShellArgs={projectForm.terminalShellArgs}
+                              onTerminalShellArgsChange={projectForm.setTerminalShellArgs}
+                              terminalDefaultCwd={projectForm.terminalDefaultCwd}
+                              onTerminalDefaultCwdChange={projectForm.setTerminalDefaultCwd}
+                              terminalScrollback={projectForm.terminalScrollback}
+                              onTerminalScrollbackChange={projectForm.setTerminalScrollback}
+                              recipes={projectForm.recipes}
+                              recipesLoading={projectForm.recipesLoading}
                               onNavigateToRecipes={() => {
                                 markTabVisited("project:recipes");
                                 startTransition(() => setActiveTab("project:recipes"));
@@ -1720,9 +1386,11 @@ export function SettingsDialog({
                           {visitedTabs.has("project:recipes") && (
                             <ProjectRecipesTab
                               projectId={projectId}
-                              defaultWorktreeRecipeId={defaultWorktreeRecipeId}
-                              onDefaultWorktreeRecipeIdChange={setDefaultWorktreeRecipeId}
-                              worktreeMap={worktreeMap}
+                              defaultWorktreeRecipeId={projectForm.defaultWorktreeRecipeId}
+                              onDefaultWorktreeRecipeIdChange={
+                                projectForm.setDefaultWorktreeRecipeId
+                              }
+                              worktreeMap={projectForm.worktreeMap}
                               isOpen={isOpen}
                             />
                           )}
@@ -1738,8 +1406,8 @@ export function SettingsDialog({
                           {visitedTabs.has("project:commands") && (
                             <CommandOverridesTab
                               projectId={projectId}
-                              overrides={commandOverrides}
-                              onChange={setCommandOverrides}
+                              overrides={projectForm.commandOverrides}
+                              onChange={projectForm.setCommandOverrides}
                             />
                           )}
                         </div>
@@ -1753,8 +1421,8 @@ export function SettingsDialog({
                         >
                           {visitedTabs.has("project:notifications") && (
                             <ProjectNotificationsTab
-                              overrides={notificationOverrides}
-                              onChange={setNotificationOverrides}
+                              overrides={projectForm.notificationOverrides}
+                              onChange={projectForm.setNotificationOverrides}
                             />
                           )}
                         </div>
@@ -1766,11 +1434,11 @@ export function SettingsDialog({
                           tabIndex={0}
                           className={activeTab === "project:github" ? "" : "hidden"}
                         >
-                          {visitedTabs.has("project:github") && currentProject && (
+                          {visitedTabs.has("project:github") && projectForm.currentProject && (
                             <ProjectGitHubTab
-                              githubRemote={githubRemote}
-                              onGithubRemoteChange={setGithubRemote}
-                              projectPath={currentProject.path}
+                              githubRemote={projectForm.githubRemote}
+                              onGithubRemoteChange={projectForm.setGithubRemote}
+                              projectPath={projectForm.currentProject.path}
                             />
                           )}
                         </div>
