@@ -7,7 +7,7 @@ import { ErrorBoundary } from "../ErrorBoundary";
 import { PortalDock, PortalVisibilityController } from "../Portal";
 import { ProjectSwitchOverlay } from "@/components/Project";
 import { ChordIndicator } from "./ChordIndicator";
-import { DemoCursor } from "../Demo";
+import { DemoCursor, DemoOverlay } from "../Demo";
 
 import { AllClearOverlay } from "../AllClearOverlay";
 import { useDiagnosticsStore, useDockStore, type PanelState } from "@/store";
@@ -347,7 +347,12 @@ export function AppLayout({
       <ChordIndicator />
 
       <AllClearOverlay />
-      {window.electron?.demo && <DemoCursor />}
+      {window.electron?.demo && (
+        <>
+          <DemoOverlay />
+          <DemoCursor />
+        </>
+      )}
     </div>
   );
 }

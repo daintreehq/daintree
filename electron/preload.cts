@@ -941,6 +941,22 @@ const CHANNELS = {
   DEMO_START_CAPTURE: "demo:start-capture",
   DEMO_STOP_CAPTURE: "demo:stop-capture",
   DEMO_GET_CAPTURE_STATUS: "demo:get-capture-status",
+  DEMO_SCROLL: "demo:scroll",
+  DEMO_EXEC_SCROLL: "demo:exec-scroll",
+  DEMO_DRAG: "demo:drag",
+  DEMO_EXEC_DRAG: "demo:exec-drag",
+  DEMO_PRESS_KEY: "demo:press-key",
+  DEMO_EXEC_PRESS_KEY: "demo:exec-press-key",
+  DEMO_SPOTLIGHT: "demo:spotlight",
+  DEMO_EXEC_SPOTLIGHT: "demo:exec-spotlight",
+  DEMO_DISMISS_SPOTLIGHT: "demo:dismiss-spotlight",
+  DEMO_EXEC_DISMISS_SPOTLIGHT: "demo:exec-dismiss-spotlight",
+  DEMO_ANNOTATE: "demo:annotate",
+  DEMO_EXEC_ANNOTATE: "demo:exec-annotate",
+  DEMO_DISMISS_ANNOTATION: "demo:dismiss-annotation",
+  DEMO_EXEC_DISMISS_ANNOTATION: "demo:exec-dismiss-annotation",
+  DEMO_WAIT_FOR_IDLE: "demo:wait-for-idle",
+  DEMO_EXEC_WAIT_FOR_IDLE: "demo:exec-wait-for-idle",
   DEMO_ENCODE: "demo:encode",
   DEMO_ENCODE_PROGRESS: "demo:encode:progress",
 
@@ -2652,6 +2668,35 @@ const api: ElectronAPI = {
           }) => _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
           stopCapture: () => _unwrappingInvoke(CHANNELS.DEMO_STOP_CAPTURE),
           getCaptureStatus: () => _unwrappingInvoke(CHANNELS.DEMO_GET_CAPTURE_STATUS),
+          scroll: (selector: string, durationMs?: number) =>
+            _unwrappingInvoke(CHANNELS.DEMO_SCROLL, { selector, durationMs }),
+          drag: (fromSelector: string, toSelector: string, durationMs?: number) =>
+            _unwrappingInvoke(CHANNELS.DEMO_DRAG, { fromSelector, toSelector, durationMs }),
+          pressKey: (
+            key: string,
+            code?: string,
+            modifiers?: Array<"mod" | "ctrl" | "shift" | "alt" | "meta">,
+            selector?: string
+          ) => _unwrappingInvoke(CHANNELS.DEMO_PRESS_KEY, { key, code, modifiers, selector }),
+          spotlight: (selector: string, padding?: number) =>
+            _unwrappingInvoke(CHANNELS.DEMO_SPOTLIGHT, { selector, padding }),
+          dismissSpotlight: () => _unwrappingInvoke(CHANNELS.DEMO_DISMISS_SPOTLIGHT),
+          annotate: (
+            selector: string,
+            text: string,
+            position?: "top" | "bottom" | "left" | "right",
+            id?: string
+          ) =>
+            _unwrappingInvoke(CHANNELS.DEMO_ANNOTATE, {
+              selector,
+              text,
+              position,
+              id,
+            }),
+          dismissAnnotation: (id?: string) =>
+            _unwrappingInvoke(CHANNELS.DEMO_DISMISS_ANNOTATION, { id }),
+          waitForIdle: (settleMs?: number, timeoutMs?: number) =>
+            _unwrappingInvoke(CHANNELS.DEMO_WAIT_FOR_IDLE, { settleMs, timeoutMs }),
           encode: (payload: import("../shared/types/ipc/demo.js").DemoEncodePayload) =>
             _unwrappingInvoke(CHANNELS.DEMO_ENCODE, payload),
           onEncodeProgress: (

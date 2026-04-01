@@ -79,3 +79,46 @@ export interface DemoEncodeResult {
   outputPath: string;
   durationMs: number;
 }
+
+export interface DemoScrollPayload {
+  selector: string;
+  durationMs?: number;
+}
+
+export interface DemoDragPayload {
+  fromSelector: string;
+  toSelector: string;
+  durationMs?: number;
+}
+
+export interface DemoPressKeyPayload {
+  key: string;
+  code?: string;
+  modifiers?: Array<"mod" | "ctrl" | "shift" | "alt" | "meta">;
+  selector?: string;
+}
+
+export interface DemoSpotlightPayload {
+  selector: string;
+  padding?: number;
+}
+
+export interface DemoAnnotatePayload {
+  selector: string;
+  text: string;
+  position?: "top" | "bottom" | "left" | "right";
+  id?: string;
+}
+
+export interface DemoAnnotateResult {
+  id: string;
+}
+
+export interface DemoDismissAnnotationPayload {
+  id?: string;
+}
+
+export interface DemoWaitForIdlePayload {
+  settleMs?: number;
+  timeoutMs?: number;
+}
