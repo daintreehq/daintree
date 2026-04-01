@@ -1,22 +1,15 @@
-import { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
+import { useMemo, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
   Clipboard,
   FolderOpen,
   FolderPlus,
-  Layers,
-  Pencil,
   Pin,
   PinOff,
   Plus,
   Settings2,
   Square,
-  Trash2,
   X,
   AppWindow,
 } from "lucide-react";
@@ -39,9 +32,13 @@ import { useModifierKeys } from "@/hooks/useModifierKeys";
 import { useOverlayState } from "@/hooks";
 import { usePaletteStore } from "@/store/paletteStore";
 import type { ProjectSwitcherMode, SearchableProject } from "@/hooks/useProjectSwitcherPalette";
-import type { ProjectGroup } from "@/store/projectGroupsStore";
-import { buildSwitcherSections, type SwitcherSection } from "./projectGrouping";
 import { useUIStore } from "@/store/uiStore";
+
+interface SwitcherSection {
+  key: string;
+  label: string | null;
+  items: SearchableProject[];
+}
 
 export interface ProjectSwitcherPaletteProps {
   isOpen: boolean;
@@ -70,14 +67,6 @@ export interface ProjectSwitcherPaletteProps {
   onRemoveConfirmClose?: () => void;
   onConfirmRemove?: () => void;
   isRemovingProject?: boolean;
-  groups?: ProjectGroup[];
-  onCreateGroup?: (name: string) => string;
-  onAssignProjectToGroup?: (projectId: string, groupId: string) => void;
-  onRemoveProjectFromGroup?: (projectId: string) => void;
-  onRenameGroup?: (groupId: string, name: string) => void;
-  onDeleteGroup?: (groupId: string) => void;
-  onMoveGroupUp?: (groupId: string) => void;
-  onMoveGroupDown?: (groupId: string) => void;
   onHoverProject?: (project: SearchableProject) => void;
 }
 
@@ -426,266 +415,6 @@ function ProjectListItem({
   );
 }
 
-interface GroupAssignmentPanelProps {
-  projectId: string;
-  groups: ProjectGroup[];
-  onAssign: (projectId: string, groupId: string) => void;
-  onRemoveFromGroup: (projectId: string) => void;
-  onCreate: (name: string) => string;
-  onClose: () => void;
-}
-
-function GroupAssignmentPanel({
-  projectId,
-  groups,
-  onAssign,
-  onRemoveFromGroup,
-  onCreate,
-  onClose,
-}: GroupAssignmentPanelProps) {
-  const [newGroupName, setNewGroupName] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
-  const currentGroup = groups.find((g) => g.projectIds.includes(projectId));
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  const handleCreate = () => {
-    const name = newGroupName.trim();
-    if (!name) return;
-    const groupId = onCreate(name);
-    onAssign(projectId, groupId);
-    onClose();
-  };
-
-  return (
-    <div className="p-2 space-y-1">
-      <div className="px-2 py-1 text-[10px] font-medium tracking-wider uppercase text-canopy-text/40 select-none flex items-center justify-between">
-        <span>Assign to Group</span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="p-0.5 rounded hover:bg-tint/[0.06] text-canopy-text/50 hover:text-canopy-text/80 cursor-pointer"
-          aria-label="Close group assignment"
-        >
-          <X className="w-3 h-3" />
-        </button>
-      </div>
-
-      {groups.map((group) => (
-        <button
-          key={group.id}
-          type="button"
-          onClick={() => {
-            if (currentGroup?.id === group.id) {
-              onRemoveFromGroup(projectId);
-            } else {
-              onAssign(projectId, group.id);
-            }
-            onClose();
-          }}
-          className={cn(
-            "w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)] text-left text-sm transition-colors cursor-pointer",
-            currentGroup?.id === group.id
-              ? "bg-canopy-accent/10 text-canopy-accent"
-              : "text-canopy-text/70 hover:bg-overlay-soft hover:text-canopy-text"
-          )}
-        >
-          {currentGroup?.id === group.id ? (
-            <Check className="w-3.5 h-3.5 shrink-0" />
-          ) : (
-            <Layers className="w-3.5 h-3.5 shrink-0 opacity-50" />
-          )}
-          <span className="truncate">{group.name}</span>
-          <span className="ml-auto text-[10px] text-canopy-text/40">{group.projectIds.length}</span>
-        </button>
-      ))}
-
-      {currentGroup && (
-        <button
-          type="button"
-          onClick={() => {
-            onRemoveFromGroup(projectId);
-            onClose();
-          }}
-          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)] text-left text-sm text-canopy-text/50 hover:bg-overlay-soft hover:text-canopy-text transition-colors cursor-pointer"
-        >
-          <X className="w-3.5 h-3.5 shrink-0" />
-          <span>Remove from group</span>
-        </button>
-      )}
-
-      <div className="pt-1 border-t border-tint/[0.08]">
-        <div className="flex items-center gap-1">
-          <input
-            ref={inputRef}
-            type="text"
-            value={newGroupName}
-            onChange={(e) => setNewGroupName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                handleCreate();
-              } else if (e.key === "Escape") {
-                e.preventDefault();
-                onClose();
-              }
-              e.stopPropagation();
-            }}
-            placeholder="New group name..."
-            className="flex-1 px-2 py-1.5 text-sm bg-transparent border border-border-subtle rounded-[var(--radius-md)] text-canopy-text placeholder:text-canopy-text/30 focus:outline-none focus:border-canopy-accent"
-          />
-          <button
-            type="button"
-            onClick={handleCreate}
-            disabled={!newGroupName.trim()}
-            className="p-1.5 rounded-[var(--radius-md)] text-canopy-text/50 hover:bg-overlay-soft hover:text-canopy-text disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
-            aria-label="Create group"
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-interface GroupHeaderProps {
-  section: SwitcherSection;
-  isCollapsed: boolean;
-  onToggleCollapse: () => void;
-  onMoveUp?: () => void;
-  onMoveDown?: () => void;
-  onRename?: (name: string) => void;
-  onDelete?: () => void;
-  isFirst: boolean;
-  isLast: boolean;
-}
-
-function GroupHeader({
-  section,
-  isCollapsed,
-  onToggleCollapse,
-  onMoveUp,
-  onMoveDown,
-  onRename,
-  onDelete,
-  isFirst,
-  isLast,
-}: GroupHeaderProps) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(section.label ?? "");
-  const editRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (isEditing) editRef.current?.focus();
-  }, [isEditing]);
-
-  const handleSaveEdit = () => {
-    const trimmed = editName.trim();
-    if (trimmed && trimmed !== section.label && onRename) {
-      onRename(trimmed);
-    }
-    setIsEditing(false);
-  };
-
-  return (
-    <div className="group/header flex items-center gap-1 px-3 py-1">
-      <button
-        type="button"
-        tabIndex={-1}
-        onClick={onToggleCollapse}
-        className="p-0.5 rounded text-canopy-text/40 hover:text-canopy-text/70 transition-colors cursor-pointer"
-        aria-expanded={!isCollapsed}
-        aria-label={isCollapsed ? "Expand group" : "Collapse group"}
-      >
-        {isCollapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-      </button>
-
-      {isEditing ? (
-        <input
-          ref={editRef}
-          type="text"
-          value={editName}
-          onChange={(e) => setEditName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              handleSaveEdit();
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              setIsEditing(false);
-              setEditName(section.label ?? "");
-            }
-            e.stopPropagation();
-          }}
-          onBlur={handleSaveEdit}
-          className="flex-1 min-w-0 px-1 py-0 text-[10px] font-medium tracking-wider uppercase bg-transparent text-canopy-text/60 border-b border-canopy-accent focus:outline-none"
-        />
-      ) : (
-        <span className="text-[10px] font-medium tracking-wider uppercase text-canopy-text/40 select-none truncate">
-          {section.label}
-        </span>
-      )}
-
-      <span className="text-[9px] text-canopy-text/30 select-none ml-0.5">
-        {section.items.length}
-      </span>
-
-      <div className="ml-auto flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity">
-        {onMoveUp && !isFirst && (
-          <button
-            type="button"
-            tabIndex={-1}
-            onClick={onMoveUp}
-            className="p-0.5 rounded text-canopy-text/40 hover:text-canopy-text/70 hover:bg-tint/[0.06] transition-colors cursor-pointer"
-            aria-label="Move group up"
-          >
-            <ChevronUp className="w-3 h-3" />
-          </button>
-        )}
-        {onMoveDown && !isLast && (
-          <button
-            type="button"
-            tabIndex={-1}
-            onClick={onMoveDown}
-            className="p-0.5 rounded text-canopy-text/40 hover:text-canopy-text/70 hover:bg-tint/[0.06] transition-colors cursor-pointer"
-            aria-label="Move group down"
-          >
-            <ChevronDown className="w-3 h-3" />
-          </button>
-        )}
-        {onRename && (
-          <button
-            type="button"
-            tabIndex={-1}
-            onClick={() => {
-              setEditName(section.label ?? "");
-              setIsEditing(true);
-            }}
-            className="p-0.5 rounded text-canopy-text/40 hover:text-canopy-text/70 hover:bg-tint/[0.06] transition-colors cursor-pointer"
-            aria-label="Rename group"
-          >
-            <Pencil className="w-3 h-3" />
-          </button>
-        )}
-        {onDelete && (
-          <button
-            type="button"
-            tabIndex={-1}
-            onClick={onDelete}
-            className="p-0.5 rounded text-canopy-text/40 hover:text-status-error hover:bg-status-error/10 transition-colors cursor-pointer"
-            aria-label="Delete group"
-          >
-            <Trash2 className="w-3 h-3" />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 interface ProjectListContentProps {
   results: SearchableProject[];
   selectedIndex: number;
@@ -698,14 +427,6 @@ interface ProjectListContentProps {
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
   onSelectNewWindow?: (project: SearchableProject) => void;
-  groups?: ProjectGroup[];
-  onAssignProjectToGroup?: (projectId: string, groupId: string) => void;
-  onRemoveProjectFromGroup?: (projectId: string) => void;
-  onCreateGroup?: (name: string) => string;
-  onRenameGroup?: (groupId: string, name: string) => void;
-  onDeleteGroup?: (groupId: string) => void;
-  onMoveGroupUp?: (groupId: string) => void;
-  onMoveGroupDown?: (groupId: string) => void;
   onHoverProject?: (project: SearchableProject) => void;
 }
 
@@ -721,26 +442,12 @@ function ProjectListContent({
   onTogglePinProject,
   onCopyPath,
   onSelectNewWindow,
-  groups,
-  onAssignProjectToGroup,
-  onRemoveProjectFromGroup,
-  onCreateGroup,
-  onRenameGroup,
-  onDeleteGroup,
-  onMoveGroupUp,
-  onMoveGroupDown,
   onHoverProject,
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [assigningProjectId, setAssigningProjectId] = useState<string | null>(null);
-  const hasGroups = groups && groups.length > 0;
 
   const sections = useMemo(() => {
     if (isSearching || results.length === 0) return null;
-    if (hasGroups) {
-      return buildSwitcherSections(results, groups);
-    }
     const pinned = results.filter((p) => p.isPinned && !p.isActive);
     const current = results.filter((p) => p.isActive);
     const remaining = results.filter((p) => !p.isActive && !p.isPinned);
@@ -749,98 +456,30 @@ function ProjectListContent({
     const running = remaining.filter(isRunning);
     const recent = remaining.filter((p) => !isRunning(p));
     return [
-      { key: "pinned", label: "Pinned", isUserGroup: false, items: pinned },
-      { key: "current", label: null, isUserGroup: false, items: current },
-      { key: "running", label: "Running", isUserGroup: false, items: running },
-      { key: "recent", label: "Recent", isUserGroup: false, items: recent },
+      { key: "pinned", label: "Pinned", items: pinned },
+      { key: "current", label: null, items: current },
+      { key: "running", label: "Running", items: running },
+      { key: "recent", label: "Recent", items: recent },
     ].filter((s) => s.items.length > 0) as SwitcherSection[];
-  }, [results, isSearching, hasGroups, groups]);
-
-  const toggleCollapse = useCallback((key: string) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
-  }, []);
-
-  const userGroupSections = useMemo(() => {
-    if (!sections) return [];
-    return sections.filter((s) => s.isUserGroup);
-  }, [sections]);
-  const userGroupCount = userGroupSections.length;
+  }, [results, isSearching]);
 
   const renderItem = (project: SearchableProject) => {
     const index = results.indexOf(project);
     return (
-      <div key={project.id} role="presentation" className="flex items-center">
-        <div className="flex-1 min-w-0">
-          <ProjectListItem
-            project={project}
-            index={index}
-            selectedIndex={selectedIndex}
-            onSelect={onSelect}
-            onStopProject={onStopProject}
-            onCloseProject={onCloseProject}
-            onLocateProject={onLocateProject}
-            onTogglePinProject={onTogglePinProject}
-            onCopyPath={onCopyPath}
-            onHoverProject={onHoverProject}
-            onSelectNewWindow={onSelectNewWindow}
-          />
-        </div>
-        {onAssignProjectToGroup && onCreateGroup && onRemoveProjectFromGroup && (
-          <div
-            className={cn(
-              "shrink-0 transition-opacity",
-              index === selectedIndex ? "opacity-100" : "opacity-0 hover:opacity-100"
-            )}
-          >
-            <Popover
-              open={assigningProjectId === project.id}
-              onOpenChange={(open) => setAssigningProjectId(open ? project.id : null)}
-            >
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  tabIndex={-1}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setAssigningProjectId(assigningProjectId === project.id ? null : project.id);
-                  }}
-                  className={cn(
-                    "p-0.5 mr-2 rounded transition-colors cursor-pointer",
-                    "text-canopy-text/50 hover:bg-tint/[0.06] hover:text-canopy-text/80",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                  )}
-                  aria-label="Assign to group"
-                >
-                  <Layers className="w-3.5 h-3.5" aria-hidden="true" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent
-                className="w-56 p-0"
-                align="end"
-                side="right"
-                sideOffset={4}
-                onOpenAutoFocus={(e) => e.preventDefault()}
-              >
-                <GroupAssignmentPanel
-                  projectId={project.id}
-                  groups={groups ?? []}
-                  onAssign={onAssignProjectToGroup}
-                  onRemoveFromGroup={onRemoveProjectFromGroup}
-                  onCreate={onCreateGroup}
-                  onClose={() => setAssigningProjectId(null)}
-                />
-              </PopoverContent>
-            </Popover>
-          </div>
-        )}
+      <div key={project.id} role="presentation">
+        <ProjectListItem
+          project={project}
+          index={index}
+          selectedIndex={selectedIndex}
+          onSelect={onSelect}
+          onStopProject={onStopProject}
+          onCloseProject={onCloseProject}
+          onLocateProject={onLocateProject}
+          onTogglePinProject={onTogglePinProject}
+          onCopyPath={onCopyPath}
+          onHoverProject={onHoverProject}
+          onSelectNewWindow={onSelectNewWindow}
+        />
       </div>
     );
   };
@@ -856,10 +495,8 @@ function ProjectListContent({
           </div>
         ) : sections ? (
           sections.map((section, sectionIdx) => {
-            const isActiveSection = !section.isUserGroup && section.items[0]?.isActive;
+            const isActiveSection = section.items[0]?.isActive;
             const isLast = sectionIdx === sections.length - 1;
-            const isSectionCollapsed = collapsed.has(section.key);
-            const userGroupIdx = section.isUserGroup ? userGroupSections.indexOf(section) : -1;
 
             return (
               <div key={section.key}>
@@ -872,30 +509,12 @@ function ProjectListContent({
                     isActiveSection && "bg-overlay-subtle"
                   )}
                 >
-                  {section.isUserGroup && section.label ? (
-                    <GroupHeader
-                      section={section}
-                      isCollapsed={isSectionCollapsed}
-                      onToggleCollapse={() => toggleCollapse(section.key)}
-                      onMoveUp={onMoveGroupUp ? () => onMoveGroupUp(section.key) : undefined}
-                      onMoveDown={onMoveGroupDown ? () => onMoveGroupDown(section.key) : undefined}
-                      onRename={
-                        onRenameGroup
-                          ? (name: string) => onRenameGroup(section.key, name)
-                          : undefined
-                      }
-                      onDelete={onDeleteGroup ? () => onDeleteGroup(section.key) : undefined}
-                      isFirst={userGroupIdx === 0}
-                      isLast={userGroupIdx === userGroupCount - 1}
-                    />
-                  ) : (
-                    section.label && (
-                      <div className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-canopy-text/40 select-none">
-                        {section.label}
-                      </div>
-                    )
+                  {section.label && (
+                    <div className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-canopy-text/40 select-none">
+                      {section.label}
+                    </div>
                   )}
-                  {!isSectionCollapsed && section.items.map(renderItem)}
+                  {section.items.map(renderItem)}
                 </div>
               </div>
             );
@@ -980,14 +599,6 @@ interface ProjectPaletteInnerProps {
   onLocateProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
   onCopyPath?: (path: string) => void;
-  groups?: ProjectGroup[];
-  onAssignProjectToGroup?: (projectId: string, groupId: string) => void;
-  onRemoveProjectFromGroup?: (projectId: string) => void;
-  onCreateGroup?: (name: string) => string;
-  onRenameGroup?: (groupId: string, name: string) => void;
-  onDeleteGroup?: (groupId: string) => void;
-  onMoveGroupUp?: (groupId: string) => void;
-  onMoveGroupDown?: (groupId: string) => void;
   onHoverProject?: (project: SearchableProject) => void;
 }
 
@@ -1012,14 +623,6 @@ function ProjectPaletteInner({
   onLocateProject,
   onTogglePinProject,
   onCopyPath,
-  groups,
-  onAssignProjectToGroup,
-  onRemoveProjectFromGroup,
-  onCreateGroup,
-  onRenameGroup,
-  onDeleteGroup,
-  onMoveGroupUp,
-  onMoveGroupDown,
   onHoverProject,
 }: ProjectPaletteInnerProps) {
   const projectSwitcherShortcut = useKeybindingDisplay("project.switcherPalette");
@@ -1137,14 +740,6 @@ function ProjectPaletteInner({
           onTogglePinProject={onTogglePinProject}
           onCopyPath={onCopyPath}
           onSelectNewWindow={onSelectNewWindow}
-          groups={groups}
-          onAssignProjectToGroup={onAssignProjectToGroup}
-          onRemoveProjectFromGroup={onRemoveProjectFromGroup}
-          onCreateGroup={onCreateGroup}
-          onRenameGroup={onRenameGroup}
-          onDeleteGroup={onDeleteGroup}
-          onMoveGroupUp={onMoveGroupUp}
-          onMoveGroupDown={onMoveGroupDown}
           onHoverProject={onHoverProject}
         />
       </AppPaletteDialog.Body>
@@ -1304,14 +899,6 @@ function ModalContent({
           onCopyPath={innerProps.onCopyPath}
           onSelectBackground={innerProps.onSelectBackground}
           onSelectNewWindow={innerProps.onSelectNewWindow}
-          groups={innerProps.groups}
-          onAssignProjectToGroup={innerProps.onAssignProjectToGroup}
-          onRemoveProjectFromGroup={innerProps.onRemoveProjectFromGroup}
-          onCreateGroup={innerProps.onCreateGroup}
-          onRenameGroup={innerProps.onRenameGroup}
-          onDeleteGroup={innerProps.onDeleteGroup}
-          onMoveGroupUp={innerProps.onMoveGroupUp}
-          onMoveGroupDown={innerProps.onMoveGroupDown}
           onHoverProject={innerProps.onHoverProject}
         />
       </div>
@@ -1388,14 +975,6 @@ function DropdownContent({
           onCopyPath={innerProps.onCopyPath}
           onSelectBackground={innerProps.onSelectBackground}
           onSelectNewWindow={innerProps.onSelectNewWindow}
-          groups={innerProps.groups}
-          onAssignProjectToGroup={innerProps.onAssignProjectToGroup}
-          onRemoveProjectFromGroup={innerProps.onRemoveProjectFromGroup}
-          onCreateGroup={innerProps.onCreateGroup}
-          onRenameGroup={innerProps.onRenameGroup}
-          onDeleteGroup={innerProps.onDeleteGroup}
-          onMoveGroupUp={innerProps.onMoveGroupUp}
-          onMoveGroupDown={innerProps.onMoveGroupDown}
           onHoverProject={innerProps.onHoverProject}
         />
       </PopoverContent>
@@ -1430,14 +1009,6 @@ export function ProjectSwitcherPalette({
   onRemoveConfirmClose,
   onConfirmRemove,
   isRemovingProject = false,
-  groups,
-  onCreateGroup,
-  onAssignProjectToGroup,
-  onRemoveProjectFromGroup,
-  onRenameGroup,
-  onDeleteGroup,
-  onMoveGroupUp,
-  onMoveGroupDown,
   onHoverProject,
 }: ProjectSwitcherPaletteProps) {
   const hasRunningProcesses = removeConfirmProject
@@ -1469,14 +1040,6 @@ export function ProjectSwitcherPalette({
         onSelectNewWindow={onSelectNewWindow}
         onOpenProjectSettings={onOpenProjectSettings}
         dropdownAlign={dropdownAlign}
-        groups={groups}
-        onCreateGroup={onCreateGroup}
-        onAssignProjectToGroup={onAssignProjectToGroup}
-        onRemoveProjectFromGroup={onRemoveProjectFromGroup}
-        onRenameGroup={onRenameGroup}
-        onDeleteGroup={onDeleteGroup}
-        onMoveGroupUp={onMoveGroupUp}
-        onMoveGroupDown={onMoveGroupDown}
         onHoverProject={onHoverProject}
       >
         {children}
@@ -1502,14 +1065,6 @@ export function ProjectSwitcherPalette({
         onSelectBackground={onSelectBackground}
         onSelectNewWindow={onSelectNewWindow}
         onOpenProjectSettings={onOpenProjectSettings}
-        groups={groups}
-        onCreateGroup={onCreateGroup}
-        onAssignProjectToGroup={onAssignProjectToGroup}
-        onRemoveProjectFromGroup={onRemoveProjectFromGroup}
-        onRenameGroup={onRenameGroup}
-        onDeleteGroup={onDeleteGroup}
-        onMoveGroupUp={onMoveGroupUp}
-        onMoveGroupDown={onMoveGroupDown}
         onHoverProject={onHoverProject}
       />
     );
