@@ -141,12 +141,13 @@ function SortableButtonItem({
   const metadata = allMetadata[buttonId];
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: buttonId,
+    disabled: !isVisible,
   });
 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : 1,
+    opacity: isDragging ? 0.5 : isVisible ? 1 : 0.5,
   };
 
   if (!metadata) return null;
@@ -157,8 +158,13 @@ function SortableButtonItem({
       style={style}
       className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30"
     >
-      <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing">
-        <GripVertical className="h-4 w-4 text-canopy-text/50" />
+      <div
+        {...(isVisible ? { ...attributes, ...listeners } : {})}
+        className={cn(isVisible ? "cursor-grab active:cursor-grabbing" : "cursor-default")}
+      >
+        <GripVertical
+          className={cn("h-4 w-4", isVisible ? "text-canopy-text/50" : "text-canopy-text/20")}
+        />
       </div>
       <div className="flex items-center gap-2 flex-1">
         <div className="text-canopy-text">{metadata.icon}</div>
@@ -271,7 +277,7 @@ export function ToolbarSettingsTab() {
       <SettingsSection
         icon={LayoutGrid}
         title="Left Side Buttons"
-        description={`Drag to reorder, uncheck to hide. ${layout.leftButtons.length} buttons configured.`}
+        description={`Drag to reorder, uncheck to hide. ${layout.leftButtons.filter((id) => !layout.hiddenButtons.includes(id)).length} of ${layout.leftButtons.length} visible.`}
       >
         <DndContext
           sensors={sensors}
@@ -284,7 +290,7 @@ export function ToolbarSettingsTab() {
                 <SortableButtonItem
                   key={buttonId}
                   buttonId={buttonId}
-                  isVisible={layout.leftButtons.includes(buttonId)}
+                  isVisible={!layout.hiddenButtons.includes(buttonId)}
                   onToggle={handleToggleLeft}
                   allMetadata={allMetadata}
                 />
@@ -297,7 +303,7 @@ export function ToolbarSettingsTab() {
       <SettingsSection
         icon={LayoutGrid}
         title="Right Side Buttons"
-        description={`Drag to reorder, uncheck to hide. ${layout.rightButtons.length} buttons configured.`}
+        description={`Drag to reorder, uncheck to hide. ${layout.rightButtons.filter((id) => !layout.hiddenButtons.includes(id)).length} of ${layout.rightButtons.length} visible.`}
       >
         <DndContext
           sensors={sensors}
@@ -310,7 +316,7 @@ export function ToolbarSettingsTab() {
                 <SortableButtonItem
                   key={buttonId}
                   buttonId={buttonId}
-                  isVisible={layout.rightButtons.includes(buttonId)}
+                  isVisible={!layout.hiddenButtons.includes(buttonId)}
                   onToggle={handleToggleRight}
                   allMetadata={allMetadata}
                 />
