@@ -87,10 +87,25 @@ const mockProjects = [
     path: "/alpha",
     emoji: "🌲",
     lastOpened: 3000,
+    frecencyScore: 10.0,
     color: "#ff0000",
   },
-  { id: "p2", name: "Project Beta", path: "/beta", emoji: "🌿", lastOpened: 1000 },
-  { id: "p3", name: "Project Gamma", path: "/gamma", emoji: "🌳", lastOpened: 2000 },
+  {
+    id: "p2",
+    name: "Project Beta",
+    path: "/beta",
+    emoji: "🌿",
+    lastOpened: 1000,
+    frecencyScore: 2.0,
+  },
+  {
+    id: "p3",
+    name: "Project Gamma",
+    path: "/gamma",
+    emoji: "🌳",
+    lastOpened: 2000,
+    frecencyScore: 5.0,
+  },
 ];
 
 let storeState = {
@@ -199,7 +214,7 @@ describe("WelcomeScreen", () => {
 
   // --- Recent Projects ---
 
-  it("renders recent projects sorted by lastOpened descending", () => {
+  it("renders recent projects sorted by frecencyScore descending", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
     expect(screen.getByText("Recent Projects")).toBeTruthy();
@@ -238,13 +253,14 @@ describe("WelcomeScreen", () => {
       path: `/path/${i}`,
       emoji: "🌲",
       lastOpened: i * 1000,
+      frecencyScore: i,
     }));
     storeState = { ...storeState, projects: manyProjects };
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
     const projectNames = screen.getAllByText(/Project \d/).map((el) => el.textContent);
     expect(projectNames).toHaveLength(5);
-    // Should be the 5 most recent in descending order (7000, 6000, 5000, 4000, 3000)
+    // Should be the 5 highest frecencyScore in descending order (7, 6, 5, 4, 3)
     expect(projectNames).toEqual(["Project 7", "Project 6", "Project 5", "Project 4", "Project 3"]);
   });
 
