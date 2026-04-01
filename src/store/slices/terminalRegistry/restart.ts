@@ -534,7 +534,7 @@ export const createRestartActions = (
               // After restart, inject captured history as a first prompt for agent terminals
               const restarted = get().terminals.find((t) => t.id === id);
               if (isAgent && capturedHistory.trim().length > 0 && !restarted?.restartError) {
-                scheduleHistoryInjection(id, capturedHistory, newCwd);
+                scheduleHistoryInjection(id, capturedHistory, newCwd ?? "");
               }
             } catch (err) {
               console.error("[TerminalStore] moveToNewWorktreeAndTransfer failed:", err);

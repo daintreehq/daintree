@@ -140,10 +140,7 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
       commandQueue: [],
     });
 
-    // Override restartTerminal to track calls without running full logic
-    const state = useTerminalStore.getState();
     mockRestartTerminal.mockClear();
-    // We'll spy on the actual store method
   });
 
   it("captures buffer text for agent terminals before restart", async () => {
