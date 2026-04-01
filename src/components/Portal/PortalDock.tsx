@@ -399,7 +399,7 @@ export function PortalDock() {
           >
             <div
               className={cn(
-                "w-px h-8 rounded-full transition-all duration-150 delay-100 group-hover:w-0.5",
+                "w-px h-8 rounded-full transition-[width] duration-150 delay-100 group-hover:w-0.5",
                 "bg-canopy-text/20",
                 "group-hover:bg-canopy-text/35 group-focus:bg-canopy-accent",
                 isResizing && "bg-canopy-accent"

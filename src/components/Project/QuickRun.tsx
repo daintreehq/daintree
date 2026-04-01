@@ -395,7 +395,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
               <div
                 className={cn(
                   "relative flex items-center rounded-[var(--radius-md)] border border-border-subtle/50 bg-overlay-soft",
-                  "transition-all focus-within:border-canopy-accent/35 focus-within:ring-1 focus-within:ring-canopy-accent/12"
+                  "transition focus-within:border-canopy-accent/35 focus-within:ring-1 focus-within:ring-canopy-accent/12"
                 )}
               >
                 {/* Prompt Symbol */}
@@ -435,7 +435,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           type="button"
                           onClick={handleToggleAutoRestart}
                           className={cn(
-                            "p-1.5 rounded-[var(--radius-sm)] transition-all",
+                            "p-1.5 rounded-[var(--radius-sm)] transition",
                             autoRestart
                               ? "bg-canopy-accent/20 text-canopy-accent"
                               : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
@@ -460,7 +460,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           type="button"
                           onClick={() => setRunAsDocked(!runAsDocked)}
                           className={cn(
-                            "p-1.5 rounded-[var(--radius-sm)] transition-all",
+                            "p-1.5 rounded-[var(--radius-sm)] transition",
                             runAsDocked
                               ? "bg-canopy-accent/20 text-canopy-accent"
                               : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
@@ -496,7 +496,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                             onClick={() => handleRun(input)}
                             disabled={!input.trim()}
                             className={cn(
-                              "p-1.5 rounded-[var(--radius-sm)] transition-all",
+                              "p-1.5 rounded-[var(--radius-sm)] transition",
                               input.trim()
                                 ? "text-accent-primary hover:bg-accent-soft"
                                 : "cursor-not-allowed text-text-muted/50"

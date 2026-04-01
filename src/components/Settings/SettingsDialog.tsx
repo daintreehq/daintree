@@ -1934,7 +1934,7 @@ function SearchResults({
             )
           }
           className={cn(
-            "group w-full text-left p-3 rounded-[var(--radius-md)] border transition-all",
+            "group w-full text-left p-3 rounded-[var(--radius-md)] border transition-colors",
             index === activeIndex
               ? "bg-overlay-soft border-canopy-accent/30"
               : "border-transparent hover:bg-overlay-soft hover:border-canopy-border",
@@ -1971,7 +1971,7 @@ function SearchResults({
             </div>
             <ChevronRight
               className={cn(
-                "w-4 h-4 text-canopy-text/20 shrink-0 transition-all",
+                "w-4 h-4 text-canopy-text/20 shrink-0 transition",
                 index === activeIndex
                   ? "text-canopy-accent/60 translate-x-0.5"
                   : "group-hover:text-canopy-text/40"

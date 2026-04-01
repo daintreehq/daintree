@@ -109,7 +109,7 @@ function ArtifactItem({
         className={cn(
           "w-full flex items-center justify-between px-3 py-2 text-left",
           colorClass.split(" ")[1],
-          "hover:brightness-110 transition-all"
+          "hover:brightness-110 transition"
         )}
       >
         <div className="flex items-center gap-2 min-w-0">
@@ -327,7 +327,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
           className={cn(
             "px-3 py-2 rounded-[var(--radius-md)] shadow-lg",
             "border border-status-info/30 text-status-info hover:bg-status-info/10",
-            "text-sm font-medium transition-all",
+            "text-sm font-medium transition-colors",
             "flex items-center gap-2"
           )}
         >

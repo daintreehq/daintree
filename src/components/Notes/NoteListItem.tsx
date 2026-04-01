@@ -105,7 +105,7 @@ export function NoteListItemRow({
                 <button
                   type="button"
                   onClick={(e) => onDelete(note, e)}
-                  className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded-[var(--radius-sm)] hover:bg-status-error/10 text-canopy-text/40 hover:text-status-error transition-all"
+                  className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded-[var(--radius-sm)] hover:bg-status-error/10 text-canopy-text/40 hover:text-status-error transition"
                   aria-label="Delete note"
                 >
                   <Trash2 size={12} />

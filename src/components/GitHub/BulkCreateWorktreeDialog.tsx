@@ -1233,7 +1233,7 @@ export function BulkCreateWorktreeDialog({
             <div className="space-y-2">
               <div className="h-2 rounded-full bg-overlay-soft overflow-hidden">
                 <div
-                  className="h-full rounded-full bg-canopy-accent transition-all duration-300"
+                  className="h-full rounded-full bg-canopy-accent transition-[width] duration-300"
                   style={{
                     width: `${progress.items.size > 0 ? (processedCount / progress.items.size) * 100 : 0}%`,
                   }}
