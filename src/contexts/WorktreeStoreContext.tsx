@@ -8,6 +8,7 @@ import type { WorktreeSnapshot } from "@shared/types";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { usePulseStore } from "@/store/pulseStore";
+import { worktreeClient } from "@/clients/worktreeClient";
 
 export const WorktreeStoreContext = createContext<WorktreeViewStoreApi | null>(null);
 
@@ -74,17 +75,48 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
 
     function fetchInitialState() {
       const thisGen = ++generation;
-      store.getState().setLoading(true);
+      // Only show loading spinner on cold start (no cached data).
+      // Wake refreshes should be silent — users see existing cached data.
+      const isWake = store.getState().isInitialized;
+      if (!isWake) {
+        store.getState().setLoading(true);
+      }
       worktreePort
         .request("get-all-states")
-        .then((response: { states: WorktreeSnapshot[] }) => {
+        .then(async (response: { states: WorktreeSnapshot[] }) => {
           if (thisGen !== generation) return;
-          store.getState().applySnapshot(response.states, store.getState().nextVersion());
+
+          // Hydrate manual issue associations from electron store.
+          // Auto-detected issues (from branch names) are already in the snapshots,
+          // but user-attached associations are stored separately.
+          let states = response.states;
+          try {
+            const associations = await worktreeClient.getAllIssueAssociations();
+            if (thisGen !== generation) return;
+            if (Object.keys(associations).length > 0) {
+              states = states.map((s) => {
+                const assoc = associations[s.id];
+                // Only apply manual association if no auto-detected issue exists
+                if (assoc && !s.issueNumber) {
+                  return { ...s, issueNumber: assoc.issueNumber, issueTitle: assoc.issueTitle };
+                }
+                return s;
+              });
+            }
+          } catch {
+            // Non-critical — proceed without manual associations
+            if (thisGen !== generation) return;
+          }
+
+          store.getState().applySnapshot(states, store.getState().nextVersion());
         })
         .catch((err: Error) => {
           if (thisGen !== generation) return;
-          store.getState().setError(err.message);
-          store.getState().setLoading(false);
+          // On wake, preserve existing data — don't show error screen
+          if (!isWake) {
+            store.getState().setError(err.message);
+            store.getState().setLoading(false);
+          }
         });
     }
 
@@ -232,6 +264,17 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       fetchInitialState();
     }
     cleanups.push(worktreePort.onReady(fetchInitialState));
+
+    // Snapshot-on-wake: when a cached view is reactivated (addChildView),
+    // Chromium fires visibilitychange. Request a fresh snapshot to rehydrate
+    // state that may have changed while the view was backgrounded.
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible" && worktreePort.isReady()) {
+        fetchInitialState();
+      }
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    cleanups.push(() => document.removeEventListener("visibilitychange", handleVisibilityChange));
 
     return () => {
       generation++;

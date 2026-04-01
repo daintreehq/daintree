@@ -92,6 +92,11 @@ vi.mock("@/store/createWorktreeStore", () => ({
   }),
 }));
 
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
+    selector({ worktrees: mockWorktreeDataMap }),
+}));
+
 const mockSetPendingWorktree = vi.fn();
 const mockSelectWorktree = vi.fn();
 vi.mock("@/store/worktreeStore", () => ({
