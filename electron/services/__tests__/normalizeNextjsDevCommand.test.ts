@@ -8,6 +8,12 @@ vi.mock("node:fs/promises", () => ({
   readFile: (...args: unknown[]) => mockReadFile(...(args as [string, string])),
 }));
 
+import { beforeEach } from "vitest";
+
+beforeEach(() => {
+  mockReadFile.mockReset();
+});
+
 function mockPkg(scripts: Record<string, string>): void {
   mockReadFile.mockResolvedValue(JSON.stringify({ scripts }));
 }
@@ -77,16 +83,14 @@ describe("normalizeNextjsDevCommand", () => {
       );
     });
 
-    it("appends -- --turbopack for bun run dev", async () => {
+    it("appends --turbopack (no separator) for bun run dev", async () => {
       mockPkg({ dev: "next dev" });
-      expect(await normalizeNextjsDevCommand("bun run dev", CWD)).toBe(
-        "bun run dev -- --turbopack"
-      );
+      expect(await normalizeNextjsDevCommand("bun run dev", CWD)).toBe("bun run dev --turbopack");
     });
 
-    it("appends -- --turbopack for bun dev (without run)", async () => {
+    it("appends --turbopack (no separator) for bun dev", async () => {
       mockPkg({ dev: "next dev" });
-      expect(await normalizeNextjsDevCommand("bun dev", CWD)).toBe("bun dev -- --turbopack");
+      expect(await normalizeNextjsDevCommand("bun dev", CWD)).toBe("bun dev --turbopack");
     });
 
     it("handles scripts with extra args like 'next dev -p 3000'", async () => {

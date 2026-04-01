@@ -51,6 +51,18 @@ describe("findDevServerCandidate", () => {
       expect(candidate?.command).toBe("npm run dev");
     });
 
+    it("appends --turbopack (no separator) for bun run dev", () => {
+      const runners = [runner("dev", "bun run dev", "next dev")];
+      const candidate = findDevServerCandidate(runners);
+      expect(candidate?.command).toBe("bun run dev --turbopack");
+    });
+
+    it("appends --turbopack (no separator) for bun dev", () => {
+      const runners = [runner("dev", "bun dev", "next dev")];
+      const candidate = findDevServerCandidate(runners);
+      expect(candidate?.command).toBe("bun dev --turbopack");
+    });
+
     it("does NOT modify non-Next.js scripts", () => {
       const runners = [runner("dev", "npm run dev", "vite")];
       const candidate = findDevServerCandidate(runners);

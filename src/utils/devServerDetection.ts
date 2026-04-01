@@ -5,24 +5,15 @@ const DEV_SCRIPT_PRIORITY = ["dev", "start", "serve"];
 const NEXT_DEV_RE = /\bnext\s+dev\b/;
 const TURBOPACK_FLAG_RE = /--turbo(?:pack)?\b/;
 
-/**
- * If a runner's underlying script is `next dev` without --turbopack,
- * returns a copy with `-- --turbopack` appended to the command.
- * Turbopack is required for Canopy's integrated browser because webpack's
- * style-loader CSS injection fails in Electron webviews.
- */
 function applyNextjsTurbopack(runner: RunCommand): RunCommand {
   const desc = runner.description ?? "";
   if (!NEXT_DEV_RE.test(desc) || TURBOPACK_FLAG_RE.test(desc)) {
     return runner;
   }
-  return { ...runner, command: `${runner.command} -- --turbopack` };
+  const sep = runner.command.trimStart().startsWith("bun ") ? " " : " -- ";
+  return { ...runner, command: `${runner.command}${sep}--turbopack` };
 }
 
-/**
- * Find the best dev server candidate from detected runners
- * Priority: dev > start > serve
- */
 export function findDevServerCandidate(
   allDetectedRunners: RunCommand[] | undefined
 ): RunCommand | undefined {
