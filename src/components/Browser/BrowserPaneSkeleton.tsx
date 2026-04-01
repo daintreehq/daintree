@@ -2,16 +2,9 @@ interface BrowserPaneSkeletonProps {
   label?: string;
 }
 
-export function BrowserPaneSkeleton({
-  label = "Loading browser panel",
-}: BrowserPaneSkeletonProps) {
+export function BrowserPaneSkeleton({ label = "Loading browser panel" }: BrowserPaneSkeletonProps) {
   return (
-    <div
-      className="flex flex-col h-full w-full"
-      role="status"
-      aria-busy="true"
-      aria-label={label}
-    >
+    <div className="flex flex-col h-full w-full" role="status" aria-busy="true" aria-label={label}>
       <span className="sr-only">{label}</span>
 
       {/* Header row — matches PanelHeader h-8 in grid location */}
