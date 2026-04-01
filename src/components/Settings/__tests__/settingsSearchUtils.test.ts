@@ -260,6 +260,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       "toolbar",
       "notifications",
       "integrations",
+      "voice",
       "mcp",
       "environment",
       "privacy",
@@ -311,6 +312,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       toolbar: "Toolbar Customization",
       notifications: "Notifications",
       integrations: "Integrations",
+      voice: "Voice Input",
 
       mcp: "MCP Server",
       environment: "Environment Variables",
@@ -345,6 +347,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       toolbar: "Toolbar Customization",
       notifications: "Notifications",
       integrations: "Integrations",
+      voice: "Voice Input",
 
       mcp: "MCP Server",
       environment: "Environment Variables",
@@ -368,7 +371,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
 describe("voice tab coverage", () => {
   it("returns results for 'voice' query", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "voice");
-    expect(results.some((r) => r.tab === "integrations")).toBe(true);
+    expect(results.some((r) => r.tab === "voice")).toBe(true);
   });
 
   it("returns results for 'microphone' query", () => {
@@ -378,17 +381,17 @@ describe("voice tab coverage", () => {
 
   it("returns results for 'deepgram' query", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "deepgram");
-    expect(results.some((r) => r.tab === "integrations")).toBe(true);
+    expect(results.some((r) => r.tab === "voice")).toBe(true);
   });
 
   it("returns results for 'speech' query", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "speech");
-    expect(results.some((r) => r.tab === "integrations")).toBe(true);
+    expect(results.some((r) => r.tab === "voice")).toBe(true);
   });
 
   it("returns results for 'transcription' query", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "transcription");
-    expect(results.some((r) => r.tab === "integrations")).toBe(true);
+    expect(results.some((r) => r.tab === "voice")).toBe(true);
   });
 });
 

@@ -13,6 +13,7 @@ const VALID_TABS: SettingsTab[] = [
   "toolbar",
   "notifications",
   "integrations",
+  "voice",
 
   "mcp",
   "environment",
