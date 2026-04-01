@@ -121,13 +121,6 @@ function TerminalHeaderContentComponent({
     return () => clearInterval(interval);
   }, []);
 
-  const STALL_THRESHOLD_MS = 60_000;
-  const isStalled =
-    agentState === "working" &&
-    lastStateChange != null &&
-    lastStateChange > 0 &&
-    tick - lastStateChange > STALL_THRESHOLD_MS;
-
   const showStateDuration =
     (agentState === "working" || agentState === "waiting" || agentState === "directing") &&
     lastStateChange != null &&
@@ -154,9 +147,8 @@ function TerminalHeaderContentComponent({
 
     const effectiveColor = getEffectiveStateColor(agentState, waitingReason);
 
-    const chipStyle = isStalled
-      ? "bg-[color-mix(in_oklab,var(--color-status-warning)_15%,transparent)] border-status-warning/40"
-      : agentState === "working"
+    const chipStyle =
+      agentState === "working"
         ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
         : agentState === "directing"
           ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
@@ -182,17 +174,15 @@ function TerminalHeaderContentComponent({
                   className={cn(
                     "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
                     chipStyle,
-                    isStalled
-                      ? "text-status-warning animate-pulse motion-reduce:animate-none"
-                      : effectiveColor
+                    effectiveColor
                   )}
                   role="status"
-                  aria-label={`Agent state: ${isStalled ? "stalled" : stateLabel}`}
+                  aria-label={`Agent state: ${stateLabel}`}
                 >
                   <StateIcon
                     className={cn(
                       "w-3 h-3",
-                      agentState === "working" && !isStalled && "animate-spin-slow",
+                      agentState === "working" && "animate-spin-slow",
                       "motion-reduce:animate-none"
                     )}
                     aria-hidden="true"
@@ -226,7 +216,7 @@ function TerminalHeaderContentComponent({
                 <span className="text-status-error tabular-nums">Exit code: {exitCode}</span>
               )}
               <span>
-                State: {isStalled ? "stalled" : stateLabel}
+                State: {stateLabel}
                 {showStateDuration && <> · {formatElapsedDuration(tick - lastStateChange!)}</>}
                 {stateChangeTrigger && <> · {TRIGGER_LABELS[stateChangeTrigger]}</>}
                 {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
