@@ -40,22 +40,23 @@ export interface DemoScreenshotResult {
 export interface DemoStartCapturePayload {
   fps?: number;
   maxFrames?: number;
-  outputDir?: string;
+  outputPath: string;
+  preset: DemoEncodePreset;
 }
 
 export interface DemoStartCaptureResult {
-  outputDir: string;
+  outputPath: string;
 }
 
 export interface DemoStopCaptureResult {
-  outputDir: string;
+  outputPath: string;
   frameCount: number;
 }
 
 export interface DemoCaptureStatus {
   active: boolean;
   frameCount: number;
-  outputDir: string | null;
+  outputPath: string | null;
 }
 
 export type DemoEncodePreset = "youtube-4k" | "youtube-1080p" | "web-webm";

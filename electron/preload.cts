@@ -2644,8 +2644,12 @@ const api: ElectronAPI = {
           pause: () => _unwrappingInvoke(CHANNELS.DEMO_PAUSE),
           resume: () => _unwrappingInvoke(CHANNELS.DEMO_RESUME),
           sleep: (durationMs: number) => _unwrappingInvoke(CHANNELS.DEMO_SLEEP, { durationMs }),
-          startCapture: (payload: { fps?: number; maxFrames?: number; outputDir?: string }) =>
-            _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
+          startCapture: (payload: {
+            fps?: number;
+            maxFrames?: number;
+            outputPath: string;
+            preset: import("../shared/types/ipc/demo.js").DemoEncodePreset;
+          }) => _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
           stopCapture: () => _unwrappingInvoke(CHANNELS.DEMO_STOP_CAPTURE),
           getCaptureStatus: () => _unwrappingInvoke(CHANNELS.DEMO_GET_CAPTURE_STATUS),
           encode: (payload: import("../shared/types/ipc/demo.js").DemoEncodePayload) =>
