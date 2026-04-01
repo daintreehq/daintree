@@ -23,7 +23,7 @@ const SCROLLBACK_POLICIES: Record<string, ScrollbackPolicy> = {
 
 /**
  * Get appropriate scrollback lines for a terminal type based on the user's
- * base scrollback setting. Agent terminals get full base, standard terminals get 20%,
+ * base scrollback setting. Agent terminals get 1.5x base, standard terminals get 30%,
  * all clamped to type-specific min/max limits.
  */
 export function getScrollbackForType(type: TerminalType, baseScrollback: number): number {
