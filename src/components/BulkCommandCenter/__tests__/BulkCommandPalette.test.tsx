@@ -4,6 +4,15 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { BulkCommandPalette, openBulkCommandPalette } from "../BulkCommandPalette";
 import { usePaletteStore } from "@/store/paletteStore";
 
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+);
+
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
 
 vi.mock("@/lib/utils", () => ({

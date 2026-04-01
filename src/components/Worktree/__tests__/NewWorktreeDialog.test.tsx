@@ -5,6 +5,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
 import type { BranchInfo } from "@/types/electron";
 
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+);
+
 const mockDispatch = vi.fn();
 vi.mock("@/services/ActionService", () => ({
   actionService: {
