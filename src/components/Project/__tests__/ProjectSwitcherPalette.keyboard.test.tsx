@@ -122,6 +122,7 @@ function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProj
     isBackground: false,
     isMissing: false,
     isPinned: false,
+    frecencyScore: 3.0,
     processCount: 0,
     activeAgentCount: 0,
     waitingAgentCount: 0,
