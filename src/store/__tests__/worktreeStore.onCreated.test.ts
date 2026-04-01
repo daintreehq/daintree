@@ -49,9 +49,7 @@ vi.mock("@/store/terminalStore", () => ({
 }));
 
 describe("worktreeStore createDialog.onCreated", () => {
-  let store: Awaited<
-    ReturnType<typeof import("@/store/worktreeStore")>
-  >["useWorktreeSelectionStore"];
+  let store: Awaited<typeof import("@/store/worktreeStore")>["useWorktreeSelectionStore"];
 
   beforeEach(async () => {
     vi.resetModules();
@@ -95,13 +93,10 @@ describe("worktreeStore createDialog.onCreated", () => {
       number: 1,
       title: "test",
       url: "",
-      state: "open",
-      labels: [],
-      author: "test",
-      createdAt: new Date().toISOString(),
+      state: "OPEN",
+      isDraft: false,
       updatedAt: new Date().toISOString(),
-      headRef: "test",
-      baseRef: "main",
+      author: { login: "test", avatarUrl: "" },
     });
 
     expect(store.getState().createDialog.onCreated).toBeUndefined();

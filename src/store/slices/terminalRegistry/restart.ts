@@ -457,75 +457,80 @@ export const createRestartActions = (
     if (!terminal || terminal.location === "trash") return;
     if (terminal.isRestarting) return;
 
-    void import("@/store/worktreeStore").then(({ useWorktreeSelectionStore }) => {
-      useWorktreeSelectionStore.getState().openCreateDialog(null, {
-        onCreated: async (worktreeId) => {
-          try {
-            const { worktreeClient } = await import("@/clients");
-            const worktrees = await worktreeClient.getAll();
-            const newWorktree = worktrees.find((w) => w.id === worktreeId);
-            const newCwd = newWorktree?.path ?? terminal.cwd;
+    void import("@/store/worktreeStore")
+      .then(({ useWorktreeSelectionStore }) => {
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          onCreated: async (worktreeId) => {
+            let newCwd = terminal.cwd;
+            try {
+              const { worktreeClient } = await import("@/clients");
+              const worktrees = await worktreeClient.getAll();
+              const newWorktree = worktrees.find((w) => w.id === worktreeId);
+              newCwd = newWorktree?.path ?? terminal.cwd;
 
-            markTerminalRestarting(id);
+              markTerminalRestarting(id);
 
-            set((state) => ({
-              terminals: state.terminals.map((t) =>
-                t.id === id
-                  ? {
-                      ...t,
-                      cwd: newCwd,
-                      worktreeId,
-                      isRestarting: true,
-                      restartError: undefined,
-                    }
-                  : t
-              ),
-            }));
-
-            const sessionId = await terminalClient.gracefulKill(id);
-
-            if (sessionId) {
               set((state) => ({
                 terminals: state.terminals.map((t) =>
-                  t.id === id ? { ...t, agentSessionId: sessionId } : t
+                  t.id === id
+                    ? {
+                        ...t,
+                        cwd: newCwd,
+                        worktreeId,
+                        isRestarting: true,
+                        restartError: undefined,
+                      }
+                    : t
+                ),
+              }));
+
+              const sessionId = await terminalClient.gracefulKill(id);
+
+              if (sessionId) {
+                set((state) => ({
+                  terminals: state.terminals.map((t) =>
+                    t.id === id ? { ...t, agentSessionId: sessionId } : t
+                  ),
+                }));
+              }
+
+              unmarkTerminalRestarting(id);
+              set((state) => ({
+                terminals: state.terminals.map((t) =>
+                  t.id === id ? { ...t, isRestarting: false } : t
+                ),
+              }));
+
+              await get().restartTerminal(id);
+            } catch (err) {
+              console.error("[TerminalStore] moveToNewWorktreeAndTransfer failed:", err);
+              unmarkTerminalRestarting(id);
+              set((state) => ({
+                terminals: state.terminals.map((t) =>
+                  t.id === id
+                    ? {
+                        ...t,
+                        isRestarting: false,
+                        restartError: {
+                          message: err instanceof Error ? err.message : String(err),
+                          timestamp: Date.now(),
+                          recoverable: false,
+                          context: {
+                            failedCwd: newCwd,
+                            phase: "move-to-new-worktree",
+                          },
+                        },
+                      }
+                    : t
                 ),
               }));
             }
-
-            unmarkTerminalRestarting(id);
-            set((state) => ({
-              terminals: state.terminals.map((t) =>
-                t.id === id ? { ...t, isRestarting: false } : t
-              ),
-            }));
-
-            await get().restartTerminal(id);
-          } catch (err) {
-            console.error("[TerminalStore] moveToNewWorktreeAndTransfer failed:", err);
-            unmarkTerminalRestarting(id);
-            set((state) => ({
-              terminals: state.terminals.map((t) =>
-                t.id === id
-                  ? {
-                      ...t,
-                      isRestarting: false,
-                      restartError: {
-                        message: err instanceof Error ? err.message : String(err),
-                        timestamp: Date.now(),
-                        recoverable: false,
-                        context: {
-                          failedCwd: terminal.cwd,
-                          phase: "move-to-new-worktree",
-                        },
-                      },
-                    }
-                  : t
-              ),
-            }));
-          }
-        },
+          },
+        });
+      })
+      .catch((err) => {
+        console.error("[TerminalStore] Failed to load worktreeStore:", err);
       });
-    });
   },
 
   updateFlowStatus: (id, status, timestamp) => {
