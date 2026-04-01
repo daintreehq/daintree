@@ -16,8 +16,8 @@ vi.stubGlobal("window", {
   removeEventListener: vi.fn(),
 });
 
-const notifyMock = vi.fn(() => "");
-vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+vi.mock("@/lib/notify", () => ({ notify: vi.fn(() => "") }));
+import { notify as notifyMock } from "@/lib/notify";
 
 vi.mock("../../useElectron", () => ({
   isElectronAvailable: () => true,
@@ -74,11 +74,10 @@ vi.mock("@/store/recipeStore", () => ({
   },
 }));
 
-// Reset the module-level guard between tests
-let useOrchestrationMilestones: (isStateLoaded: boolean) => void;
+import { useOrchestrationMilestones } from "../useOrchestrationMilestones";
 
 describe("useOrchestrationMilestones", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     terminalState = { terminals: [] };
@@ -88,11 +87,6 @@ describe("useOrchestrationMilestones", () => {
     worktreeSubscribers = [];
     recipeSubscribers = [];
     milestonesMock.get.mockResolvedValue({});
-
-    // Re-import to reset module-level guard
-    vi.resetModules();
-    const mod = await import("../useOrchestrationMilestones");
-    useOrchestrationMilestones = mod.useOrchestrationMilestones;
   });
 
   afterEach(() => {
@@ -208,5 +202,24 @@ describe("useOrchestrationMilestones", () => {
     renderHook(() => useOrchestrationMilestones(false));
     await vi.advanceTimersByTimeAsync(0);
     expect(milestonesMock.get).not.toHaveBeenCalled();
+  });
+
+  it("cleans up all subscriptions and event listeners on unmount", async () => {
+    const { unmount } = renderHook(() => useOrchestrationMilestones(true));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(terminalSubscribers).toHaveLength(1);
+    expect(worktreeSubscribers).toHaveLength(1);
+    expect(recipeSubscribers).toHaveLength(1);
+
+    unmount();
+
+    expect(terminalSubscribers).toHaveLength(0);
+    expect(worktreeSubscribers).toHaveLength(0);
+    expect(recipeSubscribers).toHaveLength(0);
+    expect(window.removeEventListener).toHaveBeenCalledWith(
+      "canopy:context-injected",
+      expect.any(Function)
+    );
   });
 });

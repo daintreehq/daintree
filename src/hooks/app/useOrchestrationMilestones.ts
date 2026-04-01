@@ -42,8 +42,6 @@ const MILESTONES: MilestoneDefinition[] = [
 const TOAST_DURATION = 5000;
 const TOAST_STAGGER = 5500;
 
-let observerInitialized = false;
-
 function checkAgentCompleted(): boolean {
   return useTerminalStore.getState().terminals.some((t) => t.agentState === "completed");
 }
@@ -74,55 +72,6 @@ function checkRecipeUsed(): boolean {
   return useRecipeStore.getState().recipes.some((r) => r.lastUsedAt != null);
 }
 
-function initObservers(shown: Record<string, boolean>, fire: (id: string) => void): void {
-  if (observerInitialized) return;
-  observerInitialized = true;
-
-  useTerminalStore.subscribe((state, prev) => {
-    if (!shown["first-agent-completed"]) {
-      const had = prev.terminals.some((t) => t.agentState === "completed");
-      const has = state.terminals.some((t) => t.agentState === "completed");
-      if (!had && has) fire("first-agent-completed");
-    }
-
-    if (!shown["first-concurrent-agents"]) {
-      const prevCount = prev.terminals.filter((t) => t.agentState === "working").length;
-      const curCount = state.terminals.filter((t) => t.agentState === "working").length;
-      if (prevCount < 3 && curCount >= 3) fire("first-concurrent-agents");
-    }
-  });
-
-  getCurrentViewStore().subscribe((state, prev) => {
-    if (shown["first-pr-merged"]) return;
-    for (const [id, w] of state.worktrees) {
-      if (w.prState === "merged") {
-        const prevW = prev.worktrees.get(id);
-        if (!prevW || prevW.prState !== "merged") {
-          fire("first-pr-merged");
-          return;
-        }
-      }
-    }
-  });
-
-  useRecipeStore.subscribe((state, prev) => {
-    if (shown["first-recipe-used"]) return;
-    const hadUsed = prev.recipes.some((r) => r.lastUsedAt != null);
-    const hasUsed = state.recipes.some((r) => r.lastUsedAt != null);
-    if (!hadUsed && hasUsed) fire("first-recipe-used");
-  });
-
-  window.addEventListener(
-    "canopy:context-injected",
-    () => {
-      if (!shown["first-context-injection"]) {
-        fire("first-context-injection");
-      }
-    },
-    { once: false }
-  );
-}
-
 function reconcile(shown: Record<string, boolean>, markShown: (id: string) => void): void {
   const checks: Record<string, () => boolean> = {
     "first-agent-completed": checkAgentCompleted,
@@ -148,6 +97,8 @@ export function useOrchestrationMilestones(isStateLoaded: boolean): void {
   useEffect(() => {
     if (!isElectronAvailable() || !isStateLoaded || hydratedRef.current) return;
     hydratedRef.current = true;
+
+    const unsubs: (() => void)[] = [];
 
     const markShownSilent = (id: string) => {
       shownRef.current[id] = true;
@@ -189,8 +140,62 @@ export function useOrchestrationMilestones(isStateLoaded: boolean): void {
       .then((persisted) => {
         shownRef.current = { ...persisted };
         reconcile(shownRef.current, markShownSilent);
-        initObservers(shownRef.current, showToast);
+
+        const shown = shownRef.current;
+
+        unsubs.push(
+          useTerminalStore.subscribe((state, prev) => {
+            if (!shown["first-agent-completed"]) {
+              const had = prev.terminals.some((t) => t.agentState === "completed");
+              const has = state.terminals.some((t) => t.agentState === "completed");
+              if (!had && has) showToast("first-agent-completed");
+            }
+
+            if (!shown["first-concurrent-agents"]) {
+              const prevCount = prev.terminals.filter((t) => t.agentState === "working").length;
+              const curCount = state.terminals.filter((t) => t.agentState === "working").length;
+              if (prevCount < 3 && curCount >= 3) showToast("first-concurrent-agents");
+            }
+          })
+        );
+
+        const viewStore = getCurrentViewStore();
+        unsubs.push(
+          viewStore.subscribe((state, prev) => {
+            if (shown["first-pr-merged"]) return;
+            for (const [id, w] of state.worktrees) {
+              if (w.prState === "merged") {
+                const prevW = prev.worktrees.get(id);
+                if (!prevW || prevW.prState !== "merged") {
+                  showToast("first-pr-merged");
+                  return;
+                }
+              }
+            }
+          })
+        );
+
+        unsubs.push(
+          useRecipeStore.subscribe((state, prev) => {
+            if (shown["first-recipe-used"]) return;
+            const hadUsed = prev.recipes.some((r) => r.lastUsedAt != null);
+            const hasUsed = state.recipes.some((r) => r.lastUsedAt != null);
+            if (!hadUsed && hasUsed) showToast("first-recipe-used");
+          })
+        );
+
+        const onContextInjected = () => {
+          if (!shown["first-context-injection"]) {
+            showToast("first-context-injection");
+          }
+        };
+        window.addEventListener("canopy:context-injected", onContextInjected);
+        unsubs.push(() => window.removeEventListener("canopy:context-injected", onContextInjected));
       })
       .catch(console.error);
+
+    return () => {
+      for (const unsub of unsubs) unsub();
+    };
   }, [isStateLoaded]);
 }
