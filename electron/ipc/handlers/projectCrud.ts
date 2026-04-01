@@ -11,7 +11,6 @@ import type { HandlerDependencies } from "../types.js";
 import type { Project, ProjectSettings } from "../../types/index.js";
 import type {
   BulkProjectStats,
-  BulkProjectStatsEntry,
   ProjectSwitchOutgoingState,
 } from "../../../shared/types/ipc/project.js";
 import { sanitizeTerminals, sanitizeTerminalSizes } from "./terminalLayout.js";
@@ -555,55 +554,49 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     const uniqueIds = [...new Set(projectIds.filter((id) => typeof id === "string" && id))];
     const MEMORY_PER_TERMINAL_MB = 50;
 
-    const entries = await Promise.allSettled(
-      uniqueIds.map(async (projectId): Promise<[string, BulkProjectStatsEntry]> => {
-        const [ptyStats, terminalIds] = await Promise.all([
-          deps.ptyClient!.getProjectStats(projectId),
-          deps.ptyClient!.getTerminalsForProjectAsync(projectId),
-        ]);
+    // Fetch all terminals once and per-project stats in parallel (eliminates N+1 per-terminal IPC)
+    const [allTerminals, statsResults] = await Promise.all([
+      deps.ptyClient!.getAllTerminalsAsync(),
+      Promise.allSettled(
+        uniqueIds.map((id) => deps.ptyClient!.getProjectStats(id).then((s) => [id, s] as const))
+      ),
+    ]);
 
-        let activeAgentCount = 0;
-        let waitingAgentCount = 0;
+    // Group agent counts by projectId from the bulk terminal list
+    const agentCounts = new Map<string, { active: number; waiting: number }>();
+    for (const id of uniqueIds) {
+      agentCounts.set(id, { active: 0, waiting: 0 });
+    }
+    for (const terminal of allTerminals) {
+      if (!terminal.projectId) continue;
+      const counts = agentCounts.get(terminal.projectId);
+      if (!counts) continue;
+      if (terminal.isTrashed) continue;
+      if (terminal.kind === "dev-preview") continue;
+      if (terminal.hasPty === false) continue;
+      if (terminal.kind !== "agent" && !terminal.agentId) continue;
 
-        const terminalInfos = await Promise.all(
-          terminalIds.map((id) => deps.ptyClient!.getTerminalAsync(id))
-        );
-
-        for (const terminal of terminalInfos) {
-          if (!terminal) continue;
-          if (terminal.kind === "dev-preview") continue;
-          if (terminal.hasPty === false) continue;
-
-          const isAgent = terminal.kind === "agent" || !!terminal.agentId;
-          if (!isAgent) continue;
-
-          if (terminal.agentState === "waiting") {
-            waitingAgentCount += 1;
-          } else if (terminal.agentState === "working" || terminal.agentState === "running") {
-            activeAgentCount += 1;
-          }
-        }
-
-        return [
-          projectId,
-          {
-            processCount: ptyStats.terminalCount,
-            terminalCount: ptyStats.terminalCount,
-            estimatedMemoryMB: ptyStats.terminalCount * MEMORY_PER_TERMINAL_MB,
-            terminalTypes: ptyStats.terminalTypes,
-            processIds: ptyStats.processIds,
-            activeAgentCount,
-            waitingAgentCount,
-          },
-        ];
-      })
-    );
+      if (terminal.agentState === "waiting") {
+        counts.waiting += 1;
+      } else if (terminal.agentState === "working" || terminal.agentState === "running") {
+        counts.active += 1;
+      }
+    }
 
     const result: BulkProjectStats = {};
-    for (const entry of entries) {
+    for (const entry of statsResults) {
       if (entry.status === "fulfilled") {
-        const [id, stats] = entry.value;
-        result[id] = stats;
+        const [id, ptyStats] = entry.value;
+        const counts = agentCounts.get(id) ?? { active: 0, waiting: 0 };
+        result[id] = {
+          processCount: ptyStats.terminalCount,
+          terminalCount: ptyStats.terminalCount,
+          estimatedMemoryMB: ptyStats.terminalCount * MEMORY_PER_TERMINAL_MB,
+          terminalTypes: ptyStats.terminalTypes,
+          processIds: ptyStats.processIds,
+          activeAgentCount: counts.active,
+          waitingAgentCount: counts.waiting,
+        };
       }
     }
     return result;
