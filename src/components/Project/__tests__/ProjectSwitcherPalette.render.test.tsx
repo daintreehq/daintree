@@ -114,6 +114,7 @@ function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProj
     path: "/tmp/test",
     emoji: "🚀",
     lastOpened: 0,
+    frecencyScore: 3.0,
     status: "closed",
     isActive: false,
     isBackground: false,
