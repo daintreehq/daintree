@@ -98,6 +98,7 @@ export function useOrchestrationMilestones(isStateLoaded: boolean): void {
     if (!isElectronAvailable() || !isStateLoaded || hydratedRef.current) return;
     hydratedRef.current = true;
 
+    let disposed = false;
     const unsubs: (() => void)[] = [];
 
     const markShownSilent = (id: string) => {
@@ -138,6 +139,7 @@ export function useOrchestrationMilestones(isStateLoaded: boolean): void {
     window.electron.milestones
       .get()
       .then((persisted) => {
+        if (disposed) return;
         shownRef.current = { ...persisted };
         reconcile(shownRef.current, markShownSilent);
 
@@ -195,6 +197,7 @@ export function useOrchestrationMilestones(isStateLoaded: boolean): void {
       .catch(console.error);
 
     return () => {
+      disposed = true;
       for (const unsub of unsubs) unsub();
     };
   }, [isStateLoaded]);
