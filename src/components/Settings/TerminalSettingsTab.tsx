@@ -82,8 +82,8 @@ const SCROLLBACK_OPTIONS = [
 ] as const;
 
 const CACHED_VIEWS_OPTIONS = [
-  { value: 1, label: "1 project", description: "Min memory" },
-  { value: 2, label: "2 projects", description: "Default" },
+  { value: 1, label: "1 project", description: "Default" },
+  { value: 2, label: "2 projects", description: "Balanced" },
   { value: 3, label: "3 projects", description: "Balanced" },
   { value: 4, label: "4 projects", description: "More cache" },
   { value: 5, label: "5 projects", description: "Max cache" },

@@ -6,6 +6,6 @@ interface CachedProjectViewsState {
 }
 
 export const useCachedProjectViewsStore = create<CachedProjectViewsState>()((set) => ({
-  cachedProjectViews: 2,
+  cachedProjectViews: 1,
   setCachedProjectViews: (n) => set({ cachedProjectViews: n }),
 }));

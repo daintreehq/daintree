@@ -109,7 +109,7 @@ describe("ProjectViewManager — GC on deactivate", () => {
     vi.useFakeTimers();
     nextWebContentsId = 100;
     win = createMockWindow();
-    manager = new ProjectViewManager(win as never, { dirname: "/test" });
+    manager = new ProjectViewManager(win as never, { dirname: "/test", cachedProjectViews: 2 });
 
     // Create the initial view with a known webContents mock
     initialWc = createMockWebContents();

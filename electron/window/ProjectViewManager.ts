@@ -46,7 +46,7 @@ export interface ProjectViewManagerOptions {
   onViewEvicted?: (webContentsId: number) => void;
   /** Called on every did-finish-load for any managed view (initial load and reloads) */
   onViewReady?: (webContents: Electron.WebContents) => void;
-  /** Number of project views to keep cached in memory (1–5, default: 2) */
+  /** Number of project views to keep cached in memory (1–5, default: 1) */
   cachedProjectViews?: number;
 }
 
@@ -54,7 +54,7 @@ export class ProjectViewManager {
   private views = new Map<string, ViewEntry>();
   private webContentsToProject = new Map<number, string>();
   private activeProjectId: string | null = null;
-  private maxCachedViews = 2;
+  private maxCachedViews = 1;
   private win: BrowserWindow;
   private dirname: string;
   private onRecreateWindow?: () => Promise<void>;

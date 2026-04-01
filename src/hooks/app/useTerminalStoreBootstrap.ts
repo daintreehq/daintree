@@ -42,7 +42,7 @@ export function useTerminalStoreBootstrap() {
           config.memoryLeakAutoRestartThresholdMb ?? DEFAULT_AUTO_RESTART_THRESHOLD_MB
         );
 
-      useCachedProjectViewsStore.getState().setCachedProjectViews(config.cachedProjectViews ?? 2);
+      useCachedProjectViewsStore.getState().setCachedProjectViews(config.cachedProjectViews ?? 1);
     });
 
     return () => {
