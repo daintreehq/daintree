@@ -3,6 +3,7 @@ import {
   extractLocalhostUrls,
   normalizeBrowserUrl,
   isLocalhostUrl,
+  isSafeNavigationUrl,
   stripAnsiAndOscCodes,
 } from "../urlUtils.js";
 
@@ -209,6 +210,48 @@ describe("urlUtils", () => {
 
     it("returns true for https IPv6 [::1] URL", () => {
       expect(isLocalhostUrl("https://[::1]:3000")).toBe(true);
+    });
+  });
+
+  describe("isSafeNavigationUrl", () => {
+    it("returns true for http URL", () => {
+      expect(isSafeNavigationUrl("http://example.com")).toBe(true);
+    });
+
+    it("returns true for https URL", () => {
+      expect(isSafeNavigationUrl("https://example.com/path")).toBe(true);
+    });
+
+    it("returns false for javascript: URL", () => {
+      expect(isSafeNavigationUrl("javascript:alert(1)")).toBe(false);
+    });
+
+    it("returns false for data: URL", () => {
+      expect(isSafeNavigationUrl("data:text/html,<h1>Hi</h1>")).toBe(false);
+    });
+
+    it("returns false for file: URL", () => {
+      expect(isSafeNavigationUrl("file:///etc/passwd")).toBe(false);
+    });
+
+    it("returns false for blob: URL", () => {
+      expect(isSafeNavigationUrl("blob:https://example.com/uuid")).toBe(false);
+    });
+
+    it("returns false for about:blank", () => {
+      expect(isSafeNavigationUrl("about:blank")).toBe(false);
+    });
+
+    it("returns false for empty string", () => {
+      expect(isSafeNavigationUrl("")).toBe(false);
+    });
+
+    it("returns false for invalid URL", () => {
+      expect(isSafeNavigationUrl("not-a-url")).toBe(false);
+    });
+
+    it("trims whitespace before parsing", () => {
+      expect(isSafeNavigationUrl("  https://example.com  ")).toBe(true);
     });
   });
 });

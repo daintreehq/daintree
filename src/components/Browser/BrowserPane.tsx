@@ -105,10 +105,8 @@ export function BrowserPane({
 
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [blockedNav, setBlockedNav] = useState<{
-    url: string;
-    canOpenExternal: boolean;
-  } | null>(null);
+  const [blockedNav, setBlockedNav] = useState<{ url: string } | null>(null);
+  const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
   // Track the last URL we set on the webview to detect in-webview navigation
   const lastSetUrlRef = useRef<string>(history.present);
   // Track if webview has been mounted and is ready
@@ -156,14 +154,25 @@ export function BrowserPane({
     return () => removePane(id);
   }, [id, removePane]);
 
-  // Listen for blocked navigation events from main process
+  // Listen for blocked navigation events from main process (debounced 150ms for redirect chains)
   useEffect(() => {
     const cleanup = window.electron.webview.onNavigationBlocked((data) => {
-      if (data.panelId === id) {
-        setBlockedNav({ url: data.url, canOpenExternal: data.canOpenExternal });
+      if (data.panelId !== id) return;
+      if (blockedNavTimerRef.current) {
+        clearTimeout(blockedNavTimerRef.current);
       }
+      blockedNavTimerRef.current = setTimeout(() => {
+        setBlockedNav({ url: data.url });
+        blockedNavTimerRef.current = null;
+      }, 150);
     });
-    return cleanup;
+    return () => {
+      cleanup();
+      if (blockedNavTimerRef.current) {
+        clearTimeout(blockedNavTimerRef.current);
+        blockedNavTimerRef.current = null;
+      }
+    };
   }, [id]);
 
   // Auto-dismiss blocked navigation notification after 10 seconds
@@ -472,6 +481,9 @@ export function BrowserPane({
   // Cleanup timeouts on unmount
   useEffect(() => {
     return () => {
+      if (blockedNavTimerRef.current) {
+        clearTimeout(blockedNavTimerRef.current);
+      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
       }
@@ -774,24 +786,34 @@ export function BrowserPane({
               <div className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-canopy-text/80">
                 <ExternalLink className="h-3.5 w-3.5 shrink-0 text-status-warning" />
                 <span className="truncate flex-1">
-                  Navigation to external site blocked: {blockedNav.url}
+                  Navigation to external site blocked:{" "}
+                  {(() => {
+                    try {
+                      return new URL(blockedNav.url).hostname;
+                    } catch {
+                      return blockedNav.url;
+                    }
+                  })()}
                 </span>
-                {blockedNav.canOpenExternal && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void window.electron.system.openExternal(blockedNav.url);
-                      setBlockedNav(null);
-                    }}
-                    className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-canopy-text/90 transition-colors"
-                  >
-                    Open in Browser
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    void actionService.dispatch(
+                      "browser.openExternal",
+                      { terminalId: id, url: blockedNav.url },
+                      { source: "user" }
+                    );
+                    setBlockedNav(null);
+                  }}
+                  className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-canopy-text/90 transition-colors"
+                >
+                  Open in External Browser
+                </button>
                 <button
                   type="button"
                   onClick={() => setBlockedNav(null)}
                   className="shrink-0 text-canopy-text/40 hover:text-canopy-text/70 transition-colors"
+                  aria-label="Dismiss"
                 >
                   ×
                 </button>

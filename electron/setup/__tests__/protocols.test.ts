@@ -82,7 +82,6 @@ vi.mock("../../window/windowRef.js", () => ({
   getMainWindow: vi.fn(() => mockMainWindow),
 }));
 
-
 vi.mock("../../ipc/channels.js", () => ({
   CHANNELS: {
     WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
@@ -392,6 +391,7 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(mockSend).toHaveBeenCalledWith("webview:navigation-blocked", {
         panelId: "panel-42",
         url: "https://oauth.provider.com/authorize",
+        canOpenExternal: true,
       });
     });
 
@@ -418,6 +418,7 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(mockSend).toHaveBeenCalledWith("webview:navigation-blocked", {
         panelId: "panel-7",
         url: "https://external-oauth.com/callback",
+        canOpenExternal: true,
       });
     });
 
@@ -504,6 +505,11 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
   describe("blocked navigation IPC notification", () => {
     beforeEach(() => {
       mockSend.mockClear();
+      mockFromWebContents.mockReturnValue(mockMainWindow);
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-browser-1"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
     });
 
     it("sends navigation-blocked IPC when cross-origin navigation is blocked", () => {

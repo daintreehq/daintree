@@ -310,7 +310,6 @@ export const CHANNELS = {
   WEBVIEW_GET_CONSOLE_PROPERTIES: "webview:get-console-properties",
   WEBVIEW_CONSOLE_MESSAGE: "webview:console-message",
   WEBVIEW_CONSOLE_CONTEXT_CLEARED: "webview:console-context-cleared",
-  WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",
 
   SYSTEM_SLEEP_GET_METRICS: "system-sleep:get-metrics",
   SYSTEM_SLEEP_GET_AWAKE_TIME: "system-sleep:get-awake-time",
