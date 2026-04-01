@@ -2,7 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { useRecipeStore } from "@/store/recipeStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 
 export function registerRecipeActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("recipe.list", () => ({
@@ -50,7 +50,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       const { recipeId, worktreeId } = args as { recipeId: string; worktreeId?: string };
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId ?? undefined;
       const worktree = targetWorktreeId
-        ? useWorktreeDataStore.getState().worktrees.get(targetWorktreeId)
+        ? getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
         : null;
       const worktreePath = worktree?.path ?? ctx.projectPath;
 

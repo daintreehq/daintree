@@ -1,9 +1,9 @@
 import { CircleDot } from "lucide-react";
 import { WorktreeIcon } from "@/components/icons";
-import type { WorktreeState } from "@shared/types";
+import type { WorktreeSnapshot } from "@shared/types";
 
 interface WorktreeDragPreviewProps {
-  worktree: WorktreeState;
+  worktree: WorktreeSnapshot;
 }
 
 export function WorktreeDragPreview({ worktree }: WorktreeDragPreviewProps) {

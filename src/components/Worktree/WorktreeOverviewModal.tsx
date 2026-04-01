@@ -6,11 +6,11 @@ import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
-import type { WorktreeState } from "@/types";
+import type { WorktreeState, WorktreeSnapshot } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useTerminalStore } from "@/store/terminalStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import {
   matchesFilters,
   sortWorktrees,
@@ -29,9 +29,9 @@ interface OverviewWorktreeCardProps {
   totalWorktreeCount: number;
   variant?: "sidebar" | "grid";
   onSelectWorktree: (worktreeId: string) => void;
-  onCopyTree: (worktree: WorktreeState) => Promise<string | undefined> | void;
-  onOpenEditor: (worktree: WorktreeState) => void;
-  onSaveLayout?: (worktree: WorktreeState) => void;
+  onCopyTree: (worktree: WorktreeSnapshot) => Promise<string | undefined> | void;
+  onOpenEditor: (worktree: WorktreeSnapshot) => void;
+  onSaveLayout?: (worktree: WorktreeSnapshot) => void;
   onLaunchAgent?: (worktreeId: string, agentId: string) => void;
   agentAvailability?: UseAgentLauncherReturn["availability"];
   agentSettings?: UseAgentLauncherReturn["agentSettings"];
@@ -55,7 +55,18 @@ const OverviewWorktreeCard = React.memo(function OverviewWorktreeCard({
   homeDir,
   onClose,
 }: OverviewWorktreeCardProps) {
-  const worktree = useWorktreeDataStore((state) => state.worktrees.get(worktreeId));
+  const worktreeSnap = useWorktreeStore((state) => state.worktrees.get(worktreeId));
+  const worktree = useMemo(
+    () =>
+      worktreeSnap
+        ? ({
+            ...worktreeSnap,
+            worktreeChanges: worktreeSnap.worktreeChanges ?? null,
+            lastActivityTimestamp: worktreeSnap.lastActivityTimestamp ?? null,
+          } as WorktreeState)
+        : undefined,
+    [worktreeSnap]
+  );
 
   const handleSelect = useCallback(() => {
     onSelectWorktree(worktreeId);
@@ -108,9 +119,9 @@ export interface WorktreeOverviewModalProps {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
   onSelectWorktree: (worktreeId: string) => void;
-  onCopyTree: (worktree: WorktreeState) => Promise<string | undefined> | void;
-  onOpenEditor: (worktree: WorktreeState) => void;
-  onSaveLayout?: (worktree: WorktreeState) => void;
+  onCopyTree: (worktree: WorktreeSnapshot) => Promise<string | undefined> | void;
+  onOpenEditor: (worktree: WorktreeSnapshot) => void;
+  onSaveLayout?: (worktree: WorktreeSnapshot) => void;
   onLaunchAgent?: (worktreeId: string, agentId: string) => void;
   agentAvailability?: UseAgentLauncherReturn["availability"];
   agentSettings?: UseAgentLauncherReturn["agentSettings"];

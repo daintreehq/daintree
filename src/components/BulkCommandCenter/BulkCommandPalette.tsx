@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useTerminalStore } from "@/store/terminalStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { useNotificationStore } from "@/store/notificationStore";
@@ -91,7 +91,7 @@ function getEligibleTerminals(
 }
 
 function useWorktreeRows(): WorktreeRow[] {
-  const worktrees = useWorktreeDataStore((s) => s.worktrees);
+  const worktrees = useWorktreeStore((s) => s.worktrees);
   const terminals = useTerminalStore((s) => s.terminals);
 
   return useMemo(() => {

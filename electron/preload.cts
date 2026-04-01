@@ -193,6 +193,166 @@ ipcRenderer.on("workspace-port", (event: Electron.IpcRendererEvent) => {
   console.log("[Preload] Workspace direct port connected");
 });
 
+// ── Worktree Port Client (Phase 1) ──────────────────────────────────────────
+// New dedicated port for worktree data with request/response correlation.
+// Coexists with the legacy workspace-port above — both work independently.
+
+type WorktreePortEventCallback = (data: unknown) => void;
+
+class WorktreePortClient {
+  private port: MessagePort | null = null;
+  private pending = new Map<
+    string,
+    {
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+      timeout: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private eventListeners = new Map<string, Set<WorktreePortEventCallback>>();
+  private readyCallbacks: Array<() => void> = [];
+  private _isReady = false;
+
+  attach(newPort: MessagePort): void {
+    // Close old port and reject pending requests
+    if (this.port) {
+      this.detach();
+    }
+
+    this.port = newPort;
+    this._isReady = true;
+
+    this.port.onmessage = (msg: MessageEvent) => {
+      const data = msg.data;
+      if (!data) return;
+
+      // Response to a request
+      if (data.id && this.pending.has(data.id)) {
+        const entry = this.pending.get(data.id)!;
+        clearTimeout(entry.timeout);
+        this.pending.delete(data.id);
+
+        if (data.error) {
+          entry.reject(new Error(data.error));
+        } else {
+          entry.resolve(data.result);
+        }
+        return;
+      }
+
+      // Spontaneous event from host
+      if (data.type === "event" && data.event?.type) {
+        const listeners = this.eventListeners.get(data.event.type);
+        if (listeners) {
+          for (const cb of listeners) {
+            try {
+              cb(data.event);
+            } catch {
+              // Don't let listener errors crash the port
+            }
+          }
+        }
+      }
+    };
+
+    // Fire ready callbacks (kept for re-attach — not cleared)
+    for (const cb of this.readyCallbacks) {
+      try {
+        cb();
+      } catch {
+        // ignore
+      }
+    }
+
+    console.log("[Preload] Worktree port connected");
+  }
+
+  private detach(): void {
+    if (!this.port) return;
+
+    try {
+      this.port.close();
+    } catch {
+      // ignore
+    }
+
+    // Reject all pending requests
+    for (const [, entry] of this.pending) {
+      clearTimeout(entry.timeout);
+      entry.reject(new Error("Worktree port replaced"));
+    }
+    this.pending.clear();
+
+    this.port = null;
+    this._isReady = false;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  request(action: string, payload?: Record<string, unknown>, timeoutMs = 10000): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.port) {
+        reject(new Error("Worktree port not ready"));
+        return;
+      }
+
+      const id = crypto.randomUUID();
+      const timeout = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Worktree port request timed out: ${action}`));
+      }, timeoutMs);
+
+      this.pending.set(id, { resolve, reject, timeout });
+
+      try {
+        this.port.postMessage({ id, action, payload: payload || {} });
+      } catch (error) {
+        clearTimeout(timeout);
+        this.pending.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  onEvent(type: string, callback: WorktreePortEventCallback): () => void {
+    let listeners = this.eventListeners.get(type);
+    if (!listeners) {
+      listeners = new Set();
+      this.eventListeners.set(type, listeners);
+    }
+    listeners.add(callback);
+
+    return () => {
+      listeners!.delete(callback);
+      if (listeners!.size === 0) {
+        this.eventListeners.delete(type);
+      }
+    };
+  }
+
+  isReady(): boolean {
+    return this._isReady;
+  }
+
+  onReady(callback: () => void): () => void {
+    if (this._isReady) {
+      callback();
+    }
+    // Always register for future re-attaches (port replacement on host restart)
+    this.readyCallbacks.push(callback);
+    return () => {
+      const idx = this.readyCallbacks.indexOf(callback);
+      if (idx >= 0) this.readyCallbacks.splice(idx, 1);
+    };
+  }
+}
+
+const worktreePortClient = new WorktreePortClient();
+
+ipcRenderer.on("worktree-port", (event: Electron.IpcRendererEvent) => {
+  if (!event.ports || event.ports.length === 0) return;
+  worktreePortClient.attach(event.ports[0]);
+});
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches ipcRenderer.invoke return type
 async function _unwrappingInvoke(channel: string, ...args: unknown[]): Promise<any> {
   const response = await ipcRenderer.invoke(channel, ...args);
@@ -863,6 +1023,20 @@ const api: ElectronAPI = {
 
     onActivated: (callback: (data: { worktreeId: string }) => void) =>
       _typedOn(CHANNELS.WORKTREE_ACTIVATED, callback),
+  },
+
+  // Worktree Port API (Phase 1 — dedicated MessagePort with request/response)
+  worktreePort: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    request: (action: string, payload?: Record<string, unknown>): Promise<any> =>
+      worktreePortClient.request(action, payload),
+
+    onEvent: (type: string, callback: (data: unknown) => void): (() => void) =>
+      worktreePortClient.onEvent(type, callback),
+
+    isReady: (): boolean => worktreePortClient.isReady(),
+
+    onReady: (callback: () => void): (() => void) => worktreePortClient.onReady(callback),
   },
 
   // Terminal API

@@ -1,7 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { useTerminalStore } from "@/store/terminalStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 export function registerTerminalWorktreeActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -13,7 +13,7 @@ export function registerTerminalWorktreeActions(
     const terminal = useTerminalStore.getState().terminals.find((t) => t.id === focusedTerminalId);
     if (!terminal?.worktreeId) return null;
 
-    const worktree = useWorktreeDataStore.getState().worktrees.get(terminal.worktreeId);
+    const worktree = getCurrentViewStore().getState().worktrees.get(terminal.worktreeId);
     if (!worktree) return null;
 
     return { terminal, worktree };
@@ -37,7 +37,7 @@ export function registerTerminalWorktreeActions(
         .terminals.find((t) => t.id === ctx.focusedTerminalId);
       if (!terminal) return "Focused terminal no longer exists";
       if (!terminal.worktreeId) return "Terminal has no associated worktree";
-      const worktree = useWorktreeDataStore.getState().worktrees.get(terminal.worktreeId);
+      const worktree = getCurrentViewStore().getState().worktrees.get(terminal.worktreeId);
       if (!worktree) return "Worktree no longer exists";
       return undefined;
     },
@@ -76,7 +76,7 @@ export function registerTerminalWorktreeActions(
         .terminals.find((t) => t.id === ctx.focusedTerminalId);
       if (!terminal) return "Focused terminal no longer exists";
       if (!terminal.worktreeId) return "Terminal has no associated worktree";
-      const worktree = useWorktreeDataStore.getState().worktrees.get(terminal.worktreeId);
+      const worktree = getCurrentViewStore().getState().worktrees.get(terminal.worktreeId);
       if (!worktree) return "Worktree no longer exists";
       if (!worktree.issueNumber) return "Worktree has no associated issue";
       return undefined;
@@ -116,7 +116,7 @@ export function registerTerminalWorktreeActions(
         .terminals.find((t) => t.id === ctx.focusedTerminalId);
       if (!terminal) return "Focused terminal no longer exists";
       if (!terminal.worktreeId) return "Terminal has no associated worktree";
-      const worktree = useWorktreeDataStore.getState().worktrees.get(terminal.worktreeId);
+      const worktree = getCurrentViewStore().getState().worktrees.get(terminal.worktreeId);
       if (!worktree) return "Worktree no longer exists";
       if (!worktree.prUrl) return "Worktree has no associated pull request";
       return undefined;

@@ -15,7 +15,8 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
 import { useRecipeStore, type RecipeSpawnResults } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useRecipePicker } from "@/components/Worktree/hooks/useRecipePicker";
@@ -417,21 +418,21 @@ export function BulkCreateWorktreeDialog({
   }, [initializeGitHubConfig]);
 
   // Plan worktrees
+  const worktreeMap = useWorktreeStore((s) => s.worktrees);
   const planned = useMemo(() => {
-    const worktrees = useWorktreeDataStore.getState().worktrees;
     if (mode === "pr") {
       const existingPRNumbers = new Set<number>();
-      for (const wt of worktrees.values()) {
+      for (const wt of worktreeMap.values()) {
         if (wt.prNumber) existingPRNumbers.add(wt.prNumber);
       }
       return planPRWorktrees(selectedPRs, existingPRNumbers);
     }
     const existingIssueNumbers = new Set<number>();
-    for (const wt of worktrees.values()) {
+    for (const wt of worktreeMap.values()) {
       if (wt.issueNumber) existingIssueNumbers.add(wt.issueNumber);
     }
     return planIssueWorktrees(selectedIssues, existingIssueNumbers);
-  }, [mode, selectedIssues, selectedPRs]);
+  }, [mode, selectedIssues, selectedPRs, worktreeMap]);
 
   const creatableCount = planned.filter((p) => !p.skipped).length;
 
@@ -510,7 +511,7 @@ export function BulkCreateWorktreeDialog({
               let resolvedBranch = tracked?.resolvedBranch;
 
               if (!worktreeId) {
-                const worktrees = useWorktreeDataStore.getState().worktrees;
+                const worktrees = getCurrentViewStore().getState().worktrees;
                 for (const wt of worktrees.values()) {
                   if (wt.branch && wt.branch === planned.branchName) {
                     worktreeId = wt.worktreeId;
@@ -591,7 +592,7 @@ export function BulkCreateWorktreeDialog({
                 } else {
                   // Issue mode: create new branch from base
                   const mainWorktree = Array.from(
-                    useWorktreeDataStore.getState().worktrees.values()
+                    getCurrentViewStore().getState().worktrees.values()
                   ).find((w) => w.isMainWorktree);
                   const baseBranch = mainWorktree?.branch;
                   if (!baseBranch) throw new Error("No main worktree found for base branch");

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { worktreeClient, githubClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { useRecipeStore } from "@/store/recipeStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
 
 export function registerWorkflowActions(actions: ActionRegistry): void {
@@ -76,7 +76,7 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
       // Determine base branch - default to main worktree's branch if not specified
       let baseRef = baseBranch;
       if (!baseRef) {
-        const mainWorktree = Array.from(useWorktreeDataStore.getState().worktrees.values()).find(
+        const mainWorktree = Array.from(getCurrentViewStore().getState().worktrees.values()).find(
           (w) => w.isMainWorktree
         );
         if (!mainWorktree) {

@@ -41,9 +41,9 @@ import { arrayMove } from "@dnd-kit/sortable";
 import { parseAccordionDragId } from "./SortableWorktreeTerminal";
 import { isWorktreeSortDragData, parseWorktreeSortDragId } from "./SortableWorktreeCard";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
-import type { WorktreeState } from "@shared/types";
+import type { WorktreeSnapshot } from "@shared/types";
 
 // Placeholder ID used when dragging from dock to grid
 export const GRID_PLACEHOLDER_ID = "__grid-placeholder__";
@@ -173,7 +173,7 @@ function DragOverlayWithCursorTracking({
   groupTabCount,
 }: {
   activeTerminal: TerminalInstance | null;
-  activeWorktree: WorktreeState | null;
+  activeWorktree: WorktreeSnapshot | null;
   groupTabCount?: number;
 }) {
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -252,7 +252,7 @@ export function DndProvider({ children }: DndProviderProps) {
   const [activeData, setActiveData] = useState<DragData | WorktreeDragData | null>(null);
   const [overContainer, setOverContainer] = useState<"grid" | "dock" | null>(null);
   const [isWorktreeSortActive, setIsWorktreeSortActive] = useState(false);
-  const [activeSortWorktree, setActiveSortWorktree] = useState<WorktreeState | null>(null);
+  const [activeSortWorktree, setActiveSortWorktree] = useState<WorktreeSnapshot | null>(null);
 
   // Ref to track overContainer for stable collision detection (avoids infinite loops)
   const overContainerRef = useRef<"grid" | "dock" | null>(null);
@@ -309,7 +309,7 @@ export function DndProvider({ children }: DndProviderProps) {
       setIsWorktreeSortActive(true);
       const worktreeId = parseWorktreeSortDragId(dragId);
       if (worktreeId) {
-        const wt = useWorktreeDataStore.getState().getWorktree(worktreeId);
+        const wt = getCurrentViewStore().getState().worktrees.get(worktreeId);
         setActiveSortWorktree(wt ?? null);
       }
       return;

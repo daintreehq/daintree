@@ -199,6 +199,13 @@ export interface ElectronAPI {
     onRemove(callback: (data: { worktreeId: string }) => void): () => void;
     onActivated(callback: (data: { worktreeId: string }) => void): () => void;
   };
+  worktreePort: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    request(action: string, payload?: Record<string, unknown>): Promise<any>;
+    onEvent(type: string, callback: (data: unknown) => void): () => void;
+    isReady(): boolean;
+    onReady(callback: () => void): () => void;
+  };
   terminal: {
     spawn(options: TerminalSpawnOptions): Promise<string>;
     write(id: string, data: string): void;

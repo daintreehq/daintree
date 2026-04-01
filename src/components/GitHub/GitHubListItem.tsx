@@ -25,7 +25,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 interface GitHubListItemProps {
@@ -106,7 +106,7 @@ export function GitHubListItem({
     };
   }, []);
 
-  const matchedWorktree = useWorktreeDataStore((s) => {
+  const matchedWorktree = useWorktreeStore((s) => {
     for (const wt of s.worktrees.values()) {
       if (type === "issue" ? wt.issueNumber === item.number : wt.prNumber === item.number)
         return wt;

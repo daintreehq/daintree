@@ -181,7 +181,7 @@ import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { terminalInstanceService } from "./services/terminal/TerminalInstanceService";
 import { SIDEBAR_TOGGLE_LOCK_MS } from "./lib/terminalLayout";
 import { useRenderProfiler } from "./utils/renderProfiler";
-import { useWorktreeDataStore } from "./store/worktreeDataStore";
+import { useWorktreeStore } from "./hooks/useWorktreeStore";
 import { useRecipeStore } from "./store/recipeStore";
 import type { WorktreeActions } from "./hooks/useWorktreeActions";
 import type { UseAgentLauncherReturn } from "./hooks/useAgentLauncher";
@@ -215,7 +215,18 @@ const SidebarWorktreeRow = React.memo(function SidebarWorktreeRow({
   isSortDisabled,
   isPinned,
 }: SidebarWorktreeRowProps) {
-  const worktree = useWorktreeDataStore((state) => state.worktrees.get(worktreeId));
+  const worktreeSnap = useWorktreeStore((state) => state.worktrees.get(worktreeId));
+  const worktree = useMemo(
+    () =>
+      worktreeSnap
+        ? ({
+            ...worktreeSnap,
+            worktreeChanges: worktreeSnap.worktreeChanges ?? null,
+            lastActivityTimestamp: worktreeSnap.lastActivityTimestamp ?? null,
+          } as WorktreeState)
+        : undefined,
+    [worktreeSnap]
+  );
 
   const onSelect = useCallback(() => selectWorktree(worktreeId), [selectWorktree, worktreeId]);
   const onCopyTree = useCallback(
@@ -336,7 +347,18 @@ const StaticWorktreeRow = React.memo(function StaticWorktreeRow({
   homeDir,
   aggregateCounts,
 }: StaticWorktreeRowProps) {
-  const worktree = useWorktreeDataStore((state) => state.worktrees.get(worktreeId));
+  const worktreeSnap = useWorktreeStore((state) => state.worktrees.get(worktreeId));
+  const worktree = useMemo(
+    () =>
+      worktreeSnap
+        ? ({
+            ...worktreeSnap,
+            worktreeChanges: worktreeSnap.worktreeChanges ?? null,
+            lastActivityTimestamp: worktreeSnap.lastActivityTimestamp ?? null,
+          } as WorktreeState)
+        : undefined,
+    [worktreeSnap]
+  );
 
   const onSelect = useCallback(() => selectWorktree(worktreeId), [selectWorktree, worktreeId]);
   const onCopyTree = useCallback(

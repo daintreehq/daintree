@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { GitCompare, FileIcon, AlertCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { AppDialog } from "@/components/ui/AppDialog";
 import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "@shared/types/ipc/git";
 import { DiffViewer } from "./DiffViewer";
@@ -33,7 +33,7 @@ function statusLabel(status: string): { label: string; className: string } {
 }
 
 export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossWorktreeDiffProps) {
-  const worktreeMap = useWorktreeDataStore((state) => state.worktrees);
+  const worktreeMap = useWorktreeStore((state) => state.worktrees);
   const worktrees = useMemo(() => sortWorktreesForComparison(worktreeMap.values()), [worktreeMap]);
 
   const [leftId, setLeftId] = useState<string | null>(null);

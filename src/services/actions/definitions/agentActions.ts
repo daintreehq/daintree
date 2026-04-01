@@ -98,8 +98,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     scope: "renderer",
     run: async () => {
       const state = useTerminalStore.getState();
-      const { useWorktreeDataStore } = await import("@/store/worktreeDataStore");
-      const worktreeData = useWorktreeDataStore.getState();
+      const { getCurrentViewStore } = await import("@/store/createWorktreeStore");
+      const worktreeData = getCurrentViewStore().getState();
       const validWorktreeIds = new Set<string>();
       for (const [id, wt] of worktreeData.worktrees) {
         validWorktreeIds.add(id);
@@ -119,8 +119,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     scope: "renderer",
     run: async () => {
       const state = useTerminalStore.getState();
-      const { useWorktreeDataStore } = await import("@/store/worktreeDataStore");
-      const worktreeData = useWorktreeDataStore.getState();
+      const { getCurrentViewStore } = await import("@/store/createWorktreeStore");
+      const worktreeData = getCurrentViewStore().getState();
       const validWorktreeIds = new Set<string>();
       for (const [id, wt] of worktreeData.worktrees) {
         validWorktreeIds.add(id);
@@ -140,8 +140,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     scope: "renderer",
     run: async () => {
       const state = useTerminalStore.getState();
-      const { useWorktreeDataStore } = await import("@/store/worktreeDataStore");
-      const worktreeData = useWorktreeDataStore.getState();
+      const { getCurrentViewStore } = await import("@/store/createWorktreeStore");
+      const worktreeData = getCurrentViewStore().getState();
       const validWorktreeIds = new Set<string>();
       for (const [id, wt] of worktreeData.worktrees) {
         validWorktreeIds.add(id);
@@ -177,8 +177,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     scope: "renderer",
     run: async () => {
       const state = useTerminalStore.getState();
-      const { useWorktreeDataStore } = await import("@/store/worktreeDataStore");
-      const worktreeData = useWorktreeDataStore.getState();
+      const { getCurrentViewStore } = await import("@/store/createWorktreeStore");
+      const worktreeData = getCurrentViewStore().getState();
       const validWorktreeIds = new Set<string>();
       for (const [id, wt] of worktreeData.worktrees) {
         validWorktreeIds.add(id);

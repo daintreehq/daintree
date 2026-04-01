@@ -3,7 +3,7 @@ import { useTerminalStore } from "@/store/terminalStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { isActiveVoiceSession } from "@shared/types";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
 import { logDebug, logWarn, logError } from "@/utils/logger";
@@ -795,7 +795,7 @@ class VoiceRecordingService {
 
     const currentProject = useProjectStore.getState().currentProject;
     const worktree = panel.worktreeId
-      ? useWorktreeDataStore.getState().worktrees.get(panel.worktreeId)
+      ? getCurrentViewStore().getState().worktrees.get(panel.worktreeId)
       : undefined;
 
     return {

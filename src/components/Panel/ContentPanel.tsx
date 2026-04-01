@@ -11,7 +11,7 @@ import type { TabInfo } from "./TabButton";
 import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
 import { usePreferencesStore } from "@/store";
 import { useWorktreeColorMap } from "@/hooks/useWorktreeColorMap";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 
 /**
  * Base props for all panel types.
@@ -154,7 +154,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // Per-worktree color identity
   const worktreeColorMap = useWorktreeColorMap();
   const worktreeAccentColor = worktreeId ? worktreeColorMap?.[worktreeId] : undefined;
-  const worktreeBranch = useWorktreeDataStore(
+  const worktreeBranch = useWorktreeStore(
     useCallback(
       (state) => {
         if (!worktreeId || !worktreeAccentColor) return undefined;

@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mapCreationError } from "../worktreeCreationErrors";
 
-vi.mock("@/store/worktreeDataStore", () => ({
-  useWorktreeDataStore: {
+vi.mock("@/store/createWorktreeStore", () => ({
+  getCurrentViewStore: () => ({
     getState: () => ({
-      getWorktreeList: () => [
-        { id: "wt-1", path: "/projects/repo-worktrees/feature-auth" },
-        { id: "wt-2", path: "/projects/repo-worktrees/main" },
-      ],
+      worktrees: new Map([
+        ["wt-1", { id: "wt-1", path: "/projects/repo-worktrees/feature-auth" }],
+        ["wt-2", { id: "wt-2", path: "/projects/repo-worktrees/main" }],
+      ]),
     }),
-  },
+  }),
 }));
 
 const mockSelectWorktree = vi.fn();

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { isElectronAvailable } from "../useElectron";
 import { useTerminalStore } from "@/store/terminalStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { notify } from "@/lib/notify";
 
@@ -63,7 +63,7 @@ function checkContextInjection(): boolean {
 }
 
 function checkPRMerged(): boolean {
-  const worktrees = useWorktreeDataStore.getState().worktrees;
+  const worktrees = getCurrentViewStore().getState().worktrees;
   for (const w of worktrees.values()) {
     if (w.prState === "merged") return true;
   }
@@ -92,7 +92,7 @@ function initObservers(shown: Record<string, boolean>, fire: (id: string) => voi
     }
   });
 
-  useWorktreeDataStore.subscribe((state, prev) => {
+  getCurrentViewStore().subscribe((state, prev) => {
     if (shown["first-pr-merged"]) return;
     for (const [id, w] of state.worktrees) {
       if (w.prState === "merged") {

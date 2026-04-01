@@ -47,8 +47,8 @@ let worktreeState = { worktrees: new Map<string, WorktreeLike>() };
 let worktreeSubscribers: Array<(state: typeof worktreeState, prev: typeof worktreeState) => void> =
   [];
 
-vi.mock("@/store/worktreeDataStore", () => ({
-  useWorktreeDataStore: {
+vi.mock("@/store/createWorktreeStore", () => ({
+  getCurrentViewStore: () => ({
     getState: () => worktreeState,
     subscribe: (fn: (state: typeof worktreeState, prev: typeof worktreeState) => void) => {
       worktreeSubscribers.push(fn);
@@ -56,7 +56,7 @@ vi.mock("@/store/worktreeDataStore", () => ({
         worktreeSubscribers = worktreeSubscribers.filter((s) => s !== fn);
       };
     },
-  },
+  }),
 }));
 
 let recipeState = { recipes: [] as RecipeLike[] };

@@ -20,6 +20,7 @@ import {
   getMainWindow,
   setWindowRegistry,
   setProjectViewManager,
+  getProjectViewManager,
 } from "./window/windowRef.js";
 import { WindowRegistry } from "./window/WindowRegistry.js";
 import { ProjectViewManager } from "./window/ProjectViewManager.js";
@@ -30,6 +31,7 @@ import {
   getPtyClient,
   setPtyClientRef,
   getWorkspaceClientRef,
+  getWorktreePortBrokerRef,
   getCliAvailabilityServiceRef,
   getCleanupIpcHandlers,
   setCleanupIpcHandlers,
@@ -164,6 +166,7 @@ if (!gotTheLock) {
       cachedProjectViews: store.get("terminalConfig")?.cachedProjectViews,
       onViewEvicted: (wcId) => {
         getWorkspaceClientRef()?.removeDirectPort(wcId);
+        getWorktreePortBrokerRef()?.closePortsForView(wcId);
       },
       onViewReady: (wc) => {
         // Re-distribute PTY MessagePort on every view load/reload.
@@ -175,6 +178,24 @@ if (!gotTheLock) {
         }
         // Refresh workspace direct port (preload context is reset on reload)
         getWorkspaceClientRef()?.attachDirectPort(win.id, wc);
+
+        // Re-broker worktree port (preload context is reset on reload)
+        const broker = getWorktreePortBrokerRef();
+        const wsClient = getWorkspaceClientRef();
+        if (broker && wsClient) {
+          const pvm = getProjectViewManager();
+          const projectId = pvm?.getProjectIdForWebContents(wc.id);
+          if (projectId) {
+            // Find the project path from PVM to look up the host
+            const viewEntry = pvm?.getAllViews().find((v) => v.projectId === projectId);
+            if (viewEntry) {
+              const host = wsClient.getHostForProject(viewEntry.projectPath);
+              if (host) {
+                broker.brokerPort(host, wc);
+              }
+            }
+          }
+        }
       },
     });
     setProjectViewManager(pvm);

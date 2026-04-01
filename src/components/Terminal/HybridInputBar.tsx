@@ -36,7 +36,8 @@ import { CommandPickerHost } from "@/components/Commands";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
-import { useTerminalStore, useVoiceRecordingStore, useWorktreeDataStore } from "@/store";
+import { useTerminalStore, useVoiceRecordingStore } from "@/store";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { Archive, Loader2 } from "lucide-react";
 import { useVoiceWaitSubmit } from "./hooks/useVoiceWaitSubmit";
@@ -210,7 +211,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         [terminalId]
       )
     );
-    const panelWorktree = useWorktreeDataStore((s) =>
+    const panelWorktree = useWorktreeStore((s) =>
       panelWorktreeId ? s.worktrees.get(panelWorktreeId) : undefined
     );
     const isVoiceRecording = activeVoicePanelId === terminalId && voiceStatus === "recording";

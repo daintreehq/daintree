@@ -13,8 +13,8 @@ vi.mock("@/store", () => ({
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
 
-vi.mock("@/store/worktreeDataStore", () => ({
-  useWorktreeDataStore: (sel: (s: { worktrees: Map<string, unknown> }) => unknown) =>
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (sel: (s: { worktrees: Map<string, unknown> }) => unknown) =>
     sel({ worktrees: new Map() }),
 }));
 
