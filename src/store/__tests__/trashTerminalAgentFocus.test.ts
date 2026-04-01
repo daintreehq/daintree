@@ -372,3 +372,123 @@ describe("worktree-scoped focus fallback (#4327)", () => {
     expect(useTerminalStore.getState().focusedId).toBe("shell-same");
   });
 });
+
+describe("lastClosedConfig snapshot (#4717)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    const { reset } = useTerminalStore.getState();
+    reset();
+    useTerminalStore.setState({
+      terminals: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+      lastClosedConfig: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("captures lastClosedConfig when trashing a terminal", () => {
+    useTerminalStore.setState({
+      terminals: [
+        {
+          ...makeTerminal("agent-1", "agent", "claude", "wt-1"),
+          command: "claude --interactive",
+          agentModelId: "opus",
+          agentLaunchFlags: ["--verbose"],
+          cwd: "/projects/app",
+        },
+      ],
+      focusedId: "agent-1",
+    });
+
+    useTerminalStore.getState().trashTerminal("agent-1");
+
+    const config = useTerminalStore.getState().lastClosedConfig;
+    expect(config).not.toBeNull();
+    expect(config!.agentId).toBe("claude");
+    expect(config!.worktreeId).toBe("wt-1");
+    expect(config!.command).toBe("claude --interactive");
+    expect(config!.agentModelId).toBe("opus");
+    expect(config!.agentLaunchFlags).toEqual(["--verbose"]);
+    expect(config!.cwd).toBe("/projects/app");
+  });
+
+  it("overwrites lastClosedConfig on each close", () => {
+    useTerminalStore.setState({
+      terminals: [
+        makeTerminal("shell-1", "terminal"),
+        { ...makeTerminal("shell-2", "terminal"), command: "zsh" },
+      ],
+      focusedId: "shell-1",
+    });
+
+    useTerminalStore.getState().trashTerminal("shell-1");
+    expect(useTerminalStore.getState().lastClosedConfig!.type).toBe("terminal");
+
+    useTerminalStore.getState().trashTerminal("shell-2");
+    expect(useTerminalStore.getState().lastClosedConfig!.command).toBe("zsh");
+  });
+
+  it("captures lastClosedConfig when trashing a panel group", () => {
+    useTerminalStore.setState({
+      terminals: [
+        { ...makeTerminal("agent-1", "agent", "claude"), command: "claude-cmd" },
+        makeTerminal("agent-2", "agent", "gemini"),
+        makeTerminal("shell-1", "terminal"),
+      ],
+      tabGroups: new Map([
+        [
+          "group-1",
+          {
+            id: "group-1",
+            panelIds: ["agent-1", "agent-2"],
+            activeTabId: "agent-1",
+            location: "grid" as const,
+          },
+        ],
+      ]),
+      focusedId: "agent-1",
+    });
+
+    useTerminalStore.getState().trashPanelGroup("agent-1");
+
+    const config = useTerminalStore.getState().lastClosedConfig;
+    expect(config).not.toBeNull();
+    expect(config!.agentId).toBe("claude");
+    expect(config!.command).toBe("claude-cmd");
+  });
+
+  it("clears lastClosedConfig on reset", async () => {
+    useTerminalStore.setState({
+      terminals: [makeTerminal("shell-1", "terminal")],
+      focusedId: "shell-1",
+    });
+
+    useTerminalStore.getState().trashTerminal("shell-1");
+    expect(useTerminalStore.getState().lastClosedConfig).not.toBeNull();
+
+    await useTerminalStore.getState().reset();
+    expect(useTerminalStore.getState().lastClosedConfig).toBeNull();
+  });
+
+  it("clears lastClosedConfig on clearTerminalStoreForSwitch", () => {
+    useTerminalStore.setState({
+      terminals: [makeTerminal("shell-1", "terminal")],
+      focusedId: "shell-1",
+    });
+
+    useTerminalStore.getState().trashTerminal("shell-1");
+    expect(useTerminalStore.getState().lastClosedConfig).not.toBeNull();
+
+    useTerminalStore.getState().clearTerminalStoreForSwitch();
+    expect(useTerminalStore.getState().lastClosedConfig).toBeNull();
+  });
+});

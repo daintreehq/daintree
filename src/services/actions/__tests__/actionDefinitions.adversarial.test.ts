@@ -533,7 +533,7 @@ describe("terminal action hardening", () => {
     );
   });
 
-  it("falls back to creating a new terminal when no panels exist", async () => {
+  it("falls back to creating a new terminal when no panels exist and no snapshot", async () => {
     const actions = buildRegistry(registerTerminalActions);
     const duplicate = actions.get("terminal.duplicate")!();
     const addTerminal = vi.fn().mockResolvedValue("new-id");
@@ -541,6 +541,7 @@ describe("terminal action hardening", () => {
     useTerminalStore.setState({
       terminals: [],
       focusedId: null,
+      lastClosedConfig: null,
       addTerminal,
     } as never);
 
@@ -551,6 +552,69 @@ describe("terminal action hardening", () => {
         type: "terminal",
         cwd: "/repo",
         location: "grid",
+      })
+    );
+  });
+
+  it("uses lastClosedConfig snapshot when no panels exist", async () => {
+    const actions = buildRegistry(registerTerminalActions);
+    const duplicate = actions.get("terminal.duplicate")!();
+    const addTerminal = vi.fn().mockResolvedValue("new-id");
+
+    useTerminalStore.setState({
+      terminals: [],
+      focusedId: null,
+      lastClosedConfig: {
+        kind: "terminal",
+        type: "claude",
+        agentId: "claude",
+        cwd: "/projects/app",
+        worktreeId: "wt-1",
+        command: "claude --interactive",
+        agentModelId: "opus",
+        agentLaunchFlags: ["--verbose"],
+      },
+      addTerminal,
+    } as never);
+
+    await duplicate.run(undefined, {} as never);
+
+    expect(addTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "claude",
+        cwd: "/projects/app",
+        worktreeId: "wt-1",
+        command: "claude --interactive",
+        agentModelId: "opus",
+        location: "grid",
+      })
+    );
+  });
+
+  it("uses active worktree when lastClosedConfig has no worktreeId", async () => {
+    const actions = buildRegistry(registerTerminalActions, {
+      getActiveWorktreeId: () => "active-wt",
+    });
+    const duplicate = actions.get("terminal.duplicate")!();
+    const addTerminal = vi.fn().mockResolvedValue("new-id");
+
+    useTerminalStore.setState({
+      terminals: [],
+      focusedId: null,
+      lastClosedConfig: {
+        kind: "terminal",
+        type: "terminal",
+        cwd: "/home/user",
+      },
+      addTerminal,
+    } as never);
+
+    await duplicate.run(undefined, {} as never);
+
+    expect(addTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        location: "grid",
+        worktreeId: "active-wt",
       })
     );
   });

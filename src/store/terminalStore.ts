@@ -38,6 +38,7 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logWarn, logError } from "@/utils/logger";
 import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
+import { buildPanelSnapshotOptions } from "@/services/terminal/panelDuplicationService";
 
 export type { TerminalInstance, AddTerminalOptions, QueuedCommand, CrashType };
 export { isAgentReady };
@@ -105,6 +106,7 @@ export interface PanelGridState
   resetWithoutKilling: (options?: { preserveTerminalIds?: Set<string> }) => Promise<void>;
   detachTerminalsForProjectSwitch: () => void;
   clearTerminalStoreForSwitch: () => void;
+  lastClosedConfig: AddTerminalOptions | null;
   restoreLastTrashed: () => void;
 }
 
@@ -150,6 +152,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
     backendStatus: "connected" as BackendStatus,
     lastCrashType: null as CrashType | null,
+    lastClosedConfig: null as AddTerminalOptions | null,
     setBackendStatus: (status: BackendStatus) => set({ backendStatus: status }),
     setLastCrashType: (crashType: CrashType | null) => set({ lastCrashType: crashType }),
 
@@ -200,6 +203,11 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
     trashTerminal: (id: string) => {
       const state = get();
+      const terminalToTrash = state.terminals.find((t) => t.id === id);
+      if (terminalToTrash && terminalToTrash.location !== "trash") {
+        set({ lastClosedConfig: buildPanelSnapshotOptions(terminalToTrash) });
+      }
+
       registrySlice.trashTerminal(id);
 
       // Clear watch when panel is trashed (onTerminalRemoved only fires on full removal)
@@ -240,6 +248,14 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       // Get the group before trashing to identify all panels
       const group = registrySlice.getPanelGroup(panelId);
       const panelIdsInGroup = group?.panelIds ?? [panelId];
+
+      // Capture last-closed snapshot from the active tab or the triggering panel
+      const snapshotSourceId =
+        group && panelIdsInGroup.includes(state.focusedId ?? "") ? state.focusedId! : panelId;
+      const snapshotSource = state.terminals.find((t) => t.id === snapshotSourceId);
+      if (snapshotSource && snapshotSource.location !== "trash") {
+        set({ lastClosedConfig: buildPanelSnapshotOptions(snapshotSource) });
+      }
 
       registrySlice.trashPanelGroup(panelId);
 
@@ -419,6 +435,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         commandQueue: [],
         backendStatus: "connected",
         lastCrashType: null,
+        lastClosedConfig: null,
         mruList: [],
       });
     },
@@ -459,6 +476,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         commandQueue: [],
         backendStatus: "connected",
         lastCrashType: null,
+        lastClosedConfig: null,
         mruList: [],
       });
     },
@@ -501,6 +519,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         commandQueue: [],
         backendStatus: "connected",
         lastCrashType: null,
+        lastClosedConfig: null,
         mruList: [],
       });
     },
