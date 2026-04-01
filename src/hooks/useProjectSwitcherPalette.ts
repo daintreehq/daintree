@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import Fuse, { type IFuseOptions } from "fuse.js";
+import { rankProjectMatches } from "@/lib/projectSwitcherSearch";
 import { useProjectStore } from "@/store/projectStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { notify } from "@/lib/notify";
@@ -57,17 +57,7 @@ export interface UseProjectSwitcherPaletteReturn {
   prefetchProject: (project: SearchableProject) => void;
 }
 
-const FUSE_OPTIONS: IFuseOptions<SearchableProject> = {
-  keys: [
-    { name: "name", weight: 2 },
-    { name: "path", weight: 1 },
-  ],
-  threshold: 0.4,
-  includeScore: true,
-};
-
 const MAX_RESULTS = 15;
-const DEBOUNCE_MS = 150;
 const PREFETCH_DEBOUNCE_MS = 150;
 
 const prefetchedProjects = new Set<string>();
@@ -80,7 +70,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const isOpen = mode === "modal" ? modalIsOpen : dropdownIsOpen;
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [bulkStats, setBulkStats] = useState<Map<string, BulkProjectStatsEntry>>(new Map());
   const [stopConfirmProjectId, setStopConfirmProjectId] = useState<string | null>(null);
   const [isStoppingProject, setIsStoppingProject] = useState(false);
@@ -100,24 +89,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const closeActiveProject = useProjectStore((state) => state.closeActiveProject);
   const removeProject = useProjectStore((state) => state.removeProject);
   const locateProjectFn = useProjectStore((state) => state.locateProject);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-    }
-
-    debounceRef.current = setTimeout(() => {
-      setDebouncedQuery(query);
-    }, DEBOUNCE_MS);
-
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-    };
-  }, [query]);
-
   const fetchStats = useCallback(
     async (force = false) => {
       if (projects.length === 0) return;
@@ -236,12 +207,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     });
   }, [searchableProjects]);
 
-  const fuse = useMemo(() => {
-    return new Fuse(sortedProjects, FUSE_OPTIONS);
-  }, [sortedProjects]);
-
   const results = useMemo<SearchableProject[]>(() => {
-    if (!debouncedQuery.trim()) {
+    if (!query.trim()) {
       // Ensure pinned projects are always visible when browsing
       const pinned = sortedProjects.filter((p) => p.isPinned);
       const rest = sortedProjects.filter((p) => !p.isPinned);
@@ -258,9 +225,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       return deduped.slice(0, MAX_RESULTS);
     }
 
-    const fuseResults = fuse.search(debouncedQuery);
-    return fuseResults.slice(0, MAX_RESULTS).map((r) => r.item);
-  }, [debouncedQuery, sortedProjects, fuse]);
+    return rankProjectMatches(query, sortedProjects).slice(0, MAX_RESULTS);
+  }, [query, sortedProjects]);
 
   useEffect(() => {
     if (results.length === 0) {
@@ -288,11 +254,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   }, [results, selectedIndex]);
 
   useEffect(() => {
-    if (debouncedQuery) {
+    if (query) {
       selectedProjectIdRef.current = null;
       setSelectedIndex(0);
     }
-  }, [debouncedQuery]);
+  }, [query]);
 
   useEffect(() => {
     if (!removeConfirmProject) return;
@@ -312,7 +278,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       }
       setQuery("");
       setSelectedIndex(sortedProjects.length >= 2 ? 1 : 0);
-      setDebouncedQuery("");
     },
     [sortedProjects.length]
   );
@@ -325,7 +290,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
     setQuery("");
     setSelectedIndex(0);
-    setDebouncedQuery("");
     if (prefetchTimerRef) {
       clearTimeout(prefetchTimerRef);
       prefetchTimerRef = null;

@@ -407,6 +407,110 @@ describe("useProjectSwitcherPalette", () => {
     });
   });
 
+  describe("search behavior", () => {
+    const searchProjects = [
+      {
+        id: "project-1",
+        name: "canopy-app",
+        path: "/repos/canopy-app",
+        emoji: "🌲",
+        color: "#00aa00",
+        lastOpened: 300,
+        status: "active" as const,
+      },
+      {
+        id: "project-2",
+        name: "other-service",
+        path: "/repos/other-service",
+        emoji: "🌿",
+        color: "#00bb00",
+        lastOpened: 200,
+        status: "active" as const,
+      },
+      {
+        id: "project-3",
+        name: "my-canopy-tools",
+        path: "/repos/my-canopy-tools",
+        emoji: "🌴",
+        color: "#00cc00",
+        lastOpened: 100,
+        status: "active" as const,
+      },
+    ];
+
+    it("filters results synchronously with zero debounce", async () => {
+      projectState.projects = searchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(searchProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+
+      act(() => {
+        result.current.setQuery("canopy");
+      });
+
+      // Results should be available immediately — no waitFor needed
+      expect(result.current.results.length).toBeGreaterThanOrEqual(2);
+      expect(result.current.results[0].name).toContain("canopy");
+    });
+
+    it("returns empty results for non-matching query", async () => {
+      projectState.projects = searchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(searchProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+
+      act(() => {
+        result.current.setQuery("zzzzz");
+      });
+
+      expect(result.current.results).toHaveLength(0);
+    });
+
+    it("restores browse results when query is cleared", async () => {
+      projectState.projects = searchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(searchProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+
+      act(() => {
+        result.current.setQuery("canopy");
+      });
+      expect(result.current.results.length).toBeLessThan(3);
+
+      act(() => {
+        result.current.setQuery("");
+      });
+      expect(result.current.results).toHaveLength(3);
+    });
+  });
+
   describe("toggle advances selection", () => {
     const threeProjects = [
       {
