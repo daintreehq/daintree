@@ -255,7 +255,7 @@ class WorktreePortClient {
       }
     };
 
-    // Fire ready callbacks
+    // Fire ready callbacks (kept for re-attach — not cleared)
     for (const cb of this.readyCallbacks) {
       try {
         cb();
@@ -263,7 +263,6 @@ class WorktreePortClient {
         // ignore
       }
     }
-    this.readyCallbacks = [];
 
     console.log("[Preload] Worktree port connected");
   }
@@ -337,8 +336,8 @@ class WorktreePortClient {
   onReady(callback: () => void): () => void {
     if (this._isReady) {
       callback();
-      return () => {};
     }
+    // Always register for future re-attaches (port replacement on host restart)
     this.readyCallbacks.push(callback);
     return () => {
       const idx = this.readyCallbacks.indexOf(callback);
