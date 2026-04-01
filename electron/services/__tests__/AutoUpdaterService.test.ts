@@ -377,12 +377,16 @@ describe("AutoUpdaterService", () => {
       expect(autoUpdaterMock.checkForUpdatesAndNotify).not.toHaveBeenCalled();
     });
 
-    it("does not register IPC handlers on blocked Linux init", () => {
+    it("registers only channel-preference IPC handlers on blocked Linux init", () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 
       autoUpdaterService.initialize();
 
-      expect(ipcMainMock.handle).not.toHaveBeenCalled();
+      const registeredChannels = (ipcMainMock.handle as Mock).mock.calls.map((args) => args[0]);
+      expect(registeredChannels).toContain(CHANNELS.UPDATE_GET_CHANNEL);
+      expect(registeredChannels).toContain(CHANNELS.UPDATE_SET_CHANNEL);
+      expect(registeredChannels).not.toContain(CHANNELS.UPDATE_QUIT_AND_INSTALL);
+      expect(registeredChannels).not.toContain(CHANNELS.UPDATE_CHECK_FOR_UPDATES);
     });
 
     it("probes the correct package-type path", () => {
@@ -409,6 +413,68 @@ describe("AutoUpdaterService", () => {
 
       expect(autoUpdaterMock.on).toHaveBeenCalled();
       expect(autoUpdaterMock.checkForUpdatesAndNotify).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("dev mode (app.isPackaged = false)", () => {
+    beforeEach(() => {
+      appMock.isPackaged = false;
+    });
+
+    it("registers GET and SET channel handlers", () => {
+      autoUpdaterService.initialize();
+
+      const registeredChannels = (ipcMainMock.handle as Mock).mock.calls.map((args) => args[0]);
+      expect(registeredChannels).toContain(CHANNELS.UPDATE_GET_CHANNEL);
+      expect(registeredChannels).toContain(CHANNELS.UPDATE_SET_CHANNEL);
+    });
+
+    it("does not register updater-action handlers or attach event listeners", () => {
+      autoUpdaterService.initialize();
+
+      const registeredChannels = (ipcMainMock.handle as Mock).mock.calls.map((args) => args[0]);
+      expect(registeredChannels).not.toContain(CHANNELS.UPDATE_QUIT_AND_INSTALL);
+      expect(registeredChannels).not.toContain(CHANNELS.UPDATE_CHECK_FOR_UPDATES);
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+      expect(autoUpdaterMock.checkForUpdatesAndNotify).not.toHaveBeenCalled();
+    });
+
+    it("SET_CHANNEL persists to store but skips setFeedURL", () => {
+      autoUpdaterService.initialize();
+
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1];
+
+      const result = setChannelHandler(null, "nightly");
+      expect(result).toBe("nightly");
+      expect(storeMock.set).toHaveBeenCalledWith("updateChannel", "nightly");
+      expect(autoUpdaterMock.setFeedURL).not.toHaveBeenCalled();
+    });
+
+    it("does not double-register handlers on repeated initialize() calls", () => {
+      autoUpdaterService.initialize();
+      autoUpdaterService.initialize();
+
+      const getChannelCalls = (ipcMainMock.handle as Mock).mock.calls.filter(
+        (args) => args[0] === CHANNELS.UPDATE_GET_CHANNEL
+      );
+      expect(getChannelCalls).toHaveLength(1);
+    });
+  });
+
+  describe("Windows portable guard", () => {
+    it("registers only channel-preference IPC handlers on Windows portable", () => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      process.env.PORTABLE_EXECUTABLE_FILE = "C:\\portable\\canopy.exe";
+
+      autoUpdaterService.initialize();
+
+      const registeredChannels = (ipcMainMock.handle as Mock).mock.calls.map((args) => args[0]);
+      expect(registeredChannels).toContain(CHANNELS.UPDATE_GET_CHANNEL);
+      expect(registeredChannels).toContain(CHANNELS.UPDATE_SET_CHANNEL);
+      expect(registeredChannels).not.toContain(CHANNELS.UPDATE_QUIT_AND_INSTALL);
+      expect(registeredChannels).not.toContain(CHANNELS.UPDATE_CHECK_FOR_UPDATES);
     });
   });
 
