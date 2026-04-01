@@ -146,6 +146,7 @@ export default tseslint.config(
       "*.config.cjs",
       "scripts/**",
       "build/**",
+      "public/**",
     ],
   }
 );

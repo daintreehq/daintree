@@ -1,7 +1,6 @@
-import { useEffect, useCallback, useMemo } from "react";
-import type { WorktreeState } from "../types";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
-import { worktreeClient } from "@/clients";
+import { useCallback, useMemo } from "react";
+import type { WorktreeSnapshot, WorktreeState } from "@shared/types";
+import { useWorktreeStore } from "./useWorktreeStore";
 
 export interface UseWorktreesReturn {
   worktrees: WorktreeState[];
@@ -13,35 +12,40 @@ export interface UseWorktreesReturn {
   setActive: (id: string) => void;
 }
 
-export function useWorktrees(): UseWorktreesReturn {
-  const worktreeMap = useWorktreeDataStore((state) => state.worktrees);
-  const isLoading = useWorktreeDataStore((state) => state.isLoading);
-  const error = useWorktreeDataStore((state) => state.error);
-  const isInitialized = useWorktreeDataStore((state) => state.isInitialized);
-  const initialize = useWorktreeDataStore((state) => state.initialize);
-  const storeRefresh = useWorktreeDataStore((state) => state.refresh);
+function normalizeSnapshot(s: WorktreeSnapshot): WorktreeState {
+  return {
+    ...s,
+    worktreeChanges: s.worktreeChanges ?? null,
+    lastActivityTimestamp: s.lastActivityTimestamp ?? null,
+  } as WorktreeState;
+}
 
-  useEffect(() => {
-    if (!isInitialized) {
-      initialize();
-    }
-  }, [isInitialized, initialize]);
+export function useWorktrees(): UseWorktreesReturn {
+  const worktreeMap = useWorktreeStore((state) => state.worktrees);
+  const isLoading = useWorktreeStore((state) => state.isLoading);
+  const error = useWorktreeStore((state) => state.error);
 
   const refresh = useCallback(async () => {
-    await storeRefresh();
-  }, [storeRefresh]);
-
-  const setActive = useCallback((id: string) => {
-    worktreeClient.setActive(id).catch(() => {});
+    await window.electron.worktreePort.request("refresh");
   }, []);
 
+  const setActive = useCallback((id: string) => {
+    window.electron.worktreePort.request("set-active", { worktreeId: id }).catch(() => {});
+  }, []);
+
+  const normalizedMap = useMemo(() => {
+    const map = new Map<string, WorktreeState>();
+    for (const [id, snap] of worktreeMap) {
+      map.set(id, normalizeSnapshot(snap));
+    }
+    return map;
+  }, [worktreeMap]);
+
   const worktrees = useMemo(() => {
-    return Array.from(worktreeMap.values()).sort((a, b) => {
-      // Use isMainWorktree flag for consistent sorting
+    return Array.from(normalizedMap.values()).sort((a, b) => {
       if (a.isMainWorktree && !b.isMainWorktree) return -1;
       if (!a.isMainWorktree && b.isMainWorktree) return 1;
 
-      // Secondary sort by last activity
       const timeA = a.lastActivityTimestamp ?? 0;
       const timeB = b.lastActivityTimestamp ?? 0;
       if (timeA !== timeB) {
@@ -50,11 +54,11 @@ export function useWorktrees(): UseWorktreesReturn {
 
       return a.name.localeCompare(b.name);
     });
-  }, [worktreeMap]);
+  }, [normalizedMap]);
 
   return {
     worktrees,
-    worktreeMap,
+    worktreeMap: normalizedMap,
     activeId: worktrees.length > 0 ? worktrees[0].id : null,
     isLoading,
     error,
@@ -64,15 +68,6 @@ export function useWorktrees(): UseWorktreesReturn {
 }
 
 export function useWorktree(worktreeId: string): WorktreeState | null {
-  const getWorktree = useWorktreeDataStore((state) => state.getWorktree);
-  const isInitialized = useWorktreeDataStore((state) => state.isInitialized);
-  const initialize = useWorktreeDataStore((state) => state.initialize);
-
-  useEffect(() => {
-    if (!isInitialized) {
-      initialize();
-    }
-  }, [isInitialized, initialize]);
-
-  return getWorktree(worktreeId) ?? null;
+  const snap = useWorktreeStore((state) => state.worktrees.get(worktreeId));
+  return snap ? normalizeSnapshot(snap) : null;
 }

@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { computeWorktreeColorMap } from "@shared/theme/worktreeColors";
 
 /**
@@ -13,7 +13,7 @@ export function useWorktreeColorMap(): Record<string, string> | null {
   const prevKeysRef = useRef<string>("");
   const prevMapRef = useRef<Record<string, string> | null>(null);
 
-  return useWorktreeDataStore((state) => {
+  return useWorktreeStore((state) => {
     const worktrees = state.worktrees;
     if (worktrees.size <= 1) {
       prevKeysRef.current = "";

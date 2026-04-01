@@ -91,6 +91,15 @@ export class WorkspaceClient extends EventEmitter {
     return this.resolveEntryForWindow(windowId)?.host;
   }
 
+  getHostForProject(projectPath: string): WorkspaceHostProcess | undefined {
+    const normalized = this.normalizeProjectPath(projectPath);
+    return this.entries.get(normalized)?.host;
+  }
+
+  getHostForWindow(windowId: number): WorkspaceHostProcess | undefined {
+    return this.resolveHostForWindow(windowId);
+  }
+
   private sendToEntryWindows(entry: ProcessEntry, channel: string, ...args: unknown[]): void {
     // Target this project's specific webContents via directPortViews rather
     // than using getAppWebContents(win), which returns the *active* view for
@@ -252,6 +261,12 @@ export class WorkspaceClient extends EventEmitter {
       }
       this.createDirectPortForEntry(entry, wc);
     }
+
+    // Notify listeners (e.g. WorktreePortBroker) so they can re-broker ports
+    this.emit("host-restarted", {
+      projectPath: entry.projectPath,
+      host,
+    });
   }
 
   private evictEntry(projectPath: string, entry: ProcessEntry): void {

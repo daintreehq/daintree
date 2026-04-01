@@ -30,8 +30,8 @@ if (process.env.CANOPY_USER_DATA) {
 
 const port = process.parentPort as unknown as MessagePort;
 
-// Direct MessagePort connections to renderer views (bypasses main-process relay)
-const rendererPorts: MessagePort[] = [];
+// Worktree-specific ports with request/response correlation (Phase 1)
+const worktreePorts: MessagePort[] = [];
 
 // Event types delivered directly to renderers via MessagePort
 const DIRECT_RENDERER_EVENTS = new Set([
@@ -43,15 +43,123 @@ const DIRECT_RENDERER_EVENTS = new Set([
   "issue-not-found",
 ]);
 
-function sendToRendererPorts(event: WorkspaceHostEvent): void {
-  for (let i = rendererPorts.length - 1; i >= 0; i--) {
+function sendToWorktreePorts(event: WorkspaceHostEvent): void {
+  for (let i = worktreePorts.length - 1; i >= 0; i--) {
     try {
-      rendererPorts[i].postMessage(event);
+      worktreePorts[i].postMessage({ type: "event", event });
     } catch {
-      // Port closed (view evicted or destroyed)
-      rendererPorts.splice(i, 1);
+      worktreePorts.splice(i, 1);
     }
   }
+}
+
+async function handleWorktreePortRequest(
+  rPort: MessagePort,
+  id: string,
+  action: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  try {
+    let result: unknown;
+
+    switch (action) {
+      case "get-all-states": {
+        const states = workspaceService.getSnapshotsSync();
+        result = { states };
+        break;
+      }
+
+      case "set-active": {
+        const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        workspaceService.setActiveWorktree(requestId, payload.worktreeId as string);
+        result = { ok: true };
+        break;
+      }
+
+      case "refresh": {
+        const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await workspaceService.refresh(requestId, payload.worktreeId as string | undefined);
+        result = { ok: true };
+        break;
+      }
+
+      case "create-worktree": {
+        const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await workspaceService.createWorktree(
+          requestId,
+          payload.rootPath as string,
+          payload.options as any
+        );
+        result = { ok: true };
+        break;
+      }
+
+      case "delete-worktree": {
+        const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await workspaceService.deleteWorktree(
+          requestId,
+          payload.worktreeId as string,
+          payload.force as boolean | undefined,
+          payload.deleteBranch as boolean | undefined
+        );
+        result = { ok: true };
+        break;
+      }
+
+      case "list-branches": {
+        const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await workspaceService.listBranches(requestId, payload.rootPath as string);
+        result = { ok: true };
+        break;
+      }
+
+      case "get-recent-branches": {
+        const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await workspaceService.getRecentBranches(requestId, payload.rootPath as string);
+        result = { ok: true };
+        break;
+      }
+
+      case "refresh-prs": {
+        const { pullRequestService } = await import("./services/PullRequestService.js");
+        await pullRequestService.refresh();
+        result = { ok: true };
+        break;
+      }
+
+      default:
+        throw new Error(`Unknown worktree port action: ${action}`);
+    }
+
+    rPort.postMessage({ id, result });
+  } catch (error) {
+    rPort.postMessage({ id, error: (error as Error).message });
+  }
+}
+
+function attachWorktreePort(newPort: MessagePort): void {
+  newPort.start();
+  worktreePorts.push(newPort);
+
+  newPort.on("message", (rawMsg: any) => {
+    const msg = rawMsg?.data ? rawMsg.data : rawMsg;
+    if (!msg?.id || !msg?.action) return;
+
+    handleWorktreePortRequest(newPort, msg.id, msg.action, msg.payload || {}).catch((err) => {
+      try {
+        newPort.postMessage({ id: msg.id, error: (err as Error).message });
+      } catch {
+        // Port closed
+      }
+    });
+  });
+
+  newPort.on("close", () => {
+    const idx = worktreePorts.indexOf(newPort);
+    if (idx >= 0) worktreePorts.splice(idx, 1);
+  });
+
+  console.log(`[WorkspaceHost] Worktree port attached (${worktreePorts.length} active)`);
 }
 
 // Global error handlers to prevent silent crashes
@@ -95,8 +203,10 @@ function sendEvent(event: WorkspaceHostEvent): void {
   }
 
   // Direct delivery to renderer(s) via MessagePort (bypasses main-process relay)
-  if (rendererPorts.length > 0 && DIRECT_RENDERER_EVENTS.has((event as { type: string }).type)) {
-    sendToRendererPorts(event);
+  if (DIRECT_RENDERER_EVENTS.has((event as { type: string }).type)) {
+    if (worktreePorts.length > 0) {
+      sendToWorktreePorts(event);
+    }
   }
 }
 
@@ -110,17 +220,17 @@ const workspaceService = new WorkspaceService(sendEvent);
 port.on("message", async (rawMsg: any) => {
   const msg = rawMsg?.data ? rawMsg.data : rawMsg;
 
-  // Handle MessagePort transfers (direct renderer connection)
+  // Handle MessagePort transfers (worktree-specific port with request/response correlation)
   const transferredPorts = rawMsg?.ports || [];
+  // Legacy renderer ports are no longer used — worktreePorts replaced them.
+  // Accept and close the port silently to avoid "Unknown message type" warnings.
   if (msg?.type === "attach-renderer-port" && transferredPorts.length > 0) {
-    const newPort = transferredPorts[0] as MessagePort;
-    newPort.start();
-    rendererPorts.push(newPort);
-    newPort.on("close", () => {
-      const idx = rendererPorts.indexOf(newPort);
-      if (idx >= 0) rendererPorts.splice(idx, 1);
-    });
-    console.log(`[WorkspaceHost] Renderer port attached (${rendererPorts.length} active)`);
+    transferredPorts[0].close();
+    return;
+  }
+
+  if (msg?.type === "attach-worktree-port" && transferredPorts.length > 0) {
+    attachWorktreePort(transferredPorts[0] as MessagePort);
     return;
   }
 

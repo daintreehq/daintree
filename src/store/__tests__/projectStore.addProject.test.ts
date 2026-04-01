@@ -45,10 +45,6 @@ vi.mock("../resetStores", () => ({
   resetAllStoresForProjectSwitch: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../worktreeDataStore", () => ({
-  forceReinitializeWorktreeDataStore: vi.fn(),
-}));
-
 vi.mock("../worktreeStore", () => ({
   useWorktreeSelectionStore: {
     getState: () => ({

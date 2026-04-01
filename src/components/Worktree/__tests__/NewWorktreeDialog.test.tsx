@@ -72,13 +72,9 @@ mockWorktreeDataMap.set("main-wt", {
   isMainWorktree: true,
 });
 
-vi.mock("@/store/worktreeDataStore", () => ({
-  useWorktreeDataStore: {
-    getState: () => ({
-      worktrees: mockWorktreeDataMap,
-      getWorktreeList: () => Array.from(mockWorktreeDataMap.values()),
-    }),
-  },
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
+    selector({ worktrees: mockWorktreeDataMap }),
 }));
 
 const mockSetPendingWorktree = vi.fn();

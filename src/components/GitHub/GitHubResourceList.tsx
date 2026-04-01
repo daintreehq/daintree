@@ -17,7 +17,7 @@ import { GitHubListItem } from "./GitHubListItem";
 import { BulkActionBar } from "./BulkActionBar";
 import { useIssueSelection } from "@/hooks/useIssueSelection";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import {
   useGitHubFilterStore,
   type IssueStateFilter,
@@ -480,7 +480,7 @@ export function GitHubResourceList({
                 { source: "user" }
               );
             } else {
-              const worktrees = useWorktreeDataStore.getState().worktrees;
+              const worktrees = getCurrentViewStore().getState().worktrees;
               let matchedWt: { id: string } | undefined;
               for (const wt of worktrees.values()) {
                 if (

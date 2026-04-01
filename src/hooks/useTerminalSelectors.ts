@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
-import type { WorktreeState } from "@shared/types";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import type { WorktreeSnapshot } from "@shared/types";
 
 function isTerminalOrphaned(terminal: TerminalInstance, worktreeIds: Set<string>): boolean {
   const worktreeId = typeof terminal.worktreeId === "string" ? terminal.worktreeId.trim() : "";
@@ -23,10 +23,10 @@ function isTerminalVisible(
   return true;
 }
 
-let _cachedWorktrees: Map<string, WorktreeState> | null = null;
+let _cachedWorktrees: Map<string, WorktreeSnapshot> | null = null;
 let _cachedIds: Set<string> | null = null;
 
-function buildWorktreeIds(worktrees: Map<string, WorktreeState>): Set<string> {
+function buildWorktreeIds(worktrees: Map<string, WorktreeSnapshot>): Set<string> {
   if (worktrees === _cachedWorktrees && _cachedIds) return _cachedIds;
 
   if (_cachedIds && worktrees.size === _cachedIds.size) {
@@ -59,7 +59,7 @@ export function _resetWorktreeIdCacheForTests(): void {
 }
 
 function useWorktreeIds(): Set<string> {
-  return useWorktreeDataStore(useShallow((state) => buildWorktreeIds(state.worktrees)));
+  return useWorktreeStore(useShallow((state) => buildWorktreeIds(state.worktrees)));
 }
 
 export function useTerminalNotificationCounts(blurTime?: number | null): {
@@ -123,8 +123,8 @@ export function useBackgroundedTerminals(): TerminalInstance[] {
   );
 }
 
-export function useConflictedWorktrees(): WorktreeState[] {
-  const worktrees = useWorktreeDataStore((state) => state.worktrees);
+export function useConflictedWorktrees(): WorktreeSnapshot[] {
+  const worktrees = useWorktreeStore((state) => state.worktrees);
 
   return useMemo(
     () =>

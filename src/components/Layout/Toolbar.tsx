@@ -75,7 +75,7 @@ import type { ToolbarButtonId, AnyToolbarButtonId } from "@/../../shared/types/t
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { Puzzle } from "lucide-react";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useGitHubFilterStore } from "@/store/githubFilterStore";
 import { useRepositoryStats } from "@/hooks/useRepositoryStats";
 import type { CliAvailability, AgentSettings } from "@shared/types";
@@ -160,7 +160,7 @@ export function Toolbar({
     lastUpdated,
   } = useRepositoryStats();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
-  const activeWorktree = useWorktreeDataStore((state) =>
+  const activeWorktree = useWorktreeStore((state) =>
     activeWorktreeId ? state.worktrees.get(activeWorktreeId) : null
   );
   const branchName = activeWorktree?.branch;
@@ -806,7 +806,7 @@ export function Toolbar({
                 <Suspense fallback={<CommitListSkeleton count={stats?.commitCount} immediate />}>
                   <LazyCommitList
                     projectPath={activeWorktree?.path ?? currentProject.path}
-                    branch={activeWorktree?.branch ?? activeWorktree?.head}
+                    branch={activeWorktree?.branch}
                     onClose={() => {
                       setCommitsOpen(false);
                       commitsButtonRef.current?.focus();

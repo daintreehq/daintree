@@ -2,17 +2,17 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { useTerminalStoreMock, useWorktreeDataStoreMock } = vi.hoisted(() => ({
+const { useTerminalStoreMock, useWorktreeStoreMock } = vi.hoisted(() => ({
   useTerminalStoreMock: vi.fn(),
-  useWorktreeDataStoreMock: vi.fn(),
+  useWorktreeStoreMock: vi.fn(),
 }));
 
 vi.mock("@/store/terminalStore", () => ({
   useTerminalStore: useTerminalStoreMock,
 }));
 
-vi.mock("@/store/worktreeDataStore", () => ({
-  useWorktreeDataStore: useWorktreeDataStoreMock,
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: useWorktreeStoreMock,
 }));
 
 import {
@@ -27,7 +27,7 @@ import {
 const isInTrashFn = () => false;
 
 function setupEmptyWorktrees() {
-  useWorktreeDataStoreMock.mockImplementation(
+  useWorktreeStoreMock.mockImplementation(
     (selector: (state: { worktrees: Map<string, { worktreeId?: string }> }) => unknown) =>
       selector({ worktrees: new Map() })
   );
@@ -67,7 +67,7 @@ function setupBoth(
   worktrees?: Map<string, { worktreeId?: string }>
 ) {
   const wtMap = worktrees ?? new Map();
-  useWorktreeDataStoreMock.mockImplementation(
+  useWorktreeStoreMock.mockImplementation(
     (selector: (state: { worktrees: typeof wtMap }) => unknown) => selector({ worktrees: wtMap })
   );
   const state = {
@@ -449,7 +449,7 @@ function setupWorktreesWithChanges(
   for (const wt of worktrees) {
     map.set(wt.id, wt);
   }
-  useWorktreeDataStoreMock.mockImplementation(
+  useWorktreeStoreMock.mockImplementation(
     (selector: (state: { worktrees: typeof map }) => unknown) => selector({ worktrees: map })
   );
 }

@@ -21,7 +21,7 @@ import { FileDiffModal } from "../FileDiffModal";
 import { BaseBranchDiffModal } from "./BaseBranchDiffModal";
 import { Button } from "@/components/ui/button";
 import { debounce } from "@/utils/debounce";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useShallow } from "zustand/react/shallow";
 import { githubClient } from "@/clients/githubClient";
 
@@ -77,12 +77,12 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
   const savedScrollTop = useRef(0);
   const debouncedBgRefreshRef = useRef<ReturnType<typeof debounce> | null>(null);
 
-  const mainBranch = useWorktreeDataStore(
+  const mainBranch = useWorktreeStore(
     (state) =>
       Array.from(state.worktrees.values()).find((wt) => wt.isMainWorktree)?.branch ?? "main"
   );
 
-  const worktreePR = useWorktreeDataStore(
+  const worktreePR = useWorktreeStore(
     useShallow((state) => {
       for (const wt of state.worktrees.values()) {
         if (wt.path === worktreePath) {

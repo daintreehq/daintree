@@ -7,7 +7,7 @@ import {
 import type { ActionContext } from "@shared/types/actions";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useProjectStore } from "@/store/projectStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 export type { ActionCallbacks };
@@ -73,7 +73,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
 
       const activeWorktreeId = callbacksRef.current.getActiveWorktreeId() ?? undefined;
       const activeWorktree = activeWorktreeId
-        ? useWorktreeDataStore.getState().worktrees.get(activeWorktreeId)
+        ? getCurrentViewStore().getState().worktrees.get(activeWorktreeId)
         : undefined;
 
       return {

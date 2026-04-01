@@ -162,6 +162,20 @@ const mocks = vi.hoisted(() => {
     writable: true,
   });
 
+  // Minimal zustand-like store for getCurrentViewStore() mock
+  let worktreeViewState: Record<string, unknown> = {
+    worktrees: new Map(),
+    isLoading: false,
+    error: null,
+    isInitialized: false,
+  };
+  const worktreeViewStore = {
+    getState: () => worktreeViewState,
+    setState: (partial: Record<string, unknown>) => {
+      worktreeViewState = { ...worktreeViewState, ...partial };
+    },
+  };
+
   return {
     appClient,
     terminalClient,
@@ -174,8 +188,13 @@ const mocks = vi.hoisted(() => {
     portal,
     terminal,
     notification,
+    worktreeViewStore,
   };
 });
+
+vi.mock("@/store/createWorktreeStore", () => ({
+  getCurrentViewStore: () => mocks.worktreeViewStore,
+}));
 
 vi.mock("@/clients", () => ({
   appClient: mocks.appClient,
@@ -222,7 +241,7 @@ const { registerWorktreeActions } = await import("../definitions/worktreeActions
 const { useTerminalStore } = await import("../../../store/terminalStore");
 const { usePortalStore } = await import("../../../store/portalStore");
 const { useWorktreeSelectionStore } = await import("../../../store/worktreeStore");
-const { useWorktreeDataStore } = await import("../../../store/worktreeDataStore");
+const worktreeViewStore = mocks.worktreeViewStore;
 
 function createCallbacks(overrides: Partial<ActionCallbacks> = {}): ActionCallbacks {
   return {
@@ -319,7 +338,7 @@ beforeEach(() => {
     lastFocusedTerminalByWorktree: new Map<string, string>(),
   });
 
-  useWorktreeDataStore.setState({
+  worktreeViewStore.setState({
     worktrees: new Map(),
     isLoading: false,
     error: null,
@@ -706,7 +725,7 @@ describe("worktree action hardening", () => {
     const actions = buildRegistry(registerWorktreeActions);
     const openPRInPortal = actions.get("worktree.openPRInPortal")!();
 
-    useWorktreeDataStore.setState({
+    worktreeViewStore.setState({
       worktrees: new Map([
         [
           "wt-1",
@@ -743,7 +762,7 @@ describe("worktree action hardening", () => {
     const actions = buildRegistry(registerWorktreeActions);
     const openIssueInPortal = actions.get("worktree.openIssueInPortal")!();
 
-    useWorktreeDataStore.setState({
+    worktreeViewStore.setState({
       worktrees: new Map([
         [
           "wt-3",

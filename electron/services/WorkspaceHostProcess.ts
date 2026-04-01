@@ -105,6 +105,21 @@ export class WorkspaceHostProcess extends EventEmitter {
     }
   }
 
+  /**
+   * Transfer a MessagePort for the new worktree port protocol (Phase 1).
+   * Supports request/response correlation and scoped event delivery.
+   */
+  attachWorktreePort(port: MessagePortMain): boolean {
+    if (!this.child || this.isDisposed) return false;
+    try {
+      this.child.postMessage({ type: "attach-worktree-port" }, [port]);
+      return true;
+    } catch (error) {
+      console.error(`[WorkspaceHost:${this.serviceName}] Failed to attach worktree port:`, error);
+      return false;
+    }
+  }
+
   sendWithResponse<T>(
     request: WorkspaceHostRequest & { requestId: string },
     timeoutMs: number = 30000

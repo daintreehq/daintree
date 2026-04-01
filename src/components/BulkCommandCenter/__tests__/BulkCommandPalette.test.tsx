@@ -262,8 +262,8 @@ const mockTerminals = [
   },
 ];
 
-vi.mock("@/store/worktreeDataStore", () => ({
-  useWorktreeDataStore: (selector: (s: { worktrees: typeof mockWorktrees }) => unknown) =>
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (s: { worktrees: typeof mockWorktrees }) => unknown) =>
     selector({ worktrees: mockWorktrees }),
 }));
 

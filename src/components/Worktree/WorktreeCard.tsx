@@ -19,7 +19,7 @@ import { useWorktreeSelectionStore } from "../../store/worktreeStore";
 import { useWorktreeFilterStore } from "../../store/worktreeFilterStore";
 import { errorsClient, worktreeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { cn } from "../../lib/utils";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { getAgentSettingsEntry } from "@/types";
@@ -396,7 +396,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         issueState: issue.state,
         issueUrl: issue.url,
       });
-      useWorktreeDataStore.setState((prev) => {
+      getCurrentViewStore().setState((prev) => {
         const existing = prev.worktrees.get(worktree.id);
         if (!existing) return prev;
         const next = new Map(prev.worktrees);
@@ -413,7 +413,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
 
   const handleDetachIssue = useCallback(async () => {
     await worktreeClient.detachIssue(worktree.id);
-    useWorktreeDataStore.setState((prev) => {
+    getCurrentViewStore().setState((prev) => {
       const existing = prev.worktrees.get(worktree.id);
       if (!existing) return prev;
       const next = new Map(prev.worktrees);

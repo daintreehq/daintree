@@ -65,10 +65,11 @@ vi.mock("@/store/projectStore", () => {
   return { useProjectStore: Object.assign(getState, { getState }) };
 });
 
-vi.mock("@/store/worktreeDataStore", () => {
-  const getState = () => ({ worktrees: new Map() });
-  return { useWorktreeDataStore: Object.assign(getState, { getState }) };
-});
+vi.mock("@/store/createWorktreeStore", () => ({
+  getCurrentViewStore: () => ({
+    getState: () => ({ worktrees: new Map() }),
+  }),
+}));
 
 vi.mock("@/store/worktreeStore", () => {
   const getState = () => ({ activeWorktreeId: null, selectWorktree: vi.fn() });

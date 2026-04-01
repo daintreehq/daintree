@@ -3,7 +3,7 @@ import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useProjectStore } from "@/store/projectStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 
 export function registerIntrospectionActions(
   actions: ActionRegistry,
@@ -73,7 +73,7 @@ export function registerIntrospectionActions(
       const project = useProjectStore.getState().currentProject;
       const terminalState = useTerminalStore.getState();
       const worktreeSelection = useWorktreeSelectionStore.getState();
-      const worktrees = useWorktreeDataStore.getState().worktrees;
+      const worktrees = getCurrentViewStore().getState().worktrees;
       const portal = usePortalStore.getState();
 
       const focusedId = terminalState.focusedId;

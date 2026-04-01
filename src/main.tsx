@@ -15,6 +15,7 @@ import {
   onUncaughtError,
   onRecoverableError,
 } from "./utils/reactRootErrorCallbacks";
+import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupOrchestrator: (() => void) | undefined;
@@ -37,7 +38,9 @@ async function bootstrap() {
     onRecoverableError,
   }).render(
     <StrictMode>
-      <App />
+      <WorktreeStoreProvider>
+        <App />
+      </WorktreeStoreProvider>
     </StrictMode>
   );
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isElectronAvailable } from "../useElectron";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalStore } from "@/store/terminalStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { notify } from "@/lib/notify";
 import type { ChecklistState, ChecklistItemId } from "@shared/types/ipc/maps";
 
@@ -35,7 +35,7 @@ function reconcileCurrentState(
   ) {
     markItem("launchedAgent");
   }
-  if (!cl.items.createdWorktree && useWorktreeDataStore.getState().worktrees.size > 1) {
+  if (!cl.items.createdWorktree && getCurrentViewStore().getState().worktrees.size > 1) {
     markItem("createdWorktree");
   }
 }
@@ -64,7 +64,7 @@ function initChecklistObserver(
     }
   });
 
-  useWorktreeDataStore.subscribe((state) => {
+  getCurrentViewStore().subscribe((state) => {
     const cl = getChecklist();
     if (!cl || cl.dismissed || cl.items.createdWorktree) return;
     if (state.worktrees.size > 1) {

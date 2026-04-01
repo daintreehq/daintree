@@ -1,6 +1,6 @@
 import { useMemo, useState, useCallback, useEffect } from "react";
 import { useRecipeStore } from "@/store/recipeStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { actionService } from "@/services/ActionService";
 import {
@@ -112,7 +112,7 @@ export function useRecipeRunner({
     (recipeId: string) => {
       if (!defaultCwd) return;
       const worktreeData = activeWorktreeId
-        ? useWorktreeDataStore.getState().worktrees.get(activeWorktreeId)
+        ? getCurrentViewStore().getState().worktrees.get(activeWorktreeId)
         : null;
       void runRecipe(recipeId, defaultCwd, activeWorktreeId ?? undefined, {
         issueNumber: worktreeData?.issueNumber,

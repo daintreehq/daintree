@@ -33,7 +33,7 @@ import { mapCreationError, type WorktreeCreationError } from "./worktreeCreation
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useNewWorktreeProjectSettings } from "./hooks/useNewWorktreeProjectSettings";
 import { useBranchInput } from "./hooks/useBranchInput";
 import { useBranchValidation } from "./hooks/useBranchValidation";
@@ -120,6 +120,7 @@ export function NewWorktreeDialog({
   const setLastSelectedWorktreeRecipeIdByProject = usePreferencesStore(
     (s) => s.setLastSelectedWorktreeRecipeIdByProject
   );
+  const worktreeMap = useWorktreeStore((s) => s.worktrees);
   const githubConfig = useGitHubConfigStore((s) => s.config);
   const initializeGitHubConfig = useGitHubConfigStore((s) => s.initialize);
   const refreshGitHubConfig = useGitHubConfigStore((s) => s.refresh);
@@ -220,12 +221,11 @@ export function NewWorktreeDialog({
   // --- Existing branch candidates (local only, not in use by a worktree) ---
   const existingBranchCandidates = useMemo(() => {
     const inUseSet = new Set<string>();
-    const worktrees = useWorktreeDataStore.getState().getWorktreeList();
-    for (const wt of worktrees) {
+    for (const wt of worktreeMap.values()) {
       if (wt.branch) inUseSet.add(wt.branch);
     }
     return branches.filter((b) => !b.remote && !inUseSet.has(b.name));
-  }, [branches]);
+  }, [branches, worktreeMap]);
 
   const filteredExistingBranches = useMemo(() => {
     const q = existingBranchQuery.trim().toLowerCase();

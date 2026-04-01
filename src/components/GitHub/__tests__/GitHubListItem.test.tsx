@@ -13,8 +13,8 @@ vi.mock("react-dom", async () => {
   return { ...actual, createPortal: (children: ReactNode) => children };
 });
 
-vi.mock("@/store/worktreeDataStore", () => ({
-  useWorktreeDataStore: vi.fn((selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: vi.fn((selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
     selector({ worktrees: new Map() })
   ),
 }));
