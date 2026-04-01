@@ -154,9 +154,16 @@ describe("TerminalHibernationManager", () => {
       expect(deps.destroyRestoreState).not.toHaveBeenCalled();
     });
 
-    it("should no-op for active agent terminal", () => {
+    it("should no-op for working agent terminal", () => {
       managed.kind = "agent";
       managed.canonicalAgentState = "working";
+      manager.hibernate("t1");
+      expect(managed.isHibernated).toBeFalsy();
+    });
+
+    it("should no-op for waiting agent terminal", () => {
+      managed.kind = "agent";
+      managed.canonicalAgentState = "waiting";
       manager.hibernate("t1");
       expect(managed.isHibernated).toBeFalsy();
     });
@@ -189,12 +196,14 @@ describe("TerminalHibernationManager", () => {
     });
 
     it("should dispose addons and null them", () => {
-      const imageDispose = (managed.imageAddon as { dispose: ReturnType<typeof vi.fn> }).dispose;
-      const fileLinksDispose = (
-        managed.fileLinksDisposable as { dispose: ReturnType<typeof vi.fn> }
-      ).dispose;
-      const webLinksDispose = (managed.webLinksAddon as { dispose: ReturnType<typeof vi.fn> })
+      const imageDispose = (managed.imageAddon as unknown as { dispose: ReturnType<typeof vi.fn> })
         .dispose;
+      const fileLinksDispose = (
+        managed.fileLinksDisposable as unknown as { dispose: ReturnType<typeof vi.fn> }
+      ).dispose;
+      const webLinksDispose = (
+        managed.webLinksAddon as unknown as { dispose: ReturnType<typeof vi.fn> }
+      ).dispose;
 
       manager.hibernate("t1");
 
