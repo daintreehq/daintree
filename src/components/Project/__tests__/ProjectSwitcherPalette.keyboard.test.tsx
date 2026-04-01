@@ -102,8 +102,8 @@ vi.mock("@/hooks/useModifierKeys", () => ({
   useModifierKeys: () => ({ meta: false, alt: false }),
 }));
 
-vi.mock("./ProjectActionRow", () => ({
-  ProjectActionRow: () => null,
+vi.mock("@/utils/timeAgo", () => ({
+  formatTimeAgo: () => "2h ago",
 }));
 
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
@@ -190,19 +190,20 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     expect(defaultProps.onSelectPrevious).toHaveBeenCalledTimes(1);
   });
 
-  it("row action buttons have tabIndex={-1}", () => {
+  it("no inline action buttons are rendered in list items", () => {
     render(
       <ProjectSwitcherPalette
         {...defaultProps}
         onTogglePinProject={vi.fn()}
         onCloseProject={vi.fn()}
         onStopProject={vi.fn()}
+        onLocateProject={vi.fn()}
       />
     );
-    const closeButtons = screen.getAllByLabelText("Close project");
-    for (const btn of closeButtons) {
-      expect(btn.getAttribute("tabindex")).toBe("-1");
-    }
+    expect(screen.queryByLabelText("Close project")).toBeNull();
+    expect(screen.queryByLabelText("Stop project")).toBeNull();
+    expect(screen.queryByLabelText("Locate project folder")).toBeNull();
+    expect(screen.queryByLabelText("Remove project")).toBeNull();
   });
 
   it("Tab from last footer button wraps focus to the input (focus trap)", () => {

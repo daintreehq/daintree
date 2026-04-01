@@ -1,7 +1,6 @@
 import { useMemo, useEffect, useLayoutEffect, useRef, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
 import {
-  AlertTriangle,
   Clipboard,
   FolderOpen,
   FolderPlus,
@@ -17,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -26,7 +25,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { ProjectActionRow } from "./ProjectActionRow";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
 import { useOverlayState } from "@/hooks";
@@ -76,8 +75,6 @@ interface ProjectListItemProps {
 }
 
 const StatusDot = memo(function StatusDot({ project }: { project: SearchableProject }) {
-  if (project.isMissing) return <div className="w-1.5 shrink-0" />;
-
   const hasActive = project.activeAgentCount > 0;
   const hasWaiting = project.waitingAgentCount > 0;
   const hasProcesses = project.processCount > 0;
@@ -106,7 +103,12 @@ const StatusDot = memo(function StatusDot({ project }: { project: SearchableProj
       />
     );
   }
-  return <div className="w-1.5 shrink-0" />;
+  return (
+    <div
+      className="w-1.5 h-1.5 rounded-full border border-canopy-text/20 shrink-0"
+      aria-label="Idle"
+    />
+  );
 });
 
 const ProjectListItem = memo(function ProjectListItem({
@@ -121,6 +123,21 @@ const ProjectListItem = memo(function ProjectListItem({
   onSelectNewWindow,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0 && !project.isMissing;
+
+  const { secondaryText, secondaryClass } = (() => {
+    if (project.isMissing)
+      return { secondaryText: "Directory not found", secondaryClass: "text-status-warning/70" };
+    if (project.activeAgentCount > 0)
+      return { secondaryText: "Agent working\u2026", secondaryClass: "text-canopy-accent/80" };
+    if (project.waitingAgentCount > 0)
+      return { secondaryText: "Needs review", secondaryClass: "text-status-warning/80" };
+    if (project.lastOpened > 0)
+      return {
+        secondaryText: formatTimeAgo(project.lastOpened),
+        secondaryClass: "text-canopy-text/50",
+      };
+    return { secondaryText: project.displayPath, secondaryClass: "text-canopy-text/50" };
+  })();
 
   const row = (
     <div
@@ -160,7 +177,7 @@ const ProjectListItem = memo(function ProjectListItem({
       </div>
 
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center min-w-0">
           <span
             className={cn(
               "truncate text-sm font-semibold leading-tight",
@@ -169,153 +186,11 @@ const ProjectListItem = memo(function ProjectListItem({
           >
             {project.name}
           </span>
-
-          {project.isPinned && (
-            <Pin className="w-3 h-3 text-canopy-accent/60 shrink-0" aria-label="Pinned" />
-          )}
-
-          {project.isMissing && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <AlertTriangle
-                  className="h-3 w-3 text-status-warning shrink-0"
-                  aria-label="Directory not found"
-                />
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Directory not found</TooltipContent>
-            </Tooltip>
-          )}
-
-          <div className="ml-auto flex items-center gap-1.5 shrink-0">
-            {project.isMissing ? (
-              <div
-                className={cn(
-                  "flex items-center gap-1.5 transition-opacity",
-                  isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-                )}
-              >
-                {onLocateProject && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        tabIndex={-1}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onLocateProject(project.id);
-                        }}
-                        className={cn(
-                          "p-0.5 rounded transition-colors cursor-pointer",
-                          "text-canopy-text/50 hover:bg-tint/[0.06] hover:text-canopy-text/80",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                        )}
-                        aria-label="Locate project folder"
-                      >
-                        <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Locate folder</TooltipContent>
-                  </Tooltip>
-                )}
-                {onCloseProject && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        tabIndex={-1}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onCloseProject(project.id);
-                        }}
-                        className={cn(
-                          "p-0.5 rounded transition-colors cursor-pointer",
-                          "text-canopy-text/50 hover:bg-tint/[0.06] hover:text-canopy-text/80",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                        )}
-                        aria-label="Remove project"
-                      >
-                        <X className="w-3.5 h-3.5" aria-hidden="true" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Remove project</TooltipContent>
-                  </Tooltip>
-                )}
-              </div>
-            ) : (
-              (showStop || onCloseProject) && (
-                <div
-                  className={cn(
-                    "flex items-center gap-1.5 transition-opacity",
-                    isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-                  )}
-                >
-                  {showStop && onStopProject && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          tabIndex={-1}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onStopProject(project.id);
-                          }}
-                          className={cn(
-                            "p-0.5 rounded transition-colors cursor-pointer",
-                            "text-status-error hover:bg-status-error/10",
-                            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                          )}
-                          aria-label="Stop project"
-                        >
-                          <Square className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">Stop project</TooltipContent>
-                    </Tooltip>
-                  )}
-                  {onCloseProject && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          tabIndex={-1}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onCloseProject(project.id);
-                          }}
-                          className={cn(
-                            "p-0.5 rounded transition-colors cursor-pointer",
-                            "text-canopy-text/50 hover:bg-tint/[0.06] hover:text-canopy-text/80",
-                            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                          )}
-                          aria-label="Close project"
-                        >
-                          <X className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">Close project</TooltipContent>
-                    </Tooltip>
-                  )}
-                </div>
-              )
-            )}
-
-            {!project.isMissing && (
-              <ProjectActionRow
-                activeAgentCount={project.activeAgentCount}
-                waitingAgentCount={project.waitingAgentCount}
-              />
-            )}
-          </div>
         </div>
 
         <div className="flex items-center min-w-0 mt-0.5">
-          <span
-            className={cn(
-              "truncate text-[11px] leading-none font-mono",
-              project.isMissing ? "text-status-warning/70" : "text-canopy-text/50"
-            )}
-          >
-            {project.isMissing ? "Directory not found" : project.displayPath}
+          <span className={cn("truncate text-[11px] leading-none", secondaryClass)}>
+            {secondaryText}
           </span>
         </div>
       </div>
