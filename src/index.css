@@ -1191,39 +1191,6 @@ body,
   }
 }
 
-/* Window unfocused state — resting look with liveness for working indicators */
-.animate-activity-pulse,
-.animate-agent-pulse,
-.animate-breathe,
-.status-working,
-.panel-state-working {
-  transition: opacity 200ms ease;
-}
-
-/* Spinning icons: swap rotation for gentle opacity pulse (avoids frozen mid-rotation) */
-body[data-window-focused="false"] .animate-spin-slow {
-  animation: agent-pulse 2.5s ease-in-out infinite;
-}
-
-/* Ambient animations: go fully static when unfocused */
-body[data-window-focused="false"] .animate-activity-pulse,
-body[data-window-focused="false"] .animate-agent-pulse,
-body[data-window-focused="false"] .animate-breathe,
-body[data-window-focused="false"] .status-working,
-body[data-window-focused="false"] .panel-state-working {
-  animation: none;
-}
-
-/* Dim everything for resting window aesthetic */
-body[data-window-focused="false"] .animate-activity-pulse,
-body[data-window-focused="false"] .animate-agent-pulse,
-body[data-window-focused="false"] .animate-breathe,
-body[data-window-focused="false"] .animate-spin-slow,
-body[data-window-focused="false"] .status-working,
-body[data-window-focused="false"] .panel-state-working {
-  opacity: 0.5;
-}
-
 /* Terminal trash/restore animations */
 @keyframes terminal-restore {
   from {
