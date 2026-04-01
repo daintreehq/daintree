@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Button } from "@/components/ui/button";
 import { createTooltipWithShortcut } from "@/lib/platform";
 import { keybindingService } from "@/services/KeybindingService";
@@ -341,7 +342,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                   )}
                 </div>
 
-                <div ref={listRef} role="listbox" className="flex-1 overflow-y-auto">
+                <ScrollShadow className="flex-1" ref={listRef} role="listbox">
                   {isLoading || search.isSearching ? (
                     <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
                       Loading...
@@ -379,7 +380,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                       />
                     ))
                   )}
-                </div>
+                </ScrollShadow>
               </div>
 
               {/* Content area */}

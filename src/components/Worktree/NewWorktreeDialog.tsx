@@ -14,6 +14,7 @@ import {
   GitBranch,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { WorktreeIcon } from "@/components/icons";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
@@ -903,11 +904,12 @@ export function NewWorktreeDialog({
                           }
                         />
                       </div>
-                      <div
+                      <ScrollShadow
                         ref={branchListRef}
                         id="branch-list"
                         role="listbox"
-                        className="max-h-[300px] overflow-y-auto p-1"
+                        className="max-h-[300px]"
+                        scrollClassName="p-1"
                       >
                         {selectableRows.length === 0 ? (
                           <div className="py-6 text-center text-sm text-muted-foreground">
@@ -978,7 +980,7 @@ export function NewWorktreeDialog({
                             });
                           })()
                         )}
-                      </div>
+                      </ScrollShadow>
                       {!branchQuery && branchOptions.length > 500 && (
                         <div className="border-t border-canopy-border px-3 py-2 text-xs text-canopy-text/60">
                           Showing first 500 branches. Type to search.
@@ -1036,7 +1038,7 @@ export function NewWorktreeDialog({
                           data-testid="existing-branch-search"
                         />
                       </div>
-                      <div role="listbox" className="max-h-[300px] overflow-y-auto p-1">
+                      <ScrollShadow role="listbox" className="max-h-[300px]" scrollClassName="p-1">
                         {filteredExistingBranches.length === 0 ? (
                           <div className="py-6 text-center text-sm text-muted-foreground">
                             {existingBranchQuery
@@ -1068,7 +1070,7 @@ export function NewWorktreeDialog({
                             </div>
                           ))
                         )}
-                      </div>
+                      </ScrollShadow>
                     </PopoverContent>
                   </Popover>
                 </div>
@@ -1121,11 +1123,12 @@ export function NewWorktreeDialog({
                       onOpenAutoFocus={(e) => e.preventDefault()}
                       onEscapeKeyDown={(e) => e.stopPropagation()}
                     >
-                      <div
+                      <ScrollShadow
                         ref={prefixListRef}
                         id="prefix-list"
                         role="listbox"
-                        className="max-h-[240px] overflow-y-auto p-1"
+                        className="max-h-[240px]"
+                        scrollClassName="p-1"
                       >
                         {prefixSuggestions.length === 0 ? (
                           <div className="py-4 text-center text-sm text-canopy-text/60">
@@ -1152,7 +1155,7 @@ export function NewWorktreeDialog({
                             </div>
                           ))
                         )}
-                      </div>
+                      </ScrollShadow>
                     </PopoverContent>
                   </Popover>
                   <p className="text-xs text-canopy-text/60 select-text">
@@ -1345,10 +1348,11 @@ export function NewWorktreeDialog({
                       align="start"
                       onEscapeKeyDown={(e) => e.stopPropagation()}
                     >
-                      <div
+                      <ScrollShadow
                         id="recipe-list"
                         role="listbox"
-                        className="max-h-[300px] overflow-y-auto p-1"
+                        className="max-h-[300px]"
+                        scrollClassName="p-1"
                       >
                         <div
                           role="option"
@@ -1426,7 +1430,7 @@ export function NewWorktreeDialog({
                             )}
                           </div>
                         ))}
-                      </div>
+                      </ScrollShadow>
                     </PopoverContent>
                   </Popover>
                 </div>

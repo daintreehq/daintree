@@ -1,5 +1,6 @@
 import { forwardRef } from "react";
 import { cn } from "@/lib/utils";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 function getDescriptionSnippet(description: string, maxLength = 60): string {
@@ -47,7 +48,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
             {title}
           </div>
         )}
-        <div className="max-h-64 overflow-y-auto p-1">
+        <ScrollShadow className="max-h-64" scrollClassName="p-1">
           {isLoading && items.length === 0 && (
             <div className="px-2 py-2 text-xs font-mono text-canopy-text/40">Searching…</div>
           )}
@@ -94,7 +95,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
               </TooltipProvider>
             );
           })}
-        </div>
+        </ScrollShadow>
       </div>
     );
   }

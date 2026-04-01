@@ -2,6 +2,15 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+);
+
 const mockSetSelectedSchemeId = vi.fn();
 const mockSetColorScheme = vi.fn((_id: string) => Promise.resolve());
 

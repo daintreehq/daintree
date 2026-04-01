@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useId, createContext, useContext } from
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { useOverlayState, useEscapeStack } from "@/hooks";
 import { usePortalStore } from "@/store";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
@@ -320,7 +321,11 @@ interface AppDialogBodyProps {
 }
 
 AppDialog.Body = function AppDialogBody({ children, className }: AppDialogBodyProps) {
-  return <div className={cn("flex-1 overflow-y-auto min-h-0 p-6", className)}>{children}</div>;
+  return (
+    <ScrollShadow className={cn("flex-1 min-h-0", className)} scrollClassName="p-6">
+      {children}
+    </ScrollShadow>
+  );
 };
 
 interface AppDialogBodyScrollProps {

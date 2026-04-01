@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CircleHelp } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { useOverlayState, useEscapeStack } from "@/hooks";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
@@ -175,9 +176,9 @@ AppPaletteDialog.Body = function AppPaletteBody({
   maxHeight = "max-h-[50vh]",
 }: AppPaletteBodyProps) {
   return (
-    <div tabIndex={0} className={cn("overflow-y-auto p-2 space-y-1", maxHeight, className)}>
+    <ScrollShadow tabIndex={0} className={cn(maxHeight, className)} scrollClassName="p-2 space-y-1">
       {children}
-    </div>
+    </ScrollShadow>
   );
 };
 
