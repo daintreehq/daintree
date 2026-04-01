@@ -42,6 +42,10 @@ export interface Project {
   inRepoSettings?: boolean;
   /** Whether the project is pinned to the top of the project switcher */
   pinned?: boolean;
+  /** Frecency score for sorting (exponential decay, default 3.0) */
+  frecencyScore?: number;
+  /** Timestamp (ms) of last frecency update */
+  lastAccessedAt?: number;
 }
 
 /**

@@ -94,7 +94,7 @@ export function rankProjectMatches(
 
   scored.sort((a, b) => {
     if (a.score !== b.score) return b.score - a.score;
-    return b.project.lastOpened - a.project.lastOpened;
+    return b.project.frecencyScore - a.project.frecencyScore;
   });
 
   return scored.map((entry) => entry.project);

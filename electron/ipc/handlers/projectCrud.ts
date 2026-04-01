@@ -113,8 +113,13 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     if (typeof updates !== "object" || updates === null) {
       throw new Error("Invalid updates object");
     }
-    // Strip control-plane fields — use project:enable/disable-in-repo-settings instead
-    const { inRepoSettings: _inRepo, ...safeUpdates } = updates;
+    // Strip control-plane and internal scoring fields
+    const {
+      inRepoSettings: _inRepo,
+      frecencyScore: _fs,
+      lastAccessedAt: _lat,
+      ...safeUpdates
+    } = updates;
     const updated = projectStore.updateProject(projectId, safeUpdates);
     if (
       updated.inRepoSettings &&

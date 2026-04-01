@@ -29,6 +29,8 @@ import { GlobalFileStore } from "./GlobalFileStore.js";
 import { ProjectIdentityFiles } from "./ProjectIdentityFiles.js";
 import { cleanupQuarantinedProjectFiles } from "./projectQuarantineCleanup.js";
 
+import { computeFrecencyScore, FRECENCY_COLD_START } from "./frecency.js";
+
 export const DEFAULT_PROJECT_EMOJI = "🌲";
 
 function rowToProject(row: ProjectRow): Project {
@@ -46,6 +48,9 @@ function rowToProject(row: ProjectRow): Project {
   if (row.inRepoSettings !== null && row.inRepoSettings !== undefined)
     project.inRepoSettings = row.inRepoSettings;
   if (row.pinned) project.pinned = true;
+  project.frecencyScore =
+    typeof row.frecencyScore === "number" ? row.frecencyScore : FRECENCY_COLD_START;
+  project.lastAccessedAt = typeof row.lastAccessedAt === "number" ? row.lastAccessedAt : 0;
   return project;
 }
 
@@ -150,18 +155,31 @@ export class ProjectStore {
 
     const existing = await this.getProjectByPath(normalizedPath);
     if (existing) {
-      return this.updateProject(existing.id, { lastOpened: Date.now() });
+      const now = Date.now();
+      const newScore = computeFrecencyScore(
+        existing.frecencyScore ?? FRECENCY_COLD_START,
+        existing.lastAccessedAt ?? 0,
+        now
+      );
+      return this.updateProject(existing.id, {
+        lastOpened: now,
+        frecencyScore: newScore,
+        lastAccessedAt: now,
+      });
     }
 
     const inRepo = await this.readInRepoProjectIdentity(normalizedPath);
 
+    const now = Date.now();
     const project: Project = {
       id: generateProjectId(normalizedPath),
       path: normalizedPath,
       name: inRepo.name ?? path.basename(normalizedPath),
       emoji: inRepo.emoji ?? DEFAULT_PROJECT_EMOJI,
-      lastOpened: Date.now(),
+      lastOpened: now,
       status: "closed",
+      frecencyScore: FRECENCY_COLD_START,
+      lastAccessedAt: now,
       ...(inRepo.color ? { color: inRepo.color } : {}),
       ...(inRepo.found ? { canopyConfigPresent: true } : {}),
     };
@@ -178,6 +196,8 @@ export class ProjectStore {
         status: project.status ?? null,
         canopyConfigPresent: project.canopyConfigPresent ?? null,
         inRepoSettings: project.inRepoSettings ?? null,
+        frecencyScore: FRECENCY_COLD_START,
+        lastAccessedAt: now,
       })
       .run();
 
@@ -226,6 +246,8 @@ export class ProjectStore {
       canopyConfigPresent: boolean | null;
       inRepoSettings: boolean | null;
       pinned: number;
+      frecencyScore: number;
+      lastAccessedAt: number;
     }> = {};
     if (updates.name !== undefined) set.name = updates.name;
     if (updates.path !== undefined) set.path = updates.path;
@@ -237,6 +259,8 @@ export class ProjectStore {
       set.canopyConfigPresent = updates.canopyConfigPresent ?? null;
     if (updates.inRepoSettings !== undefined) set.inRepoSettings = updates.inRepoSettings ?? null;
     if (updates.pinned !== undefined) set.pinned = updates.pinned ? 1 : 0;
+    if (updates.frecencyScore !== undefined) set.frecencyScore = updates.frecencyScore;
+    if (updates.lastAccessedAt !== undefined) set.lastAccessedAt = updates.lastAccessedAt;
 
     if (Object.keys(set).length > 0) {
       db.update(projectsTable).set(set).where(eq(projectsTable.id, projectId)).run();
@@ -253,7 +277,11 @@ export class ProjectStore {
 
   getAllProjects(): Project[] {
     const db = getSharedDb();
-    const rows = db.select().from(projectsTable).orderBy(desc(projectsTable.lastOpened)).all();
+    const rows = db
+      .select()
+      .from(projectsTable)
+      .orderBy(desc(projectsTable.frecencyScore), desc(projectsTable.lastOpened))
+      .all();
 
     const validStatuses: ProjectStatus[] = ["active", "background", "closed", "missing"];
     const currentProjectId = this.getCurrentProjectId();
@@ -400,6 +428,8 @@ export class ProjectStore {
           canopyConfigPresent: updatedProject.canopyConfigPresent ?? null,
           inRepoSettings: updatedProject.inRepoSettings ?? null,
           pinned: updatedProject.pinned ? 1 : 0,
+          frecencyScore: updatedProject.frecencyScore ?? FRECENCY_COLD_START,
+          lastAccessedAt: updatedProject.lastAccessedAt ?? 0,
         })
         .run();
       this.settingsManager.migrateEnvForProject(projectId, newProjectId);
@@ -419,6 +449,8 @@ export class ProjectStore {
           canopyConfigPresent: oldProject.canopyConfigPresent ?? null,
           inRepoSettings: oldProject.inRepoSettings ?? null,
           pinned: oldProject.pinned ? 1 : 0,
+          frecencyScore: oldProject.frecencyScore ?? FRECENCY_COLD_START,
+          lastAccessedAt: oldProject.lastAccessedAt ?? 0,
         })
         .run();
       if (newStateDir && existsSync(newStateDir)) {
@@ -463,6 +495,13 @@ export class ProjectStore {
     const previousProjectId = this.getCurrentProjectId();
     const db = getSharedDb();
 
+    const now = Date.now();
+    const newScore = computeFrecencyScore(
+      project.frecencyScore ?? FRECENCY_COLD_START,
+      project.lastAccessedAt ?? 0,
+      now
+    );
+
     db.transaction((tx) => {
       if (previousProjectId && previousProjectId !== projectId) {
         console.log(`[ProjectStore] Marking previous project ${previousProjectId} as background`);
@@ -476,7 +515,12 @@ export class ProjectStore {
         .onConflictDoUpdate({ target: appStateTable.key, set: { value: projectId } })
         .run();
       tx.update(projectsTable)
-        .set({ lastOpened: Date.now(), status: "active" })
+        .set({
+          lastOpened: now,
+          status: "active",
+          frecencyScore: newScore,
+          lastAccessedAt: now,
+        })
         .where(eq(projectsTable.id, projectId))
         .run();
     });

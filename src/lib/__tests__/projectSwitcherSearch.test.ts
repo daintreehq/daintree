@@ -13,6 +13,7 @@ function makeProject(
     isBackground: false,
     isMissing: false,
     isPinned: false,
+    frecencyScore: 3.0,
     activeAgentCount: 0,
     waitingAgentCount: 0,
     processCount: 0,
@@ -99,13 +100,23 @@ describe("rankProjectMatches", () => {
     expect(results[0].name).toContain("canopy");
   });
 
-  it("uses lastOpened as tiebreaker for equal scores", () => {
+  it("uses frecencyScore as tiebreaker for equal text scores", () => {
     const tieProjects = [
-      makeProject({ id: "a", name: "alpha-test", path: "/repos/a", lastOpened: 100 }),
-      makeProject({ id: "b", name: "alpha-test", path: "/repos/b", lastOpened: 200 }),
+      makeProject({
+        id: "a",
+        name: "alpha-test",
+        path: "/repos/a",
+        frecencyScore: 2.0,
+      }),
+      makeProject({
+        id: "b",
+        name: "alpha-test",
+        path: "/repos/b",
+        frecencyScore: 5.0,
+      }),
     ];
     const results = rankProjectMatches("alpha", tieProjects);
-    expect(results[0].id).toBe("b"); // higher lastOpened wins
+    expect(results[0].id).toBe("b"); // higher frecencyScore wins
   });
 
   it("trims whitespace from query before matching", () => {

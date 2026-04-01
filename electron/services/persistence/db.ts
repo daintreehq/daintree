@@ -41,7 +41,10 @@ const CREATE_TABLES_SQL = `
     color TEXT,
     status TEXT,
     canopy_config_present INTEGER,
-    in_repo_settings INTEGER
+    in_repo_settings INTEGER,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    frecency_score REAL NOT NULL DEFAULT 3.0,
+    last_accessed_at INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS app_state (
@@ -83,6 +86,22 @@ export function openDb(dbPath: string): { sqlite: Database.Database; db: AppDb }
   if (!cols.some((c) => c.name === "pinned")) {
     sqlite.prepare("ALTER TABLE projects ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0").run();
   }
+
+  // Migrate: add frecency columns to projects table
+  if (!cols.some((c) => c.name === "frecency_score")) {
+    sqlite
+      .prepare("ALTER TABLE projects ADD COLUMN frecency_score REAL NOT NULL DEFAULT 3.0")
+      .run();
+  }
+  if (!cols.some((c) => c.name === "last_accessed_at")) {
+    sqlite
+      .prepare("ALTER TABLE projects ADD COLUMN last_accessed_at INTEGER NOT NULL DEFAULT 0")
+      .run();
+  }
+  // Backfill: set last_accessed_at to now for migrated rows to prevent first-access decay collapse
+  sqlite
+    .prepare("UPDATE projects SET last_accessed_at = ? WHERE last_accessed_at = 0")
+    .run(Date.now());
 
   const db = drizzle(sqlite, { schema });
   return { sqlite, db };

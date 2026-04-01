@@ -42,7 +42,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const switchProject = useProjectStore((state) => state.switchProject);
 
   const recentProjects = useMemo(
-    () => [...projects].sort((a, b) => b.lastOpened - a.lastOpened).slice(0, 5),
+    () => [...projects].sort((a, b) => (b.frecencyScore ?? 0) - (a.frecencyScore ?? 0)).slice(0, 5),
     [projects]
   );
 

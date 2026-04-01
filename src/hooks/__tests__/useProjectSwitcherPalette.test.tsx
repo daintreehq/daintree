@@ -14,6 +14,7 @@ const { getBulkStatsMock, useProjectStoreMock, notifyMock, projectState } = vi.h
         emoji: "🌲",
         color: "#00aa00",
         lastOpened: 123,
+        frecencyScore: 3.0,
         status: "active" as const,
       },
     ],
@@ -162,6 +163,7 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌲",
         color: "#00aa00",
         lastOpened: 300,
+        frecencyScore: 10.0,
         status: "active" as const,
       },
       {
@@ -171,6 +173,7 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌿",
         color: "#00bb00",
         lastOpened: 200,
+        frecencyScore: 7.0,
         status: "active" as const,
       },
       {
@@ -180,6 +183,7 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌴",
         color: "#00cc00",
         lastOpened: 100,
+        frecencyScore: 3.0,
         status: "active" as const,
       },
     ];
@@ -266,6 +270,7 @@ describe("useProjectSwitcherPalette", () => {
       emoji: "🌲",
       color: "#00aa00",
       lastOpened: 300,
+      frecencyScore: 8.0,
       status: "active" as const,
     };
     const inactiveProject = {
@@ -275,6 +280,7 @@ describe("useProjectSwitcherPalette", () => {
       emoji: "🌿",
       color: "#00bb00",
       lastOpened: 200,
+      frecencyScore: 5.0,
       status: "active" as const,
     };
 
@@ -416,6 +422,7 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌲",
         color: "#00aa00",
         lastOpened: 300,
+        frecencyScore: 10.0,
         status: "active" as const,
       },
       {
@@ -425,6 +432,7 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌿",
         color: "#00bb00",
         lastOpened: 200,
+        frecencyScore: 7.0,
         status: "active" as const,
       },
       {
@@ -434,6 +442,7 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌴",
         color: "#00cc00",
         lastOpened: 100,
+        frecencyScore: 3.0,
         status: "active" as const,
       },
     ];
@@ -520,6 +529,7 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌲",
         color: "#00aa00",
         lastOpened: 300,
+        frecencyScore: 10.0,
         status: "active" as const,
       },
       {
@@ -529,6 +539,7 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌿",
         color: "#00bb00",
         lastOpened: 200,
+        frecencyScore: 7.0,
         status: "active" as const,
       },
       {
@@ -538,6 +549,7 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌴",
         color: "#00cc00",
         lastOpened: 100,
+        frecencyScore: 3.0,
         status: "active" as const,
       },
     ];
@@ -628,6 +640,7 @@ describe("useProjectSwitcherPalette", () => {
           emoji: "🌴",
           color: "#00cc00",
           lastOpened: 100,
+          frecencyScore: 3.0,
           status: "active" as const,
         },
         {
@@ -637,6 +650,7 @@ describe("useProjectSwitcherPalette", () => {
           emoji: "🌲",
           color: "#00aa00",
           lastOpened: 300,
+          frecencyScore: 10.0,
           status: "active" as const,
         },
         {
@@ -646,6 +660,7 @@ describe("useProjectSwitcherPalette", () => {
           emoji: "🌿",
           color: "#00bb00",
           lastOpened: 200,
+          frecencyScore: 7.0,
           status: "active" as const,
         },
       ];

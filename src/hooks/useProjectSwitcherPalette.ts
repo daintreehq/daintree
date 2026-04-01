@@ -20,6 +20,7 @@ export interface SearchableProject {
   isBackground: boolean;
   isMissing: boolean;
   isPinned: boolean;
+  frecencyScore: number;
   activeAgentCount: number;
   waitingAgentCount: number;
   processCount: number;
@@ -178,6 +179,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         isBackground,
         isMissing,
         isPinned: p.pinned ?? false,
+        frecencyScore: p.frecencyScore ?? 3.0,
         activeAgentCount: stats?.activeAgentCount ?? 0,
         waitingAgentCount: stats?.waitingAgentCount ?? 0,
         processCount: stats?.processCount ?? 0,
@@ -196,6 +198,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const sortedProjects = useMemo<SearchableProject[]>(() => {
     return [...searchableProjects].sort((a, b) => {
+      if (a.frecencyScore !== b.frecencyScore) {
+        return b.frecencyScore - a.frecencyScore;
+      }
       if (a.lastOpened !== b.lastOpened) {
         return b.lastOpened - a.lastOpened;
       }

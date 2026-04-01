@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, index } from "drizzle-orm/sqlite-core";
 
 export const tasks = sqliteTable(
   "tasks",
@@ -39,6 +39,8 @@ export const projects = sqliteTable("projects", {
   canopyConfigPresent: integer("canopy_config_present", { mode: "boolean" }),
   inRepoSettings: integer("in_repo_settings", { mode: "boolean" }),
   pinned: integer("pinned").notNull().default(0),
+  frecencyScore: real("frecency_score").notNull().default(3.0),
+  lastAccessedAt: integer("last_accessed_at").notNull().default(0),
 });
 
 export const appState = sqliteTable("app_state", {
