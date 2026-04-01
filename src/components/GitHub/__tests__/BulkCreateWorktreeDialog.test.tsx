@@ -78,8 +78,10 @@ vi.mock("@/store/projectStore", () => ({
     selector({ currentProject: { id: "test-project", path: "/test/root" } }),
 }));
 
-const mockWorktreeDataMap = new Map();
-mockWorktreeDataMap.set("main-wt", {
+const worktreeDataHolder: { map: Map<string, unknown> } = {
+  map: new Map(),
+};
+worktreeDataHolder.map.set("main-wt", {
   worktreeId: "main-wt",
   branch: "main",
   path: "/test/root",
@@ -88,13 +90,13 @@ mockWorktreeDataMap.set("main-wt", {
 
 vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStore: () => ({
-    getState: () => ({ worktrees: mockWorktreeDataMap }),
+    getState: () => ({ worktrees: worktreeDataHolder.map }),
   }),
 }));
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
-    selector({ worktrees: mockWorktreeDataMap }),
+    selector({ worktrees: worktreeDataHolder.map }),
 }));
 
 const mockSetPendingWorktree = vi.fn();
@@ -408,7 +410,7 @@ describe("BulkCreateWorktreeDialog", () => {
     // itself fails). Let's check the retry scenario where worktree was already found.
 
     // For this test, add the failed issue's worktree to the data store
-    mockWorktreeDataMap.set("existing-wt", {
+    worktreeDataHolder.map.set("existing-wt", {
       worktreeId: "existing-wt",
       branch: "feature/issue-2-issue-2",
       path: "/worktrees/feature/issue-2-issue-2",
@@ -428,7 +430,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
 
     // Clean up
-    mockWorktreeDataMap.delete("existing-wt");
+    worktreeDataHolder.map.delete("existing-wt");
   });
 
   it("auto-retries transient errors with backoff", async () => {
@@ -696,7 +698,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/1 failed/)).toBeTruthy();
 
     // Set up retry — issue 2's worktree exists now
-    mockWorktreeDataMap.set("retry-wt", {
+    worktreeDataHolder.map.set("retry-wt", {
       worktreeId: "retry-wt",
       branch: "feature/issue-2-issue-2",
       path: "/worktrees/feature/issue-2-issue-2",
@@ -712,7 +714,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/2 of 2 created/)).toBeTruthy();
     expect(screen.queryByText(/failed/)).toBeNull();
 
-    mockWorktreeDataMap.delete("retry-wt");
+    worktreeDataHolder.map.delete("retry-wt");
   });
 
   it("crashed terminal during retry does not demote prior successes", async () => {
@@ -748,7 +750,7 @@ describe("BulkCreateWorktreeDialog", () => {
     mockTerminals = [{ id: "t-ok", exitCode: 1 }];
 
     // Set up retry for issue 2
-    mockWorktreeDataMap.set("retry-wt-2", {
+    worktreeDataHolder.map.set("retry-wt-2", {
       worktreeId: "retry-wt-2",
       branch: "feature/issue-2-issue-2",
       path: "/worktrees/feature/issue-2-issue-2",
@@ -769,7 +771,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/2 of 2 created/)).toBeTruthy();
     expect(screen.queryByText(/failed/)).toBeNull();
 
-    mockWorktreeDataMap.delete("retry-wt-2");
+    worktreeDataHolder.map.delete("retry-wt-2");
   });
 
   it("mixed healthy and crashed terminals across multiple items", async () => {
@@ -1030,13 +1032,16 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     // Simulate worktreeMap updating with the newly created worktree (issue #1)
-    mockWorktreeDataMap.set("wt-1", {
+    // Replace the Map reference so useMemo's dependency triggers recomputation
+    const updatedMap = new Map(worktreeDataHolder.map);
+    updatedMap.set("wt-1", {
       worktreeId: "wt-1",
       branch: "feature/issue-1",
       path: "/worktrees/feature/issue-1",
       isMainWorktree: false,
       issueNumber: 1,
     });
+    worktreeDataHolder.map = updatedMap;
 
     // Trigger re-render to simulate Zustand subscription update
     await act(async () => {
@@ -1062,7 +1067,10 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText("Issue 2")).toBeTruthy();
     expect(screen.getByText("Issue 3")).toBeTruthy();
 
-    mockWorktreeDataMap.delete("wt-1");
+    // Restore the original map without the test entry
+    const cleanMap = new Map(worktreeDataHolder.map);
+    cleanMap.delete("wt-1");
+    worktreeDataHolder.map = cleanMap;
   });
 
   it("does not flash empty state when Done is clicked", async () => {
