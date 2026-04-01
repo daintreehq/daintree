@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectSettings } from "@/types";
 
 const {
@@ -97,7 +97,7 @@ interface FormProps {
 function renderOpenForm(projectId = "proj-1") {
   // Step 1: Render closed with no settings (mimics real dialog mount)
   const hook = renderHook(
-    ({ isOpen, tick, projectId }: FormProps) => useProjectSettingsForm({ projectId, isOpen }),
+    ({ isOpen, projectId }: FormProps) => useProjectSettingsForm({ projectId, isOpen }),
     { initialProps: { isOpen: false, tick: 0, projectId } }
   );
 
@@ -164,7 +164,7 @@ describe("useProjectSettingsForm", () => {
   it("triggers debounced save when state changes after initialization", async () => {
     vi.useFakeTimers();
     const { result, rerender } = renderHook(
-      ({ isOpen, tick }: { isOpen: boolean; tick: number }) =>
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
         useProjectSettingsForm({ projectId: "proj-1", isOpen }),
       { initialProps: { isOpen: false, tick: 0 } }
     );
@@ -191,7 +191,7 @@ describe("useProjectSettingsForm", () => {
   it("does not save when snapshot is unchanged", async () => {
     vi.useFakeTimers();
     const { rerender } = renderHook(
-      ({ isOpen, tick }: { isOpen: boolean; tick: number }) =>
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
         useProjectSettingsForm({ projectId: "proj-1", isOpen }),
       { initialProps: { isOpen: false, tick: 0 } }
     );
@@ -213,7 +213,7 @@ describe("useProjectSettingsForm", () => {
   it("flush() triggers immediate save if debounce is pending", async () => {
     vi.useFakeTimers();
     const { result, rerender } = renderHook(
-      ({ isOpen, tick }: { isOpen: boolean; tick: number }) =>
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
         useProjectSettingsForm({ projectId: "proj-1", isOpen }),
       { initialProps: { isOpen: false, tick: 0 } }
     );
@@ -239,7 +239,7 @@ describe("useProjectSettingsForm", () => {
   it("calls updateProject when identity fields change", async () => {
     vi.useFakeTimers();
     const { result, rerender } = renderHook(
-      ({ isOpen, tick }: { isOpen: boolean; tick: number }) =>
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
         useProjectSettingsForm({ projectId: "proj-1", isOpen }),
       { initialProps: { isOpen: false, tick: 0 } }
     );
@@ -269,7 +269,7 @@ describe("useProjectSettingsForm", () => {
   it("does not call updateProject when non-identity fields change", async () => {
     vi.useFakeTimers();
     const { result, rerender } = renderHook(
-      ({ isOpen, tick }: { isOpen: boolean; tick: number }) =>
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
         useProjectSettingsForm({ projectId: "proj-1", isOpen }),
       { initialProps: { isOpen: false, tick: 0 } }
     );
@@ -296,7 +296,7 @@ describe("useProjectSettingsForm", () => {
   it("sets projectAutoSaveError when save fails", async () => {
     vi.useFakeTimers();
     const { result, rerender } = renderHook(
-      ({ isOpen, tick }: { isOpen: boolean; tick: number }) =>
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
         useProjectSettingsForm({ projectId: "proj-1", isOpen }),
       { initialProps: { isOpen: false, tick: 0 } }
     );
@@ -340,7 +340,7 @@ describe("useProjectSettingsForm", () => {
   it("filters invalid env var keys on save", async () => {
     vi.useFakeTimers();
     const { result, rerender } = renderHook(
-      ({ isOpen, tick }: { isOpen: boolean; tick: number }) =>
+      ({ isOpen }: { isOpen: boolean; tick: number }) =>
         useProjectSettingsForm({ projectId: "proj-1", isOpen }),
       { initialProps: { isOpen: false, tick: 0 } }
     );
