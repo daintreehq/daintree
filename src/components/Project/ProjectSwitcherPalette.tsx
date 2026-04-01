@@ -421,7 +421,6 @@ function getTemporalBucket(timestamp: number, todayStart: number, weekStart: num
   return "older";
 }
 
-
 interface ProjectListContentProps {
   results: SearchableProject[];
   selectedIndex: number;
@@ -465,7 +464,6 @@ function ProjectListContent({
       now.getMonth(),
       now.getDate() - mondayOffset
     ).getTime();
-
 
     const current = results.filter((p) => p.isActive);
     const pinned = results.filter((p) => p.isPinned && !p.isActive);
