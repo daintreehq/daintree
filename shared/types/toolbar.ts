@@ -33,6 +33,8 @@ export interface ToolbarLayout {
   leftButtons: AnyToolbarButtonId[];
   /** Ordered list of button IDs to show on the right side (excluding portal-toggle which is always last) */
   rightButtons: AnyToolbarButtonId[];
+  /** Button IDs that are hidden from the toolbar. Ordering is preserved in leftButtons/rightButtons. */
+  hiddenButtons: AnyToolbarButtonId[];
 }
 
 /** Launcher palette default behaviors */

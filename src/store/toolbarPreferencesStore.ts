@@ -30,6 +30,7 @@ const DEFAULT_PREFERENCES: ToolbarPreferences = {
   layout: {
     leftButtons: DEFAULT_LEFT_BUTTONS,
     rightButtons: DEFAULT_RIGHT_BUTTONS,
+    hiddenButtons: [],
   },
   launcher: {
     alwaysShowDevServer: false,
@@ -119,23 +120,20 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           toList.splice(toIndex, 0, buttonId);
 
           return {
-            layout: { leftButtons, rightButtons },
+            layout: { ...state.layout, leftButtons, rightButtons },
           };
         }),
-      toggleButtonVisibility: (buttonId, side) =>
+      toggleButtonVisibility: (buttonId, _side) =>
         set((state) => {
-          const sideKey = side === "left" ? "leftButtons" : "rightButtons";
-          const buttons = [...state.layout[sideKey]];
-          const index = buttons.indexOf(buttonId);
-
+          const hidden = [...state.layout.hiddenButtons];
+          const index = hidden.indexOf(buttonId);
           if (index === -1) {
-            buttons.push(buttonId);
+            hidden.push(buttonId);
           } else {
-            buttons.splice(index, 1);
+            hidden.splice(index, 1);
           }
-
           return {
-            layout: { ...state.layout, [sideKey]: buttons },
+            layout: { ...state.layout, hiddenButtons: hidden },
           };
         }),
       setAlwaysShowDevServer: (value) =>
@@ -154,7 +152,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }),
     {
       name: "canopy-toolbar-preferences",
-      version: 1,
+      version: 2,
       storage: createSafeJSONStorage(),
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
@@ -171,6 +169,12 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           const launcher = state.launcher as { defaultSelection?: string } | undefined;
           if (launcher?.defaultSelection === "dev-server") {
             launcher.defaultSelection = undefined;
+          }
+        }
+        if (version < 2) {
+          const layout = state.layout as Record<string, unknown> | undefined;
+          if (layout && !Array.isArray(layout.hiddenButtons)) {
+            layout.hiddenButtons = [];
           }
         }
         return state as unknown as ToolbarPreferencesState;
@@ -196,6 +200,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
               persisted.layout?.rightButtons,
               currentState.layout.rightButtons
             ),
+            hiddenButtons: persisted.layout?.hiddenButtons ?? [],
           },
         };
       },

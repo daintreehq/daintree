@@ -617,16 +617,21 @@ export function Toolbar({
     ]
   );
 
+  const hiddenSet = useMemo(
+    () => new Set(toolbarLayout.hiddenButtons),
+    [toolbarLayout.hiddenButtons]
+  );
+
   const effectiveLeftButtons = useMemo(
-    () => [...toolbarLayout.leftButtons],
-    [toolbarLayout.leftButtons]
+    () => toolbarLayout.leftButtons.filter((id) => !hiddenSet.has(id)),
+    [toolbarLayout.leftButtons, hiddenSet]
   );
 
   const effectiveRightButtons = useMemo(() => {
     const existing = new Set(toolbarLayout.rightButtons);
     const extra = pluginButtonIds.filter((id) => !existing.has(id));
-    return [...toolbarLayout.rightButtons, ...extra];
-  }, [toolbarLayout.rightButtons, pluginButtonIds]);
+    return [...toolbarLayout.rightButtons, ...extra].filter((id) => !hiddenSet.has(id));
+  }, [toolbarLayout.rightButtons, pluginButtonIds, hiddenSet]);
 
   const availableLeftIds = useMemo(
     () => effectiveLeftButtons.filter((id) => buttonRegistry[id]?.isAvailable),
