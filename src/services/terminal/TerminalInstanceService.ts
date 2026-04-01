@@ -26,51 +26,16 @@ import { TerminalWebGLManager } from "./TerminalWebGLManager";
 import { TerminalWakeManager } from "./TerminalWakeManager";
 import { TerminalAgentStateController } from "./TerminalAgentStateController";
 import { TerminalRestoreController } from "./TerminalRestoreController";
+import { TerminalHibernationManager } from "./TerminalHibernationManager";
 import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
+import { isNonKeyboardInput } from "./inputUtils";
 
-// eslint-disable-next-line no-control-regex
-const URXVT_MOUSE_RE = /^\x1b\[\d+;\d+;\d+M/;
-
-// CSI navigation: arrows, Home, End, and modified F1–F4 (with optional ;modifier param)
-// eslint-disable-next-line no-control-regex
-const CSI_NAV_RE = /^\x1b\[(1;\d+)?[ABCDHFPQRS]$/;
-
-// Application-mode arrows, Home/End, F1–F4 (SS3 prefix, unmodified only)
-// eslint-disable-next-line no-control-regex
-const SS3_NAV_RE = /^\x1bO[ABCDHFPQRS]$/;
-
-// Tilde-terminated navigation: Insert(2), Delete(3), PgUp(5), PgDn(6), F5–F12
-// Includes optional ;modifier param. Excludes bracketed paste markers (200~, 201~)
-// eslint-disable-next-line no-control-regex
-const TILDE_NAV_RE = /^\x1b\[(2|3|5|6|15|17|18|19|20|21|23|24)(;\d+)?~$/;
-
-export function isNonKeyboardInput(data: string): boolean {
-  // Mouse sequences
-  if (data.startsWith("\x1b[M")) return true;
-  if (data.startsWith("\x1b[<")) return true;
-  if (URXVT_MOUSE_RE.test(data)) return true;
-
-  // Focus reports
-  if (data === "\x1b[I" || data === "\x1b[O") return true;
-
-  // Lone Escape
-  if (data === "\x1b") return true;
-
-  // Navigation / cursor sequences
-  if (CSI_NAV_RE.test(data)) return true;
-  if (SS3_NAV_RE.test(data)) return true;
-  if (TILDE_NAV_RE.test(data)) return true;
-
-  // C0 control characters that are not prompt editing (Ctrl+C, Ctrl+D, Ctrl+L, Ctrl+Z)
-  if (data === "\x03" || data === "\x04" || data === "\x0c" || data === "\x1a") return true;
-
-  return false;
-}
+export { isNonKeyboardInput } from "./inputUtils";
 
 function canAutoInitializeTerminalIngest(): boolean {
   return (
@@ -102,6 +67,7 @@ class TerminalInstanceService {
   private wakeManager: TerminalWakeManager;
   private agentStateController: TerminalAgentStateController;
   private restoreController: TerminalRestoreController;
+  private hibernationManager: TerminalHibernationManager;
 
   constructor() {
     if (canAutoInitializeTerminalIngest()) {
@@ -120,6 +86,27 @@ class TerminalInstanceService {
     this.restoreController = new TerminalRestoreController({
       getInstance: (id) => this.instances.get(id),
       writeData: (id, data) => this.writeToTerminal(id, data),
+    });
+
+    this.hibernationManager = new TerminalHibernationManager({
+      getInstance: (id) => this.instances.get(id),
+      destroyRestoreState: (id) => this.restoreController.destroy(id),
+      resetBufferedOutput: (id) => this.dataBuffer.resetForTerminal(id),
+      releaseWebGL: (id) => this.webGLManager.onTerminalDestroyed(id),
+      clearResizeJob: (managed) => this.resizeController.clearResizeJob(managed),
+      clearSettledTimer: (id) => this.resizeController.clearSettledTimer(id),
+      applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
+      openLink: (url, id, event) => this.linkHandler.openLink(url, id, event),
+      getCwdProvider: (id) => this.cwdProviders.get(id),
+      onBufferModeChange: (id, isAltBuffer) => this.handleBufferModeChange(id, isAltBuffer),
+      notifyParsed: (id) => this.dataBuffer.notifyParsed(id),
+      scrollToBottomSafe: (managed) => this.scrollToBottomSafe(managed),
+      clearUnseen: (id, fromUser) => this.unseenTracker.clearUnseen(id, fromUser),
+      updateScrollState: (id, isScrolledBack) =>
+        this.unseenTracker.updateScrollState(id, isScrolledBack),
+      setCachedSelection: (id, selection) => this.cachedSelections.set(id, selection),
+      clearDirectingState: (id) => this.agentStateController.clearDirectingState(id),
+      onUserInput: (id, data) => this.onUserInput(id, data),
     });
 
     this.wakeManager = new TerminalWakeManager({
@@ -1505,218 +1492,11 @@ class TerminalInstanceService {
   }
 
   hibernate(id: string): void {
-    const managed = this.instances.get(id);
-    if (
-      !managed ||
-      managed.isHibernated ||
-      (managed.kind === "agent" && managed.canonicalAgentState !== "completed")
-    )
-      return;
-
-    logDebug(`[TIS.hibernate] Hibernating terminal ${id}`);
-
-    if (managed.hibernationTimer) {
-      clearTimeout(managed.hibernationTimer);
-      managed.hibernationTimer = undefined;
-    }
-
-    this.restoreController.destroy(id);
-    this.dataBuffer.resetForTerminal(id);
-
-    // Release WebGL context first to avoid context leaks
-    this.webGLManager.onTerminalDestroyed(id);
-
-    // Dispose tier-managed addons
-    try {
-      managed.imageAddon?.dispose();
-    } catch {
-      /* ignore */
-    }
-    managed.imageAddon = null;
-    try {
-      managed.fileLinksDisposable?.dispose();
-    } catch {
-      /* ignore */
-    }
-    managed.fileLinksDisposable = null;
-    try {
-      managed.webLinksAddon?.dispose();
-    } catch {
-      /* ignore */
-    }
-    managed.webLinksAddon = null;
-
-    // Dispose terminal-bound listeners (keep IPC listeners at the beginning)
-    const terminalBoundListeners = managed.listeners.splice(managed.ipcListenerCount);
-    for (const unsub of terminalBoundListeners) {
-      try {
-        unsub();
-      } catch {
-        /* ignore — terminal already disposing */
-      }
-    }
-
-    // Dispose parser handler
-    managed.parserHandler?.dispose();
-    managed.parserHandler = undefined;
-
-    // Dispose last activity marker
-    managed.lastActivityMarker?.dispose();
-    managed.lastActivityMarker = undefined;
-
-    // Dispose terminal instance — this removes xterm's injected DOM elements
-    // from the hostElement but leaves the hostElement itself in the DOM
-    // so XtermAdapter's container ref stays valid for reattachment
-    managed.terminal.dispose();
-
-    managed.isHibernated = true;
-    managed.isOpened = false;
-    managed.keyHandlerInstalled = false;
-
-    // Clear resize state
-    this.resizeController.clearResizeJob(managed);
-    this.resizeController.clearSettledTimer(id);
+    this.hibernationManager.hibernate(id);
   }
 
   unhibernate(id: string): void {
-    const managed = this.instances.get(id);
-    if (!managed || !managed.isHibernated) return;
-
-    logDebug(`[TIS.unhibernate] Restoring terminal ${id}`);
-
-    // Create fresh Terminal with same options
-    const terminal = new Terminal(managed.terminal.options);
-    managed.terminal = terminal;
-
-    // Create fresh addons
-    const openLink = (url: string, event?: MouseEvent) => {
-      this.linkHandler.openLink(url, id, event);
-    };
-    const addons = setupTerminalAddons(
-      terminal,
-      () => (this.cwdProviders.get(id) ?? (() => ""))(),
-      (event, uri) => openLink(uri, event)
-    );
-    managed.fitAddon = addons.fitAddon;
-    managed.serializeAddon = addons.serializeAddon;
-    managed.searchAddon = addons.searchAddon;
-    managed.imageAddon = addons.imageAddon;
-    managed.fileLinksDisposable = addons.fileLinksDisposable;
-    managed.webLinksAddon = addons.webLinksAddon;
-
-    // Reuse existing hostElement — clear old xterm DOM nodes to prevent ghosting
-    const hostElement = managed.hostElement;
-    while (hostElement.firstChild) {
-      hostElement.removeChild(hostElement.firstChild);
-    }
-
-    // Re-create parser handler
-    managed.parserHandler = new TerminalParserHandler(managed, () => {
-      this.resizeController.applyDeferredResize(id);
-    });
-
-    // Re-register terminal-bound listeners (IPC listeners in managed.listeners survive)
-    const initialIsAltBuffer = terminal.buffer.active.type === "alternate";
-    managed.isAltBuffer = initialIsAltBuffer;
-
-    const bufferDisposable = terminal.buffer.onBufferChange(() => {
-      const newIsAltBuffer = terminal.buffer.active.type === "alternate";
-      if (newIsAltBuffer !== managed.isAltBuffer) {
-        managed.isAltBuffer = newIsAltBuffer;
-        this.handleBufferModeChange(id, newIsAltBuffer);
-      }
-    });
-    managed.listeners.push(() => bufferDisposable.dispose());
-
-    const oscDisposable = terminal.parser.registerOscHandler(11, () => {
-      if (managed.isAltBuffer) {
-        for (const callback of managed.altBufferListeners) {
-          try {
-            callback(true);
-          } catch (err) {
-            logError("Alt buffer callback error", err);
-          }
-        }
-      }
-      return false;
-    });
-    managed.listeners.push(() => oscDisposable.dispose());
-
-    const writeParsedDisposable = terminal.onWriteParsed(() => {
-      this.dataBuffer.notifyParsed(id);
-      if (managed && !managed.isUserScrolledBack && !managed.isAltBuffer) {
-        this.scrollToBottomSafe(managed);
-      }
-    });
-    managed.listeners.push(() => writeParsedDisposable.dispose());
-
-    const scrollDisposable = terminal.onScroll(() => {
-      const buffer = terminal.buffer.active;
-      const isAtBottom = buffer.viewportY >= buffer.baseY;
-      managed.latestWasAtBottom = isAtBottom;
-
-      managed._userScrollIntent = false;
-      if (managed._suppressScrollTracking) return;
-
-      if (isAtBottom) {
-        managed.isUserScrolledBack = false;
-        this.unseenTracker.clearUnseen(id, false);
-        if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
-          reduceScrollback(managed, SCROLLBACK_BACKGROUND);
-        }
-      } else {
-        managed.isUserScrolledBack = true;
-        this.unseenTracker.updateScrollState(id, true);
-      }
-    });
-    managed.listeners.push(() => scrollDisposable.dispose());
-
-    const SCROLL_KEYS = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"]);
-    const onWheel = () => {
-      managed._userScrollIntent = true;
-    };
-    const onKeydownScroll = (e: KeyboardEvent) => {
-      if (SCROLL_KEYS.has(e.key)) managed._userScrollIntent = true;
-    };
-    hostElement.addEventListener("wheel", onWheel, { passive: true });
-    hostElement.addEventListener("keydown", onKeydownScroll);
-    managed.listeners.push(() => {
-      hostElement.removeEventListener("wheel", onWheel);
-      hostElement.removeEventListener("keydown", onKeydownScroll);
-    });
-
-    const selectionDisposable = terminal.onSelectionChange(() => {
-      const sel = terminal.getSelection();
-      if (sel) {
-        this.cachedSelections.set(id, sel);
-      } else if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
-        reduceScrollback(managed, SCROLLBACK_BACKGROUND);
-      }
-    });
-    managed.listeners.push(() => selectionDisposable.dispose());
-
-    const inputDisposable = terminal.onData((data) => {
-      if (!managed.isInputLocked) {
-        if (isNonKeyboardInput(data)) {
-          if (data === "\x1b") {
-            this.agentStateController.clearDirectingState(id);
-          }
-        } else {
-          this.onUserInput(id, data);
-        }
-        terminalClient.write(id, data);
-      }
-    });
-    managed.listeners.push(() => inputDisposable.dispose());
-
-    // Reset restore state
-    managed.writeChain = Promise.resolve();
-    managed.restoreGeneration += 1;
-    managed.isSerializedRestoreInProgress = false;
-    managed.deferredOutput = [];
-
-    managed.isHibernated = false;
-    managed.isDetached = false;
+    this.hibernationManager.unhibernate(id);
   }
 
   destroy(id: string): void {
