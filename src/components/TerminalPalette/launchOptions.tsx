@@ -1,6 +1,6 @@
 import { SquareTerminal, Globe, Settings } from "lucide-react";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import type { TerminalType, TerminalKind } from "@/types";
+import type { TerminalType, PanelKind } from "@/types";
 import { AGENT_REGISTRY } from "@/config/agents";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { resolveAgentIcon } from "@/config/agentIcons";
@@ -8,7 +8,7 @@ import { resolveAgentIcon } from "@/config/agentIcons";
 export interface LaunchOption {
   id: string;
   type: TerminalType;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   label: string;
   description: string;
   icon: React.ReactNode;

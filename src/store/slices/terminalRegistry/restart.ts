@@ -1,4 +1,4 @@
-import type { TerminalLocation } from "@/types";
+import type { PanelLocation } from "@/types";
 import type { TerminalRegistryStoreApi, TerminalRegistrySlice } from "./types";
 import { terminalClient, agentSettingsClient, projectClient, systemClient } from "@/clients";
 import { generateAgentCommand, buildResumeCommand } from "@shared/types";
@@ -407,7 +407,7 @@ export const createRestartActions = (
     }
 
     // Terminal is not in a group - move it individually
-    let movedToLocation: TerminalLocation | null = null;
+    let movedToLocation: PanelLocation | null = null;
 
     set((state) => {
       const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
@@ -418,7 +418,7 @@ export const createRestartActions = (
           (t.location === "grid" || t.location === undefined)
       ).length;
 
-      const newLocation: TerminalLocation = targetGridCount >= maxCapacity ? "dock" : "grid";
+      const newLocation: PanelLocation = targetGridCount >= maxCapacity ? "dock" : "grid";
       movedToLocation = newLocation;
 
       const newTerminals = state.terminals.map((t) =>

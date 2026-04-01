@@ -1,4 +1,4 @@
-import type { TerminalKind, TerminalType, AgentState } from "@/types";
+import type { PanelKind, TerminalType, AgentState } from "@/types";
 import type { BrowserHistory } from "@shared/types/browser";
 import type { PanelExitBehavior } from "@shared/types/panel";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
@@ -6,7 +6,7 @@ import { generateAgentCommand, buildResumeCommand } from "@shared/types";
 import { logWarn } from "@/utils/logger";
 
 export interface AddTerminalArgs {
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: string;
   title?: string;
@@ -45,7 +45,7 @@ export interface AddTerminalArgs {
 
 export interface SavedTerminalData {
   id: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: string;
   title?: string;
@@ -73,7 +73,7 @@ export interface SavedTerminalData {
 
 interface BackendTerminalData {
   id: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: string;
   title?: string;
@@ -89,7 +89,7 @@ interface BackendTerminalData {
 
 interface ReconnectedTerminalData {
   id?: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: string;
   title?: string;
@@ -109,7 +109,7 @@ interface AgentSettingsData {
 
 export function inferAgentIdFromTitle(
   title: string | undefined,
-  kind: TerminalKind | undefined,
+  kind: PanelKind | undefined,
   existingAgentId: string | undefined,
   terminalId: string,
   logContext: string
@@ -142,7 +142,7 @@ export function resolveAgentId(
   return undefined;
 }
 
-export function inferKind(saved: SavedTerminalData): TerminalKind {
+export function inferKind(saved: SavedTerminalData): PanelKind {
   if (saved.kind) return saved.kind;
   if (saved.browserUrl !== undefined) return "browser";
   if (saved.notePath !== undefined || saved.noteId !== undefined) return "notes";
@@ -246,7 +246,7 @@ export function buildArgsForReconnectedFallback(
 
 export function buildArgsForRespawn(
   saved: SavedTerminalData,
-  kind: TerminalKind,
+  kind: PanelKind,
   projectRoot: string,
   agentSettings: AgentSettingsData | undefined,
   reconnectTimedOut: boolean,
@@ -320,7 +320,7 @@ export function buildArgsForRespawn(
 
 export function buildArgsForNonPtyRecreation(
   saved: SavedTerminalData,
-  kind: TerminalKind,
+  kind: PanelKind,
   projectRoot: string
 ): AddTerminalArgs {
   const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";

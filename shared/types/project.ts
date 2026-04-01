@@ -1,9 +1,9 @@
 import type { AgentId, AgentState } from "./agent.js";
 import type { BrowserHistory } from "./browser.js";
 import type {
-  TerminalKind,
+  PanelKind,
   TerminalType,
-  TerminalLocation,
+  PanelLocation,
   TabGroup,
   PanelExitBehavior,
 } from "./panel.js";
@@ -52,7 +52,7 @@ export interface TerminalSnapshot {
   /** Terminal ID */
   id: string;
   /** Terminal category */
-  kind?: TerminalKind;
+  kind?: PanelKind;
   /** Terminal type */
   type?: TerminalType;
   /** Agent ID when kind is an agent - enables extensibility */
@@ -64,7 +64,7 @@ export interface TerminalSnapshot {
   /** Associated worktree ID */
   worktreeId?: string;
   /** Location in the UI - grid or dock */
-  location: TerminalLocation;
+  location: PanelLocation;
   /** Command to execute after shell starts (e.g., 'claude --model sonnet-4' for AI agents) */
   command?: string;
   /** Current URL for browser/dev-preview panes */

@@ -8,7 +8,7 @@
  */
 
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
-import type { TerminalType, TerminalKind, TerminalFlowStatus } from "./panel.js";
+import type { TerminalType, PanelKind, TerminalFlowStatus } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
 
 export type { TerminalFlowStatus };
@@ -21,7 +21,7 @@ export interface PtyHostSpawnOptions {
   env?: Record<string, string>;
   cols: number;
   rows: number;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: AgentId;
   title?: string;
@@ -107,7 +107,7 @@ export interface PtyHostTerminalSnapshot {
   lastInputTime: number;
   lastOutputTime: number;
   lastCheckTime: number;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   worktreeId?: string;
   agentId?: AgentId;
@@ -236,7 +236,7 @@ export type PtyHostEvent =
 export interface PtyHostTerminalInfo {
   id: string;
   projectId?: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: AgentId;
   title?: string;

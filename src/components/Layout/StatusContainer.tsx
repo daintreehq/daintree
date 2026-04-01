@@ -10,10 +10,10 @@ import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import type { TerminalInstance } from "@/store/terminalStore";
-import type { TerminalLocation } from "@shared/types";
+import type { PanelLocation } from "@shared/types";
 import type { ComponentType } from "react";
 
-function getLocationIcon(location: TerminalLocation | undefined) {
+function getLocationIcon(location: PanelLocation | undefined) {
   if (location === "dock") return <PanelBottom className="w-3 h-3" />;
   return <MoveToGridIcon className="w-3 h-3" />;
 }

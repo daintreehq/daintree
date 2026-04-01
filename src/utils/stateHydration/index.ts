@@ -6,7 +6,7 @@ import { notify } from "@/lib/notify";
 import type {
   TerminalType,
   AgentState,
-  TerminalKind,
+  PanelKind,
   TerminalReconnectError,
   TabGroup,
 } from "@/types";
@@ -101,7 +101,7 @@ function scheduleScrollbackRestore(
 
 export interface HydrationOptions {
   addTerminal: (options: {
-    kind?: TerminalKind;
+    kind?: PanelKind;
     type?: TerminalType;
     agentId?: string;
     title?: string;

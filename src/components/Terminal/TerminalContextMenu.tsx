@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import type React from "react";
 import type { Terminal as XTermTerminal } from "@xterm/xterm";
-import { type TerminalLocation, type TerminalType } from "@/types";
+import { type PanelLocation, type TerminalType } from "@/types";
 import { useTerminalStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { useWorktrees } from "@/hooks/useWorktrees";
@@ -124,7 +124,7 @@ export function buildCreateNoteArgs(
 interface TerminalContextMenuProps {
   terminalId: string;
   children: React.ReactNode;
-  forceLocation?: TerminalLocation;
+  forceLocation?: PanelLocation;
 }
 
 /**
@@ -178,7 +178,7 @@ export function TerminalContextMenu({
 
   const isPaused = terminal?.flowStatus === "paused-backpressure";
 
-  const currentLocation: TerminalLocation = forceLocation ?? terminal?.location ?? "grid";
+  const currentLocation: PanelLocation = forceLocation ?? terminal?.location ?? "grid";
 
   const isMac = navigator.platform.toLowerCase().includes("mac");
   const modifierKey = isMac ? "⌘" : "Ctrl";

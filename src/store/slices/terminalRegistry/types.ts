@@ -3,7 +3,7 @@ import type {
   TerminalInstance as TerminalInstanceType,
   AgentState,
   TerminalType,
-  TerminalLocation,
+  PanelLocation,
   AgentStateChangeTrigger,
   TerminalFlowStatus,
   TerminalRuntimeStatus,
@@ -30,7 +30,7 @@ export interface AddTerminalOptions {
   cwd?: string;
   shell?: string;
   command?: string;
-  location?: TerminalLocation;
+  location?: PanelLocation;
   agentState?: AgentState;
   lastStateChange?: number;
   /** If provided, request a stable ID when spawning a new backend process */

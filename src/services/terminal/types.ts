@@ -4,7 +4,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { ImageAddon } from "@xterm/addon-image";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { TerminalRefreshTier, TerminalType, TerminalKind, AgentState } from "@/types";
+import { TerminalRefreshTier, TerminalType, PanelKind, AgentState } from "@/types";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
@@ -15,7 +15,7 @@ export type PostCompleteHook = (output: string) => void | Promise<void>;
 export interface ManagedTerminal {
   terminal: Terminal;
   type: TerminalType;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   agentId?: string;
   agentState?: AgentState;
   agentStateSubscribers: Set<AgentStateCallback>;

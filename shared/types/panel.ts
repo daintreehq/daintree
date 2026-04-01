@@ -20,11 +20,6 @@ export type BuiltInPanelKind = "terminal" | "agent" | "browser" | "notes" | "dev
 export type PanelKind = BuiltInPanelKind | (string & {});
 
 /**
- * @deprecated Use PanelKind instead. Kept for backward compatibility.
- */
-export type TerminalKind = PanelKind;
-
-/**
  * @deprecated Use PanelKind + agentId instead. This is kept for backward compatibility/migrations.
  */
 export type TerminalType = "terminal" | LegacyAgentType;
@@ -53,11 +48,6 @@ export interface TabGroup {
   /** Ordered list of panel IDs in this group (sorted by orderInGroup) */
   panelIds: string[];
 }
-
-/**
- * @deprecated Use PanelLocation instead. Kept for backward compatibility.
- */
-export type TerminalLocation = PanelLocation;
 
 /** Dock display mode - always expanded (kept as literal type for compatibility) */
 export type DockMode = "expanded";
@@ -175,7 +165,7 @@ interface BasePanelData {
   /** Display title for the panel tab */
   title: string;
   /** Location in the UI - grid (main view) or dock (minimized) */
-  location: TerminalLocation;
+  location: PanelLocation;
   /** ID of the worktree this panel is associated with */
   worktreeId?: string;
   /** Whether the panel pane is currently visible in the viewport */
@@ -350,7 +340,7 @@ export function isDevPreviewPanel(
 export interface TerminalInstance {
   id: string;
   worktreeId?: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: AgentId;
   title: string;
@@ -375,7 +365,7 @@ export interface TerminalInstance {
   activityType?: "interactive" | "background" | "idle";
   activityTimestamp?: number;
   lastCommand?: string;
-  location: TerminalLocation;
+  location: PanelLocation;
   command?: string;
   isVisible?: boolean;
   restartKey?: number;

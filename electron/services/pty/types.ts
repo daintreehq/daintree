@@ -2,7 +2,7 @@ import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/agent.js";
-import type { TerminalType, TerminalKind } from "../../../shared/types/panel.js";
+import type { TerminalType, PanelKind } from "../../../shared/types/panel.js";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
 
@@ -22,7 +22,7 @@ export interface TerminalPublicState {
   projectId?: string;
   cwd: string;
   shell: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: AgentId;
   title?: string;
@@ -114,7 +114,7 @@ export interface TerminalSnapshot {
   lastInputTime: number;
   lastOutputTime: number;
   lastCheckTime: number;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   worktreeId?: string;
   agentId?: AgentId;
