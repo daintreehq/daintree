@@ -363,6 +363,26 @@ describe("registerDemoHandlers", () => {
       const rowMtIdx = args.indexOf("-row-mt");
       expect(rowMtIdx).toBeGreaterThan(-1);
     });
+
+    it("uses frame-%06d.png input pattern matching capture output", async () => {
+      const { spawn: spawnMock } = await import("child_process");
+      const handler = getEncodeHandler();
+      const event = makeEvent();
+
+      const promise = handler(event, {
+        framesDir: "/tmp/frames",
+        outputPath: "/tmp/out.mp4",
+        preset: "youtube-1080p",
+      });
+
+      mockProc.emit("close", 0);
+      await promise;
+
+      const args = (spawnMock as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string[];
+      const inputIdx = args.indexOf("-i");
+      expect(inputIdx).toBeGreaterThan(-1);
+      expect(args[inputIdx + 1]).toContain("frame-%06d.png");
+    });
   });
 
   it("moveTo handler sends exec event with requestId and awaits done", async () => {

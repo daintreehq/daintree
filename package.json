@@ -53,6 +53,8 @@
     "test:e2e:full": "npx playwright test --project=full",
     "test:e2e:online": "npx playwright test --project=online",
     "test:e2e:nightly": "npx playwright test --project=nightly --workers=1",
+    "demo": "electron . --demo-mode",
+    "demo:record": "tsx demo/runner.ts",
     "perf:smoke": "tsx scripts/perf/run.ts --mode smoke",
     "perf:ci": "tsx scripts/perf/run.ts --mode ci",
     "perf:nightly": "tsx scripts/perf/run.ts --mode nightly",

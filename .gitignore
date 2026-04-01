@@ -52,6 +52,9 @@ keys/
 .env.*
 !.env.example
 
+# Demo recording output
+demo-output/
+
 # Cache
 .cache/
 *.tsbuildinfo
