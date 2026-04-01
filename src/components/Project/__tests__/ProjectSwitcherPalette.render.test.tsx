@@ -214,4 +214,29 @@ describe("ProjectSwitcherPalette status dot", () => {
     );
     expect(screen.getByLabelText("Agents waiting")).toBeTruthy();
   });
+
+  it("renders background dot for background projects", () => {
+    render(
+      <ProjectSwitcherPalette {...baseProps} results={[makeProject({ isBackground: true })]} />
+    );
+    expect(screen.getByLabelText("Running in background")).toBeTruthy();
+  });
+
+  it("renders process dot for projects with running processes", () => {
+    render(<ProjectSwitcherPalette {...baseProps} results={[makeProject({ processCount: 1 })]} />);
+    expect(screen.getByLabelText("Running in background")).toBeTruthy();
+  });
+});
+
+describe("ProjectSwitcherPalette secondary text edge cases", () => {
+  it("isMissing takes priority over active agents", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ isMissing: true, activeAgentCount: 2 })]}
+      />
+    );
+    expect(screen.getByText("Directory not found")).toBeTruthy();
+    expect(screen.queryByText("Agent working\u2026")).toBeNull();
+  });
 });
