@@ -36,7 +36,10 @@ export function FileDiffModal({
         { source: "user" }
       );
       if (requestRef.current !== requestId) return;
-      if (!result.ok) return;
+      if (!result.ok) {
+        setDiff("NO_CHANGES");
+        return;
+      }
       const diffResult = result.result as string;
       setDiff(diffResult || "NO_CHANGES");
     } catch {
