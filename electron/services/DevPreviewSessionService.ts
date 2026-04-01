@@ -616,11 +616,6 @@ export class DevPreviewSessionService {
 
     void normalizeNextjsDevCommand(trimmedCommand, session.cwd)
       .then((normalizedCommand) => {
-        if (normalizedCommand !== trimmedCommand) {
-          console.log(
-            `[DevPreviewSessionService] Next.js detected — using Turbopack for webview compatibility: "${normalizedCommand}"`
-          );
-        }
         submitCommand(normalizedCommand);
       })
       .catch(() => {
