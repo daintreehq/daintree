@@ -1,9 +1,10 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { rankProjectMatches } from "@/lib/projectSwitcherSearch";
 import { useProjectStore } from "@/store/projectStore";
+import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { notify } from "@/lib/notify";
-import type { Project, BulkProjectStatsEntry } from "@shared/types";
+import type { Project } from "@shared/types";
 import { projectClient } from "@/clients";
 
 export type ProjectSwitcherMode = "modal" | "dropdown";
@@ -66,14 +67,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const isOpen = mode === "modal" ? modalIsOpen : dropdownIsOpen;
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [bulkStats, setBulkStats] = useState<Map<string, BulkProjectStatsEntry>>(new Map());
   const [stopConfirmProjectId, setStopConfirmProjectId] = useState<string | null>(null);
   const [isStoppingProject, setIsStoppingProject] = useState(false);
   const [removeConfirmProject, setRemoveConfirmProject] = useState<SearchableProject | null>(null);
   const [isRemovingProject, setIsRemovingProject] = useState(false);
   const selectedProjectIdRef = useRef<string | null>(null);
-  const lastFetchRef = useRef(0);
-  const lastFetchIdsRef = useRef<string>("");
 
   const projects = useProjectStore((state) => state.projects);
   const currentProject = useProjectStore((state) => state.currentProject);
@@ -85,83 +83,16 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const closeActiveProject = useProjectStore((state) => state.closeActiveProject);
   const removeProject = useProjectStore((state) => state.removeProject);
   const locateProjectFn = useProjectStore((state) => state.locateProject);
-  const fetchStats = useCallback(
-    async (force = false) => {
-      if (projects.length === 0) return;
-
-      try {
-        const currentProjects = projects;
-        const projectIds = currentProjects.map((project) => project.id).join("|");
-        const now = Date.now();
-
-        if (!force) {
-          if (now - lastFetchRef.current < 5000 && projectIds === lastFetchIdsRef.current) {
-            return;
-          }
-        }
-
-        lastFetchRef.current = now;
-        lastFetchIdsRef.current = projectIds;
-
-        const ids = currentProjects.map((p) => p.id);
-        const result = await projectClient.getBulkStats(ids);
-
-        const newStats = new Map<string, BulkProjectStatsEntry>();
-        for (const [id, entry] of Object.entries(result)) {
-          newStats.set(id, entry);
-        }
-        setBulkStats(newStats);
-      } catch (error) {
-        console.error("[ProjectSwitcherPalette] Failed to fetch project stats:", error);
-      }
-    },
-    [projects]
-  );
+  const projectStats = useProjectStatsStore((state) => state.stats);
 
   useEffect(() => {
     if (!isOpen) return;
-
-    let cancelled = false;
-
-    const runFetch = async () => {
-      try {
-        await loadProjects();
-        if (cancelled) return;
-        await fetchStats(true);
-      } catch (error) {
-        if (!cancelled) {
-          console.error("[ProjectSwitcherPalette] Failed to load projects:", error);
-        }
-      }
-    };
-
-    void runFetch();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, loadProjects, fetchStats]);
-
-  useEffect(() => {
-    if (isOpen && projects.length > 0) {
-      void fetchStats();
-    }
-  }, [isOpen, projects, fetchStats]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    if (projects.length <= 1) return;
-
-    const id = setInterval(() => {
-      void fetchStats();
-    }, 10_000);
-
-    return () => clearInterval(id);
-  }, [isOpen, projects.length, fetchStats]);
+    void loadProjects();
+  }, [isOpen, loadProjects]);
 
   const searchableProjects = useMemo<SearchableProject[]>(() => {
     return projects.map((p) => {
-      const stats = bulkStats.get(p.id);
+      const stats = projectStats[p.id];
       const isActive = p.id === currentProject?.id;
       const isMissing = p.status === "missing";
       const hasProcesses = (stats?.processCount ?? 0) > 0;
@@ -186,7 +117,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         displayPath: p.path.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? p.path,
       };
     });
-  }, [projects, bulkStats, currentProject?.id]);
+  }, [projects, projectStats, currentProject?.id]);
 
   const backgroundWaitingCount = useMemo(
     () =>
@@ -400,21 +331,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
     try {
       await closeProject(stopConfirmProjectId, { killTerminals: true });
-
-      setBulkStats((prev) => {
-        const next = new Map(prev);
-        next.set(stopConfirmProjectId, {
-          processCount: 0,
-          terminalCount: 0,
-          estimatedMemoryMB: 0,
-          terminalTypes: {},
-          processIds: [],
-          activeAgentCount: 0,
-          waitingAgentCount: 0,
-        });
-        return next;
-      });
-
       setStopConfirmProjectId(null);
     } catch (error) {
       notify({

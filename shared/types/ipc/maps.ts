@@ -83,6 +83,7 @@ import type { EventRecord, EventFilterOptions } from "./events.js";
 import type {
   ProjectCloseResult,
   ProjectStats,
+  ProjectStatusMap,
   ProjectSwitchPayload,
   ProjectSwitchOutgoingState,
 } from "./project.js";
@@ -1821,6 +1822,7 @@ export interface IpcEventMap {
 
   // Project events
   "project:on-switch": ProjectSwitchPayload;
+  "project:stats-updated": ProjectStatusMap;
 
   // System events
   "system:wake": SystemWakePayload;

@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { projectClient, systemClient } from "@/clients";
+import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import type { ProcessMetricEntry, HeapStats, DiagnosticsInfo } from "@shared/types/ipc/system";
 import type { BulkProjectStatsEntry } from "@shared/types/ipc/project";
@@ -230,6 +231,8 @@ export function ProjectResourceBadge() {
   const trend = getTrendDirection(samplesRef.current);
   const projectIdsKey = useMemo(() => stats.projects.map((p) => p.id).join(","), [stats.projects]);
 
+  const projectStatusStats = useProjectStatsStore((state) => state.stats);
+
   const fetchStats = useCallback(async () => {
     try {
       const [projects, appMetrics] = await Promise.all([
@@ -237,12 +240,9 @@ export function ProjectResourceBadge() {
         systemClient.getAppMetrics(),
       ]);
 
-      const projectIds = projects.map((p: Project) => p.id);
-      const bulkStats = projectIds.length > 0 ? await projectClient.getBulkStats(projectIds) : {};
-
       let running = 0;
-      for (const id of projectIds) {
-        if (bulkStats[id]?.processCount > 0) running++;
+      for (const p of projects) {
+        if ((projectStatusStats[p.id]?.processCount ?? 0) > 0) running++;
       }
 
       samplesRef.current = [
@@ -259,7 +259,7 @@ export function ProjectResourceBadge() {
       console.error("[ProjectResourceBadge] Failed to fetch stats:", error);
       return null;
     }
-  }, []);
+  }, [projectStatusStats]);
 
   useEffect(() => {
     let cancelled = false;

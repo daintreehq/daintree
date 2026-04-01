@@ -79,6 +79,7 @@ import type { EventRecord, EventFilterOptions } from "./events.js";
 import type {
   ProjectCloseResult,
   ProjectStats,
+  ProjectStatusMap,
   BulkProjectStats,
   ProjectSwitchOutgoingState,
 } from "./project.js";
@@ -406,6 +407,7 @@ export interface ElectronAPI {
     reopen(projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project>;
     getStats(projectId: string): Promise<ProjectStats>;
     getBulkStats(projectIds: string[]): Promise<BulkProjectStats>;
+    onStatsUpdated(callback: (stats: ProjectStatusMap) => void): () => void;
     createFolder(parentPath: string, folderName: string): Promise<string>;
     initGit(directoryPath: string): Promise<void>;
     /** Initialize git repository with progress events */

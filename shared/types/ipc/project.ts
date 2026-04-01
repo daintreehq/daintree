@@ -58,3 +58,13 @@ export interface BulkProjectStatsEntry extends ProjectStats {
 
 /** Bulk project stats response keyed by project ID */
 export type BulkProjectStats = Record<string, BulkProjectStatsEntry>;
+
+/** Minimal per-project status entry for push-based updates */
+export interface ProjectStatusEntry {
+  activeAgentCount: number;
+  waitingAgentCount: number;
+  processCount: number;
+}
+
+/** Project status map pushed from main process, keyed by project ID */
+export type ProjectStatusMap = Record<string, ProjectStatusEntry>;

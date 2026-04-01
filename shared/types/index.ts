@@ -135,6 +135,8 @@ export type {
   ProjectStats,
   BulkProjectStatsEntry,
   BulkProjectStats,
+  ProjectStatusEntry,
+  ProjectStatusMap,
   // GitHub IPC types
   RepositoryStats,
   ProjectHealthData,
