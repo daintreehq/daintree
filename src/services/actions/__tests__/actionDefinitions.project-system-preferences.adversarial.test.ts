@@ -653,7 +653,7 @@ describe("preferences action hardening", () => {
       successArgs: { cachedProjectViews: 4 },
       failureArgs: { cachedProjectViews: 1 },
       read: () => useCachedProjectViewsStore.getState().cachedProjectViews,
-      initial: 2,
+      initial: 1,
       expected: 4,
       clientMock: mocks.terminalConfigClient.setCachedProjectViews,
     },
