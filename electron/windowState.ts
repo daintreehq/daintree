@@ -154,7 +154,11 @@ export function createWindowWithState(
     const visibleArea = Math.max(0, visibleWidth) * Math.max(0, visibleHeight);
     const totalArea = bounds.width * bounds.height;
 
-    if (visibleArea < totalArea * 0.5) {
+    if (
+      visibleArea < totalArea * 0.5 ||
+      bounds.width > workArea.width ||
+      bounds.height > workArea.height
+    ) {
       const clampedWidth = Math.round(Math.min(bounds.width, workArea.width));
       const clampedHeight = Math.round(Math.min(bounds.height, workArea.height));
       win.setSize(clampedWidth, clampedHeight);
