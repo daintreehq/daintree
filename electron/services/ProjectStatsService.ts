@@ -13,6 +13,7 @@ export class ProjectStatsService {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribeAgentState: (() => void) | null = null;
   private started = false;
+  private lastBroadcast: ProjectStatusMap = {};
 
   constructor(private ptyClient: PtyClient | undefined | null) {}
 
@@ -59,6 +60,25 @@ export class ProjectStatsService {
       this.debounceTimer = null;
       void this.computeAndBroadcast();
     }, DEBOUNCE_MS);
+  }
+
+  private shallowEqual(a: ProjectStatusMap, b: ProjectStatusMap): boolean {
+    const keysA = Object.keys(a);
+    const keysB = Object.keys(b);
+    if (keysA.length !== keysB.length) return false;
+    for (const key of keysA) {
+      const ea = a[key];
+      const eb = b[key];
+      if (
+        !eb ||
+        ea.processCount !== eb.processCount ||
+        ea.activeAgentCount !== eb.activeAgentCount ||
+        ea.waitingAgentCount !== eb.waitingAgentCount
+      ) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private async computeAndBroadcast(): Promise<void> {
@@ -112,7 +132,10 @@ export class ProjectStatsService {
         }
       }
 
-      typedBroadcast<"project:stats-updated">(CHANNELS.PROJECT_STATS_UPDATED, statusMap);
+      if (!this.shallowEqual(statusMap, this.lastBroadcast)) {
+        this.lastBroadcast = statusMap;
+        typedBroadcast<"project:stats-updated">(CHANNELS.PROJECT_STATS_UPDATED, statusMap);
+      }
     } catch (error) {
       console.error("[ProjectStatsService] Failed to compute stats:", error);
     }

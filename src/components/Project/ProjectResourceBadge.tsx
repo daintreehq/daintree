@@ -231,8 +231,6 @@ export function ProjectResourceBadge() {
   const trend = getTrendDirection(samplesRef.current);
   const projectIdsKey = useMemo(() => stats.projects.map((p) => p.id).join(","), [stats.projects]);
 
-  const projectStatusStats = useProjectStatsStore((state) => state.stats);
-
   const fetchStats = useCallback(async () => {
     try {
       const [projects, appMetrics] = await Promise.all([
@@ -240,9 +238,10 @@ export function ProjectResourceBadge() {
         systemClient.getAppMetrics(),
       ]);
 
+      const currentStats = useProjectStatsStore.getState().stats;
       let running = 0;
       for (const p of projects) {
-        if ((projectStatusStats[p.id]?.processCount ?? 0) > 0) running++;
+        if ((currentStats[p.id]?.processCount ?? 0) > 0) running++;
       }
 
       samplesRef.current = [
@@ -259,7 +258,7 @@ export function ProjectResourceBadge() {
       console.error("[ProjectResourceBadge] Failed to fetch stats:", error);
       return null;
     }
-  }, [projectStatusStats]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
