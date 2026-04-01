@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, session } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, session, webContents } from "electron";
 import os from "os";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { registerIpcHandlers, sendToRenderer } from "../ipc/handlers.js";
@@ -93,6 +93,8 @@ let stopProcessMemoryMonitor: (() => void) | null = null;
 let stopAppMetricsMonitor: (() => void) | null = null;
 let stopDiskSpaceMonitor: (() => void) | null = null;
 let resourceProfileService: ResourceProfileService | null = null;
+let worktreePortBroker: import("../services/WorktreePortBroker.js").WorktreePortBroker | null =
+  null;
 
 // Guard: IPC handlers are globally scoped (ipcMain.handle throws on re-registration)
 let ipcHandlersRegistered = false;
@@ -109,6 +111,11 @@ export function setPtyClientRef(v: PtyClient | null): void {
 }
 export function getWorkspaceClientRef(): WorkspaceClient | null {
   return workspaceClient;
+}
+export function getWorktreePortBrokerRef():
+  | import("../services/WorktreePortBroker.js").WorktreePortBroker
+  | null {
+  return worktreePortBroker;
 }
 export function getCliAvailabilityServiceRef(): CliAvailabilityService | null {
   return cliAvailabilityService;
@@ -528,11 +535,41 @@ export async function setupWindowServices(
       showCrashDialog: false,
     });
 
+    // Create WorktreePortBroker alongside WorkspaceClient
+    if (!worktreePortBroker) {
+      const { WorktreePortBroker } = await import("../services/WorktreePortBroker.js");
+      worktreePortBroker = new WorktreePortBroker();
+    }
+
     handlerDeps.worktreeService = workspaceClient;
+    handlerDeps.worktreePortBroker = worktreePortBroker ?? undefined;
 
     workspaceClient.on("host-crash", (code: number) => {
       console.error(`[MAIN] Workspace Host crashed with code ${code}`);
     });
+
+    // Re-broker worktree ports when a workspace host restarts
+    workspaceClient.on(
+      "host-restarted",
+      ({
+        projectPath,
+        host,
+      }: {
+        projectPath: string;
+        host: import("../services/WorkspaceHostProcess.js").WorkspaceHostProcess;
+      }) => {
+        if (!worktreePortBroker) return;
+        const wcIds = worktreePortBroker.closePortsForHost(projectPath);
+        if (wcIds.length > 0) {
+          worktreePortBroker.reBrokerForHost(
+            host,
+            (wcId: number) => webContents.fromId(wcId) ?? undefined,
+            wcIds
+          );
+          console.log(`[MAIN] Re-brokered ${wcIds.length} worktree port(s) after host restart`);
+        }
+      }
+    );
   }
 
   const { armRestoreQuota } = await import("../ipc/utils.js");
@@ -554,6 +591,14 @@ export async function setupWindowServices(
     // Refresh workspace direct port on reload (preload context is reset)
     if (workspaceClient) {
       workspaceClient.attachDirectPort(win.id, appWc);
+
+      // Re-broker worktree port for initial view reload
+      if (worktreePortBroker) {
+        const host = workspaceClient.getHostForWindow(win.id);
+        if (host) {
+          worktreePortBroker.brokerPort(host, appWc);
+        }
+      }
     }
     flushPendingErrors();
     const diskStatus = getCurrentDiskSpaceStatus();
@@ -683,6 +728,13 @@ export async function setupWindowServices(
       if (directPortTarget && !directPortTarget.isDestroyed()) {
         workspaceClient.attachDirectPort(win.id, directPortTarget);
         console.log("[MAIN] Workspace direct port attached");
+
+        // Broker new worktree port (Phase 1)
+        const host = workspaceClient.getHostForProject(projectPathForWorktrees);
+        if (host && worktreePortBroker) {
+          worktreePortBroker.brokerPort(host, directPortTarget);
+          console.log("[MAIN] Worktree port brokered");
+        }
       }
     } catch (error) {
       console.error("[MAIN] Failed to load worktrees:", error);
@@ -946,6 +998,8 @@ export async function setupWindowServices(
       resourceProfileService = null;
     }
 
+    if (worktreePortBroker) worktreePortBroker.dispose();
+    worktreePortBroker = null;
     if (workspaceClient) workspaceClient.dispose();
     workspaceClient = null;
     disposeWorkspaceClient();

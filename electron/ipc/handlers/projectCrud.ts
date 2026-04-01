@@ -202,6 +202,12 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
             // potential host recreation (CLEANUP_GRACE_MS expiry).
             if (!view.webContents.isDestroyed()) {
               deps.worktreeService.attachDirectPort(windowId, view.webContents);
+
+              // Broker new worktree port (Phase 1)
+              const host = deps.worktreeService.getHostForProject(project.path);
+              if (host && deps.worktreePortBroker) {
+                deps.worktreePortBroker.brokerPort(host, view.webContents);
+              }
             }
           } catch (err) {
             console.error("[ProjectSwitch] Failed to load worktrees:", err);
@@ -468,6 +474,12 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
 
             if (!view.webContents.isDestroyed()) {
               deps.worktreeService.attachDirectPort(windowId, view.webContents);
+
+              // Broker new worktree port (Phase 1)
+              const host = deps.worktreeService.getHostForProject(project.path);
+              if (host && deps.worktreePortBroker) {
+                deps.worktreePortBroker.brokerPort(host, view.webContents);
+              }
             }
           } catch (err) {
             console.error("[ProjectReopen] Failed to load worktrees:", err);

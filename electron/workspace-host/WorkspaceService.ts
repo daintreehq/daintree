@@ -434,6 +434,14 @@ export class WorkspaceService {
     this.sendEvent({ type: "all-states", requestId, states });
   }
 
+  getSnapshotsSync(): WorktreeSnapshot[] {
+    const states: WorktreeSnapshot[] = [];
+    for (const monitor of this.monitors.values()) {
+      states.push(monitor.getSnapshot());
+    }
+    return states;
+  }
+
   getMonitor(requestId: string, worktreeId: string): void {
     const monitor = this.monitors.get(worktreeId);
     if (!monitor) {
