@@ -33,6 +33,7 @@ import { logDebug, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
+import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
 import { isNonKeyboardInput } from "./inputUtils";
 
 export { isNonKeyboardInput } from "./inputUtils";
@@ -1305,6 +1306,28 @@ class TerminalInstanceService {
     return () => {
       managed.agentStateSubscribers.delete(callback);
     };
+  }
+
+  captureBufferText(id: string, maxChars: number = 20000): string {
+    const managed = this.instances.get(id);
+    if (!managed || managed.isHibernated) return "";
+
+    const buf = managed.terminal.buffer.active;
+    if (buf.length === 0) return "";
+
+    const lines: string[] = [];
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+
+    let text = stripAnsiAndOscCodes(lines.join("\n"));
+
+    if (text.length > maxChars) {
+      text = text.slice(-maxChars);
+    }
+
+    return text;
   }
 
   registerPostCompleteHook(id: string, callback: PostCompleteHook): () => void {

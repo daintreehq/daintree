@@ -2,6 +2,7 @@ import type { PanelLocation } from "@/types";
 import type { TerminalRegistryStoreApi, TerminalRegistrySlice } from "./types";
 import { terminalClient, agentSettingsClient, projectClient, systemClient } from "@/clients";
 import { generateAgentCommand, buildResumeCommand } from "@shared/types";
+import type { AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { validateTerminalConfig } from "@/utils/terminalValidation";
@@ -25,6 +26,41 @@ async function resolveProjectStore() {
 
 type Set = TerminalRegistryStoreApi["setState"];
 type Get = TerminalRegistryStoreApi["getState"];
+
+const INJECTION_TIMEOUT_MS = 30_000;
+
+function scheduleHistoryInjection(id: string, history: string, worktreePath: string): void {
+  const prompt = [
+    "Here is the conversation history from your previous session in a different worktree:\n",
+    "<previous-session-history>",
+    history,
+    "</previous-session-history>\n",
+    `You have been moved to a new git worktree at ${worktreePath}. Continue where you left off.`,
+  ].join("\n");
+
+  let injected = false;
+
+  const inject = () => {
+    if (injected) return;
+    injected = true;
+    terminalClient.submit(id, prompt).catch((err) => {
+      console.warn("[TerminalStore] Failed to inject history prompt:", err);
+    });
+  };
+
+  const timeout = setTimeout(() => {
+    unsub();
+    inject();
+  }, INJECTION_TIMEOUT_MS);
+
+  const unsub = terminalInstanceService.addAgentStateListener(id, (state: AgentState) => {
+    if (state === "idle" || state === "waiting") {
+      clearTimeout(timeout);
+      unsub();
+      inject();
+    }
+  });
+}
 
 export const createRestartActions = (
   set: Set,
@@ -457,6 +493,15 @@ export const createRestartActions = (
     if (!terminal || terminal.location === "trash") return;
     if (terminal.isRestarting) return;
 
+    // Determine if this is an agent terminal before any async work
+    const effectiveAgentId =
+      terminal.agentId ??
+      (terminal.type && isRegisteredAgent(terminal.type) ? terminal.type : undefined);
+    const isAgent = !!effectiveAgentId;
+
+    // Capture the terminal buffer BEFORE any teardown (xterm instance is still alive)
+    const capturedHistory = isAgent ? terminalInstanceService.captureBufferText(id, 20000) : "";
+
     void import("@/store/worktreeStore")
       .then(({ useWorktreeSelectionStore }) => {
         useWorktreeSelectionStore.getState().openCreateDialog(null, {
@@ -468,8 +513,8 @@ export const createRestartActions = (
               const newWorktree = worktrees.find((w) => w.id === worktreeId);
               newCwd = newWorktree?.path ?? terminal.cwd;
 
-              markTerminalRestarting(id);
-
+              // Update cwd, worktreeId, and clear agentSessionId so restartTerminal
+              // spawns fresh instead of attempting a broken session resume
               set((state) => ({
                 terminals: state.terminals.map((t) =>
                   t.id === id
@@ -477,34 +522,21 @@ export const createRestartActions = (
                         ...t,
                         cwd: newCwd,
                         worktreeId,
-                        isRestarting: true,
+                        agentSessionId: undefined,
                         restartError: undefined,
                       }
                     : t
                 ),
               }));
 
-              const sessionId = await terminalClient.gracefulKill(id);
-
-              if (sessionId) {
-                set((state) => ({
-                  terminals: state.terminals.map((t) =>
-                    t.id === id ? { ...t, agentSessionId: sessionId } : t
-                  ),
-                }));
-              }
-
-              unmarkTerminalRestarting(id);
-              set((state) => ({
-                terminals: state.terminals.map((t) =>
-                  t.id === id ? { ...t, isRestarting: false } : t
-                ),
-              }));
-
               await get().restartTerminal(id);
+
+              // After restart, inject captured history as a first prompt for agent terminals
+              if (isAgent && capturedHistory.length > 0) {
+                scheduleHistoryInjection(id, capturedHistory, newCwd);
+              }
             } catch (err) {
               console.error("[TerminalStore] moveToNewWorktreeAndTransfer failed:", err);
-              unmarkTerminalRestarting(id);
               set((state) => ({
                 terminals: state.terminals.map((t) =>
                   t.id === id
