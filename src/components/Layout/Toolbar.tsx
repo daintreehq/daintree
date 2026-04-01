@@ -1,16 +1,6 @@
-import {
-  Suspense,
-  lazy,
-  useRef,
-  useState,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useCallback,
-} from "react";
+import { useRef, useState, useEffect, useLayoutEffect, useMemo, useCallback } from "react";
 import type React from "react";
 import { Button } from "@/components/ui/button";
-import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import {
   SlidersHorizontal,
   SquareTerminal,
@@ -18,8 +8,6 @@ import {
   GitCommit,
   GitPullRequest,
   CircleDot,
-  PanelRightOpen,
-  PanelRightClose,
   PanelLeftOpen,
   PanelLeftClose,
   Check,
@@ -35,21 +23,8 @@ import { Spinner } from "@/components/ui/Spinner";
 import { CopyTreeIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
-const LazyGitHubResourceList = lazy(() =>
-  import("@/components/GitHub/GitHubResourceList").then((m) => ({
-    default: m.GitHubResourceList,
-  }))
-);
-const LazyCommitList = lazy(() =>
-  import("@/components/GitHub/CommitList").then((m) => ({ default: m.CommitList }))
-);
-import {
-  GitHubResourceListSkeleton,
-  CommitListSkeleton,
-} from "@/components/GitHub/GitHubDropdownSkeletons";
 import { AgentButton } from "./AgentButton";
 import { AgentSetupButton } from "./AgentSetupButton";
-import { GitHubStatusIndicator, type GitHubStatusIndicatorStatus } from "./GitHubStatusIndicator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -64,37 +39,25 @@ import { useKeybindingDisplay } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useProjectStore } from "@/store/projectStore";
-import {
-  usePortalStore,
-  usePreferencesStore,
-  useToolbarPreferencesStore,
-  useVoiceRecordingStore,
-  usePaletteStore,
-} from "@/store";
+import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
+import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import type { ToolbarButtonId, AnyToolbarButtonId } from "@/../../shared/types/toolbar";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { Puzzle } from "lucide-react";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
-import { useGitHubFilterStore } from "@/store/githubFilterStore";
-import { useRepositoryStats } from "@/hooks/useRepositoryStats";
 import type { CliAvailability, AgentSettings } from "@shared/types";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { ProjectSwitcherPalette } from "@/components/Project/ProjectSwitcherPalette";
-import { NotificationCenter } from "@/components/Notifications/NotificationCenter";
-import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
-import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { useUIStore } from "@/store/uiStore";
-import { useShallow } from "zustand/react/shallow";
+import { GitHubStatsToolbarButton, type GitHubStatsHandle } from "./GitHubStatsToolbarButton";
+import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
+import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
+import { ToolbarSettingsButton } from "./ToolbarSettingsButton";
+import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
+import { ToolbarPortalButton } from "./ToolbarPortalButton";
 
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
@@ -151,14 +114,7 @@ export function Toolbar({
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
   const projectSwitcher = projectSwitcherPalette;
-  const {
-    stats,
-    loading: statsLoading,
-    error: statsError,
-    refresh: refreshStats,
-    isStale,
-    lastUpdated,
-  } = useRepositoryStats();
+
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const activeWorktree = useWorktreeStore((state) =>
     activeWorktreeId ? state.worktrees.get(activeWorktreeId) : null
@@ -177,37 +133,16 @@ export function Toolbar({
     return cleanup;
   }, [loadProjects, getCurrentProject]);
 
-  const portalOpen = usePortalStore((state) => state.isOpen);
-  const togglePortal = usePortalStore((state) => state.toggle);
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
+  const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
 
-  const [issuesOpen, setIssuesOpen] = useState(false);
-  const [prsOpen, setPrsOpen] = useState(false);
-  const [commitsOpen, setCommitsOpen] = useState(false);
-  const setIssueSearchQuery = useGitHubFilterStore((s) => s.setIssueSearchQuery);
-  const setPrSearchQuery = useGitHubFilterStore((s) => s.setPrSearchQuery);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [treeCopied, setTreeCopied] = useState(false);
   const [isCopyingTree, setIsCopyingTree] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string>("");
-  const issuesButtonRef = useRef<HTMLButtonElement>(null);
-  const prsButtonRef = useRef<HTMLButtonElement>(null);
-  const commitsButtonRef = useRef<HTMLButtonElement>(null);
   const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { notificationCenterOpen, toggleNotificationCenter, closeNotificationCenter } = useUIStore(
-    useShallow((s) => ({
-      notificationCenterOpen: s.notificationCenterOpen,
-      toggleNotificationCenter: s.toggleNotificationCenter,
-      closeNotificationCenter: s.closeNotificationCenter,
-    }))
-  );
-  const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
-  const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
-  const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
-  useEffect(() => {
-    if (!notificationsEnabled && notificationCenterOpen) closeNotificationCenter();
-  }, [notificationsEnabled, notificationCenterOpen, closeNotificationCenter]);
+
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
       state.activeTarget !== null &&
@@ -215,31 +150,16 @@ export function Toolbar({
         state.status === "recording" ||
         state.status === "finishing")
   );
-  const [statsJustUpdated, setStatsJustUpdated] = useState(false);
-  const prevLastUpdatedRef = useRef<number | null>(null);
+
   const toolbarRef = useRef<HTMLDivElement>(null);
   const leftGroupRef = useRef<HTMLDivElement>(null);
   const rightGroupRef = useRef<HTMLDivElement>(null);
   const activeToolbarIndexRef = useRef<number>(0);
+  const githubStatsRef = useRef<GitHubStatsHandle>(null);
 
   const { handleCopyTree } = useWorktreeActions();
-  const terminalShortcut = useKeybindingDisplay("agent.terminal");
-  const browserShortcut = useKeybindingDisplay("agent.browser");
-  const panelPaletteShortcut = useKeybindingDisplay("panel.palette");
   const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
-  const diagnosticsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
-  const portalShortcut = useKeybindingDisplay("panel.togglePortal");
   const notesShortcut = useKeybindingDisplay("notes.openPalette");
-  const settingsShortcut = useKeybindingDisplay("app.settings");
-  const panelPaletteOpen = usePaletteStore((state) => state.activePaletteId === "panel");
-
-  const handleTogglePanelPalette = useCallback(() => {
-    if (usePaletteStore.getState().activePaletteId === "panel") {
-      usePaletteStore.getState().closePalette("panel");
-    } else {
-      void actionService.dispatch("panel.palette", undefined, { source: "user" });
-    }
-  }, []);
 
   const handleOpenProjectSettings = useCallback(() => {
     projectSwitcher.close();
@@ -277,25 +197,6 @@ export function Toolbar({
     [projectSwitcher]
   );
 
-  const getTimeSinceUpdate = useCallback((timestamp: number | null): string => {
-    if (timestamp == null || !Number.isFinite(timestamp) || timestamp <= 0) {
-      return "unknown";
-    }
-
-    const seconds = Math.floor((Date.now() - timestamp) / 1000);
-    if (seconds < 0) return "just now";
-    if (seconds < 60) return "just now";
-
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-
-    const days = Math.floor(hours / 24);
-    return `${days}d ago`;
-  }, []);
-
   useEffect(() => {
     return window.electron.window.onFullscreenChange(setIsFullscreen);
   }, []);
@@ -306,30 +207,6 @@ export function Toolbar({
         clearTimeout(treeCopyTimeoutRef.current);
       }
     };
-  }, []);
-
-  useEffect(() => {
-    if (statsLoading || statsError) {
-      setStatsJustUpdated(false);
-    } else if (
-      lastUpdated != null &&
-      prevLastUpdatedRef.current != null &&
-      lastUpdated > prevLastUpdatedRef.current
-    ) {
-      setStatsJustUpdated(true);
-    }
-    prevLastUpdatedRef.current = lastUpdated;
-  }, [lastUpdated, statsLoading, statsError]);
-
-  const getGitHubIndicatorStatus = useCallback((): GitHubStatusIndicatorStatus => {
-    if (statsLoading) return "loading";
-    if (statsError) return "error";
-    if (statsJustUpdated) return "success";
-    return "idle";
-  }, [statsLoading, statsError, statsJustUpdated]);
-
-  const handleGitHubStatusTransitionEnd = useCallback(() => {
-    setStatsJustUpdated(false);
   }, []);
 
   const handleCopyTreeClick = useCallback(async () => {
@@ -358,18 +235,6 @@ export function Toolbar({
       setIsCopyingTree(false);
     }
   }, [isCopyingTree, activeWorktree, handleCopyTree]);
-
-  const settingsContextMenuTabs = useMemo(
-    () => [
-      { tab: "general", label: "General" },
-      { tab: "agents", label: "Agents" },
-      { tab: "terminal", label: "Terminal" },
-      { tab: "keyboard", label: "Keyboard" },
-      { tab: "notifications", label: "Notifications" },
-      { tab: "portal", label: "Portal" },
-    ],
-    []
-  );
 
   const getToolbarItems = useCallback(
     () =>
@@ -546,74 +411,34 @@ export function Toolbar({
       },
       terminal: {
         render: () => (
-          <TooltipProvider key="terminal">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={() => onLaunchAgent("terminal")}
-                  className={toolbarIconButtonClass}
-                  aria-label="Open Terminal"
-                >
-                  <SquareTerminal />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Open Terminal", terminalShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <ToolbarLauncherButton
+            key="terminal"
+            type="terminal"
+            onLaunchAgent={onLaunchAgent}
+            data-toolbar-item=""
+          />
         ),
         isAvailable: true,
       },
       browser: {
         render: () => (
-          <TooltipProvider key="browser">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={() => onLaunchAgent("browser")}
-                  className={toolbarIconButtonClass}
-                  aria-label="Open Browser"
-                >
-                  <Globe />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Open Browser", browserShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <ToolbarLauncherButton
+            key="browser"
+            type="browser"
+            onLaunchAgent={onLaunchAgent}
+            data-toolbar-item=""
+          />
         ),
         isAvailable: true,
       },
       "panel-palette": {
         render: () => (
-          <TooltipProvider key="panel-palette">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={handleTogglePanelPalette}
-                  className={toolbarIconButtonClass}
-                  aria-label={panelPaletteOpen ? "Close panel palette" : "Open panel palette"}
-                  aria-pressed={panelPaletteOpen}
-                >
-                  <LayoutGrid />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Panel Palette", panelPaletteShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <ToolbarLauncherButton
+            key="panel-palette"
+            type="panel-palette"
+            onLaunchAgent={onLaunchAgent}
+            data-toolbar-item=""
+          />
         ),
         isAvailable: true,
       },
@@ -622,255 +447,19 @@ export function Toolbar({
         isAvailable: hasActiveVoiceRecording,
       },
       "github-stats": {
-        render: () =>
-          currentProject ? (
-            <div
-              key="github-stats"
-              className="toolbar-stats relative mr-2 flex h-8 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,0.5rem)] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))]"
-              style={{
-                ["--toolbar-stats-divider" as string]:
-                  "var(--toolbar-stats-divider,var(--theme-border-subtle))",
-              }}
-            >
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      ref={issuesButtonRef}
-                      variant="ghost"
-                      data-toolbar-item=""
-                      onClick={() => {
-                        setPrsOpen(false);
-                        setPrSearchQuery("");
-                        setCommitsOpen(false);
-                        const willOpen = !issuesOpen;
-                        setIssuesOpen(willOpen);
-                        if (!willOpen) setIssueSearchQuery("");
-                        if (willOpen) refreshStats({ force: true });
-                      }}
-                      className={cn(
-                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
-                        stats?.issueCount === 0 && "opacity-50",
-                        isStale && "opacity-60",
-                        issuesOpen &&
-                          "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-github-open/20"
-                      )}
-                      aria-label={`${stats?.issueCount ?? "\u2014"} open issues${isStale ? " (cached)" : ""}`}
-                    >
-                      <CircleDot className="h-4 w-4 text-github-open" />
-                      <span className="text-xs font-medium tabular-nums">
-                        {stats?.issueCount ?? "\u2014"}
-                      </span>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {isStale
-                      ? `${stats?.issueCount ?? "\u2014"} open issues (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
-                      : "Browse GitHub Issues"}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <FixedDropdown
-                open={issuesOpen}
-                onOpenChange={(open) => {
-                  setIssuesOpen(open);
-                  if (!open) {
-                    setIssueSearchQuery("");
-                    issuesButtonRef.current?.focus();
-                  }
-                }}
-                anchorRef={issuesButtonRef}
-                className="p-0 w-[450px]"
-                persistThroughChildOverlays
-              >
-                <Suspense
-                  fallback={
-                    <GitHubResourceListSkeleton count={stats?.issueCount} immediate type="issue" />
-                  }
-                >
-                  <LazyGitHubResourceList
-                    type="issue"
-                    projectPath={currentProject.path}
-                    onClose={() => {
-                      setIssuesOpen(false);
-                      setIssueSearchQuery("");
-                      issuesButtonRef.current?.focus();
-                    }}
-                    initialCount={stats?.issueCount}
-                  />
-                </Suspense>
-              </FixedDropdown>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      ref={prsButtonRef}
-                      variant="ghost"
-                      data-toolbar-item=""
-                      onClick={() => {
-                        setIssuesOpen(false);
-                        setIssueSearchQuery("");
-                        setCommitsOpen(false);
-                        const willOpen = !prsOpen;
-                        setPrsOpen(willOpen);
-                        if (!willOpen) setPrSearchQuery("");
-                        if (willOpen) refreshStats({ force: true });
-                      }}
-                      className={cn(
-                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
-                        stats?.prCount === 0 && "opacity-50",
-                        isStale && "opacity-60",
-                        prsOpen &&
-                          "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-github-merged/20"
-                      )}
-                      aria-label={`${stats?.prCount ?? "\u2014"} open pull requests${isStale ? " (cached)" : ""}`}
-                    >
-                      <GitPullRequest className="h-4 w-4 text-github-merged" />
-                      <span className="text-xs font-medium tabular-nums">
-                        {stats?.prCount ?? "\u2014"}
-                      </span>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {isStale
-                      ? `${stats?.prCount ?? "\u2014"} open PRs (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
-                      : "Browse GitHub Pull Requests"}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <FixedDropdown
-                open={prsOpen}
-                onOpenChange={(open) => {
-                  setPrsOpen(open);
-                  if (!open) {
-                    setPrSearchQuery("");
-                    prsButtonRef.current?.focus();
-                  }
-                }}
-                anchorRef={prsButtonRef}
-                className="p-0 w-[450px]"
-              >
-                <Suspense
-                  fallback={
-                    <GitHubResourceListSkeleton count={stats?.prCount} immediate type="pr" />
-                  }
-                >
-                  <LazyGitHubResourceList
-                    type="pr"
-                    projectPath={currentProject.path}
-                    onClose={() => {
-                      setPrsOpen(false);
-                      setPrSearchQuery("");
-                      prsButtonRef.current?.focus();
-                    }}
-                    initialCount={stats?.prCount}
-                  />
-                </Suspense>
-              </FixedDropdown>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      ref={commitsButtonRef}
-                      variant="ghost"
-                      data-toolbar-item=""
-                      onClick={() => {
-                        setIssuesOpen(false);
-                        setIssueSearchQuery("");
-                        setPrsOpen(false);
-                        setPrSearchQuery("");
-                        setCommitsOpen(!commitsOpen);
-                      }}
-                      className={cn(
-                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
-                        stats?.commitCount === 0 && "opacity-50",
-                        commitsOpen &&
-                          "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-border-strong"
-                      )}
-                      aria-label={`${stats?.commitCount ?? "\u2014"} commits`}
-                    >
-                      <GitCommit className="h-4 w-4" />
-                      <span className="text-xs font-medium tabular-nums">
-                        {stats?.commitCount ?? "\u2014"}
-                      </span>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Browse Git Commits</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <FixedDropdown
-                open={commitsOpen}
-                onOpenChange={(open) => {
-                  setCommitsOpen(open);
-                  if (!open) commitsButtonRef.current?.focus();
-                }}
-                anchorRef={commitsButtonRef}
-                className="p-0 w-[450px]"
-              >
-                <Suspense fallback={<CommitListSkeleton count={stats?.commitCount} immediate />}>
-                  <LazyCommitList
-                    projectPath={activeWorktree?.path ?? currentProject.path}
-                    branch={activeWorktree?.branch}
-                    onClose={() => {
-                      setCommitsOpen(false);
-                      commitsButtonRef.current?.focus();
-                    }}
-                    initialCount={stats?.commitCount}
-                  />
-                </Suspense>
-              </FixedDropdown>
-              <GitHubStatusIndicator
-                status={getGitHubIndicatorStatus()}
-                error={statsError ?? undefined}
-                onTransitionEnd={handleGitHubStatusTransitionEnd}
-              />
-            </div>
-          ) : null,
+        render: () => (
+          <GitHubStatsToolbarButton
+            key="github-stats"
+            ref={githubStatsRef}
+            currentProject={currentProject}
+            data-toolbar-item=""
+          />
+        ),
         isAvailable: !!currentProject,
       },
       "notification-center": {
         render: () => (
-          <div key="notification-center" className="relative">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    ref={notificationCenterButtonRef}
-                    variant="ghost"
-                    size="icon"
-                    data-toolbar-item=""
-                    onClick={toggleNotificationCenter}
-                    className={toolbarIconButtonClass}
-                    aria-label={
-                      notificationUnreadCount > 0
-                        ? `Notifications — ${notificationUnreadCount} unread`
-                        : "Notifications"
-                    }
-                    aria-expanded={notificationCenterOpen}
-                    aria-haspopup="dialog"
-                  >
-                    <Bell />
-                    {notificationUnreadCount > 0 && (
-                      <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-canopy-accent text-[9px] font-bold tabular-nums text-canopy-bg px-0.5 leading-none">
-                        {notificationUnreadCount > 99 ? "99+" : notificationUnreadCount}
-                      </span>
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Notifications</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            <FixedDropdown
-              open={notificationCenterOpen}
-              onOpenChange={(open) => {
-                if (!open) closeNotificationCenter();
-              }}
-              anchorRef={notificationCenterButtonRef}
-              className="p-0"
-            >
-              <NotificationCenter open={notificationCenterOpen} onClose={closeNotificationCenter} />
-            </FixedDropdown>
-          </div>
+          <NotificationCenterToolbarButton key="notification-center" data-toolbar-item="" />
         ),
         isAvailable: notificationsEnabled,
       },
@@ -940,133 +529,28 @@ export function Toolbar({
       },
       settings: {
         render: () => (
-          <ContextMenu key="settings">
-            <ContextMenuTrigger asChild>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      data-toolbar-item=""
-                      onClick={onSettings}
-                      onPointerEnter={onPreloadSettings}
-                      className={toolbarIconButtonClass}
-                      aria-label="Open settings"
-                    >
-                      <SlidersHorizontal />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {createTooltipWithShortcut("Open Settings", settingsShortcut)}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </ContextMenuTrigger>
-            <ContextMenuContent>
-              {settingsContextMenuTabs.map(({ tab, label }) => (
-                <ContextMenuItem
-                  key={tab}
-                  onSelect={() =>
-                    void actionService.dispatch(
-                      "app.settings.openTab",
-                      { tab },
-                      { source: "context-menu" }
-                    )
-                  }
-                >
-                  {label}
-                </ContextMenuItem>
-              ))}
-              <ContextMenuSeparator />
-              <ContextMenuItem
-                onSelect={() =>
-                  void actionService.dispatch(
-                    "app.settings.openTab",
-                    { tab: "toolbar" },
-                    { source: "context-menu" }
-                  )
-                }
-              >
-                Customize Toolbar…
-              </ContextMenuItem>
-              <ContextMenuItem
-                onSelect={() =>
-                  void actionService.dispatch(
-                    "app.settings.openTab",
-                    { tab: "troubleshooting" },
-                    { source: "context-menu" }
-                  )
-                }
-              >
-                Troubleshooting
-              </ContextMenuItem>
-            </ContextMenuContent>
-          </ContextMenu>
+          <ToolbarSettingsButton
+            key="settings"
+            onSettings={onSettings}
+            onPreloadSettings={onPreloadSettings}
+            data-toolbar-item=""
+          />
         ),
         isAvailable: true,
       },
       problems: {
         render: () => (
-          <TooltipProvider key="problems">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={onToggleProblems}
-                  className={cn(
-                    toolbarIconButtonClass,
-                    "relative",
-                    errorCount > 0 && "text-status-error"
-                  )}
-                  aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}`}
-                >
-                  <AlertCircle />
-                  {errorCount > 0 && (
-                    <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-status-error rounded-full" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Show Problems Panel", diagnosticsShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <ToolbarProblemsButton
+            key="problems"
+            errorCount={errorCount}
+            onToggleProblems={onToggleProblems}
+            data-toolbar-item=""
+          />
         ),
         isAvailable: showDeveloperTools,
       },
       "portal-toggle": {
-        render: () => (
-          <TooltipProvider key="portal-toggle">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={togglePortal}
-                  className={toolbarIconButtonClass}
-                  aria-label={portalOpen ? "Close context portal" : "Open context portal"}
-                  aria-pressed={portalOpen}
-                >
-                  {portalOpen ? (
-                    <PanelRightClose aria-hidden="true" />
-                  ) : (
-                    <PanelRightOpen aria-hidden="true" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut(
-                  portalOpen ? "Close Context Portal" : "Open Context Portal",
-                  portalShortcut
-                )}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        ),
+        render: () => <ToolbarPortalButton key="portal-toggle" data-toolbar-item="" />,
         isAvailable: true,
       },
       ...Object.fromEntries(
@@ -1113,48 +597,20 @@ export function Toolbar({
       agentSettings,
       hasAnySelectedAgent,
       onLaunchAgent,
-      terminalShortcut,
-      browserShortcut,
       sidebarShortcut,
-      diagnosticsShortcut,
-      portalShortcut,
       notesShortcut,
-      settingsShortcut,
-      panelPaletteOpen,
-      panelPaletteShortcut,
-      handleTogglePanelPalette,
       hasActiveVoiceRecording,
-      stats,
       currentProject,
-      issuesOpen,
-      prsOpen,
-      commitsOpen,
-      isStale,
-      lastUpdated,
-      refreshStats,
-      getGitHubIndicatorStatus,
-      handleGitHubStatusTransitionEnd,
-      statsError,
       handleCopyTreeClick,
       isCopyingTree,
       activeWorktree,
       treeCopied,
       copyFeedback,
       onSettings,
-      settingsContextMenuTabs,
       onPreloadSettings,
       onToggleProblems,
       errorCount,
       showDeveloperTools,
-      togglePortal,
-      portalOpen,
-      getTimeSinceUpdate,
-      notificationCenterOpen,
-      toggleNotificationCenter,
-      closeNotificationCenter,
-      notificationUnreadCount,
-      setIssueSearchQuery,
-      setPrSearchQuery,
       notificationsEnabled,
       pluginButtonIds,
       pluginConfigs,
@@ -1196,14 +652,12 @@ export function Toolbar({
   useEffect(() => {
     const overflowSet = new Set<AnyToolbarButtonId>([...leftOverflow, ...rightOverflow]);
     if (overflowSet.has("github-stats")) {
-      setIssuesOpen(false);
-      setPrsOpen(false);
-      setCommitsOpen(false);
+      githubStatsRef.current?.closeAll();
     }
     if (overflowSet.has("notification-center")) {
-      closeNotificationCenter();
+      useUIStore.getState().closeNotificationCenter();
     }
-  }, [leftOverflow, rightOverflow, closeNotificationCenter]);
+  }, [leftOverflow, rightOverflow]);
 
   const renderButtons = (buttonIds: AnyToolbarButtonId[], visibleSet: Set<AnyToolbarButtonId>) => {
     return buttonIds
@@ -1295,8 +749,12 @@ export function Toolbar({
       cursor: () => onLaunchAgent("cursor"),
       terminal: () => onLaunchAgent("terminal"),
       browser: () => onLaunchAgent("browser"),
-      "panel-palette": handleTogglePanelPalette,
-      "notification-center": toggleNotificationCenter,
+      "panel-palette": () => {
+        void actionService.dispatch("panel.palette", undefined, { source: "user" });
+      },
+      "notification-center": () => {
+        useUIStore.getState().toggleNotificationCenter();
+      },
       notes: () => {
         void actionService.dispatch("notes.create", {}, { source: "user" });
       },
@@ -1325,8 +783,6 @@ export function Toolbar({
     }),
     [
       onLaunchAgent,
-      handleTogglePanelPalette,
-      toggleNotificationCenter,
       handleCopyTreeClick,
       onSettings,
       onToggleProblems,
@@ -1360,18 +816,25 @@ export function Toolbar({
         <DropdownMenuContent align={side === "left" ? "start" : "end"} sideOffset={4}>
           {overflowIds.flatMap((id, idx) => {
             if (id === "github-stats") {
+              const ghStats = githubStatsRef.current?.stats;
               const items = [
-                <DropdownMenuItem key="gh-issues" onClick={() => setIssuesOpen((p) => !p)}>
+                <DropdownMenuItem
+                  key="gh-issues"
+                  onClick={() => githubStatsRef.current?.openIssues()}
+                >
                   <CircleDot className="mr-2 h-4 w-4 text-github-open" />
-                  Issues {stats?.issueCount != null ? `(${stats.issueCount})` : ""}
+                  Issues {ghStats?.issueCount != null ? `(${ghStats.issueCount})` : ""}
                 </DropdownMenuItem>,
-                <DropdownMenuItem key="gh-prs" onClick={() => setPrsOpen((p) => !p)}>
+                <DropdownMenuItem key="gh-prs" onClick={() => githubStatsRef.current?.openPrs()}>
                   <GitPullRequest className="mr-2 h-4 w-4 text-github-merged" />
-                  Pull Requests {stats?.prCount != null ? `(${stats.prCount})` : ""}
+                  Pull Requests {ghStats?.prCount != null ? `(${ghStats.prCount})` : ""}
                 </DropdownMenuItem>,
-                <DropdownMenuItem key="gh-commits" onClick={() => setCommitsOpen((p) => !p)}>
+                <DropdownMenuItem
+                  key="gh-commits"
+                  onClick={() => githubStatsRef.current?.openCommits()}
+                >
                   <GitCommit className="mr-2 h-4 w-4" />
-                  Commits {stats?.commitCount != null ? `(${stats.commitCount})` : ""}
+                  Commits {ghStats?.commitCount != null ? `(${ghStats.commitCount})` : ""}
                 </DropdownMenuItem>,
               ];
               if (idx < overflowIds.length - 1) {
