@@ -8,6 +8,7 @@ import { isNonKeyboardInput } from "./inputUtils";
 import { reduceScrollback } from "./TerminalScrollbackController";
 import { logDebug, logError } from "@/utils/logger";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 
 export interface HibernationManagerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
@@ -27,6 +28,7 @@ export interface HibernationManagerDeps {
   setCachedSelection: (id: string, selection: string) => void;
   clearDirectingState: (id: string) => void;
   onUserInput: (id: string, data: string) => void;
+  onEnterPressed: (id: string) => void;
 }
 
 export class TerminalHibernationManager {
@@ -235,9 +237,100 @@ export class TerminalHibernationManager {
           this.deps.onUserInput(id, data);
         }
         terminalClient.write(id, data);
+        if (managed.onInput) {
+          managed.onInput(data);
+        }
       }
     });
     managed.listeners.push(() => inputDisposable.dispose());
+
+    // Reinstall title-state listener for agent terminals
+    if (managed.agentId) {
+      const agentConfig = getEffectiveAgentConfig(managed.agentId);
+      const titlePatterns = agentConfig?.detection?.titleStatePatterns;
+      if (titlePatterns) {
+        let lastReportedTitleState: "working" | "waiting" | undefined;
+
+        const titleDisposable = terminal.onTitleChange((title: string) => {
+          let matched: "working" | "waiting" | undefined;
+          for (const pattern of titlePatterns.working) {
+            if (title.includes(pattern)) {
+              matched = "working";
+              break;
+            }
+          }
+          if (!matched) {
+            for (const pattern of titlePatterns.waiting) {
+              if (title.includes(pattern)) {
+                matched = "waiting";
+                break;
+              }
+            }
+          }
+          if (!matched) {
+            if (managed.titleReportTimer !== undefined) {
+              clearTimeout(managed.titleReportTimer);
+              managed.titleReportTimer = undefined;
+              managed.pendingTitleState = undefined;
+            }
+            return;
+          }
+
+          if (matched === "working") {
+            if (managed.titleReportTimer !== undefined) {
+              clearTimeout(managed.titleReportTimer);
+              managed.titleReportTimer = undefined;
+              managed.pendingTitleState = undefined;
+            }
+            if (lastReportedTitleState !== "working") {
+              lastReportedTitleState = "working";
+              window.electron.terminal.reportTitleState(id, "working");
+            }
+          } else {
+            managed.pendingTitleState = "waiting";
+            if (managed.titleReportTimer !== undefined) {
+              clearTimeout(managed.titleReportTimer);
+            }
+            managed.titleReportTimer = window.setTimeout(() => {
+              managed.titleReportTimer = undefined;
+              if (managed.pendingTitleState === "waiting") {
+                managed.pendingTitleState = undefined;
+                if (lastReportedTitleState !== "waiting") {
+                  lastReportedTitleState = "waiting";
+                  window.electron.terminal.reportTitleState(id, "waiting");
+                }
+              }
+            }, 250);
+          }
+        });
+        managed.listeners.push(() => {
+          titleDisposable.dispose();
+          if (managed.titleReportTimer !== undefined) {
+            clearTimeout(managed.titleReportTimer);
+            managed.titleReportTimer = undefined;
+            managed.pendingTitleState = undefined;
+          }
+        });
+      }
+    }
+
+    // Reinstall agent Enter key listener
+    if (managed.kind === "agent") {
+      const keyDisposable = terminal.onKey(({ domEvent }) => {
+        if (
+          !managed.isInputLocked &&
+          domEvent.key === "Enter" &&
+          !domEvent.isComposing &&
+          !domEvent.shiftKey &&
+          !domEvent.ctrlKey &&
+          !domEvent.altKey &&
+          !domEvent.metaKey
+        ) {
+          this.deps.onEnterPressed(id);
+        }
+      });
+      managed.listeners.push(() => keyDisposable.dispose());
+    }
 
     // Reset restore state
     managed.writeChain = Promise.resolve();

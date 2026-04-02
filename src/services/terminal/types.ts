@@ -92,6 +92,9 @@ export interface ManagedTerminal {
   // Input lock state (read-only monitor mode)
   isInputLocked?: boolean;
 
+  // Caller-supplied input callback (stored for reinstallation after hibernation wake)
+  onInput?: (data: string) => void;
+
   // Incremental restore state
   writeChain: Promise<void>;
   restoreGeneration: number;
