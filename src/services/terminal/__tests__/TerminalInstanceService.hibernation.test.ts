@@ -176,7 +176,7 @@ describe("TerminalInstanceService - Hibernation", () => {
     vi.clearAllMocks();
 
     // Mock window.electron for title state reporting
-    (window as Record<string, unknown>).electron = {
+    (window as unknown as Record<string, unknown>).electron = {
       terminal: {
         reportTitleState: vi.fn(),
       },

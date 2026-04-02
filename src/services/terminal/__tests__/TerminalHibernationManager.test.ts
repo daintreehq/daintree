@@ -127,6 +127,7 @@ function makeMockDeps(managed?: ManagedTerminal): HibernationManagerDeps {
     setCachedSelection: vi.fn(),
     clearDirectingState: vi.fn(),
     onUserInput: vi.fn(),
+    onEnterPressed: vi.fn(),
   };
 }
 
