@@ -315,20 +315,20 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     const { framesDir, outputPath, preset, fps = 30 } = payload;
     const presetConfig = ENCODE_PRESETS[preset];
 
-    const framePattern = /^frame_\d{4}\.png$/;
+    const framePattern = /^frame-\d{6}\.png$/;
     const pngFiles = fs
       .readdirSync(framesDir)
       .filter((f) => framePattern.test(f))
       .sort();
     if (pngFiles.length === 0) {
-      throw new Error(`No PNG frames matching frame_NNNN.png found in ${framesDir}`);
+      throw new Error(`No PNG frames matching frame-NNNNNN.png found in ${framesDir}`);
     }
     const totalFrames = pngFiles.length;
 
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
     const startTime = Date.now();
-    const inputPattern = path.join(framesDir, "frame_%04d.png");
+    const inputPattern = path.join(framesDir, "frame-%06d.png");
 
     const args = [
       "-y",
