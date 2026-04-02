@@ -9,6 +9,7 @@ import { logDebug, logWarn, logError } from "@/utils/logger";
 
 const RENDERER_HIGH_WATERMARK_BYTES = 128 * 1024;
 const RENDERER_LOW_WATERMARK_BYTES = 32 * 1024;
+const COALESCE_BATCH_CAP_BYTES = 256 * 1024;
 const IPC_LOOKBACK_CHARS = 32;
 const INK_ERASE_LINE_PATTERN = "\x1b[2K\x1b[1A";
 
@@ -235,9 +236,23 @@ export class TerminalOutputIngestService {
 
     const allStrings = queue.chunks.every((c) => typeof c === "string");
     if (allStrings) {
-      const merged = (queue.chunks as string[]).join("");
-      queue.chunks.length = 0;
-      queue.queuedBytes = 0;
+      if (queue.queuedBytes <= COALESCE_BATCH_CAP_BYTES) {
+        const merged = (queue.chunks as string[]).join("");
+        queue.chunks.length = 0;
+        queue.queuedBytes = 0;
+        return merged;
+      }
+      let taken = 0;
+      let i = 0;
+      do {
+        taken += (queue.chunks[i] as string).length;
+        i++;
+      } while (
+        i < queue.chunks.length &&
+        taken + (queue.chunks[i] as string).length <= COALESCE_BATCH_CAP_BYTES
+      );
+      const merged = (queue.chunks.splice(0, i) as string[]).join("");
+      queue.queuedBytes -= merged.length;
       return merged;
     }
 
