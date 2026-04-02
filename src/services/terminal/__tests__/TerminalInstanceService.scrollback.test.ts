@@ -15,6 +15,7 @@ vi.mock("@/clients", () => ({
       signalBuffer: null,
     })),
     acknowledgeData: vi.fn(),
+    acknowledgePortData: vi.fn(),
   },
   systemClient: { openExternal: vi.fn() },
   appClient: { getHydrationState: vi.fn() },

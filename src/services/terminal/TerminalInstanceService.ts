@@ -303,6 +303,7 @@ class TerminalInstanceService {
 
     if (managed.isHibernated) {
       const bytes = typeof data === "string" ? data.length : data.byteLength;
+      terminalClient.acknowledgePortData(id, bytes);
       this.dataBuffer.notifyWriteComplete(id, bytes);
       return;
     }
@@ -310,6 +311,7 @@ class TerminalInstanceService {
     if (managed.isSerializedRestoreInProgress) {
       managed.deferredOutput.push(data);
       const deferredBytes = typeof data === "string" ? data.length : data.byteLength;
+      terminalClient.acknowledgePortData(id, deferredBytes);
       this.dataBuffer.notifyWriteComplete(id, deferredBytes);
       return;
     }
@@ -345,6 +347,7 @@ class TerminalInstanceService {
 
       managed.pendingWrites = Math.max(0, (managed.pendingWrites ?? 1) - 1);
 
+      terminalClient.acknowledgePortData(id, acknowledgedBytes);
       terminalClient.acknowledgeData(id, acknowledgedBytes);
       this.dataBuffer.notifyWriteComplete(id, acknowledgedBytes);
 

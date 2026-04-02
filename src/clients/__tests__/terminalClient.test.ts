@@ -199,20 +199,41 @@ describe("terminalClient MessagePort data routing", () => {
     });
   });
 
-  it("uses msg.bytes for ack without re-encoding", () => {
+  it("does NOT send immediate ack when live callbacks are registered", () => {
     const port = acquirePort();
 
     terminalClient.onData("term-1", () => {});
 
-    // Send data with a deliberate bytes value (42 != actual UTF-8 length of "hello")
-    // to prove the ack uses the carried value, not a re-encoded one
     port.postMessage({ type: "data", id: "term-1", data: "hello", bytes: 42 });
 
     return new Promise<void>((resolve) => {
-      // Listen for ack messages coming back on port1
+      const acks: Record<string, unknown>[] = [];
       port.addEventListener("message", (event: MessageEvent) => {
         const msg = event.data as Record<string, unknown>;
         if (msg?.type === "ack" && msg.id === "term-1") {
+          acks.push(msg);
+        }
+      });
+      port.start();
+
+      // Wait and verify no ack arrived — ACK is deferred to xterm write callback
+      setTimeout(() => {
+        expect(acks).toEqual([]);
+        resolve();
+      }, 100);
+    });
+  });
+
+  it("sends immediate ack for early-buffered data (no callbacks registered)", () => {
+    const port = acquirePort();
+
+    // No onData registered — data goes to early buffer with immediate ACK
+    port.postMessage({ type: "data", id: "term-early", data: "hello", bytes: 42 });
+
+    return new Promise<void>((resolve) => {
+      port.addEventListener("message", (event: MessageEvent) => {
+        const msg = event.data as Record<string, unknown>;
+        if (msg?.type === "ack" && msg.id === "term-early") {
           expect(msg.bytes).toBe(42);
           resolve();
         }
@@ -221,23 +242,74 @@ describe("terminalClient MessagePort data routing", () => {
     });
   });
 
-  it("falls back to 0 bytes when msg.bytes is missing", () => {
+  it("falls back to 0 bytes for early-buffered ack when msg.bytes is missing", () => {
     const port = acquirePort();
 
-    terminalClient.onData("term-1", () => {});
-
-    // Send a message without bytes (simulating legacy pty-host)
-    port.postMessage({ type: "data", id: "term-1", data: "hello" } as unknown);
+    // No onData registered — early buffer path
+    port.postMessage({ type: "data", id: "term-early", data: "hello" } as unknown);
 
     return new Promise<void>((resolve) => {
       port.addEventListener("message", (event: MessageEvent) => {
         const msg = event.data as Record<string, unknown>;
-        if (msg?.type === "ack" && msg.id === "term-1") {
+        if (msg?.type === "ack" && msg.id === "term-early") {
           expect(msg.bytes).toBe(0);
           resolve();
         }
       });
       port.start();
+    });
+  });
+
+  it("acknowledgePortData sends deferred ack with original msg.bytes", () => {
+    const port = acquirePort();
+
+    // Register callback so data goes through the live path (queues byte count)
+    terminalClient.onData("term-1", () => {});
+
+    // Send data with bytes: 42 (original pty-host UTF-8 byte count)
+    port.postMessage({ type: "data", id: "term-1", data: "hello", bytes: 42 });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        // Now call acknowledgePortData — it should use the queued 42, not the passed 999
+        terminalClient.acknowledgePortData("term-1", 999);
+
+        port.addEventListener("message", (event: MessageEvent) => {
+          const msg = event.data as Record<string, unknown>;
+          if (msg?.type === "ack" && msg.id === "term-1") {
+            expect(msg.bytes).toBe(42);
+            resolve();
+          }
+        });
+        port.start();
+      }, 50);
+    });
+  });
+
+  it("acknowledgePortData is a no-op when no port is connected", () => {
+    // No port acquired — should not throw
+    expect(() => terminalClient.acknowledgePortData("term-1", 42)).not.toThrow();
+  });
+
+  it("acknowledgePortData is a no-op when byte queue is empty (IPC or early-flush data)", () => {
+    const port = acquirePort();
+
+    // Call acknowledgePortData without any prior port data dispatch (simulates
+    // IPC data or early-buffer flush reaching writeToTerminal)
+    terminalClient.acknowledgePortData("term-1", 100);
+
+    return new Promise<void>((resolve) => {
+      const acks: Record<string, unknown>[] = [];
+      port.addEventListener("message", (event: MessageEvent) => {
+        const msg = event.data as Record<string, unknown>;
+        if (msg?.type === "ack") acks.push(msg);
+      });
+      port.start();
+
+      setTimeout(() => {
+        expect(acks).toEqual([]);
+        resolve();
+      }, 100);
     });
   });
 
