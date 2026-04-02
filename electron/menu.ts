@@ -1,4 +1,4 @@
-import { Menu, dialog, BrowserWindow, shell, app } from "electron";
+import { Menu, dialog, BrowserWindow, shell, app, webContents } from "electron";
 import { projectStore } from "./services/ProjectStore.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
@@ -144,13 +144,55 @@ export function createApplicationMenu(
     {
       label: "Edit",
       submenu: [
-        { role: "undo" },
-        { role: "redo" },
+        {
+          label: "Undo",
+          accelerator: "CommandOrControl+Z",
+          click: () => {
+            const focused = webContents.getFocusedWebContents();
+            if (focused && !focused.isDestroyed()) focused.undo();
+          },
+        },
+        {
+          label: "Redo",
+          accelerator: "CommandOrControl+Shift+Z",
+          click: () => {
+            const focused = webContents.getFocusedWebContents();
+            if (focused && !focused.isDestroyed()) focused.redo();
+          },
+        },
         { type: "separator" },
-        { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
-        { role: "selectAll" },
+        {
+          label: "Cut",
+          accelerator: "CommandOrControl+X",
+          click: () => {
+            const focused = webContents.getFocusedWebContents();
+            if (focused && !focused.isDestroyed()) focused.cut();
+          },
+        },
+        {
+          label: "Copy",
+          accelerator: "CommandOrControl+C",
+          click: () => {
+            const focused = webContents.getFocusedWebContents();
+            if (focused && !focused.isDestroyed()) focused.copy();
+          },
+        },
+        {
+          label: "Paste",
+          accelerator: "CommandOrControl+V",
+          click: () => {
+            const focused = webContents.getFocusedWebContents();
+            if (focused && !focused.isDestroyed()) focused.paste();
+          },
+        },
+        {
+          label: "Select All",
+          accelerator: "CommandOrControl+A",
+          click: () => {
+            const focused = webContents.getFocusedWebContents();
+            if (focused && !focused.isDestroyed()) focused.selectAll();
+          },
+        },
       ],
     },
     {
@@ -179,11 +221,52 @@ export function createApplicationMenu(
             getAppWebContents(win).reloadIgnoringCache();
           },
         },
-        ...(app.isPackaged ? [] : [{ role: "toggleDevTools" as const }]),
+        ...(app.isPackaged
+          ? []
+          : [
+              {
+                label: "Toggle Developer Tools",
+                accelerator: "Alt+CommandOrControl+I",
+                click: (
+                  _item: Electron.MenuItem,
+                  browserWindow: Electron.BaseWindow | undefined
+                ) => {
+                  const win = getTargetBrowserWindow(browserWindow);
+                  if (!win) return;
+                  getAppWebContents(win).toggleDevTools();
+                },
+              },
+            ]),
         { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
+        {
+          label: "Actual Size",
+          accelerator: "CommandOrControl+0",
+          click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) => {
+            const win = getTargetBrowserWindow(browserWindow);
+            if (!win) return;
+            getAppWebContents(win).setZoomLevel(0);
+          },
+        },
+        {
+          label: "Zoom In",
+          accelerator: "CommandOrControl+=",
+          click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) => {
+            const win = getTargetBrowserWindow(browserWindow);
+            if (!win) return;
+            const wc = getAppWebContents(win);
+            wc.setZoomLevel(wc.getZoomLevel() + 0.5);
+          },
+        },
+        {
+          label: "Zoom Out",
+          accelerator: "CommandOrControl+-",
+          click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) => {
+            const win = getTargetBrowserWindow(browserWindow);
+            if (!win) return;
+            const wc = getAppWebContents(win);
+            wc.setZoomLevel(wc.getZoomLevel() - 0.5);
+          },
+        },
         { type: "separator" },
         {
           label: "Toggle Full Screen",
