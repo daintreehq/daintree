@@ -2,11 +2,12 @@ import { systemClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { isLocalhostUrl, normalizeBrowserUrl } from "@/components/Browser/browserUtils";
 import { useTerminalStore } from "@/store/terminalStore";
+import { isMac } from "@/lib/platform";
 
 export class TerminalLinkHandler {
   openLink(url: string, terminalId: string, event?: MouseEvent): void {
-    const isMac = navigator.platform.toLowerCase().includes("mac");
-    const isModifierPressed = event ? (isMac ? event.metaKey : event.ctrlKey) : false;
+    const mac = isMac();
+    const isModifierPressed = event ? (mac ? event.metaKey : event.ctrlKey) : false;
 
     const normalized = normalizeBrowserUrl(url);
 

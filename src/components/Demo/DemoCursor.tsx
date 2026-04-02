@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { isMac } from "@/lib/platform";
 import { EditorView } from "@codemirror/view";
 import { Transaction } from "@codemirror/state";
 import type {
@@ -684,14 +685,14 @@ export function DemoCursor() {
         try {
           await waitIfPaused();
           const modifiers = payload.modifiers ?? [];
-          const isMac = navigator.platform.includes("Mac");
+          const mac = isMac();
           const opts: KeyboardEventInit = {
             key: payload.key,
             code: payload.code ?? payload.key,
             bubbles: true,
             cancelable: true,
-            metaKey: modifiers.includes("meta") || (modifiers.includes("mod") && isMac),
-            ctrlKey: modifiers.includes("ctrl") || (modifiers.includes("mod") && !isMac),
+            metaKey: modifiers.includes("meta") || (modifiers.includes("mod") && mac),
+            ctrlKey: modifiers.includes("ctrl") || (modifiers.includes("mod") && !mac),
             shiftKey: modifiers.includes("shift"),
             altKey: modifiers.includes("alt"),
           };

@@ -1,4 +1,5 @@
 import { Terminal } from "@xterm/xterm";
+import { isMac } from "@/lib/platform";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier, TerminalType } from "@/types";
 import type { AgentState } from "@/types";
@@ -1708,10 +1709,10 @@ if (typeof window !== "undefined") {
   ): string => {
     const managed = terminalInstanceService["instances"].get(panelId);
     if (!managed) return "missing-panel";
-    const isMac = navigator.platform.toLowerCase().includes("mac");
+    const mac = isMac();
     const syntheticEvent = new MouseEvent("click", {
-      metaKey: isMac,
-      ctrlKey: !isMac,
+      metaKey: mac,
+      ctrlKey: !mac,
     });
     terminalInstanceService["linkHandler"].openLink(url, panelId, syntheticEvent);
     return "ok";

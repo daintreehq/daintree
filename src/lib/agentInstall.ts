@@ -3,21 +3,12 @@ import type {
   AgentInstallBlock,
   AgentInstallOS,
 } from "../../shared/config/agentRegistry";
+import { isMac, isWindows, isLinux } from "./platform";
 
 export function detectOS(): AgentInstallOS {
-  if (typeof navigator === "undefined" || !navigator.platform) {
-    return "generic";
-  }
-  const platform = navigator.platform.toUpperCase();
-  if (platform.includes("MAC")) {
-    return "macos";
-  }
-  if (platform.includes("WIN")) {
-    return "windows";
-  }
-  if (platform.includes("LINUX")) {
-    return "linux";
-  }
+  if (isMac()) return "macos";
+  if (isWindows()) return "windows";
+  if (isLinux()) return "linux";
   return "generic";
 }
 
