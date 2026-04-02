@@ -292,4 +292,41 @@ describe("terminalStore process detection listeners", () => {
     cleanupA();
     cleanupB();
   });
+
+  describe("flow status wake behavior", () => {
+    let terminalInstanceService: { wake: ReturnType<typeof vi.fn> };
+
+    beforeEach(async () => {
+      const mod = await import("@/services/TerminalInstanceService");
+      terminalInstanceService = mod.terminalInstanceService as typeof terminalInstanceService;
+    });
+
+    it("calls wake on suspended status", () => {
+      const cleanup = setupTerminalStoreListeners();
+      handlers.status?.({ id: "term-1", status: "suspended", timestamp: Date.now() });
+      expect(terminalInstanceService.wake).toHaveBeenCalledWith("term-1");
+      cleanup();
+    });
+
+    it("calls wake on paused-backpressure status", () => {
+      const cleanup = setupTerminalStoreListeners();
+      handlers.status?.({ id: "term-1", status: "paused-backpressure", timestamp: Date.now() });
+      expect(terminalInstanceService.wake).toHaveBeenCalledWith("term-1");
+      cleanup();
+    });
+
+    it("does not call wake on paused-user status", () => {
+      const cleanup = setupTerminalStoreListeners();
+      handlers.status?.({ id: "term-1", status: "paused-user", timestamp: Date.now() });
+      expect(terminalInstanceService.wake).not.toHaveBeenCalled();
+      cleanup();
+    });
+
+    it("does not call wake on running status", () => {
+      const cleanup = setupTerminalStoreListeners();
+      handlers.status?.({ id: "term-1", status: "running", timestamp: Date.now() });
+      expect(terminalInstanceService.wake).not.toHaveBeenCalled();
+      cleanup();
+    });
+  });
 });
