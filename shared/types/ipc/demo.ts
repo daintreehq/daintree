@@ -1,7 +1,7 @@
 export interface DemoMoveToPayload {
   x: number;
   y: number;
-  durationMs: number;
+  durationMs?: number;
 }
 
 export interface DemoTypePayload {
@@ -26,7 +26,7 @@ export interface DemoSleepPayload {
 
 export interface DemoMoveToSelectorPayload {
   selector: string;
-  durationMs: number;
+  durationMs?: number;
   offsetX?: number;
   offsetY?: number;
 }

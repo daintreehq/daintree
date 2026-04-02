@@ -2619,11 +2619,11 @@ const api: ElectronAPI = {
   ...(isDemoMode
     ? {
         demo: {
-          moveTo: (x: number, y: number, durationMs: number) =>
+          moveTo: (x: number, y: number, durationMs?: number) =>
             _unwrappingInvoke(CHANNELS.DEMO_MOVE_TO, { x, y, durationMs }),
           moveToSelector: (
             selector: string,
-            durationMs: number,
+            durationMs?: number,
             offsetX?: number,
             offsetY?: number
           ) =>

@@ -27,13 +27,17 @@ const originalElectron = (window as unknown as { electron?: unknown }).electron;
 (window as unknown as { electron: unknown }).electron = { demo: demoMock };
 
 // Stub Element.prototype.animate (jsdom doesn't support WAAPI)
-const mockAnimation = {
-  finished: Promise.resolve(),
-  cancel: vi.fn(),
-  pause: vi.fn(),
-  play: vi.fn(),
-};
-Element.prototype.animate = vi.fn(() => mockAnimation as unknown as Animation);
+function createMockAnimation() {
+  return {
+    finished: Promise.resolve(),
+    cancel: vi.fn(),
+    pause: vi.fn(),
+    play: vi.fn(),
+  };
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const animateSpy = vi.fn((() => createMockAnimation()) as any) as ReturnType<typeof vi.fn>;
+Element.prototype.animate = animateSpy as unknown as typeof Element.prototype.animate;
 
 import { DemoCursor } from "../DemoCursor";
 
@@ -108,10 +112,8 @@ describe("DemoCursor", () => {
 
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(Element.prototype.animate).toHaveBeenCalled();
-    // Verify keyframes use transform (not left/top)
-    const animateFn = Element.prototype.animate as ReturnType<typeof vi.fn>;
-    const keyframes = animateFn.mock.calls[0][0] as Array<{ transform: string }>;
+    expect(animateSpy).toHaveBeenCalled();
+    const keyframes = animateSpy.mock.calls[0][0] as Array<{ transform: string }>;
     expect(keyframes[0]).toHaveProperty("transform");
     expect(keyframes[keyframes.length - 1].transform).toContain("translate(");
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-1", undefined);
@@ -190,11 +192,11 @@ describe("DemoCursor", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(events).toEqual(["mousedown", "mouseup", "click"]);
-    // Verify elementFromPoint was called with cursor position (initialized to viewport center)
-    expect(document.elementFromPoint).toHaveBeenCalledWith(
-      window.innerWidth / 2,
-      window.innerHeight / 2
-    );
+    // Verify elementFromPoint was called with cursor position (near viewport center, shifted by settle drift)
+    const efp = document.elementFromPoint as ReturnType<typeof vi.fn>;
+    const [calledX, calledY] = efp.mock.calls[0];
+    expect(calledX).toBeCloseTo(window.innerWidth / 2, -1);
+    expect(calledY).toBeCloseTo(window.innerHeight / 2, -1);
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-click-1", undefined);
 
     document.elementFromPoint = origElementFromPoint;
@@ -210,9 +212,8 @@ describe("DemoCursor", () => {
 
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(
-      (Element.prototype.animate as ReturnType<typeof vi.fn>).mock.calls.length
-    ).toBeGreaterThanOrEqual(2);
+    // press + release + ripple + settle = at least 3 calls (ripple may be skipped if ref is null)
+    expect(animateSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-2", undefined);
 
     document.elementFromPoint = origElementFromPoint;
@@ -307,6 +308,129 @@ describe("DemoCursor", () => {
     expect(done).toBe(true);
 
     vi.useRealTimers();
+  });
+
+  it("moveTo without durationMs auto-computes duration via Fitts's law", async () => {
+    render(<DemoCursor />);
+    emit("demo:exec-move-to", { x: 30, y: 40, requestId: "req-fitts" });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(animateSpy).toHaveBeenCalled();
+    const options = animateSpy.mock.calls[0][1] as KeyframeAnimationOptions;
+    expect(options.duration).toBeGreaterThan(0);
+    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-fitts", undefined);
+  });
+
+  it("moveTo produces more keyframes for longer distances", async () => {
+    render(<DemoCursor />);
+
+    // Short move: 10% of 1000px = 100px from center (500,400)
+    emit("demo:exec-move-to", { x: 60, y: 50, durationMs: 300, requestId: "req-short" });
+    await new Promise((r) => setTimeout(r, 10));
+    const shortFrameCount = (animateSpy.mock.calls[0][0] as unknown[]).length;
+
+    animateSpy.mockClear();
+
+    // Long move: from current position to far corner — need a fresh render
+    cleanup();
+    render(<DemoCursor />);
+    emit("demo:exec-move-to", { x: 95, y: 95, durationMs: 300, requestId: "req-long" });
+    await new Promise((r) => setTimeout(r, 10));
+    const longFrameCount = (animateSpy.mock.calls[0][0] as unknown[]).length;
+
+    expect(longFrameCount).toBeGreaterThan(shortFrameCount);
+  });
+
+  it("moveTo long-distance move calls animate twice (ballistic + acquisition)", async () => {
+    render(<DemoCursor />);
+    // cursor starts at (500, 400). Move to (100, 0) = (1000, 0). Distance ~500+px > 300px threshold
+    emit("demo:exec-move-to", { x: 100, y: 0, durationMs: 800, requestId: "req-twophase" });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Two phases = two animate calls on the cursor element
+    const cursorCalls = animateSpy.mock.calls.filter((call) => {
+      const keyframes = call[0] as Array<{ transform: string }>;
+      return Array.isArray(keyframes) && keyframes[0]?.transform?.includes("translate(");
+    });
+    expect(cursorCalls.length).toBe(2);
+    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-twophase", undefined);
+  });
+
+  it("moveTo short move calls animate once", async () => {
+    render(<DemoCursor />);
+    // cursor starts at (500, 400). Move to (55, 50) = (550, 400). Distance = 50px < 300px
+    emit("demo:exec-move-to", { x: 55, y: 50, durationMs: 200, requestId: "req-onephase" });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    const cursorCalls = animateSpy.mock.calls.filter((call) => {
+      const keyframes = call[0] as Array<{ transform: string }>;
+      return Array.isArray(keyframes) && keyframes[0]?.transform?.includes("translate(");
+    });
+    expect(cursorCalls.length).toBe(1);
+    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-onephase", undefined);
+  });
+
+  it("click includes settle animation on cursor element", async () => {
+    render(<DemoCursor />);
+
+    const origElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn(() => null);
+
+    emit("demo:exec-click", { requestId: "req-settle" });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Should have press + release + ripple + settle = at least 4 animate calls
+    // (ripple fires on the ripple element, settle on the cursor element)
+    expect(animateSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
+
+    // Verify settle animation keyframes include small translate
+    const lastCall = animateSpy.mock.calls[animateSpy.mock.calls.length - 1];
+    const lastKeyframes = lastCall[0] as Array<{ transform: string }>;
+    if (lastKeyframes.length === 2) {
+      expect(lastKeyframes[0].transform).toBe("translate(0px, 0px)");
+      expect(lastKeyframes[1].transform).toMatch(/translate\([^)]+\)/);
+    }
+
+    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-settle", undefined);
+    document.elementFromPoint = origElementFromPoint;
+  });
+
+  it("type() applies variable delays (not uniform)", async () => {
+    const input = document.createElement("input");
+    input.id = "type-delay-input";
+    document.body.appendChild(input);
+
+    const delays: number[] = [];
+    const origSetTimeout = globalThis.setTimeout;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      fn: (...args: unknown[]) => void,
+      ms?: number
+    ) => {
+      if (ms !== undefined && ms > 0) delays.push(ms);
+      return origSetTimeout(fn, 0);
+    }) as typeof setTimeout);
+
+    render(<DemoCursor />);
+    emit("demo:exec-type", {
+      selector: "#type-delay-input",
+      text: "ab cd",
+      cps: 12,
+      requestId: "req-type-delays",
+    });
+
+    await new Promise((r) => origSetTimeout(r, 500));
+
+    // With Gaussian variance, not all delays should be identical
+    const uniqueDelays = new Set(delays.filter((d) => d >= 10));
+    expect(uniqueDelays.size).toBeGreaterThan(1);
+
+    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-type-delays", undefined);
+
+    setTimeoutSpy.mockRestore();
+    document.body.removeChild(input);
   });
 
   it("waitForSelector resolves immediately when element exists", async () => {

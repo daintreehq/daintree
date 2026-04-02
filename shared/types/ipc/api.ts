@@ -1219,10 +1219,10 @@ export interface ElectronAPI {
     getFolderPath(): Promise<string | null>;
   };
   demo?: {
-    moveTo(x: number, y: number, durationMs: number): Promise<void>;
+    moveTo(x: number, y: number, durationMs?: number): Promise<void>;
     moveToSelector(
       selector: string,
-      durationMs: number,
+      durationMs?: number,
       offsetX?: number,
       offsetY?: number
     ): Promise<void>;
