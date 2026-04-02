@@ -20,17 +20,20 @@ vi.mock("../webContentsRegistry.js", () => ({
   getAppWebContents: vi.fn(),
 }));
 
-import { app, BrowserWindow } from "electron";
+import { app } from "electron";
 import type { PtyClient } from "../../services/PtyClient.js";
 import type { WorkspaceClient } from "../../services/WorkspaceClient.js";
 import type { ProjectStatsService } from "../../services/ProjectStatsService.js";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Electron's app.on() signature uses any
 type AppEventHandler = (...args: any[]) => void;
 const appHandlers = new Map<string, AppEventHandler>();
-(app.on as ReturnType<typeof vi.fn>).mockImplementation((event: string, handler: AppEventHandler) => {
-  appHandlers.set(event, handler);
-  return app;
-});
+(app.on as ReturnType<typeof vi.fn>).mockImplementation(
+  (event: string, handler: AppEventHandler) => {
+    appHandlers.set(event, handler);
+    return app;
+  }
+);
 
 function createMockDeps() {
   const ptyClient = {
@@ -122,7 +125,10 @@ describe("WindowFocusThrottle", () => {
       pollIntervalBackground: 50_000,
     });
     expect(statsService.updatePollInterval).toHaveBeenCalledWith(25_000);
-    expect((ptyClient as any).setProcessTreePollInterval).toHaveBeenCalledWith(12_500);
+    expect(
+      vi.mocked(ptyClient as unknown as { setProcessTreePollInterval: () => void })
+        .setProcessTreePollInterval
+    ).toHaveBeenCalledWith(12_500);
   });
 
   it("does not throttle on blur when another window is focused", async () => {
@@ -131,7 +137,7 @@ describe("WindowFocusThrottle", () => {
 
     const blurHandler = appHandlers.get("browser-window-blur")!;
     const { BrowserWindow: BW } = await import("electron");
-    (BW.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue({} as any);
+    (BW.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue({} as unknown);
 
     blurHandler();
     vi.advanceTimersByTime(100);
@@ -181,7 +187,10 @@ describe("WindowFocusThrottle", () => {
     expect(workspaceClient.refresh).toHaveBeenCalled();
     expect(statsService.updatePollInterval).toHaveBeenCalledWith(5_000);
     expect(statsService.refresh).toHaveBeenCalled();
-    expect((ptyClient as any).setProcessTreePollInterval).toHaveBeenCalledWith(2_500);
+    expect(
+      vi.mocked(ptyClient as unknown as { setProcessTreePollInterval: () => void })
+        .setProcessTreePollInterval
+    ).toHaveBeenCalledWith(2_500);
   });
 
   it("is idempotent — double throttle only calls services once", async () => {
@@ -207,12 +216,12 @@ describe("WindowFocusThrottle", () => {
     const { BrowserWindow: BW } = await import("electron");
     (BW.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue(null);
 
-    const windowHandlers = new Map<string, Function>();
+    const windowHandlers = new Map<string, (...args: unknown[]) => void>();
     const mockWin = {
-      on: vi.fn((event: string, handler: Function) => {
+      on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
         windowHandlers.set(event, handler);
       }),
-    } as any;
+    } as unknown as Electron.BrowserWindow;
 
     registerWindowForFocusThrottle(mockWin);
 

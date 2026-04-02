@@ -94,7 +94,7 @@ export interface WindowFocusThrottleDeps {
   getProjectStatsService: () => ProjectStatsService | null;
 }
 
-let focusThrottleState = {
+const focusThrottleState = {
   isThrottled: false,
   blurTimeout: null as NodeJS.Timeout | null,
 };
