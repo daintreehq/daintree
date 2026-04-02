@@ -110,18 +110,23 @@ export const createTerminalFocusSlice =
       pingedId: null,
       preMaximizeLayout: null,
       setFocused: (id, shouldPing = false) => {
-        set({ focusedId: id });
         if (id) {
-          // Wake-on-focus: sync terminal state from backend when focused.
-          // This is a safety net to recover from any missed data.
-          // Skip wake for non-PTY panels - they don't have backend PTY processes.
           const terminal = getTerminals().find((t) => t.id === id);
+          if (terminal?.location === "dock") {
+            set({ focusedId: id, activeDockTerminalId: id });
+          } else {
+            set({ focusedId: id, activeDockTerminalId: null });
+          }
+          // Wake-on-focus: sync terminal state from backend when focused.
+          // Skip wake for non-PTY panels - they don't have backend PTY processes.
           if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
             terminalInstanceService.wake(id);
           }
           if (shouldPing) {
             get().pingTerminal(id);
           }
+        } else {
+          set({ focusedId: null, activeDockTerminalId: null });
         }
       },
 
@@ -289,32 +294,28 @@ export const createTerminalFocusSlice =
       },
 
       focusDirection: (direction, findNearest) => {
-        set((state) => {
-          if (!state.focusedId) return state;
-          const nextId = findNearest(state.focusedId, direction);
-          if (nextId) {
-            return { focusedId: nextId };
-          }
-          return state;
-        });
+        const { focusedId, activateTerminal } = get();
+        if (!focusedId) return;
+        const nextId = findNearest(focusedId, direction);
+        if (nextId) {
+          activateTerminal(nextId);
+        }
       },
 
       focusByIndex: (index, findByIndex) => {
         const nextId = findByIndex(index);
         if (nextId) {
-          set({ focusedId: nextId });
+          get().activateTerminal(nextId);
         }
       },
 
       focusDockDirection: (direction, findDockByIndex) => {
-        set((state) => {
-          if (!state.focusedId) return state;
-          const nextId = findDockByIndex(state.focusedId, direction);
-          if (nextId) {
-            return { focusedId: nextId };
-          }
-          return state;
-        });
+        const { focusedId, activateTerminal } = get();
+        if (!focusedId) return;
+        const nextId = findDockByIndex(focusedId, direction);
+        if (nextId) {
+          activateTerminal(nextId);
+        }
       },
 
       openDockTerminal: (id) => {
