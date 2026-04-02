@@ -8,6 +8,10 @@ import type {
   DemoSetZoomPayload,
   DemoWaitForSelectorPayload,
   DemoSleepPayload,
+  DemoScrollPayload,
+  DemoDragPayload,
+  DemoPressKeyPayload,
+  DemoWaitForIdlePayload,
 } from "@shared/types/ipc/demo";
 
 const CURSOR_SVG_PATH = "M2.5 1L17.5 13.5H9.5L14 22L11 23.5L6.5 15L2.5 19.5V1Z";
@@ -492,6 +496,293 @@ export function DemoCursor() {
         const payload = raw as unknown as DemoSleepPayload & { requestId: string };
         try {
           await pauseAwareDelay(payload.durationMs);
+          sendDone(payload.requestId);
+        } catch (err) {
+          sendDone(payload.requestId, String(err));
+        }
+      })
+    );
+
+    // --- scroll handler: spring-animate scrollTop on nearest scrollable ancestor ---
+    cleanups.push(
+      demo.onExecCommand("demo:exec-scroll", async (raw: Record<string, unknown>) => {
+        const payload = raw as unknown as DemoScrollPayload & { requestId: string };
+        try {
+          await waitIfPaused();
+          const target = document.querySelector(payload.selector) as HTMLElement | null;
+          if (!target) {
+            sendDone(payload.requestId, `Selector not found: ${payload.selector}`);
+            return;
+          }
+
+          // Find nearest scrollable ancestor
+          let container: HTMLElement | null = target.parentElement;
+          while (container) {
+            const style = getComputedStyle(container);
+            const overflowY = style.overflowY;
+            if (
+              (overflowY === "auto" || overflowY === "scroll") &&
+              container.scrollHeight > container.clientHeight
+            ) {
+              break;
+            }
+            container = container.parentElement;
+          }
+          if (!container) {
+            sendDone(payload.requestId, `No scrollable ancestor found for: ${payload.selector}`);
+            return;
+          }
+
+          // Calculate target scrollTop to bring element into view (centered)
+          const containerRect = container.getBoundingClientRect();
+          const targetRect = target.getBoundingClientRect();
+          const targetScrollTop =
+            container.scrollTop +
+            (targetRect.top - containerRect.top) -
+            containerRect.height / 2 +
+            targetRect.height / 2;
+          const clampedTarget = Math.max(
+            0,
+            Math.min(targetScrollTop, container.scrollHeight - container.clientHeight)
+          );
+
+          // Spring animation (semi-implicit Euler)
+          const stiffness = 70;
+          const damping = 20;
+          let current = container.scrollTop;
+          let velocity = 0;
+
+          await new Promise<void>((resolve) => {
+            let lastTime = performance.now();
+            function step(now: number) {
+              let dt = (now - lastTime) / 1000;
+              dt = Math.min(dt, 0.032);
+              lastTime = now;
+
+              const force = -stiffness * (current - clampedTarget) - damping * velocity;
+              velocity += force * dt;
+              current += velocity * dt;
+              container!.scrollTop = current;
+
+              if (Math.abs(velocity) < 0.5 && Math.abs(clampedTarget - current) < 0.5) {
+                container!.scrollTop = clampedTarget;
+                resolve();
+              } else {
+                requestAnimationFrame(step);
+              }
+            }
+            requestAnimationFrame(step);
+          });
+
+          sendDone(payload.requestId);
+        } catch (err) {
+          sendDone(payload.requestId, String(err));
+        }
+      })
+    );
+
+    // --- drag handler: mousedown → animate → mousemove×N → mouseup ---
+    cleanups.push(
+      demo.onExecCommand("demo:exec-drag", async (raw: Record<string, unknown>) => {
+        const payload = raw as unknown as DemoDragPayload & { requestId: string };
+        try {
+          await waitIfPaused();
+          const fromEl = document.querySelector(payload.fromSelector) as HTMLElement | null;
+          const toEl = document.querySelector(payload.toSelector) as HTMLElement | null;
+          if (!fromEl) {
+            sendDone(payload.requestId, `Source not found: ${payload.fromSelector}`);
+            return;
+          }
+          if (!toEl) {
+            sendDone(payload.requestId, `Target not found: ${payload.toSelector}`);
+            return;
+          }
+
+          const fromRect = fromEl.getBoundingClientRect();
+          const toRect = toEl.getBoundingClientRect();
+          const fromX = fromRect.left + fromRect.width / 2;
+          const fromY = fromRect.top + fromRect.height / 2;
+          const toX = toRect.left + toRect.width / 2;
+          const toY = toRect.top + toRect.height / 2;
+
+          const eventOpts = { bubbles: true, cancelable: true };
+
+          // Move cursor to source first
+          await animateCursor(fromX, fromY, Math.min(payload.durationMs ?? 500, 300));
+
+          // Press down at source
+          const sourceTarget = document.elementFromPoint(fromX, fromY) ?? fromEl;
+          sourceTarget.dispatchEvent(
+            new PointerEvent("pointerdown", {
+              ...eventOpts,
+              clientX: fromX,
+              clientY: fromY,
+              buttons: 1,
+            })
+          );
+          sourceTarget.dispatchEvent(
+            new MouseEvent("mousedown", {
+              ...eventOpts,
+              clientX: fromX,
+              clientY: fromY,
+              buttons: 1,
+            })
+          );
+
+          try {
+            // Animate cursor to target, dispatching intermediate move events
+            const steps = 10;
+            const duration = payload.durationMs ?? 500;
+            for (let i = 1; i <= steps; i++) {
+              const t = i / steps;
+              const cx = fromX + (toX - fromX) * t;
+              const cy = fromY + (toY - fromY) * t;
+              await pauseAwareDelay(duration / steps);
+              const moveTarget = document.elementFromPoint(cx, cy) ?? sourceTarget;
+              moveTarget.dispatchEvent(
+                new PointerEvent("pointermove", {
+                  ...eventOpts,
+                  clientX: cx,
+                  clientY: cy,
+                  buttons: 1,
+                })
+              );
+              moveTarget.dispatchEvent(
+                new MouseEvent("mousemove", { ...eventOpts, clientX: cx, clientY: cy, buttons: 1 })
+              );
+            }
+
+            // Visual cursor follows
+            await animateCursor(toX, toY, 50);
+          } finally {
+            // Release at target (guaranteed even on error)
+            const releaseTarget = document.elementFromPoint(toX, toY) ?? toEl;
+            releaseTarget.dispatchEvent(
+              new PointerEvent("pointerup", {
+                ...eventOpts,
+                clientX: toX,
+                clientY: toY,
+                buttons: 0,
+              })
+            );
+            releaseTarget.dispatchEvent(
+              new MouseEvent("mouseup", { ...eventOpts, clientX: toX, clientY: toY, buttons: 0 })
+            );
+          }
+
+          sendDone(payload.requestId);
+        } catch (err) {
+          sendDone(payload.requestId, String(err));
+        }
+      })
+    );
+
+    // --- pressKey handler: dispatch keydown/keyup on target ---
+    cleanups.push(
+      demo.onExecCommand("demo:exec-press-key", async (raw: Record<string, unknown>) => {
+        const payload = raw as unknown as DemoPressKeyPayload & { requestId: string };
+        try {
+          await waitIfPaused();
+          const modifiers = payload.modifiers ?? [];
+          const isMac = navigator.platform.includes("Mac");
+          const opts: KeyboardEventInit = {
+            key: payload.key,
+            code: payload.code ?? payload.key,
+            bubbles: true,
+            cancelable: true,
+            metaKey: modifiers.includes("meta") || (modifiers.includes("mod") && isMac),
+            ctrlKey: modifiers.includes("ctrl") || (modifiers.includes("mod") && !isMac),
+            shiftKey: modifiers.includes("shift"),
+            altKey: modifiers.includes("alt"),
+          };
+
+          let target: EventTarget;
+          if (payload.selector) {
+            const el = document.querySelector(payload.selector);
+            if (!el) {
+              sendDone(payload.requestId, `Selector not found: ${payload.selector}`);
+              return;
+            }
+            target = el;
+          } else {
+            target = document.activeElement ?? document.documentElement;
+          }
+
+          target.dispatchEvent(new KeyboardEvent("keydown", opts));
+          target.dispatchEvent(new KeyboardEvent("keyup", opts));
+          sendDone(payload.requestId);
+        } catch (err) {
+          sendDone(payload.requestId, String(err));
+        }
+      })
+    );
+
+    // --- waitForIdle handler: MutationObserver + getAnimations + double-rAF ---
+    cleanups.push(
+      demo.onExecCommand("demo:exec-wait-for-idle", async (raw: Record<string, unknown>) => {
+        const payload = raw as unknown as DemoWaitForIdlePayload & { requestId: string };
+        try {
+          const settleMs = payload.settleMs ?? 300;
+          const timeoutMs = payload.timeoutMs ?? 5000;
+
+          await new Promise<void>((resolve, reject) => {
+            const start = performance.now();
+            let timer: ReturnType<typeof setTimeout>;
+            const demoOverlay = document.querySelector("[data-demo-overlay]");
+
+            function isDemoOwned(el: Element | null): boolean {
+              if (!el || !demoOverlay) return false;
+              return demoOverlay.contains(el);
+            }
+
+            function check() {
+              const hasAnimations = document.getAnimations().some((a) => {
+                const state = a.playState as string;
+                if (state !== "running" && state !== "pending") return false;
+                const effect = a.effect as KeyframeEffect | null;
+                // Skip demo-owned animations (cursor, overlay)
+                if (effect?.target && isDemoOwned(effect.target as Element)) return false;
+                // Skip infinite CSS animations (spinners, pulses, breathe effects)
+                const timing = effect?.getComputedTiming?.();
+                if (timing && timing.iterations === Infinity) return false;
+                return true;
+              });
+
+              if (hasAnimations) {
+                resetTimer();
+                return;
+              }
+
+              // Double rAF to ensure paint is complete
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  observer.disconnect();
+                  resolve();
+                });
+              });
+            }
+
+            function resetTimer() {
+              if (performance.now() - start > timeoutMs) {
+                observer.disconnect();
+                reject(new Error("waitForIdle timed out"));
+                return;
+              }
+              clearTimeout(timer);
+              timer = setTimeout(check, settleMs);
+            }
+
+            const observer = new MutationObserver(() => resetTimer());
+            observer.observe(document.documentElement, {
+              attributes: true,
+              childList: true,
+              subtree: true,
+              characterData: true,
+            });
+
+            resetTimer();
+          });
+
           sendDone(payload.requestId);
         } catch (err) {
           sendDone(payload.requestId, String(err));

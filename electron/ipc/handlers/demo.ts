@@ -22,6 +22,14 @@ import type {
   DemoEncodeProgressEvent,
   DemoEncodeResult,
   DemoEncodePreset,
+  DemoScrollPayload,
+  DemoDragPayload,
+  DemoPressKeyPayload,
+  DemoSpotlightPayload,
+  DemoAnnotatePayload,
+  DemoAnnotateResult,
+  DemoDismissAnnotationPayload,
+  DemoWaitForIdlePayload,
 } from "../../../shared/types/ipc/demo.js";
 
 export function resolveFfmpegPath(): string {
@@ -139,6 +147,61 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     payload: DemoSleepPayload
   ): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SLEEP, payload);
+  };
+
+  const handleScroll = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: DemoScrollPayload
+  ): Promise<void> => {
+    await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SCROLL, payload);
+  };
+
+  const handleDrag = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: DemoDragPayload
+  ): Promise<void> => {
+    await sendCommandAndAwait(CHANNELS.DEMO_EXEC_DRAG, payload);
+  };
+
+  const handlePressKey = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: DemoPressKeyPayload
+  ): Promise<void> => {
+    await sendCommandAndAwait(CHANNELS.DEMO_EXEC_PRESS_KEY, payload);
+  };
+
+  const handleSpotlight = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: DemoSpotlightPayload
+  ): Promise<void> => {
+    await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SPOTLIGHT, payload);
+  };
+
+  const handleDismissSpotlight = async (): Promise<void> => {
+    await sendCommandAndAwait(CHANNELS.DEMO_EXEC_DISMISS_SPOTLIGHT);
+  };
+
+  const handleAnnotate = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: DemoAnnotatePayload
+  ): Promise<DemoAnnotateResult> => {
+    const id = payload.id ?? randomBytes(8).toString("hex");
+    await sendCommandAndAwait(CHANNELS.DEMO_EXEC_ANNOTATE, { ...payload, id });
+    return { id };
+  };
+
+  const handleDismissAnnotation = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: DemoDismissAnnotationPayload
+  ): Promise<void> => {
+    await sendCommandAndAwait(CHANNELS.DEMO_EXEC_DISMISS_ANNOTATION, payload);
+  };
+
+  const handleWaitForIdle = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: DemoWaitForIdlePayload
+  ): Promise<void> => {
+    await sendCommandAndAwait(CHANNELS.DEMO_EXEC_WAIT_FOR_IDLE, payload);
   };
 
   // --- Frame capture state ---
@@ -624,6 +687,14 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.DEMO_PAUSE, handlePause);
   ipcMain.handle(CHANNELS.DEMO_RESUME, handleResume);
   ipcMain.handle(CHANNELS.DEMO_SLEEP, handleSleep);
+  ipcMain.handle(CHANNELS.DEMO_SCROLL, handleScroll);
+  ipcMain.handle(CHANNELS.DEMO_DRAG, handleDrag);
+  ipcMain.handle(CHANNELS.DEMO_PRESS_KEY, handlePressKey);
+  ipcMain.handle(CHANNELS.DEMO_SPOTLIGHT, handleSpotlight);
+  ipcMain.handle(CHANNELS.DEMO_DISMISS_SPOTLIGHT, handleDismissSpotlight);
+  ipcMain.handle(CHANNELS.DEMO_ANNOTATE, handleAnnotate);
+  ipcMain.handle(CHANNELS.DEMO_DISMISS_ANNOTATION, handleDismissAnnotation);
+  ipcMain.handle(CHANNELS.DEMO_WAIT_FOR_IDLE, handleWaitForIdle);
   ipcMain.handle(CHANNELS.DEMO_START_CAPTURE, handleStartCapture);
   ipcMain.handle(CHANNELS.DEMO_STOP_CAPTURE, handleStopCapture);
   ipcMain.handle(CHANNELS.DEMO_GET_CAPTURE_STATUS, handleGetCaptureStatus);
@@ -644,6 +715,14 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     ipcMain.removeHandler(CHANNELS.DEMO_PAUSE);
     ipcMain.removeHandler(CHANNELS.DEMO_RESUME);
     ipcMain.removeHandler(CHANNELS.DEMO_SLEEP);
+    ipcMain.removeHandler(CHANNELS.DEMO_SCROLL);
+    ipcMain.removeHandler(CHANNELS.DEMO_DRAG);
+    ipcMain.removeHandler(CHANNELS.DEMO_PRESS_KEY);
+    ipcMain.removeHandler(CHANNELS.DEMO_SPOTLIGHT);
+    ipcMain.removeHandler(CHANNELS.DEMO_DISMISS_SPOTLIGHT);
+    ipcMain.removeHandler(CHANNELS.DEMO_ANNOTATE);
+    ipcMain.removeHandler(CHANNELS.DEMO_DISMISS_ANNOTATION);
+    ipcMain.removeHandler(CHANNELS.DEMO_WAIT_FOR_IDLE);
     ipcMain.removeHandler(CHANNELS.DEMO_START_CAPTURE);
     ipcMain.removeHandler(CHANNELS.DEMO_STOP_CAPTURE);
     ipcMain.removeHandler(CHANNELS.DEMO_GET_CAPTURE_STATUS);

@@ -53,6 +53,7 @@ import type {
   DemoEncodePayload,
   DemoEncodeProgressEvent,
   DemoEncodeResult,
+  DemoAnnotateResult,
 } from "./demo.js";
 import type {
   CopyTreeResult,
@@ -1234,6 +1235,24 @@ export interface ElectronAPI {
     pause(): Promise<void>;
     resume(): Promise<void>;
     sleep(durationMs: number): Promise<void>;
+    scroll(selector: string): Promise<void>;
+    drag(fromSelector: string, toSelector: string, durationMs?: number): Promise<void>;
+    pressKey(
+      key: string,
+      code?: string,
+      modifiers?: Array<"mod" | "ctrl" | "shift" | "alt" | "meta">,
+      selector?: string
+    ): Promise<void>;
+    spotlight(selector: string, padding?: number): Promise<void>;
+    dismissSpotlight(): Promise<void>;
+    annotate(
+      selector: string,
+      text: string,
+      position?: "top" | "bottom" | "left" | "right",
+      id?: string
+    ): Promise<DemoAnnotateResult>;
+    dismissAnnotation(id?: string): Promise<void>;
+    waitForIdle(settleMs?: number, timeoutMs?: number): Promise<void>;
     startCapture(payload: DemoStartCapturePayload): Promise<DemoStartCaptureResult>;
     stopCapture(): Promise<DemoStopCaptureResult>;
     getCaptureStatus(): Promise<DemoCaptureStatus>;

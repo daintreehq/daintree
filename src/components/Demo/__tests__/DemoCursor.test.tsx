@@ -93,12 +93,22 @@ describe("DemoCursor", () => {
     expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-sleep", expect.any(Function));
     expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-pause", expect.any(Function));
     expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-resume", expect.any(Function));
+    expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-scroll", expect.any(Function));
+    expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-drag", expect.any(Function));
+    expect(demoMock.onExecCommand).toHaveBeenCalledWith(
+      "demo:exec-press-key",
+      expect.any(Function)
+    );
+    expect(demoMock.onExecCommand).toHaveBeenCalledWith(
+      "demo:exec-wait-for-idle",
+      expect.any(Function)
+    );
   });
 
   it("cleans up listeners on unmount", () => {
     const { unmount } = render(<DemoCursor />);
-    // All 9 onExecCommand calls return cleanup functions
-    expect(demoMock.onExecCommand).toHaveBeenCalledTimes(9);
+    // All 13 onExecCommand calls return cleanup functions (9 original + 4 new: scroll, drag, pressKey, waitForIdle)
+    expect(demoMock.onExecCommand).toHaveBeenCalledTimes(13);
     unmount();
     // After unmount, listeners should be removed
     expect(listenerMap.get("demo:exec-move-to")?.length ?? 0).toBe(0);

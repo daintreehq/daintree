@@ -100,9 +100,9 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("registers 14 IPC handlers when isDemoMode is true", () => {
+  it("registers 22 IPC handlers when isDemoMode is true", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(14);
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(22);
     cleanup();
   });
 
@@ -123,13 +123,21 @@ describe("registerDemoHandlers", () => {
     expect(channels).toContain("demo:stop-capture");
     expect(channels).toContain("demo:get-capture-status");
     expect(channels).toContain("demo:encode");
+    expect(channels).toContain("demo:scroll");
+    expect(channels).toContain("demo:drag");
+    expect(channels).toContain("demo:press-key");
+    expect(channels).toContain("demo:spotlight");
+    expect(channels).toContain("demo:dismiss-spotlight");
+    expect(channels).toContain("demo:annotate");
+    expect(channels).toContain("demo:dismiss-annotation");
+    expect(channels).toContain("demo:wait-for-idle");
     cleanup();
   });
 
-  it("cleanup removes all 14 handlers", () => {
+  it("cleanup removes all 22 handlers", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
     cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(14);
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(22);
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:move-to");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:move-to-selector");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:click");
@@ -140,6 +148,14 @@ describe("registerDemoHandlers", () => {
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:pause");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:resume");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:sleep");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:scroll");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:drag");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:press-key");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:spotlight");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:dismiss-spotlight");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:annotate");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:dismiss-annotation");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:wait-for-idle");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:start-capture");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:stop-capture");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:get-capture-status");
@@ -437,6 +453,71 @@ describe("registerDemoHandlers", () => {
         offsetY: -3,
         requestId: "test-request-id",
       }
+    );
+  });
+
+  it("annotate handler returns pre-generated id", async () => {
+    const deps = makeDeps(true);
+    registerDemoHandlers(deps);
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]: unknown[]) => ch === "demo:annotate") ?? [];
+
+    ipcMainMock.on.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
+      if (channel === "demo:command-done") {
+        setTimeout(() => {
+          listener({}, { requestId: "test-request-id" });
+        }, 10);
+      }
+    });
+
+    const result = await handler({}, { selector: ".my-el", text: "Hello", position: "top" });
+    expect(result).toEqual({ id: "test-request-id" });
+    expect(deps.mainWindow!.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      "demo:exec-annotate",
+      expect.objectContaining({ selector: ".my-el", text: "Hello", id: "test-request-id" })
+    );
+  });
+
+  it("annotate handler uses provided id when given", async () => {
+    const deps = makeDeps(true);
+    registerDemoHandlers(deps);
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]: unknown[]) => ch === "demo:annotate") ?? [];
+
+    ipcMainMock.on.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
+      if (channel === "demo:command-done") {
+        setTimeout(() => {
+          listener({}, { requestId: "test-request-id" });
+        }, 10);
+      }
+    });
+
+    const result = await handler({}, { selector: ".my-el", text: "Hello", id: "custom-id" });
+    expect(result).toEqual({ id: "custom-id" });
+  });
+
+  it("scroll handler sends exec-scroll event and awaits done", async () => {
+    const deps = makeDeps(true);
+    registerDemoHandlers(deps);
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]: unknown[]) => ch === "demo:scroll") ?? [];
+
+    ipcMainMock.on.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
+      if (channel === "demo:command-done") {
+        setTimeout(() => {
+          listener({}, { requestId: "test-request-id" });
+        }, 10);
+      }
+    });
+
+    const result = await handler({}, { selector: ".content" });
+    expect(result).toBeUndefined();
+    expect(deps.mainWindow!.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      "demo:exec-scroll",
+      { selector: ".content", requestId: "test-request-id" }
     );
   });
 
