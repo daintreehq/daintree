@@ -100,18 +100,23 @@ export class TerminalRestoreController {
           const chunk = serializedState.substring(offset, offset + chunkSize);
           offset += chunkSize;
 
-          await Promise.race([
-            new Promise<void>((resolve, reject) => {
-              try {
-                managed.terminal.write(chunk, () => resolve());
-              } catch (err) {
-                reject(err);
-              }
-            }),
-            new Promise<void>((_, reject) =>
-              setTimeout(() => reject(new Error("Write timeout")), 5000)
-            ),
-          ]);
+          let timeoutHandle!: ReturnType<typeof setTimeout>;
+          try {
+            await Promise.race([
+              new Promise<void>((resolve, reject) => {
+                try {
+                  managed.terminal.write(chunk, () => resolve());
+                } catch (err) {
+                  reject(err);
+                }
+              }),
+              new Promise<void>((_, reject) => {
+                timeoutHandle = setTimeout(() => reject(new Error("Write timeout")), 5000);
+              }),
+            ]);
+          } finally {
+            clearTimeout(timeoutHandle);
+          }
 
           if (offset < total) {
             await this.yieldToUI();

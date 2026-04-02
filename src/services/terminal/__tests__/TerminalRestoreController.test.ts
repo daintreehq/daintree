@@ -253,6 +253,22 @@ describe("TerminalRestoreController", () => {
       expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred-data");
     });
 
+    it("clears all timeout handles after successful multi-chunk restore", async () => {
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+      const data = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 3);
+
+      const promise = controller.restoreFromSerializedIncremental("t1", data);
+      await flushMicrotasks();
+
+      for (let i = 0; i < 10; i++) {
+        await flushPostTasks();
+      }
+      await promise;
+
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
     it("falls back to setTimeout when scheduler is unavailable", async () => {
       (global as any).scheduler = undefined;
 
