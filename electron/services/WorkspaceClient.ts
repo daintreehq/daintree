@@ -66,6 +66,8 @@ export class WorkspaceClient extends EventEmitter {
   private copyTreeProgressCallbacks = new Map<string, CopyTreeProgressCallback>();
   private activeCopyTreeOperations = new Map<string, string>();
 
+  private readonly _statesInflight = new Map<string, Promise<WorktreeSnapshot[]>>();
+
   constructor(config: WorkspaceClientConfig = {}) {
     super();
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -369,6 +371,7 @@ export class WorkspaceClient extends EventEmitter {
         this.windowToProject.set(windowId, normalizedPath);
 
         if (isSwitching) {
+          this._statesInflight.delete(`w:${windowId}`);
           this.releaseOldProject(windowId, oldProjectPath);
         }
         return;
@@ -425,6 +428,7 @@ export class WorkspaceClient extends EventEmitter {
     this.windowToProject.set(windowId, normalizedPath);
 
     if (isSwitching) {
+      this._statesInflight.delete(`w:${windowId}`);
       this.releaseOldProject(windowId, oldProjectPath);
     }
   }
@@ -543,7 +547,26 @@ export class WorkspaceClient extends EventEmitter {
     }
   }
 
-  async getAllStatesAsync(windowId?: number): Promise<WorktreeSnapshot[]> {
+  getAllStatesAsync(windowId?: number): Promise<WorktreeSnapshot[]> {
+    const key = windowId !== undefined ? `w:${windowId}` : "all";
+    const existing = this._statesInflight.get(key);
+    if (existing) return existing;
+
+    const promise = this._doGetAllStates(windowId).then(
+      (result) => {
+        setTimeout(() => this._statesInflight.delete(key), 150);
+        return result;
+      },
+      (error) => {
+        this._statesInflight.delete(key);
+        throw error;
+      }
+    );
+    this._statesInflight.set(key, promise);
+    return promise;
+  }
+
+  private async _doGetAllStates(windowId?: number): Promise<WorktreeSnapshot[]> {
     if (windowId !== undefined) {
       const host = this.resolveHostForWindow(windowId);
       if (!host) return [];
@@ -555,21 +578,22 @@ export class WorkspaceClient extends EventEmitter {
       return result.states;
     }
 
-    // No windowId — aggregate from all hosts
-    const allStates: WorktreeSnapshot[] = [];
-    for (const entry of this.entries.values()) {
-      try {
+    // No windowId — fan out to all hosts in parallel
+    const entries = [...this.entries.values()];
+    const results = await Promise.allSettled(
+      entries.map((entry) => {
         const requestId = entry.host.generateRequestId();
-        const result = await entry.host.sendWithResponse<{ states: WorktreeSnapshot[] }>({
+        return entry.host.sendWithResponse<{ states: WorktreeSnapshot[] }>({
           type: "get-all-states",
           requestId,
         });
-        allStates.push(...result.states);
-      } catch {
-        // Host may be crashed or restarting
-      }
-    }
-    return allStates;
+      })
+    );
+    return results
+      .filter(
+        (r): r is PromiseFulfilledResult<{ states: WorktreeSnapshot[] }> => r.status === "fulfilled"
+      )
+      .flatMap((r) => r.value.states);
   }
 
   async getMonitorAsync(worktreeId: string): Promise<WorktreeSnapshot | null> {
@@ -1008,6 +1032,7 @@ export class WorkspaceClient extends EventEmitter {
     this.worktreePathToProject.clear();
     this.copyTreeProgressCallbacks.clear();
     this.activeCopyTreeOperations.clear();
+    this._statesInflight.clear();
     this.removeAllListeners();
   }
 

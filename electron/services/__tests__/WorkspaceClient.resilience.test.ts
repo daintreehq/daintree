@@ -244,7 +244,7 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(result).toEqual([]);
     });
 
-    it("aggregates from all hosts when no windowId", async () => {
+    it("aggregates from all hosts in parallel when no windowId", async () => {
       const load1 = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
       await load1;
@@ -253,19 +253,18 @@ describe("WorkspaceClient multi-process manager", () => {
       await readyAndResolveLoad(1);
       await load2;
 
-      // getAllStatesAsync iterates sequentially — must resolve host 0 before host 1 is called
       const statesPromise = client.getAllStatesAsync();
       await tick();
 
-      // Host 0 is awaited first
+      // Both hosts receive requests concurrently (parallel fan-out)
       const reqA = h(0).getLastRequest()!;
+      const reqB = h(1).getLastRequest()!;
+      expect(reqA.type).toBe("get-all-states");
+      expect(reqB.type).toBe("get-all-states");
+
       h(0).resolveRequest(reqA.requestId, {
         states: [{ id: "wt-a", name: "A" }],
       });
-
-      // After host 0 resolves, host 1 is called next
-      await tick();
-      const reqB = h(1).getLastRequest()!;
       h(1).resolveRequest(reqB.requestId, {
         states: [{ id: "wt-b", name: "B" }],
       });
@@ -273,6 +272,145 @@ describe("WorkspaceClient multi-process manager", () => {
       const result = await statesPromise;
       expect(result).toHaveLength(2);
       expect(result.map((s) => s.id)).toEqual(["wt-a", "wt-b"]);
+    });
+  });
+
+  describe("singleflight cache", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function readyAndResolveLoadFake(hostIndex: number): Promise<void> {
+      h(hostIndex).simulateReady();
+      await vi.advanceTimersByTimeAsync(0);
+      const req = h(hostIndex).getLastRequest()!;
+      h(hostIndex).resolveRequest(req.requestId);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    it("concurrent calls return the same Promise", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoadFake(0);
+      await load;
+
+      const p1 = client.getAllStatesAsync(1);
+      const p2 = client.getAllStatesAsync(1);
+      expect(p1).toBe(p2);
+
+      await vi.advanceTimersByTimeAsync(0);
+      const req = h(0).getLastRequest()!;
+      expect(h(0).sendWithResponse).toHaveBeenCalledTimes(2); // 1 load + 1 get-all-states
+      h(0).resolveRequest(req.requestId, { states: [{ id: "wt-1" }] });
+
+      const [r1, r2] = await Promise.all([p1, p2]);
+      expect(r1).toEqual([{ id: "wt-1" }]);
+      expect(r2).toEqual([{ id: "wt-1" }]);
+    });
+
+    it("creates new Promise after TTL expires", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoadFake(0);
+      await load;
+
+      const p1 = client.getAllStatesAsync(1);
+      await vi.advanceTimersByTimeAsync(0);
+      const req1 = h(0).getLastRequest()!;
+      h(0).resolveRequest(req1.requestId, { states: [{ id: "wt-1" }] });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Before TTL: same Promise
+      const p2 = client.getAllStatesAsync(1);
+      expect(p2).toBe(p1);
+
+      // Advance past TTL
+      await vi.advanceTimersByTimeAsync(150);
+
+      // After TTL: new Promise
+      const p3 = client.getAllStatesAsync(1);
+      expect(p3).not.toBe(p1);
+
+      await vi.advanceTimersByTimeAsync(0);
+      const req2 = h(0).getLastRequest()!;
+      h(0).resolveRequest(req2.requestId, { states: [{ id: "wt-2" }] });
+      const r3 = await p3;
+      expect(r3).toEqual([{ id: "wt-2" }]);
+    });
+
+    it("evicts immediately on error allowing retry", async () => {
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoadFake(0);
+      await load;
+
+      const p1 = client.getAllStatesAsync(1);
+      await vi.advanceTimersByTimeAsync(0);
+      const req1 = h(0).getLastRequest()!;
+      h(0).rejectRequest(req1.requestId, new Error("host crashed"));
+      await expect(p1).rejects.toThrow("host crashed");
+
+      // Immediately after error: new Promise (not cached)
+      const p2 = client.getAllStatesAsync(1);
+      expect(p2).not.toBe(p1);
+
+      await vi.advanceTimersByTimeAsync(0);
+      const req2 = h(0).getLastRequest()!;
+      h(0).resolveRequest(req2.requestId, { states: [{ id: "wt-ok" }] });
+      const r2 = await p2;
+      expect(r2).toEqual([{ id: "wt-ok" }]);
+    });
+
+    it("different windowIds get separate cache entries", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoadFake(0);
+      await load1;
+
+      const load2 = client.loadProject("/project-b", 2);
+      await readyAndResolveLoadFake(1);
+      await load2;
+
+      const p1 = client.getAllStatesAsync(1);
+      const p2 = client.getAllStatesAsync(2);
+      expect(p1).not.toBe(p2);
+
+      await vi.advanceTimersByTimeAsync(0);
+      const req1 = h(0).getLastRequest()!;
+      const req2 = h(1).getLastRequest()!;
+      h(0).resolveRequest(req1.requestId, { states: [{ id: "wt-a" }] });
+      h(1).resolveRequest(req2.requestId, { states: [{ id: "wt-b" }] });
+
+      expect(await p1).toEqual([{ id: "wt-a" }]);
+      expect(await p2).toEqual([{ id: "wt-b" }]);
+    });
+
+    it("no-windowId path fans out to all hosts in parallel", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoadFake(0);
+      await load1;
+
+      const load2 = client.loadProject("/project-b", 2);
+      await readyAndResolveLoadFake(1);
+      await load2;
+
+      const callsBefore0 = h(0).sendWithResponse.mock.calls.length;
+      const callsBefore1 = h(1).sendWithResponse.mock.calls.length;
+
+      const statesPromise = client.getAllStatesAsync();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Both hosts received requests before either resolves
+      expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore0 + 1);
+      expect(h(1).sendWithResponse.mock.calls.length).toBe(callsBefore1 + 1);
+
+      const reqA = h(0).getLastRequest()!;
+      const reqB = h(1).getLastRequest()!;
+      h(0).resolveRequest(reqA.requestId, { states: [{ id: "wt-a" }] });
+      h(1).resolveRequest(reqB.requestId, { states: [{ id: "wt-b" }] });
+
+      const result = await statesPromise;
+      expect(result).toHaveLength(2);
+      expect(result.map((s: any) => s.id)).toEqual(["wt-a", "wt-b"]);
     });
   });
 
