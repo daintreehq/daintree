@@ -857,6 +857,7 @@ export async function hydrateAppState(
         rendererTimeOrigin: performance.timeOrigin,
         rendererT0: RENDERER_T0,
       });
+      window.__CANOPY_PERF_MARKS__ = [];
     }
   }
 }

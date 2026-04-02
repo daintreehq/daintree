@@ -18,6 +18,8 @@ export function registerPerfHandlers(): () => void {
     const { marks, rendererTimeOrigin, rendererT0 } = payload;
 
     for (const record of marks) {
+      if (typeof record.elapsedMs !== "number") continue;
+
       const rebasedMs = rebaseRendererElapsedMs(
         rendererTimeOrigin,
         rendererT0,
