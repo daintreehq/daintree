@@ -955,6 +955,9 @@ export class WorkspaceService {
         throw new Error("Path traversal detected");
       }
 
+      // Git always uses forward slashes in diff output, even on Windows
+      const gitPath = normalizedPath.replaceAll("\\", "/");
+
       const git = createHardenedGit(cwd);
 
       if (status === "untracked" || status === "added") {
@@ -979,10 +982,10 @@ export class WorkspaceService {
         const content = buffer.toString("utf-8");
         const lines = content.split("\n");
 
-        const diff = `diff --git a/${normalizedPath} b/${normalizedPath}
+        const diff = `diff --git a/${gitPath} b/${gitPath}
 new file mode 100644
 --- /dev/null
-+++ b/${normalizedPath}
++++ b/${gitPath}
 @@ -0,0 +1,${lines.length} @@
 ${lines.map((l) => "+" + l).join("\n")}`;
 
