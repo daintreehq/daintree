@@ -245,7 +245,7 @@ function EmptyState({
   const handleOpenHelp = () => {
     void actionService.dispatch(
       "system.openExternal",
-      { url: "https://github.com/gregpriday/canopy-electron#readme" },
+      { url: "https://github.com/canopyide/canopy#readme" },
       { source: "user" }
     );
   };

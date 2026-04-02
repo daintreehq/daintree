@@ -13,8 +13,8 @@ app.setAboutPanelOptions({
   applicationName: "Canopy",
   applicationVersion: app.getVersion(),
   version: "Beta",
-  copyright: "© 2025 Canopy Team",
-  website: "https://github.com/gregpriday/canopy-electron",
+  copyright: `© ${new Date().getFullYear()} Canopy Team`,
+  website: "https://github.com/canopyide/canopy",
 });
 
 function convertShortcutToAccelerator(shortcut: string): string {
@@ -302,7 +302,7 @@ export function createApplicationMenu(
         {
           label: "Learn More",
           click: async () => {
-            await shell.openExternal("https://github.com/gregpriday/canopy-electron");
+            await shell.openExternal("https://github.com/canopyide/canopy");
           },
         },
         ...(process.platform !== "darwin" && app.isPackaged
