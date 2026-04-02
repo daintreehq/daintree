@@ -17,9 +17,10 @@ import {
   LayoutGrid,
   Ellipsis,
   GitBranch,
+  StickyNote,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { CopyTreeIcon, NotesPanelIcon, McpServerIcon } from "@/components/icons";
+import { CopyTreeIcon, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
@@ -78,7 +79,7 @@ const OVERFLOW_MENU_META: Partial<
   "panel-palette": { label: "Panel Palette", icon: LayoutGrid },
   "github-stats": { label: "GitHub Stats", icon: GitPullRequest },
   "notification-center": { label: "Notifications", icon: Bell },
-  notes: { label: "Notes", icon: NotesPanelIcon },
+  notes: { label: "Notes", icon: StickyNote },
   "copy-tree": { label: "Copy Context", icon: CopyTreeIcon },
   settings: { label: "Settings", icon: SlidersHorizontal },
   problems: { label: "Problems", icon: AlertCircle },
@@ -477,7 +478,7 @@ export function Toolbar({
                   className={toolbarIconButtonClass}
                   aria-label="Open notes palette"
                 >
-                  <NotesPanelIcon />
+                  <StickyNote />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">

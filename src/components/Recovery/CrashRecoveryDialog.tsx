@@ -8,8 +8,9 @@ import {
   SquareTerminal,
   Globe,
   Monitor,
+  StickyNote,
 } from "lucide-react";
-import { CanopyAgentIcon, NotesPanelIcon } from "@/components/icons";
+import { CanopyAgentIcon } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
 import type {
@@ -35,7 +36,7 @@ function getPanelIcon(kind: string) {
     case "browser":
       return <Globe className="h-3.5 w-3.5" />;
     case "notes":
-      return <NotesPanelIcon className="h-3.5 w-3.5" />;
+      return <StickyNote className="h-3.5 w-3.5" />;
     case "dev-preview":
       return <Monitor className="h-3.5 w-3.5" />;
     default:

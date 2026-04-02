@@ -27,6 +27,7 @@ import {
   LayoutGrid,
   Rocket,
   RotateCcw,
+  StickyNote,
 } from "lucide-react";
 import {
   ClaudeIcon,
@@ -35,7 +36,6 @@ import {
   OpenCodeIcon,
   CanopyAgentIcon,
   CopyTreeIcon,
-  NotesPanelIcon,
 } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
@@ -105,7 +105,7 @@ const BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, ButtonMetadata>> = {
   },
   notes: {
     label: "Notes",
-    icon: <NotesPanelIcon className="h-4 w-4" />,
+    icon: <StickyNote className="h-4 w-4" />,
     description: "Open notes palette",
   },
   "copy-tree": {
