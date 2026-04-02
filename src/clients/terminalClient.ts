@@ -20,6 +20,7 @@ let messagePortConnected = false;
 
 const dataCallbacks = new Map<string, Set<(data: string | Uint8Array) => void>>();
 const earlyDataBuffer = new Map<string, Array<string | Uint8Array>>();
+const pendingPortAckBytes = new Map<string, number[]>();
 const MAX_EARLY_BUFFER_CHUNKS = 500;
 
 function installPortDataHandler(port: MessagePort): void {
@@ -31,7 +32,15 @@ function installPortDataHandler(port: MessagePort): void {
       const cbs = dataCallbacks.get(msg.id);
       if (cbs) {
         // Live-callback path: defer ACK until xterm write callback fires.
-        // acknowledgePortData() will be called from TerminalInstanceService.writeToTerminal().
+        // Queue the original byte count so acknowledgePortData() uses the pty-host's
+        // UTF-8 byte count (msg.bytes) rather than JS string.length.
+        let queue = pendingPortAckBytes.get(msg.id);
+        if (!queue) {
+          queue = [];
+          pendingPortAckBytes.set(msg.id, queue);
+        }
+        queue.push(byteCount);
+
         for (const cb of cbs) {
           cb(msg.data);
         }
@@ -279,9 +288,15 @@ export const terminalClient = {
   /**
    * Acknowledge processed data bytes via the MessagePort (Flow Control — port path).
    * Called from TerminalInstanceService.writeToTerminal() after xterm consumes the chunk.
+   * Uses the original pty-host byte count queued by installPortDataHandler, not the
+   * caller's byte count, to avoid UTF-16 vs UTF-8 length mismatches.
+   * No-op when the queue is empty (data came via IPC or early-buffer flush).
    */
-  acknowledgePortData: (id: string, bytes: number): void => {
+  acknowledgePortData: (id: string, _bytes: number): void => {
     if (!messagePort) return;
+    const queue = pendingPortAckBytes.get(id);
+    if (!queue || queue.length === 0) return;
+    const bytes = queue.shift()!;
     try {
       messagePort.postMessage({ type: "ack", id, bytes });
     } catch {

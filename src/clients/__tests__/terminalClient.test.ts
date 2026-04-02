@@ -260,26 +260,57 @@ describe("terminalClient MessagePort data routing", () => {
     });
   });
 
-  it("acknowledgePortData sends deferred ack via the active port", () => {
+  it("acknowledgePortData sends deferred ack with original msg.bytes", () => {
     const port = acquirePort();
 
-    terminalClient.acknowledgePortData("term-1", 99);
+    // Register callback so data goes through the live path (queues byte count)
+    terminalClient.onData("term-1", () => {});
+
+    // Send data with bytes: 42 (original pty-host UTF-8 byte count)
+    port.postMessage({ type: "data", id: "term-1", data: "hello", bytes: 42 });
 
     return new Promise<void>((resolve) => {
-      port.addEventListener("message", (event: MessageEvent) => {
-        const msg = event.data as Record<string, unknown>;
-        if (msg?.type === "ack" && msg.id === "term-1") {
-          expect(msg.bytes).toBe(99);
-          resolve();
-        }
-      });
-      port.start();
+      setTimeout(() => {
+        // Now call acknowledgePortData — it should use the queued 42, not the passed 999
+        terminalClient.acknowledgePortData("term-1", 999);
+
+        port.addEventListener("message", (event: MessageEvent) => {
+          const msg = event.data as Record<string, unknown>;
+          if (msg?.type === "ack" && msg.id === "term-1") {
+            expect(msg.bytes).toBe(42);
+            resolve();
+          }
+        });
+        port.start();
+      }, 50);
     });
   });
 
   it("acknowledgePortData is a no-op when no port is connected", () => {
     // No port acquired — should not throw
     expect(() => terminalClient.acknowledgePortData("term-1", 42)).not.toThrow();
+  });
+
+  it("acknowledgePortData is a no-op when byte queue is empty (IPC or early-flush data)", () => {
+    const port = acquirePort();
+
+    // Call acknowledgePortData without any prior port data dispatch (simulates
+    // IPC data or early-buffer flush reaching writeToTerminal)
+    terminalClient.acknowledgePortData("term-1", 100);
+
+    return new Promise<void>((resolve) => {
+      const acks: Record<string, unknown>[] = [];
+      port.addEventListener("message", (event: MessageEvent) => {
+        const msg = event.data as Record<string, unknown>;
+        if (msg?.type === "ack") acks.push(msg);
+      });
+      port.start();
+
+      setTimeout(() => {
+        expect(acks).toEqual([]);
+        resolve();
+      }, 100);
+    });
   });
 
   it("dispatches to correct terminal only", () => {
