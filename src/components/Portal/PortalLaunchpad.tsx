@@ -1,7 +1,7 @@
 import { Globe } from "lucide-react";
-import { useMemo } from "react";
 import type { PortalLink } from "@shared/types";
 import { PortalIcon } from "./PortalIcon";
+import { isMac } from "@/lib/platform";
 
 interface PortalLaunchpadProps {
   links: PortalLink[];
@@ -9,7 +9,7 @@ interface PortalLaunchpadProps {
 }
 
 export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
-  const isMac = useMemo(() => navigator.platform.toUpperCase().includes("MAC"), []);
+  const mac = isMac();
   if (links.length === 0) {
     return (
       <div className="flex-1 flex flex-col items-center justify-start pt-8 text-muted-foreground px-6">
@@ -29,7 +29,7 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
               key={link.id}
               type="button"
               onClick={(e) => {
-                const modifierBackground = isMac ? e.metaKey : e.ctrlKey;
+                const modifierBackground = mac ? e.metaKey : e.ctrlKey;
                 onOpenUrl(link.url, link.title, modifierBackground);
               }}
               onAuxClick={(e) => {

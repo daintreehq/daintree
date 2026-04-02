@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { isMac } from "@/lib/platform";
 import type React from "react";
 import type { Terminal as XTermTerminal } from "@xterm/xterm";
 import { type PanelLocation, type TerminalType } from "@/types";
@@ -180,8 +181,8 @@ export function TerminalContextMenu({
 
   const currentLocation: PanelLocation = forceLocation ?? terminal?.location ?? "grid";
 
-  const isMac = navigator.platform.toLowerCase().includes("mac");
-  const modifierKey = isMac ? "⌘" : "Ctrl";
+  const mac = isMac();
+  const modifierKey = mac ? "⌘" : "Ctrl";
 
   const handleAction = useCallback(
     (actionId: string) => {
@@ -659,7 +660,7 @@ export function TerminalContextMenu({
             <ContextMenuItem onSelect={() => handleAction("paste")}>
               <Clipboard className={ICON_CLASS} aria-hidden="true" />
               Paste
-              <ContextMenuShortcut>{isMac ? `${modifierKey}V` : "Ctrl+⇧V"}</ContextMenuShortcut>
+              <ContextMenuShortcut>{mac ? `${modifierKey}V` : "Ctrl+⇧V"}</ContextMenuShortcut>
             </ContextMenuItem>
             <ContextMenuItem
               disabled={!hasSelection}
@@ -673,7 +674,7 @@ export function TerminalContextMenu({
             >
               <Send className={ICON_CLASS} aria-hidden="true" />
               Send to Agent
-              <ContextMenuShortcut>{isMac ? "⌘⇧E" : "Ctrl+⇧E"}</ContextMenuShortcut>
+              <ContextMenuShortcut>{mac ? "⌘⇧E" : "Ctrl+⇧E"}</ContextMenuShortcut>
             </ContextMenuItem>
             {hoveredUrl && (
               <>
@@ -727,7 +728,7 @@ export function TerminalContextMenu({
               <Bell className={ICON_CLASS} aria-hidden="true" />
             )}
             {isWatched ? "Cancel Watch" : "Watch Terminal"}
-            <ContextMenuShortcut>{isMac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
+            <ContextMenuShortcut>{mac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
           </ContextMenuItem>
         )}
         {terminal.agentId && (

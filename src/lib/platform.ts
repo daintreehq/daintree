@@ -10,6 +10,18 @@ export function isMac(): boolean {
   return _isMac;
 }
 
+let _isWindows: boolean | undefined;
+
+export function isWindows(): boolean {
+  if (_isWindows === undefined) {
+    _isWindows =
+      typeof navigator !== "undefined" &&
+      !!navigator.platform &&
+      navigator.platform.toUpperCase().includes("WIN");
+  }
+  return _isWindows;
+}
+
 let _isLinux: boolean | undefined;
 
 export function isLinux(): boolean {

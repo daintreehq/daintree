@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { isMac } from "@/lib/platform";
 import { Search, X, RotateCcw, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -65,10 +66,10 @@ function KeyRecorder({ onCapture, onCancel, excludeActionId }: KeyRecorderProps)
       e.stopPropagation();
 
       const parts: string[] = [];
-      const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+      const mac = isMac();
 
-      if (isMac && e.metaKey) parts.push("Cmd");
-      if (!isMac && e.ctrlKey) parts.push("Cmd");
+      if (mac && e.metaKey) parts.push("Cmd");
+      if (!mac && e.ctrlKey) parts.push("Cmd");
       if (e.shiftKey) parts.push("Shift");
       if (e.altKey) parts.push("Alt");
 

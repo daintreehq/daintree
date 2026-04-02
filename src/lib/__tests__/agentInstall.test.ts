@@ -1,68 +1,89 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { detectOS, getInstallBlocksForCurrentOS } from "../agentInstall";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import type { AgentConfig } from "../../../shared/config/agentRegistry";
 
+const originalNavigator = globalThis.navigator;
+
+function stubNavigator(userAgent: string, platform: string) {
+  Object.defineProperty(globalThis, "navigator", {
+    value: { userAgent, platform },
+    writable: true,
+    configurable: true,
+  });
+}
+
+function restoreNavigator() {
+  Object.defineProperty(globalThis, "navigator", {
+    value: originalNavigator,
+    writable: true,
+    configurable: true,
+  });
+}
+
+afterEach(() => {
+  restoreNavigator();
+  vi.resetModules();
+});
+
 describe("agentInstall", () => {
-  const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
-
-  const setNavigator = (value: Navigator | undefined) => {
-    Object.defineProperty(globalThis, "navigator", {
-      value,
-      configurable: true,
-      writable: true,
-    });
-  };
-
-  beforeEach(() => {
-    setNavigator({ platform: "Linux x86_64" } as Navigator);
-  });
-
-  afterEach(() => {
-    if (originalNavigatorDescriptor) {
-      Object.defineProperty(globalThis, "navigator", originalNavigatorDescriptor);
-    } else {
-      delete (globalThis as { navigator?: Navigator }).navigator;
-    }
-  });
-
   describe("detectOS", () => {
-    it("should detect macOS", () => {
-      Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+    it("should detect macOS", async () => {
+      stubNavigator(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "MacIntel"
+      );
+      const { detectOS } = await import("../agentInstall");
       expect(detectOS()).toBe("macos");
     });
 
-    it("should detect macOS case-insensitively", () => {
-      Object.defineProperty(navigator, "platform", { value: "macIntel", configurable: true });
+    it("should detect macOS case-insensitively", async () => {
+      stubNavigator(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "macIntel"
+      );
+      const { detectOS } = await import("../agentInstall");
       expect(detectOS()).toBe("macos");
     });
 
-    it("should detect Windows", () => {
-      Object.defineProperty(navigator, "platform", { value: "Win32", configurable: true });
+    it("should detect Windows", async () => {
+      stubNavigator("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Win32");
+      const { detectOS } = await import("../agentInstall");
       expect(detectOS()).toBe("windows");
     });
 
-    it("should detect Windows case-insensitively", () => {
-      Object.defineProperty(navigator, "platform", { value: "win32", configurable: true });
+    it("should detect Windows case-insensitively", async () => {
+      stubNavigator("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "win32");
+      const { detectOS } = await import("../agentInstall");
       expect(detectOS()).toBe("windows");
     });
 
-    it("should detect Linux explicitly", () => {
-      Object.defineProperty(navigator, "platform", { value: "Linux x86_64", configurable: true });
+    it("should detect Linux explicitly", async () => {
+      stubNavigator(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Electron/40.0.0",
+        "Linux x86_64"
+      );
+      const { detectOS } = await import("../agentInstall");
       expect(detectOS()).toBe("linux");
     });
 
-    it("should return generic for unknown platforms", () => {
-      Object.defineProperty(navigator, "platform", { value: "FreeBSD", configurable: true });
+    it("should return generic for unknown platforms", async () => {
+      stubNavigator("Mozilla/5.0", "FreeBSD");
+      const { detectOS } = await import("../agentInstall");
       expect(detectOS()).toBe("generic");
     });
 
-    it("should return generic when navigator is undefined", () => {
-      setNavigator(undefined);
+    it("should return generic when navigator is undefined", async () => {
+      Object.defineProperty(globalThis, "navigator", {
+        value: undefined,
+        writable: true,
+        configurable: true,
+      });
+      const { detectOS } = await import("../agentInstall");
       expect(detectOS()).toBe("generic");
     });
 
-    it("should return generic when platform is empty", () => {
-      Object.defineProperty(navigator, "platform", { value: "", configurable: true });
+    it("should return generic when platform is empty", async () => {
+      stubNavigator("", "");
+      const { detectOS } = await import("../agentInstall");
       expect(detectOS()).toBe("generic");
     });
   });
@@ -106,32 +127,45 @@ describe("agentInstall", () => {
       },
     };
 
-    it("should return macOS blocks on macOS", () => {
-      Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+    it("should return macOS blocks on macOS", async () => {
+      stubNavigator(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "MacIntel"
+      );
+      const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
       const blocks = getInstallBlocksForCurrentOS(mockAgent);
       expect(blocks).toHaveLength(1);
       expect(blocks?.[0].label).toBe("Homebrew");
       expect(blocks?.[0].commands).toEqual(["brew install test"]);
     });
 
-    it("should return Windows blocks on Windows", () => {
-      Object.defineProperty(navigator, "platform", { value: "Win32", configurable: true });
+    it("should return Windows blocks on Windows", async () => {
+      stubNavigator("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Win32");
+      const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
       const blocks = getInstallBlocksForCurrentOS(mockAgent);
       expect(blocks).toHaveLength(1);
       expect(blocks?.[0].label).toBe("npm");
       expect(blocks?.[0].commands).toEqual(["npm install -g test"]);
     });
 
-    it("should return Linux blocks on Linux", () => {
-      Object.defineProperty(navigator, "platform", { value: "Linux x86_64", configurable: true });
+    it("should return Linux blocks on Linux", async () => {
+      stubNavigator(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Electron/40.0.0",
+        "Linux x86_64"
+      );
+      const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
       const blocks = getInstallBlocksForCurrentOS(mockAgent);
       expect(blocks).toHaveLength(1);
       expect(blocks?.[0].label).toBe("apt");
       expect(blocks?.[0].commands).toEqual(["apt install test"]);
     });
 
-    it("should fallback to generic blocks if OS-specific blocks not available", () => {
-      Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+    it("should fallback to generic blocks if OS-specific blocks not available", async () => {
+      stubNavigator(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "MacIntel"
+      );
+      const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
       const agentWithoutMacOS: AgentConfig = {
         ...mockAgent,
         install: {
@@ -151,7 +185,9 @@ describe("agentInstall", () => {
       expect(blocks?.[0].label).toBe("Generic");
     });
 
-    it("should return null if no install config", () => {
+    it("should return null if no install config", async () => {
+      stubNavigator("", "");
+      const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
       const agentWithoutInstall: AgentConfig = {
         id: "test",
         name: "Test",
@@ -164,7 +200,9 @@ describe("agentInstall", () => {
       expect(blocks).toBeNull();
     });
 
-    it("should return null if no byOs config", () => {
+    it("should return null if no byOs config", async () => {
+      stubNavigator("", "");
+      const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
       const agentWithoutByOs: AgentConfig = {
         ...mockAgent,
         install: {
@@ -175,8 +213,12 @@ describe("agentInstall", () => {
       expect(blocks).toBeNull();
     });
 
-    it("should return null if no blocks for current OS and no generic fallback", () => {
-      Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+    it("should return null if no blocks for current OS and no generic fallback", async () => {
+      stubNavigator(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "MacIntel"
+      );
+      const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
       const agentWithoutMacOSOrGeneric: AgentConfig = {
         ...mockAgent,
         install: {
@@ -195,8 +237,12 @@ describe("agentInstall", () => {
       expect(blocks).toBeNull();
     });
 
-    it("should handle multiple blocks for a single OS", () => {
-      Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+    it("should handle multiple blocks for a single OS", async () => {
+      stubNavigator(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "MacIntel"
+      );
+      const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
       const agentWithMultipleBlocks: AgentConfig = {
         ...mockAgent,
         install: {
@@ -221,8 +267,12 @@ describe("agentInstall", () => {
       expect(blocks?.[1].label).toBe("npm");
     });
 
-    it("should prioritize OS-specific blocks over generic", () => {
-      Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+    it("should prioritize OS-specific blocks over generic", async () => {
+      stubNavigator(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "MacIntel"
+      );
+      const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
       const agentWithBoth: AgentConfig = {
         ...mockAgent,
         install: {
@@ -248,8 +298,12 @@ describe("agentInstall", () => {
       expect(blocks?.[0].label).toBe("Homebrew");
     });
 
-    it("should fallback to generic when OS-specific array is empty", () => {
-      Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+    it("should fallback to generic when OS-specific array is empty", async () => {
+      stubNavigator(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "MacIntel"
+      );
+      const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
       const agentWithEmptyMacOS: AgentConfig = {
         ...mockAgent,
         install: {
