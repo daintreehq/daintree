@@ -298,7 +298,8 @@ describe("terminalStore process detection listeners", () => {
 
     beforeEach(async () => {
       const mod = await import("@/services/TerminalInstanceService");
-      terminalInstanceService = mod.terminalInstanceService as typeof terminalInstanceService;
+      terminalInstanceService =
+        mod.terminalInstanceService as unknown as typeof terminalInstanceService;
     });
 
     it("calls wake on suspended status", () => {
