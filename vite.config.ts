@@ -65,7 +65,7 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     babel({
-      presets: [reactCompilerPreset({ compilationMode: "annotation" })],
+      presets: [reactCompilerPreset({ compilationMode: "infer" })],
     }),
     tailwindcss(),
     cspTransformPlugin(),
