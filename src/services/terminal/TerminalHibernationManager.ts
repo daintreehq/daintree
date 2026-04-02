@@ -138,9 +138,7 @@ export class TerminalHibernationManager {
 
     // Reuse existing hostElement — clear old xterm DOM nodes to prevent ghosting
     const hostElement = managed.hostElement;
-    while (hostElement.firstChild) {
-      hostElement.removeChild(hostElement.firstChild);
-    }
+    hostElement.replaceChildren();
 
     // Re-create parser handler
     managed.parserHandler = new TerminalParserHandler(managed, () => {
