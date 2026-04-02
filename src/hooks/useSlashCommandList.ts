@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { slashCommandsClient } from "@/clients";
 
-import { getBuiltinSlashCommands, type LegacyAgentType, type SlashCommand } from "@shared/types";
+import { getBuiltinSlashCommands, type SlashCommand } from "@shared/types";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 
 export interface UseSlashCommandListArgs {
-  agentId?: LegacyAgentType;
+  agentId?: BuiltInAgentId;
   projectPath?: string;
 }
 

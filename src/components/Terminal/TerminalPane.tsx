@@ -31,7 +31,8 @@ import {
 } from "@/store";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { errorsClient } from "@/clients";
-import type { AgentState, LegacyAgentType } from "@/types";
+import type { AgentState } from "@/types";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { actionService } from "@/services/ActionService";
 import { InputTracker } from "@/services/clearCommandDetection";
@@ -210,7 +211,7 @@ function TerminalPaneComponent({
       : type && isRegisteredAgent(type)
         ? type
         : undefined
-  ) as LegacyAgentType | undefined;
+  ) as BuiltInAgentId | undefined;
   const isAgentTerminal = effectiveAgentId !== undefined;
   const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
 

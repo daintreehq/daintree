@@ -36,17 +36,3 @@ export interface DevPreviewSessionState {
 export interface DevPreviewStateChangedPayload {
   state: DevPreviewSessionState;
 }
-
-/** @deprecated Replaced by `dev-preview:state-changed` payload. */
-export interface DevPreviewUrlDetectedPayload {
-  terminalId: string;
-  url: string;
-  worktreeId?: string;
-}
-
-/** @deprecated Replaced by `dev-preview:state-changed` payload. */
-export interface DevPreviewErrorDetectedPayload {
-  terminalId: string;
-  error: DevServerError;
-  worktreeId?: string;
-}

@@ -6,7 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { getProjectGradient, isValidHexColor } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
-import { validateProjectSvg, sanitizeSvg, svgToDataUrl } from "@/lib/svg";
+import { sanitizeSvg, svgToDataUrl } from "@/lib/svg";
 import { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
 import type { Project } from "@shared/types/project";
 
@@ -144,7 +144,7 @@ export function GeneralTab({
     }
     try {
       const text = await file.text();
-      const result = validateProjectSvg(text);
+      const result = sanitizeSvg(text);
       if (!result.ok) {
         setIconError(result.error);
         return;

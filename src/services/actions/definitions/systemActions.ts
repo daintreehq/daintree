@@ -1,5 +1,5 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import { CopyTreeOptionsSchema, FileSearchPayloadSchema, LegacyAgentTypeSchema } from "./schemas";
+import { CopyTreeOptionsSchema, FileSearchPayloadSchema, BuiltInAgentIdSchema } from "./schemas";
 import { z } from "zod";
 import {
   artifactClient,
@@ -134,7 +134,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ agentId: LegacyAgentTypeSchema, projectPath: z.string().optional() }),
+    argsSchema: z.object({ agentId: BuiltInAgentIdSchema, projectPath: z.string().optional() }),
     run: async (args: unknown) => {
       const payload = args as {
         agentId: "claude" | "gemini" | "codex" | "opencode";

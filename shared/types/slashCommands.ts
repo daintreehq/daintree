@@ -1,4 +1,4 @@
-import type { LegacyAgentType } from "./agent.js";
+import type { BuiltInAgentId } from "../config/agentIds.js";
 
 export type SlashCommandScope = "built-in" | "global" | "user" | "project";
 
@@ -7,13 +7,13 @@ export interface SlashCommand {
   label: string; // e.g. "/compact"
   description: string;
   scope: SlashCommandScope;
-  agentId: LegacyAgentType;
+  agentId: BuiltInAgentId;
   sourcePath?: string;
   kind?: "command" | "skill";
 }
 
 export interface SlashCommandListRequest {
-  agentId: LegacyAgentType;
+  agentId: BuiltInAgentId;
   projectPath?: string;
 }
 
@@ -21,8 +21,8 @@ export interface BuiltinSlashCommandEntry {
   id: string;
   label: string;
   description: string;
-  descriptions?: Partial<Record<LegacyAgentType, string>>;
-  supportedAgents: readonly LegacyAgentType[];
+  descriptions?: Partial<Record<BuiltInAgentId, string>>;
+  supportedAgents: readonly BuiltInAgentId[];
 }
 
 const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
@@ -327,7 +327,7 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
 
 export { BUILTIN_SLASH_COMMANDS };
 
-export function getBuiltinSlashCommands(agentId: LegacyAgentType): SlashCommand[] {
+export function getBuiltinSlashCommands(agentId: BuiltInAgentId): SlashCommand[] {
   return BUILTIN_SLASH_COMMANDS.filter((entry) => entry.supportedAgents.includes(agentId)).map(
     (entry) => ({
       id: entry.id,

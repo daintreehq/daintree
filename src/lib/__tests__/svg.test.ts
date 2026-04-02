@@ -1,13 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { validateProjectSvg, svgToDataUrl, validateSvg } from "../svg";
+import { sanitizeSvg, svgToDataUrl, validateSvg } from "../svg";
 
-describe("validateProjectSvg (sanitizeSvg)", () => {
+describe("sanitizeSvg", () => {
   const validSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
     <circle cx="50" cy="50" r="40" fill="blue"/>
   </svg>`;
 
   it("should accept a valid SVG", () => {
-    const result = validateProjectSvg(validSvg);
+    const result = sanitizeSvg(validSvg);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.svg).toBe(validSvg.trim());
@@ -20,12 +20,12 @@ describe("validateProjectSvg (sanitizeSvg)", () => {
       <path d="M10 10 L90 90" stroke="black"/>
       <text x="50" y="50">Hello</text>
     </svg>`;
-    const result = validateProjectSvg(svg);
+    const result = sanitizeSvg(svg);
     expect(result.ok).toBe(true);
   });
 
   it("should reject empty input", () => {
-    const result = validateProjectSvg("");
+    const result = sanitizeSvg("");
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("required");
@@ -33,7 +33,7 @@ describe("validateProjectSvg (sanitizeSvg)", () => {
   });
 
   it("should reject null/undefined input", () => {
-    const result = validateProjectSvg(null as unknown as string);
+    const result = sanitizeSvg(null as unknown as string);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("required");
@@ -41,7 +41,7 @@ describe("validateProjectSvg (sanitizeSvg)", () => {
   });
 
   it("should reject non-SVG content", () => {
-    const result = validateProjectSvg("<html><body>Hello</body></html>");
+    const result = sanitizeSvg("<html><body>Hello</body></html>");
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("valid SVG");
@@ -53,7 +53,7 @@ describe("validateProjectSvg (sanitizeSvg)", () => {
       <script>alert('xss')</script>
       <circle cx="50" cy="50" r="40"/>
     </svg>`;
-    const result = validateProjectSvg(svgWithScript);
+    const result = sanitizeSvg(svgWithScript);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.svg).not.toContain("script");
@@ -69,7 +69,7 @@ describe("validateProjectSvg (sanitizeSvg)", () => {
       </foreignObject>
       <circle cx="50" cy="50" r="40"/>
     </svg>`;
-    const result = validateProjectSvg(svgWithForeignObject);
+    const result = sanitizeSvg(svgWithForeignObject);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.svg).not.toContain("foreignObject");
@@ -82,7 +82,7 @@ describe("validateProjectSvg (sanitizeSvg)", () => {
     const svgWithOnclick = `<svg xmlns="http://www.w3.org/2000/svg">
       <circle cx="50" cy="50" r="40" onclick="alert('xss')"/>
     </svg>`;
-    const result = validateProjectSvg(svgWithOnclick);
+    const result = sanitizeSvg(svgWithOnclick);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.svg).not.toContain("onclick");
@@ -95,7 +95,7 @@ describe("validateProjectSvg (sanitizeSvg)", () => {
     const svgWithOnload = `<svg xmlns="http://www.w3.org/2000/svg" onload="alert('xss')">
       <circle cx="50" cy="50" r="40"/>
     </svg>`;
-    const result = validateProjectSvg(svgWithOnload);
+    const result = sanitizeSvg(svgWithOnload);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.svg).not.toContain("onload");
@@ -110,7 +110,7 @@ describe("validateProjectSvg (sanitizeSvg)", () => {
         <circle cx="50" cy="50" r="40"/>
       </a>
     </svg>`;
-    const result = validateProjectSvg(svgWithJsUrl);
+    const result = sanitizeSvg(svgWithJsUrl);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.svg).not.toContain("javascript:");
@@ -124,7 +124,7 @@ describe("validateProjectSvg (sanitizeSvg)", () => {
       <image href="https://evil.com/image.svg"/>
       <circle cx="50" cy="50" r="40"/>
     </svg>`;
-    const result = validateProjectSvg(svgWithExternal);
+    const result = sanitizeSvg(svgWithExternal);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.svg).not.toContain("https://evil.com");
@@ -138,7 +138,7 @@ describe("validateProjectSvg (sanitizeSvg)", () => {
       <use xlink:href="https://evil.com/sprites.svg#icon"/>
       <circle cx="50" cy="50" r="40"/>
     </svg>`;
-    const result = validateProjectSvg(svgWithXlink);
+    const result = sanitizeSvg(svgWithXlink);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.svg).not.toContain("https://evil.com");
@@ -152,7 +152,7 @@ describe("validateProjectSvg (sanitizeSvg)", () => {
       <rect style="fill: url(https://evil.com/pattern)" width="100" height="100"/>
       <circle cx="50" cy="50" r="40"/>
     </svg>`;
-    const result = validateProjectSvg(svgWithUrlFunc);
+    const result = sanitizeSvg(svgWithUrlFunc);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.svg).not.toContain("https://evil.com");
@@ -165,7 +165,7 @@ describe("validateProjectSvg (sanitizeSvg)", () => {
     const largeSvg = `<svg xmlns="http://www.w3.org/2000/svg">
       <text>${"x".repeat(300 * 1024)}</text>
     </svg>`;
-    const result = validateProjectSvg(largeSvg);
+    const result = sanitizeSvg(largeSvg);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("too large");
@@ -181,7 +181,7 @@ describe("validateProjectSvg (sanitizeSvg)", () => {
       </defs>
       <rect fill="url(#grad1)" width="100" height="100"/>
     </svg>`;
-    const result = validateProjectSvg(svgWithInternalUrl);
+    const result = sanitizeSvg(svgWithInternalUrl);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.modified).toBe(false);
@@ -197,7 +197,7 @@ describe("validateProjectSvg (sanitizeSvg)", () => {
       </defs>
       <use href="#icon"/>
     </svg>`;
-    const result = validateProjectSvg(svgWithLocalHref);
+    const result = sanitizeSvg(svgWithLocalHref);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.modified).toBe(false);

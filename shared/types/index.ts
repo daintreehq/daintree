@@ -28,13 +28,7 @@ export type {
 export type { NotificationType, Notification, NotificationPayload } from "./notification.js";
 
 // Agent types
-export type {
-  AgentState,
-  TaskState,
-  RunRecord,
-  LegacyAgentType,
-  AgentStateChangeTrigger,
-} from "./agent.js";
+export type { AgentState, TaskState, RunRecord, AgentStateChangeTrigger } from "./agent.js";
 
 // Panel types
 export type {

@@ -1,10 +1,5 @@
-import type {
-  AgentState,
-  AgentStateChangeTrigger,
-  AgentId,
-  LegacyAgentType,
-  WaitingReason,
-} from "./agent.js";
+import type { AgentState, AgentStateChangeTrigger, AgentId, WaitingReason } from "./agent.js";
+import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { BrowserHistory } from "./browser.js";
 
 /** Built-in panel kinds */
@@ -22,7 +17,7 @@ export type PanelKind = BuiltInPanelKind | (string & {});
 /**
  * @deprecated Use PanelKind + agentId instead. This is kept for backward compatibility/migrations.
  */
-export type TerminalType = "terminal" | LegacyAgentType;
+export type TerminalType = "terminal" | BuiltInAgentId;
 
 /** Location of a panel instance in the UI */
 export type PanelLocation = "grid" | "dock" | "trash" | "background";

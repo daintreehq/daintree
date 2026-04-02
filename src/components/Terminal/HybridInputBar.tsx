@@ -10,7 +10,7 @@ import {
 } from "react";
 import { EditorView, drawSelection } from "@codemirror/view";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import type { LegacyAgentType } from "@shared/types";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentState } from "@/types";
 import { getAgentConfig } from "@/config/agents";
 import { cn } from "@/lib/utils";
@@ -98,7 +98,7 @@ export interface HybridInputBarProps {
   onSendKey?: (key: string) => void;
   onActivate?: () => void;
   cwd: string;
-  agentId?: LegacyAgentType;
+  agentId?: BuiltInAgentId;
   agentHasLifecycleEvent?: boolean;
   agentState?: AgentState;
   restartKey?: number;

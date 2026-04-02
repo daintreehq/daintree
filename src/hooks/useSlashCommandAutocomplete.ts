@@ -3,12 +3,13 @@ import type { AutocompleteItem } from "@/components/Terminal/AutocompleteMenu";
 import { slashCommandsClient } from "@/clients";
 import { rankSlashCommands } from "@/lib/slashCommandMatch";
 
-import { getBuiltinSlashCommands, type LegacyAgentType, type SlashCommand } from "@shared/types";
+import { getBuiltinSlashCommands, type SlashCommand } from "@shared/types";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 
 export interface UseSlashCommandAutocompleteArgs {
   query: string;
   enabled: boolean;
-  agentId?: LegacyAgentType;
+  agentId?: BuiltInAgentId;
   projectPath?: string;
 }
 
