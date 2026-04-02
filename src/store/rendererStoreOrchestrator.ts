@@ -9,6 +9,9 @@ import { semanticAnalysisService } from "@/services/SemanticAnalysisService";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
+import { debounce } from "@/utils/debounce";
+
+const debouncedPersistMruList = debounce(persistMruList, 150);
 
 let cleanupFn: (() => void) | null = null;
 
@@ -37,7 +40,7 @@ export function initStoreOrchestrator(): () => void {
 
     if (!isMruRecordingSuppressed()) {
       state.recordMru(`terminal:${focusedId}`);
-      persistMruList(useTerminalStore.getState().mruList);
+      debouncedPersistMruList(useTerminalStore.getState().mruList);
     }
   });
   unsubscribers.push(unsubFocus);
@@ -116,5 +119,6 @@ export function initStoreOrchestrator(): () => void {
 }
 
 export function destroyStoreOrchestrator(): void {
+  debouncedPersistMruList.cancel();
   cleanupFn?.();
 }

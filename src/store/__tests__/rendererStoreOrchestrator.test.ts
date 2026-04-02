@@ -57,8 +57,16 @@ vi.mock("../terminalInputStore", async (importOriginal) => {
   };
 });
 
+vi.mock("../worktreeStore", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../worktreeStore")>();
+  return {
+    ...actual,
+    persistMruList: vi.fn(),
+  };
+});
+
 const { useTerminalStore } = await import("../terminalStore");
-const { useWorktreeSelectionStore } = await import("../worktreeStore");
+const { useWorktreeSelectionStore, persistMruList } = await import("../worktreeStore");
 const { useTerminalInputStore } = await import("../terminalInputStore");
 const { useConsoleCaptureStore } = await import("../consoleCaptureStore");
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
@@ -621,6 +629,123 @@ describe("rendererStoreOrchestrator", () => {
     expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledTimes(2);
     expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledWith("t-a");
     expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledWith("t-b");
+  });
+
+  it("debounces persistMruList during rapid focus changes", async () => {
+    vi.useFakeTimers();
+    try {
+      useTerminalStore.setState({
+        terminals: [
+          {
+            id: "t-1",
+            type: "terminal",
+            title: "T1",
+            cwd: "/test",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            worktreeId: "wt-1",
+          },
+          {
+            id: "t-2",
+            type: "terminal",
+            title: "T2",
+            cwd: "/test",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            worktreeId: "wt-1",
+          },
+          {
+            id: "t-3",
+            type: "terminal",
+            title: "T3",
+            cwd: "/test",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            worktreeId: "wt-1",
+          },
+        ],
+      });
+
+      useTerminalStore.setState({ focusedId: "t-1" });
+      useTerminalStore.setState({ focusedId: "t-2" });
+      useTerminalStore.setState({ focusedId: "t-3" });
+
+      expect(persistMruList).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(150);
+      await Promise.resolve();
+
+      expect(persistMruList).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("calls persistMruList after debounce delay on single focus change", async () => {
+    vi.useFakeTimers();
+    try {
+      useTerminalStore.setState({
+        terminals: [
+          {
+            id: "t-1",
+            type: "terminal",
+            title: "T1",
+            cwd: "/test",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            worktreeId: "wt-1",
+          },
+        ],
+      });
+
+      useTerminalStore.setState({ focusedId: "t-1" });
+
+      expect(persistMruList).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(149);
+      await Promise.resolve();
+      expect(persistMruList).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+      expect(persistMruList).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels pending persistMruList on destroy", async () => {
+    vi.useFakeTimers();
+    try {
+      useTerminalStore.setState({
+        terminals: [
+          {
+            id: "t-1",
+            type: "terminal",
+            title: "T1",
+            cwd: "/test",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            worktreeId: "wt-1",
+          },
+        ],
+      });
+
+      useTerminalStore.setState({ focusedId: "t-1" });
+      destroyStoreOrchestrator();
+
+      vi.advanceTimersByTime(150);
+      await Promise.resolve();
+
+      expect(persistMruList).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("cleanup function prevents further reactions", () => {
