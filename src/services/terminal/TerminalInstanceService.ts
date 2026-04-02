@@ -51,7 +51,6 @@ class TerminalInstanceService {
   private dataBuffer = new TerminalOutputIngestService((id, data) =>
     this.writeToTerminal(id, data)
   );
-  private readonly textEncoder = new TextEncoder();
   private perfWriteSampleCounter = 0;
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
@@ -302,16 +301,14 @@ class TerminalInstanceService {
     if (!managed) return;
 
     if (managed.isHibernated) {
-      const bytes =
-        typeof data === "string" ? this.textEncoder.encode(data).length : data.byteLength;
+      const bytes = typeof data === "string" ? data.length : data.byteLength;
       this.dataBuffer.notifyWriteComplete(id, bytes);
       return;
     }
 
     if (managed.isSerializedRestoreInProgress) {
       managed.deferredOutput.push(data);
-      const deferredBytes =
-        typeof data === "string" ? this.textEncoder.encode(data).length : data.byteLength;
+      const deferredBytes = typeof data === "string" ? data.length : data.byteLength;
       this.dataBuffer.notifyWriteComplete(id, deferredBytes);
       return;
     }
@@ -326,8 +323,7 @@ class TerminalInstanceService {
         ? data.length
         : data.byteLength
       : 0;
-    const acknowledgedBytes =
-      typeof data === "string" ? this.textEncoder.encode(data).length : data.byteLength;
+    const acknowledgedBytes = typeof data === "string" ? data.length : data.byteLength;
 
     if (shouldSample) {
       markRendererPerformance(PERF_MARKS.TERMINAL_DATA_PARSED, {

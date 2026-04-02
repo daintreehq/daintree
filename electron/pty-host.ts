@@ -377,7 +377,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
 
       if (!conn.portQueueManager.isAtCapacity(id, byteCount)) {
         try {
-          conn.port.postMessage({ type: "data", id, data: dataString });
+          conn.port.postMessage({ type: "data", id, data: dataString, bytes: byteCount });
           conn.portQueueManager.addBytes(id, byteCount);
           conn.portQueueManager.applyBackpressure(id, conn.portQueueManager.getUtilization(id));
           visualWritten = true;

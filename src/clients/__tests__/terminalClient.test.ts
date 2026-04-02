@@ -120,7 +120,7 @@ describe("terminalClient MessagePort data routing", () => {
     });
 
     // Simulate pty-host sending data over the port
-    port.postMessage({ type: "data", id: "term-1", data: "hello world" });
+    port.postMessage({ type: "data", id: "term-1", data: "hello world", bytes: 11 });
 
     // MessageChannel is async — use a small delay
     return new Promise<void>((resolve) => {
@@ -182,8 +182,8 @@ describe("terminalClient MessagePort data routing", () => {
     const port = acquirePort();
 
     // Send data BEFORE any onData callback is registered
-    port.postMessage({ type: "data", id: "term-early", data: "chunk-1" });
-    port.postMessage({ type: "data", id: "term-early", data: "chunk-2" });
+    port.postMessage({ type: "data", id: "term-early", data: "chunk-1", bytes: 7 });
+    port.postMessage({ type: "data", id: "term-early", data: "chunk-2", bytes: 7 });
 
     return new Promise<void>((resolve) => {
       setTimeout(() => {
@@ -199,6 +199,48 @@ describe("terminalClient MessagePort data routing", () => {
     });
   });
 
+  it("uses msg.bytes for ack without re-encoding", () => {
+    const port = acquirePort();
+
+    terminalClient.onData("term-1", () => {});
+
+    // Send data with a deliberate bytes value (42 != actual UTF-8 length of "hello")
+    // to prove the ack uses the carried value, not a re-encoded one
+    port.postMessage({ type: "data", id: "term-1", data: "hello", bytes: 42 });
+
+    return new Promise<void>((resolve) => {
+      // Listen for ack messages coming back on port1
+      port.addEventListener("message", (event: MessageEvent) => {
+        const msg = event.data as Record<string, unknown>;
+        if (msg?.type === "ack" && msg.id === "term-1") {
+          expect(msg.bytes).toBe(42);
+          resolve();
+        }
+      });
+      port.start();
+    });
+  });
+
+  it("falls back to 0 bytes when msg.bytes is missing", () => {
+    const port = acquirePort();
+
+    terminalClient.onData("term-1", () => {});
+
+    // Send a message without bytes (simulating legacy pty-host)
+    port.postMessage({ type: "data", id: "term-1", data: "hello" } as unknown);
+
+    return new Promise<void>((resolve) => {
+      port.addEventListener("message", (event: MessageEvent) => {
+        const msg = event.data as Record<string, unknown>;
+        if (msg?.type === "ack" && msg.id === "term-1") {
+          expect(msg.bytes).toBe(0);
+          resolve();
+        }
+      });
+      port.start();
+    });
+  });
+
   it("dispatches to correct terminal only", () => {
     const port = acquirePort();
     const received1: string[] = [];
@@ -207,7 +249,7 @@ describe("terminalClient MessagePort data routing", () => {
     terminalClient.onData("term-1", (d) => received1.push(d as string));
     terminalClient.onData("term-2", (d) => received2.push(d as string));
 
-    port.postMessage({ type: "data", id: "term-2", data: "for-term-2" });
+    port.postMessage({ type: "data", id: "term-2", data: "for-term-2", bytes: 10 });
 
     return new Promise<void>((resolve) => {
       setTimeout(() => {
