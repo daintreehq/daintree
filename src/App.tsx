@@ -1118,7 +1118,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                   counts={quickStateCounts}
                 />
               )}
-              {filteredWorktrees.length === 0 && hasFilters ? (
+              {filteredWorktrees.length === 0 && hasFilters && hasNonMainWorktrees ? (
                 <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
                   <FilterX className="w-10 h-10 text-canopy-text/40 mb-3" />
                   <p className="text-sm text-canopy-text/60 mb-3">
