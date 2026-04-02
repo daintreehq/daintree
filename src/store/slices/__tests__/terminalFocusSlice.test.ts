@@ -374,10 +374,24 @@ describe("TerminalFocusSlice - dock focus sync invariant", () => {
     }) as TerminalInstance;
 
   let terminals: TerminalInstance[];
-  let getTerminals: ReturnType<typeof vi.fn<() => TerminalInstance[]>>;
   let state: TerminalFocusSlice;
-  let setState: ReturnType<typeof vi.fn>;
-  let getState: ReturnType<typeof vi.fn>;
+
+  const setup = () => {
+    const getTerminals = vi.fn(() => terminals);
+    const getState = vi.fn((): TerminalFocusSlice => state);
+    const setState = vi.fn(
+      (
+        updater:
+          | Partial<TerminalFocusSlice>
+          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+      ) => {
+        const currentState = getState();
+        const updates = typeof updater === "function" ? updater(currentState) : updater;
+        state = { ...currentState, ...updates };
+      }
+    );
+    return { getTerminals, setState, getState };
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -387,16 +401,10 @@ describe("TerminalFocusSlice - dock focus sync invariant", () => {
       makeTerminal("dock-1", "dock"),
       makeTerminal("dock-2", "dock"),
     ];
-    getTerminals = vi.fn(() => terminals);
-    setState = vi.fn((updater) => {
-      const currentState = getState();
-      const updates = typeof updater === "function" ? updater(currentState) : updater;
-      state = { ...currentState, ...updates };
-    });
-    getState = vi.fn(() => state);
+    const { getTerminals, setState, getState } = setup();
     state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
-      setState,
-      getState,
+      setState as never,
+      getState as never,
       {} as never
     );
   });
