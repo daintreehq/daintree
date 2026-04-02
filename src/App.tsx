@@ -90,7 +90,7 @@ import {
   QuickStateFilterBar,
 } from "./components/Worktree";
 import { CrossWorktreeDiff } from "./components/Worktree/CrossWorktreeDiff";
-import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
+
 import { BulkCreateWorktreeDialog } from "./components/GitHub/BulkCreateWorktreeDialog";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { FileViewerModalHost } from "./components/FileViewer/FileViewerModalHost";
@@ -125,6 +125,13 @@ function preloadSettingsDialog() {
 }
 const LazySettingsDialog = lazy(() =>
   preloadSettingsDialog().then((m) => ({ default: m.SettingsDialog }))
+);
+
+function preloadNewWorktreeDialog() {
+  return import("./components/Worktree/NewWorktreeDialog");
+}
+const LazyNewWorktreeDialog = lazy(() =>
+  preloadNewWorktreeDialog().then((m) => ({ default: m.NewWorktreeDialog }))
 );
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
@@ -437,6 +444,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       closeBulkCreateDialog: state.closeBulkCreateDialog,
     }))
   );
+
+  const [hasOpenedNewWorktree, setHasOpenedNewWorktree] = useState(false);
+  useEffect(() => {
+    if (createDialog.isOpen) setHasOpenedNewWorktree(true);
+  }, [createDialog.isOpen]);
 
   // Filter/sort state - destructured for stable memoization
   const {
@@ -1193,19 +1205,21 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           onCreateRecipe={handleRecipeManagerCreate}
         />
 
-        {rootPath && (
-          <NewWorktreeDialog
-            isOpen={createDialog.isOpen}
-            onClose={closeCreateDialog}
-            rootPath={rootPath}
-            onWorktreeCreated={(worktreeId) => {
-              refresh();
-              createDialog.onCreated?.(worktreeId);
-            }}
-            initialIssue={createDialog.initialIssue}
-            initialPR={createDialog.initialPR}
-            initialRecipeId={createDialog.initialRecipeId}
-          />
+        {rootPath && (createDialog.isOpen || hasOpenedNewWorktree) && (
+          <Suspense fallback={null}>
+            <LazyNewWorktreeDialog
+              isOpen={createDialog.isOpen}
+              onClose={closeCreateDialog}
+              rootPath={rootPath}
+              onWorktreeCreated={(worktreeId) => {
+                refresh();
+                createDialog.onCreated?.(worktreeId);
+              }}
+              initialIssue={createDialog.initialIssue}
+              initialPR={createDialog.initialPR}
+              initialRecipeId={createDialog.initialRecipeId}
+            />
+          </Suspense>
         )}
 
         <BulkCreateWorktreeDialog
@@ -1392,6 +1406,7 @@ function App() {
     const id = requestIdleCallback(
       () => {
         preloadSettingsDialog();
+        preloadNewWorktreeDialog();
       },
       { timeout: 5000 }
     );
