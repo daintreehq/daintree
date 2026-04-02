@@ -9,6 +9,7 @@ import type {
 import { artifactClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { logErrorWithContext } from "@/utils/errorContext";
+import { logDebug } from "@/utils/logger";
 
 const artifactStore = new Map<string, Artifact[]>();
 const listeners = new Set<(terminalId: string, artifacts: Artifact[]) => void>();
@@ -315,7 +316,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
             result.succeeded++;
           } else if (saveResult === null) {
             // Treat null as user cancellation - skip remaining saves
-            console.log(`[useArtifacts] Save cancelled by user, stopping bulk save`);
+            logDebug("[useArtifacts] Save cancelled by user, stopping bulk save");
             break;
           } else {
             result.failed++;

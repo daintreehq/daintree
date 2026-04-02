@@ -34,6 +34,7 @@ import {
   stopDevPreviewByPanelId,
 } from "./helpers";
 import type { TrashExpiryHelpers } from "./trash";
+import { logDebug, logWarn, logError } from "@/utils/logger";
 
 // Lazy accessor to break circular dependency: core -> projectStore -> terminalPersistence -> core.
 // Resolved on first call (after app init), then cached.
@@ -238,7 +239,7 @@ export const createCorePanelActions = (
         const existingIndex = state.terminals.findIndex((t) => t.id === id);
         let newTerminals: TerminalInstance[];
         if (existingIndex >= 0) {
-          console.log(`[TerminalStore] Panel ${id} already exists, updating instead of adding`);
+          logDebug("[TerminalStore] Panel already exists, updating instead of adding", { id });
           newTerminals = state.terminals.map((t, i) => (i === existingIndex ? terminal : t));
         } else {
           newTerminals = [...state.terminals, terminal];
@@ -328,7 +329,7 @@ export const createCorePanelActions = (
       }
     } catch (error) {
       // Failed to fetch project env - continue with spawn-time env only
-      console.warn("[TerminalStore] Failed to fetch project environment variables:", error);
+      logWarn("[TerminalStore] Failed to fetch project environment variables", { error });
     }
 
     try {
@@ -337,7 +338,7 @@ export const createCorePanelActions = (
       if (options.existingId) {
         // Reconnecting to existing backend process - don't spawn new
         id = options.existingId;
-        console.log(`[TerminalStore] Reconnecting to existing terminal: ${id}`);
+        logDebug("[TerminalStore] Reconnecting to existing terminal", { id });
       } else {
         // Spawn new process - only execute command if not skipping
         const commandToExecute = options.skipCommandExecution ? undefined : options.command;
@@ -427,7 +428,7 @@ export const createCorePanelActions = (
           }
         }
       } catch (error) {
-        console.warn(`[TerminalStore] Failed to prewarm terminal ${id}:`, error);
+        logWarn("[TerminalStore] Failed to prewarm terminal", { id, error });
       }
 
       const isAgent = kind === "agent";
@@ -488,7 +489,7 @@ export const createCorePanelActions = (
         let newTerminals: TerminalInstance[];
         if (existingIndex >= 0) {
           // Update existing terminal in place (reconnection case or double hydration)
-          console.log(`[TerminalStore] Terminal ${id} already exists, updating instead of adding`);
+          logDebug("[TerminalStore] Terminal already exists, updating instead of adding", { id });
           const existing = state.terminals[existingIndex];
           // Preserve existing agentState/lastStateChange/exitBehavior if new values are undefined
           const preservedTerminal = isReconnect
@@ -524,7 +525,7 @@ export const createCorePanelActions = (
 
       return id;
     } catch (error) {
-      console.error("Failed to spawn terminal:", error);
+      logError("[TerminalStore] Failed to spawn terminal", error);
       throw error;
     }
   },
@@ -542,7 +543,7 @@ export const createCorePanelActions = (
     // Only call PTY operations for PTY-backed terminals
     if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
       terminalClient.kill(id).catch((error) => {
-        console.error("Failed to kill terminal:", error);
+        logError("[TerminalStore] Failed to kill terminal", error);
       });
 
       terminalInstanceService.destroy(id);
@@ -623,7 +624,7 @@ export const createCorePanelActions = (
     set((state) => {
       const terminal = state.terminals.find((t) => t.id === id);
       if (!terminal) {
-        console.warn(`Cannot update agent state: terminal ${id} not found`);
+        logWarn("[TerminalStore] Cannot update agent state: terminal not found", { id });
         return state;
       }
 
