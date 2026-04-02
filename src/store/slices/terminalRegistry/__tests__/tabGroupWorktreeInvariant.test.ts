@@ -115,7 +115,8 @@ describe("Tab Group Worktree Invariant", () => {
       useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to move group g1 to worktree wt-b")
+        expect.stringContaining("[TabGroup] Failed to move group to worktree"),
+        expect.anything()
       );
 
       const state = useTerminalStore.getState();

@@ -5,6 +5,7 @@ import { useErrorStore } from "@/store/errorStore";
 import type { AgentState, CopyTreeProgress } from "@/types";
 import { copyTreeClient } from "@/clients";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
+import { logDebug, logError } from "@/utils/logger";
 
 export type InjectionStatus = "idle" | "waiting" | "injecting";
 
@@ -214,9 +215,9 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
       // Gate injection for agent terminals that are not ready
       // Non-agent terminals (agentState undefined) inject immediately
       if (terminal.agentId && !isAgentReady(terminal.agentState)) {
-        console.log(
-          `Agent is not ready (state: ${terminal.agentState}), waiting for idle/waiting state`
-        );
+        logDebug("[useContextInjection] Agent not ready, waiting for idle", {
+          agentState: terminal.agentState,
+        });
 
         // Cancel any existing pending injection (regardless of terminal)
         // to prevent promise leaks
@@ -279,9 +280,9 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
 
         // Verify agent is still ready (could have changed during race)
         if (updatedTerminal.agentId && !isAgentReady(updatedTerminal.agentState)) {
-          console.log(
-            `Agent state changed to ${updatedTerminal.agentState} while waiting, aborting injection`
-          );
+          logDebug("[useContextInjection] Agent state changed while waiting, aborting injection", {
+            agentState: updatedTerminal.agentState,
+          });
           setError("Agent became busy again, injection aborted");
           // Clear stale progress on early abort
           localProgressRef.current = null;
@@ -291,7 +292,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         // Use updatedTerminal for subsequent operations (not the stale terminal reference)
         terminal = updatedTerminal;
 
-        console.log("Agent is now idle, proceeding with context injection");
+        logDebug("[useContextInjection] Agent is now idle, proceeding with context injection");
       }
 
       // Generate a unique ID for this injection operation (for per-operation cancellation)
@@ -337,9 +338,11 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           selectedPaths && selectedPaths.length > 0
             ? ` from ${selectedPaths.length} selected ${selectedPaths.length === 1 ? "path" : "paths"}`
             : "";
-        console.log(
-          `Context injected (${result.fileCount} files as ${DEFAULT_COPYTREE_FORMAT.toUpperCase()}${pathInfo})`
-        );
+        logDebug("[useContextInjection] Context injected", {
+          fileCount: result.fileCount,
+          format: DEFAULT_COPYTREE_FORMAT,
+          pathInfo,
+        });
 
         try {
           localStorage.setItem("canopy:context-injected-once", "true");
@@ -381,7 +384,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
 
         currentErrorIdRef.current = errorId;
 
-        console.error("Context injection failed:", message);
+        logError("[useContextInjection] Context injection failed", undefined, { message });
       } finally {
         // Only clear global state if we own this injection (prevent cross-run interference)
         if (globalInjectionState.injectionId === currentInjectionId) {
@@ -406,9 +409,11 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
     if (injectionUuid) {
       try {
         const cancelResult = copyTreeClient.cancel(injectionUuid);
-        void Promise.resolve(cancelResult).catch(console.error);
+        void Promise.resolve(cancelResult).catch((err) =>
+          logError("[useContextInjection] Cancel failed", err)
+        );
       } catch (error) {
-        console.error(error);
+        logError("[useContextInjection] Cancel error", error);
       }
     }
 

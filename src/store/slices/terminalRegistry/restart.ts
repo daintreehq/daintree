@@ -13,6 +13,7 @@ import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { saveTerminals } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus, getDefaultTitle } from "./helpers";
+import { logDebug, logWarn, logError } from "@/utils/logger";
 
 // Lazy accessor to break circular dependency: restart -> projectStore -> terminalPersistence -> core.
 let _cachedProjectStore: typeof import("@/store/projectStore").useProjectStore | null = null;
@@ -46,7 +47,7 @@ function scheduleHistoryInjection(id: string, history: string, worktreePath: str
     injected = true;
     unsub();
     terminalClient.submit(id, prompt).catch((err) => {
-      console.warn("[TerminalStore] Failed to inject history prompt:", err);
+      logWarn("[TerminalStore] Failed to inject history prompt", { error: err });
     });
   };
 
@@ -83,19 +84,19 @@ export const createRestartActions = (
     const terminal = state.terminals.find((t) => t.id === id);
 
     if (!terminal) {
-      console.warn(`[TerminalStore] Cannot restart: terminal ${id} not found`);
+      logWarn("[TerminalStore] Cannot restart: terminal not found", { id });
       return;
     }
 
     // Non-PTY panels don't have PTY processes to restart
     if (!panelKindHasPty(terminal.kind ?? "terminal")) {
-      console.warn(`[TerminalStore] Cannot restart non-PTY panel ${id}`);
+      logWarn("[TerminalStore] Cannot restart non-PTY panel", { id });
       return;
     }
 
     // Guard against concurrent restart attempts
     if (terminal.isRestarting) {
-      console.warn(`[TerminalStore] Terminal ${id} is already restarting, ignoring`);
+      logWarn("[TerminalStore] Terminal is already restarting, ignoring", { id });
       return;
     }
 
@@ -140,7 +141,7 @@ export const createRestartActions = (
           t.id === id ? { ...t, isRestarting: false, restartError } : t
         ),
       }));
-      console.error(`[TerminalStore] Validation error for terminal ${id}:`, error);
+      logError("[TerminalStore] Validation error for terminal", error, { id });
       return;
     }
 
@@ -166,7 +167,7 @@ export const createRestartActions = (
           t.id === id ? { ...t, isRestarting: false, restartError } : t
         ),
       }));
-      console.warn(`[TerminalStore] Restart validation failed for terminal ${id}:`, restartError);
+      logWarn("[TerminalStore] Restart validation failed for terminal", { id, restartError });
       return;
     }
 
@@ -180,7 +181,7 @@ export const createRestartActions = (
       set((state) => ({
         terminals: state.terminals.map((t) => (t.id === id ? { ...t, isRestarting: false } : t)),
       }));
-      console.warn(`[TerminalStore] Terminal ${id} no longer exists or was trashed`);
+      logWarn("[TerminalStore] Terminal no longer exists or was trashed", { id });
       return;
     }
 
@@ -228,9 +229,11 @@ export const createRestartActions = (
             );
           }
         } catch (error) {
-          console.warn(
-            "[TerminalStore] Failed to load agent settings for restart, using saved command:",
-            error
+          logWarn(
+            "[TerminalStore] Failed to load agent settings for restart, using saved command",
+            {
+              error,
+            }
           );
         }
       }
@@ -263,7 +266,7 @@ export const createRestartActions = (
       try {
         await terminalClient.kill(id);
       } catch (error) {
-        console.warn(`[TerminalStore] kill(${id}) failed during restart; continuing:`, error);
+        logWarn("[TerminalStore] kill failed during restart; continuing", { id, error });
       }
 
       // Do not shrink geometry for dock; dock previews are clipped instead.
@@ -314,7 +317,7 @@ export const createRestartActions = (
           }
         }
       } catch (error) {
-        console.warn("[TerminalStore] Failed to fetch project env for restart:", error);
+        logWarn("[TerminalStore] Failed to fetch project env for restart", { error });
       }
 
       await terminalClient.spawn({
@@ -391,7 +394,9 @@ export const createRestartActions = (
         ),
       }));
 
-      console.error(`[TerminalStore] Failed to restart terminal ${id} during ${phase}:`, error, {
+      logError("[TerminalStore] Failed to restart terminal", error, {
+        id,
+        phase,
         cwd: currentTerminal.cwd,
         command: commandToRun,
         isAgent,
@@ -419,7 +424,7 @@ export const createRestartActions = (
   moveTerminalToWorktree: (id, worktreeId) => {
     const terminal = get().terminals.find((t) => t.id === id);
     if (!terminal) {
-      console.warn(`Cannot move terminal ${id}: terminal not found`);
+      logWarn("[TerminalStore] Cannot move terminal: not found", { id });
       return;
     }
 
@@ -431,14 +436,17 @@ export const createRestartActions = (
     const group = get().getPanelGroup(id);
     if (group) {
       // Move entire group to maintain worktree invariant
-      console.log(
-        `[TabGroup] Panel ${id} is in group ${group.id}, moving entire group to worktree ${worktreeId}`
-      );
+      logDebug("[TabGroup] Panel is in group, moving entire group to worktree", {
+        panelId: id,
+        groupId: group.id,
+        worktreeId,
+      });
       const success = get().moveTabGroupToWorktree(group.id, worktreeId);
       if (!success) {
-        console.warn(
-          `[TabGroup] Failed to move group ${group.id} to worktree ${worktreeId} (likely capacity exceeded)`
-        );
+        logWarn("[TabGroup] Failed to move group to worktree (capacity exceeded)", {
+          groupId: group.id,
+          worktreeId,
+        });
       }
       return;
     }
@@ -537,7 +545,7 @@ export const createRestartActions = (
                 scheduleHistoryInjection(id, capturedHistory, newCwd ?? "");
               }
             } catch (err) {
-              console.error("[TerminalStore] moveToNewWorktreeAndTransfer failed:", err);
+              logError("[TerminalStore] moveToNewWorktreeAndTransfer failed", err);
               set((state) => ({
                 terminals: state.terminals.map((t) =>
                   t.id === id
@@ -562,7 +570,7 @@ export const createRestartActions = (
         });
       })
       .catch((err) => {
-        console.error("[TerminalStore] Failed to load worktreeStore:", err);
+        logError("[TerminalStore] Failed to load worktreeStore", err);
       });
   },
 
@@ -648,12 +656,12 @@ export const createRestartActions = (
   convertTerminalType: async (id, newType, newAgentId) => {
     const terminal = get().terminals.find((t) => t.id === id);
     if (!terminal) {
-      console.warn(`[TerminalStore] Cannot convert: terminal ${id} not found`);
+      logWarn("[TerminalStore] Cannot convert: terminal not found", { id });
       return;
     }
 
     if (terminal.isRestarting) {
-      console.warn(`[TerminalStore] Terminal ${id} is already restarting, ignoring convert`);
+      logWarn("[TerminalStore] Terminal is already restarting, ignoring convert", { id });
       return;
     }
 
@@ -690,10 +698,9 @@ export const createRestartActions = (
           );
         }
       } catch (error) {
-        console.warn(
-          "[TerminalStore] Failed to load agent settings for convert, using default:",
-          error
-        );
+        logWarn("[TerminalStore] Failed to load agent settings for convert, using default", {
+          error,
+        });
         const agentConfig = getAgentConfig(effectiveAgentId);
         commandToRun = agentConfig?.command || effectiveAgentId;
       }
@@ -757,7 +764,7 @@ export const createRestartActions = (
           }
         }
       } catch (error) {
-        console.warn("[TerminalStore] Failed to fetch project env for conversion:", error);
+        logWarn("[TerminalStore] Failed to fetch project env for conversion", { error });
       }
 
       await terminalClient.spawn({
@@ -810,7 +817,7 @@ export const createRestartActions = (
         ),
       }));
 
-      console.error(`[TerminalStore] Failed to convert terminal ${id}:`, error);
+      logError("[TerminalStore] Failed to convert terminal", error, { id });
     }
   },
 });

@@ -10,6 +10,7 @@ import type {
   SpawnResult,
 } from "@shared/types";
 import type { PtyHostToRendererMessage } from "@shared/types/pty-host";
+import { logDebug, logWarn } from "@/utils/logger";
 
 let messagePort: MessagePort | null = null;
 let expectedToken: string | null = null;
@@ -65,7 +66,7 @@ function activatePort(port: MessagePort): void {
     if (messagePort === port) {
       messagePort = null;
       messagePortConnected = false;
-      console.log("[TerminalClient] MessagePort closed, falling back to IPC");
+      logDebug("[TerminalClient] MessagePort closed, falling back to IPC");
     }
   });
   port.start();
@@ -96,7 +97,7 @@ if (typeof window !== "undefined") {
         pendingPort = null;
         pendingToken = null;
         expectedToken = null;
-        console.log("[TerminalClient] MessagePort acquired via postMessage (out-of-order)");
+        logDebug("[TerminalClient] MessagePort acquired via postMessage (out-of-order)");
       }
       return;
     }
@@ -123,7 +124,7 @@ if (typeof window !== "undefined") {
 
       activatePort(event.ports[0]);
       expectedToken = null;
-      console.log("[TerminalClient] MessagePort acquired via postMessage");
+      logDebug("[TerminalClient] MessagePort acquired via postMessage");
     }
   });
 }
@@ -138,7 +139,7 @@ export const terminalClient = {
       try {
         messagePort.postMessage({ type: "write", id, data });
       } catch (error) {
-        console.warn("[TerminalClient] MessagePort write failed, clearing port:", error);
+        logWarn("[TerminalClient] MessagePort write failed, clearing port", { error });
         messagePort = null;
         messagePortConnected = false;
         window.electron.terminal.write(id, data);
@@ -169,7 +170,7 @@ export const terminalClient = {
       try {
         messagePort.postMessage({ type: "resize", id, cols, rows });
       } catch (error) {
-        console.warn("[TerminalClient] MessagePort resize failed, clearing port:", error);
+        logWarn("[TerminalClient] MessagePort resize failed, clearing port", { error });
         messagePort = null;
         messagePortConnected = false;
         window.electron.terminal.resize(id, cols, rows);

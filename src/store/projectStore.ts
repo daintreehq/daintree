@@ -4,6 +4,7 @@ import type { Project, ProjectCloseResult } from "@shared/types";
 import { projectClient } from "@/clients";
 import { notify } from "@/lib/notify";
 import { logErrorWithContext } from "@/utils/errorContext";
+import { logDebug } from "@/utils/logger";
 import { useUrlHistoryStore } from "./urlHistoryStore";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { terminalPersistence } from "./persistence/terminalPersistence";
@@ -287,7 +288,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       }
 
       const action = options?.killTerminals ? "killed" : "backgrounded";
-      console.log(`[ProjectStore] Closed (${action}) project ${projectId}`);
+      logDebug("[ProjectStore] Closed project", { action, projectId });
 
       // Refresh project list to get updated status
       await get().loadProjects();
@@ -316,9 +317,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         throw new Error(result.error || "Failed to close project");
       }
 
-      console.log(
-        `[ProjectStore] Closed active project ${projectId}, transitioning to no-project state`
-      );
+      logDebug("[ProjectStore] Closed active project, transitioning to no-project state", {
+        projectId,
+      });
 
       set({ currentProject: null });
       await get().loadProjects();

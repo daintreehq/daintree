@@ -1,6 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { WorktreeSnapshot } from "@shared/types";
 import { useTerminalStore } from "./terminalStore";
+import { logDebug } from "@/utils/logger";
 
 let _currentViewStore: WorktreeViewStoreApi | null = null;
 
@@ -114,9 +115,9 @@ export function cleanupOrphanedTerminals(): void {
   });
 
   if (orphanedTerminals.length > 0) {
-    console.log(
-      `[WorktreeStore] Removing ${orphanedTerminals.length} orphaned terminal(s) from deleted worktrees`
-    );
+    logDebug("[WorktreeStore] Removing orphaned terminals from deleted worktrees", {
+      count: orphanedTerminals.length,
+    });
     orphanedTerminals.forEach((terminal) => terminalStore.removeTerminal(terminal.id));
   }
 }

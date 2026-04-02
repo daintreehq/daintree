@@ -5,6 +5,7 @@ import type {
 } from "@shared/types/terminal-output-worker-messages";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
+import { logDebug, logWarn, logError } from "@/utils/logger";
 
 const RENDERER_HIGH_WATERMARK_BYTES = 128 * 1024;
 const RENDERER_LOW_WATERMARK_BYTES = 32 * 1024;
@@ -56,7 +57,7 @@ export class TerminalOutputIngestService {
         };
 
         this.worker.onerror = (error) => {
-          console.error("[TerminalOutputIngestService] Worker error:", error);
+          logError("[TerminalOutputIngestService] Worker error", error);
           this.pollingActive = false;
           this.sabAvailable = false;
           this.worker?.terminate();
@@ -71,18 +72,18 @@ export class TerminalOutputIngestService {
         };
         this.worker.postMessage(initMessage);
         this.pollingActive = true;
-        console.log(
-          `[TerminalOutputIngestService] Worker-based SAB ingestion enabled (${visualBuffers.length} shards)`
-        );
+        logDebug("[TerminalOutputIngestService] Worker-based SAB ingestion enabled", {
+          shardCount: visualBuffers.length,
+        });
       } else {
-        console.log("[TerminalOutputIngestService] SharedArrayBuffer unavailable, using IPC");
+        logDebug("[TerminalOutputIngestService] SharedArrayBuffer unavailable, using IPC");
         this.sabAvailable = false;
         this.pollingActive = false;
         this.worker = null;
         this.initializePromise = null;
       }
     } catch (error) {
-      console.warn("[TerminalOutputIngestService] Failed to initialize SharedArrayBuffer:", error);
+      logWarn("[TerminalOutputIngestService] Failed to initialize SharedArrayBuffer", { error });
       this.sabAvailable = false;
       this.pollingActive = false;
       this.worker?.terminate();

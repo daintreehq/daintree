@@ -69,7 +69,10 @@ describe("TerminalInstanceService bootstrap", () => {
 
     expect(getSharedBuffersMock).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith(
-      "[TerminalOutputIngestService] SharedArrayBuffer unavailable, using IPC"
+      expect.stringContaining(
+        "[TerminalOutputIngestService] SharedArrayBuffer unavailable, using IPC"
+      ),
+      expect.anything()
     );
   });
 });
