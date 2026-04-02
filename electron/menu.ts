@@ -233,7 +233,12 @@ export function createApplicationMenu(
                 ) => {
                   const win = getTargetBrowserWindow(browserWindow);
                   if (!win) return;
-                  getAppWebContents(win).toggleDevTools();
+                  const wc = getAppWebContents(win);
+                  if (wc.isDevToolsOpened()) {
+                    wc.closeDevTools();
+                  } else {
+                    wc.openDevTools({ mode: "detach" });
+                  }
                 },
               },
             ]),

@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockWebContents = vi.hoisted(() => ({
   toggleDevTools: vi.fn(),
+  isDevToolsOpened: vi.fn(() => false),
+  openDevTools: vi.fn(),
+  closeDevTools: vi.fn(),
   reload: vi.fn(),
   reloadIgnoringCache: vi.fn(),
   setZoomLevel: vi.fn(),
@@ -107,6 +110,7 @@ describe("createApplicationMenu", () => {
     vi.clearAllMocks();
     capturedTemplate = [];
     mockWebContents.getZoomLevel.mockReturnValue(1.0);
+    mockWebContents.isDevToolsOpened.mockReturnValue(false);
     createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
   });
 
@@ -149,7 +153,8 @@ describe("createApplicationMenu", () => {
   });
 
   describe("toggleDevTools targets getAppWebContents", () => {
-    it("calls toggleDevTools on app webContents", () => {
+    it("opens devtools in detach mode when closed", () => {
+      mockWebContents.isDevToolsOpened.mockReturnValue(false);
       const item = findMenuItem(capturedTemplate, "View", "Toggle Developer Tools");
       expect(item).toBeDefined();
       expect(item!.accelerator).toBe("Alt+CommandOrControl+I");
@@ -158,7 +163,20 @@ describe("createApplicationMenu", () => {
         mockBrowserWindow as unknown as Electron.BaseWindow,
         {} as Electron.KeyboardEvent
       );
-      expect(mockWebContents.toggleDevTools).toHaveBeenCalled();
+      expect(mockWebContents.openDevTools).toHaveBeenCalledWith({ mode: "detach" });
+      expect(mockWebContents.closeDevTools).not.toHaveBeenCalled();
+    });
+
+    it("closes devtools when already open", () => {
+      mockWebContents.isDevToolsOpened.mockReturnValue(true);
+      const item = findMenuItem(capturedTemplate, "View", "Toggle Developer Tools");
+      item!.click!(
+        {} as Electron.MenuItem,
+        mockBrowserWindow as unknown as Electron.BaseWindow,
+        {} as Electron.KeyboardEvent
+      );
+      expect(mockWebContents.closeDevTools).toHaveBeenCalled();
+      expect(mockWebContents.openDevTools).not.toHaveBeenCalled();
     });
   });
 
