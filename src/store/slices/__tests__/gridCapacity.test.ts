@@ -364,4 +364,83 @@ describe("Grid Capacity Enforcement", () => {
       expect(focusedId).toBe("docked-1");
     });
   });
+
+  describe("getGridCount", () => {
+    it("should return 0 when no terminals", () => {
+      useTerminalStore.setState({ terminals: [] });
+      expect(useTerminalStore.getState().getGridCount()).toBe(0);
+    });
+
+    it("should count grid-location terminals", () => {
+      useTerminalStore.setState({ terminals: createGridTerminals(5) });
+      expect(useTerminalStore.getState().getGridCount()).toBe(5);
+    });
+
+    it("should count undefined-location terminals as grid", () => {
+      const terminals = createGridTerminals(3);
+      terminals.forEach((t) => (t.location = undefined));
+      useTerminalStore.setState({ terminals });
+      expect(useTerminalStore.getState().getGridCount()).toBe(3);
+    });
+
+    it("should count mixed grid + undefined but not dock or trash", () => {
+      const grid = createGridTerminals(4);
+      const undefinedLoc = [createMockTerminal("u-1", "grid"), createMockTerminal("u-2", "grid")];
+      undefinedLoc.forEach((t) => (t.location = undefined));
+      const dock = createDockedTerminals(3);
+      const trash = [createMockTerminal("trash-1", "trash")];
+
+      useTerminalStore.setState({ terminals: [...grid, ...undefinedLoc, ...dock, ...trash] });
+      expect(useTerminalStore.getState().getGridCount()).toBe(6);
+    });
+  });
+
+  describe("hasGridFocus with undefined location", () => {
+    it("should preserve focus when focused terminal has undefined location (bulkMoveToGrid)", () => {
+      const focusedTerminal = createMockTerminal("focused-1", "grid");
+      focusedTerminal.location = undefined;
+      const dockedTerminals = createDockedTerminals(2);
+
+      useTerminalStore.setState({
+        terminals: [focusedTerminal, ...dockedTerminals],
+        focusedId: "focused-1",
+      });
+
+      useTerminalStore.getState().bulkMoveToGrid();
+
+      expect(useTerminalStore.getState().focusedId).toBe("focused-1");
+    });
+
+    it("should not treat null focused terminal as having grid focus (bulkMoveToGrid)", () => {
+      const dockedTerminals = createDockedTerminals(2);
+
+      useTerminalStore.setState({
+        terminals: dockedTerminals,
+        focusedId: null,
+      });
+
+      useTerminalStore.getState().bulkMoveToGrid();
+
+      // Focus should not be forcibly set to null — moved terminals get focus via moveTerminalToGrid
+      const { focusedId } = useTerminalStore.getState();
+      expect(focusedId).not.toBe(null);
+    });
+
+    it("should preserve focus when focused terminal has undefined location (bulkMoveToGridByWorktree)", () => {
+      const focusedTerminal = createMockTerminal("focused-1", "grid");
+      focusedTerminal.location = undefined;
+      focusedTerminal.worktreeId = "wt-1";
+      const dockedTerminal = createMockTerminal("dock-1", "dock");
+      dockedTerminal.worktreeId = "wt-1";
+
+      useTerminalStore.setState({
+        terminals: [focusedTerminal, dockedTerminal],
+        focusedId: "focused-1",
+      });
+
+      useTerminalStore.getState().bulkMoveToGridByWorktree("wt-1");
+
+      expect(useTerminalStore.getState().focusedId).toBe("focused-1");
+    });
+  });
 });
