@@ -97,7 +97,6 @@ function useWorktreeRows(): WorktreeRow[] {
   return useMemo(() => {
     const rows: WorktreeRow[] = [];
     for (const wt of worktrees.values()) {
-      if (wt.isMainWorktree) continue;
       const eligible = getEligibleTerminals(terminals, wt.id);
       const dominantState = getDominantAgentState(eligible.map((t) => t.agentState));
       rows.push({
@@ -620,7 +619,7 @@ function BulkCommandPaletteInner() {
             {/* Worktree list */}
             {rows.length === 0 ? (
               <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
-                No non-main worktrees available
+                No worktrees available
               </div>
             ) : (
               <>

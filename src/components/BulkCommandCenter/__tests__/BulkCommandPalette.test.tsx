@@ -313,12 +313,20 @@ describe("BulkCommandPalette", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("renders worktree rows excluding main worktree when open", () => {
+  it("renders worktree rows including main worktree when open", () => {
     render(<BulkCommandPalette />);
     openPalette();
     expect(screen.getByText("feature/a")).toBeTruthy();
     expect(screen.getByText("feature/b")).toBeTruthy();
-    expect(screen.queryByText("main")).toBeNull();
+    expect(screen.getByText("main")).toBeTruthy();
+  });
+
+  it("renders main worktree as disabled when it has no agent terminals", () => {
+    render(<BulkCommandPalette />);
+    openPalette();
+    const mainRow = screen.getByText("main").closest("button")!;
+    const checkbox = mainRow.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox.disabled).toBe(true);
   });
 
   it("shows agent terminal count per worktree", () => {
