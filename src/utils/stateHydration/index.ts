@@ -801,13 +801,9 @@ export async function hydrateAppState(
     // If no worktrees exist, we don't set any active worktree (handled gracefully)
 
     // Recipe load starts earlier to overlap with hydration work.
-    // During project switch we don't block switch completion on recipes.
+    // Recipes are non-critical for first paint; fire-and-forget on both initial load and project switch.
     if (recipeLoadPromise) {
-      if (_switchId) {
-        void recipeLoadPromise;
-      } else {
-        await recipeLoadPromise;
-      }
+      void recipeLoadPromise;
     }
 
     if (appState.developerMode?.enabled && appState.developerMode.autoOpenDiagnostics) {
