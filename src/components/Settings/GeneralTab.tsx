@@ -104,6 +104,12 @@ export function GeneralTab({
   const [updateChannel, setUpdateChannel] = useState<"stable" | "nightly" | null>(null);
   const [channelSaving, setChannelSaving] = useState(false);
   const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
   const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
@@ -111,20 +117,18 @@ export function GeneralTab({
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
 
   useEffect(() => {
-    return () => {
-      isMountedRef.current = false;
-    };
-  }, []);
-
-  useEffect(() => {
+    let cancelled = false;
     window.electron.update
       .getChannel()
       .then((ch) => {
-        if (isMountedRef.current) setUpdateChannel(ch);
+        if (!cancelled) setUpdateChannel(ch);
       })
       .catch(() => {
-        if (isMountedRef.current) setUpdateChannel("stable");
+        if (!cancelled) setUpdateChannel("stable");
       });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleChannelChange = async (channel: "stable" | "nightly") => {
@@ -141,9 +145,9 @@ export function GeneralTab({
   };
 
   useEffect(() => {
-    let settled = false;
+    let cancelled = false;
     const timer = setTimeout(() => {
-      if (!settled && isMountedRef.current) {
+      if (!cancelled) {
         setConfigError("Settings load timed out");
       }
     }, 10_000);
@@ -151,9 +155,8 @@ export function GeneralTab({
     actionService
       .dispatch("hibernation.getConfig", undefined, { source: "user" })
       .then((result) => {
-        settled = true;
         clearTimeout(timer);
-        if (!isMountedRef.current) return;
+        if (cancelled) return;
         if (!result.ok) {
           throw new Error(result.error.message);
         }
@@ -161,17 +164,20 @@ export function GeneralTab({
         setConfigError(null);
       })
       .catch((error) => {
-        settled = true;
         clearTimeout(timer);
-        if (!isMountedRef.current) return;
+        if (cancelled) return;
         console.error("Failed to load hibernation config:", error);
         setConfigError(error instanceof Error ? error.message : "Failed to load settings");
       });
 
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     const STATUS_TIMEOUT_MS = 15_000;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
@@ -190,7 +196,7 @@ export function GeneralTab({
       timeout,
     ])
       .then(([availabilityResult, settingsResult]) => {
-        if (!isMountedRef.current) return;
+        if (cancelled) return;
         if (!availabilityResult.ok) {
           throw new Error(availabilityResult.error.message);
         }
@@ -202,13 +208,14 @@ export function GeneralTab({
         setAgentSettings((settingsResult.result as AgentSettings) ?? DEFAULT_AGENT_SETTINGS);
       })
       .catch((error) => {
-        if (!isMountedRef.current) return;
+        if (cancelled) return;
         console.error("[GeneralTab] Failed to load agent availability:", error);
         setCliCheckFailed(true);
       })
       .finally(() => clearTimeout(timeoutId));
 
     return () => {
+      cancelled = true;
       clearTimeout(timeoutId);
     };
   }, []);

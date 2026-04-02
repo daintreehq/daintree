@@ -53,6 +53,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
   }, [agentId]);
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
       if (copyTimeoutRef.current) {

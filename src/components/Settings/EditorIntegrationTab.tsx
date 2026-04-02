@@ -46,6 +46,7 @@ export function EditorIntegrationTab() {
   const activeProjectId = useProjectStore((s) => s.currentProject?.id);
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
     };

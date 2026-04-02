@@ -79,6 +79,7 @@ export function AgentSettings({
   }, [settings, isCliInitialized, isCliLoading, cliAvailability]);
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
       if (copyTimeoutRef.current) {

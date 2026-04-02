@@ -18,6 +18,7 @@ export function ImageViewerTab() {
   const activeProjectId = activeProject?.id;
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
     };
