@@ -360,8 +360,10 @@ export function setupTerminalStoreListeners() {
 
   flowStatusUnsubscribe = terminalRegistryController.onStatus((data: TerminalStatusPayload) => {
     const { id, status, timestamp } = data;
+    console.log(`[StoreListeners] Flow status for ${id}: ${status}`);
     useTerminalStore.getState().updateFlowStatus(id, status, timestamp);
     if (status === "suspended" || status === "paused-backpressure") {
+      console.log(`[StoreListeners] Waking ${id} due to flow status: ${status}`);
       terminalInstanceService.wake(id);
     }
   });

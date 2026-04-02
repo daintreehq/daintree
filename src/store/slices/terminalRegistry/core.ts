@@ -398,6 +398,12 @@ export const createCorePanelActions = (
           (options.worktreeId ?? null) !==
             (useWorktreeSelectionStore.getState().activeWorktreeId ?? null);
 
+        console.log(
+          `[addTerminal] Prewarming ${id}: kind=${kind}, location=${location}, ` +
+            `offscreenOrInactive=${offscreenOrInactive}, shouldBackground=${shouldBackground}, ` +
+            `activeWorktreeId=${useWorktreeSelectionStore.getState().activeWorktreeId}`
+        );
+
         if (kind !== "agent") {
           terminalInstanceService.prewarmTerminal(id, legacyType, terminalOptions, {
             offscreen: offscreenOrInactive,

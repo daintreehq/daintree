@@ -47,10 +47,17 @@ export class TerminalRendererPolicy {
         managed.tierChangeTimer = undefined;
         managed.pendingTier = undefined;
       }
+      console.log(
+        `[RendererPolicy] No-op for ${id}: tier=${tier} === currentApplied=${currentAppliedTier}`
+      );
       return;
     }
 
     const isUpgrade = tier < currentAppliedTier;
+    console.log(
+      `[RendererPolicy] Applying for ${id}: tier=${tier}, currentApplied=${currentAppliedTier}, ` +
+        `isUpgrade=${isUpgrade}, lastBackendTier=${this.lastBackendTier.get(id) ?? "unset"}`
+    );
 
     if (isUpgrade) {
       if (managed.tierChangeTimer !== undefined) {
@@ -93,6 +100,11 @@ export class TerminalRendererPolicy {
     const backendTier: "active" | "background" =
       tier === TerminalRefreshTier.BACKGROUND ? "background" : "active";
     const prevBackendTier = this.lastBackendTier.get(id) ?? "active";
+    console.log(
+      `[RendererPolicy] Immediate apply for ${id}: tier=${tier}, ` +
+        `backendTier=${backendTier}, prevBackendTier=${prevBackendTier}, ` +
+        `needsWake=${managed.needsWake}`
+    );
     this.setBackendTier(id, backendTier);
 
     if (backendTier === "background" && prevBackendTier === "active") {

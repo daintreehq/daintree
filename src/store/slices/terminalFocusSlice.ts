@@ -120,6 +120,7 @@ export const createTerminalFocusSlice =
           // Wake-on-focus: sync terminal state from backend when focused.
           // Skip wake for non-PTY panels - they don't have backend PTY processes.
           if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+            console.log(`[FocusSlice] setFocused(${id}) — waking terminal`);
             terminalInstanceService.wake(id);
           }
           if (shouldPing) {

@@ -441,6 +441,7 @@ function TerminalPaneComponent({
         e?.preventDefault();
         return;
       }
+      console.log(`[TerminalPane] handleClick for ${id} — calling setFocused + boostRefreshRate`);
       setFocused(id);
       terminalInstanceService.boostRefreshRate(id);
     },

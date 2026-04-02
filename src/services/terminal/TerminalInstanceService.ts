@@ -257,12 +257,18 @@ class TerminalInstanceService {
     options: ConstructorParameters<typeof Terminal>[0],
     params: { offscreen?: boolean; widthPx?: number; heightPx?: number } = {}
   ): ManagedTerminal {
+    console.log(
+      `[TIS.prewarm] Prewarming terminal ${id} (type=${type}, offscreen=${params.offscreen ?? false})`
+    );
     const managed = this.getOrCreate(
       id,
       type,
       options,
       () => TerminalRefreshTier.BACKGROUND,
       undefined
+    );
+    console.log(
+      `[TIS.prewarm] After getOrCreate: lastAppliedTier=${managed.lastAppliedTier}, isOpened=${managed.isOpened}`
     );
 
     if (!params.offscreen) {
@@ -297,9 +303,24 @@ class TerminalInstanceService {
     this.dataBuffer.stopPolling();
   }
 
+  private writeToTerminalLogCounter = new Map<string, number>();
+
   private writeToTerminal(id: string, data: string | Uint8Array): void {
     const managed = this.instances.get(id);
     if (!managed) return;
+
+    // Log first few writes per terminal for debugging frozen display
+    const writeCount = (this.writeToTerminalLogCounter.get(id) ?? 0) + 1;
+    this.writeToTerminalLogCounter.set(id, writeCount);
+    if (writeCount <= 5 || writeCount % 100 === 0) {
+      const bytes = typeof data === "string" ? data.length : data.byteLength;
+      console.log(
+        `[TIS.writeToTerminal] ${id} write #${writeCount}: ${bytes} bytes, ` +
+          `isOpened=${managed.isOpened}, isVisible=${managed.isVisible}, ` +
+          `isAttaching=${managed.isAttaching}, lastAppliedTier=${managed.lastAppliedTier}, ` +
+          `hostConnected=${managed.hostElement.isConnected}`
+      );
+    }
 
     if (managed.isHibernated) {
       const bytes = typeof data === "string" ? data.length : data.byteLength;
@@ -383,7 +404,13 @@ class TerminalInstanceService {
       managed.lastActiveTime = Date.now();
 
       if (isVisible) {
-        if (managed.isAttaching) return;
+        if (managed.isAttaching) {
+          console.log(
+            `[TIS.setVisible] Skipping renderer policy for ${id} — isAttaching=true ` +
+              `(will reconcile in post-attach rAF). lastAppliedTier=${managed.lastAppliedTier}`
+          );
+          return;
+        }
 
         const rect = managed.hostElement.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
@@ -993,6 +1020,11 @@ class TerminalInstanceService {
         // terminal was created.
         if (managed.isVisible && managed.getRefreshTier) {
           const currentTier = managed.getRefreshTier();
+          console.log(
+            `[TIS.attach] Post-attach renderer recovery for ${id}: ` +
+              `currentTier=${currentTier}, lastAppliedTier=${managed.lastAppliedTier}, ` +
+              `isVisible=${managed.isVisible}, kind=${managed.kind}`
+          );
           if (managed.lastAppliedTier === undefined || currentTier !== managed.lastAppliedTier) {
             this.rendererPolicy.applyRendererPolicy(id, currentTier);
           }

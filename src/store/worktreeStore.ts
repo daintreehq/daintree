@@ -553,6 +553,11 @@ function applyWorktreeTerminalPolicy(
       const terminals = useTerminalStore.getState().terminals;
       const activeDockTerminalId = useTerminalStore.getState().activeDockTerminalId;
 
+      console.log(
+        `[applyWorktreeTerminalPolicy] Running for worktree=${targetWorktreeId}, ` +
+          `terminalCount=${terminals.length}, generation=${generation}`
+      );
+
       for (const terminal of terminals) {
         const isInActiveWorktree = (terminal.worktreeId ?? null) === (targetWorktreeId ?? null);
 
@@ -565,15 +570,19 @@ function applyWorktreeTerminalPolicy(
           continue;
         }
 
+        const targetTier =
+          isInActiveWorktree && !isDockOrTrash
+            ? TerminalRefreshTier.VISIBLE
+            : TerminalRefreshTier.BACKGROUND;
+        console.log(
+          `[applyWorktreeTerminalPolicy] ${terminal.id}: isInActiveWorktree=${isInActiveWorktree}, ` +
+            `location=${location}, targetTier=${targetTier}`
+        );
+
         // Apply appropriate renderer policy based on worktree membership.
         // Avoid waking dock/trash terminals - they manage their own visibility.
         // applyRendererPolicy handles backend tier transitions internally.
-        terminalInstanceService.applyRendererPolicy(
-          terminal.id,
-          isInActiveWorktree && !isDockOrTrash
-            ? TerminalRefreshTier.VISIBLE
-            : TerminalRefreshTier.BACKGROUND
-        );
+        terminalInstanceService.applyRendererPolicy(terminal.id, targetTier);
       }
 
       onComplete?.();

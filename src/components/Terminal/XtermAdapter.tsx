@@ -203,6 +203,11 @@ function XtermAdapterComponent({
     const container = containerRef.current;
     if (!container) return;
 
+    console.log(
+      `[XtermAdapter] Mount useLayoutEffect for ${terminalId}: ` +
+        `container=${container.clientWidth}x${container.clientHeight}, type=${terminalType}`
+    );
+
     const managed = terminalInstanceService.getOrCreate(
       terminalId,
       terminalType,
@@ -210,6 +215,12 @@ function XtermAdapterComponent({
       stableRefreshTierProvider,
       onInput,
       cwd ? () => cwd : undefined
+    );
+
+    console.log(
+      `[XtermAdapter] After getOrCreate for ${terminalId}: ` +
+        `isOpened=${managed.isOpened}, isDetached=${managed.isDetached}, ` +
+        `lastAppliedTier=${managed.lastAppliedTier}, isAttaching=${managed.isAttaching}`
     );
 
     const wasDetachedForSwitch = managed.isDetached === true;
@@ -424,6 +435,9 @@ function XtermAdapterComponent({
 
   useLayoutEffect(() => {
     // Use the stable proxy to avoid stale closures in the service
+    console.log(
+      `[XtermAdapter] Tier useLayoutEffect for ${terminalId}: currentTier=${currentTier}`
+    );
     terminalInstanceService.updateRefreshTierProvider(terminalId, stableRefreshTierProvider);
     terminalInstanceService.applyRendererPolicy(terminalId, currentTier);
 

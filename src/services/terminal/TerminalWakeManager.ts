@@ -41,19 +41,30 @@ export class TerminalWakeManager {
           return false;
         }
 
+        console.log(`[WakeManager] wakeAndRestore(${id}) — fetching snapshot from backend`);
         const { state } = await terminalClient.wake(id);
 
         // Re-check after async: selection may have started while we were awaiting.
         if (managed.terminal.hasSelection()) {
+          console.log(`[WakeManager] wakeAndRestore(${id}) — aborted, user has selection`);
           return false;
         }
 
         // Alternate-screen TUIs repaint from live PTY data; serialized snapshots are optional.
         if (managed.isAltBuffer) {
+          console.log(`[WakeManager] wakeAndRestore(${id}) — alt buffer, skipping restore`);
           return true;
         }
 
-        if (!state) return false;
+        if (!state) {
+          console.log(`[WakeManager] wakeAndRestore(${id}) — no state from backend`);
+          return false;
+        }
+
+        console.log(
+          `[WakeManager] wakeAndRestore(${id}) — restoring ${state.length} bytes ` +
+            `(incremental=${state.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes})`
+        );
 
         if (state.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
           await this.deps.restoreFromSerializedIncremental(id, state);
@@ -63,6 +74,7 @@ export class TerminalWakeManager {
 
         if (this.deps.getInstance(id) === managed) {
           managed.terminal.refresh(0, managed.terminal.rows - 1);
+          console.log(`[WakeManager] wakeAndRestore(${id}) — restore complete, refreshed`);
         }
         return true;
       } catch (error) {
@@ -101,6 +113,7 @@ export class TerminalWakeManager {
 
     if (!this.deps.hasInstance(id)) {
       // Instance doesn't exist yet - schedule a retry
+      console.log(`[WakeManager] wake(${id}) — no instance, scheduling retry`);
       this.scheduleWakeRetry(id, 0);
       return;
     }
@@ -109,9 +122,11 @@ export class TerminalWakeManager {
     const lastWake = this.lastWakeTime.get(id) ?? 0;
 
     if (now - lastWake < WAKE_RATE_LIMIT_MS) {
+      console.log(`[WakeManager] wake(${id}) — rate-limited (${now - lastWake}ms since last)`);
       return;
     }
 
+    console.log(`[WakeManager] wake(${id}) — triggering wakeAndRestore`);
     this.triggerWake(id);
   }
 
