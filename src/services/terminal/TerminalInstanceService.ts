@@ -108,6 +108,7 @@ class TerminalInstanceService {
       setCachedSelection: (id, selection) => this.cachedSelections.set(id, selection),
       clearDirectingState: (id) => this.agentStateController.clearDirectingState(id),
       onUserInput: (id, data) => this.onUserInput(id, data),
+      onEnterPressed: (id) => this.onEnterPressed(id),
     });
 
     this.wakeManager = new TerminalWakeManager({
@@ -509,6 +510,7 @@ class TerminalInstanceService {
     const existing = this.instances.get(id);
     if (existing) {
       existing.getRefreshTier = getRefreshTier;
+      existing.onInput = onInput;
       if (getCwd) {
         this.cwdProviders.set(id, getCwd);
       }
@@ -606,6 +608,7 @@ class TerminalInstanceService {
       isAltBuffer: false,
       altBufferListeners: new Set(),
       ipcListenerCount: listeners.length,
+      onInput,
     };
 
     managed.parserHandler = new TerminalParserHandler(managed, () => {

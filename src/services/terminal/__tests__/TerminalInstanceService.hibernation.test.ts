@@ -41,6 +41,15 @@ vi.mock("@xterm/addon-webgl", () => ({
   })),
 }));
 
+const mockGetEffectiveAgentConfig = vi.fn();
+vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    getEffectiveAgentConfig: (...args: unknown[]) => mockGetEffectiveAgentConfig(...args),
+  };
+});
+
 vi.mock("../TerminalAddonManager", () => ({
   setupTerminalAddons: vi.fn(() => ({
     fitAddon: { fit: vi.fn() },
@@ -165,6 +174,13 @@ describe("TerminalInstanceService - Hibernation", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+
+    // Mock window.electron for title state reporting
+    (window as Record<string, unknown>).electron = {
+      terminal: {
+        reportTitleState: vi.fn(),
+      },
+    };
 
     ({ terminalInstanceService: service } =
       (await import("../TerminalInstanceService")) as unknown as {
@@ -588,6 +604,139 @@ describe("TerminalInstanceService - Hibernation", () => {
       expect(managed.isHibernated).toBe(false);
 
       expect(service.instances.has("t1")).toBe(true);
+    });
+  });
+
+  describe("Agent listener reinstallation after unhibernate", () => {
+    it("should install more listeners for agent terminals with titleStatePatterns than non-agent", () => {
+      mockGetEffectiveAgentConfig.mockReturnValue({
+        detection: {
+          titleStatePatterns: {
+            working: ["\u2726"],
+            waiting: ["\u25C7"],
+          },
+        },
+      });
+
+      // Non-agent terminal
+      const nonAgent = makeMockManaged({
+        isHibernated: true,
+        isOpened: false,
+        kind: "terminal",
+        type: "terminal",
+        ipcListenerCount: 0,
+      });
+      nonAgent.listeners = [];
+      service.instances.set("t1", nonAgent as unknown as Record<string, unknown>);
+      service.unhibernate("t1");
+      const nonAgentListenerCount = nonAgent.listeners.length;
+
+      // Agent terminal
+      const agent = makeMockManaged({
+        isHibernated: true,
+        isOpened: false,
+        kind: "agent",
+        type: "claude",
+        agentId: "claude",
+        ipcListenerCount: 0,
+      });
+      agent.listeners = [];
+      service.instances.set("t2", agent as unknown as Record<string, unknown>);
+      service.unhibernate("t2");
+      const agentListenerCount = agent.listeners.length;
+
+      // Agent should have 2 more listeners: title-state + enter-key
+      expect(agentListenerCount).toBe(nonAgentListenerCount + 2);
+    });
+
+    it("should install enter-key listener but not title listener when no titleStatePatterns", () => {
+      mockGetEffectiveAgentConfig.mockReturnValue(undefined);
+
+      // Non-agent baseline
+      const nonAgent = makeMockManaged({
+        isHibernated: true,
+        isOpened: false,
+        kind: "terminal",
+        type: "terminal",
+        ipcListenerCount: 0,
+      });
+      nonAgent.listeners = [];
+      service.instances.set("t1", nonAgent as unknown as Record<string, unknown>);
+      service.unhibernate("t1");
+      const nonAgentListenerCount = nonAgent.listeners.length;
+
+      // Agent without title patterns
+      const agent = makeMockManaged({
+        isHibernated: true,
+        isOpened: false,
+        kind: "agent",
+        type: "claude",
+        agentId: "claude",
+        ipcListenerCount: 0,
+      });
+      agent.listeners = [];
+      service.instances.set("t2", agent as unknown as Record<string, unknown>);
+      service.unhibernate("t2");
+      const agentListenerCount = agent.listeners.length;
+
+      // Agent should have 1 more listener: enter-key only (no title-state)
+      expect(agentListenerCount).toBe(nonAgentListenerCount + 1);
+    });
+
+    it("should preserve onInput callback on ManagedTerminal through unhibernate", () => {
+      const onInputMock = vi.fn();
+      const managed = makeMockManaged({
+        isHibernated: true,
+        isOpened: false,
+        onInput: onInputMock,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.unhibernate("t1");
+
+      // onInput should still be on the managed instance
+      expect((managed as Record<string, unknown>).onInput).toBe(onInputMock);
+    });
+
+    it("should not grow listeners across hibernate/unhibernate cycles for agent terminals", () => {
+      mockGetEffectiveAgentConfig.mockReturnValue({
+        detection: {
+          titleStatePatterns: {
+            working: ["\u2726"],
+            waiting: ["\u25C7"],
+          },
+        },
+      });
+
+      const managed = makeMockManaged({
+        ipcListenerCount: 2,
+        kind: "agent",
+        type: "claude",
+        agentId: "claude",
+        canonicalAgentState: "completed",
+        onInput: vi.fn(),
+      });
+      managed.listeners = [vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn()];
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.hibernate("t1");
+      expect(managed.listeners.length).toBe(2);
+
+      service.unhibernate("t1");
+      const afterFirstCycle = managed.listeners.length;
+      // Agent terminals should have more listeners than just IPC (title + key + standard)
+      expect(afterFirstCycle).toBeGreaterThan(2);
+
+      service.hibernate("t1");
+      expect(managed.listeners.length).toBe(2);
+
+      service.unhibernate("t1");
+      expect(managed.listeners.length).toBe(afterFirstCycle);
+
+      // Third cycle
+      service.hibernate("t1");
+      service.unhibernate("t1");
+      expect(managed.listeners.length).toBe(afterFirstCycle);
     });
   });
 });
