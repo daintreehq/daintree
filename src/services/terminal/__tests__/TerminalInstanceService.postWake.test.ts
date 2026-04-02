@@ -14,6 +14,7 @@ const { mockTerminalClient } = vi.hoisted(() => ({
       signalBuffer: null,
     })),
     acknowledgeData: vi.fn(),
+    acknowledgePortData: vi.fn(),
   },
 }));
 

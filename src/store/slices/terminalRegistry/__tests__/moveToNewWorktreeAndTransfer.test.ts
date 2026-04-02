@@ -22,6 +22,7 @@ vi.mock("@/clients", () => ({
     gracefulKill: mockGracefulKill,
     submit: mockSubmit,
     acknowledgeData: vi.fn(),
+    acknowledgePortData: vi.fn(),
     setActivityTier: vi.fn(),
     wake: vi.fn(),
   },
