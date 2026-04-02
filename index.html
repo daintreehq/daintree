@@ -153,6 +153,28 @@
         border-radius: 9999px;
       }
 
+      /* ── Toolbar shapes: subtler than content shapes ── */
+      .skeleton-toolbar .skel-shape {
+        background: color-mix(
+          in oklch,
+          var(--theme-surface-sidebar, #131312),
+          var(--theme-text-primary, #e0e0e0) 6%
+        );
+      }
+      .skeleton-toolbar .skel-shape::after {
+        background: linear-gradient(
+          90deg,
+          transparent 0%,
+          color-mix(
+              in oklch,
+              var(--theme-surface-sidebar, #131312),
+              var(--theme-text-primary, #e0e0e0) 9%
+            )
+            50%,
+          transparent 100%
+        );
+      }
+
       /* ── Toolbar divider ── */
       .skel-divider {
         width: 1px;
@@ -186,13 +208,11 @@
         flex-shrink: 0;
         background: var(--theme-surface-sidebar, #131312);
         border-right: 1px solid var(--theme-border-default, #282828);
-        padding: 12px 0;
         display: flex;
         flex-direction: column;
-        gap: 0;
       }
       .skeleton-sidebar-header {
-        padding: 8px 12px;
+        padding: 8px 12px; /* px-3 py-2 matches actual */
         flex-shrink: 0;
         border-bottom: 1px solid var(--theme-border-default, #282828);
       }
@@ -230,10 +250,11 @@
 
       /* ── Worktree card skeleton ── */
       .skel-card {
-        padding: 12px 16px;
+        padding: 12px 16px; /* py-3 px-4 matches actual */
         border-bottom: 1px solid var(--theme-border-default, #282828);
         display: flex;
         flex-direction: column;
+        gap: 4px; /* mt-1 between title and metadata rows */
       }
 
       /* ── Main content area ── */
@@ -473,6 +494,26 @@
             transparent 100%
           );
         }
+        .skeleton-toolbar .skel-shape {
+          background: color-mix(
+            in oklch,
+            var(--theme-surface-sidebar, #ebe7de),
+            var(--theme-text-primary, #1a1a1a) 5%
+          );
+        }
+        .skeleton-toolbar .skel-shape::after {
+          background: linear-gradient(
+            90deg,
+            transparent 0%,
+            color-mix(
+                in oklch,
+                var(--theme-surface-sidebar, #ebe7de),
+                var(--theme-text-primary, #1a1a1a) 8%
+              )
+              50%,
+            transparent 100%
+          );
+        }
         .skeleton-sidebar-header {
           border-bottom-color: var(--theme-border-default, #d8d2c6);
         }
@@ -631,31 +672,31 @@
           <!-- macOS traffic light spacer -->
           <div style="width: 64px; flex-shrink: 0"></div>
           <!-- Sidebar toggle -->
-          <div class="skel-shape skel-circle" style="width: 20px; height: 20px"></div>
+          <div class="skel-shape skel-circle" style="width: 18px; height: 18px"></div>
           <div class="skel-divider"></div>
-          <!-- Agent icons -->
-          <div class="skel-btn-group" style="gap: 8px">
-            <div class="skel-shape skel-circle" style="width: 20px; height: 20px"></div>
-            <div class="skel-shape skel-circle" style="width: 20px; height: 20px"></div>
-            <div class="skel-shape skel-circle" style="width: 20px; height: 20px"></div>
+          <!-- Agent icons (gap-0.5 = 2px matches actual) -->
+          <div class="skel-btn-group">
+            <div class="skel-shape skel-circle" style="width: 18px; height: 18px"></div>
+            <div class="skel-shape skel-circle" style="width: 18px; height: 18px"></div>
+            <div class="skel-shape skel-circle" style="width: 18px; height: 18px"></div>
           </div>
           <div class="skel-divider"></div>
           <!-- Tool icons -->
-          <div class="skel-btn-group" style="gap: 8px">
-            <div class="skel-shape skel-circle" style="width: 20px; height: 20px"></div>
-            <div class="skel-shape skel-circle" style="width: 20px; height: 20px"></div>
+          <div class="skel-btn-group">
+            <div class="skel-shape skel-circle" style="width: 18px; height: 18px"></div>
+            <div class="skel-shape skel-circle" style="width: 18px; height: 18px"></div>
           </div>
         </div>
         <div class="skeleton-toolbar-center">
           <div class="skel-shape" style="width: 180px; height: 36px; border-radius: 8px"></div>
         </div>
         <div class="skeleton-toolbar-right">
-          <div class="skel-btn-group" style="gap: 8px">
-            <div class="skel-shape skel-circle" style="width: 20px; height: 20px"></div>
-            <div class="skel-shape skel-circle" style="width: 20px; height: 20px"></div>
+          <div class="skel-btn-group">
+            <div class="skel-shape skel-circle" style="width: 18px; height: 18px"></div>
+            <div class="skel-shape skel-circle" style="width: 18px; height: 18px"></div>
           </div>
           <div class="skel-divider"></div>
-          <div class="skel-shape skel-circle" style="width: 20px; height: 20px"></div>
+          <div class="skel-shape skel-circle" style="width: 18px; height: 18px"></div>
         </div>
       </div>
 
@@ -667,27 +708,26 @@
             <div class="skel-search-input"></div>
           </div>
 
-          <!-- Worktree cards (ghost hints) -->
+          <!-- Worktree cards (ghost hints matching actual py-3 px-4 card anatomy) -->
           <div class="skel-card">
-            <div class="skel-shape" style="width: 55%; height: 11px; border-radius: 3px"></div>
-            <div
-              class="skel-shape"
-              style="width: 35%; height: 9px; border-radius: 3px; margin-top: 6px"
-            ></div>
+            <div class="skel-shape" style="width: 40%; height: 13px; border-radius: 3px"></div>
+            <div class="skel-shape" style="width: 30%; height: 11px; border-radius: 3px"></div>
           </div>
           <div class="skel-card">
-            <div class="skel-shape" style="width: 70%; height: 11px; border-radius: 3px"></div>
-            <div
-              class="skel-shape"
-              style="width: 45%; height: 9px; border-radius: 3px; margin-top: 6px"
-            ></div>
+            <div class="skel-shape" style="width: 65%; height: 13px; border-radius: 3px"></div>
+            <div class="skel-shape" style="width: 45%; height: 11px; border-radius: 3px"></div>
           </div>
           <div class="skel-card">
-            <div class="skel-shape" style="width: 48%; height: 11px; border-radius: 3px"></div>
-            <div
-              class="skel-shape"
-              style="width: 30%; height: 9px; border-radius: 3px; margin-top: 6px"
-            ></div>
+            <div class="skel-shape" style="width: 50%; height: 13px; border-radius: 3px"></div>
+            <div class="skel-shape" style="width: 35%; height: 11px; border-radius: 3px"></div>
+          </div>
+          <div class="skel-card">
+            <div class="skel-shape" style="width: 55%; height: 13px; border-radius: 3px"></div>
+            <div class="skel-shape" style="width: 40%; height: 11px; border-radius: 3px"></div>
+          </div>
+          <div class="skel-card">
+            <div class="skel-shape" style="width: 45%; height: 13px; border-radius: 3px"></div>
+            <div class="skel-shape" style="width: 28%; height: 11px; border-radius: 3px"></div>
           </div>
         </div>
 
