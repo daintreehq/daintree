@@ -334,6 +334,175 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
   });
 });
 
+describe("TerminalFocusSlice - dock focus sync invariant", () => {
+  beforeAll(() => {
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        electron: {
+          notification: { acknowledgeWaiting: vi.fn(), acknowledgeWorkingPulse: vi.fn() },
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterAll(() => {
+    Object.defineProperty(globalThis, "window", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  const makeTerminal = (
+    id: string,
+    location: "grid" | "dock",
+    worktreeId = "worktree-1"
+  ): TerminalInstance =>
+    ({
+      id,
+      title: id,
+      type: "terminal",
+      cwd: "/test",
+      location,
+      agentState: "idle",
+      isVisible: true,
+      cols: 80,
+      rows: 24,
+      worktreeId,
+    }) as TerminalInstance;
+
+  let terminals: TerminalInstance[];
+  let state: TerminalFocusSlice;
+
+  const setup = () => {
+    const getTerminals = vi.fn(() => terminals);
+    const getState = vi.fn((): TerminalFocusSlice => state);
+    const setState = vi.fn(
+      (
+        updater:
+          | Partial<TerminalFocusSlice>
+          | ((s: TerminalFocusSlice) => Partial<TerminalFocusSlice>)
+      ) => {
+        const currentState = getState();
+        const updates = typeof updater === "function" ? updater(currentState) : updater;
+        state = { ...currentState, ...updates };
+      }
+    );
+    return { getTerminals, setState, getState };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    terminals = [
+      makeTerminal("grid-1", "grid"),
+      makeTerminal("grid-2", "grid"),
+      makeTerminal("dock-1", "dock"),
+      makeTerminal("dock-2", "dock"),
+    ];
+    const { getTerminals, setState, getState } = setup();
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+      setState as never,
+      getState as never,
+      {} as never
+    );
+  });
+
+  it("focusDockDirection sets activeDockTerminalId when moving between dock terminals", () => {
+    state.focusedId = "dock-1";
+    state.activeDockTerminalId = "dock-1";
+    const findDockByIndex = vi.fn(() => "dock-2");
+
+    state.focusDockDirection("right", findDockByIndex);
+
+    expect(state.focusedId).toBe("dock-2");
+    expect(state.activeDockTerminalId).toBe("dock-2");
+  });
+
+  it("focusDockDirection is a no-op when focusedId is null", () => {
+    state.focusedId = null;
+    const findDockByIndex = vi.fn();
+
+    state.focusDockDirection("right", findDockByIndex);
+
+    expect(findDockByIndex).not.toHaveBeenCalled();
+    expect(state.focusedId).toBeNull();
+  });
+
+  it("focusDockDirection is a no-op when findDockByIndex returns null", () => {
+    state.focusedId = "dock-1";
+    state.activeDockTerminalId = "dock-1";
+    const findDockByIndex = vi.fn(() => null);
+
+    state.focusDockDirection("left", findDockByIndex);
+
+    expect(state.focusedId).toBe("dock-1");
+    expect(state.activeDockTerminalId).toBe("dock-1");
+  });
+
+  it("focusByIndex clears activeDockTerminalId when targeting a grid terminal", () => {
+    state.focusedId = "dock-1";
+    state.activeDockTerminalId = "dock-1";
+    const findByIndex = vi.fn(() => "grid-1");
+
+    state.focusByIndex(0, findByIndex);
+
+    expect(state.focusedId).toBe("grid-1");
+    expect(state.activeDockTerminalId).toBeNull();
+  });
+
+  it("focusDirection clears activeDockTerminalId when navigating to a grid terminal", () => {
+    state.focusedId = "grid-1";
+    state.activeDockTerminalId = "dock-1";
+    const findNearest = vi.fn(() => "grid-2");
+
+    state.focusDirection("right", findNearest);
+
+    expect(state.focusedId).toBe("grid-2");
+    expect(state.activeDockTerminalId).toBeNull();
+  });
+
+  it("setFocused sets activeDockTerminalId when focusing a dock terminal", () => {
+    state.focusedId = "grid-1";
+    state.activeDockTerminalId = null;
+
+    state.setFocused("dock-1");
+
+    expect(state.focusedId).toBe("dock-1");
+    expect(state.activeDockTerminalId).toBe("dock-1");
+  });
+
+  it("setFocused clears activeDockTerminalId when focusing a grid terminal", () => {
+    state.focusedId = "dock-1";
+    state.activeDockTerminalId = "dock-1";
+
+    state.setFocused("grid-1");
+
+    expect(state.focusedId).toBe("grid-1");
+    expect(state.activeDockTerminalId).toBeNull();
+  });
+
+  it("setFocused(null) clears both focusedId and activeDockTerminalId", () => {
+    state.focusedId = "dock-1";
+    state.activeDockTerminalId = "dock-1";
+
+    state.setFocused(null);
+
+    expect(state.focusedId).toBeNull();
+    expect(state.activeDockTerminalId).toBeNull();
+  });
+
+  it("setFocused clears activeDockTerminalId for unknown terminal ids", () => {
+    state.activeDockTerminalId = "dock-1";
+
+    state.setFocused("unknown-id");
+
+    expect(state.focusedId).toBe("unknown-id");
+    expect(state.activeDockTerminalId).toBeNull();
+  });
+});
+
 describe("TerminalFocusSlice - focusNextBlockedDock", () => {
   beforeAll(() => {
     // openDockTerminal accesses window.electron?.notification?.acknowledgeWaiting
