@@ -148,6 +148,44 @@ describe("TerminalRestoreController", () => {
       expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred2");
     });
 
+    it("does not apply callback when destroyed mid-write", async () => {
+      const managed = makeManagedTerminal({
+        deferredOutput: ["should-not-flush"],
+      });
+      instances.set("t1", managed);
+
+      controller.restoreFromSerialized("t1", "small-state");
+
+      // Destroy between write() and callback firing
+      controller.destroy("t1");
+      await flushMicrotasks();
+
+      expect(writeDataSpy).not.toHaveBeenCalled();
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+      expect(mockTerminal.scrollToLine).not.toHaveBeenCalled();
+    });
+
+    it("does not apply first callback when a second restore starts before callback fires", async () => {
+      const managed = makeManagedTerminal({
+        deferredOutput: ["first-deferred"],
+      });
+      instances.set("t1", managed);
+
+      // First restore — callback queued but not yet fired
+      controller.restoreFromSerialized("t1", "first-state");
+
+      // Second restore before first callback fires
+      managed.deferredOutput = ["second-deferred"];
+      controller.restoreFromSerialized("t1", "second-state");
+
+      await flushMicrotasks();
+
+      // Only the second restore's deferred output should have been flushed
+      expect(writeDataSpy).toHaveBeenCalledTimes(1);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "second-deferred");
+      expect(managed.restoreGeneration).toBe(2);
+    });
+
     it("preserves scroll position when user is scrolled back", async () => {
       const managed = makeManagedTerminal({ isUserScrolledBack: true });
       instances.set("t1", managed);

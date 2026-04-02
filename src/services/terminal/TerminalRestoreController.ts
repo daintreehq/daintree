@@ -28,6 +28,7 @@ export class TerminalRestoreController {
         return true;
       }
 
+      const restoreGeneration = ++managed.restoreGeneration;
       managed.isSerializedRestoreInProgress = true;
 
       const scrollBackOffset = managed.isUserScrolledBack
@@ -37,7 +38,7 @@ export class TerminalRestoreController {
       managed.terminal.reset();
       managed.terminal.write(serializedState, () => {
         const current = this.deps.getInstance(id);
-        if (current !== managed) return;
+        if (current !== managed || managed.restoreGeneration !== restoreGeneration) return;
 
         if (scrollBackOffset > 0) {
           const newBaseY = current.terminal.buffer.active.baseY;
