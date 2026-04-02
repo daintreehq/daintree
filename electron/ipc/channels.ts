@@ -563,6 +563,9 @@ export const CHANNELS = {
   // Config reload channels
   APP_RELOAD_CONFIG: "app:reload-config",
   APP_CONFIG_RELOADED: "app:config-reloaded",
+
+  // Performance capture channels
+  PERF_FLUSH_RENDERER_MARKS: "perf:flush-renderer-marks",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

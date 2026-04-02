@@ -52,6 +52,9 @@ keys/
 .env.*
 !.env.example
 
+# Performance capture output
+perf-metrics.ndjson
+
 # Demo recording output
 demo-output/
 

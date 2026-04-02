@@ -169,6 +169,7 @@ async function initializeDeferredServices(
   windowRegistry?: WindowRegistry
 ): Promise<void> {
   console.log("[MAIN] Initializing deferred services in background...");
+  markPerformance(PERF_MARKS.DEFERRED_SERVICES_START);
   const startTime = Date.now();
 
   const results = await Promise.allSettled([
@@ -241,6 +242,7 @@ async function initializeDeferredServices(
   })();
 
   const elapsed = Date.now() - startTime;
+  markPerformance(PERF_MARKS.DEFERRED_SERVICES_COMPLETE, { durationMs: elapsed });
   console.log(`[MAIN] All deferred services initialized in ${elapsed}ms`);
 }
 
@@ -267,9 +269,12 @@ export async function setupWindowServices(
     return;
   }
 
+  markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
+
   // ── One-time global initialization (first window only) ──
   if (!globalServicesInitialized) {
     globalServicesInitialized = true;
+    markPerformance(PERF_MARKS.SERVICE_INIT_START);
 
     // Store migrations
     console.log("[MAIN] Running store migrations...");
@@ -277,6 +282,7 @@ export async function setupWindowServices(
       const migrationRunner = new MigrationRunner(store);
       await migrationRunner.runMigrations(migrations);
       console.log("[MAIN] Store migrations completed");
+      markPerformance(PERF_MARKS.SERVICE_INIT_MIGRATIONS_DONE);
     } catch (error) {
       console.error("[MAIN] Store migration failed:", error);
       const message = error instanceof Error ? error.message : String(error);
@@ -509,6 +515,7 @@ export async function setupWindowServices(
   if (!ipcHandlersRegistered) {
     ipcHandlersRegistered = true;
     cleanupIpcHandlers = registerIpcHandlers(handlerDeps);
+    markPerformance(PERF_MARKS.SERVICE_INIT_IPC_READY);
 
     try {
       const { pluginService } = await import("../services/PluginService.js");
@@ -525,6 +532,7 @@ export async function setupWindowServices(
     try {
       await ptyClient!.waitForReady();
       console.log("[MAIN] Pty Host ready, initializing Workspace Client...");
+      markPerformance(PERF_MARKS.SERVICE_INIT_PTY_READY);
     } catch (error) {
       console.error("[MAIN] Pty Host failed to start:", error);
     }
@@ -534,6 +542,8 @@ export async function setupWindowServices(
       healthCheckIntervalMs: 60000,
       showCrashDialog: false,
     });
+
+    markPerformance(PERF_MARKS.SERVICE_INIT_WORKSPACE_READY);
 
     // Create WorktreePortBroker alongside WorkspaceClient
     if (!worktreePortBroker) {
@@ -607,6 +617,7 @@ export async function setupWindowServices(
     }
   });
 
+  markPerformance(PERF_MARKS.SERVICE_INIT_COMPLETE);
   opts.loadRenderer("after-services-ready", opts.initialProjectId);
 
   // Error handlers also use ipcMain.handle — register once

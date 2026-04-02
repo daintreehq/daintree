@@ -5,6 +5,7 @@ const state = vi.hoisted(() => ({ now: 0 }));
 vi.mock("node:perf_hooks", () => ({
   performance: {
     now: () => state.now,
+    timeOrigin: 1_000_000,
   },
 }));
 
@@ -20,7 +21,7 @@ vi.mock("node:fs", () => ({
 }));
 
 import { logWarn } from "../logger.js";
-import { startEventLoopLagMonitor } from "../performance.js";
+import { startEventLoopLagMonitor, rebaseRendererElapsedMs, APP_BOOT_T0, mainTimeOrigin } from "../performance.js";
 
 describe("startEventLoopLagMonitor", () => {
   let stopFn: (() => void) | null = null;
@@ -106,5 +107,30 @@ describe("startEventLoopLagMonitor", () => {
     vi.advanceTimersByTime(1000);
 
     expect(logWarn).not.toHaveBeenCalled();
+  });
+});
+
+describe("rebaseRendererElapsedMs", () => {
+  it("computes correct rebased elapsed time", () => {
+    // APP_BOOT_T0 = 0 (performance.now() at module load, mocked to 0)
+    // mainTimeOrigin = 1_000_000 (mocked)
+    // rendererTimeOrigin = 1_000_100 (renderer started 100ms after main)
+    // rendererT0 = 5 (performance.now() in renderer at module load)
+    // elapsedMs = 200 (time since rendererT0)
+    // Expected: (1_000_100 + 5 + 200) - (1_000_000 + 0) = 305
+    const result = rebaseRendererElapsedMs(1_000_100, 5, 200);
+    expect(result).toBe(305);
+  });
+
+  it("produces values greater than renderer elapsed when renderer started after main", () => {
+    // Renderer started 500ms after main boot
+    const result = rebaseRendererElapsedMs(1_000_500, 10, 50);
+    // (1_000_500 + 10 + 50) - (1_000_000 + 0) = 560
+    expect(result).toBe(560);
+  });
+
+  it("exports APP_BOOT_T0 and mainTimeOrigin", () => {
+    expect(typeof APP_BOOT_T0).toBe("number");
+    expect(typeof mainTimeOrigin).toBe("number");
   });
 });
