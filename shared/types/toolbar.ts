@@ -43,7 +43,15 @@ export interface LauncherDefaults {
   /** Always show dev server option in palette, even if devServerCommand not configured */
   alwaysShowDevServer: boolean;
   /** Default panel type to highlight when palette opens */
-  defaultSelection?: "terminal" | "claude" | "gemini" | "codex" | "opencode" | "cursor" | "browser" | "dev-server";
+  defaultSelection?:
+    | "terminal"
+    | "claude"
+    | "gemini"
+    | "codex"
+    | "opencode"
+    | "cursor"
+    | "browser"
+    | "dev-server";
   /** Default agent for automated workflows like "What's Next?" */
   defaultAgent?: BuiltInAgentId;
 }
