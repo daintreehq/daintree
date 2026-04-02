@@ -22,6 +22,7 @@ import {
 import { Spinner } from "@/components/ui/Spinner";
 import { CopyTreeIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
+import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
 import { AgentButton } from "./AgentButton";
 import { AgentSetupButton } from "./AgentSetupButton";
@@ -160,6 +161,7 @@ export function Toolbar({
   const { handleCopyTree } = useWorktreeActions();
   const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
   const notesShortcut = useKeybindingDisplay("notes.openPalette");
+  const copyTreeShortcut = useKeybindingDisplay("worktree.copyTree");
 
   const handleOpenProjectSettings = useCallback(() => {
     projectSwitcher.close();
@@ -220,6 +222,7 @@ export function Toolbar({
       if (resultMessage) {
         setTreeCopied(true);
         setCopyFeedback(resultMessage);
+        shortcutHintStore.getState().hide();
 
         if (treeCopyTimeoutRef.current) {
           clearTimeout(treeCopyTimeoutRef.current);
@@ -519,7 +522,7 @@ export function Toolbar({
                     {copyFeedback}
                   </span>
                 ) : (
-                  "Copy Context"
+                  createTooltipWithShortcut("Copy Context", copyTreeShortcut)
                 )}
               </TooltipContent>
             </Tooltip>
@@ -599,6 +602,7 @@ export function Toolbar({
       onLaunchAgent,
       sidebarShortcut,
       notesShortcut,
+      copyTreeShortcut,
       hasActiveVoiceRecording,
       currentProject,
       handleCopyTreeClick,
