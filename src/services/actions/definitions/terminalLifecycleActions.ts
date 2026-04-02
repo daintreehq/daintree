@@ -66,7 +66,12 @@ export function registerTerminalLifecycleActions(
       const state = useTerminalStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        state.backgroundTerminal(targetId);
+        const group = state.getPanelGroup(targetId);
+        if (group) {
+          state.backgroundPanelGroup(targetId);
+        } else {
+          state.backgroundTerminal(targetId);
+        }
       }
     },
   }));

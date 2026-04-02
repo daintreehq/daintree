@@ -12,6 +12,7 @@ export type {
   AddTerminalOptions,
   TrashedTerminal,
   TrashedTerminalGroupMetadata,
+  BackgroundedTerminal,
   TerminalRegistrySlice,
   TerminalRegistryMiddleware,
   TerminalRegistryStoreApi,

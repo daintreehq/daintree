@@ -110,6 +110,10 @@ export interface TrashedTerminal {
 export interface BackgroundedTerminal {
   id: string;
   originalLocation: "dock" | "grid";
+  /** Shared ID for panels backgrounded together as a group */
+  groupRestoreId?: string;
+  /** Present on the "anchor" panel of a backgrounded group, holds metadata for recreation */
+  groupMetadata?: TrashedTerminalGroupMetadata;
 }
 
 export interface TerminalRegistrySlice {
@@ -160,7 +164,11 @@ export interface TerminalRegistrySlice {
   isInTrash: (id: string) => boolean;
 
   backgroundTerminal: (id: string) => void;
+  /** Background all panels in a group together, storing group metadata for restoration */
+  backgroundPanelGroup: (panelId: string) => void;
   restoreBackgroundTerminal: (id: string, targetWorktreeId?: string) => void;
+  /** Restore all panels with the given groupRestoreId, recreating the tab group */
+  restoreBackgroundGroup: (groupRestoreId: string, targetWorktreeId?: string) => void;
   isInBackground: (id: string) => boolean;
 
   reorderTerminals: (

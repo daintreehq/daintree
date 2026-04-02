@@ -7,6 +7,7 @@ export {
   type TerminalRegistryMiddleware,
   type TrashedTerminal,
   type TrashedTerminalGroupMetadata,
+  type BackgroundedTerminal,
 } from "./terminalRegistrySlice";
 
 export {
