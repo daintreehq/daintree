@@ -1220,6 +1220,9 @@ export interface ElectronAPI {
   help: {
     getFolderPath(): Promise<string | null>;
   };
+  perf: {
+    flushMarks(payload: import("../../perf/marks.js").RendererPerfFlushPayload): void;
+  };
   demo?: {
     moveTo(x: number, y: number, durationMs?: number): Promise<void>;
     moveToSelector(

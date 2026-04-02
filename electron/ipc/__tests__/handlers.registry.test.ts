@@ -4,6 +4,8 @@ vi.mock("electron", () => ({
   ipcMain: {
     handle: vi.fn(),
     removeHandler: vi.fn(),
+    on: vi.fn(),
+    removeListener: vi.fn(),
   },
   BrowserWindow: {
     getAllWindows: () => [],
@@ -60,6 +62,7 @@ const registerMocks = vi.hoisted(() => ({
   registerDemoHandlers: vi.fn(),
   registerRecoveryHandlers: vi.fn(),
   registerPluginHandlers: vi.fn(),
+  registerPerfHandlers: vi.fn(),
 }));
 
 vi.mock("../handlers/worktree.js", () => ({
@@ -202,6 +205,9 @@ vi.mock("../handlers/recovery.js", () => ({
 }));
 vi.mock("../handlers/plugin.js", () => ({
   registerPluginHandlers: registerMocks.registerPluginHandlers,
+}));
+vi.mock("../handlers/perf.js", () => ({
+  registerPerfHandlers: registerMocks.registerPerfHandlers,
 }));
 vi.mock("../../services/events.js", () => ({
   events: { emit: vi.fn(), on: vi.fn(), off: vi.fn() },

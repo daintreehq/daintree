@@ -3,6 +3,15 @@ export const PERF_MARKS = {
   MAIN_WINDOW_CREATED: "main_window_created",
   RENDERER_READY: "renderer_ready",
 
+  SERVICE_INIT_START: "service_init_start",
+  SERVICE_INIT_MIGRATIONS_DONE: "service_init_migrations_done",
+  SERVICE_INIT_PTY_READY: "service_init_pty_ready",
+  SERVICE_INIT_WORKSPACE_READY: "service_init_workspace_ready",
+  SERVICE_INIT_IPC_READY: "service_init_ipc_ready",
+  SERVICE_INIT_COMPLETE: "service_init_complete",
+  DEFERRED_SERVICES_START: "deferred_services_start",
+  DEFERRED_SERVICES_COMPLETE: "deferred_services_complete",
+
   HYDRATE_START: "hydrate_start",
   HYDRATE_RESTORE_PANELS_START: "hydrate_restore_panels_start",
   HYDRATE_RESTORE_PANELS_END: "hydrate_restore_panels_end",
@@ -36,3 +45,16 @@ export const PERF_MARKS = {
 } as const;
 
 export type PerfMarkName = (typeof PERF_MARKS)[keyof typeof PERF_MARKS];
+
+export interface RendererPerfRecord {
+  mark: PerfMarkName | string;
+  timestamp: string;
+  elapsedMs: number;
+  meta?: Record<string, unknown>;
+}
+
+export interface RendererPerfFlushPayload {
+  marks: RendererPerfRecord[];
+  rendererTimeOrigin: number;
+  rendererT0: number;
+}

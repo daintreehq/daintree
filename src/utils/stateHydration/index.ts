@@ -16,7 +16,12 @@ import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
-import { markRendererPerformance, withRendererSpan } from "@/utils/performance";
+import {
+  markRendererPerformance,
+  withRendererSpan,
+  isRendererPerfCaptureEnabled,
+  RENDERER_T0,
+} from "@/utils/performance";
 import { isCanopyEnvEnabled } from "@/utils/env";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import {
@@ -844,5 +849,15 @@ export async function hydrateAppState(
       panelCount: panelRestoreCount,
       tabGroupCount: tabGroupRestoreCount,
     });
+
+    if (isRendererPerfCaptureEnabled() && window.electron?.perf) {
+      const marks = window.__CANOPY_PERF_MARKS__ ?? [];
+      window.electron.perf.flushMarks({
+        marks,
+        rendererTimeOrigin: performance.timeOrigin,
+        rendererT0: RENDERER_T0,
+      });
+      window.__CANOPY_PERF_MARKS__ = [];
+    }
   }
 }

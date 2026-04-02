@@ -971,6 +971,8 @@ const CHANNELS = {
 
   APP_RELOAD_CONFIG: "app:reload-config",
   APP_CONFIG_RELOADED: "app:config-reloaded",
+
+  PERF_FLUSH_RENDERER_MARKS: "perf:flush-renderer-marks",
 } as const;
 
 const api: ElectronAPI = {
@@ -2634,6 +2636,19 @@ const api: ElectronAPI = {
   // Help workspace API
   help: {
     getFolderPath: () => _unwrappingInvoke(CHANNELS.HELP_GET_FOLDER_PATH),
+  },
+
+  perf: {
+    flushMarks: (payload: {
+      marks: Array<{
+        mark: string;
+        timestamp: string;
+        elapsedMs: number;
+        meta?: Record<string, unknown>;
+      }>;
+      rendererTimeOrigin: number;
+      rendererT0: number;
+    }) => ipcRenderer.send(CHANNELS.PERF_FLUSH_RENDERER_MARKS, payload),
   },
 
   ...(isDemoMode
