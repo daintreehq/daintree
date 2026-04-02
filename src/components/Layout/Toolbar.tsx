@@ -160,6 +160,7 @@ export function Toolbar({
   const { handleCopyTree } = useWorktreeActions();
   const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
   const notesShortcut = useKeybindingDisplay("notes.openPalette");
+  const copyTreeShortcut = useKeybindingDisplay("worktree.copyTree");
 
   const handleOpenProjectSettings = useCallback(() => {
     projectSwitcher.close();
@@ -519,7 +520,7 @@ export function Toolbar({
                     {copyFeedback}
                   </span>
                 ) : (
-                  "Copy Context"
+                  createTooltipWithShortcut("Copy Context", copyTreeShortcut)
                 )}
               </TooltipContent>
             </Tooltip>
@@ -599,6 +600,7 @@ export function Toolbar({
       onLaunchAgent,
       sidebarShortcut,
       notesShortcut,
+      copyTreeShortcut,
       hasActiveVoiceRecording,
       currentProject,
       handleCopyTreeClick,
