@@ -67,6 +67,7 @@ test.describe.serial("Core: Toolbar Overflow", () => {
         codex: 2,
         terminal: 3,
         browser: 3,
+        "dev-server": 3,
         settings: 4,
         "notification-center": 4,
         "github-stats": 5,

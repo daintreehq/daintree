@@ -17,6 +17,7 @@ export type ToolbarButtonId =
   | "cursor"
   | "terminal"
   | "browser"
+  | "dev-server"
   | "voice-recording"
   | "github-stats"
   | "notes"
@@ -42,7 +43,7 @@ export interface LauncherDefaults {
   /** Always show dev server option in palette, even if devServerCommand not configured */
   alwaysShowDevServer: boolean;
   /** Default panel type to highlight when palette opens */
-  defaultSelection?: "terminal" | "claude" | "gemini" | "codex" | "opencode" | "cursor" | "browser";
+  defaultSelection?: "terminal" | "claude" | "gemini" | "codex" | "opencode" | "cursor" | "browser" | "dev-server";
   /** Default agent for automated workflows like "What's Next?" */
   defaultAgent?: BuiltInAgentId;
 }
@@ -63,6 +64,7 @@ export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPri
   cursor: 2,
   terminal: 3,
   browser: 3,
+  "dev-server": 3,
   "panel-palette": 4,
   settings: 5,
   "notification-center": 5,

@@ -222,6 +222,25 @@ describe("toolbarPreferencesStore", () => {
       expect(store.getState().layout.hiddenButtons).toEqual([]);
     });
 
+    it("includes dev-server in default left buttons", async () => {
+      const store = await loadStore();
+      expect(store.getState().layout.leftButtons).toContain("dev-server");
+    });
+
+    it("re-inserts dev-server for persisted state missing it via mergeButtonList", async () => {
+      setStoredState({
+        layout: {
+          leftButtons: ["terminal", "browser", "panel-palette"],
+          rightButtons: ["notes", "settings"],
+          hiddenButtons: [],
+        },
+        launcher: { alwaysShowDevServer: false },
+      });
+
+      const store = await loadStore();
+      expect(store.getState().layout.leftButtons).toContain("dev-server");
+    });
+
     it("migrates v0 state through both migrations", async () => {
       storageMock.setItem(
         STORAGE_KEY,
@@ -241,8 +260,10 @@ describe("toolbarPreferencesStore", () => {
       );
 
       const store = await loadStore();
-      // v0→v1: removes dev-server
-      expect(store.getState().layout.leftButtons).not.toContain("dev-server");
+      // v0→v1: removes old dev-server, mergeButtonList re-adds it from current defaults
+      expect(store.getState().layout.leftButtons).toContain("dev-server");
+      // v0→v1: resets defaultSelection that was "dev-server"
+      expect(store.getState().launcher.defaultSelection).toBeUndefined();
       // v1→v2: adds hiddenButtons
       expect(store.getState().layout.hiddenButtons).toEqual([]);
     });

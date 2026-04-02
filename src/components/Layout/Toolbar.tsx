@@ -13,6 +13,7 @@ import {
   Check,
   ChevronsUpDown,
   Globe,
+  Monitor,
   Bell,
   LayoutGrid,
   Ellipsis,
@@ -76,6 +77,7 @@ const OVERFLOW_MENU_META: Partial<
   cursor: { label: "Cursor", icon: SquareTerminal },
   terminal: { label: "Terminal", icon: SquareTerminal },
   browser: { label: "Browser", icon: Globe },
+  "dev-server": { label: "Dev Preview", icon: Monitor },
   "panel-palette": { label: "Panel Palette", icon: LayoutGrid },
   "github-stats": { label: "GitHub Stats", icon: GitPullRequest },
   "notification-center": { label: "Notifications", icon: Bell },
@@ -433,6 +435,30 @@ export function Toolbar({
         ),
         isAvailable: true,
       },
+      "dev-server": {
+        render: () => (
+          <TooltipProvider key="dev-server">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  data-toolbar-item=""
+                  onClick={() =>
+                    actionService.dispatch("devServer.start", undefined, { source: "user" })
+                  }
+                  className={toolbarIconButtonClass}
+                  aria-label="Open Dev Preview"
+                >
+                  <Monitor />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Open Dev Preview</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ),
+        isAvailable: !!currentProject,
+      },
       "panel-palette": {
         render: () => (
           <ToolbarLauncherButton
@@ -757,6 +783,9 @@ export function Toolbar({
       cursor: () => onLaunchAgent("cursor"),
       terminal: () => onLaunchAgent("terminal"),
       browser: () => onLaunchAgent("browser"),
+      "dev-server": () => {
+        void actionService.dispatch("devServer.start", undefined, { source: "user" });
+      },
       "panel-palette": () => {
         void actionService.dispatch("panel.palette", undefined, { source: "user" });
       },

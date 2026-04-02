@@ -13,6 +13,7 @@ const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
   ...(BUILT_IN_AGENT_IDS as unknown as ToolbarButtonId[]),
   "terminal",
   "browser",
+  "dev-server",
   "panel-palette",
 ];
 
