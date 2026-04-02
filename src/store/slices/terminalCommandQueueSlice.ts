@@ -16,6 +16,7 @@ export interface QueuedCommand {
 
 export interface TerminalCommandQueueSlice {
   commandQueue: QueuedCommand[];
+  commandQueueCountById: Record<string, number>;
 
   queueCommand: (
     terminalId: string,
@@ -37,6 +38,7 @@ export const createTerminalCommandQueueSlice =
   ): StateCreator<TerminalCommandQueueSlice, [], [], TerminalCommandQueueSlice> =>
   (set, get) => ({
     commandQueue: [],
+    commandQueueCountById: {},
 
     queueCommand: (terminalId, payload, description, origin = "automation") => {
       const terminal = getTerminal(terminalId);
@@ -62,6 +64,10 @@ export const createTerminalCommandQueueSlice =
           ...state.commandQueue,
           { id, terminalId, payload, description, queuedAt: Date.now(), origin },
         ],
+        commandQueueCountById: {
+          ...state.commandQueueCountById,
+          [terminalId]: (state.commandQueueCountById[terminalId] ?? 0) + 1,
+        },
       }));
     },
 
@@ -82,7 +88,13 @@ export const createTerminalCommandQueueSlice =
           const cmd = forTerminal[0];
           terminalClient.write(cmd.terminalId, cmd.payload);
 
-          return { commandQueue: [...remaining, ...forTerminal.slice(1)] };
+          return {
+            commandQueue: [...remaining, ...forTerminal.slice(1)],
+            commandQueueCountById: {
+              ...state.commandQueueCountById,
+              [terminalId]: Math.max(0, (state.commandQueueCountById[terminalId] ?? 0) - 1),
+            },
+          };
         }
 
         return state;
@@ -92,12 +104,15 @@ export const createTerminalCommandQueueSlice =
     clearQueue: (terminalId) => {
       set((state) => ({
         commandQueue: state.commandQueue.filter((c) => c.terminalId !== terminalId),
+        commandQueueCountById: {
+          ...state.commandQueueCountById,
+          [terminalId]: 0,
+        },
       }));
     },
 
     getQueueCount: (terminalId) => {
-      const { commandQueue } = get();
-      return commandQueue.filter((c) => c.terminalId === terminalId).length;
+      return get().commandQueueCountById[terminalId] ?? 0;
     },
   });
 
