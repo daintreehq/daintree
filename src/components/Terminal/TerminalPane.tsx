@@ -215,9 +215,7 @@ function TerminalPaneComponent({
   const isAgentTerminal = effectiveAgentId !== undefined;
   const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
 
-  const queueCount = useTerminalStore(
-    useShallow((state) => state.commandQueue.filter((c) => c.terminalId === id).length)
-  );
+  const queueCount = useTerminalStore((state) => state.commandQueueCountById[id] ?? 0);
 
   const pingedIdSelector = useMemo(
     () => (state: ReturnType<typeof useTerminalStore.getState>) => state.pingedId === id,
