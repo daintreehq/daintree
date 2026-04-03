@@ -827,6 +827,7 @@ const CHANNELS = {
   // Clipboard channels
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
   CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
+  CLIPBOARD_WRITE_IMAGE: "clipboard:write-image",
 
   // App Theme channels
   APP_THEME_GET: "app-theme:get",
@@ -2417,6 +2418,7 @@ const api: ElectronAPI = {
     saveImage: () => _unwrappingInvoke(CHANNELS.CLIPBOARD_SAVE_IMAGE),
     thumbnailFromPath: (filePath: string) =>
       _unwrappingInvoke(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH, filePath),
+    writeImage: (pngData: Uint8Array) => _unwrappingInvoke(CHANNELS.CLIPBOARD_WRITE_IMAGE, pngData),
   },
 
   // Web Utils API

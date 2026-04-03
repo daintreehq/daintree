@@ -11,6 +11,7 @@ type MockWebviewElement = HTMLElement & {
   getURL: ReturnType<typeof vi.fn>;
   isLoading: ReturnType<typeof vi.fn>;
   getWebContentsId: ReturnType<typeof vi.fn>;
+  capturePage: ReturnType<typeof vi.fn>;
   setMockLoading: (value: boolean) => void;
 };
 
@@ -38,6 +39,9 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   });
   webview.isLoading = vi.fn(() => loading);
   webview.getWebContentsId = vi.fn(() => 42);
+  webview.capturePage = vi.fn(() =>
+    Promise.resolve({ toPNG: () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]) })
+  );
   webview.setMockLoading = (value: boolean) => {
     loading = value;
   };
@@ -186,6 +190,9 @@ describe("BrowserPane webview lifecycle regression", () => {
     (globalThis as any).window = globalThis.window ?? {};
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).electron = {
+      clipboard: {
+        writeImage: vi.fn(() => Promise.resolve({ ok: true })),
+      },
       webview: {
         startConsoleCapture: vi.fn(() => Promise.resolve()),
         stopConsoleCapture: vi.fn(() => Promise.resolve()),
@@ -491,6 +498,78 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
 
       expect(container.textContent).not.toContain("blocked.com");
+    });
+  });
+
+  describe("screenshot capture via IPC", () => {
+    it("calls clipboard.writeImage with Uint8Array after dom-ready", async () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("canopy:browser-capture-screenshot", {
+            detail: { id: "browser-panel-1" },
+          })
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mock = (window as any).electron.clipboard.writeImage;
+      expect(mock).toHaveBeenCalledTimes(1);
+      const arg = mock.mock.calls[0][0];
+      expect(arg).toBeInstanceOf(Uint8Array);
+    });
+
+    it("does not call writeImage when webview is not ready", async () => {
+      const { container } = render(<BrowserPane {...baseProps} initialUrl="about:blank" />);
+      const webview = getWebviewElement(container);
+      webview.getURL.mockReturnValue("about:blank");
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("canopy:browser-capture-screenshot", {
+            detail: { id: "browser-panel-1" },
+          })
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mock = (window as any).electron.clipboard.writeImage;
+      expect(mock).not.toHaveBeenCalled();
+    });
+
+    it("does not call writeImage when URL is about:blank", async () => {
+      const { container } = render(<BrowserPane {...baseProps} />);
+      const webview = getWebviewElement(container);
+
+      act(() => {
+        emitWebviewEvent(webview, "dom-ready");
+      });
+
+      webview.getURL.mockReturnValue("about:blank");
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("canopy:browser-capture-screenshot", {
+            detail: { id: "browser-panel-1" },
+          })
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mock = (window as any).electron.clipboard.writeImage;
+      expect(mock).not.toHaveBeenCalled();
     });
   });
 

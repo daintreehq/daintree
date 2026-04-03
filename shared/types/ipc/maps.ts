@@ -1354,6 +1354,10 @@ export interface IpcInvokeMap {
     args: [filePath: string];
     result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
   };
+  "clipboard:write-image": {
+    args: [pngData: Uint8Array];
+    result: { ok: true } | { ok: false; error: string };
+  };
 
   // Notification settings channels
   "notification:settings-get": {

@@ -117,11 +117,31 @@ export function registerClipboardHandlers(): () => void {
     }
   };
 
+  const handleWriteImage = async (
+    _event: Electron.IpcMainInvokeEvent,
+    pngData: Uint8Array
+  ): Promise<{ ok: true } | { ok: false; error: string }> => {
+    try {
+      const buffer = Buffer.from(pngData.buffer, pngData.byteOffset, pngData.byteLength);
+      const image = nativeImage.createFromBuffer(buffer);
+      if (image.isEmpty()) {
+        return { ok: false, error: "Invalid image data" };
+      }
+      clipboard.writeImage(image);
+      return { ok: true };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: message };
+    }
+  };
+
   ipcMain.handle(CHANNELS.CLIPBOARD_SAVE_IMAGE, handleSaveImage);
   ipcMain.handle(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH, handleThumbnailFromPath);
+  ipcMain.handle(CHANNELS.CLIPBOARD_WRITE_IMAGE, handleWriteImage);
 
   return () => {
     ipcMain.removeHandler(CHANNELS.CLIPBOARD_SAVE_IMAGE);
     ipcMain.removeHandler(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH);
+    ipcMain.removeHandler(CHANNELS.CLIPBOARD_WRITE_IMAGE);
   };
 }
