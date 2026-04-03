@@ -21,6 +21,7 @@ function createMockWebContents() {
         Promise.resolve().then(() => handler());
       }
     }),
+    removeListener: vi.fn(),
     setWindowOpenHandler: vi.fn(),
     setIgnoreMenuShortcuts: vi.fn(),
   };

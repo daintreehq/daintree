@@ -24,6 +24,7 @@ import { notifyError } from "../ipc/errorHandlers.js";
 import { injectSkeletonCss } from "./skeletonCss.js";
 
 const GC_DELAY_MS = 100;
+const LOAD_TIMEOUT_MS = 10_000;
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
 
@@ -143,6 +144,10 @@ export class ProjectViewManager {
       }
     }
 
+    // Snapshot previous state for rollback
+    const previousProjectId = this.activeProjectId;
+    const previousEntry = previousProjectId ? this.views.get(previousProjectId) : null;
+
     // Detach current active view (keep in cache)
     this.deactivateCurrentView();
 
@@ -186,8 +191,33 @@ export class ProjectViewManager {
     this.activeProjectId = projectId;
     entry.state = "active";
 
-    // Load the renderer with projectId context
-    await this.loadView(view, projectId);
+    try {
+      // Load the renderer with projectId context
+      await this.loadView(view, projectId);
+    } catch (loadError) {
+      // Rollback: clean up the failed new view
+      this.cleanupEntry(projectId);
+
+      // Restore the previous view if it's still alive
+      if (previousEntry && !previousEntry.view.webContents.isDestroyed()) {
+        try {
+          this.activateView(previousEntry);
+        } catch {
+          // Window may be destroyed concurrently — don't mask the original error
+          this.activeProjectId = previousProjectId;
+        }
+      } else {
+        this.activeProjectId = previousProjectId;
+      }
+
+      notifyError(loadError, {
+        source: "project-switch",
+        context: { fromProject: previousProjectId, toProject: projectId },
+      });
+
+      throw loadError;
+    }
+
     entry.state = "active";
 
     // Explicit focus after load
@@ -343,19 +373,39 @@ export class ProjectViewManager {
   private loadView(view: WebContentsView, projectId: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const wc = view.webContents;
+      let settled = false;
+
+      const cleanup = () => {
+        wc.removeListener("did-finish-load", onFinish);
+        wc.removeListener("did-fail-load", onFail);
+        wc.removeListener("preload-error", onPreloadError);
+        wc.removeListener("render-process-gone", onProcessGone);
+      };
+
+      const settle = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        cleanup();
+        fn();
+      };
+
       const timeout = setTimeout(() => {
-        resolve();
-      }, 5000);
+        settle(() => reject(new Error("View load timed out")));
+      }, LOAD_TIMEOUT_MS);
 
-      wc.once("did-finish-load", () => {
-        clearTimeout(timeout);
-        resolve();
-      });
+      const onFinish = () => settle(() => resolve());
+      const onFail = (_event: Electron.Event, errorCode: number, errorDescription: string) =>
+        settle(() => reject(new Error(`View load failed: ${errorDescription} (${errorCode})`)));
+      const onPreloadError = (_event: Electron.Event, _preloadPath: string, error: Error) =>
+        settle(() => reject(error ?? new Error("Preload script failed")));
+      const onProcessGone = (_event: Electron.Event, details: Electron.RenderProcessGoneDetails) =>
+        settle(() => reject(new Error(`Renderer process gone during load: ${details.reason}`)));
 
-      wc.once("did-fail-load", (_event, errorCode, errorDescription) => {
-        clearTimeout(timeout);
-        reject(new Error(`View load failed: ${errorDescription} (${errorCode})`));
-      });
+      wc.once("did-finish-load", onFinish);
+      wc.once("did-fail-load", onFail);
+      wc.once("preload-error", onPreloadError);
+      wc.once("render-process-gone", onProcessGone);
 
       injectSkeletonCss(wc);
 
