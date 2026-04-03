@@ -75,7 +75,9 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
 
       let waitingCount = 0;
 
-      for (const terminal of state.terminals) {
+      for (const id of state.terminalIds) {
+        const terminal = state.terminalsById[id];
+        if (!terminal) continue;
         if (!isTerminalVisible(terminal, state.isInTrash, worktreeIds)) continue;
 
         if (terminal.agentState !== "waiting") continue;
@@ -95,15 +97,19 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
 
 export function useWaitingTerminals(): TerminalInstance[] {
   const worktreeIds = useWorktreeIds();
-  const terminals = useTerminalStore((state) => state.terminals);
+  const terminalIds = useTerminalStore((state) => state.terminalIds);
+  const terminalsById = useTerminalStore((state) => state.terminalsById);
   const isInTrash = useTerminalStore((state) => state.isInTrash);
 
   return useMemo(
     () =>
-      terminals.filter(
-        (t) => t.agentState === "waiting" && isTerminalVisible(t, isInTrash, worktreeIds)
-      ),
-    [terminals, isInTrash, worktreeIds]
+      terminalIds
+        .map((id) => terminalsById[id])
+        .filter(
+          (t): t is TerminalInstance =>
+            !!t && t.agentState === "waiting" && isTerminalVisible(t, isInTrash, worktreeIds)
+        ),
+    [terminalIds, terminalsById, isInTrash, worktreeIds]
   );
 }
 
@@ -114,12 +120,18 @@ export function useWaitingTerminalIds(): string[] {
 
 export function useBackgroundedTerminals(): TerminalInstance[] {
   const worktreeIds = useWorktreeIds();
-  const terminals = useTerminalStore((state) => state.terminals);
+  const terminalIds = useTerminalStore((state) => state.terminalIds);
+  const terminalsById = useTerminalStore((state) => state.terminalsById);
 
   return useMemo(
     () =>
-      terminals.filter((t) => t.location === "background" && !isTerminalOrphaned(t, worktreeIds)),
-    [terminals, worktreeIds]
+      terminalIds
+        .map((id) => terminalsById[id])
+        .filter(
+          (t): t is TerminalInstance =>
+            !!t && t.location === "background" && !isTerminalOrphaned(t, worktreeIds)
+        ),
+    [terminalIds, terminalsById, worktreeIds]
   );
 }
 
@@ -148,8 +160,9 @@ export function useBackgroundPanelStats(excludeId: string): {
     useShallow((state) => {
       let active = 0;
       let working = 0;
-      for (const t of state.terminals) {
-        // Only count grid panels (exclude dock and trash), and exclude the current panel
+      for (const id of state.terminalIds) {
+        const t = state.terminalsById[id];
+        if (!t) continue;
         if (t.id !== excludeId && (t.location === "grid" || t.location === undefined)) {
           active++;
           if (t.agentState === "working") working++;

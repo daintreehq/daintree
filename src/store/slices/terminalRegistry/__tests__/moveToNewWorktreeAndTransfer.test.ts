@@ -132,7 +132,8 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
     const { reset } = useTerminalStore.getState();
     await reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -146,7 +147,10 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
 
   it("captures buffer text for agent terminals before restart", async () => {
     mockCaptureBufferText.mockReturnValue("Previous conversation content");
-    useTerminalStore.setState({ terminals: [agentTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [agentTerminal.id]: agentTerminal },
+      terminalIds: [agentTerminal.id],
+    });
 
     useTerminalStore.getState().moveToNewWorktreeAndTransfer("test-1");
 
@@ -157,7 +161,10 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
   });
 
   it("does not capture buffer text for non-agent terminals", async () => {
-    useTerminalStore.setState({ terminals: [plainTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [plainTerminal.id]: plainTerminal },
+      terminalIds: [plainTerminal.id],
+    });
 
     useTerminalStore.getState().moveToNewWorktreeAndTransfer("test-2");
 
@@ -168,7 +175,10 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
 
   it("does not call gracefulKill (abandoned session resume path)", async () => {
     mockCaptureBufferText.mockReturnValue("some history");
-    useTerminalStore.setState({ terminals: [agentTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [agentTerminal.id]: agentTerminal },
+      terminalIds: [agentTerminal.id],
+    });
 
     useTerminalStore.getState().moveToNewWorktreeAndTransfer("test-1");
 
@@ -198,7 +208,10 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
       agentSessionId: "old-session-123",
     };
     mockCaptureBufferText.mockReturnValue("some history");
-    useTerminalStore.setState({ terminals: [terminalWithSession] });
+    useTerminalStore.setState({
+      terminalsById: { [terminalWithSession.id]: terminalWithSession },
+      terminalIds: [terminalWithSession.id],
+    });
 
     useTerminalStore.getState().moveToNewWorktreeAndTransfer("test-1");
 
@@ -210,13 +223,16 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
     }
 
     // Check that agentSessionId was cleared
-    const terminal = useTerminalStore.getState().terminals.find((t) => t.id === "test-1");
+    const terminal = useTerminalStore.getState().terminalsById["test-1"];
     expect(terminal?.agentSessionId).toBeUndefined();
   });
 
   it("does not proceed for trashed terminals", () => {
     const trashedTerminal = { ...agentTerminal, location: "trash" as const };
-    useTerminalStore.setState({ terminals: [trashedTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [trashedTerminal.id]: trashedTerminal },
+      terminalIds: [trashedTerminal.id],
+    });
 
     useTerminalStore.getState().moveToNewWorktreeAndTransfer("test-1");
 
@@ -225,7 +241,10 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
 
   it("does not proceed for terminals already restarting", () => {
     const restartingTerminal = { ...agentTerminal, isRestarting: true };
-    useTerminalStore.setState({ terminals: [restartingTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [restartingTerminal.id]: restartingTerminal },
+      terminalIds: [restartingTerminal.id],
+    });
 
     useTerminalStore.getState().moveToNewWorktreeAndTransfer("test-1");
 
@@ -234,7 +253,10 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
 
   it("does not schedule injection when captured history is empty", async () => {
     mockCaptureBufferText.mockReturnValue("");
-    useTerminalStore.setState({ terminals: [agentTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [agentTerminal.id]: agentTerminal },
+      terminalIds: [agentTerminal.id],
+    });
 
     useTerminalStore.getState().moveToNewWorktreeAndTransfer("test-1");
 

@@ -2,7 +2,7 @@ import type { TerminalRegistryStoreApi, TerminalRegistrySlice } from "./types";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
-import { saveTerminals, saveTabGroups } from "./persistence";
+import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 
 type Set = TerminalRegistryStoreApi["setState"];
@@ -20,7 +20,7 @@ export const createBackgroundActions = (
   | "isInBackground"
 > => ({
   backgroundTerminal: (id) => {
-    const terminal = get().terminals.find((t) => t.id === id);
+    const terminal = get().terminalsById[id];
     if (!terminal) return;
     if (terminal.location === "trash" || terminal.location === "background") return;
 
@@ -42,9 +42,10 @@ export const createBackgroundActions = (
     }
 
     set((state) => {
-      const newTerminals = state.terminals.map((t) =>
-        t.id === id ? { ...t, location: "background" as const } : t
-      );
+      const newById = {
+        ...state.terminalsById,
+        [id]: { ...state.terminalsById[id], location: "background" as const },
+      };
       const newBackgrounded = new Map(state.backgroundedTerminals);
       newBackgrounded.set(id, {
         id,
@@ -75,15 +76,14 @@ export const createBackgroundActions = (
         }
       }
 
-      saveTerminals(newTerminals);
+      saveNormalized(newById, state.terminalIds);
       return {
-        terminals: newTerminals,
+        terminalsById: newById,
         backgroundedTerminals: newBackgrounded,
         tabGroups: newTabGroups,
       };
     });
 
-    // Apply background render tier for PTY-backed panels (keep PTY alive but suppress visual streaming)
     if (panelKindHasPty(terminal.kind ?? "terminal")) {
       terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
     }
@@ -92,7 +92,6 @@ export const createBackgroundActions = (
   backgroundPanelGroup: (panelId) => {
     const group = get().getPanelGroup(panelId);
 
-    // If no group, fall back to single panel background
     if (!group) {
       get().backgroundTerminal(panelId);
       return;
@@ -101,12 +100,12 @@ export const createBackgroundActions = (
     const groupRestoreId = `group-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const panelIds = [...group.panelIds];
     const activeTabId = group.activeTabId ?? panelIds[0] ?? "";
-    const terminals = get().terminals;
+    const state = get();
 
-    const existingPanelIds = panelIds.filter((id) => terminals.some((t) => t.id === id));
+    const existingPanelIds = panelIds.filter((id) => state.terminalsById[id]);
     if (existingPanelIds.length === 0) {
-      set((state) => {
-        const newTabGroups = new Map(state.tabGroups);
+      set((s) => {
+        const newTabGroups = new Map(s.tabGroups);
         newTabGroups.delete(group.id);
         saveTabGroups(newTabGroups);
         return { tabGroups: newTabGroups };
@@ -121,17 +120,20 @@ export const createBackgroundActions = (
     const originalLocation: "dock" | "grid" = group.location === "dock" ? "dock" : "grid";
     const worktreeId = group.worktreeId ?? null;
 
-    set((state) => {
-      const newTerminals = state.terminals.map((t) =>
-        bgPanelIds.includes(t.id) ? { ...t, location: "background" as const } : t
-      );
+    set((s) => {
+      const newById = { ...s.terminalsById };
+      for (const bid of bgPanelIds) {
+        if (newById[bid]) {
+          newById[bid] = { ...newById[bid], location: "background" as const };
+        }
+      }
 
-      const newBackgrounded = new Map(state.backgroundedTerminals);
+      const newBackgrounded = new Map(s.backgroundedTerminals);
       for (let i = 0; i < bgPanelIds.length; i++) {
-        const id = bgPanelIds[i];
+        const bid = bgPanelIds[i];
         const isAnchor = i === 0;
-        newBackgrounded.set(id, {
-          id,
+        newBackgrounded.set(bid, {
+          id: bid,
           originalLocation,
           groupRestoreId,
           ...(isAnchor && {
@@ -145,23 +147,22 @@ export const createBackgroundActions = (
         });
       }
 
-      const newTabGroups = new Map(state.tabGroups);
+      const newTabGroups = new Map(s.tabGroups);
       newTabGroups.delete(group.id);
       saveTabGroups(newTabGroups);
 
-      saveTerminals(newTerminals);
+      saveNormalized(newById, s.terminalIds);
       return {
-        terminals: newTerminals,
+        terminalsById: newById,
         backgroundedTerminals: newBackgrounded,
         tabGroups: newTabGroups,
       };
     });
 
-    // Apply background renderer policy for PTY-backed panels
-    for (const id of bgPanelIds) {
-      const terminal = terminals.find((t) => t.id === id);
+    for (const bid of bgPanelIds) {
+      const terminal = state.terminalsById[bid];
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-        terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+        terminalInstanceService.applyRendererPolicy(bid, TerminalRefreshTier.BACKGROUND);
       }
     }
   },
@@ -170,32 +171,31 @@ export const createBackgroundActions = (
     const backgroundedInfo = get().backgroundedTerminals.get(id);
     if (!backgroundedInfo) return;
 
-    // If panel has a group, delegate to restoreBackgroundGroup
     if (backgroundedInfo.groupRestoreId) {
       get().restoreBackgroundGroup(backgroundedInfo.groupRestoreId, targetWorktreeId);
       return;
     }
 
     const restoreLocation = backgroundedInfo.originalLocation ?? "grid";
-    const terminal = get().terminals.find((t) => t.id === id);
+    const terminal = get().terminalsById[id];
 
     set((state) => {
-      const newTerminals = state.terminals.map((t) =>
-        t.id === id
-          ? {
-              ...t,
-              location: restoreLocation,
-              worktreeId: targetWorktreeId !== undefined ? targetWorktreeId : t.worktreeId,
-            }
-          : t
-      );
+      const t = state.terminalsById[id];
+      if (!t) return state;
+      const newById = {
+        ...state.terminalsById,
+        [id]: {
+          ...t,
+          location: restoreLocation,
+          worktreeId: targetWorktreeId !== undefined ? targetWorktreeId : t.worktreeId,
+        },
+      };
       const newBackgrounded = new Map(state.backgroundedTerminals);
       newBackgrounded.delete(id);
-      saveTerminals(newTerminals);
-      return { terminals: newTerminals, backgroundedTerminals: newBackgrounded };
+      saveNormalized(newById, state.terminalIds);
+      return { terminalsById: newById, backgroundedTerminals: newBackgrounded };
     });
 
-    // Restore render tier for PTY-backed panels
     if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
       if (restoreLocation === "dock") {
         optimizeForDock(id);
@@ -236,28 +236,30 @@ export const createBackgroundActions = (
 
     set((state) => {
       const panelIdsInGroup = new Set(groupPanels.map(({ id }) => id));
-      const newTerminals = state.terminals.map((t) =>
-        panelIdsInGroup.has(t.id)
-          ? {
-              ...t,
-              location: restoreLocation as "dock" | "grid",
-              worktreeId: worktreeId ?? t.worktreeId,
-            }
-          : t
-      );
+      const newById = { ...state.terminalsById };
+      for (const pid of panelIdsInGroup) {
+        const t = newById[pid];
+        if (t) {
+          newById[pid] = {
+            ...t,
+            location: restoreLocation as "dock" | "grid",
+            worktreeId: worktreeId ?? t.worktreeId,
+          };
+        }
+      }
 
       const newBackgrounded = new Map(state.backgroundedTerminals);
       for (const { id } of groupPanels) {
         newBackgrounded.delete(id);
       }
 
-      saveTerminals(newTerminals);
-      return { terminals: newTerminals, backgroundedTerminals: newBackgrounded };
+      saveNormalized(newById, state.terminalIds);
+      return { terminalsById: newById, backgroundedTerminals: newBackgrounded };
     });
 
     // Recreate the tab group if we have multiple valid panels
     const restoredPanelIds = groupPanels.map(({ id }) => id);
-    const existingIds = new Set(get().terminals.map((t) => t.id));
+    const existingIds = new Set(get().terminalIds);
     const validPanelIds = restoredPanelIds.filter((id) => existingIds.has(id));
 
     if (validPanelIds.length > 1) {
@@ -287,9 +289,8 @@ export const createBackgroundActions = (
       }
     }
 
-    // Apply renderer policies for PTY-backed panels
     for (const { id } of groupPanels) {
-      const terminal = get().terminals.find((t) => t.id === id);
+      const terminal = get().terminalsById[id];
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         if (restoreLocation === "dock") {
           optimizeForDock(id);

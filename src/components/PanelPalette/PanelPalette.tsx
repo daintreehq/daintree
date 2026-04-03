@@ -88,9 +88,14 @@ export function PanelPalette({
     [onSelectPrevious, onSelectNext, onConfirm, onClose]
   );
 
-  const panelCount = useTerminalStore(
-    (state) => state.terminals.filter((t) => t.location !== "trash").length
-  );
+  const panelCount = useTerminalStore((state) => {
+    let count = 0;
+    for (const id of state.terminalIds) {
+      const t = state.terminalsById[id];
+      if (t && t.location !== "trash") count++;
+    }
+    return count;
+  });
   const hardLimit = usePanelLimitStore((state) => state.hardLimit);
 
   const isSearching = query.trim().length > 0;

@@ -148,10 +148,14 @@ export function registerTerminalNavigationActions(
     run: async () => {
       const state = useTerminalStore.getState();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
-      const dockTerminals = state.terminals.filter(
-        (t) =>
-          t.location === "dock" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      );
+      const dockTerminals = state.terminalIds
+        .map((id) => state.terminalsById[id])
+        .filter(
+          (t) =>
+            t &&
+            t.location === "dock" &&
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+        );
       if (dockTerminals.length === 0) return;
 
       const targetId =

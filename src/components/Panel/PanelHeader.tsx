@@ -216,9 +216,7 @@ function PanelHeaderComponent({
   const closeShortcut = useKeybindingDisplay("terminal.close");
 
   // Terminal record for overflow menu actions (single shallow selector, matching TerminalContextMenu pattern)
-  const terminal = useTerminalStore(
-    useShallow((state) => state.terminals.find((t) => t.id === id))
-  );
+  const terminal = useTerminalStore(useShallow((state) => state.terminalsById[id]));
   const isInputLocked = terminal?.isInputLocked ?? false;
   const hasPty = panelKindHasPty(kind);
 

@@ -10,7 +10,7 @@ import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
-import { saveTerminals } from "./persistence";
+import { saveNormalized } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus, getDefaultTitle } from "./helpers";
 import { logDebug, logWarn, logError } from "@/utils/logger";
@@ -63,6 +63,21 @@ function scheduleHistoryInjection(id: string, history: string, worktreePath: str
   });
 }
 
+// Helper to update a single terminal field in the normalized store
+function updateTerminal(
+  state: TerminalRegistrySlice,
+  id: string,
+  updater: (
+    t: TerminalRegistrySlice["terminalsById"][string]
+  ) => TerminalRegistrySlice["terminalsById"][string]
+):
+  | { terminalsById: Record<string, TerminalRegistrySlice["terminalsById"][string]> }
+  | typeof state {
+  const terminal = state.terminalsById[id];
+  if (!terminal) return state;
+  return { terminalsById: { ...state.terminalsById, [id]: updater(terminal) } };
+}
+
 export const createRestartActions = (
   set: Set,
   get: Get
@@ -80,8 +95,7 @@ export const createRestartActions = (
   | "convertTerminalType"
 > => ({
   restartTerminal: async (id) => {
-    const state = get();
-    const terminal = state.terminals.find((t) => t.id === id);
+    const terminal = get().terminalsById[id];
 
     if (!terminal) {
       logWarn("[TerminalStore] Cannot restart: terminal not found", { id });
@@ -105,19 +119,15 @@ export const createRestartActions = (
     markTerminalRestarting(id);
 
     // Also set the store flag for UI and other consumers
-    set((state) => ({
-      terminals: state.terminals.map((t) =>
-        t.id === id
-          ? {
-              ...t,
-              restartError: undefined,
-              reconnectError: undefined,
-              spawnError: undefined,
-              isRestarting: true,
-            }
-          : t
-      ),
-    }));
+    set((state) =>
+      updateTerminal(state, id, (t) => ({
+        ...t,
+        restartError: undefined,
+        reconnectError: undefined,
+        spawnError: undefined,
+        isRestarting: true,
+      }))
+    );
 
     // Validate configuration before attempting restart
     let validation;
@@ -136,18 +146,15 @@ export const createRestartActions = (
       };
 
       unmarkTerminalRestarting(id);
-      set((state) => ({
-        terminals: state.terminals.map((t) =>
-          t.id === id ? { ...t, isRestarting: false, restartError } : t
-        ),
-      }));
+      set((state) =>
+        updateTerminal(state, id, (t) => ({ ...t, isRestarting: false, restartError }))
+      );
       logError("[TerminalStore] Validation error for terminal", error, { id });
       return;
     }
 
     if (!validation.valid) {
       // Set error state instead of attempting doomed restart
-      // Use the first non-recoverable error's code, or the first error's code
       const primaryError = validation.errors.find((e) => !e.recoverable) || validation.errors[0];
 
       const restartError = {
@@ -162,25 +169,20 @@ export const createRestartActions = (
       };
 
       unmarkTerminalRestarting(id);
-      set((state) => ({
-        terminals: state.terminals.map((t) =>
-          t.id === id ? { ...t, isRestarting: false, restartError } : t
-        ),
-      }));
+      set((state) =>
+        updateTerminal(state, id, (t) => ({ ...t, isRestarting: false, restartError }))
+      );
       logWarn("[TerminalStore] Restart validation failed for terminal", { id, restartError });
       return;
     }
 
     // Re-read terminal from state in case it was modified during async validation
-    const currentState = get();
-    const currentTerminal = currentState.terminals.find((t) => t.id === id);
+    const currentTerminal = get().terminalsById[id];
 
     if (!currentTerminal || currentTerminal.location === "trash") {
       // Terminal was removed or trashed while we were validating
       unmarkTerminalRestarting(id);
-      set((state) => ({
-        terminals: state.terminals.map((t) => (t.id === id ? { ...t, isRestarting: false } : t)),
-      }));
+      set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
       logWarn("[TerminalStore] Terminal no longer exists or was trashed", { id });
       return;
     }
@@ -247,8 +249,6 @@ export const createRestartActions = (
 
     try {
       // CAPTURE LIVE DIMENSIONS before destroying the frontend
-      // The store's cols/rows may be stale (set on initial spawn).
-      // The managed xterm instance has the actual current dimensions.
       const managedInstance = terminalInstanceService.get(id);
       let spawnCols = currentTerminal.cols || 80;
       let spawnRows = currentTerminal.rows || 24;
@@ -258,7 +258,6 @@ export const createRestartActions = (
       }
 
       // AGGRESSIVE TEARDOWN: Destroy frontend FIRST to prevent race condition
-      // The old frontend must stop listening before new PTY data starts flowing
       terminalInstanceService.destroy(id);
 
       terminalInstanceService.suppressNextExit(id, 10000);
@@ -269,33 +268,28 @@ export const createRestartActions = (
         logWarn("[TerminalStore] kill failed during restart; continuing", { id, error });
       }
 
-      // Do not shrink geometry for dock; dock previews are clipped instead.
-
       // Update terminal in store: increment restartKey, reset agent state, update location
-      // This triggers XtermAdapter remount with new xterm instance
-      // Keep isRestarting: true to prevent onExit race
       set((state) => {
-        const newTerminals = state.terminals.map((t) =>
-          t.id === id
-            ? {
-                ...t,
-                location: targetLocation,
-                restartKey: (t.restartKey ?? 0) + 1,
-                agentState: isAgent ? ("working" as const) : undefined,
-                lastStateChange: isAgent ? Date.now() : undefined,
-                stateChangeTrigger: undefined,
-                stateChangeConfidence: undefined,
-                command: durableCommand,
-                agentSessionId: undefined,
-                isRestarting: true,
-                restartError: undefined,
-                exitCode: undefined,
-                startedAt: Date.now(),
-              }
-            : t
-        );
-        saveTerminals(newTerminals);
-        return { terminals: newTerminals };
+        const t = state.terminalsById[id];
+        if (!t) return state;
+        const updated = {
+          ...t,
+          location: targetLocation,
+          restartKey: (t.restartKey ?? 0) + 1,
+          agentState: isAgent ? ("working" as const) : undefined,
+          lastStateChange: isAgent ? Date.now() : undefined,
+          stateChangeTrigger: undefined,
+          stateChangeConfidence: undefined,
+          command: durableCommand,
+          agentSessionId: undefined,
+          isRestarting: true,
+          restartError: undefined,
+          exitCode: undefined,
+          startedAt: Date.now(),
+        };
+        const newById = { ...state.terminalsById, [id]: updated };
+        saveNormalized(newById, state.terminalIds);
+        return { terminalsById: newById };
       });
 
       await terminalInstanceService.waitForInstance(id, { timeoutMs: 5000 });
@@ -341,15 +335,11 @@ export const createRestartActions = (
       if (targetLocation === "dock") {
         optimizeForDock(id);
       } else {
-        // Force resize sync to ensure PTY dimensions match the container
-        // performFit() in XtermAdapter may run before the container is laid out
         terminalInstanceService.fit(id);
       }
 
       unmarkTerminalRestarting(id);
-      set((state) => ({
-        terminals: state.terminals.map((t) => (t.id === id ? { ...t, isRestarting: false } : t)),
-      }));
+      set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorCode = (error as { code?: string })?.code;
@@ -380,19 +370,15 @@ export const createRestartActions = (
       };
 
       unmarkTerminalRestarting(id);
-      set((state) => ({
-        terminals: state.terminals.map((t) =>
-          t.id === id
-            ? {
-                ...t,
-                isRestarting: false,
-                restartError,
-                // Restore session ID so user can retry resume
-                ...(consumedSessionId ? { agentSessionId: consumedSessionId } : {}),
-              }
-            : t
-        ),
-      }));
+      set((state) =>
+        updateTerminal(state, id, (t) => ({
+          ...t,
+          isRestarting: false,
+          restartError,
+          // Restore session ID so user can retry resume
+          ...(consumedSessionId ? { agentSessionId: consumedSessionId } : {}),
+        }))
+      );
 
       logError("[TerminalStore] Failed to restart terminal", error, {
         id,
@@ -406,23 +392,24 @@ export const createRestartActions = (
   },
 
   clearTerminalError: (id) => {
-    set((state) => ({
-      terminals: state.terminals.map((t) => (t.id === id ? { ...t, restartError: undefined } : t)),
-    }));
+    set((state) => updateTerminal(state, id, (t) => ({ ...t, restartError: undefined })));
   },
 
   updateTerminalCwd: (id, cwd) => {
     set((state) => {
-      const newTerminals = state.terminals.map((t) =>
-        t.id === id ? { ...t, cwd, restartError: undefined, spawnError: undefined } : t
-      );
-      saveTerminals(newTerminals);
-      return { terminals: newTerminals };
+      const t = state.terminalsById[id];
+      if (!t) return state;
+      const newById = {
+        ...state.terminalsById,
+        [id]: { ...t, cwd, restartError: undefined, spawnError: undefined },
+      };
+      saveNormalized(newById, state.terminalIds);
+      return { terminalsById: newById };
     });
   },
 
   moveTerminalToWorktree: (id, worktreeId) => {
-    const terminal = get().terminals.find((t) => t.id === id);
+    const terminal = get().terminalsById[id];
     if (!terminal) {
       logWarn("[TerminalStore] Cannot move terminal: not found", { id });
       return;
@@ -456,33 +443,35 @@ export const createRestartActions = (
 
     set((state) => {
       const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
-      const targetGridCount = state.terminals.filter(
-        (t) =>
+      let targetGridCount = 0;
+      for (const tid of state.terminalIds) {
+        const t = state.terminalsById[tid];
+        if (
+          t &&
           (t.worktreeId ?? null) === (worktreeId ?? null) &&
           t.location !== "trash" &&
           (t.location === "grid" || t.location === undefined)
-      ).length;
+        )
+          targetGridCount++;
+      }
 
       const newLocation: PanelLocation = targetGridCount >= maxCapacity ? "dock" : "grid";
       movedToLocation = newLocation;
 
-      const newTerminals = state.terminals.map((t) =>
-        t.id === id
-          ? {
-              ...t,
-              worktreeId,
-              location: newLocation,
-              isVisible: newLocation === "grid" ? true : false,
-              runtimeStatus: deriveRuntimeStatus(
-                newLocation === "grid",
-                t.flowStatus,
-                t.runtimeStatus
-              ),
-            }
-          : t
-      );
-      saveTerminals(newTerminals);
-      return { terminals: newTerminals };
+      const t = state.terminalsById[id];
+      if (!t) return state;
+      const newById = {
+        ...state.terminalsById,
+        [id]: {
+          ...t,
+          worktreeId,
+          location: newLocation,
+          isVisible: newLocation === "grid" ? true : false,
+          runtimeStatus: deriveRuntimeStatus(newLocation === "grid", t.flowStatus, t.runtimeStatus),
+        },
+      };
+      saveNormalized(newById, state.terminalIds);
+      return { terminalsById: newById };
     });
 
     if (!movedToLocation) return;
@@ -492,12 +481,11 @@ export const createRestartActions = (
       return;
     }
 
-    // All terminals stay visible - we don't background for reliability.
     terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
   },
 
   moveToNewWorktreeAndTransfer: (id) => {
-    const terminal = get().terminals.find((t) => t.id === id);
+    const terminal = get().terminalsById[id];
     if (!terminal || terminal.location === "trash") return;
     if (terminal.isRestarting) return;
 
@@ -523,48 +511,40 @@ export const createRestartActions = (
 
               // Update cwd, worktreeId, and clear agentSessionId so restartTerminal
               // spawns fresh instead of attempting a broken session resume
-              set((state) => ({
-                terminals: state.terminals.map((t) =>
-                  t.id === id
-                    ? {
-                        ...t,
-                        cwd: newCwd,
-                        worktreeId,
-                        agentSessionId: undefined,
-                        restartError: undefined,
-                      }
-                    : t
-                ),
-              }));
+              set((state) =>
+                updateTerminal(state, id, (t) => ({
+                  ...t,
+                  cwd: newCwd,
+                  worktreeId,
+                  agentSessionId: undefined,
+                  restartError: undefined,
+                }))
+              );
 
               await get().restartTerminal(id);
 
               // After restart, inject captured history as a first prompt for agent terminals
-              const restarted = get().terminals.find((t) => t.id === id);
+              const restarted = get().terminalsById[id];
               if (isAgent && capturedHistory.trim().length > 0 && !restarted?.restartError) {
                 scheduleHistoryInjection(id, capturedHistory, newCwd ?? "");
               }
             } catch (err) {
               logError("[TerminalStore] moveToNewWorktreeAndTransfer failed", err);
-              set((state) => ({
-                terminals: state.terminals.map((t) =>
-                  t.id === id
-                    ? {
-                        ...t,
-                        isRestarting: false,
-                        restartError: {
-                          message: err instanceof Error ? err.message : String(err),
-                          timestamp: Date.now(),
-                          recoverable: false,
-                          context: {
-                            failedCwd: newCwd,
-                            phase: "move-to-new-worktree",
-                          },
-                        },
-                      }
-                    : t
-                ),
-              }));
+              set((state) =>
+                updateTerminal(state, id, (t) => ({
+                  ...t,
+                  isRestarting: false,
+                  restartError: {
+                    message: err instanceof Error ? err.message : String(err),
+                    timestamp: Date.now(),
+                    recoverable: false,
+                    context: {
+                      failedCwd: newCwd,
+                      phase: "move-to-new-worktree",
+                    },
+                  },
+                }))
+              );
             }
           },
         });
@@ -576,7 +556,7 @@ export const createRestartActions = (
 
   updateFlowStatus: (id, status, timestamp) => {
     set((state) => {
-      const terminal = state.terminals.find((t) => t.id === id);
+      const terminal = state.terminalsById[id];
       if (!terminal) return state;
 
       const prevTs = terminal.flowStatusTimestamp;
@@ -589,72 +569,67 @@ export const createRestartActions = (
       const runtimeStatus = deriveRuntimeStatus(terminal.isVisible, status, terminal.runtimeStatus);
 
       return {
-        terminals: state.terminals.map((t) =>
-          t.id === id
-            ? { ...t, flowStatus: status, flowStatusTimestamp: timestamp, runtimeStatus }
-            : t
-        ),
+        terminalsById: {
+          ...state.terminalsById,
+          [id]: { ...terminal, flowStatus: status, flowStatusTimestamp: timestamp, runtimeStatus },
+        },
       };
     });
   },
 
   setRuntimeStatus: (id, status) => {
     set((state) => {
-      const terminal = state.terminals.find((t) => t.id === id);
+      const terminal = state.terminalsById[id];
       if (!terminal) return state;
-
-      if (terminal.runtimeStatus === status) {
-        return state;
-      }
+      if (terminal.runtimeStatus === status) return state;
 
       return {
-        terminals: state.terminals.map((t) => (t.id === id ? { ...t, runtimeStatus: status } : t)),
+        terminalsById: {
+          ...state.terminalsById,
+          [id]: { ...terminal, runtimeStatus: status },
+        },
       };
     });
   },
 
   setInputLocked: (id, locked) => {
     set((state) => {
-      const terminal = state.terminals.find((t) => t.id === id);
+      const terminal = state.terminalsById[id];
       if (!terminal) return state;
-
       if (terminal.isInputLocked === locked) return state;
 
-      const updated = {
-        terminals: state.terminals.map((t) => (t.id === id ? { ...t, isInputLocked: locked } : t)),
+      const newById = {
+        ...state.terminalsById,
+        [id]: { ...terminal, isInputLocked: locked },
       };
-
-      saveTerminals(updated.terminals);
-      if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+      saveNormalized(newById, state.terminalIds);
+      if (panelKindHasPty(terminal.kind ?? "terminal")) {
         terminalInstanceService.setInputLocked(id, locked);
       }
-
-      return updated;
+      return { terminalsById: newById };
     });
   },
 
   toggleInputLocked: (id) => {
     set((state) => {
-      const terminal = state.terminals.find((t) => t.id === id);
+      const terminal = state.terminalsById[id];
       if (!terminal) return state;
 
       const locked = !terminal.isInputLocked;
-
-      const updated = {
-        terminals: state.terminals.map((t) => (t.id === id ? { ...t, isInputLocked: locked } : t)),
+      const newById = {
+        ...state.terminalsById,
+        [id]: { ...terminal, isInputLocked: locked },
       };
-
-      saveTerminals(updated.terminals);
+      saveNormalized(newById, state.terminalIds);
       if (panelKindHasPty(terminal.kind ?? "terminal")) {
         terminalInstanceService.setInputLocked(id, locked);
       }
-
-      return updated;
+      return { terminalsById: newById };
     });
   },
 
   convertTerminalType: async (id, newType, newAgentId) => {
-    const terminal = get().terminals.find((t) => t.id === id);
+    const terminal = get().terminalsById[id];
     if (!terminal) {
       logWarn("[TerminalStore] Cannot convert: terminal not found", { id });
       return;
@@ -669,11 +644,13 @@ export const createRestartActions = (
     markTerminalRestarting(id);
 
     // Set store flag immediately to prevent overlapping operations
-    set((state) => ({
-      terminals: state.terminals.map((t) =>
-        t.id === id ? { ...t, restartError: undefined, isRestarting: true } : t
-      ),
-    }));
+    set((state) =>
+      updateTerminal(state, id, (t) => ({
+        ...t,
+        restartError: undefined,
+        isRestarting: true,
+      }))
+    );
 
     const effectiveAgentId = newAgentId ?? (isRegisteredAgent(newType) ? newType : undefined);
     const newKind: "terminal" | "agent" = effectiveAgentId ? "agent" : "terminal";
@@ -719,30 +696,29 @@ export const createRestartActions = (
       terminalInstanceService.suppressNextExit(id);
       await terminalClient.kill(id);
 
-      const isAgent = !!effectiveAgentId;
+      const isAgentConvert = !!effectiveAgentId;
 
       set((state) => {
-        const newTerminals = state.terminals.map((t) =>
-          t.id === id
-            ? {
-                ...t,
-                kind: newKind,
-                type: newType,
-                agentId: effectiveAgentId,
-                title: newTitle,
-                restartKey: (t.restartKey ?? 0) + 1,
-                agentState: isAgent ? ("working" as const) : undefined,
-                lastStateChange: isAgent ? Date.now() : undefined,
-                stateChangeTrigger: undefined,
-                stateChangeConfidence: undefined,
-                command: commandToRun,
-                isRestarting: true,
-                restartError: undefined,
-              }
-            : t
-        );
-        saveTerminals(newTerminals);
-        return { terminals: newTerminals };
+        const t = state.terminalsById[id];
+        if (!t) return state;
+        const updated = {
+          ...t,
+          kind: newKind,
+          type: newType,
+          agentId: effectiveAgentId,
+          title: newTitle,
+          restartKey: (t.restartKey ?? 0) + 1,
+          agentState: isAgentConvert ? ("working" as const) : undefined,
+          lastStateChange: isAgentConvert ? Date.now() : undefined,
+          stateChangeTrigger: undefined,
+          stateChangeConfidence: undefined,
+          command: commandToRun,
+          isRestarting: true,
+          restartError: undefined,
+        };
+        const newById = { ...state.terminalsById, [id]: updated };
+        saveNormalized(newById, state.terminalIds);
+        return { terminalsById: newById };
       });
 
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -792,9 +768,7 @@ export const createRestartActions = (
       }
 
       unmarkTerminalRestarting(id);
-      set((state) => ({
-        terminals: state.terminals.map((t) => (t.id === id ? { ...t, isRestarting: false } : t)),
-      }));
+      set((state) => updateTerminal(state, id, (t) => ({ ...t, isRestarting: false })));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorCode = (error as { code?: string })?.code;
@@ -811,11 +785,13 @@ export const createRestartActions = (
       };
 
       unmarkTerminalRestarting(id);
-      set((state) => ({
-        terminals: state.terminals.map((t) =>
-          t.id === id ? { ...t, isRestarting: false, restartError } : t
-        ),
-      }));
+      set((state) =>
+        updateTerminal(state, id, (t) => ({
+          ...t,
+          isRestarting: false,
+          restartError,
+        }))
+      );
 
       logError("[TerminalStore] Failed to convert terminal", error, { id });
     }

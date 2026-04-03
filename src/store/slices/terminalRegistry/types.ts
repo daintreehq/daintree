@@ -117,7 +117,8 @@ export interface BackgroundedTerminal {
 }
 
 export interface TerminalRegistrySlice {
-  terminals: TerminalInstance[];
+  terminalsById: Record<string, TerminalInstance>;
+  terminalIds: string[];
   trashedTerminals: Map<string, TrashedTerminal>;
   backgroundedTerminals: Map<string, BackgroundedTerminal>;
   /** Explicit tab group storage - single source of truth for tab membership and order */
@@ -263,7 +264,7 @@ export type TerminalRegistryMiddleware = {
   onTerminalRemoved?: (
     id: string,
     removedIndex: number,
-    remainingTerminals: TerminalInstance[],
+    remainingIds: string[],
     removedTerminal: TerminalInstance | undefined
   ) => void;
 };

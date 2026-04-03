@@ -58,7 +58,8 @@ describe("removeTerminal consoleCaptureStore cleanup", () => {
     initStoreOrchestrator();
     await useTerminalStore.getState().reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -79,8 +80,8 @@ describe("removeTerminal consoleCaptureStore cleanup", () => {
     const panelId = "browser-1";
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        [panelId]: {
           id: panelId,
           type: "terminal",
           kind: "browser",
@@ -90,7 +91,8 @@ describe("removeTerminal consoleCaptureStore cleanup", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: [panelId],
     });
 
     useConsoleCaptureStore.getState().addStructuredMessage({
@@ -116,8 +118,8 @@ describe("removeTerminal consoleCaptureStore cleanup", () => {
     const panelId = "browser-2";
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        [panelId]: {
           id: panelId,
           type: "terminal",
           kind: "browser",
@@ -127,7 +129,8 @@ describe("removeTerminal consoleCaptureStore cleanup", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: [panelId],
     });
 
     useConsoleCaptureStore.getState().addStructuredMessage({
@@ -154,8 +157,8 @@ describe("removeTerminal consoleCaptureStore cleanup", () => {
 
   it("preserves other panes' messages when one browser panel is removed", () => {
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "browser-a": {
           id: "browser-a",
           type: "terminal",
           kind: "browser",
@@ -165,7 +168,7 @@ describe("removeTerminal consoleCaptureStore cleanup", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "browser-b": {
           id: "browser-b",
           type: "terminal",
           kind: "browser",
@@ -175,7 +178,8 @@ describe("removeTerminal consoleCaptureStore cleanup", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["browser-a", "browser-b"],
     });
 
     const addMsg = useConsoleCaptureStore.getState().addStructuredMessage;
@@ -214,8 +218,8 @@ describe("removeTerminal consoleCaptureStore cleanup", () => {
     const panelId = "terminal-1";
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        [panelId]: {
           id: panelId,
           type: "terminal",
           title: "Shell",
@@ -224,7 +228,8 @@ describe("removeTerminal consoleCaptureStore cleanup", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: [panelId],
     });
 
     expect(() => {

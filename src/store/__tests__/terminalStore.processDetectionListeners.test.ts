@@ -210,20 +210,20 @@ describe("terminalStore process detection listeners", () => {
     handlers.backendReady = undefined;
     handlers.spawnResult = undefined;
 
+    const term1 = {
+      id: "term-1",
+      type: "terminal" as const,
+      kind: "terminal" as const,
+      title: "Terminal",
+      cwd: "/tmp",
+      cols: 80,
+      rows: 24,
+      location: "grid" as const,
+      detectedProcessId: undefined,
+    };
     useTerminalStore.setState({
-      terminals: [
-        {
-          id: "term-1",
-          type: "terminal",
-          kind: "terminal",
-          title: "Terminal",
-          cwd: "/tmp",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-          detectedProcessId: undefined,
-        },
-      ],
+      terminalsById: { "term-1": term1 },
+      terminalIds: ["term-1"],
       focusedId: "term-1",
       maximizedId: null,
       commandQueue: [],
@@ -248,7 +248,7 @@ describe("terminalStore process detection listeners", () => {
       timestamp: Date.now(),
     });
 
-    expect(useTerminalStore.getState().terminals[0]?.detectedProcessId).toBe("npm");
+    expect(useTerminalStore.getState().terminalsById["term-1"]?.detectedProcessId).toBe("npm");
 
     detected?.({
       terminalId: "term-1",
@@ -257,7 +257,7 @@ describe("terminalStore process detection listeners", () => {
       timestamp: Date.now(),
     });
 
-    expect(useTerminalStore.getState().terminals[0]?.detectedProcessId).toBe("npm");
+    expect(useTerminalStore.getState().terminalsById["term-1"]?.detectedProcessId).toBe("npm");
     cleanup();
   });
 
@@ -272,13 +272,13 @@ describe("terminalStore process detection listeners", () => {
       processName: "claude",
       timestamp: Date.now(),
     });
-    expect(useTerminalStore.getState().terminals[0]?.detectedProcessId).toBe("claude");
+    expect(useTerminalStore.getState().terminalsById["term-1"]?.detectedProcessId).toBe("claude");
 
     exited?.({
       terminalId: "term-1",
       timestamp: Date.now(),
     });
-    expect(useTerminalStore.getState().terminals[0]?.detectedProcessId).toBeUndefined();
+    expect(useTerminalStore.getState().terminalsById["term-1"]?.detectedProcessId).toBeUndefined();
     cleanup();
   });
 

@@ -30,12 +30,15 @@ export function useDockRenderState(): DockRenderState & {
 
   const dockTerminals = useTerminalStore(
     useShallow((state) =>
-      state.terminals.filter(
-        (t) =>
-          t.location === "dock" &&
-          // Show terminals that match active worktree OR have no worktree (global terminals)
-          (t.worktreeId == null || t.worktreeId === activeWorktreeId)
-      )
+      state.terminalIds
+        .map((id) => state.terminalsById[id])
+        .filter(
+          (t) =>
+            t &&
+            t.location === "dock" &&
+            // Show terminals that match active worktree OR have no worktree (global terminals)
+            (t.worktreeId == null || t.worktreeId === activeWorktreeId)
+        )
     )
   );
 
@@ -48,7 +51,7 @@ export function useDockRenderState(): DockRenderState & {
   const shouldFadeForInput = useTerminalStore(
     useShallow((state) => {
       if (!hybridInputEnabled) return false;
-      const focusedTerminal = state.terminals.find((t) => t.id === state.focusedId);
+      const focusedTerminal = state.focusedId ? state.terminalsById[state.focusedId] : undefined;
       if (!focusedTerminal) return false;
       return isAgentTerminal(focusedTerminal.kind ?? focusedTerminal.type, focusedTerminal.agentId);
     })

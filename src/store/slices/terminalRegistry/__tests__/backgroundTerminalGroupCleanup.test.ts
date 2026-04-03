@@ -39,6 +39,13 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 
 const { useTerminalStore } = await import("../../../terminalStore");
 
+function setTerminals(terminals: any[]) {
+  useTerminalStore.setState({
+    terminalsById: Object.fromEntries(terminals.map((t: any) => [t.id, t])),
+    terminalIds: terminals.map((t: any) => t.id),
+  });
+}
+
 function makeTerminal(id: string, location: "grid" | "dock" = "grid") {
   return {
     id,
@@ -57,7 +64,8 @@ describe("backgroundTerminal group metadata", () => {
     const { reset } = useTerminalStore.getState();
     reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -80,10 +88,8 @@ describe("backgroundTerminal group metadata", () => {
       location: "grid",
     };
 
-    useTerminalStore.setState({
-      terminals: [makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3")],
-      tabGroups: new Map([["group-1", group]]),
-    });
+    setTerminals([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3")]);
+    useTerminalStore.setState({ tabGroups: new Map([["group-1", group]]) });
 
     useTerminalStore.getState().backgroundTerminal("t1");
 
@@ -98,10 +104,8 @@ describe("backgroundTerminal group metadata", () => {
   });
 
   it("should not save group metadata for ungrouped panels", () => {
-    useTerminalStore.setState({
-      terminals: [makeTerminal("t1")],
-      tabGroups: new Map(),
-    });
+    setTerminals([makeTerminal("t1")]);
+    useTerminalStore.setState({ tabGroups: new Map() });
 
     useTerminalStore.getState().backgroundTerminal("t1");
 
@@ -119,10 +123,8 @@ describe("backgroundTerminal group metadata", () => {
       location: "grid",
     };
 
-    useTerminalStore.setState({
-      terminals: [makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3")],
-      tabGroups: new Map([["group-1", group]]),
-    });
+    setTerminals([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3")]);
+    useTerminalStore.setState({ tabGroups: new Map([["group-1", group]]) });
 
     useTerminalStore.getState().backgroundTerminal("t1");
 
@@ -140,7 +142,8 @@ describe("backgroundPanelGroup", () => {
     const { reset } = useTerminalStore.getState();
     reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -163,19 +166,17 @@ describe("backgroundPanelGroup", () => {
       location: "grid",
     };
 
-    useTerminalStore.setState({
-      terminals: [makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3")],
-      tabGroups: new Map([["group-1", group]]),
-    });
+    setTerminals([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3")]);
+    useTerminalStore.setState({ tabGroups: new Map([["group-1", group]]) });
 
     useTerminalStore.getState().backgroundPanelGroup("t1");
 
     const state = useTerminalStore.getState();
 
     // All panels should be backgrounded
-    expect(state.terminals.find((t) => t.id === "t1")!.location).toBe("background");
-    expect(state.terminals.find((t) => t.id === "t2")!.location).toBe("background");
-    expect(state.terminals.find((t) => t.id === "t3")!.location).toBe("background");
+    expect(state.terminalsById["t1"]!.location).toBe("background");
+    expect(state.terminalsById["t2"]!.location).toBe("background");
+    expect(state.terminalsById["t3"]!.location).toBe("background");
 
     // All should have same groupRestoreId
     const bg1 = state.backgroundedTerminals.get("t1")!;
@@ -197,15 +198,13 @@ describe("backgroundPanelGroup", () => {
   });
 
   it("should fall back to backgroundTerminal when panel is not in a group", () => {
-    useTerminalStore.setState({
-      terminals: [makeTerminal("t1")],
-      tabGroups: new Map(),
-    });
+    setTerminals([makeTerminal("t1")]);
+    useTerminalStore.setState({ tabGroups: new Map() });
 
     useTerminalStore.getState().backgroundPanelGroup("t1");
 
     const state = useTerminalStore.getState();
-    expect(state.terminals.find((t) => t.id === "t1")!.location).toBe("background");
+    expect(state.terminalsById["t1"]!.location).toBe("background");
     expect(state.backgroundedTerminals.has("t1")).toBe(true);
   });
 });
@@ -216,7 +215,8 @@ describe("restoreBackgroundGroup", () => {
     const { reset } = useTerminalStore.getState();
     reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -234,12 +234,13 @@ describe("restoreBackgroundGroup", () => {
   it("should reconstruct the tab group with correct order and active tab", () => {
     const groupRestoreId = "group-test-123";
 
+    const bgTerminals = [
+      { ...makeTerminal("t1"), location: "background" as const },
+      { ...makeTerminal("t2"), location: "background" as const },
+      { ...makeTerminal("t3"), location: "background" as const },
+    ];
+    setTerminals(bgTerminals);
     useTerminalStore.setState({
-      terminals: [
-        { ...makeTerminal("t1"), location: "background" as const },
-        { ...makeTerminal("t2"), location: "background" as const },
-        { ...makeTerminal("t3"), location: "background" as const },
-      ],
       backgroundedTerminals: new Map([
         [
           "t1",
@@ -265,9 +266,9 @@ describe("restoreBackgroundGroup", () => {
     const state = useTerminalStore.getState();
 
     // All panels restored
-    expect(state.terminals.find((t) => t.id === "t1")!.location).toBe("grid");
-    expect(state.terminals.find((t) => t.id === "t2")!.location).toBe("grid");
-    expect(state.terminals.find((t) => t.id === "t3")!.location).toBe("grid");
+    expect(state.terminalsById["t1"]!.location).toBe("grid");
+    expect(state.terminalsById["t2"]!.location).toBe("grid");
+    expect(state.terminalsById["t3"]!.location).toBe("grid");
 
     // Backgrounded entries cleared
     expect(state.backgroundedTerminals.size).toBe(0);
@@ -284,11 +285,11 @@ describe("restoreBackgroundGroup", () => {
     const groupRestoreId = "group-test-456";
 
     // t2 was removed while backgrounded
+    setTerminals([
+      { ...makeTerminal("t1"), location: "background" as const },
+      { ...makeTerminal("t3"), location: "background" as const },
+    ]);
     useTerminalStore.setState({
-      terminals: [
-        { ...makeTerminal("t1"), location: "background" as const },
-        { ...makeTerminal("t3"), location: "background" as const },
-      ],
       backgroundedTerminals: new Map([
         [
           "t1",
@@ -320,10 +321,8 @@ describe("restoreBackgroundGroup", () => {
   });
 
   it("should be a no-op when groupRestoreId is not found", () => {
-    useTerminalStore.setState({
-      terminals: [makeTerminal("t1")],
-      backgroundedTerminals: new Map(),
-    });
+    setTerminals([makeTerminal("t1")]);
+    useTerminalStore.setState({ backgroundedTerminals: new Map() });
 
     useTerminalStore.getState().restoreBackgroundGroup("nonexistent");
 
@@ -338,7 +337,8 @@ describe("restoreBackgroundTerminal with groupRestoreId", () => {
     const { reset } = useTerminalStore.getState();
     reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -356,11 +356,11 @@ describe("restoreBackgroundTerminal with groupRestoreId", () => {
   it("should delegate to restoreBackgroundGroup when panel has groupRestoreId", () => {
     const groupRestoreId = "group-test-789";
 
+    setTerminals([
+      { ...makeTerminal("t1"), location: "background" as const },
+      { ...makeTerminal("t2"), location: "background" as const },
+    ]);
     useTerminalStore.setState({
-      terminals: [
-        { ...makeTerminal("t1"), location: "background" as const },
-        { ...makeTerminal("t2"), location: "background" as const },
-      ],
       backgroundedTerminals: new Map([
         [
           "t1",
@@ -384,22 +384,22 @@ describe("restoreBackgroundTerminal with groupRestoreId", () => {
     useTerminalStore.getState().restoreBackgroundTerminal("t1");
 
     const state = useTerminalStore.getState();
-    expect(state.terminals.find((t) => t.id === "t1")!.location).toBe("grid");
-    expect(state.terminals.find((t) => t.id === "t2")!.location).toBe("grid");
+    expect(state.terminalsById["t1"]!.location).toBe("grid");
+    expect(state.terminalsById["t2"]!.location).toBe("grid");
     expect(state.backgroundedTerminals.size).toBe(0);
     expect(state.tabGroups.size).toBe(1);
   });
 
   it("should restore standalone panel without group reconstruction", () => {
+    setTerminals([{ ...makeTerminal("t1"), location: "background" as const }]);
     useTerminalStore.setState({
-      terminals: [{ ...makeTerminal("t1"), location: "background" as const }],
       backgroundedTerminals: new Map([["t1", { id: "t1", originalLocation: "dock" as const }]]),
     });
 
     useTerminalStore.getState().restoreBackgroundTerminal("t1");
 
     const state = useTerminalStore.getState();
-    expect(state.terminals.find((t) => t.id === "t1")!.location).toBe("dock");
+    expect(state.terminalsById["t1"]!.location).toBe("dock");
     expect(state.backgroundedTerminals.size).toBe(0);
     expect(state.tabGroups.size).toBe(0);
   });
@@ -411,7 +411,8 @@ describe("round-trip: backgroundPanelGroup → restoreBackgroundGroup", () => {
     const { reset } = useTerminalStore.getState();
     reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -435,14 +436,12 @@ describe("round-trip: backgroundPanelGroup → restoreBackgroundGroup", () => {
       worktreeId: "wt-1",
     };
 
-    useTerminalStore.setState({
-      terminals: [
-        { ...makeTerminal("t1", "dock"), worktreeId: "wt-1" },
-        { ...makeTerminal("t2", "dock"), worktreeId: "wt-1" },
-        { ...makeTerminal("t3", "dock"), worktreeId: "wt-1" },
-      ],
-      tabGroups: new Map([["group-1", group]]),
-    });
+    setTerminals([
+      { ...makeTerminal("t1", "dock"), worktreeId: "wt-1" },
+      { ...makeTerminal("t2", "dock"), worktreeId: "wt-1" },
+      { ...makeTerminal("t3", "dock"), worktreeId: "wt-1" },
+    ]);
+    useTerminalStore.setState({ tabGroups: new Map([["group-1", group]]) });
 
     // Background the group
     useTerminalStore.getState().backgroundPanelGroup("t1");
@@ -469,7 +468,7 @@ describe("round-trip: backgroundPanelGroup → restoreBackgroundGroup", () => {
 
     // All panels restored to dock with correct worktreeId
     for (const id of ["t1", "t2", "t3"]) {
-      const t = state.terminals.find((t) => t.id === id)!;
+      const t = state.terminalsById[id]!;
       expect(t.location).toBe("dock");
       expect(t.worktreeId).toBe("wt-1");
     }

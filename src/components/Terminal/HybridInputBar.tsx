@@ -206,10 +206,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const activeVoicePanelId = useVoiceRecordingStore((s) => s.activeTarget?.panelId ?? null);
     const voiceDraftRevision = useTerminalInputStore((s) => s.voiceDraftRevision);
     const panelWorktreeId = useTerminalStore(
-      useCallback(
-        (s) => s.terminals.find((terminal) => terminal.id === terminalId)?.worktreeId,
-        [terminalId]
-      )
+      useCallback((s) => s.terminalsById[terminalId]?.worktreeId, [terminalId])
     );
     const panelWorktree = useWorktreeStore((s) =>
       panelWorktreeId ? s.worktrees.get(panelWorktreeId) : undefined

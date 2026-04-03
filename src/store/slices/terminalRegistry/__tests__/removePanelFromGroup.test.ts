@@ -59,7 +59,8 @@ describe("removePanelFromGroup", () => {
     const { reset } = useTerminalStore.getState();
     await reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -83,8 +84,8 @@ describe("removePanelFromGroup", () => {
     };
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "Shell 1",
@@ -93,7 +94,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "term-2": {
           id: "term-2",
           type: "terminal",
           title: "Shell 2",
@@ -102,7 +103,8 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["term-1", "term-2"],
       tabGroups: new Map([["group-1", group]]),
     });
 
@@ -122,8 +124,8 @@ describe("removePanelFromGroup", () => {
     };
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "Shell 1",
@@ -132,7 +134,8 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["term-1"],
       tabGroups: new Map([["group-1", group]]),
     });
 
@@ -152,8 +155,8 @@ describe("removePanelFromGroup", () => {
     };
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "Shell 1",
@@ -162,7 +165,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "term-2": {
           id: "term-2",
           type: "terminal",
           title: "Shell 2",
@@ -171,7 +174,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "term-3": {
           id: "term-3",
           type: "terminal",
           title: "Shell 3",
@@ -180,7 +183,8 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["term-1", "term-2", "term-3"],
       tabGroups: new Map([["group-1", group]]),
     });
 
@@ -201,8 +205,8 @@ describe("removePanelFromGroup", () => {
     };
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "Shell 1",
@@ -211,7 +215,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "term-2": {
           id: "term-2",
           type: "terminal",
           title: "Shell 2",
@@ -220,7 +224,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "term-3": {
           id: "term-3",
           type: "terminal",
           title: "Shell 3",
@@ -229,7 +233,8 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["term-1", "term-2", "term-3"],
       tabGroups: new Map([["group-1", group]]),
     });
 
@@ -250,8 +255,8 @@ describe("removePanelFromGroup", () => {
     };
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "Shell 1",
@@ -260,7 +265,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "term-2": {
           id: "term-2",
           type: "terminal",
           title: "Shell 2",
@@ -269,7 +274,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "term-3": {
           id: "term-3",
           type: "terminal",
           title: "Shell 3",
@@ -278,7 +283,8 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["term-1", "term-2", "term-3"],
       tabGroups: new Map([["group-1", group]]),
     });
 
@@ -292,8 +298,8 @@ describe("removePanelFromGroup", () => {
 
   it("should be a no-op when panel is not in any group", () => {
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "Shell 1",
@@ -302,7 +308,8 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["term-1"],
       tabGroups: new Map(),
     });
 
@@ -329,8 +336,8 @@ describe("removePanelFromGroup", () => {
     };
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "Shell 1",
@@ -339,7 +346,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "term-2": {
           id: "term-2",
           type: "terminal",
           title: "Shell 2",
@@ -348,7 +355,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "term-3": {
           id: "term-3",
           type: "terminal",
           title: "Shell 3",
@@ -357,7 +364,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "dock",
         },
-        {
+        "term-4": {
           id: "term-4",
           type: "terminal",
           title: "Shell 4",
@@ -366,7 +373,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "dock",
         },
-        {
+        "term-5": {
           id: "term-5",
           type: "terminal",
           title: "Shell 5",
@@ -375,7 +382,8 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "dock",
         },
-      ],
+      },
+      terminalIds: ["term-1", "term-2", "term-3", "term-4", "term-5"],
       tabGroups: new Map([
         ["group-1", group1],
         ["group-2", group2],
@@ -402,8 +410,8 @@ describe("removePanelFromGroup", () => {
     };
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "Shell 1",
@@ -412,7 +420,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "dock",
         },
-        {
+        "term-2": {
           id: "term-2",
           type: "terminal",
           title: "Shell 2",
@@ -421,7 +429,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "dock",
         },
-        {
+        "term-3": {
           id: "term-3",
           type: "terminal",
           title: "Shell 3",
@@ -430,7 +438,8 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "dock",
         },
-      ],
+      },
+      terminalIds: ["term-1", "term-2", "term-3"],
       tabGroups: new Map([["group-1", group]]),
     });
 
@@ -452,8 +461,8 @@ describe("removePanelFromGroup", () => {
     };
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "Shell 1",
@@ -462,7 +471,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "term-2": {
           id: "term-2",
           type: "terminal",
           title: "Shell 2",
@@ -471,7 +480,8 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["term-1", "term-2"],
       tabGroups: new Map([["group-1", group]]),
     });
 
@@ -491,8 +501,8 @@ describe("removePanelFromGroup", () => {
     };
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "Shell 1",
@@ -501,7 +511,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "term-2": {
           id: "term-2",
           type: "terminal",
           title: "Shell 2",
@@ -510,7 +520,7 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "term-3": {
           id: "term-3",
           type: "terminal",
           title: "Shell 3",
@@ -519,7 +529,8 @@ describe("removePanelFromGroup", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["term-1", "term-2", "term-3"],
       tabGroups: new Map([["group-1", group]]),
     });
 
@@ -540,8 +551,8 @@ describe("removePanelFromGroup", () => {
     };
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "Shell 1",
@@ -551,7 +562,7 @@ describe("removePanelFromGroup", () => {
           location: "grid",
           worktreeId: "wt-123",
         },
-        {
+        "term-2": {
           id: "term-2",
           type: "terminal",
           title: "Shell 2",
@@ -561,7 +572,7 @@ describe("removePanelFromGroup", () => {
           location: "grid",
           worktreeId: "wt-123",
         },
-        {
+        "term-3": {
           id: "term-3",
           type: "terminal",
           title: "Shell 3",
@@ -571,7 +582,8 @@ describe("removePanelFromGroup", () => {
           location: "grid",
           worktreeId: "wt-123",
         },
-      ],
+      },
+      terminalIds: ["term-1", "term-2", "term-3"],
       tabGroups: new Map([["group-1", group]]),
     });
 

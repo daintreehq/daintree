@@ -771,7 +771,7 @@ export function BulkCreateWorktreeDialog({
         await delay(VERIFICATION_SETTLE_MS);
         if (runIdRef.current !== currentRunId) return;
 
-        const terminals = useTerminalStore.getState().terminals;
+        const { terminalsById } = useTerminalStore.getState();
 
         for (const [itemNumber, tracked] of tracking) {
           if (!currentRunItems.has(itemNumber)) continue;
@@ -779,7 +779,7 @@ export function BulkCreateWorktreeDialog({
           if (tracked.failedTerminalIndices.length > 0) continue;
 
           const crashedCount = tracked.spawnedTerminalIds.filter((tid) => {
-            const t = terminals.find((term) => term.id === tid);
+            const t = terminalsById[tid];
             return t && t.exitCode !== undefined && t.exitCode !== 0;
           }).length;
 

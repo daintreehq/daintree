@@ -161,13 +161,15 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
 
         // Side effect: kill associated terminals
         const terminalStore = useTerminalStore.getState();
-        const terminalsToKill = terminalStore.terminals.filter(
-          (t) => (t.worktreeId ?? undefined) === event.worktreeId
-        );
-        if (terminalsToKill.length > 0) {
-          terminalsToKill.forEach((terminal) => {
-            terminalStore.removeTerminal(terminal.id);
-          });
+        const idsToKill: string[] = [];
+        for (const id of terminalStore.terminalIds) {
+          const t = terminalStore.terminalsById[id];
+          if (t && (t.worktreeId ?? undefined) === event.worktreeId) {
+            idsToKill.push(id);
+          }
+        }
+        for (const id of idsToKill) {
+          terminalStore.removeTerminal(id);
         }
       })
     );

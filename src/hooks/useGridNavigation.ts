@@ -18,9 +18,10 @@ interface UseGridNavigationOptions {
 export function useGridNavigation(options: UseGridNavigationOptions = {}) {
   const { containerSelector = "#panel-grid" } = options;
 
-  const { terminals, focusedId, tabGroups, getTabGroups } = useTerminalStore(
+  const { terminalIds, terminalsById, focusedId, tabGroups, getTabGroups } = useTerminalStore(
     useShallow((state) => ({
-      terminals: state.terminals,
+      terminalIds: state.terminalIds,
+      terminalsById: state.terminalsById,
       focusedId: state.focusedId,
       tabGroups: state.tabGroups,
       getTabGroups: state.getTabGroups,
@@ -32,21 +33,28 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
 
   const gridTerminals = useMemo(
     () =>
-      terminals.filter(
-        (t) =>
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      ),
-    [terminals, activeWorktreeId]
+      terminalIds
+        .map((id) => terminalsById[id])
+        .filter(
+          (t) =>
+            t &&
+            (t.location === "grid" || t.location === undefined) &&
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+        ),
+    [terminalIds, terminalsById, activeWorktreeId]
   );
 
   const dockTerminals = useMemo(
     () =>
-      terminals.filter(
-        (t) =>
-          t.location === "dock" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      ),
-    [terminals, activeWorktreeId]
+      terminalIds
+        .map((id) => terminalsById[id])
+        .filter(
+          (t) =>
+            t &&
+            t.location === "dock" &&
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+        ),
+    [terminalIds, terminalsById, activeWorktreeId]
   );
 
   const directionCache = useRef(new Map<string, string | null>());
@@ -86,7 +94,7 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
   // tabGroups + terminals are intentional deps: getTabGroups reads both internally.
   const gridGroups = useMemo(
     () => getTabGroups("grid", activeWorktreeId ?? undefined),
-    [getTabGroups, activeWorktreeId, tabGroups, terminals]
+    [getTabGroups, activeWorktreeId, tabGroups, terminalIds, terminalsById]
   );
 
   // Compute gridCols using visual group count, matching ContentGrid's gridItemCount
@@ -221,7 +229,7 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
         : group.panelIds[0];
       return resolvedId ? [resolvedId] : [];
     });
-  }, [getTabGroups, activeWorktreeId, tabGroups, terminals]);
+  }, [getTabGroups, activeWorktreeId, tabGroups, terminalIds, terminalsById]);
 
   const findByIndex = useCallback(
     (index: number): string | null => {
@@ -248,10 +256,10 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
 
   const getCurrentLocation = useCallback((): "grid" | "dock" | null => {
     if (!focusedId) return null;
-    const terminal = terminals.find((t) => t.id === focusedId);
+    const terminal = terminalsById[focusedId];
     if (!terminal) return null;
     return terminal.location === "dock" ? "dock" : "grid";
-  }, [focusedId, terminals]);
+  }, [focusedId, terminalsById]);
 
   return {
     gridLayout,

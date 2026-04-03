@@ -52,7 +52,8 @@ describe("updateAgentState store action (#3217)", () => {
     const { reset } = useTerminalStore.getState();
     await reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -63,49 +64,60 @@ describe("updateAgentState store action (#3217)", () => {
   });
 
   it("allows waiting to overwrite directing (clearDirectingState teardown path)", () => {
-    useTerminalStore.setState({ terminals: [baseTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal },
+      terminalIds: [baseTerminal.id],
+    });
 
     useTerminalStore.getState().updateAgentState("test-terminal-1", "waiting");
 
-    const after = useTerminalStore.getState().terminals;
-    expect(after[0].agentState).toBe("waiting");
+    expect(useTerminalStore.getState().terminalsById["test-terminal-1"].agentState).toBe("waiting");
   });
 
   it("allows working to overwrite directing", () => {
-    useTerminalStore.setState({ terminals: [baseTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal },
+      terminalIds: [baseTerminal.id],
+    });
 
     useTerminalStore.getState().updateAgentState("test-terminal-1", "working");
 
-    const after = useTerminalStore.getState().terminals;
-    expect(after[0].agentState).toBe("working");
+    expect(useTerminalStore.getState().terminalsById["test-terminal-1"].agentState).toBe("working");
   });
 
   it("allows idle to overwrite directing", () => {
-    useTerminalStore.setState({ terminals: [baseTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal },
+      terminalIds: [baseTerminal.id],
+    });
 
     useTerminalStore.getState().updateAgentState("test-terminal-1", "idle");
 
-    const after = useTerminalStore.getState().terminals;
-    expect(after[0].agentState).toBe("idle");
+    expect(useTerminalStore.getState().terminalsById["test-terminal-1"].agentState).toBe("idle");
   });
 
   it("allows waiting when current state is not directing", () => {
     const workingTerminal = { ...baseTerminal, agentState: "working" as const };
-    useTerminalStore.setState({ terminals: [workingTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [workingTerminal.id]: workingTerminal },
+      terminalIds: [workingTerminal.id],
+    });
 
     useTerminalStore.getState().updateAgentState("test-terminal-1", "waiting");
 
-    const after = useTerminalStore.getState().terminals;
-    expect(after[0].agentState).toBe("waiting");
+    expect(useTerminalStore.getState().terminalsById["test-terminal-1"].agentState).toBe("waiting");
   });
 
   it("returns unchanged state for nonexistent terminal", () => {
-    useTerminalStore.setState({ terminals: [baseTerminal] });
-    const before = useTerminalStore.getState().terminals;
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal },
+      terminalIds: [baseTerminal.id],
+    });
+    const before = useTerminalStore.getState().terminalsById;
 
     useTerminalStore.getState().updateAgentState("nonexistent", "working");
 
-    expect(useTerminalStore.getState().terminals).toBe(before);
+    expect(useTerminalStore.getState().terminalsById).toBe(before);
   });
 });
 
@@ -118,16 +130,22 @@ describe("setupTerminalStoreListeners directing guard (#3217)", () => {
   }
 
   it("backend waiting is suppressed when store terminal is in directing state", () => {
-    useTerminalStore.setState({ terminals: [baseTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal },
+      terminalIds: [baseTerminal.id],
+    });
 
-    const terminal = useTerminalStore.getState().terminals.find((t) => t.id === "test-terminal-1");
+    const terminal = useTerminalStore.getState().terminalsById["test-terminal-1"];
     expect(shouldSuppressBackendState(terminal?.agentState, "waiting")).toBe(true);
   });
 
   it("backend working is not suppressed when store terminal is in directing state", () => {
-    useTerminalStore.setState({ terminals: [baseTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal },
+      terminalIds: [baseTerminal.id],
+    });
 
-    const terminal = useTerminalStore.getState().terminals.find((t) => t.id === "test-terminal-1");
+    const terminal = useTerminalStore.getState().terminalsById["test-terminal-1"];
     expect(shouldSuppressBackendState(terminal?.agentState, "working")).toBe(false);
   });
 });

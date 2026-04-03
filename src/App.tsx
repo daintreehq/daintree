@@ -488,7 +488,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const expandWorktree = useWorktreeFilterStore((state) => state.expandWorktree);
 
   // Terminal store for derived metadata
-  const terminals = useTerminalStore(useShallow((state) => state.terminals));
+  const terminalsById = useTerminalStore(useShallow((state) => state.terminalsById));
+  const terminalIds = useTerminalStore(useShallow((state) => state.terminalIds));
 
   // Error store for derived metadata
   const getWorktreeErrors = useErrorStore((state) => state.getWorktreeErrors);
@@ -553,12 +554,25 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const derivedMetaMap = useMemo(() => {
     const map = new Map<string, DerivedWorktreeMeta>();
     for (const worktree of deferredWorktrees) {
-      const worktreeTerminals = terminals.filter(
-        (t) => t.worktreeId === worktree.id && t.location !== "trash"
-      );
-      const waitingTerminalCount = worktreeTerminals.filter(
-        (t) => t.agentState === "waiting"
-      ).length;
+      let terminalCount = 0;
+      let waitingTerminalCount = 0;
+      let hasWorkingAgent = false;
+      let hasRunningAgent = false;
+      let hasWaitingAgent = false;
+      let hasCompletedAgent = false;
+
+      for (const id of terminalIds) {
+        const t = terminalsById[id];
+        if (!t || t.worktreeId !== worktree.id || t.location === "trash") continue;
+        terminalCount++;
+        if (t.agentState === "working") hasWorkingAgent = true;
+        if (t.agentState === "running") hasRunningAgent = true;
+        if (t.agentState === "waiting") {
+          hasWaitingAgent = true;
+          waitingTerminalCount++;
+        }
+        if (t.agentState === "completed") hasCompletedAgent = true;
+      }
 
       // chipState logic mirrors useWorktreeStatus.ts — keep in sync
       const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
@@ -577,9 +591,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         }
       }
 
-      const hasWorkingAgent = worktreeTerminals.some((t) => t.agentState === "working");
-      const hasRunningAgent = worktreeTerminals.some((t) => t.agentState === "running");
-
       const chipState = computeChipState({
         waitingTerminalCount,
         lifecycleStage,
@@ -588,18 +599,18 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       });
 
       map.set(worktree.id, {
-        terminalCount: worktreeTerminals.length,
+        terminalCount,
         hasWorkingAgent,
         hasRunningAgent,
-        hasWaitingAgent: worktreeTerminals.some((t) => t.agentState === "waiting"),
-        hasCompletedAgent: worktreeTerminals.some((t) => t.agentState === "completed"),
+        hasWaitingAgent,
+        hasCompletedAgent,
         hasMergeConflict:
           worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
         chipState,
       });
     }
     return map;
-  }, [deferredWorktrees, terminals, getWorktreeErrors]);
+  }, [deferredWorktrees, terminalsById, terminalIds, getWorktreeErrors]);
 
   // Apply filters and sorting
   const mainWorktree = useMemo(
@@ -1456,10 +1467,14 @@ function App() {
 
   const handleToggleSidebar = useCallback(() => {
     const activeWtId = useWorktreeSelectionStore.getState().activeWorktreeId;
-    const gridIds = useTerminalStore
-      .getState()
-      .terminals.filter((t) => t.location !== "dock" && t.worktreeId === activeWtId)
-      .map((t) => t.id);
+    const storeState = useTerminalStore.getState();
+    const gridIds: string[] = [];
+    for (const id of storeState.terminalIds) {
+      const t = storeState.terminalsById[id];
+      if (t && t.location !== "dock" && t.worktreeId === activeWtId) {
+        gridIds.push(t.id);
+      }
+    }
     terminalInstanceService.suppressResizesDuringLayoutTransition(gridIds, SIDEBAR_TOGGLE_LOCK_MS);
     window.dispatchEvent(new CustomEvent("canopy:toggle-focus-mode"));
   }, []);

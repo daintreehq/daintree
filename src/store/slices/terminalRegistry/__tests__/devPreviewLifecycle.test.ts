@@ -63,7 +63,8 @@ describe("dev-preview lifecycle integration", () => {
     const { reset } = useTerminalStore.getState();
     await reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -81,8 +82,8 @@ describe("dev-preview lifecycle integration", () => {
 
   it("stops dev-preview runtime when panel is removed", () => {
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "dev-panel-1": {
           id: "dev-panel-1",
           kind: "dev-preview",
           type: "terminal",
@@ -93,7 +94,8 @@ describe("dev-preview lifecycle integration", () => {
           location: "grid",
           devCommand: "npm run dev",
         },
-      ],
+      },
+      terminalIds: ["dev-panel-1"],
     });
 
     useTerminalStore.getState().removeTerminal("dev-panel-1");
@@ -103,8 +105,8 @@ describe("dev-preview lifecycle integration", () => {
 
   it("stops dev-preview runtime when panel is trashed", () => {
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "dev-panel-2": {
           id: "dev-panel-2",
           kind: "dev-preview",
           type: "terminal",
@@ -115,7 +117,8 @@ describe("dev-preview lifecycle integration", () => {
           location: "grid",
           devCommand: "npm run dev",
         },
-      ],
+      },
+      terminalIds: ["dev-panel-2"],
     });
 
     useTerminalStore.getState().trashTerminal("dev-panel-2");
@@ -132,8 +135,8 @@ describe("dev-preview lifecycle integration", () => {
     };
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "dev-panel-3": {
           id: "dev-panel-3",
           kind: "dev-preview",
           type: "terminal",
@@ -144,7 +147,7 @@ describe("dev-preview lifecycle integration", () => {
           location: "grid",
           devCommand: "npm run dev",
         },
-        {
+        "term-1": {
           id: "term-1",
           kind: "terminal",
           type: "terminal",
@@ -154,7 +157,8 @@ describe("dev-preview lifecycle integration", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["dev-panel-3", "term-1"],
       tabGroups: new Map([["group-dev-preview", group]]),
     });
 
@@ -173,8 +177,8 @@ describe("dev-preview lifecycle integration", () => {
     };
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "dev-panel-a": {
           id: "dev-panel-a",
           kind: "dev-preview",
           type: "terminal",
@@ -185,7 +189,7 @@ describe("dev-preview lifecycle integration", () => {
           location: "grid",
           devCommand: "npm run dev",
         },
-        {
+        "dev-panel-b": {
           id: "dev-panel-b",
           kind: "dev-preview",
           type: "terminal",
@@ -196,7 +200,7 @@ describe("dev-preview lifecycle integration", () => {
           location: "grid",
           devCommand: "pnpm dev",
         },
-        {
+        "term-2": {
           id: "term-2",
           kind: "terminal",
           type: "terminal",
@@ -206,7 +210,8 @@ describe("dev-preview lifecycle integration", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["dev-panel-a", "dev-panel-b", "term-2"],
       tabGroups: new Map([["group-multi-dev-preview", group]]),
     });
 

@@ -3,7 +3,7 @@
  * Tests terminal lifecycle, state transitions, and location changes
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -33,12 +33,25 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 const { useTerminalStore } = await import("../../store/terminalStore");
 type AddTerminalOptions = any;
 
+function setTerminals(terminals: any[]) {
+  useTerminalStore.setState({
+    terminalsById: Object.fromEntries(terminals.map((t: any) => [t.id, t])),
+    terminalIds: terminals.map((t: any) => t.id),
+  });
+}
+
+function getTerminals() {
+  const state = useTerminalStore.getState();
+  return state.terminalIds.map((id: string) => state.terminalsById[id]);
+}
+
 describe("Terminal Store Integration", () => {
   beforeEach(() => {
     const { reset } = useTerminalStore.getState();
     reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
@@ -47,7 +60,8 @@ describe("Terminal Store Integration", () => {
 
   afterEach(() => {
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
@@ -145,42 +159,44 @@ describe("Terminal Store Integration", () => {
 
   describe("Terminal Location Changes", () => {
     beforeEach(() => {
-      useTerminalStore.setState({
-        terminals: [
-          {
-            id: "term-1",
-            type: "terminal",
-            title: "Shell 1",
-            cwd: "/test",
-            cols: 80,
-            rows: 24,
-            location: "grid",
-          },
-          {
-            id: "term-2",
-            type: "terminal",
-            title: "Shell 2",
-            cwd: "/test",
-            cols: 80,
-            rows: 24,
-            location: "grid",
-          },
-        ],
-        focusedId: "term-1",
-      });
+      setTerminals([
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "Shell 1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+        {
+          id: "term-2",
+          type: "terminal",
+          title: "Shell 2",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      ]);
+      useTerminalStore.setState({ focusedId: "term-1" });
     });
 
     it("should move terminal to dock", () => {
       const mockMoveToDock = vi.fn((id: string) => {
         const state = useTerminalStore.getState();
-        const terminals = state.terminals.map((t) =>
-          t.id === id ? { ...t, location: "dock" as const } : t
-        );
+        const terminals = state.terminalIds.map((tid: string) => {
+          const t = state.terminalsById[tid];
+          return t.id === id ? { ...t, location: "dock" as const } : t;
+        });
 
-        const updates: any = { terminals };
+        const updates: any = {
+          terminalsById: Object.fromEntries(terminals.map((t: any) => [t.id, t])),
+          terminalIds: terminals.map((t: any) => t.id),
+        };
 
         if (state.focusedId === id) {
-          const gridTerminals = terminals.filter((t) => t.id !== id && t.location === "grid");
+          const gridTerminals = terminals.filter((t: any) => t.id !== id && t.location === "grid");
           updates.focusedId = gridTerminals[0]?.id ?? null;
         }
 
@@ -190,82 +206,89 @@ describe("Terminal Store Integration", () => {
       useTerminalStore.setState({ moveTerminalToDock: mockMoveToDock });
       mockMoveToDock("term-1");
 
-      const { terminals, focusedId } = useTerminalStore.getState();
-      expect(terminals.find((t) => t.id === "term-1")?.location).toBe("dock");
+      const terminals = getTerminals();
+      const { focusedId } = useTerminalStore.getState();
+      expect(terminals.find((t: any) => t.id === "term-1")?.location).toBe("dock");
       expect(focusedId).toBe("term-2");
     });
 
     it("should move terminal to grid", () => {
-      useTerminalStore.setState({
-        terminals: [
-          {
-            id: "term-1",
-            type: "terminal",
-            title: "Shell 1",
-            cwd: "/test",
-            cols: 80,
-            rows: 24,
-            location: "dock",
-          },
-        ],
-      });
+      setTerminals([
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "Shell 1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "dock",
+        },
+      ]);
 
       const mockMoveToGrid = vi.fn((id: string) => {
         const state = useTerminalStore.getState();
-        const terminals = state.terminals.map((t) =>
-          t.id === id ? { ...t, location: "grid" as const } : t
-        );
-        useTerminalStore.setState({ terminals, focusedId: id });
+        const terminals = state.terminalIds.map((tid: string) => {
+          const t = state.terminalsById[tid];
+          return t.id === id ? { ...t, location: "grid" as const } : t;
+        });
+        useTerminalStore.setState({
+          terminalsById: Object.fromEntries(terminals.map((t: any) => [t.id, t])),
+          terminalIds: terminals.map((t: any) => t.id),
+          focusedId: id,
+        });
         return true;
       });
 
       useTerminalStore.setState({ moveTerminalToGrid: mockMoveToGrid });
       mockMoveToGrid("term-1");
 
-      const { terminals, focusedId } = useTerminalStore.getState();
-      expect(terminals.find((t) => t.id === "term-1")?.location).toBe("grid");
+      const terminals = getTerminals();
+      const { focusedId } = useTerminalStore.getState();
+      expect(terminals.find((t: any) => t.id === "term-1")?.location).toBe("grid");
       expect(focusedId).toBe("term-1");
     });
   });
 
   describe("Terminal Trash and Restore", () => {
     beforeEach(() => {
-      useTerminalStore.setState({
-        terminals: [
-          {
-            id: "term-1",
-            type: "terminal",
-            title: "Shell 1",
-            cwd: "/test",
-            cols: 80,
-            rows: 24,
-            location: "grid",
-          },
-          {
-            id: "term-2",
-            type: "terminal",
-            title: "Shell 2",
-            cwd: "/test",
-            cols: 80,
-            rows: 24,
-            location: "grid",
-          },
-        ],
-        focusedId: "term-1",
-      });
+      setTerminals([
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "Shell 1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+        {
+          id: "term-2",
+          type: "terminal",
+          title: "Shell 2",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      ]);
+      useTerminalStore.setState({ focusedId: "term-1" });
     });
 
     it("should move terminal to trash", () => {
       const mockTrash = vi.fn((id: string) => {
         const state = useTerminalStore.getState();
-        const terminals = state.terminals.map((t) =>
-          t.id === id ? { ...t, location: "trash" as const } : t
-        );
+        const terminals = state.terminalIds.map((tid: string) => {
+          const t = state.terminalsById[tid];
+          return t.id === id ? { ...t, location: "trash" as const } : t;
+        });
 
-        const updates: any = { terminals };
+        const updates: any = {
+          terminalsById: Object.fromEntries(terminals.map((t: any) => [t.id, t])),
+          terminalIds: terminals.map((t: any) => t.id),
+        };
 
         if (state.focusedId === id) {
-          const gridTerminals = terminals.filter((t) => t.id !== id && t.location === "grid");
+          const gridTerminals = terminals.filter((t: any) => t.id !== id && t.location === "grid");
           updates.focusedId = gridTerminals[0]?.id ?? null;
         }
 
@@ -275,68 +298,78 @@ describe("Terminal Store Integration", () => {
       useTerminalStore.setState({ trashTerminal: mockTrash });
       mockTrash("term-1");
 
-      const { terminals, focusedId } = useTerminalStore.getState();
-      expect(terminals.find((t) => t.id === "term-1")?.location).toBe("trash");
+      const terminals = getTerminals();
+      const { focusedId } = useTerminalStore.getState();
+      expect(terminals.find((t: any) => t.id === "term-1")?.location).toBe("trash");
       expect(focusedId).toBe("term-2");
     });
 
     it("should restore terminal from trash", () => {
-      useTerminalStore.setState({
-        terminals: [
-          {
-            id: "term-1",
-            type: "terminal",
-            title: "Shell 1",
-            cwd: "/test",
-            cols: 80,
-            rows: 24,
-            location: "trash",
-          },
-        ],
-      });
+      setTerminals([
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "Shell 1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "trash",
+        },
+      ]);
 
       const mockRestore = vi.fn((id: string) => {
-        const terminals = useTerminalStore
-          .getState()
-          .terminals.map((t) => (t.id === id ? { ...t, location: "grid" as const } : t));
-        useTerminalStore.setState({ terminals, focusedId: id });
+        const state = useTerminalStore.getState();
+        const terminals = state.terminalIds.map((tid: string) => {
+          const t = state.terminalsById[tid];
+          return t.id === id ? { ...t, location: "grid" as const } : t;
+        });
+        useTerminalStore.setState({
+          terminalsById: Object.fromEntries(terminals.map((t: any) => [t.id, t])),
+          terminalIds: terminals.map((t: any) => t.id),
+          focusedId: id,
+        });
       });
 
       useTerminalStore.setState({ restoreTerminal: mockRestore });
       mockRestore("term-1");
 
-      const { terminals, focusedId } = useTerminalStore.getState();
-      expect(terminals.find((t) => t.id === "term-1")?.location).toBe("grid");
+      const terminals = getTerminals();
+      const { focusedId } = useTerminalStore.getState();
+      expect(terminals.find((t: any) => t.id === "term-1")?.location).toBe("grid");
       expect(focusedId).toBe("term-1");
     });
 
     it("should clear maximized state when trashing maximized terminal", () => {
+      setTerminals([
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "Shell 1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      ]);
       useTerminalStore.setState({
-        terminals: [
-          {
-            id: "term-1",
-            type: "terminal",
-            title: "Shell 1",
-            cwd: "/test",
-            cols: 80,
-            rows: 24,
-            location: "grid",
-          },
-        ],
         focusedId: "term-1",
         maximizedId: "term-1",
       });
 
       const mockTrash = vi.fn((id: string) => {
         const state = useTerminalStore.getState();
-        const terminals = state.terminals.map((t) =>
-          t.id === id ? { ...t, location: "trash" as const } : t
-        );
+        const terminals = state.terminalIds.map((tid: string) => {
+          const t = state.terminalsById[tid];
+          return t.id === id ? { ...t, location: "trash" as const } : t;
+        });
 
-        const updates: any = { terminals };
+        const updates: any = {
+          terminalsById: Object.fromEntries(terminals.map((t: any) => [t.id, t])),
+          terminalIds: terminals.map((t: any) => t.id),
+        };
 
         if (state.focusedId === id) {
-          const gridTerminals = terminals.filter((t) => t.id !== id && t.location === "grid");
+          const gridTerminals = terminals.filter((t: any) => t.id !== id && t.location === "grid");
           updates.focusedId = gridTerminals[0]?.id ?? null;
         }
 
@@ -357,32 +390,32 @@ describe("Terminal Store Integration", () => {
 
   describe("Agent State Management", () => {
     beforeEach(() => {
-      useTerminalStore.setState({
-        terminals: [
-          {
-            id: "term-1",
-            type: "claude",
-            title: "Claude",
-            cwd: "/test",
-            cols: 80,
-            rows: 24,
-            location: "grid",
-            agentState: "idle",
-          },
-        ],
-      });
+      setTerminals([
+        {
+          id: "term-1",
+          type: "claude",
+          title: "Claude",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          agentState: "idle",
+        },
+      ]);
     });
 
     it("should update agent state", () => {
-      const { terminals } = useTerminalStore.getState();
+      const state = useTerminalStore.getState();
+      const terminal = state.terminalsById["term-1"];
 
       useTerminalStore.setState({
-        terminals: terminals.map((t) =>
-          t.id === "term-1" ? { ...t, agentState: "working" as const } : t
-        ),
+        terminalsById: {
+          ...state.terminalsById,
+          "term-1": { ...terminal, agentState: "working" as const },
+        },
       });
 
-      const updated = useTerminalStore.getState().terminals.find((t) => t.id === "term-1");
+      const updated = useTerminalStore.getState().terminalsById["term-1"];
       expect(updated?.agentState).toBe("working");
     });
 
@@ -394,56 +427,60 @@ describe("Terminal Store Integration", () => {
         "completed",
       ];
 
-      states.forEach((state) => {
-        const { terminals } = useTerminalStore.getState();
+      states.forEach((agentState) => {
+        const curState = useTerminalStore.getState();
+        const terminal = curState.terminalsById["term-1"];
         useTerminalStore.setState({
-          terminals: terminals.map((t) => (t.id === "term-1" ? { ...t, agentState: state } : t)),
+          terminalsById: {
+            ...curState.terminalsById,
+            "term-1": { ...terminal, agentState },
+          },
         });
       });
 
-      const final = useTerminalStore.getState().terminals.find((t) => t.id === "term-1");
+      const final = useTerminalStore.getState().terminalsById["term-1"];
       expect(final?.agentState).toBe("completed");
     });
 
     it("should handle completed state", () => {
-      const { terminals } = useTerminalStore.getState();
+      const state = useTerminalStore.getState();
+      const terminal = state.terminalsById["term-1"];
 
       useTerminalStore.setState({
-        terminals: terminals.map((t) =>
-          t.id === "term-1" ? { ...t, agentState: "completed" as const } : t
-        ),
+        terminalsById: {
+          ...state.terminalsById,
+          "term-1": { ...terminal, agentState: "completed" as const },
+        },
       });
 
-      const updated = useTerminalStore.getState().terminals.find((t) => t.id === "term-1");
+      const updated = useTerminalStore.getState().terminalsById["term-1"];
       expect(updated?.agentState).toBe("completed");
     });
   });
 
   describe("Focus Management", () => {
     beforeEach(() => {
-      useTerminalStore.setState({
-        terminals: [
-          {
-            id: "term-1",
-            type: "terminal",
-            title: "Shell 1",
-            cwd: "/test",
-            cols: 80,
-            rows: 24,
-            location: "grid",
-          },
-          {
-            id: "term-2",
-            type: "terminal",
-            title: "Shell 2",
-            cwd: "/test",
-            cols: 80,
-            rows: 24,
-            location: "grid",
-          },
-        ],
-        focusedId: null,
-      });
+      setTerminals([
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "Shell 1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+        {
+          id: "term-2",
+          type: "terminal",
+          title: "Shell 2",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      ]);
+      useTerminalStore.setState({ focusedId: null });
     });
 
     it("should set focused terminal", () => {
@@ -472,23 +509,21 @@ describe("Terminal Store Integration", () => {
 
   describe("Terminal Metadata", () => {
     it("should store terminal metadata", () => {
-      useTerminalStore.setState({
-        terminals: [
-          {
-            id: "term-1",
-            type: "claude",
-            title: "Claude Agent",
-            cwd: "/test/worktree",
-            cols: 120,
-            rows: 30,
-            location: "grid",
-            worktreeId: "worktree-1",
-            agentState: "working",
-          },
-        ],
-      });
+      setTerminals([
+        {
+          id: "term-1",
+          type: "claude",
+          title: "Claude Agent",
+          cwd: "/test/worktree",
+          cols: 120,
+          rows: 30,
+          location: "grid",
+          worktreeId: "worktree-1",
+          agentState: "working",
+        },
+      ]);
 
-      const terminal = useTerminalStore.getState().terminals[0];
+      const terminal = useTerminalStore.getState().terminalsById["term-1"];
       expect(terminal.type).toBe("claude");
       expect(terminal.title).toBe("Claude Agent");
       expect(terminal.worktreeId).toBe("worktree-1");
@@ -496,35 +531,31 @@ describe("Terminal Store Integration", () => {
     });
 
     it("should update terminal metadata", () => {
-      useTerminalStore.setState({
-        terminals: [
-          {
-            id: "term-1",
-            type: "terminal",
-            title: "Shell",
-            cwd: "/test",
-            cols: 80,
-            rows: 24,
-            location: "grid",
-          },
-        ],
-      });
+      setTerminals([
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "Shell",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      ]);
 
-      useTerminalStore.setState({
-        terminals: [
-          {
-            id: "term-1",
-            type: "terminal",
-            title: "Updated Title",
-            cwd: "/test",
-            cols: 100,
-            rows: 30,
-            location: "grid",
-          },
-        ],
-      });
+      setTerminals([
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "Updated Title",
+          cwd: "/test",
+          cols: 100,
+          rows: 30,
+          location: "grid",
+        },
+      ]);
 
-      const terminal = useTerminalStore.getState().terminals[0];
+      const terminal = useTerminalStore.getState().terminalsById["term-1"];
       expect(terminal.title).toBe("Updated Title");
       expect(terminal.cols).toBe(100);
       expect(terminal.rows).toBe(30);

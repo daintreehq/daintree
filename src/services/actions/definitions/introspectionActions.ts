@@ -77,9 +77,7 @@ export function registerIntrospectionActions(
       const portal = usePortalStore.getState();
 
       const focusedId = terminalState.focusedId;
-      const focusedTerminal = focusedId
-        ? terminalState.terminals.find((t) => t.id === focusedId)
-        : null;
+      const focusedTerminal = focusedId ? (terminalState.terminalsById[focusedId] ?? null) : null;
 
       const activeWorktreeId = worktreeSelection.activeWorktreeId;
       const activeWorktree = activeWorktreeId ? worktrees.get(activeWorktreeId) : null;
@@ -104,7 +102,9 @@ export function registerIntrospectionActions(
         ...ctx,
         portalOpen: portal.isOpen,
         portalActiveTabId: portal.activeTabId,
-        terminalCount: terminalState.terminals.filter((t) => t.location !== "trash").length,
+        terminalCount: terminalState.terminalIds.filter(
+          (id) => terminalState.terminalsById[id]?.location !== "trash"
+        ).length,
         worktreeCount: worktrees.size,
       };
     },

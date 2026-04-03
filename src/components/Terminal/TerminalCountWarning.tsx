@@ -15,8 +15,9 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
     useShallow((state) => {
       let active = 0;
       let completed = 0;
-      for (const t of state.terminals) {
-        if (t.location !== "trash") {
+      for (const id of state.terminalIds) {
+        const t = state.terminalsById[id];
+        if (t && t.location !== "trash") {
           active++;
           if (t.agentState === "completed") completed++;
         }
@@ -82,13 +83,13 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
     if (onOpenBulkActions) {
       onOpenBulkActions();
     } else {
-      const terminals = useTerminalStore.getState().terminals;
-      const completedNonTrashed = terminals.filter(
-        (t) => t.agentState === "completed" && t.location !== "trash"
-      );
-      completedNonTrashed.forEach((t) => {
-        useTerminalStore.getState().trashTerminal(t.id);
-      });
+      const { terminalsById, terminalIds } = useTerminalStore.getState();
+      for (const id of terminalIds) {
+        const t = terminalsById[id];
+        if (t && t.agentState === "completed" && t.location !== "trash") {
+          useTerminalStore.getState().trashTerminal(t.id);
+        }
+      }
     }
   }, [onOpenBulkActions]);
 

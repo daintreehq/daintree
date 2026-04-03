@@ -28,7 +28,7 @@ export function registerTerminalQueryActions(
         location?: "grid" | "dock" | "trash" | "background";
       };
       const state = useTerminalStore.getState();
-      let terminals = state.terminals;
+      let terminals = state.terminalIds.map((id) => state.terminalsById[id]).filter(Boolean);
 
       // Filter by worktree if specified
       if (worktreeId) {
@@ -145,8 +145,7 @@ export function registerTerminalQueryActions(
       const { terminalId, command } = args as { terminalId: string; command: string };
 
       // Verify terminal exists and is valid for command execution
-      const terminals = useTerminalStore.getState().terminals;
-      const terminal = terminals.find((t) => t.id === terminalId);
+      const terminal = useTerminalStore.getState().terminalsById[terminalId];
 
       if (!terminal) {
         throw new Error("Terminal not found");

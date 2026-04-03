@@ -622,9 +622,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   generateRecipeFromActiveTerminals: (worktreeId) => {
     const terminalStore = useTerminalStore.getState();
 
-    const activeTerminals = terminalStore.terminals.filter(
-      (t) => t.location !== "trash" && t.worktreeId === worktreeId
-    );
+    const activeTerminals = terminalStore.terminalIds
+      .map((id) => terminalStore.terminalsById[id])
+      .filter((t) => t && t.location !== "trash" && t.worktreeId === worktreeId);
 
     const terminalsToCapture = activeTerminals.slice(0, MAX_TERMINALS_PER_RECIPE);
 

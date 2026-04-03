@@ -23,6 +23,7 @@ export type {
 } from "./types";
 export { MAX_GRID_TERMINALS, deriveRuntimeStatus, getDefaultTitle } from "./helpers";
 export { flushTerminalPersistence } from "./persistence";
+export { selectOrderedTerminals } from "./selectors";
 
 export const createTerminalRegistrySlice =
   (
@@ -32,7 +33,8 @@ export const createTerminalRegistrySlice =
     const trashHelpers = createTrashExpiryHelpers(get, set);
 
     return {
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
       tabGroups: new Map(),

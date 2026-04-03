@@ -51,7 +51,8 @@ const MAX_RESULTS = 20;
 const MRU_BOOST_FACTOR = 0.05;
 
 export function useQuickSwitcher(): UseQuickSwitcherReturn {
-  const terminals = useTerminalStore(useShallow((state) => state.terminals));
+  const terminalIds = useTerminalStore(useShallow((state) => state.terminalIds));
+  const terminalsById = useTerminalStore(useShallow((state) => state.terminalsById));
   const setFocused = useTerminalStore((state) => state.setFocused);
   const mruList = useTerminalStore(useShallow((state) => state.mruList));
   const pruneMru = useTerminalStore((state) => state.pruneMru);
@@ -67,7 +68,9 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     const result: QuickSwitcherItem[] = [];
 
     // Add terminals
-    for (const t of terminals) {
+    for (const id of terminalIds) {
+      const t = terminalsById[id];
+      if (!t) continue;
       if (t.location === "trash") continue;
       if (t.hasPty === false) continue;
       if (!isPtyPanel(t)) continue;
@@ -102,7 +105,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     }
 
     return result;
-  }, [terminals, worktrees, worktreeMap]);
+  }, [terminalIds, terminalsById, worktrees, worktreeMap]);
 
   // Prune stale MRU entries when item set or MRU list changes (e.g. after hydration)
   useEffect(() => {
@@ -176,7 +179,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
           selectWorktree(item.worktreeId);
         }
         // Restore backgrounded panels before focusing
-        const terminal = useTerminalStore.getState().terminals.find((t) => t.id === terminalId);
+        const terminal = useTerminalStore.getState().terminalsById[terminalId];
         if (terminal?.location === "background") {
           restoreBackgroundTerminal(terminalId);
           activateTerminal(terminalId);

@@ -82,7 +82,8 @@ describe("rendererStoreOrchestrator", () => {
     initStoreOrchestrator();
     await useTerminalStore.getState().reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -101,8 +102,8 @@ describe("rendererStoreOrchestrator", () => {
 
   it("tracks terminal focus in worktree store when focusedId changes", () => {
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "T1",
@@ -112,7 +113,8 @@ describe("rendererStoreOrchestrator", () => {
           location: "grid",
           worktreeId: "wt-1",
         },
-      ],
+      },
+      terminalIds: ["term-1"],
     });
 
     useTerminalStore.setState({ focusedId: "term-1" });
@@ -126,8 +128,8 @@ describe("rendererStoreOrchestrator", () => {
   it("switches worktree when focusing a terminal in a different worktree", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-2": {
           id: "term-2",
           type: "terminal",
           title: "T2",
@@ -137,7 +139,8 @@ describe("rendererStoreOrchestrator", () => {
           location: "grid",
           worktreeId: "wt-2",
         },
-      ],
+      },
+      terminalIds: ["term-2"],
     });
 
     useTerminalStore.setState({ focusedId: "term-2" });
@@ -148,8 +151,8 @@ describe("rendererStoreOrchestrator", () => {
   it("does not switch worktree when focusing a terminal in the same worktree", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "T1",
@@ -159,7 +162,8 @@ describe("rendererStoreOrchestrator", () => {
           location: "grid",
           worktreeId: "wt-1",
         },
-      ],
+      },
+      terminalIds: ["term-1"],
     });
 
     useTerminalStore.setState({ focusedId: "term-1" });
@@ -171,8 +175,8 @@ describe("rendererStoreOrchestrator", () => {
     const panelId = "browser-1";
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        [panelId]: {
           id: panelId,
           type: "terminal",
           kind: "browser",
@@ -182,7 +186,8 @@ describe("rendererStoreOrchestrator", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: [panelId],
     });
 
     useConsoleCaptureStore.getState().addStructuredMessage({
@@ -208,8 +213,8 @@ describe("rendererStoreOrchestrator", () => {
     const clearSpy = vi.spyOn(useTerminalInputStore.getState(), "clearTerminalState");
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "T1",
@@ -218,7 +223,8 @@ describe("rendererStoreOrchestrator", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["term-1"],
     });
 
     useTerminalStore.getState().removeTerminal("term-1");
@@ -230,8 +236,8 @@ describe("rendererStoreOrchestrator", () => {
     useWorktreeSelectionStore.getState().trackTerminalFocus("wt-1", "term-1");
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "T1",
@@ -241,7 +247,8 @@ describe("rendererStoreOrchestrator", () => {
           location: "grid",
           worktreeId: "wt-1",
         },
-      ],
+      },
+      terminalIds: ["term-1"],
     });
 
     useTerminalStore.getState().removeTerminal("term-1");
@@ -255,8 +262,8 @@ describe("rendererStoreOrchestrator", () => {
     const recordMruSpy = vi.spyOn(useTerminalStore.getState(), "recordMru");
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "T1",
@@ -266,7 +273,8 @@ describe("rendererStoreOrchestrator", () => {
           location: "grid",
           worktreeId: "wt-1",
         },
-      ],
+      },
+      terminalIds: ["term-1"],
     });
 
     useTerminalStore.setState({ focusedId: "term-1" });
@@ -277,8 +285,8 @@ describe("rendererStoreOrchestrator", () => {
   it("does not fire side effects when focusedId is set to the same value", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "T1",
@@ -288,7 +296,8 @@ describe("rendererStoreOrchestrator", () => {
           location: "grid",
           worktreeId: "wt-1",
         },
-      ],
+      },
+      terminalIds: ["term-1"],
       focusedId: "term-1",
     });
 
@@ -303,8 +312,8 @@ describe("rendererStoreOrchestrator", () => {
   it("handles rapid A→B focus changes correctly", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "T1",
@@ -314,7 +323,7 @@ describe("rendererStoreOrchestrator", () => {
           location: "grid",
           worktreeId: "wt-1",
         },
-        {
+        "term-2": {
           id: "term-2",
           type: "terminal",
           title: "T2",
@@ -324,7 +333,8 @@ describe("rendererStoreOrchestrator", () => {
           location: "grid",
           worktreeId: "wt-2",
         },
-      ],
+      },
+      terminalIds: ["term-1", "term-2"],
     });
 
     useTerminalStore.setState({ focusedId: "term-1" });
@@ -339,8 +349,8 @@ describe("rendererStoreOrchestrator", () => {
   it("does not switch worktree when terminal has no worktreeId", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "T1",
@@ -349,7 +359,8 @@ describe("rendererStoreOrchestrator", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["term-1"],
     });
 
     useTerminalStore.setState({ focusedId: "term-1" });
@@ -359,8 +370,8 @@ describe("rendererStoreOrchestrator", () => {
 
   it("cleans up multiple terminals removed in one batch", () => {
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "t-1": {
           id: "t-1",
           type: "terminal",
           kind: "browser",
@@ -370,7 +381,7 @@ describe("rendererStoreOrchestrator", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "t-2": {
           id: "t-2",
           type: "terminal",
           kind: "browser",
@@ -380,7 +391,8 @@ describe("rendererStoreOrchestrator", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["t-1", "t-2"],
     });
 
     useConsoleCaptureStore.getState().addStructuredMessage({
@@ -407,7 +419,7 @@ describe("rendererStoreOrchestrator", () => {
     });
 
     // Remove both terminals at once
-    useTerminalStore.setState({ terminals: [] });
+    useTerminalStore.setState({ terminalsById: {}, terminalIds: [] });
 
     expect(useConsoleCaptureStore.getState().messages.has("t-1")).toBe(false);
     expect(useConsoleCaptureStore.getState().messages.has("t-2")).toBe(false);
@@ -417,8 +429,8 @@ describe("rendererStoreOrchestrator", () => {
     useWorktreeSelectionStore.getState().trackTerminalFocus("wt-1", "term-other");
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "T1",
@@ -428,7 +440,8 @@ describe("rendererStoreOrchestrator", () => {
           location: "grid",
           worktreeId: "wt-1",
         },
-      ],
+      },
+      terminalIds: ["term-1"],
     });
 
     useTerminalStore.getState().removeTerminal("term-1");
@@ -441,8 +454,8 @@ describe("rendererStoreOrchestrator", () => {
 
   it("auto-restores background panel when focused", () => {
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "bg-1": {
           id: "bg-1",
           type: "terminal",
           title: "BG",
@@ -452,7 +465,8 @@ describe("rendererStoreOrchestrator", () => {
           location: "background",
           worktreeId: "wt-1",
         },
-      ],
+      },
+      terminalIds: ["bg-1"],
     });
 
     const restoreSpy = vi.spyOn(useTerminalStore.getState(), "restoreBackgroundTerminal");
@@ -464,8 +478,8 @@ describe("rendererStoreOrchestrator", () => {
 
   it("sets activeDockTerminalId when restoring a background panel to dock", () => {
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "dock-bg-1": {
           id: "dock-bg-1",
           type: "terminal",
           title: "Dock BG",
@@ -475,7 +489,8 @@ describe("rendererStoreOrchestrator", () => {
           location: "background",
           worktreeId: "wt-1",
         },
-      ],
+      },
+      terminalIds: ["dock-bg-1"],
       backgroundedTerminals: new Map([
         ["dock-bg-1", { id: "dock-bg-1", originalLocation: "dock" as const }],
       ]),
@@ -488,8 +503,8 @@ describe("rendererStoreOrchestrator", () => {
 
   it("does not restore non-background panel when focused", () => {
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "grid-1": {
           id: "grid-1",
           type: "terminal",
           title: "Grid",
@@ -499,7 +514,8 @@ describe("rendererStoreOrchestrator", () => {
           location: "grid",
           worktreeId: "wt-1",
         },
-      ],
+      },
+      terminalIds: ["grid-1"],
     });
 
     const restoreSpy = vi.spyOn(useTerminalStore.getState(), "restoreBackgroundTerminal");
@@ -513,8 +529,8 @@ describe("rendererStoreOrchestrator", () => {
     const panelId = "term-voice-1";
 
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        [panelId]: {
           id: panelId,
           type: "terminal",
           title: "T1",
@@ -523,7 +539,8 @@ describe("rendererStoreOrchestrator", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: [panelId],
     });
 
     useVoiceRecordingStore.getState().beginSession({ panelId });
@@ -537,8 +554,8 @@ describe("rendererStoreOrchestrator", () => {
 
   it("does not error when removing terminal without voice buffer", () => {
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-no-voice": {
           id: "term-no-voice",
           type: "terminal",
           title: "T1",
@@ -547,7 +564,8 @@ describe("rendererStoreOrchestrator", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["term-no-voice"],
     });
 
     expect(useVoiceRecordingStore.getState().panelBuffers["term-no-voice"]).toBeUndefined();
@@ -559,8 +577,8 @@ describe("rendererStoreOrchestrator", () => {
 
   it("calls unregisterInputController when terminal is removed", () => {
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "T1",
@@ -569,7 +587,8 @@ describe("rendererStoreOrchestrator", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["term-1"],
     });
 
     useTerminalStore.getState().removeTerminal("term-1");
@@ -579,8 +598,8 @@ describe("rendererStoreOrchestrator", () => {
 
   it("calls semanticAnalysisService.unregisterTerminal when terminal is removed", () => {
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "T1",
@@ -589,7 +608,8 @@ describe("rendererStoreOrchestrator", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["term-1"],
     });
 
     useTerminalStore.getState().removeTerminal("term-1");
@@ -599,8 +619,8 @@ describe("rendererStoreOrchestrator", () => {
 
   it("calls both new cleanup hooks for each terminal in batch removal", () => {
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "t-a": {
           id: "t-a",
           type: "terminal",
           title: "A",
@@ -609,7 +629,7 @@ describe("rendererStoreOrchestrator", () => {
           rows: 24,
           location: "grid",
         },
-        {
+        "t-b": {
           id: "t-b",
           type: "terminal",
           title: "B",
@@ -618,10 +638,11 @@ describe("rendererStoreOrchestrator", () => {
           rows: 24,
           location: "grid",
         },
-      ],
+      },
+      terminalIds: ["t-a", "t-b"],
     });
 
-    useTerminalStore.setState({ terminals: [] });
+    useTerminalStore.setState({ terminalsById: {}, terminalIds: [] });
 
     expect(unregisterInputController).toHaveBeenCalledTimes(2);
     expect(unregisterInputController).toHaveBeenCalledWith("t-a");
@@ -635,8 +656,8 @@ describe("rendererStoreOrchestrator", () => {
     vi.useFakeTimers();
     try {
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "t-1": {
             id: "t-1",
             type: "terminal",
             title: "T1",
@@ -646,7 +667,7 @@ describe("rendererStoreOrchestrator", () => {
             location: "grid",
             worktreeId: "wt-1",
           },
-          {
+          "t-2": {
             id: "t-2",
             type: "terminal",
             title: "T2",
@@ -656,7 +677,7 @@ describe("rendererStoreOrchestrator", () => {
             location: "grid",
             worktreeId: "wt-1",
           },
-          {
+          "t-3": {
             id: "t-3",
             type: "terminal",
             title: "T3",
@@ -666,7 +687,8 @@ describe("rendererStoreOrchestrator", () => {
             location: "grid",
             worktreeId: "wt-1",
           },
-        ],
+        },
+        terminalIds: ["t-1", "t-2", "t-3"],
       });
 
       useTerminalStore.setState({ focusedId: "t-1" });
@@ -688,8 +710,8 @@ describe("rendererStoreOrchestrator", () => {
     vi.useFakeTimers();
     try {
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "t-1": {
             id: "t-1",
             type: "terminal",
             title: "T1",
@@ -699,7 +721,8 @@ describe("rendererStoreOrchestrator", () => {
             location: "grid",
             worktreeId: "wt-1",
           },
-        ],
+        },
+        terminalIds: ["t-1"],
       });
 
       useTerminalStore.setState({ focusedId: "t-1" });
@@ -722,8 +745,8 @@ describe("rendererStoreOrchestrator", () => {
     vi.useFakeTimers();
     try {
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "t-1": {
             id: "t-1",
             type: "terminal",
             title: "T1",
@@ -733,7 +756,8 @@ describe("rendererStoreOrchestrator", () => {
             location: "grid",
             worktreeId: "wt-1",
           },
-        ],
+        },
+        terminalIds: ["t-1"],
       });
 
       useTerminalStore.setState({ focusedId: "t-1" });
@@ -753,8 +777,8 @@ describe("rendererStoreOrchestrator", () => {
 
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "term-1": {
           id: "term-1",
           type: "terminal",
           title: "T1",
@@ -764,7 +788,8 @@ describe("rendererStoreOrchestrator", () => {
           location: "grid",
           worktreeId: "wt-2",
         },
-      ],
+      },
+      terminalIds: ["term-1"],
     });
 
     useTerminalStore.setState({ focusedId: "term-1" });

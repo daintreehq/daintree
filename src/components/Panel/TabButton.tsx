@@ -206,9 +206,9 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     [onClick]
   );
 
-  const waitingReason = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.waitingReason
-  ) as WaitingReason | undefined;
+  const waitingReason = useTerminalStore((state) => state.terminalsById[id]?.waitingReason) as
+    | WaitingReason
+    | undefined;
   const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
   const StateIcon = showStateIcon ? getEffectiveStateIcon(agentState, waitingReason) : null;
 

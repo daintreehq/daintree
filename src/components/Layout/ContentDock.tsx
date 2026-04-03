@@ -5,7 +5,12 @@ import { useDroppable } from "@dnd-kit/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useTerminalStore, useProjectStore, useWorktreeSelectionStore } from "@/store";
+import {
+  useTerminalStore,
+  useProjectStore,
+  useWorktreeSelectionStore,
+  type TerminalInstance,
+} from "@/store";
 import { DockedTerminalItem } from "./DockedTerminalItem";
 import { DockedTabGroup } from "./DockedTabGroup";
 import { TrashContainer } from "./TrashContainer";
@@ -49,7 +54,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
   const trashedTerminals = useTerminalStore(useShallow((state) => state.trashedTerminals));
-  const terminals = useTerminalStore(useShallow((state) => state.terminals));
+  const terminalsById = useTerminalStore(useShallow((state) => state.terminalsById));
+  const storeTerminalIds = useTerminalStore(useShallow((state) => state.terminalIds));
   const getTabGroups = useTerminalStore((state) => state.getTabGroups);
   const getTabGroupPanels = useTerminalStore((state) => state.getTabGroupPanels);
   const openDockTerminal = useTerminalStore((state) => state.openDockTerminal);
@@ -58,7 +64,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // Get tab groups for the dock
   const tabGroups = useMemo(
     () => getTabGroups("dock", activeWorktreeId ?? undefined),
-    [getTabGroups, activeWorktreeId, terminals] // re-compute when terminals change
+    [getTabGroups, activeWorktreeId, storeTerminalIds] // re-compute when terminals change
   );
 
   const { worktrees } = useWorktrees();
@@ -108,11 +114,11 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
   const trashedItems = Array.from(trashedTerminals.values())
     .map((trashed) => ({
-      terminal: terminals.find((t) => t.id === trashed.id),
+      terminal: terminalsById[trashed.id],
       trashedInfo: trashed,
     }))
     .filter((item) => item.terminal !== undefined) as {
-    terminal: (typeof terminals)[0];
+    terminal: TerminalInstance;
     trashedInfo: typeof trashedTerminals extends Map<string, infer V> ? V : never;
   }[];
 

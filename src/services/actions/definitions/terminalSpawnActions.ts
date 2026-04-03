@@ -41,12 +41,14 @@ export function registerTerminalSpawnActions(
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
       const state = useTerminalStore.getState();
-      const nonTrashed = state.terminals.filter((t) => t.location !== "trash");
+      const nonTrashed = state.terminalIds
+        .map((id) => state.terminalsById[id])
+        .filter((t) => t && t.location !== "trash");
       const targetId =
-        terminalId ?? state.focusedId ?? (nonTrashed.length === 1 ? nonTrashed[0].id : undefined);
+        terminalId ?? state.focusedId ?? (nonTrashed.length === 1 ? nonTrashed[0]!.id : undefined);
 
       if (targetId) {
-        const terminal = state.terminals.find((t) => t.id === targetId);
+        const terminal = state.terminalsById[targetId];
         if (!terminal) return;
 
         const location =
@@ -106,7 +108,7 @@ export function registerTerminalSpawnActions(
       const state = useTerminalStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        const terminal = state.terminals.find((t) => t.id === targetId);
+        const terminal = state.terminalsById[targetId];
         if (!terminal || terminal.worktreeId === worktreeId) {
           return;
         }

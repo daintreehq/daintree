@@ -137,9 +137,7 @@ export function TerminalContextMenu({
   children,
   forceLocation,
 }: TerminalContextMenuProps) {
-  const terminal = useTerminalStore(
-    useShallow((state) => state.terminals.find((t) => t.id === terminalId))
-  );
+  const terminal = useTerminalStore(useShallow((state) => state.terminalsById[terminalId]));
   const maximizeTarget = useTerminalStore((s) => s.maximizeTarget);
   const getPanelGroup = useTerminalStore((s) => s.getPanelGroup);
 

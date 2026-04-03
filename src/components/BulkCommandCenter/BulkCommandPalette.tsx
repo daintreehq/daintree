@@ -92,10 +92,12 @@ function getEligibleTerminals(
 
 function useWorktreeRows(): WorktreeRow[] {
   const worktrees = useWorktreeStore((s) => s.worktrees);
-  const terminals = useTerminalStore((s) => s.terminals);
+  const terminalsById = useTerminalStore((s) => s.terminalsById);
+  const terminalIds = useTerminalStore((s) => s.terminalIds);
 
   return useMemo(() => {
     const rows: WorktreeRow[] = [];
+    const terminals = terminalIds.map((id) => terminalsById[id]).filter(Boolean);
     for (const wt of worktrees.values()) {
       const eligible = getEligibleTerminals(terminals, wt.id);
       const dominantState = getDominantAgentState(eligible.map((t) => t.agentState));
@@ -111,7 +113,7 @@ function useWorktreeRows(): WorktreeRow[] {
       });
     }
     return rows;
-  }, [worktrees, terminals]);
+  }, [worktrees, terminalsById, terminalIds]);
 }
 
 function buildRecipeContext(row: WorktreeRow): RecipeContext {
@@ -250,10 +252,11 @@ function BulkCommandPaletteInner() {
   }, [step, mode, selectedRows, commandText]);
 
   const resolveTargetIds = useCallback((): string[] => {
-    const terminals = useTerminalStore.getState().terminals;
+    const { terminalsById: tById, terminalIds: tIds } = useTerminalStore.getState();
+    const allTerminals = tIds.map((id) => tById[id]).filter(Boolean);
     const ids: string[] = [];
     for (const worktreeId of selectedIds) {
-      for (const t of getEligibleTerminals(terminals, worktreeId)) {
+      for (const t of getEligibleTerminals(allTerminals, worktreeId)) {
         ids.push(t.id);
       }
     }
@@ -285,13 +288,14 @@ function BulkCommandPaletteInner() {
     let failures = 0;
 
     if (mode === "text") {
-      const terminals = useTerminalStore.getState().terminals;
+      const { terminalsById: tById, terminalIds: tIds } = useTerminalStore.getState();
+      const allTerminals = tIds.map((id) => tById[id]).filter(Boolean);
       const promises: Promise<unknown>[] = [];
       for (const row of selectedRows) {
         const ctx = buildRecipeContext(row);
         const resolved = replaceRecipeVariables(commandText, ctx);
         if (!resolved.trim()) continue;
-        const eligible = getEligibleTerminals(terminals, row.id);
+        const eligible = getEligibleTerminals(allTerminals, row.id);
         for (const t of eligible) {
           promises.push(terminalClient.submit(t.id, resolved));
         }

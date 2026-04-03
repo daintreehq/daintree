@@ -2,7 +2,7 @@ import type { TerminalRegistryStoreApi, TerminalRegistrySlice, TerminalInstance 
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
-import { saveTerminals } from "./persistence";
+import { saveNormalized } from "./persistence";
 import { optimizeForDock } from "./layout";
 
 type Set = TerminalRegistryStoreApi["setState"];
@@ -23,50 +23,52 @@ export const createOrderingActions = (
       const targetWorktreeId = worktreeId ?? null;
       const matchesWorktree = (t: TerminalInstance) =>
         !hasWorktreeFilter || (t.worktreeId ?? null) === targetWorktreeId;
-
-      const gridTerminals = state.terminals.filter(
-        (t) => t.location === "grid" || t.location === undefined
-      );
-      const dockTerminals = state.terminals.filter((t) => t.location === "dock");
-      const trashTerminals = state.terminals.filter((t) => t.location === "trash");
-      const backgroundTerminals = state.terminals.filter((t) => t.location === "background");
-
-      const terminalsInLocation = location === "grid" ? gridTerminals : dockTerminals;
-      const scopedTerminals = terminalsInLocation.filter(matchesWorktree);
-
-      if (fromIndex < 0 || fromIndex >= scopedTerminals.length) return state;
-      if (toIndex < 0 || toIndex > scopedTerminals.length) return state;
-
-      const terminalToMove = scopedTerminals[fromIndex];
-      if (!terminalToMove) return state;
-
-      const reorderedScoped = [...scopedTerminals];
-      reorderedScoped.splice(fromIndex, 1);
-      reorderedScoped.splice(toIndex, 0, terminalToMove);
-
-      let scopedIndex = 0;
-      const updatedLocation = terminalsInLocation.map((terminal) => {
-        if (!matchesWorktree(terminal)) {
-          return terminal;
-        }
-        const next = reorderedScoped[scopedIndex];
-        scopedIndex += 1;
-        return next ?? terminal;
-      });
-
-      const newTerminals =
+      const matchesLocation = (t: TerminalInstance) =>
         location === "grid"
-          ? [...updatedLocation, ...dockTerminals, ...trashTerminals, ...backgroundTerminals]
-          : [...gridTerminals, ...updatedLocation, ...trashTerminals, ...backgroundTerminals];
+          ? t.location === "grid" || t.location === undefined
+          : t.location === "dock";
 
-      saveTerminals(newTerminals);
-      return { terminals: newTerminals };
+      // Get scoped IDs (in this location + worktree)
+      const scopedIds: string[] = [];
+      for (const id of state.terminalIds) {
+        const t = state.terminalsById[id];
+        if (t && matchesLocation(t) && matchesWorktree(t)) {
+          scopedIds.push(id);
+        }
+      }
+
+      if (fromIndex < 0 || fromIndex >= scopedIds.length) return state;
+      if (toIndex < 0 || toIndex > scopedIds.length) return state;
+
+      const reorderedScoped = [...scopedIds];
+      reorderedScoped.splice(fromIndex, 1);
+      reorderedScoped.splice(toIndex, 0, scopedIds[fromIndex]);
+
+      // Build a mapping from old scoped position to new ID
+      const scopedMapping = new Map<string, string>();
+      for (let i = 0; i < scopedIds.length; i++) {
+        scopedMapping.set(scopedIds[i], reorderedScoped[i]);
+      }
+
+      // Rebuild terminalIds with the reordered scoped IDs in place
+      const newIds: string[] = [];
+      for (const id of state.terminalIds) {
+        const t = state.terminalsById[id];
+        if (t && matchesLocation(t) && matchesWorktree(t)) {
+          newIds.push(scopedMapping.get(id)!);
+        } else {
+          newIds.push(id);
+        }
+      }
+
+      saveNormalized(state.terminalsById, newIds);
+      return { terminalIds: newIds };
     });
   },
 
   moveTerminalToPosition: (id, toIndex, location, worktreeId) => {
     set((state) => {
-      const terminal = state.terminals.find((t) => t.id === id);
+      const terminal = state.terminalsById[id];
       if (!terminal) return state;
 
       const targetWorktreeId =
@@ -74,21 +76,20 @@ export const createOrderingActions = (
       const hasWorktreeFilter = worktreeId !== undefined;
       const matchesWorktree = (t: TerminalInstance) =>
         !hasWorktreeFilter || (t.worktreeId ?? null) === (targetWorktreeId ?? null);
+      const matchesLocation = (t: TerminalInstance) =>
+        location === "grid"
+          ? t.location === "grid" || t.location === undefined
+          : t.location === "dock";
 
-      const gridTerminals = state.terminals.filter(
-        (t) => t.id !== id && (t.location === "grid" || t.location === undefined)
-      );
-      const dockTerminals = state.terminals.filter((t) => t.id !== id && t.location === "dock");
-      const trashTerminals = state.terminals.filter((t) => t.id !== id && t.location === "trash");
-      const backgroundTerminals = state.terminals.filter(
-        (t) => t.id !== id && t.location === "background"
-      );
+      // Remove id from current position
+      const filteredIds = state.terminalIds.filter((tid) => tid !== id);
 
-      const targetList = location === "grid" ? gridTerminals : dockTerminals;
+      // Find scoped indices within the target location
       const scopedIndices: number[] = [];
-      for (let idx = 0; idx < targetList.length; idx += 1) {
-        if (matchesWorktree(targetList[idx])) {
-          scopedIndices.push(idx);
+      for (let i = 0; i < filteredIds.length; i++) {
+        const t = state.terminalsById[filteredIds[i]];
+        if (t && matchesLocation(t) && matchesWorktree(t)) {
+          scopedIndices.push(i);
         }
       }
 
@@ -97,31 +98,26 @@ export const createOrderingActions = (
 
       const insertAt =
         scopedCount === 0
-          ? targetList.length
+          ? filteredIds.length
           : clampedIndex <= 0
             ? scopedIndices[0]
             : clampedIndex >= scopedCount
               ? scopedIndices[scopedCount - 1] + 1
               : scopedIndices[clampedIndex];
 
-      const updatedTerminal: TerminalInstance = {
-        ...terminal,
-        location,
-      };
+      // Update terminal location
+      const updatedTerminal: TerminalInstance = { ...terminal, location };
 
-      const updatedTargetList = [...targetList];
-      updatedTargetList.splice(insertAt, 0, updatedTerminal);
+      // Insert at the right position
+      const newIds = [...filteredIds];
+      newIds.splice(insertAt, 0, id);
+      const newById = { ...state.terminalsById, [id]: updatedTerminal };
 
-      const newTerminals =
-        location === "grid"
-          ? [...updatedTargetList, ...dockTerminals, ...trashTerminals, ...backgroundTerminals]
-          : [...gridTerminals, ...updatedTargetList, ...trashTerminals, ...backgroundTerminals];
-
-      saveTerminals(newTerminals);
-      return { terminals: newTerminals };
+      saveNormalized(newById, newIds);
+      return { terminalsById: newById, terminalIds: newIds };
     });
 
-    const terminal = get().terminals.find((t) => t.id === id);
+    const terminal = get().terminalsById[id];
     if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
       if (location === "dock") {
         optimizeForDock(id);
@@ -136,25 +132,25 @@ export const createOrderingActions = (
 
     set((state) => {
       const indexMap = new Map(orderedIds.map((id, i) => [id, i]));
-      const matched: TerminalInstance[] = [];
-      const unmatched: TerminalInstance[] = [];
+      const matched: string[] = [];
+      const unmatched: string[] = [];
 
-      for (const t of state.terminals) {
-        if (indexMap.has(t.id)) {
-          matched.push(t);
+      for (const id of state.terminalIds) {
+        if (indexMap.has(id)) {
+          matched.push(id);
         } else {
-          unmatched.push(t);
+          unmatched.push(id);
         }
       }
 
-      matched.sort((a, b) => indexMap.get(a.id)! - indexMap.get(b.id)!);
-      const newTerminals = [...matched, ...unmatched];
+      matched.sort((a, b) => indexMap.get(a)! - indexMap.get(b)!);
+      const newIds = [...matched, ...unmatched];
 
-      const orderChanged = newTerminals.some((t, i) => state.terminals[i]?.id !== t.id);
+      const orderChanged = newIds.some((id, i) => state.terminalIds[i] !== id);
       if (!orderChanged) return state;
 
-      saveTerminals(newTerminals);
-      return { terminals: newTerminals };
+      saveNormalized(state.terminalsById, newIds);
+      return { terminalIds: newIds };
     });
   },
 });

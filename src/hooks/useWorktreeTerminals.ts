@@ -43,7 +43,9 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
   // breaking React's useSyncExternalStore contract.
   const terminals = useTerminalStore(
     useShallow((state) =>
-      state.terminals.filter((t) => t.worktreeId === worktreeId && t.location !== "trash")
+      state.terminalIds
+        .map((id) => state.terminalsById[id])
+        .filter((t) => t && t.worktreeId === worktreeId && t.location !== "trash")
     )
   );
 

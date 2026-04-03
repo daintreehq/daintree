@@ -28,7 +28,7 @@ export function initStoreOrchestrator(): () => void {
     const focusedId = state.focusedId;
     if (!focusedId) return;
 
-    const terminal = state.terminals.find((t) => t.id === focusedId);
+    const terminal = state.terminalsById[focusedId];
     if (terminal?.worktreeId) {
       const worktreeState = useWorktreeSelectionStore.getState();
       worktreeState.trackTerminalFocus(terminal.worktreeId, focusedId);
@@ -53,14 +53,14 @@ export function initStoreOrchestrator(): () => void {
     const focusedId = state.focusedId;
     if (!focusedId) return;
 
-    const panel = state.terminals.find((t) => t.id === focusedId);
+    const panel = state.terminalsById[focusedId];
     if (panel?.location !== "background") return;
 
     state.restoreBackgroundTerminal(focusedId);
 
     // If the panel was restored to dock, fix activeDockTerminalId since
     // activateTerminal() saw "background" and cleared it.
-    const restored = useTerminalStore.getState().terminals.find((t) => t.id === focusedId);
+    const restored = useTerminalStore.getState().terminalsById[focusedId];
     if (restored?.location === "dock") {
       useTerminalStore.setState({ activeDockTerminalId: focusedId });
     }
@@ -69,27 +69,34 @@ export function initStoreOrchestrator(): () => void {
 
   // 3. Terminal-removal cleanup: when terminals are removed, clean up
   //    input store, console capture store, and worktree focus tracking.
-  let prevTerminals = useTerminalStore.getState().terminals;
+  let prevTerminalIds = useTerminalStore.getState().terminalIds;
+  let prevTerminalsById = useTerminalStore.getState().terminalsById;
 
   const unsubRemoval = useTerminalStore.subscribe((state) => {
-    const currentTerminals = state.terminals;
-    if (currentTerminals === prevTerminals) return;
+    const currentIds = state.terminalIds;
+    if (currentIds === prevTerminalIds) {
+      prevTerminalsById = state.terminalsById;
+      return;
+    }
 
-    const currentIds = new Set(currentTerminals.map((t) => t.id));
-    const removedTerminals = prevTerminals.filter((t) => !currentIds.has(t.id));
-    prevTerminals = currentTerminals;
+    const currentIdSet = new Set(currentIds);
+    const removedIds = prevTerminalIds.filter((id) => !currentIdSet.has(id));
+    const prevById = prevTerminalsById;
+    prevTerminalIds = currentIds;
+    prevTerminalsById = state.terminalsById;
 
-    for (const removed of removedTerminals) {
-      useTerminalInputStore.getState().clearTerminalState(removed.id);
-      useConsoleCaptureStore.getState().removePane(removed.id);
-      useVoiceRecordingStore.getState().clearPanelBuffer(removed.id);
-      unregisterInputController(removed.id);
-      semanticAnalysisService.unregisterTerminal(removed.id);
+    for (const removedId of removedIds) {
+      useTerminalInputStore.getState().clearTerminalState(removedId);
+      useConsoleCaptureStore.getState().removePane(removedId);
+      useVoiceRecordingStore.getState().clearPanelBuffer(removedId);
+      unregisterInputController(removedId);
+      semanticAnalysisService.unregisterTerminal(removedId);
 
-      if (removed.worktreeId) {
+      const removed = prevById[removedId];
+      if (removed?.worktreeId) {
         const worktreeState = useWorktreeSelectionStore.getState();
         const lastFocused = worktreeState.lastFocusedTerminalByWorktree.get(removed.worktreeId);
-        if (lastFocused === removed.id) {
+        if (lastFocused === removedId) {
           worktreeState.clearWorktreeFocusTracking(removed.worktreeId);
         }
       }
@@ -97,16 +104,17 @@ export function initStoreOrchestrator(): () => void {
   });
   unsubscribers.push(unsubRemoval);
 
-  // 3. Layout undo history invalidation: when terminal set changes (add/remove),
+  // 4. Layout undo history invalidation: when terminal set changes (add/remove),
   //    clear the undo stack since snapshots reference a different terminal universe.
-  let prevIdSet = new Set(useTerminalStore.getState().terminals.map((t) => t.id));
+  let prevIdSet = new Set(useTerminalStore.getState().terminalIds);
 
   const unsubLayoutUndo = useTerminalStore.subscribe((state) => {
-    const currentIds = new Set(state.terminals.map((t) => t.id));
-    if (currentIds.size !== prevIdSet.size || [...currentIds].some((id) => !prevIdSet.has(id))) {
+    const currentIds = state.terminalIds;
+    const currentIdSet = new Set(currentIds);
+    if (currentIdSet.size !== prevIdSet.size || currentIds.some((id) => !prevIdSet.has(id))) {
       useLayoutUndoStore.getState().clearHistory();
     }
-    prevIdSet = currentIds;
+    prevIdSet = currentIdSet;
   });
   unsubscribers.push(unsubLayoutUndo);
 

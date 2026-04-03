@@ -27,7 +27,7 @@ export const createTrashExpiryHelpers = (
       const trashedInfo = state.trashedTerminals.get(id);
       if (!trashedInfo || trashedInfo.expiresAt !== expiresAt) return;
 
-      const terminal = state.terminals.find((t) => t.id === id);
+      const terminal = state.terminalsById[id];
       if (terminal?.location === "trash") {
         state.removeTerminal(id);
       } else if (!terminal) {

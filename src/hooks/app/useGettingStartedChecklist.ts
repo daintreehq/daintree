@@ -29,7 +29,9 @@ function reconcileCurrentState(
   }
   if (
     !cl.items.launchedAgent &&
-    useTerminalStore.getState().terminals.some((t) => t.kind === "agent")
+    useTerminalStore
+      .getState()
+      .terminalIds.some((id) => useTerminalStore.getState().terminalsById[id]?.kind === "agent")
   ) {
     markItem("launchedAgent");
   }
@@ -124,7 +126,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
       useTerminalStore.subscribe((state) => {
         const cl = getChecklist();
         if (!cl || cl.dismissed || cl.items.launchedAgent) return;
-        if (state.terminals.some((t) => t.kind === "agent")) {
+        if (state.terminalIds.some((id) => state.terminalsById[id]?.kind === "agent")) {
           markItem("launchedAgent");
         }
       }),

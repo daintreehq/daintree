@@ -22,7 +22,10 @@ export function useWatchedPanelNotifications(): void {
     });
 
     let prevAgentStates = new Map<string, string | undefined>(
-      useTerminalStore.getState().terminals.map((t) => [t.id, t.agentState])
+      useTerminalStore.getState().terminalIds.map((id) => {
+        const t = useTerminalStore.getState().terminalsById[id];
+        return [id, t?.agentState];
+      })
     );
     const staggerQueue: Array<() => void> = [];
     let staggerTimer: ReturnType<typeof setTimeout> | null = null;
@@ -46,9 +49,9 @@ export function useWatchedPanelNotifications(): void {
     }
 
     const unsubscribe = useTerminalStore.subscribe((state) => {
-      const { watchedPanels, terminals } = state;
+      const { watchedPanels, terminalsById, terminalIds } = state;
       const currentAgentStates = new Map<string, string | undefined>(
-        terminals.map((t) => [t.id, t.agentState])
+        terminalIds.map((id) => [id, terminalsById[id]?.agentState])
       );
 
       for (const panelId of watchedPanels) {
@@ -59,7 +62,7 @@ export function useWatchedPanelNotifications(): void {
           (currentState === "completed" || currentState === "waiting") &&
           currentState !== previousState
         ) {
-          const terminal = terminals.find((t) => t.id === panelId);
+          const terminal = terminalsById[panelId];
           if (!terminal || terminal.location === "trash") {
             state.unwatchPanel(panelId);
             continue;
@@ -72,8 +75,7 @@ export function useWatchedPanelNotifications(): void {
 
           enqueueNotification(() => {
             // Guard: skip if panel has since been removed or trashed
-            const { terminals: liveTerminals } = useTerminalStore.getState();
-            const liveTerminal = liveTerminals.find((t) => t.id === capturedPanelId);
+            const liveTerminal = useTerminalStore.getState().terminalsById[capturedPanelId];
             if (!liveTerminal || liveTerminal.location === "trash") return;
 
             fireWatchNotification(capturedPanelId, capturedTitle, capturedState);

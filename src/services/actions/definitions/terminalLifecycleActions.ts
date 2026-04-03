@@ -20,12 +20,15 @@ export function registerTerminalLifecycleActions(
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
       const state = useTerminalStore.getState();
       const targetId =
-        terminalId ?? state.focusedId ?? state.terminals.find((t) => t.location !== "trash")?.id;
+        terminalId ??
+        state.focusedId ??
+        state.terminalIds.find((id) => state.terminalsById[id]?.location !== "trash");
       if (targetId) {
         state.trashTerminal(targetId);
-        const remaining = useTerminalStore
-          .getState()
-          .terminals.filter((t) => t.location !== "trash");
+        const freshState = useTerminalStore.getState();
+        const remaining = freshState.terminalIds.filter(
+          (id) => freshState.terminalsById[id]?.location !== "trash"
+        );
         if (remaining.length === 0) {
           await appClient.quit();
         }
@@ -273,11 +276,15 @@ export function registerTerminalLifecycleActions(
     run: async () => {
       const state = useTerminalStore.getState();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
-      const terminalsToClose = state.terminals.filter(
-        (t) =>
-          t.location !== "trash" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      );
-      terminalsToClose.forEach((t) => state.trashTerminal(t.id));
+      const idsToClose = state.terminalIds.filter((id) => {
+        const t = state.terminalsById[id];
+        return (
+          t &&
+          t.location !== "trash" &&
+          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+        );
+      });
+      idsToClose.forEach((id) => state.trashTerminal(id));
     },
   }));
 
@@ -342,7 +349,7 @@ export function registerTerminalLifecycleActions(
       if (state.watchedPanels.has(targetId)) {
         state.unwatchPanel(targetId);
       } else {
-        const terminal = state.terminals.find((t) => t.id === targetId);
+        const terminal = state.terminalsById[targetId];
         if (terminal?.agentState === "completed" || terminal?.agentState === "waiting") {
           const { fireWatchNotification } = await import("@/lib/watchNotification");
           fireWatchNotification(targetId, terminal.title ?? targetId, terminal.agentState);

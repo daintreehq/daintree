@@ -31,6 +31,13 @@ const { useTerminalStore } = await import("../../terminalStore");
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 const { terminalPersistence } = await import("../../persistence/terminalPersistence");
 
+function setTerminals(terminals: TerminalInstance[]) {
+  useTerminalStore.setState({
+    terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    terminalIds: terminals.map((t) => t.id),
+  });
+}
+
 function createMockTerminal(
   id: string,
   worktreeId: string,
@@ -53,7 +60,8 @@ describe("moveTerminalToWorktree", () => {
   beforeEach(() => {
     useTerminalStore.getState().reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
@@ -69,11 +77,11 @@ describe("moveTerminalToWorktree", () => {
       createMockTerminal(`target-${i}`, "wt-b", "grid")
     );
 
-    useTerminalStore.setState({ terminals: [source, ...targetGridTerminals] });
+    setTerminals([source, ...targetGridTerminals]);
 
     useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
-    const moved = useTerminalStore.getState().terminals.find((t) => t.id === "t1");
+    const moved = useTerminalStore.getState().terminalsById["t1"];
     expect(moved?.worktreeId).toBe("wt-b");
     expect(moved?.location).toBe("grid");
     expect(moved?.isVisible).toBe(true);
@@ -91,11 +99,11 @@ describe("moveTerminalToWorktree", () => {
       createMockTerminal(`target-${i}`, "wt-b", "grid")
     );
 
-    useTerminalStore.setState({ terminals: [source, ...targetGridTerminals] });
+    setTerminals([source, ...targetGridTerminals]);
 
     useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
-    const moved = useTerminalStore.getState().terminals.find((t) => t.id === "t1");
+    const moved = useTerminalStore.getState().terminalsById["t1"];
     expect(moved?.worktreeId).toBe("wt-b");
     expect(moved?.location).toBe("dock");
     expect(moved?.isVisible).toBe(false);
@@ -109,11 +117,11 @@ describe("moveTerminalToWorktree", () => {
 
   it("does nothing when moving to the same worktree", () => {
     const source = createMockTerminal("t1", "wt-a", "grid");
-    useTerminalStore.setState({ terminals: [source] });
+    setTerminals([source]);
 
     useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-a");
 
-    const moved = useTerminalStore.getState().terminals.find((t) => t.id === "t1");
+    const moved = useTerminalStore.getState().terminalsById["t1"];
     expect(moved?.worktreeId).toBe("wt-a");
     expect(terminalPersistence.save).not.toHaveBeenCalled();
     expect(terminalInstanceService.applyRendererPolicy).not.toHaveBeenCalled();
@@ -121,7 +129,7 @@ describe("moveTerminalToWorktree", () => {
 
   it("applies VISIBLE tier when moving to any worktree", () => {
     const source = createMockTerminal("t1", "wt-a", "dock");
-    useTerminalStore.setState({ terminals: [source] });
+    setTerminals([source]);
 
     useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
@@ -145,18 +153,16 @@ describe("moveTerminalToWorktree", () => {
       panelIds: ["t1", "t2", "t3"],
     };
 
-    useTerminalStore.setState({
-      terminals: [t1, t2, t3],
-      tabGroups: new Map([["g1", group]]),
-    });
+    setTerminals([t1, t2, t3]);
+    useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
     useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
     const state = useTerminalStore.getState();
 
-    const movedT1 = state.terminals.find((t) => t.id === "t1");
-    const movedT2 = state.terminals.find((t) => t.id === "t2");
-    const movedT3 = state.terminals.find((t) => t.id === "t3");
+    const movedT1 = state.terminalsById["t1"];
+    const movedT2 = state.terminalsById["t2"];
+    const movedT3 = state.terminalsById["t3"];
 
     expect(movedT1?.worktreeId).toBe("wt-b");
     expect(movedT2?.worktreeId).toBe("wt-b");

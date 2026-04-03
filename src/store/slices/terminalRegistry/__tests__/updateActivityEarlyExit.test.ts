@@ -65,7 +65,8 @@ describe("updateActivity early-exit (#2701)", () => {
     const { reset } = useTerminalStore.getState();
     await reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -76,9 +77,12 @@ describe("updateActivity early-exit (#2701)", () => {
   });
 
   it("preserves array reference when activity data is unchanged", () => {
-    useTerminalStore.setState({ terminals: [baseTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal },
+      terminalIds: [baseTerminal.id],
+    });
 
-    const before = useTerminalStore.getState().terminals;
+    const before = useTerminalStore.getState().terminalsById;
 
     useTerminalStore
       .getState()
@@ -91,13 +95,16 @@ describe("updateActivity early-exit (#2701)", () => {
         baseTerminal.lastCommand
       );
 
-    expect(useTerminalStore.getState().terminals).toBe(before);
+    expect(useTerminalStore.getState().terminalsById).toBe(before);
   });
 
   it("replaces array reference when headline changes", () => {
-    useTerminalStore.setState({ terminals: [baseTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal },
+      terminalIds: [baseTerminal.id],
+    });
 
-    const before = useTerminalStore.getState().terminals;
+    const before = useTerminalStore.getState().terminalsById;
 
     useTerminalStore
       .getState()
@@ -110,15 +117,18 @@ describe("updateActivity early-exit (#2701)", () => {
         baseTerminal.lastCommand
       );
 
-    const after = useTerminalStore.getState().terminals;
+    const after = useTerminalStore.getState().terminalsById;
     expect(after).not.toBe(before);
-    expect(after[0].activityHeadline).toBe("Tests passed");
+    expect(after[baseTerminal.id].activityHeadline).toBe("Tests passed");
   });
 
   it("replaces array reference when status changes", () => {
-    useTerminalStore.setState({ terminals: [baseTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal },
+      terminalIds: [baseTerminal.id],
+    });
 
-    const before = useTerminalStore.getState().terminals;
+    const before = useTerminalStore.getState().terminalsById;
 
     useTerminalStore
       .getState()
@@ -131,15 +141,18 @@ describe("updateActivity early-exit (#2701)", () => {
         baseTerminal.lastCommand
       );
 
-    const after = useTerminalStore.getState().terminals;
+    const after = useTerminalStore.getState().terminalsById;
     expect(after).not.toBe(before);
-    expect(after[0].activityStatus).toBe("success");
+    expect(after[baseTerminal.id].activityStatus).toBe("success");
   });
 
   it("replaces array reference when timestamp changes", () => {
-    useTerminalStore.setState({ terminals: [baseTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal },
+      terminalIds: [baseTerminal.id],
+    });
 
-    const before = useTerminalStore.getState().terminals;
+    const before = useTerminalStore.getState().terminalsById;
 
     useTerminalStore
       .getState()
@@ -152,15 +165,18 @@ describe("updateActivity early-exit (#2701)", () => {
         baseTerminal.lastCommand
       );
 
-    const after = useTerminalStore.getState().terminals;
+    const after = useTerminalStore.getState().terminalsById;
     expect(after).not.toBe(before);
-    expect(after[0].activityTimestamp).toBe(2000);
+    expect(after[baseTerminal.id].activityTimestamp).toBe(2000);
   });
 
   it("replaces array reference when activityType changes", () => {
-    useTerminalStore.setState({ terminals: [baseTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal },
+      terminalIds: [baseTerminal.id],
+    });
 
-    const before = useTerminalStore.getState().terminals;
+    const before = useTerminalStore.getState().terminalsById;
 
     useTerminalStore
       .getState()
@@ -173,15 +189,18 @@ describe("updateActivity early-exit (#2701)", () => {
         baseTerminal.lastCommand
       );
 
-    const after = useTerminalStore.getState().terminals;
+    const after = useTerminalStore.getState().terminalsById;
     expect(after).not.toBe(before);
-    expect(after[0].activityType).toBe("interactive");
+    expect(after[baseTerminal.id].activityType).toBe("interactive");
   });
 
   it("replaces array reference when lastCommand changes", () => {
-    useTerminalStore.setState({ terminals: [baseTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal },
+      terminalIds: [baseTerminal.id],
+    });
 
-    const before = useTerminalStore.getState().terminals;
+    const before = useTerminalStore.getState().terminalsById;
 
     useTerminalStore
       .getState()
@@ -194,17 +213,20 @@ describe("updateActivity early-exit (#2701)", () => {
         "npm run build"
       );
 
-    const after = useTerminalStore.getState().terminals;
+    const after = useTerminalStore.getState().terminalsById;
     expect(after).not.toBe(before);
-    expect(after[0].lastCommand).toBe("npm run build");
+    expect(after[baseTerminal.id].lastCommand).toBe("npm run build");
   });
 
   it("preserves array reference for unchanged terminal when sibling terminal differs", () => {
     const sibling = { ...baseTerminal, id: "test-terminal-2", title: "Sibling" };
-    useTerminalStore.setState({ terminals: [baseTerminal, sibling] });
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal, [sibling.id]: sibling },
+      terminalIds: [baseTerminal.id, sibling.id],
+    });
 
-    const before = useTerminalStore.getState().terminals;
-    const siblingBefore = before[1];
+    const before = useTerminalStore.getState().terminalsById;
+    const siblingBefore = before[sibling.id];
 
     useTerminalStore
       .getState()
@@ -217,17 +239,20 @@ describe("updateActivity early-exit (#2701)", () => {
         baseTerminal.lastCommand
       );
 
-    const after = useTerminalStore.getState().terminals;
+    const after = useTerminalStore.getState().terminalsById;
     expect(after).toBe(before);
-    expect(after[1]).toBe(siblingBefore);
+    expect(after[sibling.id]).toBe(siblingBefore);
   });
 
   it("updates only the target terminal when multiple terminals exist", () => {
     const sibling = { ...baseTerminal, id: "test-terminal-2", title: "Sibling" };
-    useTerminalStore.setState({ terminals: [baseTerminal, sibling] });
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal, [sibling.id]: sibling },
+      terminalIds: [baseTerminal.id, sibling.id],
+    });
 
-    const before = useTerminalStore.getState().terminals;
-    const siblingBefore = before[1];
+    const before = useTerminalStore.getState().terminalsById;
+    const siblingBefore = before[sibling.id];
 
     useTerminalStore
       .getState()
@@ -240,21 +265,24 @@ describe("updateActivity early-exit (#2701)", () => {
         baseTerminal.lastCommand
       );
 
-    const after = useTerminalStore.getState().terminals;
+    const after = useTerminalStore.getState().terminalsById;
     expect(after).not.toBe(before);
-    expect(after[0].activityHeadline).toBe("Updated headline");
-    expect(after[1]).toBe(siblingBefore);
+    expect(after[baseTerminal.id].activityHeadline).toBe("Updated headline");
+    expect(after[sibling.id]).toBe(siblingBefore);
   });
 
   it("preserves array reference when terminal id is not found", () => {
-    useTerminalStore.setState({ terminals: [baseTerminal] });
+    useTerminalStore.setState({
+      terminalsById: { [baseTerminal.id]: baseTerminal },
+      terminalIds: [baseTerminal.id],
+    });
 
-    const before = useTerminalStore.getState().terminals;
+    const before = useTerminalStore.getState().terminalsById;
 
     useTerminalStore
       .getState()
       .updateActivity("nonexistent-id", "Working", "working", "background", 1000);
 
-    expect(useTerminalStore.getState().terminals).toBe(before);
+    expect(useTerminalStore.getState().terminalsById).toBe(before);
   });
 });

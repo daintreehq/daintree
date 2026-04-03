@@ -36,19 +36,18 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 const { useTerminalStore } = await import("../../../terminalStore");
 
 function addMockTerminal(id: string, location: "grid" | "dock" = "grid") {
+  const terminal = {
+    id,
+    title: id,
+    kind: "browser" as const,
+    type: "terminal" as const,
+    location,
+    worktreeId: "wt-1",
+    isVisible: true,
+  } as import("../types").TerminalInstance;
   useTerminalStore.setState((state) => ({
-    terminals: [
-      ...state.terminals,
-      {
-        id,
-        title: id,
-        kind: "browser" as const,
-        type: "terminal" as const,
-        location,
-        worktreeId: "wt-1",
-        isVisible: true,
-      } as import("../types").TerminalInstance,
-    ],
+    terminalsById: { ...state.terminalsById, [id]: terminal },
+    terminalIds: [...state.terminalIds, id],
   }));
 }
 
@@ -72,7 +71,7 @@ describe("restoreTerminalOrder", () => {
     // Saved order was: term-1, term-2, term-3, browser-1
     useTerminalStore.getState().restoreTerminalOrder(["term-1", "term-2", "term-3", "browser-1"]);
 
-    const ids = useTerminalStore.getState().terminals.map((t) => t.id);
+    const ids = useTerminalStore.getState().terminalIds;
     expect(ids).toEqual(["term-1", "term-2", "term-3", "browser-1"]);
   });
 
@@ -85,7 +84,7 @@ describe("restoreTerminalOrder", () => {
     // orderedIds only includes a, b, c — orphan is not in saved state
     useTerminalStore.getState().restoreTerminalOrder(["c", "b", "a"]);
 
-    const ids = useTerminalStore.getState().terminals.map((t) => t.id);
+    const ids = useTerminalStore.getState().terminalIds;
     expect(ids).toEqual(["c", "b", "a", "orphan"]);
   });
 
@@ -94,9 +93,9 @@ describe("restoreTerminalOrder", () => {
     addMockTerminal("b");
     addMockTerminal("c");
 
-    const terminalsBefore = useTerminalStore.getState().terminals;
+    const terminalsBefore = useTerminalStore.getState().terminalIds;
     useTerminalStore.getState().restoreTerminalOrder(["a", "b", "c"]);
-    const terminalsAfter = useTerminalStore.getState().terminals;
+    const terminalsAfter = useTerminalStore.getState().terminalIds;
 
     // Same reference means set() returned state (no-op)
     expect(terminalsBefore).toBe(terminalsAfter);
@@ -105,9 +104,9 @@ describe("restoreTerminalOrder", () => {
   it("is a no-op with empty orderedIds", () => {
     addMockTerminal("a");
 
-    const terminalsBefore = useTerminalStore.getState().terminals;
+    const terminalsBefore = useTerminalStore.getState().terminalIds;
     useTerminalStore.getState().restoreTerminalOrder([]);
-    const terminalsAfter = useTerminalStore.getState().terminals;
+    const terminalsAfter = useTerminalStore.getState().terminalIds;
 
     expect(terminalsBefore).toBe(terminalsAfter);
   });
@@ -118,7 +117,7 @@ describe("restoreTerminalOrder", () => {
 
     useTerminalStore.getState().restoreTerminalOrder(["nonexistent", "b", "a"]);
 
-    const ids = useTerminalStore.getState().terminals.map((t) => t.id);
+    const ids = useTerminalStore.getState().terminalIds;
     expect(ids).toEqual(["b", "a"]);
   });
 });

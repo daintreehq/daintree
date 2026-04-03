@@ -32,7 +32,8 @@ export function useAccessibilityAnnouncements() {
   const debounceTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const focusedId = useTerminalStore((s) => s.focusedId);
-  const terminals = useTerminalStore(useShallow((s) => s.terminals));
+  const terminalsById = useTerminalStore(useShallow((s) => s.terminalsById));
+  const terminalIds = useTerminalStore(useShallow((s) => s.terminalIds));
 
   // Panel focus announcements
   useEffect(() => {
@@ -43,7 +44,7 @@ export function useAccessibilityAnnouncements() {
 
     if (!focusedId) return;
 
-    const terminal = terminals.find((t) => t.id === focusedId);
+    const terminal = terminalsById[focusedId];
     if (!terminal) return;
 
     useAnnouncerStore.getState().announce(`${terminal.title} panel focused`);
@@ -54,7 +55,9 @@ export function useAccessibilityAnnouncements() {
     const prevStates = previousStatesRef.current;
     const newStates = new Map<string, TerminalStateSnapshot>();
 
-    for (const terminal of terminals) {
+    for (const id of terminalIds) {
+      const terminal = terminalsById[id];
+      if (!terminal) continue;
       if (!terminal.agentState) continue;
 
       const prev = prevStates.get(terminal.id);
@@ -97,7 +100,7 @@ export function useAccessibilityAnnouncements() {
     }
 
     previousStatesRef.current = newStates;
-  }, [terminals]);
+  }, [terminalsById, terminalIds]);
 
   // Cleanup debounce timers on unmount
   useEffect(() => {

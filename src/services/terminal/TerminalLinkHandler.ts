@@ -13,7 +13,7 @@ export class TerminalLinkHandler {
 
     if (isModifierPressed && normalized.url && isLocalhostUrl(normalized.url)) {
       const store = useTerminalStore.getState();
-      const currentTerminal = store.terminals.find((t) => t.id === terminalId);
+      const currentTerminal = store.terminalsById[terminalId];
 
       if (!currentTerminal) {
         this.openExternal(url);
@@ -22,9 +22,9 @@ export class TerminalLinkHandler {
 
       const targetWorktreeId = currentTerminal.worktreeId ?? null;
 
-      const existingBrowser = store.terminals.find(
-        (t) => t.kind === "browser" && (t.worktreeId ?? null) === targetWorktreeId
-      );
+      const existingBrowser = store.terminalIds
+        .map((id) => store.terminalsById[id])
+        .find((t) => t && t.kind === "browser" && (t.worktreeId ?? null) === targetWorktreeId);
 
       if (existingBrowser) {
         store.setBrowserUrl(existingBrowser.id, normalized.url);

@@ -35,6 +35,13 @@ vi.mock("../../persistence/terminalPersistence", () => ({
 
 const { useTerminalStore } = await import("../../terminalStore");
 
+function setTerminals(terminals: TerminalInstance[]) {
+  useTerminalStore.setState({
+    terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    terminalIds: terminals.map((t) => t.id),
+  });
+}
+
 function createMockTerminal(
   id: string,
   worktreeId: string,
@@ -56,7 +63,8 @@ describe("Worktree-scoped bulk actions", () => {
   beforeEach(() => {
     useTerminalStore.getState().reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
@@ -65,20 +73,18 @@ describe("Worktree-scoped bulk actions", () => {
   });
 
   it("bulkMoveToDockByWorktree only docks grid terminals in that worktree", () => {
-    useTerminalStore.setState({
-      terminals: [
-        createMockTerminal("wt1-grid-1", "wt1", "grid"),
-        createMockTerminal("wt1-dock-1", "wt1", "dock"),
-        createMockTerminal("wt2-grid-1", "wt2", "grid"),
-      ],
-    });
+    setTerminals([
+      createMockTerminal("wt1-grid-1", "wt1", "grid"),
+      createMockTerminal("wt1-dock-1", "wt1", "dock"),
+      createMockTerminal("wt2-grid-1", "wt2", "grid"),
+    ]);
 
     useTerminalStore.getState().bulkMoveToDockByWorktree("wt1");
 
     const state = useTerminalStore.getState();
-    expect(state.terminals.find((t) => t.id === "wt1-grid-1")?.location).toBe("dock");
-    expect(state.terminals.find((t) => t.id === "wt1-dock-1")?.location).toBe("dock");
-    expect(state.terminals.find((t) => t.id === "wt2-grid-1")?.location).toBe("grid");
+    expect(state.terminalsById["wt1-grid-1"]?.location).toBe("dock");
+    expect(state.terminalsById["wt1-dock-1"]?.location).toBe("dock");
+    expect(state.terminalsById["wt2-grid-1"]?.location).toBe("grid");
   });
 
   it("bulkMoveToGridByWorktree respects grid capacity and only moves that worktree's docked terminals", () => {
@@ -90,17 +96,16 @@ describe("Worktree-scoped bulk actions", () => {
       createMockTerminal("wt1-dock-1", "wt1", "dock"),
     ];
 
-    useTerminalStore.setState({
-      terminals: [...otherGrid, ...docked],
-    });
+    setTerminals([...otherGrid, ...docked]);
 
     useTerminalStore.getState().bulkMoveToGridByWorktree("wt1");
 
     const state = useTerminalStore.getState();
-    const moved0 = state.terminals.find((t) => t.id === "wt1-dock-0");
-    const moved1 = state.terminals.find((t) => t.id === "wt1-dock-1");
-    const gridCount = state.terminals.filter((t) => t.location === "grid").length;
-    const dockCountWt1 = state.terminals.filter(
+    const moved0 = state.terminalsById["wt1-dock-0"];
+    const moved1 = state.terminalsById["wt1-dock-1"];
+    const allTerminals = state.terminalIds.map((id) => state.terminalsById[id]);
+    const gridCount = allTerminals.filter((t) => t.location === "grid").length;
+    const dockCountWt1 = allTerminals.filter(
       (t) => t.worktreeId === "wt1" && t.location === "dock"
     ).length;
 
@@ -111,13 +116,11 @@ describe("Worktree-scoped bulk actions", () => {
   });
 
   it("bulkMoveToGridByWorktree preserves existing grid focus", () => {
-    useTerminalStore.setState({
-      terminals: [
-        createMockTerminal("wt2-grid-0", "wt2", "grid"),
-        createMockTerminal("wt1-dock-0", "wt1", "dock"),
-      ],
-      focusedId: "wt2-grid-0",
-    });
+    setTerminals([
+      createMockTerminal("wt2-grid-0", "wt2", "grid"),
+      createMockTerminal("wt1-dock-0", "wt1", "dock"),
+    ]);
+    useTerminalStore.setState({ focusedId: "wt2-grid-0" });
 
     useTerminalStore.getState().bulkMoveToGridByWorktree("wt1");
 
@@ -126,19 +129,17 @@ describe("Worktree-scoped bulk actions", () => {
   });
 
   it("bulkTrashByWorktree only trashes active terminals in that worktree", () => {
-    useTerminalStore.setState({
-      terminals: [
-        createMockTerminal("wt1-grid-0", "wt1", "grid"),
-        createMockTerminal("wt1-trash-0", "wt1", "trash"),
-        createMockTerminal("wt2-grid-0", "wt2", "grid"),
-      ],
-    });
+    setTerminals([
+      createMockTerminal("wt1-grid-0", "wt1", "grid"),
+      createMockTerminal("wt1-trash-0", "wt1", "trash"),
+      createMockTerminal("wt2-grid-0", "wt2", "grid"),
+    ]);
 
     useTerminalStore.getState().bulkTrashByWorktree("wt1");
 
     const state = useTerminalStore.getState();
-    expect(state.terminals.find((t) => t.id === "wt1-grid-0")?.location).toBe("trash");
-    expect(state.terminals.find((t) => t.id === "wt1-trash-0")?.location).toBe("trash");
-    expect(state.terminals.find((t) => t.id === "wt2-grid-0")?.location).toBe("grid");
+    expect(state.terminalsById["wt1-grid-0"]?.location).toBe("trash");
+    expect(state.terminalsById["wt1-trash-0"]?.location).toBe("trash");
+    expect(state.terminalsById["wt2-grid-0"]?.location).toBe("grid");
   });
 });

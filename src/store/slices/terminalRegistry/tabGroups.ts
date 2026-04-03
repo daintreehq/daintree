@@ -4,7 +4,7 @@ import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
-import { saveTerminals, saveTabGroups } from "./persistence";
+import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus } from "./helpers";
 
@@ -70,13 +70,11 @@ export const createTabGroupActions = (
         return state;
       }
 
-      // Don't add if already in this group
       if (group.panelIds.includes(panelId)) {
         return state;
       }
 
-      // Enforce worktree invariant - panel must match group's worktree
-      const panel = state.terminals.find((t) => t.id === panelId);
+      const panel = state.terminalsById[panelId];
       if (!panel) {
         console.warn(`[TabGroup] Cannot add panel ${panelId}: panel not found`);
         return state;
@@ -95,10 +93,8 @@ export const createTabGroupActions = (
         if (existingGroup.panelIds.includes(panelId)) {
           const filteredPanelIds = existingGroup.panelIds.filter((id) => id !== panelId);
           if (filteredPanelIds.length <= 1) {
-            // Group has 0 or 1 panels remaining - delete it
             newTabGroups.delete(existingGroupId);
           } else {
-            // Update group without this panel
             const newActiveTabId =
               existingGroup.activeTabId === panelId
                 ? (filteredPanelIds[0] ?? "")
@@ -109,11 +105,10 @@ export const createTabGroupActions = (
               activeTabId: newActiveTabId,
             });
           }
-          break; // Panel can only be in one group
+          break;
         }
       }
 
-      // Now add to the target group
       const targetGroup = newTabGroups.get(groupId);
       if (!targetGroup) {
         console.warn(`[TabGroup] Target group ${groupId} was deleted during cleanup`);
@@ -143,18 +138,14 @@ export const createTabGroupActions = (
         }
       }
 
-      if (!groupToUpdate) {
-        return state; // Panel not in any group
-      }
+      if (!groupToUpdate) return state;
 
       const newPanelIds = groupToUpdate.panelIds.filter((id) => id !== panelId);
       const newTabGroups = new Map(state.tabGroups);
 
       if (newPanelIds.length <= 1) {
-        // Group has 0 or 1 panels remaining - delete the group
         newTabGroups.delete(groupToUpdate.id);
       } else {
-        // Update the group with remaining panels
         const newActiveTabId =
           groupToUpdate.activeTabId === panelId
             ? (newPanelIds[0] ?? "")
@@ -180,7 +171,6 @@ export const createTabGroupActions = (
         return state;
       }
 
-      // Verify all panel IDs are in the group
       const existingSet = new Set(group.panelIds);
       const newSet = new Set(panelIds);
       if (existingSet.size !== newSet.size || !group.panelIds.every((id) => newSet.has(id))) {
@@ -198,9 +188,7 @@ export const createTabGroupActions = (
 
   deleteTabGroup: (groupId) => {
     set((state) => {
-      if (!state.tabGroups.has(groupId)) {
-        return state;
-      }
+      if (!state.tabGroups.has(groupId)) return state;
       const newTabGroups = new Map(state.tabGroups);
       newTabGroups.delete(groupId);
       saveTabGroups(newTabGroups);
@@ -209,17 +197,14 @@ export const createTabGroupActions = (
   },
 
   getTabGroupPanels: (groupId, _location) => {
-    // Note: location parameter is deprecated and ignored - group location is stored in TabGroup
-    const terminals = get().terminals;
-    const trashedTerminals = get().trashedTerminals;
-    const tabGroups = get().tabGroups;
+    const state = get();
+    const trashedTerminals = state.trashedTerminals;
+    const tabGroups = state.tabGroups;
 
-    // Check if this is an explicit tab group
     const group = tabGroups.get(groupId);
     if (group) {
-      // Return panels in the order defined by group.panelIds
       return group.panelIds
-        .map((id) => terminals.find((t) => t.id === id))
+        .map((id) => state.terminalsById[id])
         .filter(
           (t): t is TerminalInstance =>
             t !== undefined && t.location !== "trash" && !trashedTerminals.has(t.id)
@@ -227,12 +212,11 @@ export const createTabGroupActions = (
     }
 
     // Not an explicit group - check if it's a single ungrouped panel
-    const panel = terminals.find((t) => t.id === groupId);
+    const panel = state.terminalsById[groupId];
     if (panel && panel.location !== "trash" && !trashedTerminals.has(panel.id)) {
-      // Verify this panel isn't in any explicit group
       for (const g of tabGroups.values()) {
         if (g.panelIds.includes(groupId)) {
-          return []; // Panel is in an explicit group, not standalone
+          return [];
         }
       }
       return [panel];
@@ -242,19 +226,17 @@ export const createTabGroupActions = (
   },
 
   getTabGroups: (location, worktreeId) => {
-    const terminals = get().terminals;
-    const trashedTerminals = get().trashedTerminals;
-    const tabGroups = get().tabGroups;
+    const state = get();
+    const trashedTerminals = state.trashedTerminals;
+    const tabGroups = state.tabGroups;
 
-    // Collect explicit groups for this location/worktree
     const explicitGroups: TabGroup[] = [];
     const panelsInExplicitGroups = new Set<string>();
 
     for (const group of tabGroups.values()) {
       if (group.location === location && (group.worktreeId ?? undefined) === worktreeId) {
-        // Filter out trashed panels from the group
         const validPanelIds = group.panelIds.filter((id) => {
-          const panel = terminals.find((t) => t.id === id);
+          const panel = state.terminalsById[id];
           return panel && panel.location !== "trash" && !trashedTerminals.has(id);
         });
 
@@ -271,37 +253,35 @@ export const createTabGroupActions = (
       }
     }
 
-    // Find ungrouped panels (single-panel "virtual" groups)
-    const ungroupedPanels = terminals.filter((t) => {
-      if (t.location === "trash" || trashedTerminals.has(t.id)) return false;
+    // Find ungrouped panels
+    const ungroupedPanels: TerminalInstance[] = [];
+    for (const tid of state.terminalIds) {
+      const t = state.terminalsById[tid];
+      if (!t) continue;
+      if (t.location === "trash" || trashedTerminals.has(t.id)) continue;
       const effectiveLocation = t.location ?? "grid";
-      if (effectiveLocation !== location) return false;
-      if ((t.worktreeId ?? undefined) !== worktreeId) return false;
-      return !panelsInExplicitGroups.has(t.id);
-    });
+      if (effectiveLocation !== location) continue;
+      if ((t.worktreeId ?? undefined) !== worktreeId) continue;
+      if (panelsInExplicitGroups.has(t.id)) continue;
+      ungroupedPanels.push(t);
+    }
 
-    // Create virtual single-panel groups for ungrouped panels
     const virtualGroups: TabGroup[] = ungroupedPanels.map((panel) => ({
-      id: panel.id, // Use panel ID as group ID for virtual groups
+      id: panel.id,
       location,
       worktreeId,
       activeTabId: panel.id,
       panelIds: [panel.id],
     }));
 
-    // Sort explicit groups by their earliest terminal index in the terminals array
-    // This makes group order follow terminal array order (which reorderTabGroups manipulates)
+    // Sort explicit groups by their earliest terminal index in terminalIds
+    const idIndexMap = new Map(state.terminalIds.map((id, i) => [id, i]));
     explicitGroups.sort((a, b) => {
-      const aFirstIndex = Math.min(
-        ...a.panelIds.map((id) => terminals.findIndex((t) => t.id === id)).filter((i) => i !== -1)
-      );
-      const bFirstIndex = Math.min(
-        ...b.panelIds.map((id) => terminals.findIndex((t) => t.id === id)).filter((i) => i !== -1)
-      );
+      const aFirstIndex = Math.min(...a.panelIds.map((id) => idIndexMap.get(id) ?? Infinity));
+      const bFirstIndex = Math.min(...b.panelIds.map((id) => idIndexMap.get(id) ?? Infinity));
       return aFirstIndex - bFirstIndex;
     });
 
-    // Return explicit groups first (sorted by terminal order), then virtual groups
     return [...explicitGroups, ...virtualGroups];
   },
 
@@ -312,26 +292,27 @@ export const createTabGroupActions = (
       return false;
     }
 
-    // Already at target location
-    if (group.location === location) {
-      return true;
-    }
+    if (group.location === location) return true;
 
-    // Check capacity if moving to grid
     if (location === "grid") {
       const targetWorktreeId = group.worktreeId ?? null;
       const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
+      const state = get();
 
-      // Count current grid groups (each group = 1 slot)
-      const gridTerminals = get().terminals.filter(
-        (t) =>
+      const gridTerminalIds: string[] = [];
+      for (const tid of state.terminalIds) {
+        const t = state.terminalsById[tid];
+        if (
+          t &&
           (t.location === "grid" || t.location === undefined) &&
           (t.worktreeId ?? null) === targetWorktreeId
-      );
+        )
+          gridTerminalIds.push(tid);
+      }
 
       const panelsInGroups = new Set<string>();
       let explicitGroupCount = 0;
-      for (const g of get().tabGroups.values()) {
+      for (const g of state.tabGroups.values()) {
         if (
           g.id !== groupId &&
           g.location === "grid" &&
@@ -342,16 +323,14 @@ export const createTabGroupActions = (
         }
       }
 
-      // Count ungrouped panels (excluding panels in the moving group)
-      let ungroupedCount = 0;
       const movingPanelIds = new Set(group.panelIds);
-      for (const t of gridTerminals) {
-        if (!panelsInGroups.has(t.id) && !movingPanelIds.has(t.id)) {
+      let ungroupedCount = 0;
+      for (const tid of gridTerminalIds) {
+        if (!panelsInGroups.has(tid) && !movingPanelIds.has(tid)) {
           ungroupedCount++;
         }
       }
 
-      // The moving group will occupy 1 slot
       if (explicitGroupCount + ungroupedCount + 1 > maxCapacity) {
         console.warn(
           `[TabGroup] Cannot move group ${groupId} to grid: capacity exceeded (${explicitGroupCount + ungroupedCount + 1} > ${maxCapacity})`
@@ -360,29 +339,27 @@ export const createTabGroupActions = (
       }
     }
 
-    // Update group location and all member panel locations (skip trashed)
     set((state) => {
       const newTabGroups = new Map(state.tabGroups);
       const updatedGroup: TabGroup = { ...group, location };
       newTabGroups.set(groupId, updatedGroup);
 
-      // Update all non-trashed panels in the group to the new location
       const panelIdSet = new Set(group.panelIds);
-      const newTerminals = state.terminals.map((t) => {
-        if (!panelIdSet.has(t.id)) return t;
-        // Skip trashed panels - they should remain trashed
-        if (t.location === "trash" || state.trashedTerminals.has(t.id)) return t;
-        return { ...t, location };
-      });
+      const newById = { ...state.terminalsById };
+      for (const pid of panelIdSet) {
+        const t = newById[pid];
+        if (!t) continue;
+        if (t.location === "trash" || state.trashedTerminals.has(t.id)) continue;
+        newById[pid] = { ...t, location };
+      }
 
-      saveTerminals(newTerminals);
+      saveNormalized(newById, state.terminalIds);
       saveTabGroups(newTabGroups);
-      return { terminals: newTerminals, tabGroups: newTabGroups };
+      return { terminalsById: newById, tabGroups: newTabGroups };
     });
 
-    // Apply appropriate renderer policies for PTY-backed panels
     for (const panelId of group.panelIds) {
-      const terminal = get().terminals.find((t) => t.id === panelId);
+      const terminal = get().terminalsById[panelId];
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
         if (location === "dock") {
           optimizeForDock(panelId);
@@ -402,26 +379,27 @@ export const createTabGroupActions = (
       return false;
     }
 
-    // Already at target worktree
-    if (group.worktreeId === worktreeId) {
-      return true;
-    }
+    if (group.worktreeId === worktreeId) return true;
 
-    // Check capacity if moving to grid location
     if (group.location === "grid") {
       const targetWorktreeId = worktreeId ?? null;
       const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
+      const state = get();
 
-      // Count current grid groups (each group = 1 slot)
-      const gridTerminals = get().terminals.filter(
-        (t) =>
+      const gridTerminalIds: string[] = [];
+      for (const tid of state.terminalIds) {
+        const t = state.terminalsById[tid];
+        if (
+          t &&
           (t.location === "grid" || t.location === undefined) &&
           (t.worktreeId ?? null) === targetWorktreeId
-      );
+        )
+          gridTerminalIds.push(tid);
+      }
 
       const panelsInGroups = new Set<string>();
       let explicitGroupCount = 0;
-      for (const g of get().tabGroups.values()) {
+      for (const g of state.tabGroups.values()) {
         if (
           g.id !== groupId &&
           g.location === "grid" &&
@@ -432,16 +410,14 @@ export const createTabGroupActions = (
         }
       }
 
-      // Count ungrouped panels (excluding panels in the moving group)
-      let ungroupedCount = 0;
       const movingPanelIds = new Set(group.panelIds);
-      for (const t of gridTerminals) {
-        if (!panelsInGroups.has(t.id) && !movingPanelIds.has(t.id)) {
+      let ungroupedCount = 0;
+      for (const tid of gridTerminalIds) {
+        if (!panelsInGroups.has(tid) && !movingPanelIds.has(tid)) {
           ungroupedCount++;
         }
       }
 
-      // The moving group will occupy 1 slot
       if (explicitGroupCount + ungroupedCount + 1 > maxCapacity) {
         console.warn(
           `[TabGroup] Cannot move group ${groupId} to worktree ${worktreeId}: capacity exceeded (${explicitGroupCount + ungroupedCount + 1} > ${maxCapacity})`
@@ -450,22 +426,20 @@ export const createTabGroupActions = (
       }
     }
 
-    // Determine location for panels after the move
     const targetLocation: TabGroupLocation = group.location === "grid" ? "grid" : "dock";
 
-    // Update group worktreeId and all member panel worktreeIds (skip trashed)
     set((state) => {
       const newTabGroups = new Map(state.tabGroups);
       const updatedGroup: TabGroup = { ...group, worktreeId };
       newTabGroups.set(groupId, updatedGroup);
 
-      // Update all non-trashed panels in the group to the new worktree
       const panelIdSet = new Set(group.panelIds);
-      const newTerminals = state.terminals.map((t) => {
-        if (!panelIdSet.has(t.id)) return t;
-        // Skip trashed panels - they should remain trashed
-        if (t.location === "trash" || state.trashedTerminals.has(t.id)) return t;
-        return {
+      const newById = { ...state.terminalsById };
+      for (const pid of panelIdSet) {
+        const t = newById[pid];
+        if (!t) continue;
+        if (t.location === "trash" || state.trashedTerminals.has(t.id)) continue;
+        newById[pid] = {
           ...t,
           worktreeId,
           location: targetLocation,
@@ -476,16 +450,15 @@ export const createTabGroupActions = (
             t.runtimeStatus
           ),
         };
-      });
+      }
 
-      saveTerminals(newTerminals);
+      saveNormalized(newById, state.terminalIds);
       saveTabGroups(newTabGroups);
-      return { terminals: newTerminals, tabGroups: newTabGroups };
+      return { terminalsById: newById, tabGroups: newTabGroups };
     });
 
-    // Apply appropriate renderer policies for PTY-backed panels (skip trashed)
     for (const panelId of group.panelIds) {
-      const terminal = get().terminals.find((t) => t.id === panelId);
+      const terminal = get().terminalsById[panelId];
       if (
         terminal &&
         terminal.location !== "trash" &&
@@ -509,92 +482,96 @@ export const createTabGroupActions = (
     set((state) => {
       const targetWorktreeId = worktreeId ?? null;
 
-      // Get current tab groups for this location/worktree
-      // Use getTabGroups which returns both explicit and virtual (single-panel) groups
       const allGroups = get().getTabGroups(location, worktreeId ?? undefined);
 
       if (fromGroupIndex < 0 || fromGroupIndex >= allGroups.length) return state;
       if (toGroupIndex < 0 || toGroupIndex > allGroups.length) return state;
 
-      // Reorder the groups
       const reorderedGroups = [...allGroups];
       const [movedGroup] = reorderedGroups.splice(fromGroupIndex, 1);
       reorderedGroups.splice(toGroupIndex, 0, movedGroup);
 
-      // Now we need to reorder the terminals array to match the new group order
-      // The terminals array order determines display order
-      // Each group's panels should be contiguous and in the same order as the group's panelIds
+      // Build new terminalIds with the reordered groups
+      const matchesLocation = (t: TerminalInstance) =>
+        location === "grid"
+          ? t.location === "grid" || t.location === undefined
+          : t.location === "dock";
 
-      // Separate terminals by location
-      const gridTerminals = state.terminals.filter(
-        (t) => t.location === "grid" || t.location === undefined
-      );
-      const dockTerminals = state.terminals.filter((t) => t.location === "dock");
-      const trashTerminals = state.terminals.filter((t) => t.location === "trash");
-      const backgroundTerminals = state.terminals.filter((t) => t.location === "background");
-
-      // Get terminals in the target location/worktree
-      const terminalsInLocation = location === "grid" ? gridTerminals : dockTerminals;
-
-      // Build new terminal list for this location by walking the reordered groups
-      // and preserving order of terminals within each group
-      const newLocationTerminals: TerminalInstance[] = [];
+      const newLocationIds: string[] = [];
       const processedIds = new Set<string>();
 
-      // Process terminals in the new group order
       for (const group of reorderedGroups) {
-        // Get panels for this group in their proper order, filtering by location
-        const groupPanels = state.terminals.filter((t) => {
-          if (!group.panelIds.includes(t.id)) return false;
+        const groupPanelIds = group.panelIds.filter((pid) => {
+          const t = state.terminalsById[pid];
+          if (!t) return false;
           if ((t.worktreeId ?? null) !== targetWorktreeId) return false;
           if (t.location === "trash") return false;
-          // Ensure panel is in the target location
           const effectiveLocation = t.location ?? "grid";
           return effectiveLocation === location;
         });
 
         // Sort by the order in group.panelIds
-        groupPanels.sort((a, b) => group.panelIds.indexOf(a.id) - group.panelIds.indexOf(b.id));
+        groupPanelIds.sort((a, b) => group.panelIds.indexOf(a) - group.panelIds.indexOf(b));
 
-        for (const panel of groupPanels) {
-          if (!processedIds.has(panel.id)) {
-            newLocationTerminals.push(panel);
-            processedIds.add(panel.id);
+        for (const pid of groupPanelIds) {
+          if (!processedIds.has(pid)) {
+            newLocationIds.push(pid);
+            processedIds.add(pid);
           }
         }
       }
 
-      // Add any terminals in other worktrees (preserve their relative order)
-      for (const terminal of terminalsInLocation) {
-        if (!processedIds.has(terminal.id) && (terminal.worktreeId ?? null) !== targetWorktreeId) {
-          newLocationTerminals.push(terminal);
-          processedIds.add(terminal.id);
+      // Add terminals in this location but other worktrees
+      for (const tid of state.terminalIds) {
+        const t = state.terminalsById[tid];
+        if (
+          t &&
+          !processedIds.has(tid) &&
+          matchesLocation(t) &&
+          (t.worktreeId ?? null) !== targetWorktreeId
+        ) {
+          newLocationIds.push(tid);
+          processedIds.add(tid);
         }
       }
 
-      // Reconstruct the full terminals array
-      const newTerminals =
-        location === "grid"
-          ? [...newLocationTerminals, ...dockTerminals, ...trashTerminals, ...backgroundTerminals]
-          : [...gridTerminals, ...newLocationTerminals, ...trashTerminals, ...backgroundTerminals];
+      // Reconstruct full terminalIds: location-matched IDs in new order, others preserved
+      const otherIds: string[] = [];
+      for (const tid of state.terminalIds) {
+        const t = state.terminalsById[tid];
+        if (!t || !matchesLocation(t)) {
+          otherIds.push(tid);
+        }
+      }
 
-      saveTerminals(newTerminals);
-      return { terminals: newTerminals };
+      const newIds =
+        location === "grid"
+          ? [...newLocationIds, ...otherIds]
+          : [
+              ...state.terminalIds.filter((tid) => {
+                const t = state.terminalsById[tid];
+                return t && (t.location === "grid" || t.location === undefined);
+              }),
+              ...newLocationIds,
+              ...state.terminalIds.filter((tid) => {
+                const t = state.terminalsById[tid];
+                return (
+                  t && t.location !== "grid" && t.location !== undefined && t.location !== "dock"
+                );
+              }),
+            ];
+
+      saveNormalized(state.terminalsById, newIds);
+      return { terminalIds: newIds };
     });
   },
 
   setActiveTab: (groupId, panelId) => {
     set((state) => {
       const group = state.tabGroups.get(groupId);
-      if (!group) {
-        return state;
-      }
-      if (!group.panelIds.includes(panelId)) {
-        return state;
-      }
-      if (group.activeTabId === panelId) {
-        return state;
-      }
+      if (!group) return state;
+      if (!group.panelIds.includes(panelId)) return state;
+      if (group.activeTabId === panelId) return state;
       const newTabGroups = new Map(state.tabGroups);
       newTabGroups.set(groupId, { ...group, activeTabId: panelId });
       saveTabGroups(newTabGroups);
@@ -604,15 +581,11 @@ export const createTabGroupActions = (
 
   getActiveTabId: (groupId) => {
     const group = get().tabGroups.get(groupId);
-    if (group) {
-      return group.activeTabId || null;
-    }
-    const terminal = get().terminals.find((t) => t.id === groupId);
+    if (group) return group.activeTabId || null;
+    const terminal = get().terminalsById[groupId];
     if (terminal && terminal.location !== "trash" && terminal.location !== "background") {
       for (const g of get().tabGroups.values()) {
-        if (g.panelIds.includes(groupId)) {
-          return null;
-        }
+        if (g.panelIds.includes(groupId)) return null;
       }
       return groupId;
     }
@@ -620,76 +593,54 @@ export const createTabGroupActions = (
   },
 
   hydrateTabGroups: (tabGroups, options) => {
-    const terminals = get().terminals;
-    const terminalIdSet = new Set(terminals.map((t) => t.id));
-    const trashedTerminals = get().trashedTerminals;
+    const state = get();
+    const terminalIdSet = new Set(state.terminalIds);
+    const trashedTerminals = state.trashedTerminals;
 
-    // Sanitize tab groups during hydration:
-    // 1. Deduplicate group IDs (keep first occurrence)
-    // 2. Drop panelIds that no longer exist or are trashed (check both trashedTerminals AND location)
-    // 3. Deduplicate panelIds within each group
-    // 4. Delete groups with <= 1 unique panel
-    // 5. Validate group location is "grid" or "dock"
-    // 6. Normalize member locations to match group location
-    // 7. Repair worktree mismatches (enforce worktree invariant)
     const sanitizedGroups = new Map<string, TabGroup>();
     const panelsAlreadyInGroups = new Set<string>();
     const seenGroupIds = new Set<string>();
 
     for (const group of tabGroups) {
-      // Validate shape: skip malformed groups that would crash during sanitation
       if (!group || typeof group.id !== "string" || !Array.isArray(group.panelIds)) {
         console.warn(`[TabGroup] Hydration: Skipping malformed group`, group);
         continue;
       }
 
-      // Deduplicate group IDs - keep first occurrence
-      if (seenGroupIds.has(group.id)) {
-        continue;
-      }
+      if (seenGroupIds.has(group.id)) continue;
       seenGroupIds.add(group.id);
 
-      // Validate group location
       const groupLocation = group.location === "dock" ? "dock" : "grid";
 
-      // Filter to only valid, non-trashed/backgrounded panels
       const validPanelIds = group.panelIds.filter((id) => {
         if (!terminalIdSet.has(id)) return false;
         if (trashedTerminals.has(id)) return false;
-        const terminal = terminals.find((t) => t.id === id);
+        const terminal = state.terminalsById[id];
         if (terminal?.location === "trash" || terminal?.location === "background") return false;
         return true;
       });
 
-      // Deduplicate panel IDs (preserve first occurrence)
       const uniquePanelIds = Array.from(new Set(validPanelIds));
-
-      // Enforce unique membership: skip panels already assigned to another group
       const finalPanelIds = uniquePanelIds.filter((id) => !panelsAlreadyInGroups.has(id));
 
-      if (finalPanelIds.length <= 1) {
-        continue;
-      }
+      if (finalPanelIds.length <= 1) continue;
 
-      // Check worktree consistency - all panels must have the same worktreeId as the group
       const panelWorktrees = new Map<string | undefined, number>();
       for (const panelId of finalPanelIds) {
-        const terminal = terminals.find((t) => t.id === panelId);
+        const terminal = state.terminalsById[panelId];
         if (terminal) {
           const count = panelWorktrees.get(terminal.worktreeId) || 0;
           panelWorktrees.set(terminal.worktreeId, count + 1);
         }
       }
 
-      // If there's a worktree mismatch, repair it
       let repairedWorktreeId = group.worktreeId;
       if (panelWorktrees.size > 1 || !panelWorktrees.has(group.worktreeId)) {
-        // Find the most common worktreeId among panels (majority wins)
         let maxCount = 0;
-        for (const [worktreeId, count] of panelWorktrees.entries()) {
+        for (const [wid, count] of panelWorktrees.entries()) {
           if (count > maxCount) {
             maxCount = count;
-            repairedWorktreeId = worktreeId;
+            repairedWorktreeId = wid;
           }
         }
         console.warn(
@@ -697,10 +648,8 @@ export const createTabGroupActions = (
         );
       }
 
-      // Mark these panels as assigned
       finalPanelIds.forEach((id) => panelsAlreadyInGroups.add(id));
 
-      // Ensure activeTabId is valid
       const activeTabId = finalPanelIds.includes(group.activeTabId)
         ? group.activeTabId
         : finalPanelIds[0];
@@ -714,26 +663,24 @@ export const createTabGroupActions = (
       });
     }
 
-    // Normalize panel locations and worktreeIds to match their group (skip trashed panels)
-    set((state) => {
+    set((s) => {
       let terminalsUpdated = false;
-      const newTerminals = state.terminals.map((t) => {
-        // Skip trashed panels - they should not be normalized
-        if (t.location === "trash" || state.trashedTerminals.has(t.id)) {
-          return t;
-        }
+      const newById = { ...s.terminalsById };
 
-        // Find which group this panel belongs to
+      for (const tid of s.terminalIds) {
+        const t = newById[tid];
+        if (!t) continue;
+        if (t.location === "trash" || s.trashedTerminals.has(t.id)) continue;
+
         for (const group of sanitizedGroups.values()) {
           if (group.panelIds.includes(t.id)) {
-            // Panel is in a group - ensure location and worktreeId match
             const needsLocationUpdate = t.location !== group.location;
             const needsWorktreeUpdate =
               (t.worktreeId ?? undefined) !== (group.worktreeId ?? undefined);
 
             if (needsLocationUpdate || needsWorktreeUpdate) {
               terminalsUpdated = true;
-              return {
+              newById[tid] = {
                 ...t,
                 location: group.location,
                 worktreeId: group.worktreeId,
@@ -748,17 +695,15 @@ export const createTabGroupActions = (
             break;
           }
         }
-        return t;
-      });
+      }
 
       if (terminalsUpdated) {
-        saveTerminals(newTerminals);
+        saveNormalized(newById, s.terminalIds);
       }
-      // Skip persistence if this is an error-recovery clear
       if (!options?.skipPersist) {
         saveTabGroups(sanitizedGroups);
       }
-      return { terminals: newTerminals, tabGroups: sanitizedGroups };
+      return { terminalsById: newById, tabGroups: sanitizedGroups };
     });
   },
 
@@ -767,7 +712,5 @@ export const createTabGroupActions = (
     console.warn(
       "[TabGroup] setTabGroupInfo is deprecated. Use createTabGroup/addPanelToGroup instead."
     );
-    // This method is now a no-op as we've normalized the data model
-    // The UI should use createTabGroup and addPanelToGroup
   },
 });

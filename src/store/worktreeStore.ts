@@ -335,8 +335,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
           // Verify the worktree hasn't changed
           if (get().activeWorktreeId !== id) return;
 
-          const terminals = useTerminalStore.getState().terminals;
-          const terminal = terminals.find((t) => t.id === lastFocusedTerminalId);
+          const terminal = useTerminalStore.getState().terminalsById[lastFocusedTerminalId];
 
           // Validate terminal still exists, belongs to this worktree, and isn't in trash
           if (terminal && terminal.worktreeId === id && terminal.location !== "trash") {
@@ -551,10 +550,12 @@ function applyWorktreeTerminalPolicy(
       // Double check that the active worktree hasn't changed underneath us
       if ((get().activeWorktreeId ?? null) !== (targetWorktreeId ?? null)) return;
 
-      const terminals = useTerminalStore.getState().terminals;
+      const { terminalsById, terminalIds } = useTerminalStore.getState();
       const activeDockTerminalId = useTerminalStore.getState().activeDockTerminalId;
 
-      for (const terminal of terminals) {
+      for (const id of terminalIds) {
+        const terminal = terminalsById[id];
+        if (!terminal) continue;
         const isInActiveWorktree = (terminal.worktreeId ?? null) === (targetWorktreeId ?? null);
 
         const location = terminal.location ?? "grid";

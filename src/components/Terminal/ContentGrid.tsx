@@ -353,7 +353,8 @@ export function ContentGrid({
 }: ContentGridProps) {
   "use memo";
   const {
-    terminals,
+    terminalsById,
+    storeTerminalIds,
     focusedId,
     maximizedId,
     maximizeTarget,
@@ -365,7 +366,8 @@ export function ContentGrid({
     setFocused,
   } = useTerminalStore(
     useShallow((state) => ({
-      terminals: state.terminals,
+      terminalsById: state.terminalsById,
+      storeTerminalIds: state.terminalIds,
       focusedId: state.focusedId,
       maximizedId: state.maximizedId,
       maximizeTarget: state.maximizeTarget,
@@ -409,15 +411,20 @@ export function ContentGrid({
   const twoPaneSplitEnabled = useTwoPaneSplitStore((state) => state.config.enabled);
 
   // Grid terminals filtered by location and active worktree
-  const gridTerminals = useMemo(
-    () =>
-      terminals.filter(
-        (t) =>
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      ),
-    [terminals, activeWorktreeId]
-  );
+  const gridTerminals = useMemo(() => {
+    const result: TerminalInstance[] = [];
+    for (const id of storeTerminalIds) {
+      const t = terminalsById[id];
+      if (
+        t &&
+        (t.location === "grid" || t.location === undefined) &&
+        (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+      ) {
+        result.push(t);
+      }
+    }
+    return result;
+  }, [terminalsById, storeTerminalIds, activeWorktreeId]);
 
   // Get tab groups for the grid
   const getTabGroups = useTerminalStore((state) => state.getTabGroups);
@@ -432,7 +439,7 @@ export function ContentGrid({
   // Get tab groups for the active worktree
   const tabGroups = useMemo(() => {
     return getTabGroups("grid", activeWorktreeId ?? undefined);
-  }, [getTabGroups, activeWorktreeId, terminals]);
+  }, [getTabGroups, activeWorktreeId, storeTerminalIds]);
 
   // Handler for adding a new tab to a single panel (creates a tab group)
   const handleAddTabForPanel = useCallback(
@@ -766,7 +773,14 @@ export function ContentGrid({
     if (maximizedId && maximizeTarget) {
       validateMaximizeTarget(getPanelGroup, getTerminal);
     }
-  }, [maximizedId, maximizeTarget, validateMaximizeTarget, getPanelGroup, getTerminal, terminals]);
+  }, [
+    maximizedId,
+    maximizeTarget,
+    validateMaximizeTarget,
+    getPanelGroup,
+    getTerminal,
+    storeTerminalIds,
+  ]);
 
   const maximizedGroup =
     maximizedId && maximizeTarget?.type === "group"

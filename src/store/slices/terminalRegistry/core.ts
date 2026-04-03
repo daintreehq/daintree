@@ -22,7 +22,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { usePanelLimitStore, evaluatePanelLimit } from "@/store/panelLimitStore";
 import { useNotificationStore } from "@/store/notificationStore";
-import { saveTerminals, saveTabGroups } from "./persistence";
+import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import {
   deriveRuntimeStatus,
@@ -49,6 +49,28 @@ async function resolveProjectStore() {
 
 type Set = TerminalRegistryStoreApi["setState"];
 type Get = TerminalRegistryStoreApi["getState"];
+
+function countNonTrashTerminals(state: TerminalRegistrySlice): number {
+  let count = 0;
+  for (const id of state.terminalIds) {
+    if (state.terminalsById[id]?.location !== "trash") count++;
+  }
+  return count;
+}
+
+function countGridTerminals(state: TerminalRegistrySlice, targetWorktreeId: string | null): number {
+  let count = 0;
+  for (const id of state.terminalIds) {
+    const t = state.terminalsById[id];
+    if (
+      t &&
+      (t.location === "grid" || t.location === undefined) &&
+      (t.worktreeId ?? null) === targetWorktreeId
+    )
+      count++;
+  }
+  return count;
+}
 
 export const createCorePanelActions = (
   set: Set,
@@ -79,7 +101,7 @@ export const createCorePanelActions = (
         warningsDisabled,
         requestConfirmation,
       } = usePanelLimitStore.getState();
-      const globalCount = get().terminals.filter((t) => t.location !== "trash").length;
+      const globalCount = countNonTrashTerminals(get());
       const tier = evaluatePanelLimit(globalCount, {
         softWarningLimit,
         confirmationLimit,
@@ -110,7 +132,7 @@ export const createCorePanelActions = (
         if (!confirmed) return null;
 
         // Re-check count after confirmation in case panels were closed during the dialog
-        const postConfirmCount = get().terminals.filter((t) => t.location !== "trash").length;
+        const postConfirmCount = countNonTrashTerminals(get());
         if (postConfirmCount >= hardLimit) {
           useNotificationStore.getState().addNotification({
             type: "warning",
@@ -136,11 +158,7 @@ export const createCorePanelActions = (
 
       const targetWorktreeId = options.worktreeId ?? null;
       const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
-      const currentGridCount = get().terminals.filter(
-        (t) =>
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? null) === targetWorktreeId
-      ).length;
+      const currentGridCount = countGridTerminals(get(), targetWorktreeId);
       const requestedLocation = options.location || "grid";
       const location =
         requestedLocation === "grid" && currentGridCount >= maxCapacity
@@ -235,17 +253,17 @@ export const createCorePanelActions = (
       }
 
       set((state) => {
-        // Check for duplicate - if panel with this ID exists, update it instead of appending
-        const existingIndex = state.terminals.findIndex((t) => t.id === id);
-        let newTerminals: TerminalInstance[];
-        if (existingIndex >= 0) {
+        const existing = state.terminalsById[id];
+        if (existing) {
           logDebug("[TerminalStore] Panel already exists, updating instead of adding", { id });
-          newTerminals = state.terminals.map((t, i) => (i === existingIndex ? terminal : t));
-        } else {
-          newTerminals = [...state.terminals, terminal];
+          const newById = { ...state.terminalsById, [id]: terminal };
+          saveNormalized(newById, state.terminalIds);
+          return { terminalsById: newById };
         }
-        saveTerminals(newTerminals);
-        return { terminals: newTerminals };
+        const newById = { ...state.terminalsById, [id]: terminal };
+        const newIds = [...state.terminalIds, id];
+        saveNormalized(newById, newIds);
+        return { terminalsById: newById, terminalIds: newIds };
       });
 
       return id;
@@ -270,12 +288,18 @@ export const createCorePanelActions = (
     const currentGridGroupCount = (() => {
       // Count unique groups in grid (each group = 1 slot)
       // Groups come from two sources: explicit TabGroups and ungrouped panels
-      const gridTerminals = get().terminals.filter(
-        (t) =>
+      const state = get();
+      const gridTerminalIds: string[] = [];
+      for (const tid of state.terminalIds) {
+        const t = state.terminalsById[tid];
+        if (
+          t &&
           (t.location === "grid" || t.location === undefined) &&
           (t.worktreeId ?? null) === targetWorktreeId
-      );
-      const tabGroups = get().tabGroups;
+        )
+          gridTerminalIds.push(tid);
+      }
+      const tabGroups = state.tabGroups;
       const panelsInGroups = new Set<string>();
       const explicitGroups = new Set<string>();
 
@@ -283,14 +307,14 @@ export const createCorePanelActions = (
       for (const group of tabGroups.values()) {
         if (group.location === "grid" && (group.worktreeId ?? null) === targetWorktreeId) {
           explicitGroups.add(group.id);
-          group.panelIds.forEach((id) => panelsInGroups.add(id));
+          group.panelIds.forEach((gid) => panelsInGroups.add(gid));
         }
       }
 
       // Count ungrouped panels (each is its own virtual group)
       let ungroupedCount = 0;
-      for (const t of gridTerminals) {
-        if (!panelsInGroups.has(t.id)) {
+      for (const tid of gridTerminalIds) {
+        if (!panelsInGroups.has(tid)) {
           ungroupedCount++;
         }
       }
@@ -493,13 +517,10 @@ export const createCorePanelActions = (
       };
 
       set((state) => {
-        // Check for duplicate - if terminal with this ID exists, update it instead of appending
-        const existingIndex = state.terminals.findIndex((t) => t.id === id);
-        let newTerminals: TerminalInstance[];
-        if (existingIndex >= 0) {
+        const existing = state.terminalsById[id];
+        if (existing) {
           // Update existing terminal in place (reconnection case or double hydration)
           logDebug("[TerminalStore] Terminal already exists, updating instead of adding", { id });
-          const existing = state.terminals[existingIndex];
           // Preserve existing agentState/lastStateChange/exitBehavior if new values are undefined
           const preservedTerminal = isReconnect
             ? {
@@ -510,14 +531,14 @@ export const createCorePanelActions = (
                 extensionState: terminal.extensionState ?? existing.extensionState,
               }
             : terminal;
-          newTerminals = state.terminals.map((t, i) =>
-            i === existingIndex ? preservedTerminal : t
-          );
-        } else {
-          newTerminals = [...state.terminals, terminal];
+          const newById = { ...state.terminalsById, [id]: preservedTerminal };
+          saveNormalized(newById, state.terminalIds);
+          return { terminalsById: newById };
         }
-        saveTerminals(newTerminals);
-        return { terminals: newTerminals };
+        const newById = { ...state.terminalsById, [id]: terminal };
+        const newIds = [...state.terminalIds, id];
+        saveNormalized(newById, newIds);
+        return { terminalsById: newById, terminalIds: newIds };
       });
 
       // Determine if terminal should start backgrounded:
@@ -541,9 +562,9 @@ export const createCorePanelActions = (
 
   removeTerminal: (id) => {
     clearTrashExpiryTimer(id);
-    const currentTerminals = get().terminals;
-    const removedIndex = currentTerminals.findIndex((t) => t.id === id);
-    const terminal = currentTerminals.find((t) => t.id === id);
+    const state = get();
+    const removedIndex = state.terminalIds.indexOf(id);
+    const terminal = state.terminalsById[id];
 
     if (terminal?.kind === "dev-preview") {
       stopDevPreviewByPanelId(id);
@@ -559,7 +580,8 @@ export const createCorePanelActions = (
     }
 
     set((state) => {
-      const newTerminals = state.terminals.filter((t) => t.id !== id);
+      const { [id]: _, ...restById } = state.terminalsById;
+      const newIds = state.terminalIds.filter((tid) => tid !== id);
 
       const newTrashed = new Map(state.trashedTerminals);
       newTrashed.delete(id);
@@ -589,33 +611,31 @@ export const createCorePanelActions = (
         }
       }
 
-      saveTerminals(newTerminals);
+      saveNormalized(restById, newIds);
       saveTabGroups(newTabGroups);
       return {
-        terminals: newTerminals,
+        terminalsById: restById,
+        terminalIds: newIds,
         trashedTerminals: newTrashed,
         backgroundedTerminals: newBackgrounded,
         tabGroups: newTabGroups,
       };
     });
 
-    const remainingTerminals = get().terminals;
-    middleware?.onTerminalRemoved?.(id, removedIndex, remainingTerminals, terminal);
+    const remainingIds = get().terminalIds;
+    middleware?.onTerminalRemoved?.(id, removedIndex, remainingIds, terminal);
   },
 
   updateTitle: (id, newTitle) => {
     set((state) => {
-      const terminal = state.terminals.find((t) => t.id === id);
+      const terminal = state.terminalsById[id];
       if (!terminal) return state;
 
       const effectiveTitle =
         newTitle.trim() || getDefaultTitle(terminal.kind, terminal.type, terminal.agentId);
-      const newTerminals = state.terminals.map((t) =>
-        t.id === id ? { ...t, title: effectiveTitle } : t
-      );
-
-      saveTerminals(newTerminals);
-      return { terminals: newTerminals };
+      const newById = { ...state.terminalsById, [id]: { ...terminal, title: effectiveTitle } };
+      saveNormalized(newById, state.terminalIds);
+      return { terminalsById: newById };
     });
   },
 
@@ -631,48 +651,45 @@ export const createCorePanelActions = (
     sessionTokens
   ) => {
     set((state) => {
-      const terminal = state.terminals.find((t) => t.id === id);
+      const terminal = state.terminalsById[id];
       if (!terminal) {
         logWarn("[TerminalStore] Cannot update agent state: terminal not found", { id });
         return state;
       }
 
-      const newTerminals = state.terminals.map((t) =>
-        t.id === id
-          ? {
-              ...t,
-              agentState,
-              error,
-              lastStateChange: lastStateChange ?? Date.now(),
-              stateChangeTrigger: trigger,
-              stateChangeConfidence: confidence,
-              waitingReason: agentState === "waiting" ? waitingReason : undefined,
-              sessionCost:
-                agentState === "completed" && sessionCost != null
-                  ? sessionCost
-                  : agentState === "working"
-                    ? undefined
-                    : t.sessionCost,
-              sessionTokens:
-                agentState === "completed" && sessionTokens != null
-                  ? sessionTokens
-                  : agentState === "working"
-                    ? undefined
-                    : t.sessionTokens,
-            }
-          : t
-      );
-
-      return { terminals: newTerminals };
+      return {
+        terminalsById: {
+          ...state.terminalsById,
+          [id]: {
+            ...terminal,
+            agentState,
+            error,
+            lastStateChange: lastStateChange ?? Date.now(),
+            stateChangeTrigger: trigger,
+            stateChangeConfidence: confidence,
+            waitingReason: agentState === "waiting" ? waitingReason : undefined,
+            sessionCost:
+              agentState === "completed" && sessionCost != null
+                ? sessionCost
+                : agentState === "working"
+                  ? undefined
+                  : terminal.sessionCost,
+            sessionTokens:
+              agentState === "completed" && sessionTokens != null
+                ? sessionTokens
+                : agentState === "working"
+                  ? undefined
+                  : terminal.sessionTokens,
+          },
+        },
+      };
     });
   },
 
   updateActivity: (id, headline, status, type, timestamp, lastCommand) => {
     set((state) => {
-      const terminal = state.terminals.find((t) => t.id === id);
-      if (!terminal) {
-        return state;
-      }
+      const terminal = state.terminalsById[id];
+      if (!terminal) return state;
 
       if (
         terminal.activityHeadline === headline &&
@@ -684,69 +701,59 @@ export const createCorePanelActions = (
         return state;
       }
 
-      const newTerminals = state.terminals.map((t) =>
-        t.id === id
-          ? {
-              ...t,
-              activityHeadline: headline,
-              activityStatus: status,
-              activityType: type,
-              activityTimestamp: timestamp,
-              lastCommand,
-            }
-          : t
-      );
-
-      return { terminals: newTerminals };
+      return {
+        terminalsById: {
+          ...state.terminalsById,
+          [id]: {
+            ...terminal,
+            activityHeadline: headline,
+            activityStatus: status,
+            activityType: type,
+            activityTimestamp: timestamp,
+            lastCommand,
+          },
+        },
+      };
     });
   },
 
   updateLastCommand: (id, lastCommand) => {
     set((state) => {
-      const terminal = state.terminals.find((t) => t.id === id);
-      if (!terminal) {
-        return state;
-      }
+      const terminal = state.terminalsById[id];
+      if (!terminal) return state;
 
-      const newTerminals = state.terminals.map((t) =>
-        t.id === id
-          ? {
-              ...t,
-              lastCommand,
-            }
-          : t
-      );
-
-      return { terminals: newTerminals };
+      return {
+        terminalsById: {
+          ...state.terminalsById,
+          [id]: { ...terminal, lastCommand },
+        },
+      };
     });
   },
 
   updateVisibility: (id, isVisible) => {
     set((state) => {
-      const terminal = state.terminals.find((t) => t.id === id);
-      if (!terminal) {
-        return state;
-      }
-
-      if (terminal.isVisible === isVisible) {
-        return state;
-      }
+      const terminal = state.terminalsById[id];
+      if (!terminal) return state;
+      if (terminal.isVisible === isVisible) return state;
 
       const runtimeStatus = deriveRuntimeStatus(
         isVisible,
         terminal.flowStatus,
         terminal.runtimeStatus
       );
-      const newTerminals = state.terminals.map((t) =>
-        t.id === id ? { ...t, isVisible, runtimeStatus } : t
-      );
 
-      return { terminals: newTerminals };
+      return {
+        terminalsById: {
+          ...state.terminalsById,
+          [id]: { ...terminal, isVisible, runtimeStatus },
+        },
+      };
     });
   },
 
   getTerminal: (id) => {
-    return get().terminals.find((t) => t.id === id);
+    return get().terminalsById[id];
   },
 
   moveTerminalToDock: (id) => {
@@ -758,17 +765,17 @@ export const createCorePanelActions = (
     }
 
     // Single ungrouped panel - move just this panel
-    const terminal = get().terminals.find((t) => t.id === id);
+    const terminal = get().terminalsById[id];
 
     set((state) => {
       if (!terminal || terminal.location === "dock") return state;
 
-      const newTerminals = state.terminals.map((t) =>
-        t.id === id ? { ...t, location: "dock" as const } : t
-      );
-
-      saveTerminals(newTerminals);
-      return { terminals: newTerminals };
+      const newById = {
+        ...state.terminalsById,
+        [id]: { ...terminal, location: "dock" as const },
+      };
+      saveNormalized(newById, state.terminalIds);
+      return { terminalsById: newById };
     });
 
     // Only optimize PTY-backed panels
@@ -789,31 +796,36 @@ export const createCorePanelActions = (
     let terminal: TerminalInstance | undefined;
 
     set((state) => {
-      terminal = state.terminals.find((t) => t.id === id);
+      terminal = state.terminalsById[id];
       if (!terminal || terminal.location === "grid") return state;
 
       const targetWorktreeId = terminal.worktreeId ?? null;
       const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
       // Check grid capacity - count unique groups (each group = 1 slot)
-      const gridTerminals = state.terminals.filter(
-        (t) =>
+      const gridTerminalIds: string[] = [];
+      for (const tid of state.terminalIds) {
+        const t = state.terminalsById[tid];
+        if (
+          t &&
           (t.location === "grid" || t.location === undefined) &&
           (t.worktreeId ?? null) === targetWorktreeId
-      );
+        )
+          gridTerminalIds.push(tid);
+      }
 
       // Count groups using TabGroup data
       const panelsInGroups = new Set<string>();
       let explicitGroupCount = 0;
-      for (const group of state.tabGroups.values()) {
-        if (group.location === "grid" && (group.worktreeId ?? null) === targetWorktreeId) {
+      for (const g of state.tabGroups.values()) {
+        if (g.location === "grid" && (g.worktreeId ?? null) === targetWorktreeId) {
           explicitGroupCount++;
-          group.panelIds.forEach((pid) => panelsInGroups.add(pid));
+          g.panelIds.forEach((pid) => panelsInGroups.add(pid));
         }
       }
       // Count ungrouped panels
       let ungroupedCount = 0;
-      for (const t of gridTerminals) {
-        if (!panelsInGroups.has(t.id)) {
+      for (const tid of gridTerminalIds) {
+        if (!panelsInGroups.has(tid)) {
           ungroupedCount++;
         }
       }
@@ -822,12 +834,12 @@ export const createCorePanelActions = (
       }
 
       moveSucceeded = true;
-      const newTerminals = state.terminals.map((t) =>
-        t.id === id ? { ...t, location: "grid" as const } : t
-      );
-
-      saveTerminals(newTerminals);
-      return { terminals: newTerminals };
+      const newById = {
+        ...state.terminalsById,
+        [id]: { ...terminal!, location: "grid" as const },
+      };
+      saveNormalized(newById, state.terminalIds);
+      return { terminalsById: newById };
     });
 
     // Only apply renderer policy for PTY-backed panels if move succeeded
@@ -839,7 +851,7 @@ export const createCorePanelActions = (
   },
 
   toggleTerminalLocation: (id) => {
-    const terminal = get().terminals.find((t) => t.id === id);
+    const terminal = get().terminalsById[id];
     if (!terminal) return;
 
     if (terminal.location === "dock") {

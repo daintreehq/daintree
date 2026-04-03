@@ -12,6 +12,7 @@ import {
   createTerminalMruSlice,
   createWatchedPanelsSlice,
   flushTerminalPersistence,
+  selectOrderedTerminals,
   type TerminalRegistrySlice,
   type TerminalFocusSlice,
   type TerminalCommandQueueSlice,
@@ -93,13 +94,18 @@ export interface PanelGridState
 }
 
 export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
-  const getTerminals = () => get().terminals;
-  const getTerminal = (id: string) => get().terminals.find((t) => t.id === id);
+  const getTerminals = () => selectOrderedTerminals(get().terminalsById, get().terminalIds);
+  const getTerminal = (id: string) => get().terminalsById[id];
 
   const registrySlice = createTerminalRegistrySlice({
-    onTerminalRemoved: (id, removedIndex, remainingTerminals, _removedTerminal) => {
+    onTerminalRemoved: (id, removedIndex, remainingIds, _removedTerminal) => {
       clearTerminalRestartGuard(id);
       get().clearQueue(id);
+      // Build remaining terminals array for the focus slice
+      const state = get();
+      const remainingTerminals = remainingIds
+        .map((tid) => state.terminalsById[tid])
+        .filter(Boolean);
       get().handleTerminalRemoved(id, remainingTerminals, removedIndex);
 
       // Auto-clear watch if panel is removed while watched
@@ -155,9 +161,12 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
       if (state.focusedId === id) {
         const activeWt = getActiveWorktreeId() ?? undefined;
-        const gridTerminals = state.terminals.filter(
-          (t) => t.id !== id && t.location === "grid" && (t.worktreeId ?? undefined) === activeWt
-        );
+        const gridTerminals: TerminalInstance[] = [];
+        for (const tid of state.terminalIds) {
+          const t = state.terminalsById[tid];
+          if (t && t.id !== id && t.location === "grid" && (t.worktreeId ?? undefined) === activeWt)
+            gridTerminals.push(t);
+        }
         updates.focusedId = gridTerminals[0]?.id ?? null;
       }
 
@@ -185,7 +194,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
     trashTerminal: (id: string) => {
       const state = get();
-      const terminalToTrash = state.terminals.find((t) => t.id === id);
+      const terminalToTrash = state.terminalsById[id];
       if (terminalToTrash && terminalToTrash.location !== "trash") {
         set({ lastClosedConfig: buildPanelSnapshotOptions(terminalToTrash) });
       }
@@ -199,10 +208,13 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
       if (state.focusedId === id) {
         const activeWt = getActiveWorktreeId() ?? undefined;
-        const gridTerminals = state.terminals.filter(
-          (t) => t.id !== id && t.location === "grid" && (t.worktreeId ?? undefined) === activeWt
-        );
-        const trashedTerminal = state.terminals.find((t) => t.id === id);
+        const gridTerminals: TerminalInstance[] = [];
+        for (const tid of state.terminalIds) {
+          const t = state.terminalsById[tid];
+          if (t && t.id !== id && t.location === "grid" && (t.worktreeId ?? undefined) === activeWt)
+            gridTerminals.push(t);
+        }
+        const trashedTerminal = state.terminalsById[id];
         const wasAgent =
           trashedTerminal &&
           isAgentTerminal(trashedTerminal.kind ?? trashedTerminal.type, trashedTerminal.agentId);
@@ -227,14 +239,12 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
     trashPanelGroup: (panelId: string) => {
       const state = get();
-      // Get the group before trashing to identify all panels
       const group = registrySlice.getPanelGroup(panelId);
       const panelIdsInGroup = group?.panelIds ?? [panelId];
 
-      // Capture last-closed snapshot from the active tab or the triggering panel
       const snapshotSourceId =
         group && panelIdsInGroup.includes(state.focusedId ?? "") ? state.focusedId! : panelId;
-      const snapshotSource = state.terminals.find((t) => t.id === snapshotSourceId);
+      const snapshotSource = state.terminalsById[snapshotSourceId];
       if (snapshotSource && snapshotSource.location !== "trash") {
         set({ lastClosedConfig: buildPanelSnapshotOptions(snapshotSource) });
       }
@@ -243,16 +253,21 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
       const updates: Partial<PanelGridState> = {};
 
-      // If any panel in the group was focused, find a new focus
       if (panelIdsInGroup.includes(state.focusedId ?? "")) {
         const activeWt = getActiveWorktreeId() ?? undefined;
-        const gridTerminals = state.terminals.filter(
-          (t) =>
-            !panelIdsInGroup.includes(t.id) &&
+        const groupSet = new Set(panelIdsInGroup);
+        const gridTerminals: TerminalInstance[] = [];
+        for (const tid of state.terminalIds) {
+          const t = state.terminalsById[tid];
+          if (
+            t &&
+            !groupSet.has(t.id) &&
             t.location === "grid" &&
             (t.worktreeId ?? undefined) === activeWt
-        );
-        const focusedTerminal = state.terminals.find((t) => t.id === state.focusedId);
+          )
+            gridTerminals.push(t);
+        }
+        const focusedTerminal = state.terminalsById[state.focusedId!];
         const wasAgent =
           focusedTerminal &&
           isAgentTerminal(focusedTerminal.kind ?? focusedTerminal.type, focusedTerminal.agentId);
@@ -262,12 +277,10 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         updates.focusedId = nextAgent?.id ?? gridTerminals[0]?.id ?? null;
       }
 
-      // If any panel in the group was maximized, clear maximize
       if (state.maximizedId && panelIdsInGroup.includes(state.maximizedId)) {
         updates.maximizedId = null;
       }
 
-      // If any panel in the group was the active dock terminal, clear it
       if (state.activeDockTerminalId && panelIdsInGroup.includes(state.activeDockTerminalId)) {
         updates.activeDockTerminalId = null;
       }
@@ -285,7 +298,6 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
     restoreTrashedGroup: (groupRestoreId: string, targetWorktreeId?: string) => {
       const trashedTerminals = get().trashedTerminals;
 
-      // Find anchor panel to determine what to focus after restore
       let anchorPanel: ReturnType<typeof trashedTerminals.get> | undefined;
       const groupPanelIds: string[] = [];
       for (const [id, trashed] of trashedTerminals.entries()) {
@@ -297,13 +309,10 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         }
       }
 
-      if (groupPanelIds.length === 0) {
-        return;
-      }
+      if (groupPanelIds.length === 0) return;
 
       registrySlice.restoreTrashedGroup(groupRestoreId, targetWorktreeId);
 
-      // Focus the active tab from the restored group
       const focusId =
         anchorPanel?.groupMetadata?.activeTabId &&
         groupPanelIds.includes(anchorPanel.groupMetadata.activeTabId)
@@ -311,7 +320,6 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
           : groupPanelIds[0];
       set({ focusedId: focusId, activeDockTerminalId: null });
 
-      // Sync the registry's active tab for restored groups
       const group = get().getPanelGroup(focusId);
       if (group) {
         get().setActiveTab(group.id, focusId);
@@ -321,19 +329,14 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
     restoreLastTrashed: () => {
       const trashedTerminals = get().trashedTerminals;
       const trashedIds = Array.from(trashedTerminals.keys());
-      if (trashedIds.length === 0) {
-        return;
-      }
+      if (trashedIds.length === 0) return;
 
       const lastId = trashedIds[trashedIds.length - 1];
       const lastTrashed = trashedTerminals.get(lastId);
 
-      // Check if this panel was part of a group
       if (lastTrashed?.groupRestoreId) {
-        // Use the group restore method
         get().restoreTrashedGroup(lastTrashed.groupRestoreId);
       } else {
-        // Single panel restore (existing behavior)
         get().restoreTerminal(lastId);
       }
     },
@@ -351,9 +354,12 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         set({ focusedId: id, activeDockTerminalId: null });
       } else if (state.focusedId === id) {
         const activeWt = getActiveWorktreeId() ?? undefined;
-        const gridTerminals = state.terminals.filter(
-          (t) => t.id !== id && t.location === "grid" && (t.worktreeId ?? undefined) === activeWt
-        );
+        const gridTerminals: TerminalInstance[] = [];
+        for (const tid of state.terminalIds) {
+          const t = state.terminalsById[tid];
+          if (t && t.id !== id && t.location === "grid" && (t.worktreeId ?? undefined) === activeWt)
+            gridTerminals.push(t);
+        }
         set({ focusedId: gridTerminals[0]?.id ?? null });
       }
     },
@@ -362,7 +368,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       focusSlice.focusNext();
       const focusedId = get().focusedId;
       if (focusedId) {
-        const terminal = get().terminals.find((t) => t.id === focusedId);
+        const terminal = get().terminalsById[focusedId];
         if (terminal?.location === "dock") {
           const group = get().getPanelGroup(focusedId);
           if (group) get().setActiveTab(group.id, focusedId);
@@ -374,7 +380,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       focusSlice.focusPrevious();
       const focusedId = get().focusedId;
       if (focusedId) {
-        const terminal = get().terminals.find((t) => t.id === focusedId);
+        const terminal = get().terminalsById[focusedId];
         if (terminal?.location === "dock") {
           const group = get().getPanelGroup(focusedId);
           if (group) get().setActiveTab(group.id, focusedId);
@@ -385,17 +391,17 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
     reset: async () => {
       const state = get();
 
-      for (const terminal of state.terminals) {
+      for (const tid of state.terminalIds) {
         try {
-          terminalInstanceService.destroy(terminal.id);
+          terminalInstanceService.destroy(tid);
         } catch (error) {
-          logWarn(`Failed to destroy terminal instance ${terminal.id}`, { error });
+          logWarn(`Failed to destroy terminal instance ${tid}`, { error });
         }
       }
 
-      const killPromises = state.terminals.map((terminal) =>
-        terminalRegistryController.kill(terminal.id).catch((error) => {
-          logError(`Failed to kill terminal ${terminal.id}`, error);
+      const killPromises = state.terminalIds.map((tid) =>
+        terminalRegistryController.kill(tid).catch((error) => {
+          logError(`Failed to kill terminal ${tid}`, error);
         })
       );
 
@@ -405,7 +411,8 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       inputStore.getState().clearAllDraftInputs();
 
       set({
-        terminals: [],
+        terminalsById: {},
+        terminalIds: [],
         trashedTerminals: new Map(),
         backgroundedTerminals: new Map(),
         tabGroups: new Map(),
@@ -428,26 +435,27 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
       flushTerminalPersistence();
 
-      const allTerminalIds = state.terminals.map((t) => t.id);
+      const allTerminalIds = [...state.terminalIds];
       terminalInstanceService.suppressResizesDuringProjectSwitch(
         allTerminalIds,
         PROJECT_SWITCH_RESIZE_SUPPRESSION_MS
       );
 
-      for (const terminal of state.terminals) {
+      for (const tid of state.terminalIds) {
         try {
-          terminalInstanceService.detachForProjectSwitch(terminal.id);
+          terminalInstanceService.detachForProjectSwitch(tid);
         } catch (error) {
-          logWarn(`Failed to detach terminal instance ${terminal.id}`, { error });
+          logWarn(`Failed to detach terminal instance ${tid}`, { error });
         }
       }
 
       logInfo(
-        `Detached ${state.terminals.length} terminal instances for project switch (processes preserved)`
+        `Detached ${state.terminalIds.length} terminal instances for project switch (processes preserved)`
       );
 
       set({
-        terminals: [],
+        terminalsById: {},
+        terminalIds: [],
         trashedTerminals: new Map(),
         backgroundedTerminals: new Map(),
         tabGroups: new Map(),
@@ -470,28 +478,29 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
       flushTerminalPersistence();
 
-      const allTerminalIds = state.terminals.map((t) => t.id);
+      const allTerminalIds = [...state.terminalIds];
       terminalInstanceService.suppressResizesDuringProjectSwitch(
         allTerminalIds,
         PROJECT_SWITCH_RESIZE_SUPPRESSION_MS
       );
 
-      for (const terminal of state.terminals) {
+      for (const tid of state.terminalIds) {
         try {
-          terminalInstanceService.detachForProjectSwitch(terminal.id);
+          terminalInstanceService.detachForProjectSwitch(tid);
         } catch (error) {
-          logWarn(`Failed to detach terminal instance ${terminal.id}`, { error });
+          logWarn(`Failed to detach terminal instance ${tid}`, { error });
         }
       }
 
       logInfo(
-        `Detached ${state.terminals.length} terminal instances for project switch (processes preserved, state retained)`
+        `Detached ${state.terminalIds.length} terminal instances for project switch (processes preserved, state retained)`
       );
     },
 
     clearTerminalStoreForSwitch: () => {
       set({
-        terminals: [],
+        terminalsById: {},
+        terminalIds: [],
         trashedTerminals: new Map(),
         backgroundedTerminals: new Map(),
         tabGroups: new Map(),

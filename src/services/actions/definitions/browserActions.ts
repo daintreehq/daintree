@@ -93,9 +93,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       const targetId = terminalId ?? useTerminalStore.getState().focusedId ?? undefined;
       const derivedUrl =
         url ??
-        (targetId
-          ? useTerminalStore.getState().terminals.find((t) => t.id === targetId)?.browserUrl
-          : undefined);
+        (targetId ? useTerminalStore.getState().terminalsById[targetId]?.browserUrl : undefined);
 
       if (!derivedUrl) {
         throw new Error("No browser URL available to open externally");
@@ -121,9 +119,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       const targetId = terminalId ?? useTerminalStore.getState().focusedId ?? undefined;
       const derivedUrl =
         url ??
-        (targetId
-          ? useTerminalStore.getState().terminals.find((t) => t.id === targetId)?.browserUrl
-          : undefined);
+        (targetId ? useTerminalStore.getState().terminalsById[targetId]?.browserUrl : undefined);
 
       if (!derivedUrl) {
         throw new Error("No browser URL available to copy");

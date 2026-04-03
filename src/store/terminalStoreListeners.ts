@@ -178,7 +178,7 @@ export function setupTerminalStoreListeners() {
 
       const clampedConfidence = Math.max(0, Math.min(1, confidence || 0));
 
-      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === terminalId);
+      const terminal = useTerminalStore.getState().terminalsById[terminalId];
 
       if (!terminal) {
         return;
@@ -223,12 +223,13 @@ export function setupTerminalStoreListeners() {
     if (!terminalId || !processIconId) return;
 
     useTerminalStore.setState((state) => {
-      const terminal = state.terminals.find((t) => t.id === terminalId);
+      const terminal = state.terminalsById[terminalId];
       if (!terminal || terminal.detectedProcessId === processIconId) return state;
       return {
-        terminals: state.terminals.map((t) =>
-          t.id === terminalId ? { ...t, detectedProcessId: processIconId } : t
-        ),
+        terminalsById: {
+          ...state.terminalsById,
+          [terminalId]: { ...terminal, detectedProcessId: processIconId },
+        },
       };
     });
   });
@@ -238,12 +239,13 @@ export function setupTerminalStoreListeners() {
     if (!terminalId) return;
 
     useTerminalStore.setState((state) => {
-      const terminal = state.terminals.find((t) => t.id === terminalId);
+      const terminal = state.terminalsById[terminalId];
       if (!terminal || !terminal.detectedProcessId) return state;
       return {
-        terminals: state.terminals.map((t) =>
-          t.id === terminalId ? { ...t, detectedProcessId: undefined } : t
-        ),
+        terminalsById: {
+          ...state.terminalsById,
+          [terminalId]: { ...terminal, detectedProcessId: undefined },
+        },
       };
     });
   });
@@ -259,16 +261,19 @@ export function setupTerminalStoreListeners() {
     (data: { id: string; expiresAt: number }) => {
       const { id, expiresAt } = data;
       const state = useTerminalStore.getState();
-      const terminal = state.terminals.find((t) => t.id === id);
+      const terminal = state.terminalsById[id];
       const originalLocation: "dock" | "grid" = terminal?.location === "dock" ? "dock" : "grid";
       state.markAsTrashed(id, expiresAt, originalLocation);
 
       const updates: Partial<PanelGridState> = {};
       if (state.focusedId === id) {
         const activeWt = useWorktreeSelectionStore.getState().activeWorktreeId ?? undefined;
-        const gridTerminals = state.terminals.filter(
-          (t) => t.id !== id && t.location === "grid" && (t.worktreeId ?? undefined) === activeWt
-        );
+        const gridTerminals = state.terminalIds
+          .map((tid) => state.terminalsById[tid])
+          .filter(
+            (t) =>
+              t && t.id !== id && t.location === "grid" && (t.worktreeId ?? undefined) === activeWt
+          );
         updates.focusedId = gridTerminals[0]?.id ?? null;
       }
       if (state.maximizedId === id) {
@@ -294,7 +299,7 @@ export function setupTerminalStoreListeners() {
     }
 
     const state = useTerminalStore.getState();
-    const terminal = state.terminals.find((t) => t.id === id);
+    const terminal = state.terminalsById[id];
 
     if (!terminal) return;
 
@@ -307,9 +312,16 @@ export function setupTerminalStoreListeners() {
     useResourceMonitoringStore.getState().removeTerminal(id);
 
     // Store exit code on the terminal before applying exit behavior
-    useTerminalStore.setState((s) => ({
-      terminals: s.terminals.map((t) => (t.id === id ? { ...t, exitCode } : t)),
-    }));
+    useTerminalStore.setState((s) => {
+      const existing = s.terminalsById[id];
+      if (!existing) return s;
+      return {
+        terminalsById: {
+          ...s.terminalsById,
+          [id]: { ...existing, exitCode },
+        },
+      };
+    });
 
     state.setRuntimeStatus(id, "exited");
 
@@ -417,7 +429,7 @@ export function setupTerminalStoreListeners() {
       }
     } else {
       // Spawn succeeded - clear any previous spawn error
-      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === id);
+      const terminal = useTerminalStore.getState().terminalsById[id];
       if (terminal?.spawnError) {
         useTerminalStore.getState().clearSpawnError(id);
       }

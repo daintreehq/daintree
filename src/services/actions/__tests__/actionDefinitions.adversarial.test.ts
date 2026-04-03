@@ -308,7 +308,8 @@ beforeEach(() => {
   vi.clearAllMocks();
 
   useTerminalStore.setState({
-    terminals: [],
+    terminalsById: {},
+    terminalIds: [],
     trashedTerminals: new Map(),
     tabGroups: new Map(),
     focusedId: null,
@@ -356,21 +357,26 @@ describe("terminal action hardening", () => {
     ).rejects.toThrow("Terminal not found");
 
     useTerminalStore.setState({
-      terminals: [createTerminal({ id: "trash", location: "trash" })],
+      terminalsById: { trash: createTerminal({ id: "trash", location: "trash" }) },
+      terminalIds: ["trash"],
     });
     await expect(
       sendCommand.run({ terminalId: "trash", command: "ls" }, {} as never)
     ).rejects.toThrow("Cannot send commands to trashed terminals");
 
     useTerminalStore.setState({
-      terminals: [createTerminal({ id: "browser", kind: "browser", type: "browser" })],
+      terminalsById: {
+        browser: createTerminal({ id: "browser", kind: "browser", type: "browser" }),
+      },
+      terminalIds: ["browser"],
     });
     await expect(
       sendCommand.run({ terminalId: "browser", command: "ls" }, {} as never)
     ).rejects.toThrow('Terminal kind "browser" does not support command execution');
 
     useTerminalStore.setState({
-      terminals: [createTerminal({ id: "n-opty", hasPty: false })],
+      terminalsById: { "n-opty": createTerminal({ id: "n-opty", hasPty: false }) },
+      terminalIds: ["n-opty"],
     });
     await expect(
       sendCommand.run({ terminalId: "n-opty", command: "ls" }, {} as never)
@@ -382,7 +388,8 @@ describe("terminal action hardening", () => {
     const sendCommand = actions.get("terminal.sendCommand")!();
 
     useTerminalStore.setState({
-      terminals: [createTerminal({ id: "term-ok" })],
+      terminalsById: { "term-ok": createTerminal({ id: "term-ok" }) },
+      terminalIds: ["term-ok"],
     });
 
     const result = await sendCommand.run(
@@ -403,7 +410,8 @@ describe("terminal action hardening", () => {
     const moveToDock = actions.get("terminal.moveToDock")!();
 
     useTerminalStore.setState({
-      terminals: [createTerminal({ id: "existing" })],
+      terminalsById: { existing: createTerminal({ id: "existing" }) },
+      terminalIds: ["existing"],
       focusedId: "existing",
       activeDockTerminalId: null,
     });
@@ -420,7 +428,8 @@ describe("terminal action hardening", () => {
     const moveToWorktree = actions.get("terminal.moveToWorktree")!();
 
     useTerminalStore.setState({
-      terminals: [createTerminal({ id: "term-a", worktreeId: "wt-1" })],
+      terminalsById: { "term-a": createTerminal({ id: "term-a", worktreeId: "wt-1" }) },
+      terminalIds: ["term-a"],
       focusedId: "term-a",
     });
 
@@ -436,10 +445,11 @@ describe("terminal action hardening", () => {
     const closeTerminal = actions.get("terminal.close")!();
 
     useTerminalStore.setState({
-      terminals: [
-        createTerminal({ id: "term-1", location: "grid" }),
-        createTerminal({ id: "term-2", location: "trash" }),
-      ],
+      terminalsById: {
+        "term-1": createTerminal({ id: "term-1", location: "grid" }),
+        "term-2": createTerminal({ id: "term-2", location: "trash" }),
+      },
+      terminalIds: ["term-1", "term-2"],
       focusedId: "term-1",
     });
 
@@ -448,10 +458,11 @@ describe("terminal action hardening", () => {
 
     mocks.appClient.quit.mockClear();
     useTerminalStore.setState({
-      terminals: [
-        createTerminal({ id: "term-a", location: "grid" }),
-        createTerminal({ id: "term-b", location: "grid" }),
-      ],
+      terminalsById: {
+        "term-a": createTerminal({ id: "term-a", location: "grid" }),
+        "term-b": createTerminal({ id: "term-b", location: "grid" }),
+      },
+      terminalIds: ["term-a", "term-b"],
       focusedId: "term-a",
     });
 
@@ -465,15 +476,16 @@ describe("terminal action hardening", () => {
     const addTerminal = vi.fn().mockResolvedValue("copy-id");
 
     useTerminalStore.setState({
-      terminals: [
-        createTerminal({
+      terminalsById: {
+        "term-trash": createTerminal({
           id: "term-trash",
           location: "trash",
           title: "Broken Session",
           command: "npm test",
           isInputLocked: true,
         }),
-      ],
+      },
+      terminalIds: ["term-trash"],
       addTerminal,
     } as never);
 
@@ -495,7 +507,8 @@ describe("terminal action hardening", () => {
     const addTerminal = vi.fn().mockResolvedValue("copy-id");
 
     useTerminalStore.setState({
-      terminals: [createTerminal({ id: "term-a", title: "My Shell" })],
+      terminalsById: { "term-a": createTerminal({ id: "term-a", title: "My Shell" }) },
+      terminalIds: ["term-a"],
       focusedId: "term-a",
       addTerminal,
     } as never);
@@ -516,10 +529,11 @@ describe("terminal action hardening", () => {
     const addTerminal = vi.fn().mockResolvedValue("copy-id");
 
     useTerminalStore.setState({
-      terminals: [
-        createTerminal({ id: "term-only", title: "Lonely" }),
-        createTerminal({ id: "term-trash", location: "trash" }),
-      ],
+      terminalsById: {
+        "term-only": createTerminal({ id: "term-only", title: "Lonely" }),
+        "term-trash": createTerminal({ id: "term-trash", location: "trash" }),
+      },
+      terminalIds: ["term-only", "term-trash"],
       focusedId: null,
       addTerminal,
     } as never);
@@ -539,7 +553,8 @@ describe("terminal action hardening", () => {
     const addTerminal = vi.fn().mockResolvedValue("new-id");
 
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       focusedId: null,
       lastClosedConfig: null,
       addTerminal,
@@ -562,7 +577,8 @@ describe("terminal action hardening", () => {
     const addTerminal = vi.fn().mockResolvedValue("new-id");
 
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       focusedId: null,
       lastClosedConfig: {
         kind: "terminal",
@@ -599,7 +615,8 @@ describe("terminal action hardening", () => {
     const addTerminal = vi.fn().mockResolvedValue("new-id");
 
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       focusedId: null,
       lastClosedConfig: {
         kind: "terminal",
@@ -625,7 +642,11 @@ describe("terminal action hardening", () => {
     const addTerminal = vi.fn().mockResolvedValue("copy-id");
 
     useTerminalStore.setState({
-      terminals: [createTerminal({ id: "term-a" }), createTerminal({ id: "term-b" })],
+      terminalsById: {
+        "term-a": createTerminal({ id: "term-a" }),
+        "term-b": createTerminal({ id: "term-b" }),
+      },
+      terminalIds: ["term-a", "term-b"],
       focusedId: null,
       addTerminal,
     } as never);
@@ -714,7 +735,8 @@ describe("panel action hardening", () => {
   it("throws for focus requests targeting trashed or missing panels", async () => {
     const activateTerminal = vi.fn();
     useTerminalStore.setState({
-      terminals: [createTerminal({ id: "trashed", location: "trash" })],
+      terminalsById: { trashed: createTerminal({ id: "trashed", location: "trash" }) },
+      terminalIds: ["trashed"],
       activateTerminal,
     } as never);
 

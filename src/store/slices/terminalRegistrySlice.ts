@@ -2,6 +2,7 @@
 export {
   createTerminalRegistrySlice,
   flushTerminalPersistence,
+  selectOrderedTerminals,
   MAX_GRID_TERMINALS,
   deriveRuntimeStatus,
   getDefaultTitle,

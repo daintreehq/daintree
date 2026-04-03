@@ -67,9 +67,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
       const project = useProjectStore.getState().currentProject;
       const terminalState = useTerminalStore.getState();
       const focusedId = terminalState.focusedId;
-      const focusedTerminal = focusedId
-        ? terminalState.terminals.find((t) => t.id === focusedId)
-        : null;
+      const focusedTerminal = focusedId ? terminalState.terminalsById[focusedId] : null;
 
       const activeWorktreeId = callbacksRef.current.getActiveWorktreeId() ?? undefined;
       const activeWorktree = activeWorktreeId

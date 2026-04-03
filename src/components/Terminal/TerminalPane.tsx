@@ -178,7 +178,7 @@ function TerminalPaneComponent({
   // Consolidate terminal state selectors to avoid multiple scans and ensure consistent snapshots
   const terminalState = useTerminalStore(
     useShallow((state) => {
-      const terminal = state.terminals.find((t) => t.id === id);
+      const terminal = state.terminalsById[id];
       return {
         isInputLocked: terminal?.isInputLocked ?? false,
         stateChangeTrigger: terminal?.stateChangeTrigger,
@@ -286,7 +286,7 @@ function TerminalPaneComponent({
 
     autoRestartTimerRef.current = setTimeout(() => {
       autoRestartTimerRef.current = null;
-      const currentTerminal = useTerminalStore.getState().terminals.find((t) => t.id === id);
+      const currentTerminal = useTerminalStore.getState().terminalsById[id];
       if (!currentTerminal || currentTerminal.location === "trash") {
         setIsAutoRestarting(false);
         return;

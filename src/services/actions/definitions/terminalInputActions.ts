@@ -63,7 +63,7 @@ export function registerTerminalInputActions(
       const state = useTerminalStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
-      const terminal = state.terminals.find((t) => t.id === targetId);
+      const terminal = state.terminalsById[targetId];
       if (terminal?.isInputLocked) return;
       const { terminalInstanceService } =
         await import("@/services/terminal/TerminalInstanceService");
@@ -182,7 +182,7 @@ export function registerTerminalInputActions(
       const sourceId = terminalId ?? state.focusedId;
       if (!sourceId) return;
 
-      const terminal = state.terminals.find((t) => t.id === sourceId);
+      const terminal = state.terminalsById[sourceId];
       if (!terminal) return;
       if (terminal.kind && !panelKindHasPty(terminal.kind)) return;
 

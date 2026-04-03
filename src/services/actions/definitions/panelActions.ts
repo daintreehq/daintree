@@ -29,7 +29,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
         location?: "grid" | "dock" | "trash" | "background";
       };
       const state = useTerminalStore.getState();
-      let panels = state.terminals;
+      let panels = state.terminalIds.map((id) => state.terminalsById[id]).filter(Boolean);
 
       if (worktreeId) {
         panels = panels.filter((p) => p.worktreeId === worktreeId);
@@ -82,7 +82,8 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     run: async (args: unknown) => {
       const { panelId } = args as { panelId: string };
       const terminalState = useTerminalStore.getState();
-      const panel = terminalState.terminals.find((t) => t.id === panelId && t.location !== "trash");
+      const found = terminalState.terminalsById[panelId];
+      const panel = found && found.location !== "trash" ? found : undefined;
       if (!panel) {
         throw new Error("Terminal panel no longer exists");
       }

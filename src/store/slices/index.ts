@@ -1,6 +1,7 @@
 export {
   createTerminalRegistrySlice,
   flushTerminalPersistence,
+  selectOrderedTerminals,
   type TerminalRegistrySlice,
   type TerminalInstance,
   type AddTerminalOptions,

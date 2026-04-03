@@ -28,15 +28,18 @@ export function openSendToAgentPalette(sourceTerminalId: string): boolean {
   const selection = terminalInstanceService.getCachedSelection(sourceTerminalId);
   if (!selection) return false;
 
-  const terminals = useTerminalStore.getState().terminals;
-  const hasTargets = terminals.some(
-    (t) =>
+  const { terminalsById, terminalIds } = useTerminalStore.getState();
+  const hasTargets = terminalIds.some((id) => {
+    const t = terminalsById[id];
+    return (
+      t &&
       t.id !== sourceTerminalId &&
       t.location !== "trash" &&
       t.location !== "background" &&
       (t.kind ? panelKindHasPty(t.kind) : true) &&
       t.hasPty !== false
-  );
+    );
+  });
   if (!hasTargets) return false;
 
   pendingState.sourceId = sourceTerminalId;
@@ -78,14 +81,17 @@ function sendSelectionToTarget(targetId: string): void {
 const MAX_RESULTS = 20;
 
 export function useSendToAgentPalette() {
-  const terminals = useTerminalStore(useShallow((state) => state.terminals));
+  const terminalIds = useTerminalStore(useShallow((state) => state.terminalIds));
+  const terminalsById = useTerminalStore(useShallow((state) => state.terminalsById));
   const isOpen = usePaletteStore((state) => state.activePaletteId === "send-to-agent");
 
   const items = useMemo<SendToAgentItem[]>(() => {
     const sourceId = isOpen ? pendingState.sourceId : null;
     const result: SendToAgentItem[] = [];
 
-    for (const t of terminals) {
+    for (const id of terminalIds) {
+      const t = terminalsById[id];
+      if (!t) continue;
       if (sourceId && t.id === sourceId) continue;
       if (t.location === "trash" || t.location === "background") continue;
       if (t.kind && !panelKindHasPty(t.kind)) continue;
@@ -107,7 +113,7 @@ export function useSendToAgentPalette() {
     }
 
     return result;
-  }, [terminals, isOpen]);
+  }, [terminalIds, terminalsById, isOpen]);
 
   const fuse = useMemo(() => new Fuse(items, FUSE_OPTIONS), [items]);
 

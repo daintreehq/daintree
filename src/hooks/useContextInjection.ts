@@ -1,6 +1,6 @@
 import { useCallback, useState, useEffect, useRef, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
+import { useTerminalStore } from "@/store/terminalStore";
 import { useErrorStore } from "@/store/errorStore";
 import type { AgentState, CopyTreeProgress } from "@/types";
 import { copyTreeClient } from "@/clients";
@@ -86,7 +86,7 @@ const globalInjectionState = {
 export function useContextInjection(targetTerminalId?: string): UseContextInjectionReturn {
   const [error, setError] = useState<string | null>(null);
   const focusedId = useTerminalStore((state) => state.focusedId);
-  const terminals = useTerminalStore(useShallow((state) => state.terminals));
+  const terminalsById = useTerminalStore(useShallow((state) => state.terminalsById));
   const addError = useErrorStore((state) => state.addError);
   const removeError = useErrorStore((state) => state.removeError);
 
@@ -154,8 +154,8 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
       const pending = globalInjectionState.pendingInjection;
       if (!pending) return;
 
-      const terminal = state.terminals.find((t) => t.id === pending.terminalId);
-      const prevTerminal = prevState.terminals.find((t) => t.id === pending.terminalId);
+      const terminal = state.terminalsById[pending.terminalId];
+      const prevTerminal = prevState.terminalsById[pending.terminalId];
 
       // Handle terminal deletion while waiting
       if (!terminal && prevTerminal) {
@@ -199,7 +199,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         return;
       }
 
-      let terminal = terminals.find((t: TerminalInstance) => t.id === activeTerminal);
+      let terminal = terminalsById[activeTerminal];
       if (!terminal) {
         setError(`Terminal not found: ${activeTerminal}`);
         return;
@@ -249,9 +249,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
             };
 
             // Immediately re-check if agent became ready between initial check and pending setup
-            const currentTerminal = useTerminalStore
-              .getState()
-              .terminals.find((t) => t.id === activeTerminal);
+            const currentTerminal = useTerminalStore.getState().terminalsById[activeTerminal];
             if (currentTerminal && isAgentReady(currentTerminal.agentState)) {
               resolve();
               globalInjectionState.pendingInjection = null;
@@ -270,9 +268,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         }
 
         // Re-fetch terminal state after waiting (it may have changed)
-        const updatedTerminal = useTerminalStore
-          .getState()
-          .terminals.find((t) => t.id === activeTerminal);
+        const updatedTerminal = useTerminalStore.getState().terminalsById[activeTerminal];
         if (!updatedTerminal) {
           setError(`Terminal no longer exists: ${activeTerminal}`);
           return;
@@ -397,7 +393,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         }
       }
     },
-    [focusedId, terminals, addError, removeError]
+    [focusedId, terminalsById, addError, removeError]
   );
 
   const cancel = useCallback(() => {

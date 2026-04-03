@@ -60,7 +60,8 @@ describe("trashTerminal agent-aware focus", () => {
     const { reset } = useTerminalStore.getState();
     reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -77,12 +78,13 @@ describe("trashTerminal agent-aware focus", () => {
 
   it("should focus next agent when trashing an agent terminal", () => {
     useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude"),
-        makeTerminal("shell-1", "terminal"),
-        makeTerminal("agent-2", "agent", "gemini"),
-        makeTerminal("shell-2", "terminal"),
-      ],
+      terminalsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "shell-1": makeTerminal("shell-1", "terminal"),
+        "agent-2": makeTerminal("agent-2", "agent", "gemini"),
+        "shell-2": makeTerminal("shell-2", "terminal"),
+      },
+      terminalIds: ["agent-1", "shell-1", "agent-2", "shell-2"],
       focusedId: "agent-1",
     });
 
@@ -93,7 +95,11 @@ describe("trashTerminal agent-aware focus", () => {
 
   it("should fall back to any grid terminal when last agent is trashed", () => {
     useTerminalStore.setState({
-      terminals: [makeTerminal("agent-1", "agent", "claude"), makeTerminal("shell-1", "terminal")],
+      terminalsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "shell-1": makeTerminal("shell-1", "terminal"),
+      },
+      terminalIds: ["agent-1", "shell-1"],
       focusedId: "agent-1",
     });
 
@@ -104,12 +110,13 @@ describe("trashTerminal agent-aware focus", () => {
 
   it("should support rapid sequential agent close", () => {
     useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude"),
-        makeTerminal("agent-2", "agent", "gemini"),
-        makeTerminal("agent-3", "agent", "codex"),
-        makeTerminal("shell-1", "terminal"),
-      ],
+      terminalsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "agent-2": makeTerminal("agent-2", "agent", "gemini"),
+        "agent-3": makeTerminal("agent-3", "agent", "codex"),
+        "shell-1": makeTerminal("shell-1", "terminal"),
+      },
+      terminalIds: ["agent-1", "agent-2", "agent-3", "shell-1"],
       focusedId: "agent-1",
     });
 
@@ -125,11 +132,12 @@ describe("trashTerminal agent-aware focus", () => {
 
   it("should not change behavior when trashing a non-agent terminal", () => {
     useTerminalStore.setState({
-      terminals: [
-        makeTerminal("shell-1", "terminal"),
-        makeTerminal("agent-1", "agent", "claude"),
-        makeTerminal("shell-2", "terminal"),
-      ],
+      terminalsById: {
+        "shell-1": makeTerminal("shell-1", "terminal"),
+        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "shell-2": makeTerminal("shell-2", "terminal"),
+      },
+      terminalIds: ["shell-1", "agent-1", "shell-2"],
       focusedId: "shell-1",
     });
 
@@ -141,7 +149,8 @@ describe("trashTerminal agent-aware focus", () => {
 
   it("should set focusedId to null when no grid terminals remain", () => {
     useTerminalStore.setState({
-      terminals: [makeTerminal("agent-1", "agent", "claude")],
+      terminalsById: { "agent-1": makeTerminal("agent-1", "agent", "claude") },
+      terminalIds: ["agent-1"],
       focusedId: "agent-1",
     });
 
@@ -157,7 +166,8 @@ describe("trashPanelGroup agent-aware focus", () => {
     const { reset } = useTerminalStore.getState();
     reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -174,12 +184,13 @@ describe("trashPanelGroup agent-aware focus", () => {
 
   it("should focus next agent when trashing a group with focused agent", () => {
     useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude"),
-        makeTerminal("agent-2", "agent", "gemini"),
-        makeTerminal("agent-3", "agent", "codex"),
-        makeTerminal("shell-1", "terminal"),
-      ],
+      terminalsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "agent-2": makeTerminal("agent-2", "agent", "gemini"),
+        "agent-3": makeTerminal("agent-3", "agent", "codex"),
+        "shell-1": makeTerminal("shell-1", "terminal"),
+      },
+      terminalIds: ["agent-1", "agent-2", "agent-3", "shell-1"],
       tabGroups: new Map([
         [
           "group-1",
@@ -201,11 +212,12 @@ describe("trashPanelGroup agent-aware focus", () => {
 
   it("should fall back to non-agent when no agents remain after group trash", () => {
     useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude"),
-        makeTerminal("agent-2", "agent", "gemini"),
-        makeTerminal("shell-1", "terminal"),
-      ],
+      terminalsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "agent-2": makeTerminal("agent-2", "agent", "gemini"),
+        "shell-1": makeTerminal("shell-1", "terminal"),
+      },
+      terminalIds: ["agent-1", "agent-2", "shell-1"],
       tabGroups: new Map([
         [
           "group-1",
@@ -232,7 +244,8 @@ describe("worktree-scoped focus fallback (#4327)", () => {
     const { reset } = useTerminalStore.getState();
     reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -251,11 +264,12 @@ describe("worktree-scoped focus fallback (#4327)", () => {
   it("trashTerminal: should prefer same-worktree terminal over cross-worktree", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude", "wt-1"),
-        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
-        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
-      ],
+      terminalsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude", "wt-1"),
+        "shell-other": makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+        "shell-same": makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      },
+      terminalIds: ["agent-1", "shell-other", "shell-same"],
       focusedId: "agent-1",
     });
 
@@ -267,10 +281,11 @@ describe("worktree-scoped focus fallback (#4327)", () => {
   it("trashTerminal: should fall back to null when no same-worktree grid terminals remain", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude", "wt-1"),
-        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
-      ],
+      terminalsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude", "wt-1"),
+        "shell-other": makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+      },
+      terminalIds: ["agent-1", "shell-other"],
       focusedId: "agent-1",
     });
 
@@ -282,12 +297,13 @@ describe("worktree-scoped focus fallback (#4327)", () => {
   it("trashTerminal: should prefer same-worktree agent when trashing an agent", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude", "wt-1"),
-        makeTerminal("agent-other", "agent", "gemini", "wt-2"),
-        makeTerminal("agent-same", "agent", "codex", "wt-1"),
-        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
-      ],
+      terminalsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude", "wt-1"),
+        "agent-other": makeTerminal("agent-other", "agent", "gemini", "wt-2"),
+        "agent-same": makeTerminal("agent-same", "agent", "codex", "wt-1"),
+        "shell-same": makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      },
+      terminalIds: ["agent-1", "agent-other", "agent-same", "shell-same"],
       focusedId: "agent-1",
     });
 
@@ -299,11 +315,12 @@ describe("worktree-scoped focus fallback (#4327)", () => {
   it("trashTerminal: root worktree (null activeWorktreeId) matches undefined worktreeId", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: null });
     useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude"),
-        makeTerminal("shell-root", "terminal"),
-        makeTerminal("shell-wt", "terminal", undefined, "wt-1"),
-      ],
+      terminalsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "shell-root": makeTerminal("shell-root", "terminal"),
+        "shell-wt": makeTerminal("shell-wt", "terminal", undefined, "wt-1"),
+      },
+      terminalIds: ["agent-1", "shell-root", "shell-wt"],
       focusedId: "agent-1",
     });
 
@@ -315,11 +332,12 @@ describe("worktree-scoped focus fallback (#4327)", () => {
   it("moveTerminalToDock: should prefer same-worktree terminal", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     useTerminalStore.setState({
-      terminals: [
-        makeTerminal("panel-1", "terminal", undefined, "wt-1"),
-        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
-        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
-      ],
+      terminalsById: {
+        "panel-1": makeTerminal("panel-1", "terminal", undefined, "wt-1"),
+        "shell-other": makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+        "shell-same": makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      },
+      terminalIds: ["panel-1", "shell-other", "shell-same"],
       focusedId: "panel-1",
     });
 
@@ -331,12 +349,13 @@ describe("worktree-scoped focus fallback (#4327)", () => {
   it("trashPanelGroup: should prefer same-worktree terminal", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude", "wt-1"),
-        makeTerminal("agent-2", "agent", "gemini", "wt-1"),
-        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
-        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
-      ],
+      terminalsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude", "wt-1"),
+        "agent-2": makeTerminal("agent-2", "agent", "gemini", "wt-1"),
+        "shell-other": makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+        "shell-same": makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      },
+      terminalIds: ["agent-1", "agent-2", "shell-other", "shell-same"],
       tabGroups: new Map([
         [
           "group-1",
@@ -359,11 +378,12 @@ describe("worktree-scoped focus fallback (#4327)", () => {
   it("moveTerminalToPosition to dock: should prefer same-worktree terminal", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
     useTerminalStore.setState({
-      terminals: [
-        makeTerminal("panel-1", "terminal", undefined, "wt-1"),
-        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
-        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
-      ],
+      terminalsById: {
+        "panel-1": makeTerminal("panel-1", "terminal", undefined, "wt-1"),
+        "shell-other": makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+        "shell-same": makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      },
+      terminalIds: ["panel-1", "shell-other", "shell-same"],
       focusedId: "panel-1",
     });
 
@@ -379,7 +399,8 @@ describe("lastClosedConfig snapshot (#4717)", () => {
     const { reset } = useTerminalStore.getState();
     reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -397,15 +418,16 @@ describe("lastClosedConfig snapshot (#4717)", () => {
 
   it("captures lastClosedConfig when trashing a terminal", () => {
     useTerminalStore.setState({
-      terminals: [
-        {
+      terminalsById: {
+        "agent-1": {
           ...makeTerminal("agent-1", "agent", "claude", "wt-1"),
           command: "claude --interactive",
           agentModelId: "opus",
           agentLaunchFlags: ["--verbose"],
           cwd: "/projects/app",
         },
-      ],
+      },
+      terminalIds: ["agent-1"],
       focusedId: "agent-1",
     });
 
@@ -423,10 +445,11 @@ describe("lastClosedConfig snapshot (#4717)", () => {
 
   it("overwrites lastClosedConfig on each close", () => {
     useTerminalStore.setState({
-      terminals: [
-        makeTerminal("shell-1", "terminal"),
-        { ...makeTerminal("shell-2", "terminal"), command: "zsh" },
-      ],
+      terminalsById: {
+        "shell-1": makeTerminal("shell-1", "terminal"),
+        "shell-2": { ...makeTerminal("shell-2", "terminal"), command: "zsh" },
+      },
+      terminalIds: ["shell-1", "shell-2"],
       focusedId: "shell-1",
     });
 
@@ -439,11 +462,12 @@ describe("lastClosedConfig snapshot (#4717)", () => {
 
   it("captures lastClosedConfig when trashing a panel group", () => {
     useTerminalStore.setState({
-      terminals: [
-        { ...makeTerminal("agent-1", "agent", "claude"), command: "claude-cmd" },
-        makeTerminal("agent-2", "agent", "gemini"),
-        makeTerminal("shell-1", "terminal"),
-      ],
+      terminalsById: {
+        "agent-1": { ...makeTerminal("agent-1", "agent", "claude"), command: "claude-cmd" },
+        "agent-2": makeTerminal("agent-2", "agent", "gemini"),
+        "shell-1": makeTerminal("shell-1", "terminal"),
+      },
+      terminalIds: ["agent-1", "agent-2", "shell-1"],
       tabGroups: new Map([
         [
           "group-1",
@@ -468,7 +492,8 @@ describe("lastClosedConfig snapshot (#4717)", () => {
 
   it("clears lastClosedConfig on reset", async () => {
     useTerminalStore.setState({
-      terminals: [makeTerminal("shell-1", "terminal")],
+      terminalsById: { "shell-1": makeTerminal("shell-1", "terminal") },
+      terminalIds: ["shell-1"],
       focusedId: "shell-1",
     });
 
@@ -481,7 +506,8 @@ describe("lastClosedConfig snapshot (#4717)", () => {
 
   it("clears lastClosedConfig on clearTerminalStoreForSwitch", () => {
     useTerminalStore.setState({
-      terminals: [makeTerminal("shell-1", "terminal")],
+      terminalsById: { "shell-1": makeTerminal("shell-1", "terminal") },
+      terminalIds: ["shell-1"],
       focusedId: "shell-1",
     });
 

@@ -142,7 +142,7 @@ export function useMemoryLeakDetection(
         if (shouldAlert) {
           leakState.lastAlertAt = now;
 
-          const terminal = useTerminalStore.getState().terminals.find((t) => t.id === id);
+          const terminal = useTerminalStore.getState().terminalsById[id];
           const terminalTitle = terminal?.title ?? id;
           const slope = computeSlope(leakState.memHistory);
 
@@ -188,7 +188,7 @@ export function useMemoryLeakDetection(
           leakState.sampleCount >= STARTUP_SKIP_SAMPLES &&
           !leakState.dismissed
         ) {
-          const terminal = useTerminalStore.getState().terminals.find((t) => t.id === id);
+          const terminal = useTerminalStore.getState().terminalsById[id];
           if (terminal && terminal.agentState !== "waiting" && !terminal.isInputLocked) {
             leakState.dismissed = true;
             useTerminalStore.getState().restartTerminal(id);

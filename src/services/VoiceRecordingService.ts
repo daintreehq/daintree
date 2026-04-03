@@ -401,9 +401,8 @@ class VoiceRecordingService {
         const currentProjectId = useProjectStore.getState().currentProject?.id;
         if (activeTarget.projectId && currentProjectId !== activeTarget.projectId) return;
 
-        const panel = state.terminals.find(
-          (terminal) => terminal.id === activeTarget.panelId && terminal.location !== "trash"
-        );
+        const found = state.terminalsById[activeTarget.panelId];
+        const panel = found && found.location !== "trash" ? found : undefined;
 
         if (!panel) {
           const panelId = activeTarget.panelId;
@@ -770,14 +769,11 @@ class VoiceRecordingService {
 
     await this.waitForPanel(target.panelId);
 
-    const panel = useTerminalStore
-      .getState()
-      .terminals.find(
-        (terminal) => terminal.id === target.panelId && terminal.location !== "trash"
-      );
-    if (!panel) {
+    const foundPanel = useTerminalStore.getState().terminalsById[target.panelId];
+    if (!foundPanel || foundPanel.location === "trash") {
       return false;
     }
+    const panel = foundPanel;
 
     useTerminalStore.getState().activateTerminal(panel.id);
     return true;
@@ -788,10 +784,9 @@ class VoiceRecordingService {
     const panelId = terminalState.focusedId;
     if (!panelId) return null;
 
-    const panel = terminalState.terminals.find(
-      (terminal) => terminal.id === panelId && terminal.location !== "trash"
-    );
-    if (!panel) return null;
+    const foundPanel = terminalState.terminalsById[panelId];
+    if (!foundPanel || foundPanel.location === "trash") return null;
+    const panel = foundPanel;
 
     const currentProject = useProjectStore.getState().currentProject;
     const worktree = panel.worktreeId
@@ -809,10 +804,8 @@ class VoiceRecordingService {
   }
 
   private async waitForPanel(panelId: string, timeoutMs = 5000): Promise<void> {
-    const existing = useTerminalStore
-      .getState()
-      .terminals.some((terminal) => terminal.id === panelId && terminal.location !== "trash");
-    if (existing) return;
+    const existingPanel = useTerminalStore.getState().terminalsById[panelId];
+    if (existingPanel && existingPanel.location !== "trash") return;
 
     await new Promise<void>((resolve) => {
       let settled = false;
@@ -824,10 +817,8 @@ class VoiceRecordingService {
       }, timeoutMs);
 
       const unsubscribe = useTerminalStore.subscribe((state) => {
-        const found = state.terminals.some(
-          (terminal) => terminal.id === panelId && terminal.location !== "trash"
-        );
-        if (!found || settled) return;
+        const found = state.terminalsById[panelId];
+        if (!found || found.location === "trash" || settled) return;
         settled = true;
         clearTimeout(timeout);
         unsubscribe();

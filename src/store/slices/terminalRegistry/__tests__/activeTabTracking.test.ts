@@ -49,7 +49,8 @@ describe("unified active tab tracking", () => {
     const { reset } = useTerminalStore.getState();
     await reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -74,8 +75,8 @@ describe("unified active tab tracking", () => {
       };
 
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "term-1": {
             id: "term-1",
             type: "terminal",
             title: "Shell 1",
@@ -84,7 +85,7 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-          {
+          "term-2": {
             id: "term-2",
             type: "terminal",
             title: "Shell 2",
@@ -93,7 +94,7 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-          {
+          "term-3": {
             id: "term-3",
             type: "terminal",
             title: "Shell 3",
@@ -102,7 +103,8 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-        ],
+        },
+        terminalIds: ["term-1", "term-2", "term-3"],
         tabGroups: new Map([["group-1", group]]),
       });
 
@@ -118,8 +120,8 @@ describe("unified active tab tracking", () => {
 
     it("should be a no-op for virtual groups (single panel, no explicit TabGroup)", () => {
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "term-1": {
             id: "term-1",
             type: "terminal",
             title: "Shell 1",
@@ -128,7 +130,8 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-        ],
+        },
+        terminalIds: ["term-1"],
         tabGroups: new Map(),
       });
 
@@ -150,8 +153,8 @@ describe("unified active tab tracking", () => {
       };
 
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "term-1": {
             id: "term-1",
             type: "terminal",
             title: "Shell 1",
@@ -160,7 +163,7 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-          {
+          "term-2": {
             id: "term-2",
             type: "terminal",
             title: "Shell 2",
@@ -169,7 +172,7 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-          {
+          "term-3": {
             id: "term-3",
             type: "terminal",
             title: "Shell 3",
@@ -178,7 +181,8 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-        ],
+        },
+        terminalIds: ["term-1", "term-2", "term-3"],
         tabGroups: new Map([["group-1", group]]),
       });
 
@@ -201,8 +205,8 @@ describe("unified active tab tracking", () => {
       };
 
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "term-1": {
             id: "term-1",
             type: "terminal",
             title: "Shell 1",
@@ -211,7 +215,7 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-          {
+          "term-2": {
             id: "term-2",
             type: "terminal",
             title: "Shell 2",
@@ -220,7 +224,8 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-        ],
+        },
+        terminalIds: ["term-1", "term-2"],
         tabGroups: new Map([["group-1", group]]),
       });
 
@@ -232,7 +237,8 @@ describe("unified active tab tracking", () => {
 
     it("should be a no-op for nonexistent group ID", () => {
       useTerminalStore.setState({
-        terminals: [],
+        terminalsById: {},
+        terminalIds: [],
         tabGroups: new Map(),
       });
 
@@ -252,8 +258,8 @@ describe("unified active tab tracking", () => {
       };
 
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "term-1": {
             id: "term-1",
             type: "terminal",
             title: "Shell 1",
@@ -262,7 +268,7 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-          {
+          "term-2": {
             id: "term-2",
             type: "terminal",
             title: "Shell 2",
@@ -271,7 +277,8 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-        ],
+        },
+        terminalIds: ["term-1", "term-2"],
         tabGroups: new Map([["group-1", group]]),
       });
 
@@ -281,8 +288,8 @@ describe("unified active tab tracking", () => {
 
     it("should return panelId for virtual groups (ungrouped standalone panels)", () => {
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "term-1": {
             id: "term-1",
             type: "terminal",
             title: "Shell 1",
@@ -291,7 +298,8 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-        ],
+        },
+        terminalIds: ["term-1"],
         tabGroups: new Map(),
       });
 
@@ -301,7 +309,8 @@ describe("unified active tab tracking", () => {
 
     it("should return null for non-existent groups", () => {
       useTerminalStore.setState({
-        terminals: [],
+        terminalsById: {},
+        terminalIds: [],
         tabGroups: new Map(),
       });
 
@@ -318,8 +327,8 @@ describe("unified active tab tracking", () => {
       };
 
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "term-1": {
             id: "term-1",
             type: "terminal",
             title: "Shell 1",
@@ -328,7 +337,7 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-          {
+          "term-2": {
             id: "term-2",
             type: "terminal",
             title: "Shell 2",
@@ -337,7 +346,8 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-        ],
+        },
+        terminalIds: ["term-1", "term-2"],
         tabGroups: new Map([["group-1", group]]),
       });
 
@@ -348,8 +358,8 @@ describe("unified active tab tracking", () => {
 
     it("should exclude background panels from virtual group resolution", () => {
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "term-bg": {
             id: "term-bg",
             type: "terminal",
             title: "Background",
@@ -358,7 +368,8 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "background",
           },
-        ],
+        },
+        terminalIds: ["term-bg"],
         tabGroups: new Map(),
       });
 
@@ -370,8 +381,8 @@ describe("unified active tab tracking", () => {
   describe("hydrateTabGroups", () => {
     it("should restore activeTabId from persisted TabGroup state", () => {
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "term-1": {
             id: "term-1",
             type: "terminal",
             title: "Shell 1",
@@ -380,7 +391,7 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-          {
+          "term-2": {
             id: "term-2",
             type: "terminal",
             title: "Shell 2",
@@ -389,7 +400,7 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-          {
+          "term-3": {
             id: "term-3",
             type: "terminal",
             title: "Shell 3",
@@ -398,7 +409,7 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "dock",
           },
-          {
+          "term-4": {
             id: "term-4",
             type: "terminal",
             title: "Shell 4",
@@ -407,7 +418,8 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "dock",
           },
-        ],
+        },
+        terminalIds: ["term-1", "term-2", "term-3", "term-4"],
         tabGroups: new Map(),
       });
 
@@ -442,8 +454,8 @@ describe("unified active tab tracking", () => {
 
     it("should handle empty tab groups array", () => {
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "term-1": {
             id: "term-1",
             type: "terminal",
             title: "Shell 1",
@@ -452,7 +464,8 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-        ],
+        },
+        terminalIds: ["term-1"],
         tabGroups: new Map([
           [
             "old-group",
@@ -478,8 +491,8 @@ describe("unified active tab tracking", () => {
     it("should maintain active tab through setActiveTab → persist → hydrate cycle", () => {
       // Step 1: Set up initial state with a group
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "term-1": {
             id: "term-1",
             type: "terminal",
             title: "Shell 1",
@@ -488,7 +501,7 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-          {
+          "term-2": {
             id: "term-2",
             type: "terminal",
             title: "Shell 2",
@@ -497,7 +510,8 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-        ],
+        },
+        terminalIds: ["term-1", "term-2"],
         tabGroups: new Map([
           [
             "group-1",
@@ -521,8 +535,8 @@ describe("unified active tab tracking", () => {
 
       // Step 4: Simulate app restart - clear in-memory state
       useTerminalStore.setState({
-        terminals: [
-          {
+        terminalsById: {
+          "term-1": {
             id: "term-1",
             type: "terminal",
             title: "Shell 1",
@@ -531,7 +545,7 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-          {
+          "term-2": {
             id: "term-2",
             type: "terminal",
             title: "Shell 2",
@@ -540,7 +554,8 @@ describe("unified active tab tracking", () => {
             rows: 24,
             location: "grid",
           },
-        ],
+        },
+        terminalIds: ["term-1", "term-2"],
         tabGroups: new Map(),
       });
 

@@ -41,14 +41,21 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
 
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const dockTerminals = useTerminalStore(
-    useShallow((s) =>
-      s.terminals.filter(
-        (t) =>
+    useShallow((s) => {
+      const result: TerminalInstance[] = [];
+      for (const id of s.terminalIds) {
+        const t = s.terminalsById[id];
+        if (
+          t &&
           t.location === "dock" &&
           // Show terminals that match active worktree OR have no worktree (global terminals)
           (t.worktreeId == null || t.worktreeId === activeWorktreeId)
-      )
-    )
+        ) {
+          result.push(t);
+        }
+      }
+      return result;
+    })
   );
 
   const closeDockTerminal = useTerminalStore((s) => s.closeDockTerminal);

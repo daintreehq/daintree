@@ -47,6 +47,13 @@ vi.mock("@/store/layoutConfigStore", () => ({
 const { useTerminalStore } = await import("../../../terminalStore");
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 
+function setTerminals(terminals: TerminalInstance[]) {
+  useTerminalStore.setState({
+    terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    terminalIds: terminals.map((t) => t.id),
+  });
+}
+
 function createMockTerminal(
   id: string,
   worktreeId: string | undefined,
@@ -84,7 +91,8 @@ describe("Tab Group Worktree Invariant", () => {
   beforeEach(() => {
     useTerminalStore.getState().reset();
     useTerminalStore.setState({
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
       tabGroups: new Map(),
       focusedId: null,
       maximizedId: null,
@@ -105,10 +113,8 @@ describe("Tab Group Worktree Invariant", () => {
         createMockTerminal(`target-${i}`, "wt-b", "grid")
       );
 
-      useTerminalStore.setState({
-        terminals: [t1, t2, ...targetGridTerminals],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1, t2, ...targetGridTerminals]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -121,7 +127,7 @@ describe("Tab Group Worktree Invariant", () => {
 
       const state = useTerminalStore.getState();
       expect(state.tabGroups.get("g1")?.worktreeId).toBe("wt-a");
-      expect(state.terminals.find((t) => t.id === "t1")?.worktreeId).toBe("wt-a");
+      expect(state.terminalsById["t1"]?.worktreeId).toBe("wt-a");
 
       consoleWarnSpy.mockRestore();
     });
@@ -132,10 +138,8 @@ describe("Tab Group Worktree Invariant", () => {
       const t3 = createMockTerminal("t3", "wt-a", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1", "t2", "t3"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2, t3],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1, t2, t3]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
@@ -144,13 +148,9 @@ describe("Tab Group Worktree Invariant", () => {
 
       expect(updatedGroup?.worktreeId).toBe("wt-b");
 
-      const movedT1 = state.terminals.find((t) => t.id === "t1");
-      const movedT2 = state.terminals.find((t) => t.id === "t2");
-      const movedT3 = state.terminals.find((t) => t.id === "t3");
-
-      expect(movedT1?.worktreeId).toBe("wt-b");
-      expect(movedT2?.worktreeId).toBe("wt-b");
-      expect(movedT3?.worktreeId).toBe("wt-b");
+      expect(state.terminalsById["t1"]?.worktreeId).toBe("wt-b");
+      expect(state.terminalsById["t2"]?.worktreeId).toBe("wt-b");
+      expect(state.terminalsById["t3"]?.worktreeId).toBe("wt-b");
     });
 
     it("moves ungrouped panel individually", () => {
@@ -159,21 +159,16 @@ describe("Tab Group Worktree Invariant", () => {
       const t3 = createMockTerminal("t3", "wt-a", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t2", "t3"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2, t3],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1, t2, t3]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
       const state = useTerminalStore.getState();
-      const movedT1 = state.terminals.find((t) => t.id === "t1");
-      const movedT2 = state.terminals.find((t) => t.id === "t2");
-      const movedT3 = state.terminals.find((t) => t.id === "t3");
 
-      expect(movedT1?.worktreeId).toBe("wt-b");
-      expect(movedT2?.worktreeId).toBe("wt-a");
-      expect(movedT3?.worktreeId).toBe("wt-a");
+      expect(state.terminalsById["t1"]?.worktreeId).toBe("wt-b");
+      expect(state.terminalsById["t2"]?.worktreeId).toBe("wt-a");
+      expect(state.terminalsById["t3"]?.worktreeId).toBe("wt-a");
 
       const group1 = state.tabGroups.get("g1");
       expect(group1?.worktreeId).toBe("wt-a");
@@ -184,10 +179,8 @@ describe("Tab Group Worktree Invariant", () => {
       const t2 = createMockTerminal("t2", "wt-a", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1", "t2"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1, t2]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
@@ -213,10 +206,8 @@ describe("Tab Group Worktree Invariant", () => {
         createMockTerminal(`target-${i}`, "wt-b", "grid")
       );
 
-      useTerminalStore.setState({
-        terminals: [t1, t2, ...targetGridTerminals],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1, t2, ...targetGridTerminals]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       const result = useTerminalStore.getState().moveTabGroupToWorktree("g1", "wt-b");
 
@@ -226,8 +217,8 @@ describe("Tab Group Worktree Invariant", () => {
       const unchangedGroup = state.tabGroups.get("g1");
       expect(unchangedGroup?.worktreeId).toBe("wt-a");
 
-      const unchangedT1 = state.terminals.find((t) => t.id === "t1");
-      const unchangedT2 = state.terminals.find((t) => t.id === "t2");
+      const unchangedT1 = state.terminalsById["t1"];
+      const unchangedT2 = state.terminalsById["t2"];
       expect(unchangedT1?.worktreeId).toBe("wt-a");
       expect(unchangedT2?.worktreeId).toBe("wt-a");
 
@@ -240,10 +231,8 @@ describe("Tab Group Worktree Invariant", () => {
       const t3 = createMockTerminal("t3", "wt-a", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1", "t2", "t3"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2, t3],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1, t2, t3]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       const result = useTerminalStore.getState().moveTabGroupToWorktree("g1", "wt-b");
 
@@ -253,9 +242,9 @@ describe("Tab Group Worktree Invariant", () => {
       const updatedGroup = state.tabGroups.get("g1");
       expect(updatedGroup?.worktreeId).toBe("wt-b");
 
-      const updatedT1 = state.terminals.find((t) => t.id === "t1");
-      const updatedT2 = state.terminals.find((t) => t.id === "t2");
-      const updatedT3 = state.terminals.find((t) => t.id === "t3");
+      const updatedT1 = state.terminalsById["t1"];
+      const updatedT2 = state.terminalsById["t2"];
+      const updatedT3 = state.terminalsById["t3"];
 
       expect(updatedT1?.worktreeId).toBe("wt-b");
       expect(updatedT2?.worktreeId).toBe("wt-b");
@@ -266,10 +255,8 @@ describe("Tab Group Worktree Invariant", () => {
       const t1 = createMockTerminal("t1", "wt-a", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1"]);
 
-      useTerminalStore.setState({
-        terminals: [t1],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       const result = useTerminalStore.getState().moveTabGroupToWorktree("g1", "wt-a");
       expect(result).toBe(true);
@@ -285,16 +272,14 @@ describe("Tab Group Worktree Invariant", () => {
       const t2 = createMockTerminal("t2", "wt-a", "trash");
       const group = createMockTabGroup("g1", "wt-a", ["t1", "t2"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1, t2]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       useTerminalStore.getState().moveTabGroupToWorktree("g1", "wt-b");
 
       const state = useTerminalStore.getState();
-      const updatedT1 = state.terminals.find((t) => t.id === "t1");
-      const updatedT2 = state.terminals.find((t) => t.id === "t2");
+      const updatedT1 = state.terminalsById["t1"];
+      const updatedT2 = state.terminalsById["t2"];
 
       expect(updatedT1?.worktreeId).toBe("wt-b");
       expect(updatedT2?.worktreeId).toBe("wt-a");
@@ -308,10 +293,8 @@ describe("Tab Group Worktree Invariant", () => {
       const t2 = createMockTerminal("t2", "wt-a", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1, t2]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       useTerminalStore.getState().addPanelToGroup("g1", "t2");
 
@@ -324,10 +307,8 @@ describe("Tab Group Worktree Invariant", () => {
       const t2 = createMockTerminal("t2", "wt-b", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1, t2]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       useTerminalStore.getState().addPanelToGroup("g1", "t2");
 
@@ -340,10 +321,8 @@ describe("Tab Group Worktree Invariant", () => {
       const t2 = createMockTerminal("t2", undefined, "grid");
       const group = createMockTabGroup("g1", undefined, ["t1"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1, t2]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       useTerminalStore.getState().addPanelToGroup("g1", "t2");
 
@@ -356,10 +335,8 @@ describe("Tab Group Worktree Invariant", () => {
       const t2 = createMockTerminal("t2", undefined, "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1, t2]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       useTerminalStore.getState().addPanelToGroup("g1", "t2");
 
@@ -374,10 +351,8 @@ describe("Tab Group Worktree Invariant", () => {
       const t2 = createMockTerminal("t2", undefined, "grid");
       const group = createMockTabGroup("g1", undefined, ["t1", "t2"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1, t2]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       const result = useTerminalStore.getState().moveTabGroupToWorktree("g1", "wt-a");
       expect(result).toBe(true);
@@ -386,8 +361,8 @@ describe("Tab Group Worktree Invariant", () => {
       const updatedGroup = state.tabGroups.get("g1");
       expect(updatedGroup?.worktreeId).toBe("wt-a");
 
-      const updatedT1 = state.terminals.find((t) => t.id === "t1");
-      const updatedT2 = state.terminals.find((t) => t.id === "t2");
+      const updatedT1 = state.terminalsById["t1"];
+      const updatedT2 = state.terminalsById["t2"];
       expect(updatedT1?.worktreeId).toBe("wt-a");
       expect(updatedT2?.worktreeId).toBe("wt-a");
     });
@@ -397,10 +372,8 @@ describe("Tab Group Worktree Invariant", () => {
       const t2 = createMockTerminal("t2", "wt-a", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1", "t2"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1, t2]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       const result = useTerminalStore.getState().moveTabGroupToWorktree("g1", undefined as any);
       expect(result).toBe(true);
@@ -409,8 +382,8 @@ describe("Tab Group Worktree Invariant", () => {
       const updatedGroup = state.tabGroups.get("g1");
       expect(updatedGroup?.worktreeId).toBe(undefined);
 
-      const updatedT1 = state.terminals.find((t) => t.id === "t1");
-      const updatedT2 = state.terminals.find((t) => t.id === "t2");
+      const updatedT1 = state.terminalsById["t1"];
+      const updatedT2 = state.terminalsById["t2"];
       expect(updatedT1?.worktreeId).toBe(undefined);
       expect(updatedT2?.worktreeId).toBe(undefined);
     });
@@ -420,10 +393,8 @@ describe("Tab Group Worktree Invariant", () => {
       const t2 = createMockTerminal("t2", "wt-a", "grid");
       const group = createMockTabGroup("g1", undefined, ["t1"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-        tabGroups: new Map([["g1", group]]),
-      });
+      setTerminals([t1, t2]);
+      useTerminalStore.setState({ tabGroups: new Map([["g1", group]]) });
 
       useTerminalStore.getState().addPanelToGroup("g1", "t2");
 
@@ -439,9 +410,7 @@ describe("Tab Group Worktree Invariant", () => {
       const t3 = createMockTerminal("t3", "wt-b", "grid");
       const group = createMockTabGroup("g1", "wt-b", ["t1", "t2", "t3"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2, t3],
-      });
+      setTerminals([t1, t2, t3]);
 
       useTerminalStore.getState().hydrateTabGroups([group]);
 
@@ -450,9 +419,9 @@ describe("Tab Group Worktree Invariant", () => {
 
       expect(repairedGroup?.worktreeId).toBe("wt-a");
 
-      const repairedT1 = state.terminals.find((t) => t.id === "t1");
-      const repairedT2 = state.terminals.find((t) => t.id === "t2");
-      const repairedT3 = state.terminals.find((t) => t.id === "t3");
+      const repairedT1 = state.terminalsById["t1"];
+      const repairedT2 = state.terminalsById["t2"];
+      const repairedT3 = state.terminalsById["t3"];
 
       expect(repairedT1?.worktreeId).toBe("wt-a");
       expect(repairedT2?.worktreeId).toBe("wt-a");
@@ -464,14 +433,12 @@ describe("Tab Group Worktree Invariant", () => {
       const t2 = createMockTerminal("t2", "wt-b", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1", "t2"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-      });
+      setTerminals([t1, t2]);
 
       useTerminalStore.getState().hydrateTabGroups([group]);
 
       const state = useTerminalStore.getState();
-      const repairedT2 = state.terminals.find((t) => t.id === "t2");
+      const repairedT2 = state.terminalsById["t2"];
 
       expect(repairedT2?.worktreeId).toBe("wt-a");
     });
@@ -481,15 +448,13 @@ describe("Tab Group Worktree Invariant", () => {
       const t2 = createMockTerminal("t2", "wt-a", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1", "t2"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-      });
+      setTerminals([t1, t2]);
 
       useTerminalStore.getState().hydrateTabGroups([group]);
 
       const state = useTerminalStore.getState();
-      const repairedT1 = state.terminals.find((t) => t.id === "t1");
-      const repairedT2 = state.terminals.find((t) => t.id === "t2");
+      const repairedT1 = state.terminalsById["t1"];
+      const repairedT2 = state.terminalsById["t2"];
 
       expect(repairedT1?.worktreeId).toBe("wt-a");
       expect(repairedT2?.worktreeId).toBe("wt-a");
@@ -500,9 +465,7 @@ describe("Tab Group Worktree Invariant", () => {
       const t2 = createMockTerminal("t2", "wt-b", "trash");
       const group = createMockTabGroup("g1", "wt-a", ["t1", "t2"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-      });
+      setTerminals([t1, t2]);
 
       useTerminalStore.getState().hydrateTabGroups([group]);
 
@@ -512,7 +475,7 @@ describe("Tab Group Worktree Invariant", () => {
       // Group should be dropped because it only has 1 non-trashed panel remaining
       expect(repairedGroup).toBeUndefined();
 
-      const repairedT2 = state.terminals.find((t) => t.id === "t2");
+      const repairedT2 = state.terminalsById["t2"];
       expect(repairedT2?.worktreeId).toBe("wt-b");
       expect(repairedT2?.location).toBe("trash");
     });
@@ -525,10 +488,8 @@ describe("Tab Group Worktree Invariant", () => {
       const t1 = createMockTerminal("t1", "wt-a", "grid");
       const t2 = createMockTerminal("t2", "wt-a", "grid");
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-        tabGroups: new Map(),
-      });
+      setTerminals([t1, t2]);
+      useTerminalStore.setState({ tabGroups: new Map() });
 
       // Error recovery path: clear in-memory groups without wiping persistence
       useTerminalStore.getState().hydrateTabGroups([], { skipPersist: true });
@@ -545,10 +506,8 @@ describe("Tab Group Worktree Invariant", () => {
       const t2 = createMockTerminal("t2", "wt-a", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1", "t2"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-        tabGroups: new Map(),
-      });
+      setTerminals([t1, t2]);
+      useTerminalStore.setState({ tabGroups: new Map() });
 
       // Hydrate groups but skip persistence
       useTerminalStore.getState().hydrateTabGroups([group], { skipPersist: true });
@@ -566,10 +525,8 @@ describe("Tab Group Worktree Invariant", () => {
       const t2 = createMockTerminal("t2", "wt-a", "grid");
       const group = createMockTabGroup("g1", "wt-a", ["t1", "t2"]);
 
-      useTerminalStore.setState({
-        terminals: [t1, t2],
-        tabGroups: new Map(),
-      });
+      setTerminals([t1, t2]);
+      useTerminalStore.setState({ tabGroups: new Map() });
 
       // Normal hydration should persist
       useTerminalStore.getState().hydrateTabGroups([group]);

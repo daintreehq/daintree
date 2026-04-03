@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { X, Eye, RotateCw } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import { useTerminalStore } from "@/store/terminalStore";
+import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
 import { terminalClient } from "@/clients";
 import { cn } from "@/lib/utils";
-import type { TerminalInstance } from "@/types";
 
 const MAX_VISIBLE = 5;
 const AUTO_CLEAR_DELAY = 3000;
@@ -32,11 +31,21 @@ interface RunningTaskListProps {
 
 export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
   const quickRunTerminals = useTerminalStore(
-    useShallow((state) =>
-      state.terminals.filter(
-        (t) => t.spawnedBy === "quickrun" && t.worktreeId === worktreeId && t.location !== "trash"
-      )
-    )
+    useShallow((state) => {
+      const result: TerminalInstance[] = [];
+      for (const id of state.terminalIds) {
+        const t = state.terminalsById[id];
+        if (
+          t &&
+          t.spawnedBy === "quickrun" &&
+          t.worktreeId === worktreeId &&
+          t.location !== "trash"
+        ) {
+          result.push(t);
+        }
+      }
+      return result;
+    })
   );
 
   const activateTerminal = useTerminalStore((s) => s.activateTerminal);

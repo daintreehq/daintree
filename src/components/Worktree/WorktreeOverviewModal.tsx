@@ -204,7 +204,8 @@ export function WorktreeOverviewModal({
   const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
 
   // Terminal store for derived metadata
-  const terminals = useTerminalStore(useShallow((state) => state.terminals));
+  const terminalsById = useTerminalStore(useShallow((state) => state.terminalsById));
+  const terminalIds = useTerminalStore(useShallow((state) => state.terminalIds));
 
   // Error store for derived metadata
   // Filter store: hide main worktree preference
@@ -215,22 +216,33 @@ export function WorktreeOverviewModal({
   const derivedMetaMap = useMemo(() => {
     const map = new Map<string, DerivedWorktreeMeta>();
     for (const worktree of worktrees) {
-      const worktreeTerminals = terminals.filter(
-        (t) => t.worktreeId === worktree.id && t.location !== "trash"
-      );
+      let terminalCount = 0;
+      let hasWorkingAgent = false;
+      let hasRunningAgent = false;
+      let hasWaitingAgent = false;
+      let hasCompletedAgent = false;
+      for (const id of terminalIds) {
+        const t = terminalsById[id];
+        if (!t || t.worktreeId !== worktree.id || t.location === "trash") continue;
+        terminalCount++;
+        if (t.agentState === "working") hasWorkingAgent = true;
+        if (t.agentState === "running") hasRunningAgent = true;
+        if (t.agentState === "waiting") hasWaitingAgent = true;
+        if (t.agentState === "completed") hasCompletedAgent = true;
+      }
       map.set(worktree.id, {
-        terminalCount: worktreeTerminals.length,
-        hasWorkingAgent: worktreeTerminals.some((t) => t.agentState === "working"),
-        hasRunningAgent: worktreeTerminals.some((t) => t.agentState === "running"),
-        hasWaitingAgent: worktreeTerminals.some((t) => t.agentState === "waiting"),
-        hasCompletedAgent: worktreeTerminals.some((t) => t.agentState === "completed"),
+        terminalCount,
+        hasWorkingAgent,
+        hasRunningAgent,
+        hasWaitingAgent,
+        hasCompletedAgent,
         hasMergeConflict:
           worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
         chipState: null,
       });
     }
     return map;
-  }, [worktrees, terminals]);
+  }, [worktrees, terminalsById, terminalIds]);
 
   // Compute aggregate statistics from derivedMetaMap
   const aggregateStats = useMemo(() => {

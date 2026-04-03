@@ -109,10 +109,13 @@ export function cleanupOrphanedTerminals(): void {
   }
 
   const terminalStore = useTerminalStore.getState();
-  const orphanedTerminals = terminalStore.terminals.filter((t) => {
-    const worktreeId = typeof t.worktreeId === "string" ? t.worktreeId.trim() : "";
-    return worktreeId && !worktreeIds.has(worktreeId);
-  });
+  const orphanedTerminals = terminalStore.terminalIds
+    .map((id) => terminalStore.terminalsById[id])
+    .filter((t) => {
+      if (!t) return false;
+      const worktreeId = typeof t.worktreeId === "string" ? t.worktreeId.trim() : "";
+      return worktreeId && !worktreeIds.has(worktreeId);
+    });
 
   if (orphanedTerminals.length > 0) {
     logDebug("[WorktreeStore] Removing orphaned terminals from deleted worktrees", {

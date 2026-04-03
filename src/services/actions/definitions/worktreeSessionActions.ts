@@ -72,10 +72,13 @@ export function registerWorktreeSessionActions(
       const { worktreeId } = args as { worktreeId?: string };
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
-      const terminals = useTerminalStore.getState().terminals;
-      terminals
-        .filter((t) => t.worktreeId === targetWorktreeId)
-        .forEach((t) => terminalInstanceService.resetRenderer(t.id));
+      const { terminalsById, terminalIds } = useTerminalStore.getState();
+      for (const id of terminalIds) {
+        const t = terminalsById[id];
+        if (t && t.worktreeId === targetWorktreeId) {
+          terminalInstanceService.resetRenderer(t.id);
+        }
+      }
     },
   }));
 

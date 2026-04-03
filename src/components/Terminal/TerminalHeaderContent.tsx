@@ -94,7 +94,7 @@ function TerminalHeaderContentComponent({
     sessionTokens,
   } = useTerminalStore(
     useShallow((state) => {
-      const t = state.terminals.find((t) => t.id === id);
+      const t = state.terminalsById[id];
       return {
         isInputLocked: t?.isInputLocked ?? false,
         startedAt: t?.startedAt,

@@ -30,9 +30,8 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
 
         eligibleRef.current = true;
 
-        const hasWaiting = useTerminalStore
-          .getState()
-          .terminals.some((t) => t.agentState === "waiting");
+        const { terminalsById, terminalIds } = useTerminalStore.getState();
+        const hasWaiting = terminalIds.some((id) => terminalsById[id]?.agentState === "waiting");
         if (hasWaiting && !firedRef.current) {
           fireNudge();
         }
@@ -50,19 +49,22 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
   useEffect(() => {
     if (!isElectronAvailable() || !isStateLoaded) return;
 
+    const initState = useTerminalStore.getState();
     let prevAgentStates = new Map<string, string | undefined>(
-      useTerminalStore.getState().terminals.map((t) => [t.id, t.agentState])
+      initState.terminalIds.map((id) => [id, initState.terminalsById[id]?.agentState])
     );
 
     const unsubscribe = useTerminalStore.subscribe((state) => {
       if (!eligibleRef.current || firedRef.current) return;
 
       const currentAgentStates = new Map<string, string | undefined>(
-        state.terminals.map((t) => [t.id, t.agentState])
+        state.terminalIds.map((id) => [id, state.terminalsById[id]?.agentState])
       );
 
-      for (const terminal of state.terminals) {
-        const prev = prevAgentStates.get(terminal.id);
+      for (const id of state.terminalIds) {
+        const terminal = state.terminalsById[id];
+        if (!terminal) continue;
+        const prev = prevAgentStates.get(id);
         if (terminal.agentState === "waiting" && prev !== "waiting") {
           fireNudge();
           break;

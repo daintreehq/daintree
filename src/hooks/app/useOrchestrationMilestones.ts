@@ -43,13 +43,13 @@ const TOAST_DURATION = 5000;
 const TOAST_STAGGER = 5500;
 
 function checkAgentCompleted(): boolean {
-  return useTerminalStore.getState().terminals.some((t) => t.agentState === "completed");
+  const { terminalsById, terminalIds } = useTerminalStore.getState();
+  return terminalIds.some((id) => terminalsById[id]?.agentState === "completed");
 }
 
 function checkConcurrentAgents(): boolean {
-  return (
-    useTerminalStore.getState().terminals.filter((t) => t.agentState === "working").length >= 3
-  );
+  const { terminalsById, terminalIds } = useTerminalStore.getState();
+  return terminalIds.filter((id) => terminalsById[id]?.agentState === "working").length >= 3;
 }
 
 function checkContextInjection(): boolean {
@@ -148,14 +148,22 @@ export function useOrchestrationMilestones(isStateLoaded: boolean): void {
         unsubs.push(
           useTerminalStore.subscribe((state, prev) => {
             if (!shown["first-agent-completed"]) {
-              const had = prev.terminals.some((t) => t.agentState === "completed");
-              const has = state.terminals.some((t) => t.agentState === "completed");
+              const had = prev.terminalIds.some(
+                (id) => prev.terminalsById[id]?.agentState === "completed"
+              );
+              const has = state.terminalIds.some(
+                (id) => state.terminalsById[id]?.agentState === "completed"
+              );
               if (!had && has) showToast("first-agent-completed");
             }
 
             if (!shown["first-concurrent-agents"]) {
-              const prevCount = prev.terminals.filter((t) => t.agentState === "working").length;
-              const curCount = state.terminals.filter((t) => t.agentState === "working").length;
+              const prevCount = prev.terminalIds.filter(
+                (id) => prev.terminalsById[id]?.agentState === "working"
+              ).length;
+              const curCount = state.terminalIds.filter(
+                (id) => state.terminalsById[id]?.agentState === "working"
+              ).length;
               if (prevCount < 3 && curCount >= 3) showToast("first-concurrent-agents");
             }
           })
