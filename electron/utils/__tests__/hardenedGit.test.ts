@@ -72,11 +72,12 @@ describe("createHardenedGit", () => {
     );
   });
 
-  it("passes config overrides including core.fsmonitor=true", () => {
+  it("disables fsmonitor to prevent cross-worktree contamination", () => {
     createHardenedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(options.config).toContain("core.fsmonitor=true");
+    expect(options.config).toContain("core.fsmonitor=false");
+    expect(options.config).not.toContain("core.fsmonitor=true");
   });
 
   it("passes config overrides including protocol.ext.allow=never", () => {
@@ -117,8 +118,8 @@ describe("createHardenedGit", () => {
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const expectedKeys = [
-      "core.fsmonitor=true",
-      "core.untrackedCache=true",
+      "core.fsmonitor=false",
+      "core.untrackedCache=false",
       "core.pager=cat",
       "core.askpass=",
       "credential.helper=",

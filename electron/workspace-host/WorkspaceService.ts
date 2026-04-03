@@ -518,15 +518,17 @@ export class WorkspaceService {
   }
 
   private async refreshAll(): Promise<void> {
-    const promises = Array.from(this.monitors.values()).map(async (monitor) => {
-      try {
-        await monitor.updateGitStatus(true);
-      } finally {
-        if (monitor.isRunning && this.pollingEnabled) {
-          monitor.reschedulePolling();
+    const promises = Array.from(this.monitors.values()).map((monitor) =>
+      this.pollQueue.add(async () => {
+        try {
+          await monitor.updateGitStatus(true);
+        } finally {
+          if (monitor.isRunning && this.pollingEnabled) {
+            monitor.reschedulePolling();
+          }
         }
-      }
-    });
+      })
+    );
     await Promise.all(promises);
   }
 

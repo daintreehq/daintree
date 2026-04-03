@@ -322,6 +322,75 @@ describe("getWorktreeChangesWithStats in-flight deduplication", () => {
   });
 });
 
+describe("getWorktreeChangesWithStats concurrent worktree isolation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fs.access as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000 });
+  });
+
+  it("returns per-worktree results when multiple worktrees refresh concurrently with forceRefresh", async () => {
+    const cwdMain = "/worktree-main/" + Math.random();
+    const cwdFeature = "/worktree-feature/" + Math.random();
+
+    const mockGitMain = {
+      raw: vi.fn().mockResolvedValue("100\t0\tcommit msg"),
+      status: vi.fn().mockResolvedValue({
+        modified: ["src/main-file.ts"],
+        created: [],
+        deleted: [],
+        renamed: [],
+        staged: [],
+        conflicted: [],
+        not_added: [],
+      }),
+      diff: vi.fn().mockResolvedValue("10\t2\tsrc/main-file.ts"),
+      revparse: vi.fn().mockResolvedValue(cwdMain + "\n"),
+    };
+
+    const mockGitFeature = {
+      raw: vi.fn().mockResolvedValue("200\t0\tfeature msg"),
+      status: vi.fn().mockResolvedValue({
+        modified: ["src/feature-file.ts", "src/other.ts"],
+        created: [],
+        deleted: [],
+        renamed: [],
+        staged: [],
+        conflicted: [],
+        not_added: [],
+      }),
+      diff: vi.fn().mockResolvedValue("5\t1\tsrc/feature-file.ts\n3\t0\tsrc/other.ts"),
+      revparse: vi.fn().mockResolvedValue(cwdFeature + "\n"),
+    };
+
+    vi.mocked(createHardenedGit).mockImplementation((cwd: string) => {
+      if (cwd === cwdMain) return mockGitMain as any;
+      if (cwd === cwdFeature) return mockGitFeature as any;
+      return mockGit as any;
+    });
+
+    const [resultMain, resultFeature] = await Promise.all([
+      getWorktreeChangesWithStats(cwdMain, true),
+      getWorktreeChangesWithStats(cwdFeature, true),
+    ]);
+
+    // Main worktree: 1 file
+    expect(resultMain.worktreeId).toBe(cwdMain);
+    expect(resultMain.changedFileCount).toBe(1);
+    expect(resultMain.changes[0].path).toContain("main-file.ts");
+
+    // Feature worktree: 2 files
+    expect(resultFeature.worktreeId).toBe(cwdFeature);
+    expect(resultFeature.changedFileCount).toBe(2);
+    expect(resultFeature.changes.some((c) => c.path.includes("feature-file.ts"))).toBe(true);
+    expect(resultFeature.changes.some((c) => c.path.includes("other.ts"))).toBe(true);
+
+    // No cross-contamination
+    expect(resultMain.changes.some((c) => c.path.includes("feature-file.ts"))).toBe(false);
+    expect(resultFeature.changes.some((c) => c.path.includes("main-file.ts"))).toBe(false);
+  });
+});
+
 describe("listCommits", () => {
   beforeEach(() => {
     vi.clearAllMocks();
