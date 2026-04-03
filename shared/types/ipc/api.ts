@@ -1025,6 +1025,7 @@ export interface ElectronAPI {
     ): Promise<
       { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
     >;
+    writeImage(pngData: Uint8Array): Promise<{ ok: true } | { ok: false; error: string }>;
   };
   webUtils: {
     getPathForFile(file: File): string;
