@@ -88,4 +88,5 @@ reports/
 
 # Planning docs (private)
 planning/
+.planning/
 .tmp
