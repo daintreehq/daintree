@@ -616,7 +616,7 @@ export function registerPreferencesActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ agentId: AgentIdSchema.optional() }),
+    argsSchema: z.object({ agentId: AgentIdSchema.optional() }).optional(),
     run: async (args?: unknown) => {
       const folderPath = await window.electron.help.getFolderPath();
       if (!folderPath) {
