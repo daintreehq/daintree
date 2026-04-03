@@ -20,16 +20,21 @@ export function resolveEffectiveRatio(
 ): number | undefined {
   if (!entry) return undefined;
   const [storedLeft, storedRight] = entry.panels;
-  if (
-    storedLeft !== null &&
-    storedRight !== null &&
-    storedLeft !== currentLeft &&
-    storedLeft === currentRight &&
-    storedRight === currentLeft
-  ) {
-    return 1 - entry.ratio;
-  }
-  return entry.ratio;
+
+  // Legacy migration entries — no panel IDs recorded yet
+  if (storedLeft === null && storedRight === null) return entry.ratio;
+
+  // Partial-null is invalid data — treat as no match
+  if (storedLeft === null || storedRight === null) return undefined;
+
+  // Exact match — same panel pair in same order
+  if (storedLeft === currentLeft && storedRight === currentRight) return entry.ratio;
+
+  // Exact reverse — same pair, swapped positions
+  if (storedLeft === currentRight && storedRight === currentLeft) return 1 - entry.ratio;
+
+  // Different panel pair — stale ratio, use default
+  return undefined;
 }
 
 interface TwoPaneSplitState {
