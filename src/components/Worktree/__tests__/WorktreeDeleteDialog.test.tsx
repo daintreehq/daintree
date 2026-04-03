@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import type { WorktreeState } from "@/types";
-import type { WorktreeChanges } from "shared/types/git";
+import type { WorktreeChanges, GitStatus } from "shared/types/git";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -88,16 +88,14 @@ function makeWorktree(worktreeChanges: WorktreeChanges | null = null): WorktreeS
   } as unknown as WorktreeState;
 }
 
-function makeChanges(
-  files: Array<{ path: string; status: string }>
-): WorktreeChanges {
+function makeChanges(files: Array<{ path: string; status: GitStatus }>): WorktreeChanges {
   return {
     worktreeId: "wt-1",
     rootPath: "/test/worktree",
     changedFileCount: files.length,
     changes: files.map((f) => ({
       path: f.path,
-      status: f.status as any,
+      status: f.status,
       insertions: null,
       deletions: null,
     })),
@@ -162,9 +160,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
   });
 
   it("hides warning when force is checked", () => {
-    const worktree = makeWorktree(
-      makeChanges([{ path: "src/app.ts", status: "modified" }])
-    );
+    const worktree = makeWorktree(makeChanges([{ path: "src/app.ts", status: "modified" }]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
     expect(screen.getByText(/Standard deletion will fail/)).toBeDefined();
@@ -176,24 +172,20 @@ describe("WorktreeDeleteDialog — warning messages", () => {
   });
 
   it('shows "remove untracked files" on force label when only untracked files exist', () => {
-    const worktree = makeWorktree(
-      makeChanges([{ path: "new.txt", status: "untracked" }])
-    );
+    const worktree = makeWorktree(makeChanges([{ path: "new.txt", status: "untracked" }]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
     expect(screen.getByText(/Force delete \(remove untracked files\)/)).toBeDefined();
   });
 
   it('shows "lose uncommitted changes" on force label when tracked changes exist', () => {
-    const worktree = makeWorktree(
-      makeChanges([{ path: "src/app.ts", status: "modified" }])
-    );
+    const worktree = makeWorktree(makeChanges([{ path: "src/app.ts", status: "modified" }]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
     expect(screen.getByText(/Force delete \(lose uncommitted changes\)/)).toBeDefined();
   });
 
-  it('shows combined force label when both tracked and untracked files exist', () => {
+  it("shows combined force label when both tracked and untracked files exist", () => {
     const worktree = makeWorktree(
       makeChanges([
         { path: "src/app.ts", status: "modified" },

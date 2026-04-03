@@ -30,9 +30,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const bulkCloseByWorktree = useTerminalStore((state) => state.bulkCloseByWorktree);
 
   const changes = worktree.worktreeChanges?.changes ?? [];
-  const hasTrackedChanges = changes.some(
-    (c) => c.status !== "untracked" && c.status !== "ignored"
-  );
+  const hasTrackedChanges = changes.some((c) => c.status !== "untracked" && c.status !== "ignored");
   const hasUntrackedFiles = changes.some((c) => c.status === "untracked");
   const hasChanges = hasTrackedChanges || hasUntrackedFiles;
   const hasTerminals = terminalCounts.total > 0;

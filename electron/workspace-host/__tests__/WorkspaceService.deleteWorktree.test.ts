@@ -338,9 +338,7 @@ describe("WorkspaceService.deleteWorktree", () => {
       worktreeId: "/test/worktree",
       rootPath: "/test/worktree",
       changedFileCount: 1,
-      changes: [
-        { path: "src/app.ts", status: "modified", insertions: 5, deletions: 2 },
-      ],
+      changes: [{ path: "src/app.ts", status: "modified", insertions: 5, deletions: 2 }],
     });
 
     await service.deleteWorktree("req-ut2", "/test/worktree");
