@@ -153,3 +153,7 @@ export const IPC_MAX_QUEUE_BYTES = 8 * 1024 * 1024; // 8MB max per terminal
 export const IPC_HIGH_WATERMARK_PERCENT = 95; // Pause PTY at 95% full
 export const IPC_LOW_WATERMARK_PERCENT = 60; // Resume PTY when drops to 60%
 export const IPC_MAX_PAUSE_MS = 5000; // Force resume after 5 seconds to prevent indefinite pause
+
+// MessagePort adaptive batching configuration
+export const PORT_BATCH_THRESHOLD_BYTES = 64 * 1024; // 64KB — sync-flush when buffered data exceeds this
+export const PORT_BATCH_THROUGHPUT_DELAY_MS = 16; // ~60Hz frame — setTimeout window in throughput mode

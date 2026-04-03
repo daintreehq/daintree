@@ -42,6 +42,7 @@ import {
   BackpressureManager,
   IpcQueueManager,
   PortQueueManager,
+  PortBatcher,
   metricsEnabled,
   parseSpawnError,
   toHostSnapshot,
@@ -132,6 +133,7 @@ interface RendererConnection {
   port: MessagePort;
   handler: (e: MessageEvent) => void;
   portQueueManager: PortQueueManager;
+  batcher: PortBatcher;
 }
 const rendererConnections = new Map<number, RendererConnection>();
 const windowProjectMap = new Map<number, string | null>();
@@ -198,6 +200,8 @@ function disconnectWindow(windowId: number, reason: string): void {
   } catch {
     // ignore
   }
+  // Dispose batcher (drops buffered data — port is closing)
+  conn.batcher.dispose();
   // Release port-queue pause holds before disposing
   conn.portQueueManager.resumeAll();
   conn.portQueueManager.dispose();
@@ -264,15 +268,8 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
 
       if (filtered) continue;
 
-      if (!conn.portQueueManager.isAtCapacity(id, byteCount)) {
-        try {
-          conn.port.postMessage({ type: "data", id, data: dataString, bytes: byteCount });
-          conn.portQueueManager.addBytes(id, byteCount);
-          conn.portQueueManager.applyBackpressure(id, conn.portQueueManager.getUtilization(id));
-          visualWritten = true;
-        } catch {
-          disconnectWindow(windowId, "postMessage-error");
-        }
+      if (conn.batcher.write(id, dataString, byteCount)) {
+        visualWritten = true;
       }
     }
     // If at capacity on all ports, fall through to SAB or IPC fallback
@@ -461,9 +458,14 @@ ptyManager.on("exit", (id: string, exitCode: number) => {
   // Clean up any active backpressure monitoring for this terminal
   backpressureManager.cleanupTerminal(id);
 
-  // Clean up IPC and per-window port backpressure state
+  // Flush pending batched data for exiting terminal, then clean up backpressure state
   ipcQueueManager.clearQueue(id);
   for (const conn of rendererConnections.values()) {
+    try {
+      conn.batcher.flushTerminal(id);
+    } catch {
+      // Port may already be closed — safe to ignore
+    }
     conn.portQueueManager.clearQueue(id);
   }
 
@@ -721,6 +723,15 @@ port.on("message", async (rawMsg: any) => {
           }
 
           const perWindowQueueManager = createPortQueueManager(windowId);
+          const perWindowBatcher = new PortBatcher({
+            portQueueManager: perWindowQueueManager,
+            postMessage: (id, data, bytes) => {
+              receivedPort.postMessage({ type: "data", id, data, bytes });
+            },
+            onError: () => {
+              disconnectWindow(windowId, "postMessage-error");
+            },
+          });
           receivedPort.start();
           console.log(
             `[PtyHost] MessagePort received from Main for window ${windowId}, starting listener...`
@@ -780,6 +791,7 @@ port.on("message", async (rawMsg: any) => {
             port: receivedPort,
             handler,
             portQueueManager: perWindowQueueManager,
+            batcher: perWindowBatcher,
           });
           console.log(`[PtyHost] MessagePort listener installed for window ${windowId}`);
         } else {

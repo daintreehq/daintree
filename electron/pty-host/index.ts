@@ -13,6 +13,7 @@ export {
 } from "./backpressure.js";
 export { IpcQueueManager, type IpcQueueDeps } from "./ipcQueue.js";
 export { PortQueueManager, type PortQueueDeps } from "./portQueue.js";
+export { PortBatcher, type PortBatcherDeps } from "./portBatcher.js";
 export { FdMonitor, isProcessAlive, type FdCheckResult } from "./FdMonitor.js";
 export { metricsEnabled } from "./metrics.js";
 export { parseSpawnError } from "./spawnErrors.js";
