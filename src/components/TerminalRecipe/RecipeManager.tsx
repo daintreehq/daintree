@@ -22,6 +22,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import type { TerminalRecipe } from "@/types";
 import { useRef } from "react";
+import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 
 interface RecipeManagerProps {
   isOpen: boolean;
@@ -119,7 +120,7 @@ export function RecipeManager({
 
   const renderRecipeRow = (recipe: TerminalRecipe, readOnly = false) => {
     const exported = exportFeedback === recipe.id;
-    const isGlobal = recipe.projectId === undefined;
+    const isGlobal = !isInRepoRecipeId(recipe.id) && recipe.projectId === undefined;
     return (
       <div key={recipe.id} className="p-3 hover:bg-muted/50 transition-colors group cursor-default">
         <div className="flex items-start gap-3">
@@ -279,7 +280,7 @@ export function RecipeManager({
                 Shared via .canopy/recipes/ in the repository
               </p>
               <div className="border border-canopy-border rounded-[var(--radius-md)] divide-y divide-canopy-border">
-                {inRepoRecipes.map((r) => renderRecipeRow(r, true))}
+                {inRepoRecipes.map((r) => renderRecipeRow(r))}
               </div>
             </div>
           )}

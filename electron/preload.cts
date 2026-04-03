@@ -624,6 +624,8 @@ const CHANNELS = {
   RECIPE_IMPORT_FILE: "recipe:import-file",
   PROJECT_GET_INREPO_RECIPES: "project:get-inrepo-recipes",
   PROJECT_SYNC_INREPO_RECIPES: "project:sync-inrepo-recipes",
+  PROJECT_WRITE_INREPO_RECIPE: "project:write-inrepo-recipe",
+  PROJECT_DELETE_INREPO_RECIPE: "project:delete-inrepo-recipe",
   GLOBAL_GET_RECIPES: "global:get-recipes",
   GLOBAL_ADD_RECIPE: "global:add-recipe",
   GLOBAL_UPDATE_RECIPE: "global:update-recipe",
@@ -1605,6 +1607,15 @@ const api: ElectronAPI = {
       recipes: import("../shared/types/index.js").TerminalRecipe[]
     ): Promise<void> =>
       _unwrappingInvoke(CHANNELS.PROJECT_SYNC_INREPO_RECIPES, { projectId, recipes }),
+
+    writeInRepoRecipe: (
+      projectId: string,
+      recipe: import("../shared/types/index.js").TerminalRecipe
+    ): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.PROJECT_WRITE_INREPO_RECIPE, { projectId, recipe }),
+
+    deleteInRepoRecipe: (projectId: string, recipeName: string): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.PROJECT_DELETE_INREPO_RECIPE, { projectId, recipeName }),
 
     getTerminals: (
       projectId: string

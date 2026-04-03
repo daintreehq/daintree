@@ -197,5 +197,51 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
   ipcMain.handle(CHANNELS.PROJECT_SYNC_INREPO_RECIPES, handleProjectSyncInRepoRecipes);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SYNC_INREPO_RECIPES));
 
+  const handleProjectWriteInRepoRecipe = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { projectId: string; recipe: TerminalRecipe }
+  ): Promise<void> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    const { projectId, recipe } = payload;
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    if (!recipe || typeof recipe !== "object" || !recipe.name || !Array.isArray(recipe.terminals)) {
+      throw new Error("Invalid recipe");
+    }
+    const project = projectStore.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+    await projectStore.writeInRepoRecipe(project.path, recipe);
+  };
+  ipcMain.handle(CHANNELS.PROJECT_WRITE_INREPO_RECIPE, handleProjectWriteInRepoRecipe);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_WRITE_INREPO_RECIPE));
+
+  const handleProjectDeleteInRepoRecipe = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { projectId: string; recipeName: string }
+  ): Promise<void> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    const { projectId, recipeName } = payload;
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    if (typeof recipeName !== "string" || !recipeName) {
+      throw new Error("Invalid recipe name");
+    }
+    const project = projectStore.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+    await projectStore.deleteInRepoRecipe(project.path, recipeName);
+  };
+  ipcMain.handle(CHANNELS.PROJECT_DELETE_INREPO_RECIPE, handleProjectDeleteInRepoRecipe);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_DELETE_INREPO_RECIPE));
+
   return () => handlers.forEach((cleanup) => cleanup());
 }

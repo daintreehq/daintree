@@ -9,6 +9,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import type { TerminalRecipe, Worktree } from "@/types";
+import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 
 interface RecipesTabProps {
   projectId: string;
@@ -155,6 +156,7 @@ export function RecipesTab({
   };
 
   const getRecipeScope = (recipe: TerminalRecipe): { label: string; isGlobal: boolean } => {
+    if (isInRepoRecipeId(recipe.id)) return { label: "Project (in-repo)", isGlobal: false };
     if (recipe.projectId === undefined) return { label: "Global", isGlobal: true };
     if (!recipe.worktreeId) return { label: "Project-wide", isGlobal: false };
     const worktree = worktreeMap.get(recipe.worktreeId);

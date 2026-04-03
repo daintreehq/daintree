@@ -6,6 +6,7 @@ import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { stableInRepoId, isInRepoRecipeId } from "@shared/utils/recipeFilename";
 
 export interface RecipeSpawnResult {
   index: number;
@@ -193,10 +194,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const isGlobal = projectId === undefined;
     const newRecipe: TerminalRecipe = {
-      id: `recipe-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      id: isGlobal
+        ? `recipe-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+        : stableInRepoId(name),
       name,
-      projectId,
-      // Global recipes must not have a worktreeId
+      projectId: isGlobal ? undefined : projectId,
       worktreeId: isGlobal ? undefined : worktreeId,
       terminals: terminals.map(sanitizeRecipeTerminal),
       createdAt: Date.now(),
@@ -206,27 +208,29 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const prevGlobal = get().globalRecipes;
     const prevProject = get().projectRecipes;
-    const inRepo = get().inRepoRecipes;
+    const prevInRepo = get().inRepoRecipes;
     const nextGlobal = isGlobal ? [...prevGlobal, newRecipe] : prevGlobal;
-    const nextProject = isGlobal ? prevProject : [...prevProject, newRecipe];
+    const nextInRepo = isGlobal ? prevInRepo : [...prevInRepo, newRecipe];
     set({
       globalRecipes: nextGlobal,
-      projectRecipes: nextProject,
-      recipes: mergeRecipes(nextGlobal, nextProject, inRepo),
+      projectRecipes: prevProject,
+      inRepoRecipes: nextInRepo,
+      recipes: mergeRecipes(nextGlobal, prevProject, nextInRepo),
     });
 
     try {
       if (isGlobal) {
         await globalRecipesClient.addRecipe(newRecipe);
       } else {
-        await projectClient.addRecipe(projectId, newRecipe);
+        await projectClient.writeInRepoRecipe(projectId, newRecipe);
       }
     } catch (error) {
       console.error("Failed to persist recipe:", error);
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
-        recipes: mergeRecipes(prevGlobal, prevProject, inRepo),
+        inRepoRecipes: prevInRepo,
+        recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo),
       });
       throw error;
     }
@@ -249,21 +253,27 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }
 
     const recipe = recipes[index];
-    const isGlobal = recipe.projectId === undefined;
+    const isInRepo = isInRepoRecipeId(id);
+    const isGlobal = !isInRepo && recipe.projectId === undefined;
     const sanitizedTerminals = updates.terminals?.map(sanitizeRecipeTerminal);
     const sanitizedUpdates = sanitizedTerminals
       ? { ...updates, terminals: sanitizedTerminals }
       : updates;
 
+    // For in-repo recipes with a name change, compute the new stable ID
+    const nameChanged = isInRepo && updates.name && stableInRepoId(updates.name) !== id;
+    const newId = nameChanged ? stableInRepoId(updates.name!) : id;
+
     const updatedRecipe = {
       ...recipe,
       ...sanitizedUpdates,
+      id: newId,
       terminals: sanitizedTerminals ?? recipe.terminals,
     };
 
     const prevGlobal = get().globalRecipes;
     const prevProject = get().projectRecipes;
-    const inRepo = get().inRepoRecipes;
+    const prevInRepo = get().inRepoRecipes;
     const applyUpdate = (list: TerminalRecipe[]) => {
       const idx = list.findIndex((r) => r.id === id);
       if (idx === -1) return list;
@@ -272,16 +282,25 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       return next;
     };
     const nextGlobal = isGlobal ? applyUpdate(prevGlobal) : prevGlobal;
-    const nextProject = isGlobal ? prevProject : applyUpdate(prevProject);
+    const nextProject = !isGlobal && !isInRepo ? applyUpdate(prevProject) : prevProject;
+    const nextInRepo = isInRepo ? applyUpdate(prevInRepo) : prevInRepo;
     set({
       globalRecipes: nextGlobal,
       projectRecipes: nextProject,
-      recipes: mergeRecipes(nextGlobal, nextProject, inRepo),
+      inRepoRecipes: nextInRepo,
+      recipes: mergeRecipes(nextGlobal, nextProject, nextInRepo),
     });
 
     try {
       if (isGlobal) {
         await globalRecipesClient.updateRecipe(id, sanitizedUpdates);
+      } else if (isInRepo) {
+        const currentProjectId = get().currentProjectId;
+        if (!currentProjectId) throw new Error("No project selected");
+        await projectClient.writeInRepoRecipe(currentProjectId, updatedRecipe);
+        if (nameChanged) {
+          await projectClient.deleteInRepoRecipe(currentProjectId, recipe.name);
+        }
       } else {
         await projectClient.updateRecipe(recipe.projectId!, id, sanitizedUpdates);
       }
@@ -290,7 +309,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
-        recipes: mergeRecipes(prevGlobal, prevProject, inRepo),
+        inRepoRecipes: prevInRepo,
+        recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo),
       });
       throw error;
     }
@@ -303,21 +323,29 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       throw new Error(`Recipe ${id} not found`);
     }
 
-    const isGlobal = recipe.projectId === undefined;
+    const isInRepo = isInRepoRecipeId(id);
+    const isGlobal = !isInRepo && recipe.projectId === undefined;
     const prevGlobal = get().globalRecipes;
     const prevProject = get().projectRecipes;
-    const inRepo = get().inRepoRecipes;
+    const prevInRepo = get().inRepoRecipes;
     const nextGlobal = isGlobal ? prevGlobal.filter((r) => r.id !== id) : prevGlobal;
-    const nextProject = isGlobal ? prevProject : prevProject.filter((r) => r.id !== id);
+    const nextProject =
+      !isGlobal && !isInRepo ? prevProject.filter((r) => r.id !== id) : prevProject;
+    const nextInRepo = isInRepo ? prevInRepo.filter((r) => r.id !== id) : prevInRepo;
     set({
       globalRecipes: nextGlobal,
       projectRecipes: nextProject,
-      recipes: mergeRecipes(nextGlobal, nextProject, inRepo),
+      inRepoRecipes: nextInRepo,
+      recipes: mergeRecipes(nextGlobal, nextProject, nextInRepo),
     });
 
     try {
       if (isGlobal) {
         await globalRecipesClient.deleteRecipe(id);
+      } else if (isInRepo) {
+        const currentProjectId = get().currentProjectId;
+        if (!currentProjectId) throw new Error("No project selected");
+        await projectClient.deleteInRepoRecipe(currentProjectId, recipe.name);
       } else {
         await projectClient.deleteRecipe(recipe.projectId!, id);
       }
@@ -326,7 +354,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
-        recipes: mergeRecipes(prevGlobal, prevProject, inRepo),
+        inRepoRecipes: prevInRepo,
+        recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo),
       });
       throw error;
     }
@@ -576,10 +605,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }
 
     const isGlobal = projectId === undefined;
+    const recipeName = String(recipe.name);
     const importedRecipe: TerminalRecipe = {
-      id: `recipe-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      name: String(recipe.name),
-      projectId,
+      id: isGlobal
+        ? `recipe-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+        : stableInRepoId(recipeName),
+      name: recipeName,
+      projectId: isGlobal ? undefined : projectId,
       worktreeId: isGlobal
         ? undefined
         : typeof recipe.worktreeId === "string"
@@ -593,27 +625,29 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const prevGlobal = get().globalRecipes;
     const prevProject = get().projectRecipes;
-    const inRepo = get().inRepoRecipes;
+    const prevInRepo = get().inRepoRecipes;
     const nextGlobal = isGlobal ? [...prevGlobal, importedRecipe] : prevGlobal;
-    const nextProject = isGlobal ? prevProject : [...prevProject, importedRecipe];
+    const nextInRepo = isGlobal ? prevInRepo : [...prevInRepo, importedRecipe];
     set({
       globalRecipes: nextGlobal,
-      projectRecipes: nextProject,
-      recipes: mergeRecipes(nextGlobal, nextProject, inRepo),
+      projectRecipes: prevProject,
+      inRepoRecipes: nextInRepo,
+      recipes: mergeRecipes(nextGlobal, prevProject, nextInRepo),
     });
 
     try {
       if (isGlobal) {
         await globalRecipesClient.addRecipe(importedRecipe);
       } else {
-        await projectClient.addRecipe(projectId, importedRecipe);
+        await projectClient.writeInRepoRecipe(projectId, importedRecipe);
       }
     } catch (_error) {
       console.error("Failed to persist imported recipe:", _error);
       set({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
-        recipes: mergeRecipes(prevGlobal, prevProject, inRepo),
+        inRepoRecipes: prevInRepo,
+        recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo),
       });
       throw _error;
     }

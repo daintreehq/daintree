@@ -5,6 +5,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
+import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 
 function cloneTerminal(t: RecipeTerminal): RecipeTerminal {
   return { ...t, env: t.env ? { ...t.env } : {} };
@@ -103,7 +104,9 @@ export function RecipeEditor({
       setTerminals(nextTerminals);
       setShowInEmptyState(nextShowInEmptyState);
       setAutoAssign(nextAutoAssign);
-      setScope(recipe.projectId === undefined ? "global" : "project");
+      setScope(
+        isInRepoRecipeId(recipe.id) || recipe.projectId !== undefined ? "project" : "global"
+      );
       initialStateRef.current = serializeEditorState(
         recipe.name,
         nextTerminals,
@@ -273,7 +276,9 @@ export function RecipeEditor({
           </label>
           {recipe ? (
             <div className="px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text text-sm opacity-75">
-              {recipe.projectId === undefined ? "Global (all projects)" : "Project"}
+              {isInRepoRecipeId(recipe.id) || recipe.projectId !== undefined
+                ? "Project"
+                : "Global (all projects)"}
             </div>
           ) : (
             <select

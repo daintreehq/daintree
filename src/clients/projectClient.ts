@@ -211,6 +211,14 @@ export const projectClient = {
     return window.electron.project.syncInRepoRecipes(projectId, recipes);
   },
 
+  writeInRepoRecipe: (projectId: string, recipe: TerminalRecipe): Promise<void> => {
+    return window.electron.project.writeInRepoRecipe(projectId, recipe);
+  },
+
+  deleteInRepoRecipe: (projectId: string, recipeName: string): Promise<void> => {
+    return window.electron.project.deleteInRepoRecipe(projectId, recipeName);
+  },
+
   getTerminals: (projectId: string): Promise<TerminalSnapshot[]> => {
     return window.electron.project.getTerminals(projectId);
   },

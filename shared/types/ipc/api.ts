@@ -434,6 +434,8 @@ export interface ElectronAPI {
     importRecipeFromFile(): Promise<string | null>;
     getInRepoRecipes(projectId: string): Promise<TerminalRecipe[]>;
     syncInRepoRecipes(projectId: string, recipes: TerminalRecipe[]): Promise<void>;
+    writeInRepoRecipe(projectId: string, recipe: TerminalRecipe): Promise<void>;
+    deleteInRepoRecipe(projectId: string, recipeName: string): Promise<void>;
     /**
      * Get saved terminal snapshots for a project (per-project panel state).
      * Used for restoring panel layout when switching projects.
