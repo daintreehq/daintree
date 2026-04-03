@@ -60,6 +60,7 @@ function XtermAdapterComponent({
   const rafIdRef = useRef<number | null>(null);
   const resizeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingFitRef = useRef(false);
+  const initialFitDoneRef = useRef(false);
 
   // Store the latest getRefreshTier in a ref to prevent stale closures.
   // This ensures the service always calls the current version of the callback.
@@ -196,6 +197,7 @@ function XtermAdapterComponent({
     });
     if (dims) {
       prevDimensionsRef.current = dims;
+      initialFitDoneRef.current = true;
     }
   }, [terminalId]);
 
@@ -400,6 +402,7 @@ function XtermAdapterComponent({
       }
 
       prevDimensionsRef.current = null;
+      initialFitDoneRef.current = false;
     };
   }, [
     terminalId,
@@ -461,6 +464,42 @@ function XtermAdapterComponent({
     if (!container) return;
 
     const resizeObserver = new ResizeObserver((entries) => {
+      // On the first non-zero observation, bypass the debounce and fit
+      // synchronously. This prevents blank panels on Linux where the
+      // compositor commits layout after the initial rAF-based retry in
+      // performFit — the 50ms debounce would delay the fit past first paint.
+      if (!initialFitDoneRef.current) {
+        for (const entry of entries) {
+          const instance = terminalInstanceService.get(terminalId);
+          if (instance?.isAttaching) continue;
+
+          const rect = entry.contentRect;
+          if (
+            rect.width >= MIN_CONTAINER_SIZE &&
+            rect.height >= MIN_CONTAINER_SIZE &&
+            document.visibilityState === "visible"
+          ) {
+            const dims = terminalInstanceService.resize(terminalId, rect.width, rect.height, {
+              immediate: true,
+            });
+            if (dims) {
+              prevDimensionsRef.current = dims;
+              initialFitDoneRef.current = true;
+              // Cancel any pending debounce/rAF from earlier zero-dim observations
+              if (resizeDebounceRef.current !== null) {
+                clearTimeout(resizeDebounceRef.current);
+                resizeDebounceRef.current = null;
+              }
+              if (rafIdRef.current !== null) {
+                cancelAnimationFrame(rafIdRef.current);
+                rafIdRef.current = null;
+              }
+              return;
+            }
+          }
+        }
+      }
+
       // xterm.js v6's DomScrollableElement triggers layout mutations that can
       // re-enter the ResizeObserver synchronously. Debounce with a short delay
       // to let the DOM settle, then sync with the paint cycle via rAF.
