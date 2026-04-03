@@ -48,6 +48,10 @@ export function ProjectSwitcher() {
     openCreateFolderDialog();
   }, [projectSwitcher, openCreateFolderDialog]);
 
+  const handleCloneRepo = useCallback(() => {
+    projectSwitcher.cloneRepo();
+  }, [projectSwitcher]);
+
   const handleOpenSettings = useCallback(() => {
     projectSwitcher.close();
     void actionService.dispatch("project.settings.open", undefined, { source: "user" });
@@ -157,6 +161,7 @@ export function ProjectSwitcher() {
             onSelect={projectSwitcher.selectProject}
             onClose={handleDropdownClose}
             onAddProject={projectSwitcher.addProject}
+            onCloneRepo={handleCloneRepo}
             onCreateFolder={handleCreateFolder}
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
@@ -215,6 +220,7 @@ export function ProjectSwitcher() {
         onSelect={projectSwitcher.selectProject}
         onClose={handleDropdownClose}
         onAddProject={projectSwitcher.addProject}
+        onCloneRepo={handleCloneRepo}
         onCreateFolder={handleCreateFolder}
         onStopProject={handleStopProject}
         onCloseProject={handleCloseProject}

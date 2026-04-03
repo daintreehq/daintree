@@ -218,6 +218,19 @@ describe("createApplicationMenu", () => {
     });
   });
 
+  describe("File menu Clone Repository item", () => {
+    it("has a Clone Repository... item that sends clone-repo action", () => {
+      const item = findMenuItem(capturedTemplate, "File", "Clone Repository...");
+      expect(item).toBeDefined();
+      item!.click!(
+        {} as Electron.MenuItem,
+        mockBrowserWindow as unknown as Electron.BaseWindow,
+        {} as Electron.KeyboardEvent
+      );
+      expect(mockWebContents.send).toHaveBeenCalledWith("menu-action", "clone-repo");
+    });
+  });
+
   describe("zoom items fallback to mainWindow when browserWindow is undefined", () => {
     it("Zoom In still works via mainWindow fallback", () => {
       mockWebContents.setZoomLevel.mockClear();

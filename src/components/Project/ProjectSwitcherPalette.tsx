@@ -2,6 +2,7 @@ import { useMemo, useEffect, useLayoutEffect, useRef, useCallback, memo } from "
 import { createPortal } from "react-dom";
 import {
   Clipboard,
+  Download,
   FolderOpen,
   FolderPlus,
   Pin,
@@ -45,6 +46,7 @@ export interface ProjectSwitcherPaletteProps {
   onClose: () => void;
   mode?: ProjectSwitcherMode;
   onAddProject?: () => void;
+  onCloneRepo?: () => void;
   onCreateFolder?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
@@ -470,6 +472,7 @@ interface ProjectPaletteInnerProps {
   onSelectPrevious: () => void;
   onSelectNext: () => void;
   onAddProject?: () => void;
+  onCloneRepo?: () => void;
   onCreateFolder?: () => void;
   onOpenProjectSettings?: () => void;
   onStopProject?: (projectId: string) => void;
@@ -493,6 +496,7 @@ function ProjectPaletteInner({
   onSelectPrevious,
   onSelectNext,
   onAddProject,
+  onCloneRepo,
   onCreateFolder,
   onOpenProjectSettings,
   onStopProject,
@@ -619,7 +623,7 @@ function ProjectPaletteInner({
         />
       </AppPaletteDialog.Body>
 
-      {(onOpenProjectSettings || onAddProject || onCreateFolder) && (
+      {(onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder) && (
         <>
           <div className="h-[3px] bg-tint/[0.08]" />
           <div className="px-2 pt-1 pb-2">
@@ -648,6 +652,21 @@ function ProjectPaletteInner({
                   <Plus className="h-4 w-4" />
                 </div>
                 <span className="font-medium text-sm text-muted-foreground">Add Project...</span>
+              </button>
+            )}
+            {onCloneRepo && (
+              <button
+                type="button"
+                onClick={() => onCloneRepo()}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
+                data-testid="project-clone-button"
+              >
+                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
+                  <Download className="h-4 w-4" />
+                </div>
+                <span className="font-medium text-sm text-muted-foreground">
+                  Clone Repository...
+                </span>
               </button>
             )}
             {onCreateFolder && (
@@ -765,6 +784,7 @@ function ModalContent({
           onSelectPrevious={innerProps.onSelectPrevious}
           onSelectNext={innerProps.onSelectNext}
           onAddProject={innerProps.onAddProject}
+          onCloneRepo={innerProps.onCloneRepo}
           onCreateFolder={innerProps.onCreateFolder}
           onOpenProjectSettings={innerProps.onOpenProjectSettings}
           onStopProject={innerProps.onStopProject}
@@ -840,6 +860,7 @@ function DropdownContent({
           onSelectPrevious={innerProps.onSelectPrevious}
           onSelectNext={innerProps.onSelectNext}
           onAddProject={innerProps.onAddProject}
+          onCloneRepo={innerProps.onCloneRepo}
           onCreateFolder={innerProps.onCreateFolder}
           onOpenProjectSettings={innerProps.onOpenProjectSettings}
           onStopProject={innerProps.onStopProject}
@@ -867,6 +888,7 @@ export function ProjectSwitcherPalette({
   onClose,
   mode = "modal",
   onAddProject,
+  onCloneRepo,
   onCreateFolder,
   onStopProject,
   onCloseProject,
@@ -902,6 +924,7 @@ export function ProjectSwitcherPalette({
         onSelect={onSelect}
         onClose={onClose}
         onAddProject={onAddProject}
+        onCloneRepo={onCloneRepo}
         onCreateFolder={onCreateFolder}
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
@@ -927,6 +950,7 @@ export function ProjectSwitcherPalette({
         onSelect={onSelect}
         onClose={onClose}
         onAddProject={onAddProject}
+        onCloneRepo={onCloneRepo}
         onCreateFolder={onCreateFolder}
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}

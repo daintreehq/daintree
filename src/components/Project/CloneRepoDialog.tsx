@@ -24,8 +24,24 @@ function extractFolderName(url: string): string {
   return lastSegment.replace(/[^\w.-]/g, "") || "";
 }
 
+function isOwnerRepoShorthand(input: string): boolean {
+  if (/^https?:\/\//i.test(input) || /^git@/i.test(input) || /^ssh:\/\//i.test(input)) {
+    return false;
+  }
+  return /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?\/[a-zA-Z0-9._-]{1,100}$/.test(input);
+}
+
+function normalizeCloneUrl(input: string): string {
+  const trimmed = input.trim();
+  if (isOwnerRepoShorthand(trimmed)) {
+    return `https://github.com/${trimmed}`;
+  }
+  return trimmed;
+}
+
 function isValidCloneUrl(url: string): boolean {
-  return /^https?:\/\//i.test(url) || /^git@/i.test(url);
+  const normalized = normalizeCloneUrl(url);
+  return /^https?:\/\//i.test(normalized) || /^git@/i.test(normalized);
 }
 
 export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialogProps) {
@@ -33,6 +49,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const [parentPath, setParentPath] = useState("");
   const [folderName, setFolderName] = useState("");
   const [folderNameEdited, setFolderNameEdited] = useState(false);
+  const [shallowClone, setShallowClone] = useState(false);
   const [progressEvents, setProgressEvents] = useState<CloneRepoProgressEvent[]>([]);
   const [isCloning, setIsCloning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,6 +71,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       setParentPath("");
       setFolderName("");
       setFolderNameEdited(false);
+      setShallowClone(false);
       setProgressEvents([]);
       setIsCloning(false);
       setError(null);
@@ -78,7 +96,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   // Auto-derive folder name from URL
   useEffect(() => {
     if (!folderNameEdited) {
-      setFolderName(extractFolderName(url));
+      setFolderName(extractFolderName(normalizeCloneUrl(url)));
     }
   }, [url, folderNameEdited]);
 
@@ -109,9 +127,10 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
 
     try {
       const result = await projectClient.cloneRepo({
-        url: url.trim(),
+        url: normalizeCloneUrl(url),
         parentPath,
         folderName: folderName.trim(),
+        shallowClone,
       });
 
       if (result.success && result.clonedPath) {
@@ -156,7 +175,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             type="text"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://github.com/user/repo.git"
+            placeholder="owner/repo or https://github.com/user/repo.git"
             disabled={isCloning || isComplete}
             className="w-full rounded-md border border-canopy-border bg-canopy-bg px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 disabled:opacity-50"
           />
@@ -199,6 +218,18 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             className="w-full rounded-md border border-canopy-border bg-canopy-bg px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 disabled:opacity-50"
           />
         </div>
+
+        {/* Shallow Clone */}
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={shallowClone}
+            onChange={(e) => setShallowClone(e.target.checked)}
+            disabled={isCloning || isComplete}
+            className="rounded border-canopy-border accent-canopy-accent"
+          />
+          <span className="text-sm text-canopy-text/70">Shallow clone (--depth 1)</span>
+        </label>
 
         {/* Progress Log */}
         {showProgress && (

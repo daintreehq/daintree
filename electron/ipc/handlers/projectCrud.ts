@@ -939,7 +939,7 @@ Thumbs.db
 
     const senderWindow = getWindowForWebContents(event.sender);
 
-    const { url, parentPath, folderName } = options;
+    const { url, parentPath, folderName, shallowClone } = options;
 
     if (typeof url !== "string" || !url.trim()) {
       throw new Error("Repository URL is required");
@@ -1029,7 +1029,7 @@ Thumbs.db
         },
       });
 
-      await git.clone(url, trimmedFolder);
+      await git.clone(url, trimmedFolder, shallowClone ? ["--depth", "1"] : []);
 
       emitProgress("complete", 100, "Clone complete");
       return { success: true, clonedPath: targetPath };

@@ -2,6 +2,7 @@ export interface CloneRepoOptions {
   url: string;
   parentPath: string;
   folderName: string;
+  shallowClone?: boolean;
 }
 
 export interface CloneRepoProgressEvent {

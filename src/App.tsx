@@ -1737,6 +1737,7 @@ function App() {
         onSelect={projectSwitcherPalette.selectProject}
         onClose={projectSwitcherPalette.close}
         onAddProject={projectSwitcherPalette.addProject}
+        onCloneRepo={projectSwitcherPalette.cloneRepo}
         onCreateFolder={() => {
           projectSwitcherPalette.close();
           openCreateFolderDialog();

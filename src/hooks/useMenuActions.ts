@@ -79,6 +79,7 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
         }
 
         const menuToActionMap: Record<string, ActionId> = {
+          "clone-repo": "project.cloneRepo",
           "duplicate-panel": "terminal.duplicate",
           "new-terminal": "terminal.new",
           "new-window": "app.newWindow",

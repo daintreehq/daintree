@@ -43,6 +43,7 @@ export interface UseProjectSwitcherPaletteReturn {
   selectProject: (project: SearchableProject) => void;
   confirmSelection: () => void;
   addProject: () => Promise<void>;
+  cloneRepo: () => void;
   stopProject: (projectId: string) => Promise<void>;
   removeProject: (projectId: string) => Promise<void>;
   locateProject: (projectId: string) => Promise<void>;
@@ -291,6 +292,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     await addProjectFn();
   }, [close, addProjectFn]);
 
+  const cloneRepo = useCallback(() => {
+    close();
+    useProjectStore.getState().openCloneRepoDialog();
+  }, [close]);
+
   const locateProject = useCallback(
     async (projectId: string) => {
       await locateProjectFn(projectId);
@@ -397,6 +403,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     selectProject,
     confirmSelection,
     addProject,
+    cloneRepo,
     stopProject,
     removeProject: removeProjectFromList,
     locateProject,

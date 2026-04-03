@@ -241,3 +241,29 @@ describe("ProjectSwitcherPalette secondary text edge cases", () => {
     expect(screen.queryByText("Agent working\u2026")).toBeNull();
   });
 });
+
+describe("ProjectSwitcherPalette clone repo button", () => {
+  it("renders Clone Repository button when onCloneRepo is provided", () => {
+    render(
+      <ProjectSwitcherPalette {...baseProps} onCloneRepo={vi.fn()} results={[makeProject()]} />
+    );
+    expect(screen.getByTestId("project-clone-button")).toBeTruthy();
+    expect(screen.getByText("Clone Repository...")).toBeTruthy();
+  });
+
+  it("calls onCloneRepo when Clone Repository button is clicked", () => {
+    const onCloneRepo = vi.fn();
+    render(
+      <ProjectSwitcherPalette {...baseProps} onCloneRepo={onCloneRepo} results={[makeProject()]} />
+    );
+
+    const btn = screen.getByTestId("project-clone-button");
+    btn.click();
+    expect(onCloneRepo).toHaveBeenCalledOnce();
+  });
+
+  it("does not render Clone Repository button when onCloneRepo is not provided", () => {
+    render(<ProjectSwitcherPalette {...baseProps} results={[makeProject()]} />);
+    expect(screen.queryByTestId("project-clone-button")).toBeNull();
+  });
+});

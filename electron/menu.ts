@@ -109,6 +109,11 @@ export function createApplicationMenu(
           },
         },
         {
+          label: "Clone Repository...",
+          click: (_item, browserWindow) =>
+            sendAction("clone-repo", getTargetBrowserWindow(browserWindow)),
+        },
+        {
           label: "New Window",
           accelerator: "CommandOrControl+Shift+Alt+N",
           click: (_item, browserWindow) =>

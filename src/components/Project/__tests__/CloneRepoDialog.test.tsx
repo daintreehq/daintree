@@ -103,7 +103,9 @@ describe("CloneRepoDialog", () => {
   it("renders input fields when opened", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    expect(screen.getByPlaceholderText("https://github.com/user/repo.git")).toBeTruthy();
+    expect(
+      screen.getByPlaceholderText("owner/repo or https://github.com/user/repo.git")
+    ).toBeTruthy();
     expect(screen.getByPlaceholderText("Select a directory...")).toBeTruthy();
     expect(screen.getByText("Clone")).toBeTruthy();
   });
@@ -118,7 +120,7 @@ describe("CloneRepoDialog", () => {
   it("auto-derives folder name from URL", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("https://github.com/user/repo.git");
+    const urlInput = screen.getByPlaceholderText("owner/repo or https://github.com/user/repo.git");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/my-repo.git" } });
 
     const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
@@ -131,7 +133,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("https://github.com/user/repo.git");
+    const urlInput = screen.getByPlaceholderText("owner/repo or https://github.com/user/repo.git");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/test-repo.git" } });
 
     const browseBtn = screen.getByText("Browse");
@@ -148,6 +150,7 @@ describe("CloneRepoDialog", () => {
       url: "https://github.com/user/test-repo.git",
       parentPath: "/tmp",
       folderName: "test-repo",
+      shallowClone: false,
     });
   });
 
@@ -156,7 +159,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("https://github.com/user/repo.git");
+    const urlInput = screen.getByPlaceholderText("owner/repo or https://github.com/user/repo.git");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByText("Browse");
@@ -188,7 +191,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={onSuccess} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("https://github.com/user/repo.git");
+    const urlInput = screen.getByPlaceholderText("owner/repo or https://github.com/user/repo.git");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/my-repo.git" } });
 
     const browseBtn = screen.getByText("Browse");
@@ -213,7 +216,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("https://github.com/user/repo.git");
+    const urlInput = screen.getByPlaceholderText("owner/repo or https://github.com/user/repo.git");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByText("Browse");
@@ -238,7 +241,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("https://github.com/user/repo.git");
+    const urlInput = screen.getByPlaceholderText("owner/repo or https://github.com/user/repo.git");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByText("Browse");
@@ -259,5 +262,95 @@ describe("CloneRepoDialog", () => {
     render(<CloneRepoDialog isOpen={false} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
     expect(screen.queryByTestId("app-dialog")).toBeNull();
+  });
+
+  it("expands owner/repo shorthand to full GitHub URL on clone", async () => {
+    cloneRepoMock.mockImplementation(() => new Promise(() => {}));
+
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+
+    const urlInput = screen.getByPlaceholderText("owner/repo or https://github.com/user/repo.git");
+    fireEvent.change(urlInput, { target: { value: "vercel/next.js" } });
+
+    const browseBtn = screen.getByText("Browse");
+    await act(async () => {
+      fireEvent.click(browseBtn);
+    });
+
+    const cloneBtn = screen.getByText("Clone");
+    await act(async () => {
+      fireEvent.click(cloneBtn);
+    });
+
+    expect(cloneRepoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://github.com/vercel/next.js",
+        folderName: "next.js",
+      })
+    );
+  });
+
+  it("auto-derives folder name from owner/repo shorthand", () => {
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+
+    const urlInput = screen.getByPlaceholderText("owner/repo or https://github.com/user/repo.git");
+    fireEvent.change(urlInput, { target: { value: "facebook/react" } });
+
+    const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
+    const folderInput = inputs.find((i) => i.value === "react");
+    expect(folderInput).toBeDefined();
+  });
+
+  it("sends shallowClone: true when checkbox is checked", async () => {
+    cloneRepoMock.mockImplementation(() => new Promise(() => {}));
+
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+
+    const urlInput = screen.getByPlaceholderText("owner/repo or https://github.com/user/repo.git");
+    fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
+
+    const browseBtn = screen.getByText("Browse");
+    await act(async () => {
+      fireEvent.click(browseBtn);
+    });
+
+    const checkbox = screen.getByRole("checkbox");
+    fireEvent.click(checkbox);
+
+    const cloneBtn = screen.getByText("Clone");
+    await act(async () => {
+      fireEvent.click(cloneBtn);
+    });
+
+    expect(cloneRepoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shallowClone: true,
+      })
+    );
+  });
+
+  it("does not treat full URLs as owner/repo shorthand", async () => {
+    cloneRepoMock.mockImplementation(() => new Promise(() => {}));
+
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+
+    const urlInput = screen.getByPlaceholderText("owner/repo or https://github.com/user/repo.git");
+    fireEvent.change(urlInput, { target: { value: "https://gitlab.com/user/repo.git" } });
+
+    const browseBtn = screen.getByText("Browse");
+    await act(async () => {
+      fireEvent.click(browseBtn);
+    });
+
+    const cloneBtn = screen.getByText("Clone");
+    await act(async () => {
+      fireEvent.click(cloneBtn);
+    });
+
+    expect(cloneRepoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://gitlab.com/user/repo.git",
+      })
+    );
   });
 });

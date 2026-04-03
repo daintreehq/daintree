@@ -957,6 +957,7 @@ export function Toolbar({
             onSelect={projectSwitcher.selectProject}
             onClose={handleDropdownClose}
             onAddProject={projectSwitcher.addProject}
+            onCloneRepo={projectSwitcher.cloneRepo}
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
             onTogglePinProject={projectSwitcher.togglePinProject}
