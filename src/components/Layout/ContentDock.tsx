@@ -257,12 +257,16 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             <div className="w-px h-5 bg-[var(--dock-border)] mx-1 shrink-0" />
           )}
 
-          {/* Action containers: Help + Background + Waiting + Trash */}
+          {/* Action containers: Background + Waiting + Trash */}
           <div className="shrink-0 pl-1 flex items-center gap-2">
-            <HelpAgentDockButton compact={isCompact} />
             <BackgroundContainer compact={isCompact} />
             <WaitingContainer compact={isCompact} />
             <TrashContainer trashedTerminals={trashedItems} compact={isCompact} />
+          </div>
+
+          {/* Help button — right-aligned, always last */}
+          <div className="ml-auto shrink-0">
+            <HelpAgentDockButton compact={isCompact} />
           </div>
         </div>
       </ContextMenuTrigger>
