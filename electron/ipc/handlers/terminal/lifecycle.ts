@@ -113,6 +113,19 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           // ignore
         }
       }
+
+      if (worktreeId && deps.worktreeService) {
+        try {
+          const snapshot = await deps.worktreeService.getMonitorAsync(worktreeId);
+          if (snapshot?.path && path.isAbsolute(snapshot.path)) {
+            await fs.promises.access(snapshot.path);
+            return snapshot.path;
+          }
+        } catch {
+          // ignore — worktree path inaccessible or service unavailable
+        }
+      }
+
       return os.homedir();
     };
 

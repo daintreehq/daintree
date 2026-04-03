@@ -33,7 +33,7 @@ export interface UseAgentLauncherReturn {
 
 export function useAgentLauncher(): UseAgentLauncherReturn {
   const addTerminal = useTerminalStore((state) => state.addTerminal);
-  const { worktreeMap } = useWorktrees();
+  const { worktreeMap, isInitialized } = useWorktrees();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const currentProject = useProjectStore((state) => state.currentProject);
   const { homeDir } = useHomeDir();
@@ -89,7 +89,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       const targetWorktreeId = launchOptions?.worktreeId ?? activeWorktreeId;
       const targetWorktree = targetWorktreeId ? worktreeMap.get(targetWorktreeId) : null;
 
-      if (targetWorktreeId && !targetWorktree) {
+      if (targetWorktreeId && !targetWorktree && isInitialized) {
         console.warn(`Worktree ${targetWorktreeId} not found, cannot launch agent`);
         return null;
       }
@@ -191,7 +191,15 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         return null;
       }
     },
-    [activeWorktreeId, worktreeMap, addTerminal, currentProject, agentSettings, homeDir]
+    [
+      activeWorktreeId,
+      worktreeMap,
+      isInitialized,
+      addTerminal,
+      currentProject,
+      agentSettings,
+      homeDir,
+    ]
   );
 
   return {

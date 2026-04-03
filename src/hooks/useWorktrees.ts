@@ -7,6 +7,7 @@ export interface UseWorktreesReturn {
   worktreeMap: Map<string, WorktreeState>;
   activeId: string | null;
   isLoading: boolean;
+  isInitialized: boolean;
   error: string | null;
   refresh: () => Promise<void>;
   setActive: (id: string) => void;
@@ -23,6 +24,7 @@ function normalizeSnapshot(s: WorktreeSnapshot): WorktreeState {
 export function useWorktrees(): UseWorktreesReturn {
   const worktreeMap = useWorktreeStore((state) => state.worktrees);
   const isLoading = useWorktreeStore((state) => state.isLoading);
+  const isInitialized = useWorktreeStore((state) => state.isInitialized);
   const error = useWorktreeStore((state) => state.error);
 
   const refresh = useCallback(async () => {
@@ -61,6 +63,7 @@ export function useWorktrees(): UseWorktreesReturn {
     worktreeMap: normalizedMap,
     activeId: worktrees.length > 0 ? worktrees[0].id : null,
     isLoading,
+    isInitialized,
     error,
     refresh,
     setActive,

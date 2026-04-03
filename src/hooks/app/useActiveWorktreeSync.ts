@@ -5,7 +5,7 @@ import { useProjectStore } from "@/store";
 import { useHomeDir } from "@/hooks/app/useHomeDir";
 
 export function useActiveWorktreeSync() {
-  const { worktrees } = useWorktrees();
+  const { worktrees, isInitialized } = useWorktrees();
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
   const currentProject = useProjectStore((s) => s.currentProject);
@@ -66,8 +66,11 @@ export function useActiveWorktreeSync() {
   }, [activeWorktreeId, currentProject?.id, worktrees]);
 
   const defaultTerminalCwd = useMemo(
-    () => activeWorktree?.path ?? currentProject?.path ?? homeDir ?? "",
-    [activeWorktree, currentProject, homeDir]
+    () =>
+      isInitialized
+        ? (activeWorktree?.path ?? currentProject?.path ?? homeDir ?? "")
+        : (currentProject?.path ?? homeDir ?? ""),
+    [activeWorktree, currentProject, homeDir, isInitialized]
   );
 
   return { activeWorktree, defaultTerminalCwd };
