@@ -256,6 +256,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     // Auto-collapse terminals accordion when switching worktrees
     const updates: Partial<WorktreeSelectionState> = {
       activeWorktreeId: id,
+      focusedWorktreeId: id,
       _policyGeneration: generation,
     };
 

@@ -260,6 +260,35 @@ describe("worktreeStore", () => {
     ]);
   });
 
+  it("setActiveWorktree syncs focusedWorktreeId to clear stale focus", () => {
+    useWorktreeSelectionStore.setState({
+      activeWorktreeId: "wt-a",
+      focusedWorktreeId: "wt-b",
+      expandedTerminals: new Set(["t1"]),
+    });
+
+    useWorktreeSelectionStore.getState().setActiveWorktree("wt-a");
+
+    const state = useWorktreeSelectionStore.getState();
+    expect(state.activeWorktreeId).toBe("wt-a");
+    expect(state.focusedWorktreeId).toBe("wt-a");
+    // Same-ID path preserves expandedTerminals
+    expect(state.expandedTerminals.has("t1")).toBe(true);
+  });
+
+  it("setActiveWorktree(null) clears both activeWorktreeId and focusedWorktreeId", () => {
+    useWorktreeSelectionStore.setState({
+      activeWorktreeId: "wt-a",
+      focusedWorktreeId: "wt-a",
+    });
+
+    useWorktreeSelectionStore.getState().setActiveWorktree(null);
+
+    const state = useWorktreeSelectionStore.getState();
+    expect(state.activeWorktreeId).toBeNull();
+    expect(state.focusedWorktreeId).toBeNull();
+  });
+
   it("does not restore stale terminal focus after a newer worktree selection wins", async () => {
     terminalStoreState.terminals = [
       { id: "term-a", worktreeId: "wt-a", location: "grid" },
