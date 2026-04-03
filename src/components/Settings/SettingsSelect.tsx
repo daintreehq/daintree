@@ -35,8 +35,9 @@ export function SettingsSelect({
   const showReset = isModified && onReset && !disabled;
 
   const describedBy =
-    [description ? descriptionId : null, error ? errorId : null].filter(Boolean).join(" ") ||
-    undefined;
+    [description && !error ? descriptionId : null, error ? errorId : null]
+      .filter(Boolean)
+      .join(" ") || undefined;
 
   return (
     <div className="group flex flex-col gap-2">

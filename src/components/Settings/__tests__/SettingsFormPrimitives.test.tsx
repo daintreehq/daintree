@@ -34,6 +34,15 @@ describe("SettingsInput", () => {
     expect(screen.getByText("Invalid")).toBeTruthy();
   });
 
+  it("aria-describedby only references error when both description and error exist", () => {
+    render(<SettingsInput label="Port" description="Server port" error="Required" />);
+    const input = screen.getByLabelText("Port");
+    const describedBy = input.getAttribute("aria-describedby")!;
+    const ids = describedBy.split(" ");
+    expect(ids).toHaveLength(1);
+    expect(document.getElementById(ids[0])?.textContent).toBe("Required");
+  });
+
   it("shows modified indicator when isModified", () => {
     const { container } = render(<SettingsInput label="Name" isModified />);
     const dot = container.querySelector(".bg-canopy-accent.rounded-full");
