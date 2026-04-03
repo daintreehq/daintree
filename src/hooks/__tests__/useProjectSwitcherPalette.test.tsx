@@ -200,7 +200,7 @@ describe("useProjectSwitcherPalette", () => {
       },
     ];
 
-    it("defaults to index 1 when 2+ projects exist", async () => {
+    it("defaults to index 0 (most recent non-active) when 2+ projects exist", async () => {
       projectState.projects = multipleProjects;
       projectState.currentProject = { id: "project-1" };
       getBulkStatsMock.mockResolvedValue(emptyBulkStats(multipleProjects.map((p) => p.id)));
@@ -215,7 +215,9 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.results).toHaveLength(3);
       });
 
-      expect(result.current.selectedIndex).toBe(1);
+      expect(result.current.selectedIndex).toBe(0);
+      expect(result.current.results[0].id).toBe("project-2");
+      expect(result.current.results[2].id).toBe("project-1");
     });
 
     it("defaults to index 0 when only 1 project exists", async () => {
@@ -254,7 +256,7 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.selectedIndex).toBe(0);
     });
 
-    it("defaults to index 1 with exactly 2 projects", async () => {
+    it("defaults to index 0 with exactly 2 projects (non-active first)", async () => {
       projectState.projects = [multipleProjects[0], multipleProjects[1]];
       projectState.currentProject = { id: "project-1" };
       getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1", "project-2"]));
@@ -269,8 +271,9 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.results).toHaveLength(2);
       });
 
-      expect(result.current.selectedIndex).toBe(1);
-      expect(result.current.results[1].id).toBe("project-2");
+      expect(result.current.selectedIndex).toBe(0);
+      expect(result.current.results[0].id).toBe("project-2");
+      expect(result.current.results[1].id).toBe("project-1");
     });
   });
 
@@ -579,7 +582,7 @@ describe("useProjectSwitcherPalette", () => {
 
       await waitFor(() => {
         expect(result.current.results).toHaveLength(3);
-        expect(result.current.selectedIndex).toBe(1);
+        expect(result.current.selectedIndex).toBe(0);
       });
 
       expect(result.current.isOpen).toBe(true);
@@ -589,10 +592,10 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       expect(result.current.isOpen).toBe(true);
-      expect(result.current.selectedIndex).toBe(2);
+      expect(result.current.selectedIndex).toBe(1);
     });
 
-    it("wraps to index 1 at end of list (skipping current project)", async () => {
+    it("wraps to first non-active at end of list", async () => {
       projectState.projects = threeProjects;
       projectState.currentProject = { id: "project-1" };
       getBulkStatsMock.mockResolvedValue(emptyBulkStats(threeProjects.map((p) => p.id)));
@@ -605,8 +608,13 @@ describe("useProjectSwitcherPalette", () => {
 
       await waitFor(() => {
         expect(result.current.results).toHaveLength(3);
-        expect(result.current.selectedIndex).toBe(1);
+        expect(result.current.selectedIndex).toBe(0);
       });
+
+      await act(async () => {
+        result.current.toggle();
+      });
+      expect(result.current.selectedIndex).toBe(1);
 
       await act(async () => {
         result.current.toggle();
@@ -616,7 +624,7 @@ describe("useProjectSwitcherPalette", () => {
       await act(async () => {
         result.current.toggle();
       });
-      expect(result.current.selectedIndex).toBe(1);
+      expect(result.current.selectedIndex).toBe(0);
     });
 
     it("is a no-op with only 1 project", async () => {
@@ -643,7 +651,7 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.selectedIndex).toBe(0);
     });
 
-    it("wraps to first non-active project when active project not at index 0", async () => {
+    it("wraps to first non-active project when cycling through all", async () => {
       const projectsWithActiveNotFirst = [
         {
           id: "project-1",
@@ -693,6 +701,13 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.results).toHaveLength(3);
       });
 
+      // Non-active projects come first, active last
+      expect(result.current.results[0].isActive).toBe(false);
+      expect(result.current.selectedIndex).toBe(0);
+
+      await act(async () => {
+        result.current.toggle();
+      });
       expect(result.current.selectedIndex).toBe(1);
 
       await act(async () => {

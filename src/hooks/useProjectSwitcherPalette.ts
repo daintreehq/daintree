@@ -142,11 +142,12 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const results = useMemo<SearchableProject[]>(() => {
     if (!query.trim()) {
-      // Order: active first, then pinned (non-active), then rest by recency
+      // Order: non-active by frecency/recency first, then active last.
+      // This puts the most recently used other project at index 0 for quick toggle.
+      const nonActive = sortedProjects.filter((p) => !p.isActive);
       const active = sortedProjects.filter((p) => p.isActive);
-      const pinned = sortedProjects.filter((p) => p.isPinned && !p.isActive);
-      const rest = sortedProjects.filter((p) => !p.isPinned && !p.isActive);
-      return [...active, ...pinned, ...rest].slice(0, MAX_RESULTS);
+      const ordered = [...nonActive.slice(0, MAX_RESULTS - active.length), ...active];
+      return ordered.slice(0, MAX_RESULTS);
     }
 
     return rankProjectMatches(query, sortedProjects).slice(0, MAX_RESULTS);
@@ -192,19 +193,17 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
   }, [removeConfirmProject, searchableProjects]);
 
-  const open = useCallback(
-    (nextMode: ProjectSwitcherMode = "modal") => {
-      setMode(nextMode);
-      if (nextMode === "modal") {
-        usePaletteStore.getState().openPalette("project-switcher");
-      } else {
-        setDropdownIsOpen(true);
-      }
-      setQuery("");
-      setSelectedIndex(sortedProjects.length >= 2 ? 1 : 0);
-    },
-    [sortedProjects.length]
-  );
+  const open = useCallback((nextMode: ProjectSwitcherMode = "modal") => {
+    setMode(nextMode);
+    if (nextMode === "modal") {
+      usePaletteStore.getState().openPalette("project-switcher");
+    } else {
+      setDropdownIsOpen(true);
+    }
+    setQuery("");
+    selectedProjectIdRef.current = null;
+    setSelectedIndex(0);
+  }, []);
 
   const close = useCallback(() => {
     if (mode === "modal") {
