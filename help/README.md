@@ -54,5 +54,3 @@ The instruction files tell the agent to act as a help assistant rather than a ge
 ## MCP Documentation Search
 
 Each agent is configured to connect to the `canopy-docs` MCP server at `https://canopyide.com/api/mcp`, which provides live semantic search across all Canopy documentation. Agents prefer MCP search over the bundled `docs/` files for more comprehensive, up-to-date answers.
-
-**Setup prerequisite for Codex CLI:** Run `codex trust` from the `help/` directory before first use to enable the project-scoped MCP configuration.
