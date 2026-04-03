@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { CliAvailability } from "@shared/types";
 
 const mockDispatch = vi.fn().mockResolvedValue({ ok: true });
 vi.mock("@/services/ActionService", () => ({
@@ -15,11 +16,26 @@ vi.mock("@/store/agentPreferencesStore", () => ({
   useAgentPreferencesStore: { getState: () => mockGetAgentPrefsState() },
 }));
 
+const mockGetCliAvailabilityState = vi.fn();
+vi.mock("@/store/cliAvailabilityStore", () => ({
+  useCliAvailabilityStore: { getState: () => mockGetCliAvailabilityState() },
+}));
+
 import { registerPreferencesActions } from "../preferencesActions";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 import type { ActionContext, ActionDefinition } from "@shared/types/actions";
 
 const stubCtx: ActionContext = {};
+
+function allAvailability(override?: Partial<CliAvailability>): CliAvailability {
+  return {
+    claude: true,
+    gemini: true,
+    codex: true,
+    opencode: true,
+    ...override,
+  } as CliAvailability;
+}
 
 function extractHelpLaunchAgent(): ActionDefinition {
   const registry = new Map<string, () => ActionDefinition>();
@@ -36,6 +52,10 @@ describe("help.launchAgent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: undefined });
+    mockGetCliAvailabilityState.mockReturnValue({
+      availability: allAvailability(),
+      isInitialized: true,
+    });
     Object.defineProperty(globalThis, "window", {
       value: {
         electron: {
@@ -48,11 +68,15 @@ describe("help.launchAgent", () => {
     action = extractHelpLaunchAgent();
   });
 
-  it("dispatches agent.launch with help folder path and default agent", async () => {
+  it("dispatches agent.launch with first available agent when no default set", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: undefined });
+    mockGetCliAvailabilityState.mockReturnValue({
+      availability: allAvailability(),
+      isInitialized: true,
+    });
 
     await action.run(undefined, stubCtx);
 
@@ -65,17 +89,83 @@ describe("help.launchAgent", () => {
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("uses the user's preferred default agent", async () => {
+  it("uses the user's preferred default agent when available", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "gemini" });
+    mockGetCliAvailabilityState.mockReturnValue({
+      availability: allAvailability(),
+      isInitialized: true,
+    });
 
     await action.run(undefined, stubCtx);
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
       { agentId: "gemini", cwd: "/mock/help" },
+      { source: "user" }
+    );
+  });
+
+  it("falls back to first available agent when default is unavailable", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "gemini" });
+    mockGetCliAvailabilityState.mockReturnValue({
+      availability: allAvailability({ gemini: false }),
+      isInitialized: true,
+    });
+
+    await action.run(undefined, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      { agentId: "claude", cwd: "/mock/help" },
+      { source: "user" }
+    );
+  });
+
+  it("resolves to codex when claude and gemini are unavailable", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: undefined });
+    mockGetCliAvailabilityState.mockReturnValue({
+      availability: allAvailability({ claude: false, gemini: false }),
+      isInitialized: true,
+    });
+
+    await action.run(undefined, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      { agentId: "codex", cwd: "/mock/help" },
+      { source: "user" }
+    );
+  });
+
+  it("falls back to claude when CLI availability store is not initialized", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: undefined });
+    mockGetCliAvailabilityState.mockReturnValue({
+      availability: allAvailability({
+        claude: false,
+        gemini: false,
+        codex: false,
+        opencode: false,
+      }),
+      isInitialized: false,
+    });
+
+    await action.run(undefined, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      { agentId: "claude", cwd: "/mock/help" },
       { source: "user" }
     );
   });

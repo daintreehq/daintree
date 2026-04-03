@@ -12,6 +12,8 @@ import { notify } from "@/lib/notify";
 import { keybindingService } from "@/services/KeybindingService";
 import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
@@ -627,8 +629,17 @@ export function registerPreferencesActions(
       }
 
       const parsed = args as { agentId?: string } | undefined;
-      const agentId =
-        parsed?.agentId ?? useAgentPreferencesStore.getState().defaultAgent ?? "claude";
+      let agentId: string;
+      if (parsed?.agentId) {
+        agentId = parsed.agentId;
+      } else {
+        const { defaultAgent } = useAgentPreferencesStore.getState();
+        const { availability, isInitialized } = useCliAvailabilityStore.getState();
+        const resolved = isInitialized
+          ? getDefaultAgentId(defaultAgent, undefined, availability)
+          : null;
+        agentId = resolved ?? "claude";
+      }
 
       const { actionService } = await import("@/services/ActionService");
       await actionService.dispatch(

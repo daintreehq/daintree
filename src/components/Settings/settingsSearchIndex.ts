@@ -583,7 +583,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     section: "Global Agent Settings",
     title: "Default Agent",
     description:
-      'Agent used for automated workflows ("What\'s Next?", onboarding, project explanations). Distinct from the Portal "Default New Tab Agent".',
+      'Agent used for the help dock button (\u2318\u21e7H) and automated workflows ("What\'s Next?", onboarding, project explanations). Distinct from the Portal "Default New Tab Agent".',
     keywords: [
       "default",
       "agent",
@@ -591,6 +591,10 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
       "automated",
       "whats next",
       "onboarding",
+      "help",
+      "dock",
+      "launch",
+      "keyboard shortcut",
       ...BUILT_IN_AGENT_IDS,
     ],
   },
