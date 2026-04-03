@@ -263,7 +263,9 @@ export class TerminalRegistry {
     }
 
     // Only fallback to lastKnownProjectId if we couldn't infer anything from the filesystem.
+    // Restrict to dev-preview terminals — agent/terminal kinds must not bleed across projects.
     if (!candidates.mainProjectId && !candidates.worktreeProjectId) {
+      if (info.kind !== "dev-preview") return false;
       return this.lastKnownProjectId === projectId;
     }
 
@@ -420,7 +422,9 @@ export class TerminalRegistry {
     // Fallback to lastKnownProjectId if we couldn't infer anything from the filesystem.
     // This ensures getForProject() finds terminals even when inference fails (e.g., dev-preview
     // terminals that may have changed cwd), aligning with terminalBelongsToProject behavior.
+    // Restrict to dev-preview terminals — agent/terminal kinds must not bleed across projects.
     if (!candidates.mainProjectId && !candidates.worktreeProjectId) {
+      if (info.kind !== "dev-preview") return false;
       const fallbackMatches = this.lastKnownProjectId === projectId;
       if (process.env.CANOPY_VERBOSE && fallbackMatches) {
         console.log(

@@ -16,13 +16,14 @@ function createMockTerminalProcess(options: {
   cwd: string;
   projectId?: string;
   worktreeId?: string;
+  kind?: string;
 }): TerminalProcess {
   const info = {
     id: options.id,
     projectId: options.projectId,
     cwd: options.cwd,
     shell: "/bin/sh",
-    kind: "terminal",
+    kind: options.kind ?? "terminal",
     type: "terminal",
     spawnedAt: Date.now(),
     analysisEnabled: false,
@@ -181,5 +182,64 @@ describe("TerminalRegistry projectId inference", () => {
 
     expect(registry.isInTrash("t-1")).toBe(false);
     expect(killedId).toBe(null);
+  });
+
+  it("does not match agent terminal to new project via lastKnownProjectId fallback", () => {
+    const projectA = "project-aaa";
+    const projectB = "project-bbb";
+    const registry = new TerminalRegistry();
+
+    registry.setLastKnownProjectId(projectA);
+
+    const agentTerminal = createMockTerminalProcess({
+      id: "t-agent",
+      cwd: "/nonexistent/path/no/git/root",
+      kind: "agent",
+    });
+    registry.add("t-agent", agentTerminal);
+
+    registry.setLastKnownProjectId(projectB);
+
+    expect(registry.getForProject(projectB)).toEqual([]);
+    expect(agentTerminal.getInfo().projectId).toBeUndefined();
+
+    const stats = registry.getProjectStats(projectB);
+    expect(stats.terminalCount).toBe(0);
+  });
+
+  it("matches dev-preview terminal to new project via lastKnownProjectId fallback", () => {
+    const projectB = "project-bbb";
+    const registry = new TerminalRegistry();
+
+    const devPreviewTerminal = createMockTerminalProcess({
+      id: "t-dp",
+      cwd: "/nonexistent/path/no/git/root",
+      kind: "dev-preview",
+    });
+    registry.add("t-dp", devPreviewTerminal);
+
+    registry.setLastKnownProjectId(projectB);
+
+    expect(registry.getForProject(projectB)).toEqual(["t-dp"]);
+
+    const stats = registry.getProjectStats(projectB);
+    expect(stats.terminalCount).toBe(1);
+  });
+
+  it("does not match terminal with undefined kind via lastKnownProjectId fallback", () => {
+    const projectB = "project-bbb";
+    const registry = new TerminalRegistry();
+
+    const unknownTerminal = createMockTerminalProcess({
+      id: "t-unknown",
+      cwd: "/nonexistent/path/no/git/root",
+      kind: undefined,
+    });
+    registry.add("t-unknown", unknownTerminal);
+
+    registry.setLastKnownProjectId(projectB);
+
+    expect(registry.getForProject(projectB)).toEqual([]);
+    expect(unknownTerminal.getInfo().projectId).toBeUndefined();
   });
 });
