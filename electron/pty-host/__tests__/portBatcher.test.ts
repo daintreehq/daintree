@@ -132,13 +132,8 @@ describe("PortBatcher", () => {
 
   it("capacity rejection flushes pending data to prevent split-channel delivery", () => {
     const qm = createMockQueueManager();
-    let callCount = 0;
     (qm.isAtCapacity as ReturnType<typeof vi.fn>).mockImplementation(
-      (_id: string, bytes: number) => {
-        callCount++;
-        // First call (80 bytes): accept. Second call (80+30=110): reject.
-        return bytes > 100;
-      }
+      (_id: string, bytes: number) => bytes > 100
     );
     const deps = createDeps({ portQueueManager: qm });
     const batcher = new PortBatcher(deps);
