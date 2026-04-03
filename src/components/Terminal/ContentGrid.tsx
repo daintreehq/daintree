@@ -355,6 +355,7 @@ export function ContentGrid({
   const {
     terminalsById,
     storeTerminalIds,
+    trashedTerminals,
     focusedId,
     maximizedId,
     maximizeTarget,
@@ -368,6 +369,7 @@ export function ContentGrid({
     useShallow((state) => ({
       terminalsById: state.terminalsById,
       storeTerminalIds: state.terminalIds,
+      trashedTerminals: state.trashedTerminals,
       focusedId: state.focusedId,
       maximizedId: state.maximizedId,
       maximizeTarget: state.maximizeTarget,
@@ -439,8 +441,8 @@ export function ContentGrid({
   // Get tab groups for the active worktree
   const tabGroups = useMemo(() => {
     return getTabGroups("grid", activeWorktreeId ?? undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeTerminalIds is an intentional trigger dep
-  }, [getTabGroups, activeWorktreeId, storeTerminalIds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeTerminalIds/trashedTerminals are intentional trigger deps
+  }, [getTabGroups, activeWorktreeId, storeTerminalIds, trashedTerminals]);
 
   // Handler for adding a new tab to a single panel (creates a tab group)
   const handleAddTabForPanel = useCallback(
