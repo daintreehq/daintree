@@ -73,10 +73,11 @@ describe("usePanelPalette", () => {
 
     // Ensure window.electron.agentSessionHistory is available for tests
     if (!window.electron) {
-      (window as unknown as Record<string, unknown>).electron = {};
+      (window as unknown as { electron: unknown }).electron = {};
     }
-    if (!(window.electron as Record<string, unknown>).agentSessionHistory) {
-      (window.electron as Record<string, unknown>).agentSessionHistory = {
+    const electron = window.electron as unknown as Record<string, unknown>;
+    if (!electron.agentSessionHistory) {
+      electron.agentSessionHistory = {
         list: vi.fn().mockResolvedValue([]),
       };
     } else {

@@ -78,7 +78,7 @@ export function useSearchablePalette<T>(
 
   const { results, totalResults, matchesById } = useMemo(() => {
     let filtered: T[];
-    let matches = new Map<string, readonly FuseResultMatch[]>();
+    const matches = new Map<string, readonly FuseResultMatch[]>();
 
     if (filterFn) {
       filtered = filterFn(items, deferredQuery);
