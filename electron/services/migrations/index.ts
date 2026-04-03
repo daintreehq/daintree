@@ -8,6 +8,7 @@ import { migration007 } from "./007-reduce-default-terminal-scrollback.js";
 import { migration008 } from "./008-split-notification-sounds.js";
 import { migration009 } from "./009-per-project-window-state.js";
 import { migration010 } from "./010-add-working-pulse-setting.js";
+import { migration011 } from "./011-minimal-soundscape-defaults.js";
 
 export const migrations: Migration[] = [
   migration002,
@@ -19,4 +20,5 @@ export const migrations: Migration[] = [
   migration008,
   migration009,
   migration010,
+  migration011,
 ];

@@ -26,16 +26,16 @@ const ESCALATION_DELAY_OPTIONS: { value: number; label: string }[] = [
 const DEFAULT_SETTINGS: NotificationSettings = {
   enabled: true,
   completedEnabled: false,
-  waitingEnabled: false,
+  waitingEnabled: true,
   soundEnabled: true,
   completedSoundFile: "complete.wav",
   waitingSoundFile: "waiting.wav",
   escalationSoundFile: "ping.wav",
-  waitingEscalationEnabled: true,
+  waitingEscalationEnabled: false,
   waitingEscalationDelayMs: 180_000,
   workingPulseEnabled: false,
   workingPulseSoundFile: "pulse.wav",
-  uiFeedbackSoundEnabled: true,
+  uiFeedbackSoundEnabled: false,
 };
 
 type LoadState = "loading" | "ready" | "error";

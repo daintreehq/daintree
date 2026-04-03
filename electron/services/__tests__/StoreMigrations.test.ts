@@ -8,6 +8,7 @@ import { migration004 } from "../migrations/004-upgrade-correction-model.js";
 import { migration006 } from "../migrations/006-rename-theme-canopy-to-daintree.js";
 import { migration007 } from "../migrations/007-reduce-default-terminal-scrollback.js";
 import { migration008 } from "../migrations/008-split-notification-sounds.js";
+import { migration011 } from "../migrations/011-minimal-soundscape-defaults.js";
 
 type MockStoreData = Record<string, unknown>;
 
@@ -293,6 +294,103 @@ describe("MigrationRunner", () => {
       const store = createMockStore(storePath, {});
       migration008.up(store as never);
       expect(store.data.notificationSettings).toBeUndefined();
+    });
+  });
+
+  describe("migration 011 — minimal soundscape defaults", () => {
+    it("resets all three old-default fields and preserves sibling fields", () => {
+      const store = createMockStore(storePath, {
+        notificationSettings: {
+          enabled: true,
+          completedEnabled: false,
+          waitingEnabled: false,
+          soundEnabled: true,
+          completedSoundFile: "complete.wav",
+          waitingSoundFile: "waiting.wav",
+          escalationSoundFile: "ping.wav",
+          waitingEscalationEnabled: true,
+          waitingEscalationDelayMs: 180_000,
+          workingPulseEnabled: false,
+          workingPulseSoundFile: "pulse.wav",
+          uiFeedbackSoundEnabled: true,
+        },
+      });
+      migration011.up(store as never);
+      const settings = store.data.notificationSettings as Record<string, unknown>;
+      expect(settings.waitingEnabled).toBe(true);
+      expect(settings.waitingEscalationEnabled).toBe(false);
+      expect(settings.uiFeedbackSoundEnabled).toBe(false);
+      expect(settings.enabled).toBe(true);
+      expect(settings.soundEnabled).toBe(true);
+      expect(settings.completedEnabled).toBe(false);
+      expect(settings.completedSoundFile).toBe("complete.wav");
+    });
+
+    it("preserves custom waitingEnabled (already true)", () => {
+      const store = createMockStore(storePath, {
+        notificationSettings: {
+          waitingEnabled: true,
+          waitingEscalationEnabled: true,
+          uiFeedbackSoundEnabled: true,
+        },
+      });
+      migration011.up(store as never);
+      const settings = store.data.notificationSettings as Record<string, unknown>;
+      expect(settings.waitingEnabled).toBe(true);
+      expect(settings.waitingEscalationEnabled).toBe(false);
+      expect(settings.uiFeedbackSoundEnabled).toBe(false);
+    });
+
+    it("preserves custom waitingEscalationEnabled (already false)", () => {
+      const store = createMockStore(storePath, {
+        notificationSettings: {
+          waitingEnabled: false,
+          waitingEscalationEnabled: false,
+          uiFeedbackSoundEnabled: true,
+        },
+      });
+      migration011.up(store as never);
+      const settings = store.data.notificationSettings as Record<string, unknown>;
+      expect(settings.waitingEnabled).toBe(true);
+      expect(settings.waitingEscalationEnabled).toBe(false);
+      expect(settings.uiFeedbackSoundEnabled).toBe(false);
+    });
+
+    it("preserves custom uiFeedbackSoundEnabled (already false)", () => {
+      const store = createMockStore(storePath, {
+        notificationSettings: {
+          waitingEnabled: false,
+          waitingEscalationEnabled: true,
+          uiFeedbackSoundEnabled: false,
+        },
+      });
+      migration011.up(store as never);
+      const settings = store.data.notificationSettings as Record<string, unknown>;
+      expect(settings.waitingEnabled).toBe(true);
+      expect(settings.waitingEscalationEnabled).toBe(false);
+      expect(settings.uiFeedbackSoundEnabled).toBe(false);
+    });
+
+    it("skips when no notificationSettings exist", () => {
+      const store = createMockStore(storePath, {});
+      migration011.up(store as never);
+      expect(store.data.notificationSettings).toBeUndefined();
+    });
+
+    it("is idempotent — second call is a no-op", () => {
+      const store = createMockStore(storePath, {
+        notificationSettings: {
+          waitingEnabled: false,
+          waitingEscalationEnabled: true,
+          uiFeedbackSoundEnabled: true,
+          soundEnabled: true,
+        },
+      });
+      migration011.up(store as never);
+      const after1 = { ...(store.data.notificationSettings as Record<string, unknown>) };
+      migration011.up(store as never);
+      const after2 = store.data.notificationSettings as Record<string, unknown>;
+      expect(after2).toEqual(after1);
     });
   });
 
