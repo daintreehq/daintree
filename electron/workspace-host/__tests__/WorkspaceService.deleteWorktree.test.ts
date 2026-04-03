@@ -305,6 +305,82 @@ describe("WorkspaceService.deleteWorktree", () => {
     expect(service["monitors"].has("/test/worktree")).toBe(false);
   });
 
+  it("blocks non-force deletion with 'untracked files' when only untracked files exist", async () => {
+    const monitor = createAndRegisterMonitor();
+    vi.spyOn(monitor, "getWorktreeChanges").mockReturnValue({
+      worktreeId: "/test/worktree",
+      rootPath: "/test/worktree",
+      changedFileCount: 2,
+      changes: [
+        { path: "new.txt", status: "untracked", insertions: null, deletions: null },
+        { path: "temp.log", status: "untracked", insertions: null, deletions: null },
+      ],
+    });
+
+    await service.deleteWorktree("req-ut1", "/test/worktree");
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "delete-worktree-result",
+        success: false,
+        error: expect.stringContaining("untracked files"),
+      })
+    );
+    const call = mockSendEvent.mock.calls.find(
+      (c: unknown[]) => (c[0] as Record<string, unknown>).type === "delete-worktree-result"
+    );
+    expect((call![0] as Record<string, string>).error).not.toContain("uncommitted changes");
+  });
+
+  it("blocks non-force deletion with 'uncommitted changes' when only tracked changes exist", async () => {
+    const monitor = createAndRegisterMonitor();
+    vi.spyOn(monitor, "getWorktreeChanges").mockReturnValue({
+      worktreeId: "/test/worktree",
+      rootPath: "/test/worktree",
+      changedFileCount: 1,
+      changes: [
+        { path: "src/app.ts", status: "modified", insertions: 5, deletions: 2 },
+      ],
+    });
+
+    await service.deleteWorktree("req-ut2", "/test/worktree");
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "delete-worktree-result",
+        success: false,
+        error: expect.stringContaining("uncommitted changes"),
+      })
+    );
+    const call = mockSendEvent.mock.calls.find(
+      (c: unknown[]) => (c[0] as Record<string, unknown>).type === "delete-worktree-result"
+    );
+    expect((call![0] as Record<string, string>).error).not.toContain("untracked files");
+  });
+
+  it("blocks non-force deletion with 'uncommitted changes and untracked files' when both exist", async () => {
+    const monitor = createAndRegisterMonitor();
+    vi.spyOn(monitor, "getWorktreeChanges").mockReturnValue({
+      worktreeId: "/test/worktree",
+      rootPath: "/test/worktree",
+      changedFileCount: 2,
+      changes: [
+        { path: "src/app.ts", status: "modified", insertions: 5, deletions: 2 },
+        { path: "new.txt", status: "untracked", insertions: null, deletions: null },
+      ],
+    });
+
+    await service.deleteWorktree("req-ut3", "/test/worktree");
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "delete-worktree-result",
+        success: false,
+        error: expect.stringContaining("uncommitted changes and untracked files"),
+      })
+    );
+  });
+
   it("skips teardown when no config file exists", async () => {
     const fsModule = await import("fs/promises");
     vi.mocked(fsModule.access).mockRejectedValue(new Error("ENOENT"));

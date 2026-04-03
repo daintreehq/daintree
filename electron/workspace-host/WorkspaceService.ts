@@ -767,8 +767,20 @@ export class WorkspaceService {
         throw new Error("Cannot delete the main worktree");
       }
 
-      if (!force && (monitor.getWorktreeChanges()?.changedFileCount ?? 0) > 0) {
-        throw new Error("Worktree has uncommitted changes. Use force delete to proceed.");
+      const wtChanges = monitor.getWorktreeChanges();
+      if (!force && (wtChanges?.changedFileCount ?? 0) > 0) {
+        const fileChanges = wtChanges?.changes ?? [];
+        const hasTracked = fileChanges.some(
+          (c) => c.status !== "untracked" && c.status !== "ignored"
+        );
+        const hasUntracked = fileChanges.some((c) => c.status === "untracked");
+        const description =
+          hasTracked && hasUntracked
+            ? "uncommitted changes and untracked files"
+            : hasTracked
+              ? "uncommitted changes"
+              : "untracked files";
+        throw new Error(`Worktree has ${description}. Use force delete to proceed.`);
       }
 
       const branchToDelete = deleteBranch ? monitor.branch : undefined;

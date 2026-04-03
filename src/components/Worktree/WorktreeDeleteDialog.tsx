@@ -29,7 +29,12 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const { counts: terminalCounts } = useWorktreeTerminals(worktree.id);
   const bulkCloseByWorktree = useTerminalStore((state) => state.bulkCloseByWorktree);
 
-  const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
+  const changes = worktree.worktreeChanges?.changes ?? [];
+  const hasTrackedChanges = changes.some(
+    (c) => c.status !== "untracked" && c.status !== "ignored"
+  );
+  const hasUntrackedFiles = changes.some((c) => c.status === "untracked");
+  const hasChanges = hasTrackedChanges || hasUntrackedFiles;
   const hasTerminals = terminalCounts.total > 0;
 
   const isProtectedBranch =
@@ -149,7 +154,15 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           {hasChanges && !force && (
             <div className="flex items-start gap-2 p-3 bg-status-warning/10 border border-status-warning/20 rounded text-status-warning text-xs">
               <AlertTriangle className="w-4 h-4 shrink-0" />
-              <p>This worktree has uncommitted changes. Standard deletion will fail.</p>
+              <p>
+                This worktree has{" "}
+                {hasTrackedChanges && hasUntrackedFiles
+                  ? "uncommitted changes and untracked files"
+                  : hasTrackedChanges
+                    ? "uncommitted changes"
+                    : "untracked files"}
+                . Standard deletion will fail.
+              </p>
             </div>
           )}
 
@@ -174,7 +187,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               className="rounded border-canopy-border bg-canopy-bg text-status-error focus:ring-status-error"
             />
             <span className="text-sm text-canopy-text">
-              Force delete (lose uncommitted changes)
+              {hasUntrackedFiles && !hasTrackedChanges
+                ? "Force delete (remove untracked files)"
+                : "Force delete (lose uncommitted changes)"}
             </span>
           </label>
 
