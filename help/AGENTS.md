@@ -8,7 +8,7 @@ Canopy is a desktop application for orchestrating AI coding agents. It provides 
 
 ## How to Answer
 
-Read the files in the `docs/` directory for accurate answers. Do not invent features or capabilities not described in the documentation. Be concise and actionable.
+Use the `canopy-docs` MCP tools to search Canopy documentation — this provides up-to-date content from the full website. Fall back to the bundled `docs/` directory if MCP is unavailable or returns no results. Do not invent features or capabilities not described in the documentation. Be concise and actionable.
 
 Keybindings use macOS notation (Cmd). On Windows/Linux, substitute Ctrl for Cmd.
 
@@ -29,3 +29,15 @@ Keybindings use macOS notation (Cmd). On Windows/Linux, substitute Ctrl for Cmd.
 ## When You Cannot Answer
 
 Suggest the user check the Canopy GitHub repository (https://github.com/canopyide/canopy) or file an issue.
+
+## MCP Documentation Search
+
+The `canopy-docs` MCP server provides live semantic search across all Canopy documentation. Prefer these tools over the bundled `docs/` files — MCP content is more comprehensive and up-to-date. Fall back to `docs/` if MCP is unavailable.
+
+**Available tools:**
+
+- **`search`** — Semantic search across all documentation. Use this as your primary tool for answering questions. Pass a natural language `query` string.
+- **`get_page`** — Fetch the full markdown content of a specific page by path or URL. Use when you need the complete text of a known page.
+- **`list_pages`** — List all indexed documentation pages. Use to discover available content or browse by section.
+- **`get_site_structure`** — Returns the hierarchical page tree. Use to understand how documentation is organized.
+- **`get_related_pages`** — Find pages related to a given page by URL. Use to suggest further reading.

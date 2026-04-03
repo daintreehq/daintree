@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "canopy-docs": {
+      "type": "http",
+      "url": "https://canopyide.com/api/mcp"
+    }
+  }
+}

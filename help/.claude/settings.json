@@ -1,6 +1,6 @@
 {
   "permissions": {
-    "allow": ["Read(**)", "Glob(**)", "Grep(**)", "LS(**)", "WebFetch(**)"],
+    "allow": ["Read(**)", "Glob(**)", "Grep(**)", "LS(**)", "WebFetch(**)", "mcp__canopy-docs__*"],
     "deny": ["Write(**)", "Edit(**)", "MultiEdit(**)", "Bash(**)"]
   }
 }

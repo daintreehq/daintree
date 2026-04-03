@@ -17,11 +17,11 @@ The agent will identify itself as a Canopy help assistant and answer questions a
 
 ## Supported Agents
 
-| Agent       | Command  | Instruction File | Config                  |
-| ----------- | -------- | ---------------- | ----------------------- |
-| Claude Code | `claude` | `CLAUDE.md`      | `.claude/settings.json` |
-| Gemini CLI  | `gemini` | `GEMINI.md`      | `.gemini/settings.json` |
-| Codex CLI   | `codex`  | `AGENTS.md`      | —                       |
+| Agent       | Command  | Instruction File | Config                               |
+| ----------- | -------- | ---------------- | ------------------------------------ |
+| Claude Code | `claude` | `CLAUDE.md`      | `.claude/settings.json`, `.mcp.json` |
+| Gemini CLI  | `gemini` | `GEMINI.md`      | `.gemini/settings.json`              |
+| Codex CLI   | `codex`  | `AGENTS.md`      | `.codex/config.toml`                 |
 
 ## Documentation
 
@@ -45,12 +45,12 @@ The `docs/` directory contains user-facing documentation covering all major Cano
 
 Each agent CLI looks for instruction files in its working directory:
 
-- **Claude Code** reads `CLAUDE.md` and `.claude/settings.json`
-- **Gemini CLI** reads `GEMINI.md` and `.gemini/settings.json`
-- **Codex CLI** reads `AGENTS.md`
+- **Claude Code** reads `CLAUDE.md`, `.claude/settings.json`, and `.mcp.json`
+- **Gemini CLI** reads `GEMINI.md` and `.gemini/settings.json` (includes MCP config)
+- **Codex CLI** reads `AGENTS.md` and `.codex/config.toml`
 
-The instruction files tell the agent to act as a help assistant rather than a general-purpose coding agent. Permission configs restrict agents to read-only access — they can read the documentation but cannot modify files or run commands.
+The instruction files tell the agent to act as a help assistant rather than a general-purpose coding agent. Permission configs restrict agents to read-only access — they can read the documentation but cannot modify files or run commands. MCP server configuration connects each agent to the `canopy-docs` server for live documentation search.
 
-## Future
+## MCP Documentation Search
 
-A docs API from the Canopy website will provide richer search capabilities (see canopyide/canopy-website#3). When available, MCP server configuration can be added to the agent settings files for live documentation search.
+Each agent is configured to connect to the `canopy-docs` MCP server at `https://canopyide.com/api/mcp`, which provides live semantic search across all Canopy documentation. Agents prefer MCP search over the bundled `docs/` files for more comprehensive, up-to-date answers.
