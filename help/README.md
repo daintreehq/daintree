@@ -17,8 +17,8 @@ The agent will identify itself as a Canopy help assistant and answer questions a
 
 ## Supported Agents
 
-| Agent       | Command  | Instruction File | Config                  |
-| ----------- | -------- | ---------------- | ----------------------- |
+| Agent       | Command  | Instruction File | Config                               |
+| ----------- | -------- | ---------------- | ------------------------------------ |
 | Claude Code | `claude` | `CLAUDE.md`      | `.claude/settings.json`, `.mcp.json` |
 | Gemini CLI  | `gemini` | `GEMINI.md`      | `.gemini/settings.json`              |
 | Codex CLI   | `codex`  | `AGENTS.md`      | `.codex/config.toml`                 |
