@@ -440,7 +440,7 @@ describe("terminal action hardening", () => {
     expect(useTerminalStore.getState().focusedId).toBe("term-a");
   });
 
-  it("quits the app only when closing the last remaining non-trashed terminal", async () => {
+  it("does not quit the app when closing the last remaining non-trashed terminal", async () => {
     const actions = buildRegistry(registerTerminalActions);
     const closeTerminal = actions.get("terminal.close")!();
 
@@ -451,19 +451,6 @@ describe("terminal action hardening", () => {
       },
       terminalIds: ["term-1", "term-2"],
       focusedId: "term-1",
-    });
-
-    await closeTerminal.run(undefined, {} as never);
-    expect(mocks.appClient.quit).toHaveBeenCalledTimes(1);
-
-    mocks.appClient.quit.mockClear();
-    useTerminalStore.setState({
-      terminalsById: {
-        "term-a": createTerminal({ id: "term-a", location: "grid" }),
-        "term-b": createTerminal({ id: "term-b", location: "grid" }),
-      },
-      terminalIds: ["term-a", "term-b"],
-      focusedId: "term-a",
     });
 
     await closeTerminal.run(undefined, {} as never);
