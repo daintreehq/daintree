@@ -233,8 +233,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             onDoubleClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              moveTerminalToGrid(terminal.id);
-              closeDockTerminal();
+              const moved = moveTerminalToGrid(terminal.id);
+              if (moved) closeDockTerminal();
             }}
             aria-label={`${terminal.title} - Click to preview, double-click to move to grid, drag to reorder`}
           >

@@ -120,10 +120,13 @@ describe("Grid Capacity Enforcement", () => {
 
       setTerminals([...gridTerminals, dockedTerminal]);
 
-      useTerminalStore.getState().moveTerminalToGrid("docked-1");
+      const result = useTerminalStore.getState().moveTerminalToGrid("docked-1");
 
       const terminal = useTerminalStore.getState().terminalsById["docked-1"];
+      expect(result).toBe(true);
       expect(terminal?.location).toBe("grid");
+      expect(terminal?.isVisible).toBe(true);
+      expect(terminal?.runtimeStatus).toBe("running");
     });
 
     it("should move terminal to grid when exactly at capacity minus one", () => {
@@ -132,9 +135,10 @@ describe("Grid Capacity Enforcement", () => {
 
       setTerminals([...gridTerminals, dockedTerminal]);
 
-      useTerminalStore.getState().moveTerminalToGrid("docked-1");
+      const result = useTerminalStore.getState().moveTerminalToGrid("docked-1");
 
       const terminal = useTerminalStore.getState().terminalsById["docked-1"];
+      expect(result).toBe(true);
       expect(terminal?.location).toBe("grid");
 
       const gridCount = getTerminals().filter((t) => t.location === "grid").length;
@@ -147,9 +151,10 @@ describe("Grid Capacity Enforcement", () => {
 
       setTerminals([...gridTerminals, dockedTerminal]);
 
-      useTerminalStore.getState().moveTerminalToGrid("docked-1");
+      const result = useTerminalStore.getState().moveTerminalToGrid("docked-1");
 
       const terminal = useTerminalStore.getState().terminalsById["docked-1"];
+      expect(result).toBe(false);
       expect(terminal?.location).toBe("dock");
 
       const gridCount = getTerminals().filter((t) => t.location === "grid").length;

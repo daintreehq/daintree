@@ -350,7 +350,12 @@ export const createTabGroupActions = (
         const t = newById[pid];
         if (!t) continue;
         if (t.location === "trash" || state.trashedTerminals.has(t.id)) continue;
-        newById[pid] = { ...t, location };
+        newById[pid] = {
+          ...t,
+          location,
+          isVisible: location === "grid",
+          runtimeStatus: deriveRuntimeStatus(location === "grid", t.flowStatus, t.runtimeStatus),
+        };
       }
 
       saveNormalized(newById, state.terminalIds);

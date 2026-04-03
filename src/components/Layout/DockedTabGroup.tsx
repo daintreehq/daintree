@@ -401,8 +401,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             onDoubleClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              moveTerminalToGrid(activePanel.id);
-              closeDockTerminal();
+              const moved = moveTerminalToGrid(activePanel.id);
+              if (moved) closeDockTerminal();
             }}
             aria-label={`${activePanel.title} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
           >
