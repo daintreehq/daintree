@@ -323,8 +323,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   },
 
   deleteRecipe: async (id) => {
-    const recipes = get().recipes;
-    const recipe = recipes.find((r) => r.id === id);
+    // Search merged list first, then source lists as fallback (handles shadowed recipes)
+    const recipe =
+      get().recipes.find((r) => r.id === id) ??
+      get().projectRecipes.find((r) => r.id === id) ??
+      get().globalRecipes.find((r) => r.id === id);
     if (!recipe) {
       throw new Error(`Recipe ${id} not found`);
     }
@@ -398,13 +401,6 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     try {
       await projectClient.updateInRepoRecipe(currentProjectId, promoted);
-      if (deleteOriginal) {
-        if (isGlobal) {
-          await globalRecipesClient.deleteRecipe(recipeId);
-        } else {
-          await projectClient.deleteRecipe(recipe.projectId!, recipeId);
-        }
-      }
     } catch (error) {
       console.error("Failed to save recipe to repo:", error);
       set({
@@ -414,6 +410,26 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo),
       });
       throw error;
+    }
+
+    if (deleteOriginal) {
+      try {
+        if (isGlobal) {
+          await globalRecipesClient.deleteRecipe(recipeId);
+        } else {
+          await projectClient.deleteRecipe(recipe.projectId!, recipeId);
+        }
+      } catch (error) {
+        // In-repo write succeeded; roll back only the delete portion
+        console.error("Failed to delete original recipe:", error);
+        set({
+          globalRecipes: prevGlobal,
+          projectRecipes: prevProject,
+          inRepoRecipes: nextInRepo,
+          recipes: mergeRecipes(prevGlobal, prevProject, nextInRepo),
+        });
+        throw error;
+      }
     }
   },
 

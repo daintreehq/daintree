@@ -1081,6 +1081,33 @@ describe("recipeStore", () => {
       expect(state.recipes).toHaveLength(1);
     });
 
+    it("keeps in-repo copy when delete-original fails after successful write", async () => {
+      setupWithGlobal();
+      globalDeleteRecipeMock.mockRejectedValueOnce(new Error("delete failed"));
+
+      await expect(useRecipeStore.getState().saveToRepo("global-1", true)).rejects.toThrow(
+        "delete failed"
+      );
+
+      const state = useRecipeStore.getState();
+      expect(state.inRepoRecipes).toHaveLength(1);
+      expect(state.globalRecipes).toHaveLength(1);
+      expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("deleteRecipe finds shadowed project recipe after saveToRepo", async () => {
+      setupWithProject();
+      await useRecipeStore.getState().saveToRepo("project-recipe-1", false);
+
+      // The project recipe is shadowed in the merged list, but deleteRecipe should still find it
+      await useRecipeStore.getState().deleteRecipe("project-recipe-1");
+
+      const state = useRecipeStore.getState();
+      expect(state.projectRecipes).toHaveLength(0);
+      expect(state.inRepoRecipes).toHaveLength(1);
+      expect(deleteRecipeMock).toHaveBeenCalledWith("project-1", "project-recipe-1");
+    });
+
     it("throws when recipe is not found", async () => {
       useRecipeStore.setState({ recipes: [], currentProjectId: "project-1" });
       await expect(useRecipeStore.getState().saveToRepo("nonexistent")).rejects.toThrow(
