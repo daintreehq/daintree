@@ -442,8 +442,11 @@ function XtermAdapterComponent({
     }
   }, [terminalId, stableRefreshTierProvider, currentTier]);
 
-  // Refit terminal when window becomes visible again after being hidden
-  useEffect(() => {
+  // Refit terminal when window becomes visible again after being hidden.
+  // useLayoutEffect ensures the listener is registered synchronously before
+  // paint, closing a race on Windows where the hidden→visible transition fires
+  // before a useEffect listener would be attached (see #4913).
+  useLayoutEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible" && pendingFitRef.current) {
         pendingFitRef.current = false;
@@ -451,6 +454,14 @@ function XtermAdapterComponent({
       }
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    // Defense-in-depth: if the hidden→visible transition already fired before
+    // this listener was registered, recover immediately.
+    if (pendingFitRef.current && document.visibilityState === "visible") {
+      pendingFitRef.current = false;
+      performFit();
+    }
+
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [performFit]);
 
@@ -479,17 +490,14 @@ function XtermAdapterComponent({
           if (instance?.isAttaching) continue;
 
           const rect = entry.contentRect;
-          if (
-            rect.width >= MIN_CONTAINER_SIZE &&
-            rect.height >= MIN_CONTAINER_SIZE &&
-            document.visibilityState === "visible"
-          ) {
+          if (rect.width >= MIN_CONTAINER_SIZE && rect.height >= MIN_CONTAINER_SIZE) {
             const dims = terminalInstanceService.resize(terminalId, rect.width, rect.height, {
               immediate: true,
             });
             if (dims) {
               prevDimensionsRef.current = dims;
               initialFitDoneRef.current = true;
+              pendingFitRef.current = false;
               // Cancel any pending debounce/rAF from earlier zero-dim observations
               if (resizeDebounceRef.current !== null) {
                 clearTimeout(resizeDebounceRef.current);

@@ -31,6 +31,11 @@ test.describe.serial("Core: Panel Tab Groups", () => {
       const panel = getFirstGridPanel(window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
 
+      // Ensure xterm-screen has non-zero dimensions (regression guard for #4913:
+      // Windows blank terminal caused by fit/resize race during transient hidden state)
+      const xtermScreen = panel.locator(SEL.terminal.xtermRows);
+      await expect(xtermScreen).toBeVisible({ timeout: T_LONG });
+
       await runTerminalCommand(window, panel, "node -e \"console.log('TAB_ORIGINAL_MARKER')\"");
       await waitForTerminalText(panel, "TAB_ORIGINAL_MARKER", T_LONG);
     });
