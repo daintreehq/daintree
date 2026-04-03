@@ -187,9 +187,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               className="rounded border-canopy-border bg-canopy-bg text-status-error focus:ring-status-error"
             />
             <span className="text-sm text-canopy-text">
-              {hasUntrackedFiles && !hasTrackedChanges
-                ? "Force delete (remove untracked files)"
-                : "Force delete (lose uncommitted changes)"}
+              {hasTrackedChanges && hasUntrackedFiles
+                ? "Force delete (lose uncommitted changes and untracked files)"
+                : hasUntrackedFiles
+                  ? "Force delete (remove untracked files)"
+                  : "Force delete (lose uncommitted changes)"}
             </span>
           </label>
 

@@ -192,4 +192,18 @@ describe("WorktreeDeleteDialog — warning messages", () => {
 
     expect(screen.getByText(/Force delete \(lose uncommitted changes\)/)).toBeDefined();
   });
+
+  it('shows combined force label when both tracked and untracked files exist', () => {
+    const worktree = makeWorktree(
+      makeChanges([
+        { path: "src/app.ts", status: "modified" },
+        { path: "new.txt", status: "untracked" },
+      ])
+    );
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    expect(
+      screen.getByText(/Force delete \(lose uncommitted changes and untracked files\)/)
+    ).toBeDefined();
+  });
 });
