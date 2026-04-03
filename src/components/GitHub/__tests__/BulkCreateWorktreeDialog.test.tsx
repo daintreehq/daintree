@@ -114,7 +114,8 @@ let mockTerminals: Array<{ id: string; exitCode?: number }> = [];
 vi.mock("@/store/terminalStore", () => ({
   useTerminalStore: {
     getState: () => ({
-      terminals: mockTerminals,
+      terminalsById: Object.fromEntries(mockTerminals.map((t) => [t.id, t])),
+      terminalIds: mockTerminals.map((t) => t.id),
     }),
   },
 }));

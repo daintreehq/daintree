@@ -278,10 +278,21 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 
 vi.mock("@/store/terminalStore", () => ({
   useTerminalStore: Object.assign(
-    (selector: (s: { terminals: typeof mockTerminals }) => unknown) =>
-      selector({ terminals: mockTerminals }),
+    (
+      selector: (s: {
+        terminalsById: Record<string, (typeof mockTerminals)[number]>;
+        terminalIds: string[];
+      }) => unknown
+    ) =>
+      selector({
+        terminalsById: Object.fromEntries(mockTerminals.map((t) => [t.id, t])),
+        terminalIds: mockTerminals.map((t) => t.id),
+      }),
     {
-      getState: () => ({ terminals: mockTerminals }),
+      getState: () => ({
+        terminalsById: Object.fromEntries(mockTerminals.map((t) => [t.id, t])),
+        terminalIds: mockTerminals.map((t) => t.id),
+      }),
     }
   ),
 }));

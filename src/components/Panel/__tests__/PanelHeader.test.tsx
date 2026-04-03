@@ -40,7 +40,8 @@ let mockStoreState: Record<string, unknown> = {
   watchedPanels: new Set<string>(),
   watchPanel: mockWatchPanel,
   unwatchPanel: mockUnwatchPanel,
-  terminals: [] as unknown[],
+  terminalsById: {} as Record<string, unknown>,
+  terminalIds: [] as string[],
 };
 
 vi.mock("@/store/terminalStore", () => ({
@@ -148,7 +149,8 @@ describe("PanelHeader", () => {
       watchedPanels: new Set<string>(),
       watchPanel: mockWatchPanel,
       unwatchPanel: mockUnwatchPanel,
-      terminals: [],
+      terminalsById: {},
+      terminalIds: [],
     };
   });
 
@@ -307,7 +309,8 @@ describe("PanelHeader", () => {
       mockHasPty = true;
       mockStoreState = {
         ...mockStoreState,
-        terminals: [{ id: "test-panel", isInputLocked: true }],
+        terminalsById: { "test-panel": { id: "test-panel", isInputLocked: true } },
+        terminalIds: ["test-panel"],
       };
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
       const menu = screen.getByTestId("overflow-menu");

@@ -31,8 +31,12 @@ vi.mock("@/hooks/useProjectSettings", () => ({
 
 vi.mock("@/store/terminalStore", () => ({
   useTerminalStore: (
-    selector: (s: { addTerminal: typeof mockAddTerminal; terminals: never[] }) => unknown
-  ) => selector({ addTerminal: mockAddTerminal, terminals: [] }),
+    selector: (s: {
+      addTerminal: typeof mockAddTerminal;
+      terminalsById: Record<string, never>;
+      terminalIds: never[];
+    }) => unknown
+  ) => selector({ addTerminal: mockAddTerminal, terminalsById: {}, terminalIds: [] }),
 }));
 
 vi.mock("@/store/worktreeStore", () => ({

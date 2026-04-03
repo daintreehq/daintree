@@ -42,7 +42,11 @@ vi.mock("@/store/voiceRecordingStore", () => {
 });
 
 vi.mock("@/store/terminalStore", () => {
-  const state = { terminals: [] as unknown[], focusedId: null as string | null };
+  const state = {
+    terminalsById: {} as Record<string, unknown>,
+    terminalIds: [] as string[],
+    focusedId: null as string | null,
+  };
   const getState = () => state;
   const subscribe = vi.fn(() => () => {});
   return { useTerminalStore: Object.assign(getState, { getState, subscribe }), __state: state };
@@ -318,12 +322,14 @@ describe("VoiceRecordingService — background recording", () => {
 
   it("stops recording when the active panel is moved to trash (panel-close regression)", async () => {
     // Capture the terminalStore subscribe callback so we can trigger it.
-    let storeCallback: ((state: { terminals: unknown[] }) => void) | null = null;
+    let storeCallback:
+      | ((state: { terminalsById: Record<string, unknown>; terminalIds: string[] }) => void)
+      | null = null;
     const { useTerminalStore } = (await import("@/store/terminalStore")) as unknown as {
       useTerminalStore: { subscribe: ReturnType<typeof vi.fn> };
     };
     (useTerminalStore.subscribe as ReturnType<typeof vi.fn>).mockImplementation(
-      (cb: (state: { terminals: unknown[] }) => void) => {
+      (cb: (state: { terminalsById: Record<string, unknown>; terminalIds: string[] }) => void) => {
         storeCallback = cb;
         return () => {};
       }
@@ -342,7 +348,7 @@ describe("VoiceRecordingService — background recording", () => {
 
     // Simulate the panel being removed from the terminal list.
     expect(storeCallback).not.toBeNull();
-    storeCallback!({ terminals: [] });
+    storeCallback!({ terminalsById: {}, terminalIds: [] });
 
     expect(stopSpy).toHaveBeenCalledWith(
       "Dictation stopped because its panel was closed.",

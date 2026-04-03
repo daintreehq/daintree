@@ -69,7 +69,11 @@ vi.mock("@/store/terminalInputStore", () => {
 });
 
 vi.mock("@/store/terminalStore", () => {
-  const state = { terminals: [] as unknown[], focusedId: null };
+  const state = {
+    terminalsById: {} as Record<string, unknown>,
+    terminalIds: [] as string[],
+    focusedId: null,
+  };
   const getState = () => state;
   const subscribe = vi.fn(() => () => {});
   return { useTerminalStore: Object.assign(getState, { getState, subscribe }) };
