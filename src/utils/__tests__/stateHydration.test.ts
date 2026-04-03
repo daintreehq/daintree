@@ -2270,6 +2270,7 @@ describe("hydrateAppState", () => {
       });
 
       expect(addTerminal).toHaveBeenCalledTimes(1);
+      expect(addTerminal).toHaveBeenCalledWith(expect.objectContaining({ existingId: "orphan-1" }));
     });
 
     it("skips matched dead agent backend terminal and prevents orphan leak", async () => {
