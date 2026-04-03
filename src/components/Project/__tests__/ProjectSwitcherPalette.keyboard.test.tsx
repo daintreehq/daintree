@@ -149,9 +149,6 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     onSelect: vi.fn(),
     onClose: vi.fn(),
     mode: "modal" as const,
-    onOpenProjectSettings: vi.fn(),
-    onAddProject: vi.fn(),
-    onCreateFolder: vi.fn(),
   };
 
   beforeEach(() => {
@@ -207,7 +204,13 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
   });
 
   it("Tab from last footer button wraps focus to the input (focus trap)", () => {
-    render(<ProjectSwitcherPalette {...defaultProps} />);
+    const propsWithButtons = {
+      ...defaultProps,
+      onOpenProjectSettings: vi.fn(),
+      onAddProject: vi.fn(),
+      onCreateFolder: vi.fn(),
+    };
+    render(<ProjectSwitcherPalette {...propsWithButtons} />);
 
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog).toBeTruthy();
@@ -226,7 +229,13 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
   });
 
   it("Shift+Tab from input wraps focus to last footer button (focus trap)", () => {
-    render(<ProjectSwitcherPalette {...defaultProps} />);
+    const propsWithButtons = {
+      ...defaultProps,
+      onOpenProjectSettings: vi.fn(),
+      onAddProject: vi.fn(),
+      onCreateFolder: vi.fn(),
+    };
+    render(<ProjectSwitcherPalette {...propsWithButtons} />);
 
     const dialog = document.querySelector('[role="dialog"]');
     const focusable = dialog!.querySelectorAll<HTMLElement>(
@@ -241,11 +250,11 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     expect(document.activeElement).toBe(focusable[focusable.length - 1]);
   });
 
-  it("displays condensed footer with dynamic modifier hints", () => {
+  it("displays condensed footer with switch hint in modal mode", () => {
     render(<ProjectSwitcherPalette {...defaultProps} />);
     const footer = screen.getByTestId("palette-footer");
     expect(footer.textContent).toContain("Switch");
-    expect(footer.textContent).toContain("Remove");
-    expect(footer.textContent).toContain("Right-click for more");
+    expect(footer.textContent).not.toContain("Remove");
+    expect(footer.textContent).not.toContain("Right-click for more");
   });
 });

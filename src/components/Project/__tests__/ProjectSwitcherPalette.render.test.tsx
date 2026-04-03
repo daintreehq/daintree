@@ -131,7 +131,7 @@ function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProj
   };
 }
 
-const baseProps = {
+const modalProps = {
   isOpen: true,
   query: "",
   selectedIndex: 0,
@@ -141,6 +141,11 @@ const baseProps = {
   onSelect: vi.fn(),
   onClose: vi.fn(),
   mode: "modal" as const,
+};
+
+const dropdownProps = {
+  ...modalProps,
+  mode: "dropdown" as const,
   onOpenProjectSettings: vi.fn(),
   onAddProject: vi.fn(),
   onCreateFolder: vi.fn(),
@@ -148,6 +153,8 @@ const baseProps = {
   onCloseProject: vi.fn(),
   onStopProject: vi.fn(),
 };
+
+const baseProps = dropdownProps;
 
 describe("ProjectSwitcherPalette secondary text waterfall", () => {
   it("shows 'Directory not found' for missing projects", () => {
@@ -265,5 +272,93 @@ describe("ProjectSwitcherPalette clone repo button", () => {
   it("does not render Clone Repository button when onCloneRepo is not provided", () => {
     render(<ProjectSwitcherPalette {...baseProps} results={[makeProject()]} />);
     expect(screen.queryByTestId("project-clone-button")).toBeNull();
+  });
+});
+
+describe("ProjectSwitcherPalette modal mode", () => {
+  const now = Date.now();
+  const multiProjects = [
+    makeProject({ id: "active", name: "Active Project", isActive: true, lastOpened: now }),
+    makeProject({
+      id: "bg",
+      name: "Background Project",
+      isBackground: true,
+      lastOpened: now - 1800000,
+    }),
+    makeProject({
+      id: "pinned",
+      name: "Pinned Project",
+      isPinned: true,
+      lastOpened: now - 3600000,
+    }),
+    makeProject({ id: "recent", name: "Recent Project", lastOpened: now - 7200000 }),
+    makeProject({
+      id: "old",
+      name: "Old Project",
+      lastOpened: now - 14 * 24 * 3600000,
+    }),
+  ];
+
+  it("shows only active/open projects in modal mode (no closed projects)", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
+    expect(screen.getByText("Active Project")).toBeTruthy();
+    expect(screen.getByText("Background Project")).toBeTruthy();
+    expect(screen.queryByText("Pinned Project")).toBeNull();
+    expect(screen.queryByText("Recent Project")).toBeNull();
+    expect(screen.queryByText("Old Project")).toBeNull();
+  });
+
+  it("renders a flat list with no temporal section labels in modal mode", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
+    expect(screen.queryByText("Pinned")).toBeNull();
+    expect(screen.queryByText("Today")).toBeNull();
+    expect(screen.queryByText("This Week")).toBeNull();
+    expect(screen.queryByText("Older")).toBeNull();
+  });
+
+  it("shows 'No active projects' when no projects are active/open in modal mode", () => {
+    const closedProjects = [
+      makeProject({ id: "closed1", name: "Closed 1" }),
+      makeProject({ id: "closed2", name: "Closed 2" }),
+    ];
+    render(<ProjectSwitcherPalette {...modalProps} results={closedProjects} />);
+    expect(screen.getByText("No active projects")).toBeTruthy();
+  });
+
+  it("does not show management action buttons in modal mode", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
+    expect(screen.queryByText("Project Settings...")).toBeNull();
+    expect(screen.queryByText("Add Project...")).toBeNull();
+    expect(screen.queryByText("Clone Repository...")).toBeNull();
+    expect(screen.queryByText("Create New Folder...")).toBeNull();
+  });
+
+  it("does not show Remove hint in modal mode footer", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
+    const footer = screen.getByTestId("palette-footer");
+    expect(footer.textContent).toContain("Switch");
+    expect(footer.textContent).not.toContain("Remove");
+    expect(footer.textContent).not.toContain("Right-click for more");
+  });
+
+  it("shows temporal sections in dropdown mode", () => {
+    render(<ProjectSwitcherPalette {...dropdownProps} results={multiProjects} />);
+    expect(screen.getByText("Pinned")).toBeTruthy();
+  });
+
+  it("shows Remove hint in dropdown mode footer", () => {
+    render(<ProjectSwitcherPalette {...dropdownProps} results={multiProjects} />);
+    const footer = screen.getByTestId("palette-footer");
+    expect(footer.textContent).toContain("Remove");
+    expect(footer.textContent).toContain("Right-click for more");
+  });
+
+  it("shows all projects in dropdown mode including closed ones", () => {
+    render(<ProjectSwitcherPalette {...dropdownProps} results={multiProjects} />);
+    expect(screen.getByText("Active Project")).toBeTruthy();
+    expect(screen.getByText("Background Project")).toBeTruthy();
+    expect(screen.getByText("Pinned Project")).toBeTruthy();
+    expect(screen.getByText("Recent Project")).toBeTruthy();
+    expect(screen.getByText("Old Project")).toBeTruthy();
   });
 });

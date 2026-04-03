@@ -1,6 +1,6 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
-import { appClient, terminalClient } from "@/clients";
+import { terminalClient } from "@/clients";
 import { useTerminalStore } from "@/store/terminalStore";
 export function registerTerminalLifecycleActions(
   actions: ActionRegistry,
@@ -25,13 +25,6 @@ export function registerTerminalLifecycleActions(
         state.terminalIds.find((id) => state.terminalsById[id]?.location !== "trash");
       if (targetId) {
         state.trashTerminal(targetId);
-        const freshState = useTerminalStore.getState();
-        const remaining = freshState.terminalIds.filter(
-          (id) => freshState.terminalsById[id]?.location !== "trash"
-        );
-        if (remaining.length === 0) {
-          await appClient.quit();
-        }
       }
     },
   }));

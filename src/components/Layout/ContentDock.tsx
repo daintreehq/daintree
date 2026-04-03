@@ -64,8 +64,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // Get tab groups for the dock
   const tabGroups = useMemo(
     () => getTabGroups("dock", activeWorktreeId ?? undefined),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeTerminalIds is an intentional trigger dep
-    [getTabGroups, activeWorktreeId, storeTerminalIds]
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeTerminalIds/trashedTerminals are intentional trigger deps
+    [getTabGroups, activeWorktreeId, storeTerminalIds, trashedTerminals]
   );
 
   const { worktrees } = useWorktrees();

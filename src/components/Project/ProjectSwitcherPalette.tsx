@@ -281,6 +281,7 @@ interface ProjectListContentProps {
   query: string;
   onSelect: (project: SearchableProject) => void;
   listRef: React.RefObject<HTMLDivElement | null>;
+  mode?: ProjectSwitcherMode;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
@@ -295,6 +296,7 @@ function ProjectListContent({
   query,
   onSelect,
   listRef,
+  mode,
   onStopProject,
   onCloseProject,
   onLocateProject,
@@ -305,7 +307,7 @@ function ProjectListContent({
   const isSearching = query.trim().length > 0;
 
   const sections = useMemo<TemporalSection[] | null>(() => {
-    if (isSearching || results.length === 0) return null;
+    if (isSearching || results.length === 0 || mode === "modal") return null;
 
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -339,7 +341,14 @@ function ProjectListContent({
         : null,
       buckets.older.length > 0 ? { key: "older", label: "Older", items: buckets.older } : null,
     ].filter((s): s is TemporalSection => s !== null);
-  }, [results, isSearching]);
+  }, [results, isSearching, mode]);
+
+  const displayResults = useMemo(() => {
+    if (mode === "modal" && !isSearching) {
+      return results.filter((p) => p.isActive || p.isBackground || p.processCount > 0);
+    }
+    return results;
+  }, [results, mode, isSearching]);
 
   const resultIndexMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -369,10 +378,16 @@ function ProjectListContent({
   return (
     <>
       <div ref={listRef} id="project-list" role="listbox" aria-label="Projects">
-        {results.length === 0 ? (
+        {displayResults.length === 0 ? (
           <div className="p-2">
             <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
-              {query.trim() ? <div>{`No projects match "${query}"`}</div> : "No projects available"}
+              {query.trim() ? (
+                <div>{`No projects match "${query}"`}</div>
+              ) : mode === "modal" ? (
+                "No active projects"
+              ) : (
+                "No projects available"
+              )}
             </div>
           </div>
         ) : sections ? (
@@ -402,23 +417,7 @@ function ProjectListContent({
             );
           })
         ) : (
-          <div className="p-2">
-            {results.map((project, index) => (
-              <div key={project.id} role="presentation">
-                <ProjectListItem
-                  project={project}
-                  isSelected={index === selectedIndex}
-                  onSelect={onSelect}
-                  onStopProject={onStopProject}
-                  onCloseProject={onCloseProject}
-                  onLocateProject={onLocateProject}
-                  onTogglePinProject={onTogglePinProject}
-                  onCopyPath={onCopyPath}
-                  onSelectNewWindow={onSelectNewWindow}
-                />
-              </div>
-            ))}
-          </div>
+          <div className="p-2">{displayResults.map((project) => renderItem(project))}</div>
         )}
       </div>
     </>
@@ -427,7 +426,7 @@ function ProjectListContent({
 
 const KBD_CLASS = "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60";
 
-function ProjectSwitcherFooter() {
+function ProjectSwitcherFooter({ mode }: { mode?: ProjectSwitcherMode }) {
   const modifiers = useModifierKeys();
 
   const hint = modifiers.alt
@@ -443,14 +442,18 @@ function ProjectSwitcherFooter() {
           <kbd className={KBD_CLASS}>{hint.keys}</kbd>
           <span className="ml-1.5">{hint.label}</span>
         </span>
-        <span className="text-canopy-text/30">
-          <kbd className={KBD_CLASS}>⌘⌫</kbd>
-          <span className="ml-1.5">Remove</span>
-        </span>
+        {mode !== "modal" && (
+          <span className="text-canopy-text/30">
+            <kbd className={KBD_CLASS}>⌘⌫</kbd>
+            <span className="ml-1.5">Remove</span>
+          </span>
+        )}
       </div>
-      <span className="text-canopy-text/30">
-        <span>Right-click for more</span>
-      </span>
+      {mode !== "modal" && (
+        <span className="text-canopy-text/30">
+          <span>Right-click for more</span>
+        </span>
+      )}
     </div>
   );
 }
@@ -464,6 +467,7 @@ interface ProjectPaletteInnerProps {
   query: string;
   results: SearchableProject[];
   selectedIndex: number;
+  mode?: ProjectSwitcherMode;
   onQueryChange: (query: string) => void;
   onSelect: (project: SearchableProject) => void;
   onSelectBackground?: (project: SearchableProject) => void;
@@ -488,6 +492,7 @@ function ProjectPaletteInner({
   query,
   results,
   selectedIndex,
+  mode,
   onQueryChange,
   onSelect,
   onSelectBackground,
@@ -614,6 +619,7 @@ function ProjectPaletteInner({
           query={query}
           onSelect={onSelect}
           listRef={listRef}
+          mode={mode}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
           onLocateProject={onLocateProject}
@@ -688,7 +694,7 @@ function ProjectPaletteInner({
       )}
 
       <AppPaletteDialog.Footer>
-        <ProjectSwitcherFooter />
+        <ProjectSwitcherFooter mode={mode} />
       </AppPaletteDialog.Footer>
     </TooltipProvider>
   );
@@ -697,8 +703,9 @@ function ProjectPaletteInner({
 function ModalContent({
   isOpen,
   onClose,
+  mode,
   ...innerProps
-}: Omit<ProjectSwitcherPaletteProps, "mode" | "children" | "dropdownAlign">) {
+}: Omit<ProjectSwitcherPaletteProps, "children" | "dropdownAlign">) {
   useOverlayState(isOpen);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -778,6 +785,7 @@ function ModalContent({
           query={innerProps.query}
           results={innerProps.results}
           selectedIndex={innerProps.selectedIndex}
+          mode={mode}
           onQueryChange={innerProps.onQueryChange}
           onSelect={innerProps.onSelect}
           onClose={onClose}
@@ -806,8 +814,9 @@ function DropdownContent({
   onClose,
   dropdownAlign = "start",
   children,
+  mode,
   ...innerProps
-}: Omit<ProjectSwitcherPaletteProps, "mode">) {
+}: ProjectSwitcherPaletteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const overlayCount = useUIStore((state) => state.overlayCount);
@@ -854,6 +863,7 @@ function DropdownContent({
           query={innerProps.query}
           results={innerProps.results}
           selectedIndex={innerProps.selectedIndex}
+          mode={mode}
           onQueryChange={innerProps.onQueryChange}
           onSelect={innerProps.onSelect}
           onClose={onClose}
@@ -923,6 +933,7 @@ export function ProjectSwitcherPalette({
         onSelectNext={onSelectNext}
         onSelect={onSelect}
         onClose={onClose}
+        mode={mode}
         onAddProject={onAddProject}
         onCloneRepo={onCloneRepo}
         onCreateFolder={onCreateFolder}
@@ -949,6 +960,7 @@ export function ProjectSwitcherPalette({
         onSelectNext={onSelectNext}
         onSelect={onSelect}
         onClose={onClose}
+        mode={mode}
         onAddProject={onAddProject}
         onCloneRepo={onCloneRepo}
         onCreateFolder={onCreateFolder}
