@@ -364,9 +364,10 @@ describe("getWorktreeChangesWithStats concurrent worktree isolation", () => {
     };
 
     vi.mocked(createHardenedGit).mockImplementation((cwd: string) => {
-      if (cwd === cwdMain) return mockGitMain as ReturnType<typeof createHardenedGit>;
-      if (cwd === cwdFeature) return mockGitFeature as ReturnType<typeof createHardenedGit>;
-      return mockGit as ReturnType<typeof createHardenedGit>;
+      if (cwd === cwdMain) return mockGitMain as unknown as ReturnType<typeof createHardenedGit>;
+      if (cwd === cwdFeature)
+        return mockGitFeature as unknown as ReturnType<typeof createHardenedGit>;
+      return mockGit as unknown as ReturnType<typeof createHardenedGit>;
     });
 
     const [resultMain, resultFeature] = await Promise.all([
