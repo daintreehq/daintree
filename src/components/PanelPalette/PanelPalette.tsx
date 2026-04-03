@@ -100,37 +100,46 @@ export function PanelPalette({
 
   const isSearching = query.trim().length > 0;
 
-  const renderOption = (kind: PanelKindOption, index: number) => (
-    <button
-      key={kind.id}
-      id={`panel-option-${kind.id}`}
-      tabIndex={-1}
-      onPointerDown={(e) => e.preventDefault()}
-      role="option"
-      aria-selected={index === selectedIndex}
-      ref={(el) => {
-        if (el) itemsRef.current.set(kind.id, el);
-        else itemsRef.current.delete(kind.id);
-      }}
-      className={cn(
-        "relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
-        index === selectedIndex
-          ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-          : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
-      )}
-      onClick={() => onSelect(kind)}
-    >
-      <div className="shrink-0">
-        <PanelKindIcon iconId={kind.iconId} color={kind.color} size={16} />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-canopy-text">{kind.name}</div>
-        {kind.description && (
-          <div className="text-xs text-canopy-text/50 truncate">{kind.description}</div>
+  const renderOption = (kind: PanelKindOption, index: number) => {
+    const isUnavailable = kind.installed === false;
+    return (
+      <button
+        key={kind.id}
+        id={`panel-option-${kind.id}`}
+        tabIndex={-1}
+        onPointerDown={(e) => e.preventDefault()}
+        role="option"
+        aria-selected={index === selectedIndex}
+        ref={(el) => {
+          if (el) itemsRef.current.set(kind.id, el);
+          else itemsRef.current.delete(kind.id);
+        }}
+        className={cn(
+          "relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
+          index === selectedIndex
+            ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+            : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text",
+          isUnavailable && "opacity-50"
         )}
-      </div>
-    </button>
-  );
+        onClick={() => onSelect(kind)}
+      >
+        <div className="shrink-0">
+          <PanelKindIcon iconId={kind.iconId} color={kind.color} size={16} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium text-canopy-text">{kind.name}</div>
+          {kind.description && (
+            <div className="text-xs text-canopy-text/50 truncate">{kind.description}</div>
+          )}
+        </div>
+        {isUnavailable && (
+          <span className="shrink-0 text-[10px] font-medium text-canopy-text/40">
+            Not installed
+          </span>
+        )}
+      </button>
+    );
+  };
 
   const renderSectionedList = () => {
     const agents = results.filter((r) => r.category === "agent");

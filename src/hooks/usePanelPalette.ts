@@ -4,6 +4,7 @@ import { hasPanelComponent } from "@/registry/panelComponentRegistry";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { keybindingService } from "@/services/KeybindingService";
 import type { KeyAction } from "@shared/types/keymap";
@@ -16,6 +17,7 @@ export interface PanelKindOption {
   color: string;
   description?: string;
   category: "agent" | "tool" | "resume";
+  installed?: boolean;
   resumeSession?: AgentSessionRecord;
 }
 
@@ -25,6 +27,8 @@ export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> 
 };
 
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+
+const STALE_THRESHOLD_MS = 5 * 60 * 1000;
 
 const AGENT_LAUNCH_ACTIONS: Record<string, KeyAction> = Object.fromEntries(
   BUILT_IN_AGENT_IDS.map((id) => [id, `agent.${id}` as KeyAction])
@@ -45,6 +49,8 @@ export const MORE_AGENTS_PANEL_ID = "more-agents";
 export function usePanelPalette(): UsePanelPaletteReturn {
   const userRegistry = useUserAgentRegistryStore((state) => state.registry);
   const agentSettings = useAgentSettingsStore((state) => state.settings);
+  const availability = useCliAvailabilityStore((state) => state.availability);
+  const isAvailabilityInitialized = useCliAvailabilityStore((state) => state.isInitialized);
   const [keybindingVersion, setKeybindingVersion] = useState(0);
   const [resumeSessions, setResumeSessions] = useState<AgentSessionRecord[]>([]);
 
@@ -102,6 +108,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
           color: agentConfig.color,
           description: displayCombo || agentConfig.shortcut || agentConfig.tooltip,
           category: "agent" as const,
+          installed: isAvailabilityInitialized ? (availability[agentId] ?? false) : undefined,
         };
       })
       .filter((agent): agent is PanelKindOption => agent !== null);
@@ -148,18 +155,38 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       ...resumeOptions,
       ...toolDedup.values(),
     ];
-  }, [userRegistry, keybindingVersion, agentSettings, resumeSessions]);
+  }, [
+    userRegistry,
+    keybindingVersion,
+    agentSettings,
+    resumeSessions,
+    availability,
+    isAvailabilityInitialized,
+  ]);
 
-  const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<PanelKindOption>({
-    items: availableKinds,
-    filterFn: filterPanelKinds,
-    maxResults: 20,
-    paletteId: "panel",
-  });
+  const { results, selectedIndex, close, isOpen, ...paletteRest } =
+    useSearchablePalette<PanelKindOption>({
+      items: availableKinds,
+      filterFn: filterPanelKinds,
+      maxResults: 20,
+      paletteId: "panel",
+    });
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const { lastCheckedAt, refresh, isInitialized, initialize } =
+      useCliAvailabilityStore.getState();
+    if (!isInitialized) {
+      void initialize();
+      return;
+    }
+    const isStale = !lastCheckedAt || Date.now() - lastCheckedAt > STALE_THRESHOLD_MS;
+    if (isStale) void refresh().catch(() => {});
+  }, [isOpen]);
 
   const handleSelect = useCallback(
     (option: PanelKindOption): PanelKindOption | null => {
-      if (option.id === MORE_AGENTS_PANEL_ID) {
+      if (option.id === MORE_AGENTS_PANEL_ID || option.installed === false) {
         close();
         window.dispatchEvent(
           new CustomEvent("canopy:open-agent-setup-wizard", {
@@ -179,14 +206,14 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     const selected = results[selectedIndex];
     if (!selected) return null;
 
-    if (selected.id === MORE_AGENTS_PANEL_ID) {
+    if (selected.id === MORE_AGENTS_PANEL_ID || selected.installed === false) {
       close();
       window.dispatchEvent(
         new CustomEvent("canopy:open-agent-setup-wizard", {
           detail: { returnToPanelPalette: true },
         })
       );
-      return selected;
+      return null;
     }
     close();
     return selected;
@@ -196,6 +223,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     results,
     selectedIndex,
     close,
+    isOpen,
     ...paletteRest,
     handleSelect,
     confirmSelection,

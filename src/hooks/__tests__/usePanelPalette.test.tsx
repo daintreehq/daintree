@@ -9,12 +9,23 @@ const {
   hasPanelComponentMock,
   getEffectiveAgentIdsMock,
   getEffectiveAgentConfigMock,
+  cliAvailabilityState,
 } = vi.hoisted(() => ({
   getPanelKindIdsMock: vi.fn(),
   getPanelKindConfigMock: vi.fn(),
   hasPanelComponentMock: vi.fn(),
   getEffectiveAgentIdsMock: vi.fn(),
   getEffectiveAgentConfigMock: vi.fn(),
+  cliAvailabilityState: {
+    availability: { claude: true, gemini: false } as Record<string, boolean>,
+    isInitialized: true,
+    isLoading: false,
+    isRefreshing: false,
+    error: null,
+    lastCheckedAt: Date.now(),
+    initialize: vi.fn().mockResolvedValue(undefined),
+    refresh: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 vi.mock("@shared/config/panelKindRegistry", () => ({
@@ -47,6 +58,13 @@ vi.mock("@/store/agentSettingsStore", () => ({
     selector({ settings: { agents: { claude: { selected: true }, gemini: { selected: true } } } }),
 }));
 
+vi.mock("@/store/cliAvailabilityStore", () => {
+  const store = (selector: (state: typeof cliAvailabilityState) => unknown) =>
+    selector(cliAvailabilityState);
+  store.getState = () => cliAvailabilityState;
+  return { useCliAvailabilityStore: store };
+});
+
 import { usePanelPalette } from "../usePanelPalette";
 
 describe("usePanelPalette", () => {
@@ -66,6 +84,10 @@ describe("usePanelPalette", () => {
         : null
     );
     hasPanelComponentMock.mockReturnValue(true);
+    cliAvailabilityState.availability = { claude: true, gemini: false };
+    cliAvailabilityState.isInitialized = true;
+    cliAvailabilityState.lastCheckedAt = Date.now();
+
     getEffectiveAgentIdsMock.mockReturnValue(["claude", "claude"]);
     getEffectiveAgentConfigMock.mockReturnValue({
       name: "Claude",
@@ -209,5 +231,109 @@ describe("usePanelPalette", () => {
       })
     );
     dispatchSpy.mockRestore();
+  });
+
+  describe("agent availability", () => {
+    it("sets installed=true for available agents", () => {
+      getEffectiveAgentIdsMock.mockReturnValue(["claude"]);
+      cliAvailabilityState.availability = { claude: true };
+
+      const { result } = renderHook(() => usePanelPalette());
+
+      const claude = result.current.results.find((item) => item.id === "agent:claude");
+      expect(claude?.installed).toBe(true);
+    });
+
+    it("sets installed=false for unavailable agents", () => {
+      getEffectiveAgentIdsMock.mockReturnValue(["gemini"]);
+      getEffectiveAgentConfigMock.mockReturnValue({
+        name: "Gemini",
+        iconId: "gemini",
+        color: "#4285f4",
+        tooltip: "Gemini agent",
+      });
+      cliAvailabilityState.availability = { gemini: false };
+
+      const { result } = renderHook(() => usePanelPalette());
+
+      const gemini = result.current.results.find((item) => item.id === "agent:gemini");
+      expect(gemini?.installed).toBe(false);
+    });
+
+    it("sets installed=undefined before availability is initialized", () => {
+      getEffectiveAgentIdsMock.mockReturnValue(["claude"]);
+      cliAvailabilityState.isInitialized = false;
+
+      const { result } = renderHook(() => usePanelPalette());
+
+      const claude = result.current.results.find((item) => item.id === "agent:claude");
+      expect(claude?.installed).toBeUndefined();
+    });
+
+    it("does not set installed on tool items", () => {
+      const { result } = renderHook(() => usePanelPalette());
+
+      const browser = result.current.results.find((item) => item.id === "browser");
+      expect(browser?.installed).toBeUndefined();
+    });
+
+    it("does not set installed on MORE_AGENTS entry", () => {
+      const { result } = renderHook(() => usePanelPalette());
+
+      const moreAgents = result.current.results.find((item) => item.id === MORE_AGENTS_PANEL_ID);
+      expect(moreAgents?.installed).toBeUndefined();
+    });
+
+    it("handleSelect dispatches setup wizard and returns null for uninstalled agent", () => {
+      const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+      getEffectiveAgentIdsMock.mockReturnValue(["gemini"]);
+      getEffectiveAgentConfigMock.mockReturnValue({
+        name: "Gemini",
+        iconId: "gemini",
+        color: "#4285f4",
+        tooltip: "Gemini agent",
+      });
+      cliAvailabilityState.availability = { gemini: false };
+
+      const { result } = renderHook(() => usePanelPalette());
+
+      const gemini = result.current.results.find((item) => item.id === "agent:gemini");
+      expect(gemini).toBeDefined();
+      expect(gemini!.installed).toBe(false);
+
+      const selected = result.current.handleSelect(gemini!);
+      expect(selected).toBeNull();
+      expect(dispatchSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "canopy:open-agent-setup-wizard",
+          detail: { returnToPanelPalette: true },
+        })
+      );
+      dispatchSpy.mockRestore();
+    });
+
+    it("handleSelect returns option for installed agent", () => {
+      getEffectiveAgentIdsMock.mockReturnValue(["claude"]);
+      cliAvailabilityState.availability = { claude: true };
+
+      const { result } = renderHook(() => usePanelPalette());
+
+      const claude = result.current.results.find((item) => item.id === "agent:claude");
+      const selected = result.current.handleSelect(claude!);
+      expect(selected).toBe(claude);
+    });
+
+    it("handleSelect allows selection when installed is undefined (before init)", () => {
+      getEffectiveAgentIdsMock.mockReturnValue(["claude"]);
+      cliAvailabilityState.isInitialized = false;
+
+      const { result } = renderHook(() => usePanelPalette());
+
+      const claude = result.current.results.find((item) => item.id === "agent:claude");
+      expect(claude?.installed).toBeUndefined();
+
+      const selected = result.current.handleSelect(claude!);
+      expect(selected).toBe(claude);
+    });
   });
 });
