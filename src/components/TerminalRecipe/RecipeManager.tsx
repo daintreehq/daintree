@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import {
   Globe,
   FolderOpen,
@@ -37,8 +37,15 @@ export function RecipeManager({
   onCreateRecipe,
 }: RecipeManagerProps) {
   const globalRecipes = useRecipeStore((s) => s.globalRecipes);
-  const projectRecipes = useRecipeStore((s) => s.projectRecipes);
+  const rawProjectRecipes = useRecipeStore((s) => s.projectRecipes);
   const inRepoRecipes = useRecipeStore((s) => s.inRepoRecipes);
+
+  // Filter out project recipes shadowed by in-repo recipes with the same name
+  const inRepoNames = useMemo(() => new Set(inRepoRecipes.map((r) => r.name)), [inRepoRecipes]);
+  const projectRecipes = useMemo(
+    () => rawProjectRecipes.filter((r) => !inRepoNames.has(r.name)),
+    [rawProjectRecipes, inRepoNames]
+  );
   const deleteRecipe = useRecipeStore((s) => s.deleteRecipe);
   const exportRecipe = useRecipeStore((s) => s.exportRecipe);
   const exportRecipeToFile = useRecipeStore((s) => s.exportRecipeToFile);
