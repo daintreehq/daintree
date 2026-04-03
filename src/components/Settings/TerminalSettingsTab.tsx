@@ -23,6 +23,7 @@ import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
+import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import {
@@ -409,15 +410,12 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 "opacity-50 pointer-events-none"
             )}
           >
-            <label htmlFor="auto-restart-threshold" className="text-sm text-canopy-text/70">
-              Auto-Restart Threshold (MB)
-            </label>
-            <input
-              id="auto-restart-threshold"
-              type="number"
-              min="1024"
-              max="32768"
-              step="1024"
+            <SettingsNumberInput
+              label="Auto-Restart Threshold (MB)"
+              description="Automatically restart a terminal when its RSS exceeds this threshold. Set between 1,024 MB and 32,768 MB."
+              min={1024}
+              max={32768}
+              step={1024}
               value={autoRestartThresholdMb}
               onChange={(e) => {
                 const val = parseInt(e.target.value, 10);
@@ -429,12 +427,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 }
               }}
               disabled={!memoryLeakDetectionEnabled || !resourceMonitoringEnabled}
-              className="bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
             />
-            <p className="text-xs text-canopy-text/40 select-text">
-              Automatically restart a terminal when its RSS exceeds this threshold. Set between
-              1,024 MB and 32,768 MB.
-            </p>
           </div>
 
           {!resourceMonitoringEnabled && (
@@ -476,71 +469,44 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               panelLimits.warningsDisabled && "opacity-50 pointer-events-none"
             )}
           >
-            <div className="space-y-2">
-              <label htmlFor="soft-warning-limit" className="text-sm text-canopy-text/70">
-                Soft Warning
-              </label>
-              <input
-                id="soft-warning-limit"
-                type="number"
-                min="4"
-                max="100"
-                value={panelLimits.softWarningLimit}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  if (!isNaN(val)) setSoftWarningLimit(val);
-                }}
-                disabled={panelLimits.warningsDisabled}
-                className="bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
-              />
-              <p className="text-xs text-canopy-text/40 select-text">
-                Show a dismissible banner when panel count reaches this number.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor="confirmation-limit" className="text-sm text-canopy-text/70">
-                Confirmation Required
-              </label>
-              <input
-                id="confirmation-limit"
-                type="number"
-                min="4"
-                max="100"
-                value={panelLimits.confirmationLimit}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  if (!isNaN(val)) setConfirmationLimit(val);
-                }}
-                disabled={panelLimits.warningsDisabled}
-                className="bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
-              />
-              <p className="text-xs text-canopy-text/40 select-text">
-                Require explicit confirmation before adding panels beyond this count.
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label htmlFor="hard-limit" className="text-sm text-canopy-text/70">
-              Hard Limit
-            </label>
-            <input
-              id="hard-limit"
-              type="number"
-              min="4"
-              max="100"
-              value={panelLimits.hardLimit}
+            <SettingsNumberInput
+              label="Soft Warning"
+              description="Show a dismissible banner when panel count reaches this number."
+              min={4}
+              max={100}
+              value={panelLimits.softWarningLimit}
               onChange={(e) => {
                 const val = parseInt(e.target.value, 10);
-                if (!isNaN(val)) setPanelHardLimit(val);
+                if (!isNaN(val)) setSoftWarningLimit(val);
               }}
-              className="bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+              disabled={panelLimits.warningsDisabled}
             />
-            <p className="text-xs text-canopy-text/40 select-text">
-              Absolute maximum number of panels. Cannot be bypassed.
-            </p>
+
+            <SettingsNumberInput
+              label="Confirmation Required"
+              description="Require explicit confirmation before adding panels beyond this count."
+              min={4}
+              max={100}
+              value={panelLimits.confirmationLimit}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val)) setConfirmationLimit(val);
+              }}
+              disabled={panelLimits.warningsDisabled}
+            />
           </div>
+
+          <SettingsNumberInput
+            label="Hard Limit"
+            description="Absolute maximum number of panels. Cannot be bypassed."
+            min={4}
+            max={100}
+            value={panelLimits.hardLimit}
+            onChange={(e) => {
+              const val = parseInt(e.target.value, 10);
+              if (!isNaN(val)) setPanelHardLimit(val);
+            }}
+          />
 
           {hardwareInfo && hardwareInfo.totalMemoryBytes > 0 && (
             <div className="flex items-center gap-2 text-xs text-canopy-text/50">
@@ -770,26 +736,20 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             </div>
 
             {layoutConfig.strategy !== "automatic" && (
-              <div className="space-y-2">
-                <label className="text-sm text-canopy-text/70">
-                  {layoutConfig.strategy === "fixed-columns"
-                    ? "Number of Columns"
-                    : "Number of Rows"}
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={layoutConfig.value}
-                  onChange={(e) => handleValueChange(e.target.value)}
-                  className="bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
-                />
-                <p className="text-xs text-canopy-text/40 select-text">
-                  {layoutConfig.strategy === "fixed-columns"
+              <SettingsNumberInput
+                label={
+                  layoutConfig.strategy === "fixed-columns" ? "Number of Columns" : "Number of Rows"
+                }
+                description={
+                  layoutConfig.strategy === "fixed-columns"
                     ? "Terminals will stack vertically when this many columns are filled."
-                    : "Terminals will expand horizontally when this many rows are filled."}
-                </p>
-              </div>
+                    : "Terminals will expand horizontally when this many rows are filled."
+                }
+                min={1}
+                max={10}
+                value={layoutConfig.value}
+                onChange={(e) => handleValueChange(e.target.value)}
+              />
             )}
 
             <p className="text-xs text-canopy-text/40 leading-relaxed select-text">

@@ -6,6 +6,7 @@ import { usePortalStore } from "@/store/portalStore";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
 import { SettingsSection } from "./SettingsSection";
+import { SettingsSelect } from "./SettingsSelect";
 
 function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
   const className = size === 16 ? "w-4 h-4" : size === 32 ? "w-8 h-8" : "w-4 h-4";
@@ -312,9 +313,9 @@ export function PortalSettingsTab() {
         title="Default New Tab Agent"
         description='Choose which agent opens when you click the + button. Select "None" to show the Launchpad.'
       >
-        <div className="space-y-3">
-          <select
-            aria-label="Default new tab agent"
+        <div className="flex flex-col gap-3">
+          <SettingsSelect
+            label="Default Agent"
             value={
               showCustomUrlInput
                 ? "custom"
@@ -325,7 +326,6 @@ export function PortalSettingsTab() {
                     : defaultNewTabUrl
             }
             onChange={(e) => handleDefaultAgentChange(e.target.value)}
-            className="w-full bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
           >
             <option value="none">None (show Launchpad)</option>
             {enabledLinks.map((link) => (
@@ -334,7 +334,7 @@ export function PortalSettingsTab() {
               </option>
             ))}
             <option value="custom">Custom URL...</option>
-          </select>
+          </SettingsSelect>
 
           {showCustomUrlInput && (
             <div className="flex gap-2">

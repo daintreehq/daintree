@@ -6,7 +6,6 @@ import {
   Plus,
   X,
   Key,
-  Globe,
   BookText,
   Shield,
   Check,
@@ -15,7 +14,6 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
-  AlignLeft,
   FileSearch,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
@@ -23,6 +21,8 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { SettingsSelect } from "./SettingsSelect";
+import { SettingsTextarea } from "./SettingsTextarea";
 import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
 import { CORE_CORRECTION_PROMPT } from "@shared/config/voiceCorrection";
 import type {
@@ -236,35 +236,31 @@ export function VoiceInputSettingsTab() {
               helpLabel="Get API key"
             />
 
-            <SettingsRow label="Language" icon={Globe}>
-              <select
-                value={settings.language}
-                onChange={(e) => update({ language: e.target.value })}
-                className="bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
-              >
-                {LANGUAGES.map(({ code, label }) => (
-                  <option key={code} value={code}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </SettingsRow>
+            <SettingsSelect
+              label="Language"
+              value={settings.language}
+              onChange={(e) => update({ language: e.target.value })}
+            >
+              {LANGUAGES.map(({ code, label }) => (
+                <option key={code} value={code}>
+                  {label}
+                </option>
+              ))}
+            </SettingsSelect>
 
-            <SettingsRow label="Transcription Model" icon={Mic}>
-              <select
-                value={settings.transcriptionModel}
-                onChange={(e) =>
-                  update({ transcriptionModel: e.target.value as VoiceTranscriptionModel })
-                }
-                className="bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
-              >
-                {TRANSCRIPTION_MODELS.map(({ value, label, description }) => (
-                  <option key={value} value={value}>
-                    {label} — {description}
-                  </option>
-                ))}
-              </select>
-            </SettingsRow>
+            <SettingsSelect
+              label="Transcription Model"
+              value={settings.transcriptionModel}
+              onChange={(e) =>
+                update({ transcriptionModel: e.target.value as VoiceTranscriptionModel })
+              }
+            >
+              {TRANSCRIPTION_MODELS.map(({ value, label, description }) => (
+                <option key={value} value={value}>
+                  {label} — {description}
+                </option>
+              ))}
+            </SettingsSelect>
 
             <ParagraphingStrategyRow
               value={settings.paragraphingStrategy ?? "spoken-command"}
@@ -313,21 +309,19 @@ export function VoiceInputSettingsTab() {
                 helpLabel="Get API key"
               />
 
-              <SettingsRow label="Correction Model" icon={Sparkles}>
-                <select
-                  value={settings.correctionModel}
-                  onChange={(e) =>
-                    update({ correctionModel: e.target.value as VoiceCorrectionModel })
-                  }
-                  className="bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
-                >
-                  {CORRECTION_MODELS.map(({ value, label, description }) => (
-                    <option key={value} value={value}>
-                      {label} — {description}
-                    </option>
-                  ))}
-                </select>
-              </SettingsRow>
+              <SettingsSelect
+                label="Correction Model"
+                value={settings.correctionModel}
+                onChange={(e) =>
+                  update({ correctionModel: e.target.value as VoiceCorrectionModel })
+                }
+              >
+                {CORRECTION_MODELS.map(({ value, label, description }) => (
+                  <option key={value} value={value}>
+                    {label} — {description}
+                  </option>
+                ))}
+              </SettingsSelect>
 
               {settings.correctionApiKey && (
                 <>
@@ -359,28 +353,6 @@ export function VoiceInputSettingsTab() {
           )}
         </SettingsSection>
       )}
-    </div>
-  );
-}
-
-// ── Shared row component ──
-
-function SettingsRow({
-  label,
-  icon: Icon,
-  children,
-}: {
-  label: string;
-  icon: typeof Globe;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <label className="text-sm text-canopy-text/70 flex items-center gap-2 shrink-0">
-        <Icon className="w-3.5 h-3.5 text-canopy-text/50" aria-hidden="true" />
-        {label}
-      </label>
-      {children}
     </div>
   );
 }
@@ -684,26 +656,22 @@ function ParagraphingStrategyRow({
 }) {
   const isNonEnglish = value === "spoken-command" && language !== "en";
 
+  const description = isNonEnglish
+    ? "Spoken commands require English. Manual Enter will be used for the selected language."
+    : value === "spoken-command"
+      ? 'Say "new paragraph" to insert a break. You can also press Enter to commit the current paragraph.'
+      : "Press Enter to commit paragraph breaks. Spoken formatting commands are disabled.";
+
   return (
-    <div className="space-y-1">
-      <SettingsRow label="Paragraph Breaks" icon={AlignLeft}>
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value as VoiceParagraphingStrategy)}
-          className="bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
-        >
-          <option value="spoken-command">Spoken commands</option>
-          <option value="manual">Manual Enter only</option>
-        </select>
-      </SettingsRow>
-      <p className="text-xs text-canopy-text/40 ml-[22px] select-text">
-        {isNonEnglish
-          ? "Spoken commands require English. Manual Enter will be used for the selected language."
-          : value === "spoken-command"
-            ? 'Say "new paragraph" to insert a break. You can also press Enter to commit the current paragraph.'
-            : "Press Enter to commit paragraph breaks. Spoken formatting commands are disabled."}
-      </p>
-    </div>
+    <SettingsSelect
+      label="Paragraph Breaks"
+      description={description}
+      value={value}
+      onChange={(e) => onChange(e.target.value as VoiceParagraphingStrategy)}
+    >
+      <option value="spoken-command">Spoken commands</option>
+      <option value="manual">Manual Enter only</option>
+    </SettingsSelect>
   );
 }
 
@@ -799,20 +767,15 @@ function CustomInstructionsRow({
   onChange: (v: string) => void;
 }) {
   return (
-    <div className="space-y-2">
-      <label className="text-sm text-canopy-text/70">Custom Instructions</label>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        rows={3}
-        placeholder='e.g., "Always capitalize ProductName as one word"'
-        className="w-full bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors resize-y"
-        spellCheck={false}
-      />
-      <p className="text-xs text-canopy-text/40 select-text">
-        Project-specific rules appended to the core correction prompt.
-      </p>
-    </div>
+    <SettingsTextarea
+      label="Custom Instructions"
+      description="Project-specific rules appended to the core correction prompt."
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      rows={3}
+      placeholder='e.g., "Always capitalize ProductName as one word"'
+      spellCheck={false}
+    />
   );
 }
 
