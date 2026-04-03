@@ -46,13 +46,20 @@ vi.stubGlobal("window", {
 });
 
 type Terminal = { id: string; agentState?: string };
-let storeSubscribers: Array<(state: { terminals: Terminal[] }) => void> = [];
-let storeState: { terminals: Terminal[] } = { terminals: [] };
+let storeSubscribers: Array<
+  (state: { terminalsById: Record<string, Terminal>; terminalIds: string[] }) => void
+> = [];
+let storeState: { terminalsById: Record<string, Terminal>; terminalIds: string[] } = {
+  terminalsById: {},
+  terminalIds: [],
+};
 
 vi.mock("@/store/terminalStore", () => ({
   useTerminalStore: {
     getState: () => storeState,
-    subscribe: (fn: (state: { terminals: Terminal[] }) => void) => {
+    subscribe: (
+      fn: (state: { terminalsById: Record<string, Terminal>; terminalIds: string[] }) => void
+    ) => {
       storeSubscribers.push(fn);
       return () => {
         storeSubscribers = storeSubscribers.filter((s) => s !== fn);
@@ -86,7 +93,10 @@ vi.mock("../../useElectron", () => ({
 import { useAgentWaitingNudge } from "../useAgentWaitingNudge";
 
 function emitStoreUpdate(terminals: Terminal[]) {
-  storeState = { terminals };
+  storeState = {
+    terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    terminalIds: terminals.map((t) => t.id),
+  };
   storeSubscribers.forEach((fn) => fn(storeState));
 }
 
@@ -94,7 +104,7 @@ describe("useAgentWaitingNudge", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     storeSubscribers = [];
-    storeState = { terminals: [] };
+    storeState = { terminalsById: {}, terminalIds: [] };
     notifyMock.mockReturnValue("notif-123");
   });
 
@@ -201,7 +211,10 @@ describe("useAgentWaitingNudge", () => {
   });
 
   it("fires immediately if agent is already waiting at mount", async () => {
-    storeState = { terminals: [{ id: "t1", agentState: "waiting" }] };
+    storeState = {
+      terminalsById: { t1: { id: "t1", agentState: "waiting" } },
+      terminalIds: ["t1"],
+    };
 
     renderHook(() => useAgentWaitingNudge(true));
     await act(async () => {});
@@ -315,7 +328,10 @@ describe("useAgentWaitingNudge", () => {
   });
 
   it("does not double-fire when agent already waiting at mount then another transitions", async () => {
-    storeState = { terminals: [{ id: "t1", agentState: "waiting" }] };
+    storeState = {
+      terminalsById: { t1: { id: "t1", agentState: "waiting" } },
+      terminalIds: ["t1"],
+    };
 
     renderHook(() => useAgentWaitingNudge(true));
     await act(async () => {});

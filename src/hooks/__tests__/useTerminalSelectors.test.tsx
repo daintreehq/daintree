@@ -43,13 +43,15 @@ function setupTerminals(
   }>
 ) {
   const state = {
-    terminals,
+    terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    terminalIds: terminals.map((t) => t.id),
     isInTrash: isInTrashFn,
   };
   useTerminalStoreMock.mockImplementation(
     (
       selector: (state: {
-        terminals: typeof terminals;
+        terminalsById: Record<string, (typeof terminals)[0]>;
+        terminalIds: string[];
         isInTrash: (id: string) => boolean;
       }) => unknown
     ) => selector(state)
@@ -71,13 +73,15 @@ function setupBoth(
     (selector: (state: { worktrees: typeof wtMap }) => unknown) => selector({ worktrees: wtMap })
   );
   const state = {
-    terminals,
+    terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    terminalIds: terminals.map((t) => t.id),
     isInTrash: isInTrashFn,
   };
   useTerminalStoreMock.mockImplementation(
     (
       selector: (state: {
-        terminals: typeof terminals;
+        terminalsById: Record<string, (typeof terminals)[0]>;
+        terminalIds: string[];
         isInTrash: (id: string) => boolean;
       }) => unknown
     ) => selector(state)

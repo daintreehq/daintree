@@ -35,7 +35,7 @@ vi.mock("../../useElectron", () => ({
   isElectronAvailable: () => true,
 }));
 
-type TerminalLike = { kind?: string; agentState?: string };
+type TerminalLike = { id?: string; kind?: string; agentState?: string };
 type WorktreeLike = { prState?: string };
 
 let projectState = { currentProject: null as string | null };
@@ -53,7 +53,10 @@ vi.mock("@/store/projectStore", () => ({
   },
 }));
 
-let terminalState = { terminals: [] as TerminalLike[] };
+let terminalState = {
+  terminalsById: {} as Record<string, TerminalLike>,
+  terminalIds: [] as string[],
+};
 let terminalSubscribers: Array<(state: typeof terminalState, prev: typeof terminalState) => void> =
   [];
 
@@ -92,7 +95,7 @@ describe("useGettingStartedChecklist", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     projectState = { currentProject: null };
-    terminalState = { terminals: [] };
+    terminalState = { terminalsById: {}, terminalIds: [] };
     worktreeState = { worktrees: new Map() };
     projectSubscribers = [];
     terminalSubscribers = [];
@@ -160,8 +163,17 @@ describe("useGettingStartedChecklist", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     act(() => {
-      const prev = { terminals: [] as TerminalLike[] };
-      const next = { terminals: [{ kind: "agent", agentState: "idle" }] };
+      const prev = {
+        terminalsById: {} as Record<string, TerminalLike>,
+        terminalIds: [] as string[],
+      };
+      const next = {
+        terminalsById: { t1: { id: "t1", kind: "agent", agentState: "idle" } } as Record<
+          string,
+          TerminalLike
+        >,
+        terminalIds: ["t1"],
+      };
       for (const sub of terminalSubscribers) sub(next, prev);
     });
 

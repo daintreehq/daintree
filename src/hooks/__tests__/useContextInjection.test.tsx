@@ -15,14 +15,15 @@ const { addErrorMock, removeErrorMock, isAvailableMock, cancelMock, onProgressMo
 const { terminalState, useTerminalStoreMock } = vi.hoisted(() => {
   const terminalState = {
     focusedId: "term-1",
-    terminals: [
-      {
+    terminalsById: {
+      "term-1": {
         id: "term-1",
         worktreeId: "wt-1",
         agentId: undefined,
         agentState: "idle",
       },
-    ],
+    } as Record<string, { id: string; worktreeId: string; agentId: undefined; agentState: string }>,
+    terminalIds: ["term-1"],
   };
 
   const storeFn = vi.fn((selector: (state: typeof terminalState) => unknown) =>
@@ -64,14 +65,15 @@ describe("useContextInjection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalState.focusedId = "term-1";
-    terminalState.terminals = [
-      {
+    terminalState.terminalsById = {
+      "term-1": {
         id: "term-1",
         worktreeId: "wt-1",
         agentId: undefined,
         agentState: "idle",
       },
-    ];
+    };
+    terminalState.terminalIds = ["term-1"];
   });
 
   it("does not throw if cancel API returns non-promise", async () => {

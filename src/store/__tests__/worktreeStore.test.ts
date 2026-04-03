@@ -19,18 +19,24 @@ const {
   subscribeMock: vi.fn(() => vi.fn()),
 }));
 
+type MockTerminal = {
+  id: string;
+  worktreeId?: string;
+  location?: "grid" | "dock" | "trash";
+};
 const terminalStoreState = {
-  terminals: [] as Array<{
-    id: string;
-    worktreeId?: string;
-    location?: "grid" | "dock" | "trash";
-  }>,
+  terminalsById: {} as Record<string, MockTerminal>,
+  terminalIds: [] as string[],
   activeDockTerminalId: null as string | null,
   focusedId: null as string | null,
   mruList: [] as string[],
   recordMru: recordMruMock,
   setFocused: setFocusedMock,
 };
+function setMockTerminals(terminals: MockTerminal[]) {
+  terminalStoreState.terminalsById = Object.fromEntries(terminals.map((t) => [t.id, t]));
+  terminalStoreState.terminalIds = terminals.map((t) => t.id);
+}
 
 vi.mock("@/clients", () => ({
   appClient: {
@@ -67,7 +73,8 @@ describe("worktreeStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useWorktreeSelectionStore.getState().reset();
-    terminalStoreState.terminals = [];
+    terminalStoreState.terminalsById = {};
+    terminalStoreState.terminalIds = [];
     terminalStoreState.activeDockTerminalId = null;
     terminalStoreState.focusedId = null;
     terminalStoreState.mruList = [];
@@ -217,11 +224,11 @@ describe("worktreeStore", () => {
   });
 
   it("applies pending worktree selection only for the still-active worktree", async () => {
-    terminalStoreState.terminals = [
+    setMockTerminals([
       { id: "term-a", worktreeId: "wt-a", location: "grid" },
       { id: "term-b", worktreeId: "wt-b", location: "grid" },
       { id: "dock-global", location: "dock" },
-    ];
+    ]);
     useWorktreeSelectionStore.setState({
       activeWorktreeId: "wt-a",
       pendingWorktreeId: "wt-a",
@@ -242,10 +249,10 @@ describe("worktreeStore", () => {
   });
 
   it("ignores stale renderer policy work from an earlier selection", async () => {
-    terminalStoreState.terminals = [
+    setMockTerminals([
       { id: "term-a", worktreeId: "wt-a", location: "grid" },
       { id: "term-b", worktreeId: "wt-b", location: "grid" },
-    ];
+    ]);
 
     useWorktreeSelectionStore.getState().selectWorktree("wt-a");
     useWorktreeSelectionStore.getState().selectWorktree("wt-b");
@@ -290,10 +297,10 @@ describe("worktreeStore", () => {
   });
 
   it("does not restore stale terminal focus after a newer worktree selection wins", async () => {
-    terminalStoreState.terminals = [
+    setMockTerminals([
       { id: "term-a", worktreeId: "wt-a", location: "grid" },
       { id: "term-b", worktreeId: "wt-b", location: "grid" },
-    ];
+    ]);
     useWorktreeSelectionStore.getState().trackTerminalFocus("wt-a", "term-a");
 
     useWorktreeSelectionStore.getState().selectWorktree("wt-a");
