@@ -107,6 +107,30 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
     },
   }));
 
+  actions.set("recipe.saveToRepo", () => ({
+    id: "recipe.saveToRepo",
+    title: "Save Recipe to Repository",
+    description:
+      "Promote a recipe to in-repo storage (.canopy/recipes/) for git tracking and team sharing",
+    category: "recipes",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    argsSchema: z.object({
+      recipeId: z.string(),
+      deleteOriginal: z.boolean().default(false),
+    }),
+    run: async (args: unknown) => {
+      const { recipeId, deleteOriginal } = args as {
+        recipeId: string;
+        deleteOriginal: boolean;
+      };
+      const store = useRecipeStore.getState();
+      if (!store.currentProjectId) throw new Error("No project open");
+      await store.saveToRepo(recipeId, deleteOriginal);
+    },
+  }));
+
   actions.set("recipe.editor.openFromLayout", () => ({
     id: "recipe.editor.openFromLayout",
     title: "Open Recipe Editor From Layout",

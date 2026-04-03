@@ -155,6 +155,7 @@ export type BuiltInActionId =
   | "recipe.editor.open"
   | "recipe.editor.openFromLayout"
   | "recipe.manager.open"
+  | "recipe.saveToRepo"
   | "panel.focus"
   | "panel.focusIndex"
   | "panel.palette"

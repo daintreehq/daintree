@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from "react";
 import {
   Globe,
   FolderOpen,
+  FolderGit2,
   Plus,
   Trash2,
   Edit3,
@@ -48,6 +49,7 @@ export function RecipeManager({
     [rawProjectRecipes, inRepoNames]
   );
   const deleteRecipe = useRecipeStore((s) => s.deleteRecipe);
+  const saveToRepo = useRecipeStore((s) => s.saveToRepo);
   const exportRecipe = useRecipeStore((s) => s.exportRecipe);
   const exportRecipeToFile = useRecipeStore((s) => s.exportRecipeToFile);
   const importRecipe = useRecipeStore((s) => s.importRecipe);
@@ -56,6 +58,10 @@ export function RecipeManager({
 
   const [recipeToDelete, setRecipeToDelete] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [recipeToSave, setRecipeToSave] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [recipeToDeleteAfterSave, setRecipeToDeleteAfterSave] = useState<string | null>(null);
   const [exportFeedback, setExportFeedback] = useState<string | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importScope, setImportScope] = useState<"global" | "project">("project");
@@ -101,6 +107,32 @@ export function RecipeManager({
     },
     [exportRecipe]
   );
+
+  const handleSaveToRepo = async () => {
+    if (!recipeToSave) return;
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      await saveToRepo(recipeToSave, false);
+      const savedId = recipeToSave;
+      setRecipeToSave(null);
+      setRecipeToDeleteAfterSave(savedId);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save recipe to repo");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteAfterSave = async () => {
+    if (!recipeToDeleteAfterSave) return;
+    try {
+      await deleteRecipe(recipeToDeleteAfterSave);
+    } catch (err) {
+      console.error("Failed to delete original recipe:", err);
+    }
+    setRecipeToDeleteAfterSave(null);
+  };
 
   const handleImportRecipe = async () => {
     setImportError(null);
@@ -173,6 +205,22 @@ export function RecipeManager({
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Edit recipe</TooltipContent>
+              </Tooltip>
+            )}
+            {!isInRepoRecipeId(recipe.id) && currentProject && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setRecipeToSave(recipe.id)}
+                    className="h-7 px-2"
+                    aria-label={`Save recipe ${recipe.name} to repository`}
+                  >
+                    <FolderGit2 />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Save to repo</TooltipContent>
               </Tooltip>
             )}
             <Tooltip>
@@ -344,6 +392,34 @@ export function RecipeManager({
           setRecipeToDelete(null);
           setDeleteError(null);
         }}
+      />
+
+      <ConfirmDialog
+        isOpen={recipeToSave !== null}
+        title="Save to Team Recipes?"
+        description={
+          saveError
+            ? `Error: ${saveError}`
+            : "This recipe will be written to .canopy/recipes/ in the repository where it can be committed and shared with the team."
+        }
+        confirmLabel={saveError ? "Retry" : "Save to Repo"}
+        isConfirmLoading={isSaving}
+        onConfirm={() => void handleSaveToRepo()}
+        onClose={() => {
+          setRecipeToSave(null);
+          setSaveError(null);
+        }}
+      />
+
+      <ConfirmDialog
+        isOpen={recipeToDeleteAfterSave !== null}
+        title="Delete original?"
+        description="The recipe has been saved to the repository. Do you want to remove the original copy from this machine?"
+        confirmLabel="Delete Original"
+        cancelLabel="Keep Both"
+        variant="destructive"
+        onConfirm={() => void handleDeleteAfterSave()}
+        onClose={() => setRecipeToDeleteAfterSave(null)}
       />
 
       <AppDialog

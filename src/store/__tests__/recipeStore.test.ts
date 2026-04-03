@@ -969,6 +969,163 @@ describe("recipeStore", () => {
     });
   });
 
+  describe("saveToRepo", () => {
+    const globalRecipe = {
+      id: "global-1",
+      name: "My Global Recipe",
+      terminals: [{ type: "terminal" as const, title: "Shell", command: "npm test", env: {} }],
+      createdAt: 1000,
+    };
+
+    const projectRecipe = {
+      id: "project-recipe-1",
+      name: "My Project Recipe",
+      projectId: "project-1",
+      worktreeId: "wt-1",
+      terminals: [{ type: "terminal" as const, title: "Shell", command: "npm start", env: {} }],
+      createdAt: 2000,
+    };
+
+    function setupWithGlobal() {
+      useRecipeStore.setState({
+        globalRecipes: [globalRecipe],
+        projectRecipes: [],
+        inRepoRecipes: [],
+        recipes: [globalRecipe],
+        currentProjectId: "project-1",
+      });
+    }
+
+    function setupWithProject() {
+      useRecipeStore.setState({
+        globalRecipes: [],
+        projectRecipes: [projectRecipe],
+        inRepoRecipes: [],
+        recipes: [projectRecipe],
+        currentProjectId: "project-1",
+      });
+    }
+
+    it("promotes a global recipe to in-repo, keeping original", async () => {
+      setupWithGlobal();
+      await useRecipeStore.getState().saveToRepo("global-1", false);
+
+      const state = useRecipeStore.getState();
+      expect(state.inRepoRecipes).toHaveLength(1);
+      expect(state.inRepoRecipes[0]?.id).toBe("inrepo-my-global-recipe");
+      expect(state.inRepoRecipes[0]?.name).toBe("My Global Recipe");
+      expect(state.inRepoRecipes[0]).not.toHaveProperty("projectId");
+      expect(state.inRepoRecipes[0]).not.toHaveProperty("worktreeId");
+      expect(state.globalRecipes).toHaveLength(1);
+      expect(updateInRepoRecipeMock).toHaveBeenCalledWith(
+        "project-1",
+        expect.objectContaining({ id: "inrepo-my-global-recipe" })
+      );
+      expect(globalDeleteRecipeMock).not.toHaveBeenCalled();
+    });
+
+    it("promotes a global recipe and deletes original", async () => {
+      setupWithGlobal();
+      await useRecipeStore.getState().saveToRepo("global-1", true);
+
+      const state = useRecipeStore.getState();
+      expect(state.inRepoRecipes).toHaveLength(1);
+      expect(state.globalRecipes).toHaveLength(0);
+      expect(globalDeleteRecipeMock).toHaveBeenCalledWith("global-1");
+    });
+
+    it("promotes a project-local recipe, keeping original (shadowed by name)", async () => {
+      setupWithProject();
+      await useRecipeStore.getState().saveToRepo("project-recipe-1", false);
+
+      const state = useRecipeStore.getState();
+      expect(state.inRepoRecipes).toHaveLength(1);
+      expect(state.projectRecipes).toHaveLength(1);
+      // Project recipe is shadowed by the in-repo recipe with the same name
+      expect(state.recipes.filter((r) => r.name === "My Project Recipe")).toHaveLength(1);
+      expect(state.recipes.find((r) => r.name === "My Project Recipe")?.id).toBe(
+        "inrepo-my-project-recipe"
+      );
+    });
+
+    it("promotes a project-local recipe and deletes original", async () => {
+      setupWithProject();
+      await useRecipeStore.getState().saveToRepo("project-recipe-1", true);
+
+      const state = useRecipeStore.getState();
+      expect(state.inRepoRecipes).toHaveLength(1);
+      expect(state.projectRecipes).toHaveLength(0);
+      expect(deleteRecipeMock).toHaveBeenCalledWith("project-1", "project-recipe-1");
+    });
+
+    it("strips projectId and worktreeId from promoted recipe", async () => {
+      setupWithProject();
+      await useRecipeStore.getState().saveToRepo("project-recipe-1", false);
+
+      const promoted = updateInRepoRecipeMock.mock.calls[0]?.[1];
+      expect(promoted.projectId).toBeUndefined();
+      expect(promoted.worktreeId).toBeUndefined();
+    });
+
+    it("rolls back all slices when updateInRepoRecipe fails", async () => {
+      setupWithGlobal();
+      updateInRepoRecipeMock.mockRejectedValueOnce(new Error("disk error"));
+
+      await expect(useRecipeStore.getState().saveToRepo("global-1", true)).rejects.toThrow(
+        "disk error"
+      );
+
+      const state = useRecipeStore.getState();
+      expect(state.globalRecipes).toHaveLength(1);
+      expect(state.inRepoRecipes).toHaveLength(0);
+      expect(state.recipes).toHaveLength(1);
+    });
+
+    it("throws when recipe is not found", async () => {
+      useRecipeStore.setState({ recipes: [], currentProjectId: "project-1" });
+      await expect(useRecipeStore.getState().saveToRepo("nonexistent")).rejects.toThrow(
+        "not found"
+      );
+    });
+
+    it("throws when recipe is already in-repo", async () => {
+      const inRepoRecipe = {
+        id: "inrepo-test",
+        name: "Test",
+        terminals: [{ type: "terminal" as const }],
+        createdAt: 500,
+      };
+      useRecipeStore.setState({
+        inRepoRecipes: [inRepoRecipe],
+        recipes: [inRepoRecipe],
+        currentProjectId: "project-1",
+      });
+      await expect(useRecipeStore.getState().saveToRepo("inrepo-test")).rejects.toThrow(
+        "already in-repo"
+      );
+    });
+
+    it("throws when no current project", async () => {
+      useRecipeStore.setState({
+        globalRecipes: [globalRecipe],
+        recipes: [globalRecipe],
+        currentProjectId: null,
+      });
+      await expect(useRecipeStore.getState().saveToRepo("global-1")).rejects.toThrow(
+        "No current project"
+      );
+    });
+
+    it("upserts without duplicating when called twice for the same recipe", async () => {
+      setupWithGlobal();
+      await useRecipeStore.getState().saveToRepo("global-1", false);
+      await useRecipeStore.getState().saveToRepo("global-1", false);
+
+      const state = useRecipeStore.getState();
+      expect(state.inRepoRecipes).toHaveLength(1);
+    });
+  });
+
   describe("file export/import", () => {
     it("exportRecipeToFile calls client with recipe name and JSON", async () => {
       useRecipeStore.setState({
