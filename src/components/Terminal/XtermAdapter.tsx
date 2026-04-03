@@ -215,6 +215,7 @@ function XtermAdapterComponent({
     );
 
     const wasDetachedForSwitch = managed.isDetached === true;
+    const hasSavedTargetDims = !!(managed.targetCols && managed.targetRows);
     managed.isAttaching = true;
     terminalInstanceService.setInputLocked(terminalId, !!isInputLocked);
 
@@ -374,11 +375,15 @@ function XtermAdapterComponent({
       onExit?.(code);
     });
 
-    if (!wasDetachedForSwitch) {
+    if (!wasDetachedForSwitch || !hasSavedTargetDims) {
       performFit();
     }
 
-    if (restoreOnAttach && !wasDetachedForSwitch && !hasVisibleBufferContent()) {
+    if (
+      restoreOnAttach &&
+      !(wasDetachedForSwitch && hasSavedTargetDims) &&
+      !hasVisibleBufferContent()
+    ) {
       void terminalInstanceService.fetchAndRestore(terminalId).then((restored) => {
         if (restored) {
           requestAnimationFrame(() => performFit());

@@ -124,6 +124,8 @@ describe("Grid Capacity Enforcement", () => {
 
       const terminal = useTerminalStore.getState().terminalsById["docked-1"];
       expect(terminal?.location).toBe("grid");
+      expect(terminal?.isVisible).toBe(true);
+      expect(terminal?.runtimeStatus).toBe("running");
     });
 
     it("should move terminal to grid when exactly at capacity minus one", () => {
