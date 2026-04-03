@@ -1,5 +1,4 @@
-import type { CliAvailability } from "@shared/types";
-import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
+export { getDefaultAgentId } from "./resolveAgentId";
 
 export const PROJECT_EXPLANATION_PROMPT = `You are an expert software architect analyzing this codebase for someone who needs a high-level overview.
 
@@ -25,37 +24,3 @@ Based on package.json, README, and project files, provide the commands to:
 If commands aren't clearly defined in the project files, say so rather than guessing.
 
 Keep the summary concise but informative - aim for someone to understand the project and get it running in 5 minutes.`;
-
-export function getDefaultAgentId(
-  defaultAgent: string | undefined,
-  defaultSelection: string | undefined,
-  availability: CliAvailability,
-  selectedAgents?: Set<string>
-): BuiltInAgentId | null {
-  const isUsable = (id: string) =>
-    availability[id as keyof CliAvailability] && (!selectedAgents || selectedAgents.has(id));
-
-  if (
-    defaultAgent &&
-    (BUILT_IN_AGENT_IDS as readonly string[]).includes(defaultAgent) &&
-    isUsable(defaultAgent)
-  ) {
-    return defaultAgent as BuiltInAgentId;
-  }
-
-  if (
-    defaultSelection &&
-    (BUILT_IN_AGENT_IDS as readonly string[]).includes(defaultSelection) &&
-    isUsable(defaultSelection)
-  ) {
-    return defaultSelection as BuiltInAgentId;
-  }
-
-  for (const agentId of BUILT_IN_AGENT_IDS) {
-    if (isUsable(agentId)) {
-      return agentId;
-    }
-  }
-
-  return null;
-}

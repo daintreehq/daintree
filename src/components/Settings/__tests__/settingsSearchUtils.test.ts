@@ -696,3 +696,15 @@ describe("requiresEnabled metadata", () => {
     expect(voiceEnable?.requiresEnabled).toBeUndefined();
   });
 });
+
+describe("help dock discoverability", () => {
+  it("finds default agent entry when searching for 'help dock'", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "help dock");
+    expect(results.some((r) => r.id === "agents-default-agent")).toBe(true);
+  });
+
+  it("finds default agent entry when searching for 'keyboard shortcut'", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "keyboard shortcut");
+    expect(results.some((r) => r.id === "agents-default-agent")).toBe(true);
+  });
+});

@@ -262,9 +262,9 @@ export function AgentSettings({
                 ))}
               </select>
               <p className="text-xs text-canopy-text/40 select-text">
-                Agent used for automated workflows ("What's Next?", onboarding, project
-                explanations). Distinct from the Portal "Default New Tab Agent" which controls the
-                browser panel opened by the + button.
+                Agent used for the help dock button (⌘⇧H) and automated workflows ("What's Next?",
+                onboarding, project explanations). Distinct from the Portal "Default New Tab Agent"
+                which controls the browser panel opened by the + button.
               </p>
             </div>
           </div>
