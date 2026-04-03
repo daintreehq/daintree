@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { escapeShellArg } from "@shared/utils/shellEscape";
 
 const appClientMock = {
   hydrate: vi.fn(),
@@ -449,10 +448,9 @@ describe("hydrateAppState", () => {
     );
   });
 
-  it("silently respawns agent panels when not found in backend", async () => {
+  it("skips agent panels when not found in backend (phantom agent prevention)", async () => {
     // When an agent terminal can't be reconnected (not found in backend),
-    // we silently respawn it with a fresh session instead of showing errors.
-    // The command is regenerated from current agent settings (no old prompt).
+    // it should be silently dropped — not respawned as a phantom idle panel.
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -492,23 +490,8 @@ describe("hydrateAppState", () => {
       openDiagnosticsDock,
     });
 
-    // Agent terminals respawn with requestedId (fresh session)
-    expect(addTerminal).toHaveBeenCalledTimes(1);
-    const callArgs = addTerminal.mock.calls[0][0];
-
-    // Assert requestedId is used (respawn mode)
-    expect(callArgs).toHaveProperty("requestedId", "agent-1");
-    // Assert existingId is NOT used (not reconnecting)
-    expect(callArgs).not.toHaveProperty("existingId");
-
-    // Verify command is regenerated from settings (doesn't include old prompt)
-    // Non-flag values are shell-escaped by generateAgentCommand (platform-dependent quoting)
-    expect(callArgs.command).toBe(`claude --model ${escapeShellArg("sonnet-4")}`);
-    expect(callArgs.command).not.toContain("-p");
-    expect(callArgs.command).not.toContain("Old prompt");
-
-    // Verify NO DISCONNECTED error was set (silent respawn)
-    expect(setSpawnErrorMock).not.toHaveBeenCalled();
+    // Agent terminal not found in backend → should NOT be respawned
+    expect(addTerminal).not.toHaveBeenCalled();
   });
 
   it("reconnects via fallback when getForProject misses the terminal but reconnect finds it", async () => {
@@ -1152,7 +1135,9 @@ describe("hydrateAppState", () => {
     expect(hydrateTabGroups).toHaveBeenCalledWith([], { skipPersist: true });
   });
 
-  it("uses resume command when agent panel has agentSessionId and no backend process", async () => {
+  it("skips agent panel with agentSessionId when no backend process exists", async () => {
+    // Agent with agentSessionId but no backend process should be dropped,
+    // not respawned — it would create a phantom panel.
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -1180,30 +1165,19 @@ describe("hydrateAppState", () => {
     });
 
     const addTerminal = vi.fn().mockResolvedValue("agent-1");
-    const setActiveWorktree = vi.fn();
-    const loadRecipes = vi.fn().mockResolvedValue(undefined);
-    const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
       addTerminal,
-      setActiveWorktree,
-      loadRecipes,
-      openDiagnosticsDock,
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(1);
-    const callArgs = addTerminal.mock.calls[0][0];
-
-    // Should use resume command instead of regenerated command
-    expect(callArgs.command).toBe("claude --resume session-uuid-123");
-    expect(callArgs.command).not.toContain("--model");
-    expect(callArgs.command).not.toContain("sonnet-4");
-
-    // agentSessionId should NOT be forwarded (cleared on respawn)
-    expect(callArgs.agentSessionId).toBeUndefined();
+    // Dead agent should NOT be respawned
+    expect(addTerminal).not.toHaveBeenCalled();
   });
 
-  it("uses fresh command when agent panel has no agentSessionId", async () => {
+  it("skips agent panel without agentSessionId when no backend process exists", async () => {
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -1230,23 +1204,16 @@ describe("hydrateAppState", () => {
     });
 
     const addTerminal = vi.fn().mockResolvedValue("agent-1");
-    const setActiveWorktree = vi.fn();
-    const loadRecipes = vi.fn().mockResolvedValue(undefined);
-    const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
       addTerminal,
-      setActiveWorktree,
-      loadRecipes,
-      openDiagnosticsDock,
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(1);
-    const callArgs = addTerminal.mock.calls[0][0];
-
-    // Should use fresh generated command (no resume)
-    expect(callArgs.command).toContain("--model");
-    expect(callArgs.command).not.toContain("--resume");
+    // Dead agent should NOT be respawned
+    expect(addTerminal).not.toHaveBeenCalled();
   });
 
   it("preserves agentSessionId on successful reconnect to live backend", async () => {
@@ -2161,6 +2128,361 @@ describe("hydrateAppState", () => {
       expect(addTerminal).toHaveBeenCalledWith(
         expect.objectContaining({ existingId: "default-1" })
       );
+    });
+  });
+
+  describe("phantom agent terminal prevention", () => {
+    it("drops dead orphan backend terminals (hasPty: false)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "dead-agent-1",
+          hasPty: false,
+          cwd: "/project",
+          kind: "agent",
+          type: "claude",
+          agentId: "claude",
+          title: "Claude",
+        },
+      ]);
+
+      const addTerminal = vi.fn().mockResolvedValue("dead-agent-1");
+
+      await hydrateAppState({
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addTerminal).not.toHaveBeenCalled();
+    });
+
+    it("drops dead non-agent orphan backend terminals (hasPty: false)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "dead-term-1",
+          hasPty: false,
+          cwd: "/project",
+          kind: "terminal",
+          title: "Terminal",
+        },
+      ]);
+
+      const addTerminal = vi.fn().mockResolvedValue("dead-term-1");
+
+      await hydrateAppState({
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addTerminal).not.toHaveBeenCalled();
+    });
+
+    it("keeps live orphan backend terminals (hasPty: true)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "live-agent-1",
+          hasPty: true,
+          cwd: "/project",
+          kind: "agent",
+          type: "claude",
+          agentId: "claude",
+          title: "Claude",
+        },
+      ]);
+
+      const addTerminal = vi.fn().mockResolvedValue("live-agent-1");
+
+      await hydrateAppState({
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addTerminal).toHaveBeenCalledTimes(1);
+      expect(addTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ existingId: "live-agent-1" })
+      );
+    });
+
+    it("keeps orphan with hasPty: undefined (treat as alive)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "orphan-1",
+          cwd: "/project",
+          kind: "terminal",
+          title: "Terminal",
+          // hasPty is undefined — should be treated as alive
+        },
+      ]);
+
+      const addTerminal = vi.fn().mockResolvedValue("orphan-1");
+
+      await hydrateAppState({
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addTerminal).toHaveBeenCalledTimes(1);
+      expect(addTerminal).toHaveBeenCalledWith(expect.objectContaining({ existingId: "orphan-1" }));
+    });
+
+    it("skips matched dead agent backend terminal and prevents orphan leak", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "agent-1",
+              kind: "agent",
+              type: "claude",
+              agentId: "claude",
+              title: "Claude",
+              cwd: "/project",
+              location: "grid",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "agent-1",
+          hasPty: false,
+          cwd: "/project",
+          kind: "agent",
+          type: "claude",
+          agentId: "claude",
+          title: "Claude",
+        },
+      ]);
+
+      const addTerminal = vi.fn().mockResolvedValue("agent-1");
+
+      await hydrateAppState({
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      // Dead agent backend match should be skipped AND not appear as orphan
+      expect(addTerminal).not.toHaveBeenCalled();
+    });
+
+    it("keeps matched dead non-agent backend terminal (shows exit state)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "term-1",
+              kind: "terminal",
+              type: "terminal",
+              title: "Terminal",
+              cwd: "/project",
+              location: "grid",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "term-1",
+          hasPty: false,
+          cwd: "/project",
+          kind: "terminal",
+          title: "Terminal",
+        },
+      ]);
+
+      const addTerminal = vi.fn().mockResolvedValue("term-1");
+
+      await hydrateAppState({
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      // Non-agent dead backend terminal still restores (exit state is useful)
+      expect(addTerminal).toHaveBeenCalledTimes(1);
+    });
+
+    it("still respawns agent on reconnect timeout (network issue)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "agent-1",
+              kind: "agent",
+              type: "claude",
+              agentId: "claude",
+              title: "Claude",
+              cwd: "/project",
+              location: "grid",
+              command: "claude",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings: {
+          agents: {
+            claude: { customFlags: "--model sonnet-4" },
+          },
+        },
+      });
+
+      // getForProject returns empty
+      terminalClientMock.getForProject.mockResolvedValue([]);
+      // reconnect times out
+      terminalClientMock.reconnect.mockImplementation(
+        () =>
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Reconnection timeout")), 10)
+          )
+      );
+
+      const addTerminal = vi.fn().mockResolvedValue("agent-1");
+
+      await hydrateAppState({
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      // Agent should still respawn on timeout (could be a temporary network issue)
+      expect(addTerminal).toHaveBeenCalledTimes(1);
+      expect(addTerminal).toHaveBeenCalledWith(expect.objectContaining({ kind: "agent" }));
+    });
+
+    it("still respawns non-agent terminal when not found in backend", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "term-1",
+              kind: "terminal",
+              type: "terminal",
+              title: "Terminal",
+              cwd: "/project",
+              location: "grid",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([]);
+
+      const addTerminal = vi.fn().mockResolvedValue("term-1");
+
+      await hydrateAppState({
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      // Non-agent terminals should still respawn when not found
+      expect(addTerminal).toHaveBeenCalledTimes(1);
+      expect(addTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "terminal", requestedId: "term-1" })
+      );
+    });
+
+    it("skips older agent snapshot with type but no kind when not found", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "agent-old",
+              type: "claude",
+              agentId: "claude",
+              title: "Claude",
+              cwd: "/project",
+              location: "grid",
+              command: "claude",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([]);
+
+      const addTerminal = vi.fn().mockResolvedValue("agent-old");
+
+      await hydrateAppState({
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      // Older agent snapshots (type: "claude" but no kind) should also be skipped
+      expect(addTerminal).not.toHaveBeenCalled();
     });
   });
 

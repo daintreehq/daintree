@@ -37,6 +37,7 @@ import { normalizeAndApplyScrollback } from "./scrollbackConfig";
 import { reconnectWithTimeout } from "./reconnectManager";
 import {
   inferKind,
+  resolveAgentId,
   buildArgsForBackendTerminal,
   buildArgsForReconnectedFallback,
   buildArgsForRespawn,
@@ -369,6 +370,17 @@ export async function hydrateAppState(
               isPty: taskIsPty,
               execute: async () => {
                 if (backendTerminal) {
+                  // Skip dead agent backend terminals — they create phantom idle panels
+                  const isDeadAgentBackend =
+                    backendTerminal.hasPty === false &&
+                    (backendTerminal.kind === "agent" ||
+                      resolveAgentId(backendTerminal.agentId, backendTerminal.type) !== undefined);
+                  if (isDeadAgentBackend) {
+                    logHydrationInfo(`Skipping dead agent backend terminal: ${backendTerminal.id}`);
+                    backendTerminalMap.delete(saved.id);
+                    return;
+                  }
+
                   logHydrationInfo(`Reconnecting to terminal: ${saved.id}`);
 
                   const args = buildArgsForBackendTerminal(
@@ -482,6 +494,14 @@ export async function hydrateAppState(
                         location,
                       });
                     } else {
+                      // Don't auto-respawn agent panels that no longer exist in the backend
+                      const isAgentKind =
+                        kind === "agent" || resolveAgentId(saved.agentId, saved.type) !== undefined;
+                      if (isAgentKind && reconnectOutcome.status === "not_found") {
+                        logHydrationInfo(`Skipping respawn for dead agent: ${saved.id}`);
+                        return;
+                      }
+
                       const respawnArgs = buildArgsForRespawn(
                         saved,
                         kind,
@@ -618,7 +638,7 @@ export async function hydrateAppState(
         const orphanedTerminals = hydrateResult.safeMode
           ? []
           : Array.from(backendTerminalMap.values()).filter(
-              (t) => !(t.id.startsWith("default-") && !hasSavedPanels)
+              (t) => !(t.id.startsWith("default-") && !hasSavedPanels) && t.hasPty !== false
             );
         if (orphanedTerminals.length > 0) {
           logHydrationInfo(
