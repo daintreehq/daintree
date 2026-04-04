@@ -1,8 +1,8 @@
 import { useCallback } from "react";
-import { CircleHelp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { CanopyIcon } from "@/components/icons/CanopyIcon";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 
 export function HelpAgentDockButton() {
@@ -19,17 +19,17 @@ export function HelpAgentDockButton() {
         <TooltipTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
-            size="icon-sm"
+            variant="pill"
+            size="sm"
             className={cn(
-              "opacity-50 hover:opacity-100 transition-opacity",
-              isOpen && "opacity-100 bg-canopy-accent/10 text-canopy-accent"
+              "px-2",
+              isOpen && "bg-canopy-border border-canopy-accent/40 ring-1 ring-canopy-accent/30"
             )}
             onClick={handleClick}
-            aria-label="Help"
+            aria-label="Help Agent"
             aria-expanded={isOpen}
           >
-            <CircleHelp />
+            <CanopyIcon className="w-3.5 h-3.5 text-canopy-text/50" />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="top">

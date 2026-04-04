@@ -241,7 +241,7 @@ export function HelpPanel() {
           </button>
         )}
         <div className="flex items-center gap-1.5 min-w-0 flex-1">
-          <CanopyIcon className="w-5 h-5 text-canopy-text/50 shrink-0" />
+          <CanopyIcon className="w-4 h-4 mr-0.5 text-canopy-text/50 shrink-0" />
           <span className="text-xs font-medium text-canopy-text/70 truncate">
             Canopy Assistant
             {agentConfig && (
