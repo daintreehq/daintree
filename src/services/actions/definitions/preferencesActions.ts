@@ -641,12 +641,36 @@ export function registerPreferencesActions(
         agentId = resolved ?? "claude";
       }
 
+      const helpPrompt =
+        "I need help with Canopy, an Electron-based IDE for orchestrating AI coding agents. Please briefly tell me how you can help.";
+
       const { actionService } = await import("@/services/ActionService");
-      await actionService.dispatch(
+      const result = await actionService.dispatch<{ terminalId: string | null }>(
         "agent.launch",
-        { agentId, cwd: folderPath },
+        { agentId, cwd: folderPath, location: "dock", prompt: helpPrompt },
         { source: "user" }
       );
+
+      // Store the terminal in the help panel
+      const { useHelpPanelStore } = await import("@/store/helpPanelStore");
+      if (result.ok && result.result?.terminalId) {
+        useHelpPanelStore.getState().setTerminal(result.result.terminalId, agentId);
+        useHelpPanelStore.getState().setOpen(true);
+      }
+    },
+  }));
+
+  actions.set("help.togglePanel", () => ({
+    id: "help.togglePanel",
+    title: "Toggle Help Panel",
+    description: "Show or hide the help panel",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const { useHelpPanelStore } = await import("@/store/helpPanelStore");
+      useHelpPanelStore.getState().toggle();
     },
   }));
 

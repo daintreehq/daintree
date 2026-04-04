@@ -34,6 +34,7 @@ import {
 
 import { AGENT_REGISTRY } from "@/config/agents";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
 
 const AGENT_OPTIONS = [
   ...BUILT_IN_AGENT_IDS.map((id) => ({
@@ -61,13 +62,15 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const getTabGroupPanels = useTerminalStore((state) => state.getTabGroupPanels);
   const openDockTerminal = useTerminalStore((state) => state.openDockTerminal);
   const currentProject = useProjectStore((s) => s.currentProject);
+  const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
 
-  // Get tab groups for the dock
-  const tabGroups = useMemo(
-    () => getTabGroups("dock", activeWorktreeId ?? undefined),
+  // Get tab groups for the dock, excluding the help panel terminal
+  const tabGroups = useMemo(() => {
+    const groups = getTabGroups("dock", activeWorktreeId ?? undefined);
+    if (!helpTerminalId) return groups;
+    return groups.filter((g) => !(g.panelIds.length === 1 && g.panelIds[0] === helpTerminalId));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- storeTerminalIds/trashedTerminals are intentional trigger deps
-    [getTabGroups, activeWorktreeId, storeTerminalIds, trashedTerminals]
-  );
+  }, [getTabGroups, activeWorktreeId, storeTerminalIds, trashedTerminals, helpTerminalId]);
 
   const { worktrees } = useWorktrees();
 

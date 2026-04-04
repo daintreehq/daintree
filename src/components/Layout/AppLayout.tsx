@@ -5,6 +5,7 @@ import { TerminalDockRegion } from "./TerminalDockRegion";
 import { DiagnosticsDock } from "../Diagnostics";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { PortalDock, PortalVisibilityController } from "../Portal";
+import { HelpPanel } from "../HelpPanel";
 import { ProjectSwitchOverlay } from "@/components/Project";
 import { ChordIndicator } from "./ChordIndicator";
 import { DemoCursor, DemoOverlay } from "../Demo";
@@ -327,6 +328,18 @@ export function AppLayout({
               <div className="flex-1 overflow-hidden min-h-0">{children}</div>
               {/* Terminal Dock Region - manages dock visibility and overlays */}
               <TerminalDockRegion />
+              {layout.helpPanelOpen && (
+                <ErrorBoundary variant="section" componentName="HelpPanel">
+                  <div
+                    className="absolute top-0 bottom-0 z-40"
+                    style={{
+                      right: layout.portalOpen ? `${layout.portalWidth}px` : "0px",
+                    }}
+                  >
+                    <HelpPanel />
+                  </div>
+                </ErrorBoundary>
+              )}
               {layout.portalOpen && (
                 <ErrorBoundary variant="section" componentName="PortalDock">
                   <div className="absolute right-0 top-0 bottom-0 z-50 shadow-2xl border-l border-canopy-border">

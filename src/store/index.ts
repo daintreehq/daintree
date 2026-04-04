@@ -54,6 +54,13 @@ export { useTerminalInputStore } from "./terminalInputStore";
 
 export { usePortalStore } from "./portalStore";
 
+export { useHelpPanelStore } from "./helpPanelStore";
+export {
+  HELP_PANEL_MIN_WIDTH,
+  HELP_PANEL_MAX_WIDTH,
+  HELP_PANEL_DEFAULT_WIDTH,
+} from "./helpPanelStore";
+
 export { useUIStore } from "./uiStore";
 
 export { usePaletteStore } from "./paletteStore";

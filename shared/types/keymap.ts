@@ -163,6 +163,7 @@ export type BuiltInKeyAction =
   | "help.shortcuts"
   | "help.shortcutsAlt"
   | "help.launchAgent"
+  | "help.togglePanel"
   | "app.settings"
 
   // Voice input
@@ -311,6 +312,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "help.shortcuts",
   "help.shortcutsAlt",
   "help.launchAgent",
+  "help.togglePanel",
   "app.settings",
   "voiceInput.toggle",
   "layout.undo",
