@@ -159,16 +159,20 @@ describe("ScrollShadow", () => {
     expect(inner.className).toContain("p-4");
   });
 
-  it("outer wrapper includes h-full for flex height chain", () => {
+  it("outer wrapper uses flex layout for height chain", () => {
     const { container } = render(
       <ScrollShadow>
         <p>Content</p>
       </ScrollShadow>
     );
     const outer = container.firstElementChild!;
-    expect(outer.className).toContain("h-full");
+    expect(outer.className).toContain("flex");
+    expect(outer.className).toContain("flex-col");
     expect(outer.className).toContain("min-h-0");
     expect(outer.className).toContain("overflow-hidden");
+
+    const inner = outer.querySelector(".overflow-y-auto")!;
+    expect(inner.className).toContain("flex-1");
   });
 
   it("passes through additional div props to inner scrollable div", () => {
