@@ -52,6 +52,7 @@ const createMockProjectClient = () => ({
   locate: vi.fn().mockResolvedValue(null),
   cloneRepo: vi.fn().mockResolvedValue({ success: true }),
   onCloneProgress: vi.fn().mockReturnValue(() => {}),
+  cancelClone: vi.fn().mockResolvedValue(undefined),
   exportRecipeToFile: vi.fn().mockResolvedValue(true),
   importRecipeFromFile: vi.fn().mockResolvedValue(null),
   getInRepoRecipes: vi.fn().mockResolvedValue([]),
