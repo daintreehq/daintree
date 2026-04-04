@@ -28,18 +28,7 @@ help/
 ├── .gemini/settings.json      # Gemini tool allowlist + MCP config
 ├── .codex/config.toml         # Codex sandbox + MCP config
 ├── .gitignore                 # Excludes agent caches, sessions, logs
-├── docs/                      # Bundled documentation (12 files)
-│   ├── getting-started.md     # Onboarding, installation, first project
-│   ├── panels-and-grid.md     # Panel types, grid layout, dock management
-│   ├── agents.md              # Agent support, launching, state detection
-│   ├── worktrees.md           # Git worktree orchestration
-│   ├── keybindings.md         # Full keyboard shortcuts reference
-│   ├── actions.md             # Action system and command palette
-│   ├── context-injection.md   # CopyTree context workflows
-│   ├── recipes.md             # Repeatable multi-agent panel setups
-│   ├── themes.md              # 14 built-in themes, customization
-│   ├── browser-and-devpreview.md  # Embedded browser and dev server preview
-│   ├── workflows.md           # Event-driven automation engine
+├── docs/
 │   └── issue-guidelines.md    # What issues the project accepts/rejects
 └── README.md                  # This file
 ```
@@ -63,7 +52,7 @@ Adding a new agent requires three things:
 All three prompt files (`CLAUDE.md`, `GEMINI.md`, `AGENTS.md`) share the same core instructions with minor formatting differences per agent:
 
 - **Role override:** "You are a Canopy help assistant, NOT a general-purpose coding agent"
-- **Answer workflow:** Search via MCP first, fall back to bundled `docs/`, never fabricate
+- **Answer workflow:** Search via MCP (only documentation source), never fabricate
 - **Tone:** Concise, actionable, grounded in documentation
 - **Scope boundary:** If a question is outside docs, search GitHub issues or offer to file one
 - **GitHub access:** Search/view issues without confirmation; creating issues requires user approval of the draft text and the tool call
@@ -104,28 +93,12 @@ All agents connect to the `canopy-docs` MCP server at `https://canopyide.com/api
 | `get_site_structure` | Hierarchical page tree                                                 |
 | `get_related_pages`  | Find related pages for further reading                                 |
 
-Agents prefer MCP results over bundled `docs/` files since MCP content is more comprehensive and stays up-to-date. The bundled docs serve as a fallback when MCP is unavailable.
+All documentation is served exclusively through MCP — there are no bundled fallback docs.
 
 **MCP config locations:**
 
 - Claude and Codex read from the shared `.mcp.json` in the workspace root
 - Gemini has MCP configured inline in `.gemini/settings.json`
-
-## Bundled Documentation
-
-The `docs/` directory contains 11 markdown files covering all major Canopy features. These are user-facing help documents written for end users, not developer docs. They cover:
-
-- **Getting started** — Installation, first launch, agent detection, project setup
-- **Panels and grid** — 5 panel types (Terminal, Agent, Browser, Notes, Dev Preview), grid layout, dock
-- **Agents** — 5 supported agents (Claude, Gemini, Codex, OpenCode, Cursor), state machine, model selection
-- **Worktrees** — Git worktree sidebar, branch switching, per-worktree agent sessions, git operations
-- **Keybindings** — Full shortcut reference, Standard and Vim keymap presets
-- **Actions** — Typed action system, command palette, action categories and safety levels
-- **Context injection** — CopyTree context generation, injection shortcuts, clipboard workflows
-- **Recipes** — Saveable panel configurations for repeatable multi-agent setups
-- **Themes** — 14 built-in themes (7 dark, 7 light), customization system
-- **Browser and dev preview** — Embedded browser panel, Portal dock, dev server auto-detection
-- **Workflows** — Event-driven automation with triggers, conditions, and automation levels
 
 ## How Canopy Launches Help Agents
 
@@ -133,6 +106,6 @@ The main Canopy app launches help agents by spawning the agent CLI process with 
 
 ## Maintenance
 
-- **Updating docs:** Edit files in `docs/` directly. These are the fallback source — the primary source is the MCP server, so keep the website docs up-to-date as the priority.
+- **Updating docs:** All documentation is served via the `canopy-docs` MCP server — keep the website docs up-to-date. The only file in `docs/` is `issue-guidelines.md`.
 - **Adding an agent:** Create a system prompt file, config file, and `.gitignore` entry following the pattern of existing agents.
 - **Testing:** Run any agent command from this directory and ask it questions about Canopy features to verify it responds correctly and stays in help-assistant mode.

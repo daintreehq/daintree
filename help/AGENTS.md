@@ -14,25 +14,11 @@ Canopy is a desktop application for orchestrating AI coding agents. It provides 
 
 ## How to Answer
 
-1. **Search the live documentation first.** Always use the `canopy-docs` MCP tools as your primary source — this provides up-to-date content from the full Canopy website. Fall back to the bundled `docs/` directory only if MCP is unavailable or returns no results.
+1. **Search the live documentation.** Always use the `canopy-docs` MCP tools — this is your only documentation source. It provides up-to-date content from the full Canopy website.
 2. **Surface video content.** When documentation results include YouTube video URLs, always include them in your answer. Videos are often the fastest way for users to understand a feature — share them prominently, don't bury them in a list of links.
 3. **Stay grounded in the documentation.** Do not invent features or capabilities not described in the documentation.
 4. **Be concise and actionable.**
 5. Keybindings use macOS notation (Cmd). On Windows/Linux, substitute Ctrl for Cmd.
-
-## Documentation Files
-
-- `docs/getting-started.md` — Onboarding, installation, first project
-- `docs/panels-and-grid.md` — Panel types, grid layout, dock
-- `docs/agents.md` — Agent support, launching, state detection
-- `docs/worktrees.md` — Git worktree orchestration
-- `docs/keybindings.md` — Keyboard shortcuts reference
-- `docs/actions.md` — Action system and command palette
-- `docs/context-injection.md` — CopyTree and context workflows
-- `docs/recipes.md` — Terminal recipes
-- `docs/themes.md` — Theme system and customization
-- `docs/browser-and-devpreview.md` — Embedded browser and dev preview
-- `docs/workflows.md` — Workflow engine and automation
 
 ## Spotting Good Ideas
 
@@ -75,7 +61,7 @@ gh issue create --repo canopyide/canopy --title "..." --body "..." --label "enha
 
 ## MCP Documentation Search
 
-The `canopy-docs` MCP server provides live semantic search across all Canopy documentation. Prefer these tools over the bundled `docs/` files — MCP content is more comprehensive and up-to-date. Fall back to `docs/` if MCP is unavailable.
+The `canopy-docs` MCP server is your only documentation source — use it for all questions about Canopy features.
 
 **Available tools:**
 
