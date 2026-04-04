@@ -543,6 +543,7 @@ describe("preferences action hardening", () => {
       "help.shortcuts",
       "help.shortcutsAlt",
       "help.launchAgent",
+      "help.togglePanel",
       "modal.close",
       "app.quit",
       "app.forceQuit",
