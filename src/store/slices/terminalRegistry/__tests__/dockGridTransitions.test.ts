@@ -113,7 +113,6 @@ describe("dock ↔ grid transitions", () => {
       const t = createMockTerminal("t1", "dock");
       t.isVisible = false;
       t.runtimeStatus = "background";
-      t.flowStatus = "idle";
       setTerminals([t]);
 
       const moved = useTerminalStore.getState().moveTerminalToGrid("t1");
