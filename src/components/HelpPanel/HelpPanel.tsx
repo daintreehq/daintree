@@ -222,12 +222,6 @@ export function HelpPanel() {
           <span className="ml-1.5 text-xs font-medium text-canopy-text/70 truncate">
             Canopy Assistant
           </span>
-          {agentConfig && (
-            <span className="ml-auto mr-1 text-xs text-canopy-text/40 shrink-0 flex items-center gap-1">
-              <agentConfig.icon className="w-3 h-3" />
-              {agentConfig.name}
-            </span>
-          )}
         </div>
         <button
           type="button"
@@ -254,6 +248,26 @@ export function HelpPanel() {
           <HelpAgentPicker onSelectAgent={handleSelectAgent} />
         )}
       </div>
+
+      {/* Bottom info bar */}
+      {showTerminal && agentConfig && (
+        <div className="flex items-center justify-between px-3 py-1.5 border-t border-canopy-border shrink-0 text-[11px] text-canopy-text/40">
+          <span className="flex items-center gap-1">
+            Using
+            <agentConfig.icon className="w-3.5 h-3.5" />
+            {agentConfig.name}
+          </span>
+          <a
+            href="https://canopyide.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 hover:text-canopy-text/60 transition-colors"
+          >
+            <CanopyIcon className="w-3.5 h-3.5" />
+            CanopyIDE.com
+          </a>
+        </div>
+      )}
     </div>
   );
 }
