@@ -11,7 +11,6 @@ import {
 } from "@/store/helpPanelStore";
 import { useTerminalStore, getTerminalRefreshTier } from "@/store";
 import { AGENT_REGISTRY } from "@/config/agents";
-import { AGENT_REGISTRY as SHARED_AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { actionService } from "@/services/ActionService";
 import { TerminalRefreshTier } from "@/types";
 import type { TerminalType } from "@/types";
@@ -40,7 +39,6 @@ export function HelpPanel() {
 
   const terminal = useTerminalStore((s) => (terminalId ? s.terminalsById[terminalId] : undefined));
   const removeTerminal = useTerminalStore((s) => s.removeTerminal);
-  const addTerminal = useTerminalStore((s) => s.addTerminal);
 
   const agentConfig = agentId ? AGENT_REGISTRY[agentId] : undefined;
 
@@ -57,7 +55,7 @@ export function HelpPanel() {
   }, []);
 
   // Auto-launch preferred agent when panel opens without an active terminal.
-  // Uses the agent's continueCommand to resume the last session in the help folder.
+  // Always starts a new conversation (never resumes).
   const hasAutoLaunched = useRef(false);
   useEffect(() => {
     if (!isOpen || terminalId || !preferredAgentId || hasAutoLaunched.current) return;
@@ -67,36 +65,16 @@ export function HelpPanel() {
       const folderPath = await window.electron.help.getFolderPath();
       if (!folderPath) return;
 
-      const sharedConfig =
-        SHARED_AGENT_REGISTRY[preferredAgentId as keyof typeof SHARED_AGENT_REGISTRY];
-      const continueCommand = sharedConfig?.help?.continueCommand;
-
-      if (continueCommand) {
-        // Use the continue command to resume last session in this folder
-        const newId = await addTerminal({
-          kind: "agent",
-          type: preferredAgentId as TerminalType,
-          agentId: preferredAgentId,
-          cwd: folderPath,
-          command: continueCommand,
-          location: "dock",
-        });
-        if (newId) {
-          useHelpPanelStore.getState().setTerminal(newId, preferredAgentId);
-        }
-      } else {
-        // Fallback: standard launch with help prompt
-        const result = await actionService.dispatch<{ terminalId: string | null }>(
-          "agent.launch",
-          { agentId: preferredAgentId, location: "dock", cwd: folderPath, prompt: HELP_PROMPT },
-          { source: "user" }
-        );
-        if (result.ok && result.result?.terminalId) {
-          useHelpPanelStore.getState().setTerminal(result.result.terminalId, preferredAgentId);
-        }
+      const result = await actionService.dispatch<{ terminalId: string | null }>(
+        "agent.launch",
+        { agentId: preferredAgentId, location: "dock", cwd: folderPath, prompt: HELP_PROMPT },
+        { source: "user" }
+      );
+      if (result.ok && result.result?.terminalId) {
+        useHelpPanelStore.getState().setTerminal(result.result.terminalId, preferredAgentId);
       }
     })();
-  }, [isOpen, terminalId, preferredAgentId, addTerminal]);
+  }, [isOpen, terminalId, preferredAgentId]);
 
   // Reset auto-launch guard when panel closes
   useEffect(() => {
@@ -240,18 +218,17 @@ export function HelpPanel() {
             <ArrowLeft className="w-3.5 h-3.5" />
           </button>
         )}
-        <div className="flex items-center gap-1.5 min-w-0 flex-1">
-          <CanopyIcon className="w-4 h-4 mr-0.5 text-canopy-text/50 shrink-0" />
-          <span className="text-xs font-medium text-canopy-text/70 truncate">
+        <div className="flex items-center min-w-0 flex-1">
+          <CanopyIcon className="w-4 h-4 text-canopy-text/50 shrink-0" />
+          <span className="ml-1.5 text-xs font-medium text-canopy-text/70 truncate">
             Canopy Assistant
-            {agentConfig && (
-              <span className="text-canopy-text/40">
-                {" — "}
-                <agentConfig.icon className="w-3 h-3 inline-block align-[-0.15em]" />
-                {` ${agentConfig.name}`}
-              </span>
-            )}
           </span>
+          {agentConfig && (
+            <span className="ml-auto mr-1 text-xs text-canopy-text/40 shrink-0 flex items-center gap-1">
+              <agentConfig.icon className="w-3 h-3" />
+              {agentConfig.name}
+            </span>
+          )}
         </div>
         <button
           type="button"

@@ -4,8 +4,6 @@ import type { PrerequisiteSpec } from "../types/ipc/system.js";
 export interface AgentHelpConfig {
   args: string[];
   title?: string;
-  /** Shell command to continue the last session in the help folder, with fallback for first run */
-  continueCommand?: string;
 }
 
 export type AgentInstallOS = "macos" | "windows" | "linux" | "generic";
@@ -370,7 +368,6 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     help: {
       args: [],
-      continueCommand: "claude --continue",
     },
     prerequisites: [
       {
@@ -514,7 +511,6 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     help: {
       args: [],
-      continueCommand: "gemini --resume latest 2>/dev/null || gemini",
     },
     prerequisites: [
       {
@@ -654,7 +650,6 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     help: {
       args: [],
-      continueCommand: "codex resume --last 2>/dev/null || codex",
     },
     prerequisites: [
       {
