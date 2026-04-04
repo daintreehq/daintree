@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const mockGitInstance = {
+const mockGitInstance: Record<string, ReturnType<typeof vi.fn>> = {
   raw: vi.fn(),
   status: vi.fn(),
   diff: vi.fn(),
   add: vi.fn(),
   commit: vi.fn(),
+  env: vi.fn(),
 };
+mockGitInstance.env.mockReturnValue(mockGitInstance);
 
 vi.mock("simple-git", () => ({
   simpleGit: vi.fn(() => mockGitInstance),
@@ -192,25 +194,26 @@ describe("createAuthenticatedGit", () => {
     expect(options.config).toContain("core.hooksPath=");
   });
 
-  it("sets GIT_TERMINAL_PROMPT and GIT_SSH_COMMAND in env", () => {
+  it("sets GIT_TERMINAL_PROMPT and GIT_SSH_COMMAND via .env()", () => {
     createAuthenticatedGit("/test/repo");
 
-    const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(options.env).toMatchObject({
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_SSH_COMMAND: "ssh",
-    });
+    expect(mockGitInstance.env).toHaveBeenCalledWith(
+      expect.objectContaining({
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_SSH_COMMAND: "ssh",
+      })
+    );
   });
 
-  it("spreads process.env into the env option", () => {
+  it("spreads process.env into the .env() call", () => {
     process.env.CANOPY_TEST_SENTINEL = "sentinel_value";
     try {
       createAuthenticatedGit("/test/repo");
 
-      const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(options.env.PATH).toBe(process.env.PATH);
-      expect(options.env.HOME).toBe(process.env.HOME);
-      expect(options.env.CANOPY_TEST_SENTINEL).toBe("sentinel_value");
+      const envArg = mockGitInstance.env.mock.calls[0][0];
+      expect(envArg.PATH).toBe(process.env.PATH);
+      expect(envArg.HOME).toBe(process.env.HOME);
+      expect(envArg.CANOPY_TEST_SENTINEL).toBe("sentinel_value");
     } finally {
       delete process.env.CANOPY_TEST_SENTINEL;
     }
@@ -224,9 +227,9 @@ describe("createAuthenticatedGit", () => {
     try {
       createAuthenticatedGit("/test/repo");
 
-      const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(options.env.GIT_TERMINAL_PROMPT).toBe("0");
-      expect(options.env.GIT_SSH_COMMAND).toBe("ssh");
+      const envArg = mockGitInstance.env.mock.calls[0][0];
+      expect(envArg.GIT_TERMINAL_PROMPT).toBe("0");
+      expect(envArg.GIT_SSH_COMMAND).toBe("ssh");
     } finally {
       if (origPrompt === undefined) delete process.env.GIT_TERMINAL_PROMPT;
       else process.env.GIT_TERMINAL_PROMPT = origPrompt;

@@ -66,11 +66,10 @@ export function createAuthenticatedGit(cwd: string, opts: AuthenticatedGitOption
     timeout: { block: 0 },
     ...(signal ? { abort: signal } : {}),
     ...(progress ? { progress } : {}),
-    env: {
-      ...process.env,
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_SSH_COMMAND: "ssh",
-    },
     unsafe: UNSAFE_FLAGS,
+  }).env({
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_SSH_COMMAND: "ssh",
   });
 }
