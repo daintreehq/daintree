@@ -17,8 +17,7 @@ import type { TerminalType } from "@/types";
 
 const RESIZE_STEP = 10;
 
-const HELP_PROMPT =
-  "I need help with Canopy, an Electron-based IDE for orchestrating AI coding agents. Please briefly tell me how you can help.";
+const HELP_PROMPT = "I need help with Canopy. Please briefly tell me how you can help.";
 
 export function HelpPanel() {
   const panelRef = useRef<HTMLDivElement>(null);
