@@ -3,11 +3,12 @@
  * Collects rapid calls and executes only the final state after delay.
  */
 export function debounce<Args extends unknown[]>(
-  func: (...args: Args) => void,
+  func: (...args: Args) => void | Promise<void>,
   wait: number
 ): ((...args: Args) => void) & { cancel: () => void; flush: () => Promise<void> } {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let lastArgs: Args | null = null;
+  let runningPromise: Promise<void> | null = null;
 
   const debounced = (...args: Args) => {
     lastArgs = args;
@@ -19,9 +20,15 @@ export function debounce<Args extends unknown[]>(
         const args = lastArgs;
         timeoutId = null;
         lastArgs = null;
-        Promise.resolve()
+        const p = Promise.resolve()
           .then(() => func(...args))
-          .catch((err) => console.error("Debounce execution failed:", err));
+          .catch((err) => console.error("Debounce execution failed:", err))
+          .finally(() => {
+            if (runningPromise === p) {
+              runningPromise = null;
+            }
+          });
+        runningPromise = p;
       }
     }, wait);
   };
@@ -40,11 +47,18 @@ export function debounce<Args extends unknown[]>(
       const args = lastArgs;
       timeoutId = null;
       lastArgs = null;
-      try {
-        await func(...args);
-      } catch (err) {
-        console.error("Debounce flush failed:", err);
-      }
+      const p = Promise.resolve()
+        .then(() => func(...args))
+        .catch((err) => console.error("Debounce flush failed:", err))
+        .finally(() => {
+          if (runningPromise === p) {
+            runningPromise = null;
+          }
+        });
+      runningPromise = p;
+      await p;
+    } else if (runningPromise) {
+      await runningPromise;
     }
   };
 

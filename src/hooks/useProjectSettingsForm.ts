@@ -271,12 +271,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     const sanitizedBranchPrefixCustom = branchPrefixCustom.trim();
     const effectivePrefixMode =
       branchPrefixMode === "custom" && !sanitizedBranchPrefixCustom ? "none" : branchPrefixMode;
-    const sanitizedWorktreePathPattern = worktreePathPattern.trim() || undefined;
-    if (sanitizedWorktreePathPattern) {
-      const patternValidation = validatePathPattern(sanitizedWorktreePathPattern);
-      if (!patternValidation.valid) return;
-    }
-
     setProjectAutoSaveError(null);
     try {
       const trimmedName = projectName.trim() || currentProject.name;
@@ -290,6 +284,15 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
           emoji: projectEmoji,
           color: projectColor,
         });
+      }
+
+      const sanitizedWorktreePathPattern = worktreePathPattern.trim() || undefined;
+      if (sanitizedWorktreePathPattern) {
+        const patternValidation = validatePathPattern(sanitizedWorktreePathPattern);
+        if (!patternValidation.valid) {
+          setProjectAutoSaveError("Invalid worktree path pattern — other settings were not saved");
+          return;
+        }
       }
 
       await saveProjectSettings({
@@ -326,7 +329,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
 
   const debouncedProjectSaveRef = useRef(
     debounce(() => {
-      projectPersistRef.current?.();
+      return projectPersistRef.current?.();
     }, 500)
   );
 
