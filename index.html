@@ -57,7 +57,7 @@
         z-index: 9999;
         display: flex;
         flex-direction: column;
-        background: var(--theme-surface-canvas, #19191a);
+        background: var(--theme-surface-grid, #0e0e0d);
         animation: skeleton-safety-fade 10s forwards;
         transition: opacity 250ms ease-out;
       }
@@ -91,7 +91,7 @@
       .skeleton-toolbar {
         height: 48px;
         flex-shrink: 0;
-        background: var(--theme-surface-sidebar, #131312);
+        background: var(--theme-surface-toolbar, #131312);
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
         align-items: center;
@@ -123,7 +123,7 @@
         background: color-mix(
           in oklch,
           var(--theme-surface-sidebar, #131312),
-          var(--theme-text-primary, #e0e0e0) 8%
+          var(--theme-text-primary, #e4e4e7) 8%
         );
       }
       .skel-shape::after {
@@ -138,7 +138,7 @@
           color-mix(
               in oklch,
               var(--theme-surface-sidebar, #131312),
-              var(--theme-text-primary, #e0e0e0) 13%
+              var(--theme-text-primary, #e4e4e7) 13%
             )
             50%,
           transparent 100%
@@ -157,7 +157,7 @@
         background: color-mix(
           in oklch,
           var(--theme-surface-sidebar, #131312),
-          var(--theme-text-primary, #e0e0e0) 6%
+          var(--theme-text-primary, #e4e4e7) 6%
         );
       }
       .skeleton-toolbar .skel-shape::after {
@@ -167,7 +167,7 @@
           color-mix(
               in oklch,
               var(--theme-surface-sidebar, #131312),
-              var(--theme-text-primary, #e0e0e0) 9%
+              var(--theme-text-primary, #e4e4e7) 9%
             )
             50%,
           transparent 100%
@@ -183,7 +183,7 @@
         background: color-mix(
           in oklch,
           var(--theme-surface-sidebar, #131312),
-          var(--theme-text-primary, #e0e0e0) 10%
+          var(--theme-text-primary, #e4e4e7) 10%
         );
       }
 
@@ -217,7 +217,7 @@
         background: color-mix(
           in oklch,
           var(--theme-surface-sidebar, #131312),
-          var(--theme-text-primary, #e0e0e0) 4%
+          var(--theme-text-primary, #e4e4e7) 4%
         );
       }
       .skel-github-stat {
@@ -232,7 +232,7 @@
           color-mix(
             in oklch,
             var(--theme-surface-sidebar, #131312),
-            var(--theme-text-primary, #e0e0e0) 8%
+            var(--theme-text-primary, #e4e4e7) 8%
           );
       }
 
@@ -247,7 +247,7 @@
       .skeleton-dock {
         height: 40px;
         flex-shrink: 0;
-        background: var(--theme-surface-panel, #1e1e1f);
+        background: var(--theme-surface-sidebar, #131312);
         display: flex;
         align-items: center;
         padding: 0 12px;
@@ -266,8 +266,8 @@
         border-radius: 9999px;
         background: color-mix(
           in oklch,
-          var(--theme-surface-panel, #1e1e1f),
-          var(--theme-text-primary, #e0e0e0) 8%
+          var(--theme-surface-sidebar, #131312),
+          var(--theme-text-primary, #e4e4e7) 8%
         );
       }
 
@@ -291,7 +291,7 @@
         background: color-mix(
           in oklch,
           var(--theme-surface-sidebar, #131312),
-          var(--theme-text-primary, #e0e0e0) 5%
+          var(--theme-text-primary, #e4e4e7) 5%
         );
       }
       .skel-search-input::after {
@@ -306,7 +306,7 @@
           color-mix(
               in oklch,
               var(--theme-surface-sidebar, #131312),
-              var(--theme-text-primary, #e0e0e0) 10%
+              var(--theme-text-primary, #e4e4e7) 10%
             )
             50%,
           transparent 100%
@@ -333,7 +333,7 @@
       /* ── Main content area ── */
       .skeleton-main {
         flex: 1;
-        background: var(--theme-surface-canvas, #19191a);
+        background: var(--theme-surface-grid, #0e0e0d);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -357,7 +357,7 @@
         margin-bottom: 24px;
       }
       .skeleton-logo {
-        color: var(--theme-text-primary, #e0e0e0);
+        color: var(--theme-text-primary, #e4e4e7);
         opacity: 0.08;
         animation: skeleton-logo-pulse 2.5s ease-in-out infinite;
         margin-bottom: 16px;
@@ -370,8 +370,8 @@
         border-radius: 6px;
         background: color-mix(
           in oklch,
-          var(--theme-surface-canvas, #19191a),
-          var(--theme-text-primary, #e0e0e0) 8%
+          var(--theme-surface-grid, #0e0e0d),
+          var(--theme-text-primary, #e4e4e7) 8%
         );
       }
       .skeleton-title::after {
@@ -385,8 +385,8 @@
           transparent 0%,
           color-mix(
               in oklch,
-              var(--theme-surface-canvas, #19191a),
-              var(--theme-text-primary, #e0e0e0) 13%
+              var(--theme-surface-grid, #0e0e0d),
+              var(--theme-text-primary, #e4e4e7) 13%
             )
             50%,
           transparent 100%
@@ -409,8 +409,8 @@
         border-radius: var(--radius-md, 8px);
         background: color-mix(
           in oklch,
-          var(--theme-surface-canvas, #19191a),
-          var(--theme-text-primary, #e0e0e0) 5%
+          var(--theme-surface-grid, #0e0e0d),
+          var(--theme-text-primary, #e4e4e7) 5%
         );
         padding: 12px;
         display: flex;
@@ -428,8 +428,8 @@
           transparent 0%,
           color-mix(
               in oklch,
-              var(--theme-surface-canvas, #19191a),
-              var(--theme-text-primary, #e0e0e0) 8%
+              var(--theme-surface-grid, #0e0e0d),
+              var(--theme-text-primary, #e4e4e7) 8%
             )
             50%,
           transparent 100%
@@ -448,8 +448,8 @@
         flex-shrink: 0;
         background: color-mix(
           in oklch,
-          var(--theme-surface-canvas, #19191a),
-          var(--theme-text-primary, #e0e0e0) 10%
+          var(--theme-surface-grid, #0e0e0d),
+          var(--theme-text-primary, #e4e4e7) 10%
         );
       }
       .skel-recipe-name {
@@ -457,8 +457,8 @@
         border-radius: 3px;
         background: color-mix(
           in oklch,
-          var(--theme-surface-canvas, #19191a),
-          var(--theme-text-primary, #e0e0e0) 8%
+          var(--theme-surface-grid, #0e0e0d),
+          var(--theme-text-primary, #e4e4e7) 8%
         );
       }
       .skel-recipe-create {
@@ -479,8 +479,8 @@
         border-radius: var(--radius-lg, 12px);
         background: color-mix(
           in oklch,
-          var(--theme-surface-canvas, #19191a),
-          var(--theme-text-primary, #e0e0e0) 3%
+          var(--theme-surface-grid, #0e0e0d),
+          var(--theme-text-primary, #e4e4e7) 3%
         );
         overflow: hidden;
       }
@@ -514,8 +514,8 @@
         border-radius: 2px;
         background: color-mix(
           in oklch,
-          var(--theme-surface-canvas, #19191a),
-          var(--theme-text-primary, #e0e0e0) 6%
+          var(--theme-surface-grid, #0e0e0d),
+          var(--theme-text-primary, #e4e4e7) 6%
         );
       }
       /* Stats row skeleton */
@@ -536,36 +536,36 @@
       /* ── Light mode overrides ── */
       @media (prefers-color-scheme: light) {
         #startup-skeleton {
-          background: var(--theme-surface-canvas, #f6f4ef);
+          background: var(--theme-surface-grid, #cdd3db);
         }
         .skeleton-toolbar {
-          background: var(--theme-surface-sidebar, #ebe7de);
+          background: var(--theme-surface-toolbar, #d8dee6);
         }
         .skeleton-sidebar {
-          background: var(--theme-surface-sidebar, #ebe7de);
+          background: var(--theme-surface-sidebar, #d8dee6);
         }
         .skeleton-main {
-          background: var(--theme-surface-canvas, #f6f4ef);
+          background: var(--theme-surface-grid, #cdd3db);
         }
         .skel-github-stats {
           background: color-mix(
             in oklch,
-            var(--theme-surface-sidebar, #ebe7de),
-            var(--theme-text-primary, #1a1a1a) 4%
+            var(--theme-surface-sidebar, #d8dee6),
+            var(--theme-text-primary, #1e252e) 4%
           );
         }
         .skel-github-stat + .skel-github-stat {
           border-left-color: color-mix(
             in oklch,
-            var(--theme-surface-sidebar, #ebe7de),
-            var(--theme-text-primary, #1a1a1a) 8%
+            var(--theme-surface-sidebar, #d8dee6),
+            var(--theme-text-primary, #1e252e) 8%
           );
         }
         .skel-shape {
           background: color-mix(
             in oklch,
-            var(--theme-surface-sidebar, #ebe7de),
-            var(--theme-text-primary, #1a1a1a) 6%
+            var(--theme-surface-sidebar, #d8dee6),
+            var(--theme-text-primary, #1e252e) 6%
           );
         }
         .skel-shape::after {
@@ -574,8 +574,8 @@
             transparent 0%,
             color-mix(
                 in oklch,
-                var(--theme-surface-sidebar, #ebe7de),
-                var(--theme-text-primary, #1a1a1a) 10%
+                var(--theme-surface-sidebar, #d8dee6),
+                var(--theme-text-primary, #1e252e) 10%
               )
               50%,
             transparent 100%
@@ -584,8 +584,8 @@
         .skeleton-toolbar .skel-shape {
           background: color-mix(
             in oklch,
-            var(--theme-surface-sidebar, #ebe7de),
-            var(--theme-text-primary, #1a1a1a) 5%
+            var(--theme-surface-sidebar, #d8dee6),
+            var(--theme-text-primary, #1e252e) 5%
           );
         }
         .skeleton-toolbar .skel-shape::after {
@@ -594,8 +594,8 @@
             transparent 0%,
             color-mix(
                 in oklch,
-                var(--theme-surface-sidebar, #ebe7de),
-                var(--theme-text-primary, #1a1a1a) 8%
+                var(--theme-surface-sidebar, #d8dee6),
+                var(--theme-text-primary, #1e252e) 8%
               )
               50%,
             transparent 100%
@@ -604,8 +604,8 @@
         .skel-search-input {
           background: color-mix(
             in oklch,
-            var(--theme-surface-sidebar, #ebe7de),
-            var(--theme-text-primary, #1a1a1a) 4%
+            var(--theme-surface-sidebar, #d8dee6),
+            var(--theme-text-primary, #1e252e) 4%
           );
         }
         .skel-search-input::after {
@@ -614,8 +614,8 @@
             transparent 0%,
             color-mix(
                 in oklch,
-                var(--theme-surface-sidebar, #ebe7de),
-                var(--theme-text-primary, #1a1a1a) 8%
+                var(--theme-surface-sidebar, #d8dee6),
+                var(--theme-text-primary, #1e252e) 8%
               )
               50%,
             transparent 100%
@@ -624,15 +624,15 @@
         .skel-divider {
           background: color-mix(
             in oklch,
-            var(--theme-surface-sidebar, #ebe7de),
-            var(--theme-text-primary, #1a1a1a) 10%
+            var(--theme-surface-sidebar, #d8dee6),
+            var(--theme-text-primary, #1e252e) 10%
           );
         }
         .skeleton-title {
           background: color-mix(
             in oklch,
-            var(--theme-surface-canvas, #f6f4ef),
-            var(--theme-text-primary, #1a1a1a) 6%
+            var(--theme-surface-grid, #cdd3db),
+            var(--theme-text-primary, #1e252e) 6%
           );
         }
         .skeleton-title::after {
@@ -641,8 +641,8 @@
             transparent 0%,
             color-mix(
                 in oklch,
-                var(--theme-surface-canvas, #f6f4ef),
-                var(--theme-text-primary, #1a1a1a) 10%
+                var(--theme-surface-grid, #cdd3db),
+                var(--theme-text-primary, #1e252e) 10%
               )
               50%,
             transparent 100%
@@ -651,8 +651,8 @@
         .skel-recipe {
           background: color-mix(
             in oklch,
-            var(--theme-surface-canvas, #f6f4ef),
-            var(--theme-text-primary, #1a1a1a) 4%
+            var(--theme-surface-grid, #cdd3db),
+            var(--theme-text-primary, #1e252e) 4%
           );
         }
         .skel-recipe::after {
@@ -661,8 +661,8 @@
             transparent 0%,
             color-mix(
                 in oklch,
-                var(--theme-surface-canvas, #f6f4ef),
-                var(--theme-text-primary, #1a1a1a) 6%
+                var(--theme-surface-grid, #cdd3db),
+                var(--theme-text-primary, #1e252e) 6%
               )
               50%,
             transparent 100%
@@ -671,42 +671,42 @@
         .skel-recipe-icon {
           background: color-mix(
             in oklch,
-            var(--theme-surface-canvas, #f6f4ef),
-            var(--theme-text-primary, #1a1a1a) 8%
+            var(--theme-surface-grid, #cdd3db),
+            var(--theme-text-primary, #1e252e) 8%
           );
         }
         .skel-recipe-name {
           background: color-mix(
             in oklch,
-            var(--theme-surface-canvas, #f6f4ef),
-            var(--theme-text-primary, #1a1a1a) 6%
+            var(--theme-surface-grid, #cdd3db),
+            var(--theme-text-primary, #1e252e) 6%
           );
         }
         .skeleton-logo {
-          color: var(--theme-text-primary, #1a1a1a);
+          color: var(--theme-text-primary, #1e252e);
         }
         .skeleton-dock {
-          background: var(--theme-surface-panel, #e8e4db);
+          background: var(--theme-surface-sidebar, #d8dee6);
         }
         .skeleton-dock-help {
           background: color-mix(
             in oklch,
-            var(--theme-surface-panel, #e8e4db),
-            var(--theme-text-primary, #1a1a1a) 7%
+            var(--theme-surface-sidebar, #d8dee6),
+            var(--theme-text-primary, #1e252e) 7%
           );
         }
         .skeleton-pulse {
           background: color-mix(
             in oklch,
-            var(--theme-surface-canvas, #f6f4ef),
-            var(--theme-text-primary, #1a1a1a) 3%
+            var(--theme-surface-grid, #cdd3db),
+            var(--theme-text-primary, #1e252e) 3%
           );
         }
         .skel-heat-cell {
           background: color-mix(
             in oklch,
-            var(--theme-surface-canvas, #f6f4ef),
-            var(--theme-text-primary, #1a1a1a) 5%
+            var(--theme-surface-grid, #cdd3db),
+            var(--theme-text-primary, #1e252e) 5%
           );
         }
       }

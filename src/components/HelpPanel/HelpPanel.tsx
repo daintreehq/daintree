@@ -247,10 +247,7 @@ export function HelpPanel() {
             {agentConfig && (
               <span className="text-canopy-text/40">
                 {" — "}
-                <agentConfig.icon
-                  className="w-3 h-3 inline-block align-[-0.15em]"
-                  brandColor={agentConfig.color}
-                />
+                <agentConfig.icon className="w-3 h-3 inline-block align-[-0.15em]" />
                 {` ${agentConfig.name}`}
               </span>
             )}
