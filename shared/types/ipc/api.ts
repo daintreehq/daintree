@@ -1226,6 +1226,8 @@ export interface ElectronAPI {
   };
   help: {
     getFolderPath(): Promise<string | null>;
+    markTerminal(terminalId: string): Promise<void>;
+    unmarkTerminal(terminalId: string): Promise<void>;
   };
   perf: {
     flushMarks(payload: import("../../perf/marks.js").RendererPerfFlushPayload): void;

@@ -35,6 +35,8 @@ export class AgentAvailabilityStore {
   private agentToTerminal: Map<string, string> = new Map();
   private trashedTerminals: Set<string> = new Set();
   private trashedAgentIds: Set<string> = new Set();
+  private helpTerminalIds: Set<string> = new Set();
+  private helpAgentIds: Set<string> = new Set();
   private unsubscribers: Array<() => void> = [];
 
   constructor() {
@@ -50,6 +52,9 @@ export class AgentAvailabilityStore {
         this.agentToTerminal.set(payload.agentId, payload.terminalId);
         if (this.trashedTerminals.has(payload.terminalId)) {
           this.trashedAgentIds.add(payload.agentId);
+        }
+        if (this.helpTerminalIds.has(payload.terminalId)) {
+          this.helpAgentIds.add(payload.agentId);
         }
       })
     );
@@ -166,6 +171,7 @@ export class AgentAvailabilityStore {
 
     for (const [agentId, state] of this.agentStates) {
       if (this.trashedAgentIds.has(agentId)) continue;
+      if (this.helpAgentIds.has(agentId)) continue;
       agents.push({
         agentId,
         available: isAvailableState(state),
@@ -198,6 +204,29 @@ export class AgentAvailabilityStore {
   }
 
   /**
+   * Mark a terminal (and its associated agent) as a help terminal.
+   * Help terminals are excluded from availability counts and quit warnings.
+   */
+  markAsHelp(terminalId: string): void {
+    this.helpTerminalIds.add(terminalId);
+    const agentId = this.terminalToAgent.get(terminalId);
+    if (agentId) {
+      this.helpAgentIds.add(agentId);
+    }
+  }
+
+  /**
+   * Remove the help terminal mark from a terminal.
+   */
+  unmarkAsHelp(terminalId: string): void {
+    this.helpTerminalIds.delete(terminalId);
+    const agentId = this.terminalToAgent.get(terminalId);
+    if (agentId) {
+      this.helpAgentIds.delete(agentId);
+    }
+  }
+
+  /**
    * Unregister an agent when its terminal is removed.
    */
   unregisterAgent(agentId: string): void {
@@ -208,9 +237,11 @@ export class AgentAvailabilityStore {
     if (terminalId) {
       this.terminalToAgent.delete(terminalId);
       this.trashedTerminals.delete(terminalId);
+      this.helpTerminalIds.delete(terminalId);
       this.agentToTerminal.delete(agentId);
     }
     this.trashedAgentIds.delete(agentId);
+    this.helpAgentIds.delete(agentId);
   }
 
   /**
@@ -225,6 +256,8 @@ export class AgentAvailabilityStore {
     this.agentToTerminal.clear();
     this.trashedTerminals.clear();
     this.trashedAgentIds.clear();
+    this.helpTerminalIds.clear();
+    this.helpAgentIds.clear();
   }
 
   /**

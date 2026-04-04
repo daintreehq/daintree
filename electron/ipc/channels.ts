@@ -418,6 +418,8 @@ export const CHANNELS = {
 
   // Help workspace channels
   HELP_GET_FOLDER_PATH: "help:get-folder-path",
+  HELP_MARK_TERMINAL: "help:mark-terminal",
+  HELP_UNMARK_TERMINAL: "help:unmark-terminal",
 
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
   CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",

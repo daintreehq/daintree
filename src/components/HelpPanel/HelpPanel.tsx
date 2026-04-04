@@ -71,6 +71,7 @@ export function HelpPanel() {
       );
       if (result.ok && result.result?.terminalId) {
         useHelpPanelStore.getState().setTerminal(result.result.terminalId, preferredAgentId);
+        window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
       }
     })();
   }, [isOpen, terminalId, preferredAgentId]);
@@ -156,6 +157,7 @@ export function HelpPanel() {
 
       if (result.ok && result.result?.terminalId) {
         useHelpPanelStore.getState().setTerminal(result.result.terminalId, selectedAgentId);
+        window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
       }
     },
     [terminalId, removeTerminal, clearTerminal]
@@ -169,8 +171,12 @@ export function HelpPanel() {
   }, [terminalId, removeTerminal, clearPreferredAgent]);
 
   const handleClose = useCallback(() => {
+    if (terminalId) {
+      removeTerminal(terminalId);
+      clearTerminal();
+    }
     setOpen(false);
-  }, [setOpen]);
+  }, [terminalId, removeTerminal, clearTerminal, setOpen]);
 
   const getRefreshTier = useMemo(() => {
     return () => {

@@ -825,6 +825,8 @@ const CHANNELS = {
 
   // Help workspace channels
   HELP_GET_FOLDER_PATH: "help:get-folder-path",
+  HELP_MARK_TERMINAL: "help:mark-terminal",
+  HELP_UNMARK_TERMINAL: "help:unmark-terminal",
 
   // Clipboard channels
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
@@ -2654,6 +2656,10 @@ const api: ElectronAPI = {
   // Help workspace API
   help: {
     getFolderPath: () => _unwrappingInvoke(CHANNELS.HELP_GET_FOLDER_PATH),
+    markTerminal: (terminalId: string) =>
+      _unwrappingInvoke(CHANNELS.HELP_MARK_TERMINAL, terminalId),
+    unmarkTerminal: (terminalId: string) =>
+      _unwrappingInvoke(CHANNELS.HELP_UNMARK_TERMINAL, terminalId),
   },
 
   perf: {
