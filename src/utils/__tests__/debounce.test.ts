@@ -91,7 +91,7 @@ describe("debounce", () => {
     const barrier = new Promise<void>((r) => {
       resolve = r;
     });
-    const spy = vi.fn((_arg: string) => barrier);
+    const spy = vi.fn(() => barrier);
 
     const fn = debounce(spy, 0);
     fn();
