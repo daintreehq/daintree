@@ -429,15 +429,19 @@ export function AgentSettings({
                     description="Model used when this agent is launched from the help panel or assistant shortcut"
                     value={(activeEntry.assistantModelId as string) ?? ""}
                     onChange={(e) => {
-                      void updateAgent(activeAgent.id, {
-                        assistantModelId: e.target.value || undefined,
-                      });
-                      onSettingsChange?.();
+                      void (async () => {
+                        await updateAgent(activeAgent.id, {
+                          assistantModelId: e.target.value || undefined,
+                        });
+                        onSettingsChange?.();
+                      })();
                     }}
                     isModified={!!activeEntry.assistantModelId}
                     onReset={() => {
-                      void updateAgent(activeAgent.id, { assistantModelId: undefined });
-                      onSettingsChange?.();
+                      void (async () => {
+                        await updateAgent(activeAgent.id, { assistantModelId: undefined });
+                        onSettingsChange?.();
+                      })();
                     }}
                     resetAriaLabel={`Reset ${activeAgent.name} assistant model to default`}
                   >
