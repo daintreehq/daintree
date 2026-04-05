@@ -216,7 +216,10 @@ const registeredPages = new WeakSet<Page>();
  * (project open, onboarding, empty-grid transition, etc.).
  * If the page hasn't changed, this is a no-op that just confirms readiness.
  */
-export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Page): Promise<Page> {
+export async function refreshActiveWindow(
+  app: ElectronApplication,
+  _oldPage?: Page
+): Promise<Page> {
   const newWindow = await getActiveAppWindow(app);
 
   if (!registeredPages.has(newWindow)) {
