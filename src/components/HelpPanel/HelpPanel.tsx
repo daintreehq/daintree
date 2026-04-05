@@ -49,7 +49,7 @@ export function HelpPanel() {
   const terminal = useTerminalStore((s) => (terminalId ? s.terminalsById[terminalId] : undefined));
   const removeTerminal = useTerminalStore((s) => s.removeTerminal);
 
-  const agentConfig = agentId ? AGENT_REGISTRY[agentId] : undefined;
+  const agentConfig = agentId ? getAgentConfig(agentId) : undefined;
 
   // Clean up help terminal before window unload so it doesn't persist as a dock terminal
   useEffect(() => {
