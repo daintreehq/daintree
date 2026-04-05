@@ -11,11 +11,11 @@ import { terminalPersistence } from "./persistence/terminalPersistence";
 import { useTerminalInputStore } from "./terminalInputStore";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
 
-function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
+function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState | undefined {
   const draftInputs = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
-  return {
-    ...(Object.keys(draftInputs).length > 0 && { draftInputs }),
-  };
+  const hasDrafts = Object.keys(draftInputs).length > 0;
+  if (!hasDrafts) return undefined;
+  return { draftInputs };
 }
 
 interface ProjectState {

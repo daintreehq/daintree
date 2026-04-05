@@ -298,6 +298,20 @@ export async function hydrateAppState(
         })
       : null;
 
+    // Restore hybrid input bar draft inputs BEFORE terminal panels are created,
+    // so HybridInputBar components pick up drafts from the store at mount time.
+    if (currentProjectId) {
+      try {
+        const draftInputs = await draftInputsPromise;
+        if (!checkCurrent()) return;
+        if (Object.keys(draftInputs).length > 0) {
+          useTerminalInputStore.getState().restoreProjectDraftInputs(currentProjectId, draftInputs);
+        }
+      } catch (error) {
+        logWarn("Failed to restore draft inputs", { error });
+      }
+    }
+
     if (currentProjectId) {
       try {
         const backendTerminals = await withRendererSpan(
@@ -854,19 +868,6 @@ export async function hydrateAppState(
     // Restore focus mode from per-project state (hydrate returns per-project focus mode)
     if (options.setFocusMode && appState.focusMode !== undefined) {
       options.setFocusMode(appState.focusMode, appState.focusPanelState);
-    }
-
-    // Restore hybrid input bar draft inputs from per-project state
-    if (currentProjectId) {
-      try {
-        const draftInputs = await draftInputsPromise;
-        if (!checkCurrent()) return;
-        if (Object.keys(draftInputs).length > 0) {
-          useTerminalInputStore.getState().restoreProjectDraftInputs(currentProjectId, draftInputs);
-        }
-      } catch (error) {
-        logWarn("Failed to restore draft inputs", { error });
-      }
     }
 
     // Restore MRU list
