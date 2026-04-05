@@ -39,6 +39,19 @@ import { isNonKeyboardInput } from "./inputUtils";
 
 export { isNonKeyboardInput } from "./inputUtils";
 
+/**
+ * Force a synchronous reflow that triggers xterm.js's IntersectionObserver
+ * re-evaluation without pausing the renderer. Using display:none would set
+ * isIntersecting=false, causing xterm to set _isPaused=true and halt rendering.
+ * Sub-pixel padding jitter keeps the element in the layout tree throughout.
+ */
+function forceXtermReflow(element: HTMLElement): void {
+  const prev = element.style.paddingTop;
+  element.style.paddingTop = "0.01px";
+  void element.offsetHeight;
+  element.style.paddingTop = prev;
+}
+
 function canAutoInitializeTerminalIngest(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -203,14 +216,20 @@ class TerminalInstanceService {
           }
         }
 
-        if (
-          tier === TerminalRefreshTier.FOCUSED ||
-          tier === TerminalRefreshTier.BURST ||
-          tier === TerminalRefreshTier.VISIBLE
-        ) {
-          this.webGLManager.ensureContext(id, managed);
-        } else {
-          this.webGLManager.releaseContext(id);
+        if (managed.kind === "agent") {
+          if (
+            tier === TerminalRefreshTier.FOCUSED ||
+            tier === TerminalRefreshTier.BURST ||
+            tier === TerminalRefreshTier.VISIBLE
+          ) {
+            this.webGLManager.ensureContext(id, managed);
+          } else {
+            const hadWebGL = this.webGLManager.isActive(id);
+            this.webGLManager.releaseContext(id);
+            if (hadWebGL && managed.terminal.rows > 0) {
+              managed.terminal.refresh(0, managed.terminal.rows - 1);
+            }
+          }
         }
       },
     });
@@ -409,13 +428,9 @@ class TerminalInstanceService {
           : TerminalRefreshTier.VISIBLE;
         this.rendererPolicy.applyRendererPolicy(id, tier);
 
-        // Force DOM reflow to trigger xterm.js's IntersectionObserver (see attach() comment).
         const termEl = managed.terminal.element;
         if (termEl) {
-          const origDisplay = termEl.style.display;
-          termEl.style.display = "none";
-          void termEl.offsetHeight;
-          termEl.style.display = origDisplay;
+          forceXtermReflow(termEl);
         }
 
         requestAnimationFrame(() => {
@@ -960,9 +975,10 @@ class TerminalInstanceService {
       managed.isOpened = true;
       logDebug(`[TIS.attach] Opened terminal ${id}`);
       if (
-        managed.lastAppliedTier === TerminalRefreshTier.FOCUSED ||
-        managed.lastAppliedTier === TerminalRefreshTier.BURST ||
-        managed.lastAppliedTier === TerminalRefreshTier.VISIBLE
+        managed.kind === "agent" &&
+        (managed.lastAppliedTier === TerminalRefreshTier.FOCUSED ||
+          managed.lastAppliedTier === TerminalRefreshTier.BURST ||
+          managed.lastAppliedTier === TerminalRefreshTier.VISIBLE)
       ) {
         this.webGLManager.ensureContext(id, managed);
       }
@@ -1022,18 +1038,9 @@ class TerminalInstanceService {
           return;
         }
 
-        // Force DOM reflow to trigger xterm.js's internal IntersectionObserver.
-        // xterm.js pauses rendering (_isPaused=true) when its container is not intersecting.
-        // In Electron's WebContentsView architecture, switching views doesn't reliably fire
-        // the observer, so terminals stay paused and drop all render frames despite receiving
-        // data. Toggling display + reading offsetHeight forces a synchronous reflow that
-        // makes the observer re-evaluate, unpausing the renderer.
         const termEl = managed.terminal.element;
         if (termEl) {
-          const origDisplay = termEl.style.display;
-          termEl.style.display = "none";
-          void termEl.offsetHeight;
-          termEl.style.display = origDisplay;
+          forceXtermReflow(termEl);
         }
 
         const reveal = () => {
