@@ -143,7 +143,7 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
   }));
 
   useEffect(() => {
-    const basename = filePath.split(/[/\\]/).pop() ?? filePath;
+    const basename = filePath.split(/[/\\]/).filter(Boolean).pop() ?? filePath;
     const desc = LanguageDescription.matchFilename(languages, basename);
     if (!desc) {
       setLangExtension(null);

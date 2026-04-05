@@ -614,7 +614,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                           </span>
                           <FileIcon className="w-3 h-3 shrink-0 text-canopy-text/40" />
                           <span className="text-canopy-text/80 truncate min-w-0" title={file.path}>
-                            {file.path.split(/[/\\]/).pop()}
+                            {file.path.split(/[/\\]/).filter(Boolean).pop()}
                           </span>
                           <span className="text-canopy-text/30 truncate min-w-0 text-[10px] ml-auto pl-2">
                             {/[/\\]/.test(file.path)

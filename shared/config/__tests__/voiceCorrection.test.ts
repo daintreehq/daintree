@@ -177,6 +177,23 @@ describe("buildCorrectionSystemPrompt", () => {
     const projectSection = prompt.split("CURRENT PROJECT:")[1]?.split("\n\n")[0] ?? "";
     expect(projectSection).not.toContain("Repository:");
   });
+
+  it("handles trailing separators in project path", () => {
+    const prompt = buildCorrectionSystemPrompt({
+      projectName: "My App",
+      projectPath: "C:\\Users\\dev\\my-repo\\",
+    });
+    expect(prompt).toContain("my-repo");
+    expect(prompt).not.toContain("C:\\Users\\dev\\my-repo\\");
+  });
+
+  it("handles mixed separators in project path", () => {
+    const prompt = buildCorrectionSystemPrompt({
+      projectName: "My App",
+      projectPath: "C:\\Users/dev\\my-repo",
+    });
+    expect(prompt).toContain("my-repo");
+  });
 });
 
 describe("MICRO_CORRECTION_PROMPT", () => {
@@ -270,5 +287,14 @@ describe("buildMicroCorrectionSystemPrompt", () => {
     });
     const projectSection = prompt.split("CURRENT PROJECT:")[1]?.split("\n\n")[0] ?? "";
     expect(projectSection).not.toContain("Repository:");
+  });
+
+  it("handles trailing separators in project path", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({
+      projectName: "My App",
+      projectPath: "/Users/dev/my-repo/",
+    });
+    expect(prompt).toContain("my-repo");
+    expect(prompt).not.toContain("/Users/dev/my-repo/");
   });
 });

@@ -201,7 +201,7 @@ export function FileViewerModal({
     }
   }, [hasDiff, diff]);
 
-  const fileName = filePath.split(/[/\\]/).pop() || filePath;
+  const fileName = filePath.split(/[/\\]/).filter(Boolean).pop() || filePath;
 
   // Compute relative path by stripping rootPath prefix; guard against empty root
   const displayRoot = rootPath ? (rootPath.endsWith("/") ? rootPath : rootPath + "/") : null;

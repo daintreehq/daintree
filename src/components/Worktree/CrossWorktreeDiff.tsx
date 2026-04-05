@@ -234,7 +234,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                   </span>
                   <FileIcon className="w-3 h-3 shrink-0 text-text-muted" />
                   <span className="text-text-secondary truncate min-w-0" title={file.path}>
-                    {file.path.split(/[/\\]/).pop()}
+                    {file.path.split(/[/\\]/).filter(Boolean).pop()}
                   </span>
                 </button>
               );
