@@ -35,12 +35,14 @@ function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
     typeof terminal.initialPrompt === "string"
       ? terminal.initialPrompt.replace(/\r\n/g, "\n").trimEnd() || undefined
       : undefined;
+  const args = isAgent ? terminal.args?.trim() || undefined : undefined;
 
   return {
     ...terminal,
     command: isAgent ? undefined : command,
     initialPrompt: isAgent ? initialPrompt : undefined,
     devCommand: terminal.type === "dev-preview" ? devCommand : undefined,
+    args,
   };
 }
 
@@ -534,6 +536,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           command = generateAgentCommand(baseCommand, entry, terminal.type, {
             initialPrompt,
             clipboardDirectory,
+            recipeArgs: terminal.args?.trim() || undefined,
           });
         }
 
@@ -622,6 +625,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           // eslint-disable-next-line no-control-regex
           if (/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(terminal.initialPrompt)) return false;
         }
+        if (terminal.args !== undefined) {
+          if (typeof terminal.args !== "string") return false;
+          // eslint-disable-next-line no-control-regex
+          if (/[\r\n\x00-\x1F]/.test(terminal.args)) return false;
+        }
         if (terminal.devCommand !== undefined) {
           if (typeof terminal.devCommand !== "string") return false;
           // eslint-disable-next-line no-control-regex
@@ -665,6 +673,12 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         devCommand:
           terminal.type === "dev-preview" && typeof terminal.devCommand === "string"
             ? terminal.devCommand.trim() || undefined
+            : undefined,
+        args:
+          terminal.type !== "terminal" &&
+          terminal.type !== "dev-preview" &&
+          typeof terminal.args === "string"
+            ? terminal.args.trim() || undefined
             : undefined,
         exitBehavior:
           terminal.exitBehavior && ALLOWED_EXIT_BEHAVIORS.includes(terminal.exitBehavior as string)

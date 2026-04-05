@@ -175,6 +175,8 @@ export interface RecipeTerminal {
   env?: Record<string, string>;
   /** Initial prompt to send to agent terminals after boot (optional). Supports {{issue_number}}, {{pr_number}}, {{worktree_path}}, {{branch_name}} variables replaced at runtime. */
   initialPrompt?: string;
+  /** Additional CLI arguments for agent terminals (e.g., "--model sonnet"). Whitespace-separated; applied at spawn time only. */
+  args?: string;
   /** Dev server command for dev-preview terminals (optional). Falls back to project devServerCommand if not set. */
   devCommand?: string;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely (optional, defaults to "keep") */

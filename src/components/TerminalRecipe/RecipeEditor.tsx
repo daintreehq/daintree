@@ -34,6 +34,7 @@ function serializeEditorState(
       title: t.title ?? "",
       command: t.command ?? "",
       initialPrompt: t.initialPrompt ?? "",
+      args: t.args ?? "",
       devCommand: t.devCommand ?? "",
       exitBehavior: normalizeExitBehavior(t),
       env: Object.fromEntries(Object.entries(t.env ?? {}).sort(([a], [b]) => a.localeCompare(b))),
@@ -371,11 +372,15 @@ export function RecipeEditor({
                             type: newType,
                             // Clear command when switching between types so the new type uses its default
                             command: newType === prevType ? updated[index].command : "",
-                            // Clear initialPrompt when switching to terminal or dev-preview
+                            // Clear initialPrompt and args when switching to terminal or dev-preview
                             initialPrompt:
                               newType === "terminal" || newType === "dev-preview"
                                 ? ""
                                 : updated[index].initialPrompt,
+                            args:
+                              newType === "terminal" || newType === "dev-preview"
+                                ? ""
+                                : updated[index].args,
                             // Clear devCommand when switching away from dev-preview
                             devCommand: newType !== "dev-preview" ? "" : updated[index].devCommand,
                           };
@@ -475,6 +480,29 @@ export function RecipeEditor({
 
                 {terminal.type !== "terminal" && terminal.type !== "dev-preview" && (
                   <>
+                    <div className="mt-2">
+                      <label
+                        htmlFor={`terminal-args-${index}`}
+                        className="block text-xs font-medium text-canopy-text mb-1"
+                      >
+                        Arguments (optional)
+                      </label>
+                      <input
+                        id={`terminal-args-${index}`}
+                        type="text"
+                        value={terminal.args || ""}
+                        onChange={(e) => handleTerminalChange(index, "args", e.target.value)}
+                        placeholder="e.g., --model claude-opus-4-5"
+                        aria-describedby={`terminal-args-help-${index}`}
+                        className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                      />
+                      <p
+                        id={`terminal-args-help-${index}`}
+                        className="text-xs text-text-muted mt-1 select-text"
+                      >
+                        Additional CLI arguments passed to the agent at launch
+                      </p>
+                    </div>
                     <div className="mt-2">
                       <label
                         htmlFor={`terminal-initial-prompt-${index}`}
