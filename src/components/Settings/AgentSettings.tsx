@@ -17,6 +17,7 @@ import { RotateCcw, ExternalLink, RefreshCw, Copy, Check } from "lucide-react";
 import { CanopyAgentIcon } from "@/components/icons";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { SettingsSelect } from "./SettingsSelect";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { AgentHelpOutput } from "./AgentHelpOutput";
@@ -416,6 +417,40 @@ export function AgentSettings({
                 />
               </div>
             )}
+
+            {/* Assistant Model Picker - only for agents with multiple models */}
+            {(() => {
+              const agentCfg = getAgentConfig(activeAgent.id);
+              if (!agentCfg?.models || agentCfg.models.length <= 1) return null;
+              return (
+                <div id="agents-assistant-model">
+                  <SettingsSelect
+                    label="Assistant Model"
+                    description="Model used when this agent is launched from the help panel or assistant shortcut"
+                    value={(activeEntry.assistantModelId as string) ?? ""}
+                    onChange={(e) => {
+                      void updateAgent(activeAgent.id, {
+                        assistantModelId: e.target.value || undefined,
+                      });
+                      onSettingsChange?.();
+                    }}
+                    isModified={!!activeEntry.assistantModelId}
+                    onReset={() => {
+                      void updateAgent(activeAgent.id, { assistantModelId: undefined });
+                      onSettingsChange?.();
+                    }}
+                    resetAriaLabel={`Reset ${activeAgent.name} assistant model to default`}
+                  >
+                    <option value="">Default (fast model)</option>
+                    {agentCfg.models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </SettingsSelect>
+                </div>
+              );
+            })()}
 
             {/* Custom Arguments */}
             <div id="agents-custom-args" className="space-y-2 pt-2 border-t border-canopy-border">

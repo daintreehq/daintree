@@ -13,6 +13,7 @@ import { keybindingService } from "@/services/KeybindingService";
 import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { getAgentSettingsEntry } from "@shared/types";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -641,13 +642,24 @@ export function registerPreferencesActions(
         agentId = resolved ?? "claude";
       }
 
+      // Resolve assistant model override from agent settings
+      const agentSettings = useAgentSettingsStore.getState().settings;
+      const agentEntry = getAgentSettingsEntry(agentSettings, agentId);
+      const storedModel = agentEntry.assistantModelId as string | undefined;
+      const { getEffectiveAgentConfig } = await import("@shared/config/agentRegistry");
+      const agentCfg = getEffectiveAgentConfig(agentId);
+      const model =
+        storedModel && agentCfg?.models?.some((m) => m.id === storedModel)
+          ? storedModel
+          : undefined;
+
       const helpPrompt =
         "I need help with Canopy, an Electron-based IDE for orchestrating AI coding agents. Please briefly tell me how you can help.";
 
       const { actionService } = await import("@/services/ActionService");
       const result = await actionService.dispatch<{ terminalId: string | null }>(
         "agent.launch",
-        { agentId, cwd: folderPath, location: "dock", prompt: helpPrompt },
+        { agentId, cwd: folderPath, location: "dock", prompt: helpPrompt, ...(model && { model }) },
         { source: "user" }
       );
 

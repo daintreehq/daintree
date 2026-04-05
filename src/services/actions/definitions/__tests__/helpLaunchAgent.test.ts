@@ -21,6 +21,20 @@ vi.mock("@/store/cliAvailabilityStore", () => ({
   useCliAvailabilityStore: { getState: () => mockGetCliAvailabilityState() },
 }));
 
+const mockGetAgentSettingsState = vi.fn();
+vi.mock("@/store/agentSettingsStore", () => ({
+  useAgentSettingsStore: { getState: () => mockGetAgentSettingsState() },
+}));
+
+const mockGetEffectiveAgentConfig = vi.fn();
+vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@shared/config/agentRegistry")>();
+  return {
+    ...actual,
+    getEffectiveAgentConfig: (...args: unknown[]) => mockGetEffectiveAgentConfig(...args),
+  };
+});
+
 import { registerPreferencesActions } from "../preferencesActions";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 import type { ActionContext, ActionDefinition } from "@shared/types/actions";
@@ -55,6 +69,36 @@ describe("help.launchAgent", () => {
     mockGetCliAvailabilityState.mockReturnValue({
       availability: allAvailability(),
       isInitialized: true,
+    });
+    mockGetAgentSettingsState.mockReturnValue({
+      settings: { agents: {} },
+    });
+    mockGetEffectiveAgentConfig.mockImplementation((agentId: string) => {
+      const configs: Record<
+        string,
+        { models?: { id: string; name: string; shortLabel: string }[] }
+      > = {
+        claude: {
+          models: [
+            { id: "claude-sonnet-4-6", name: "Sonnet 4.6", shortLabel: "Sonnet" },
+            { id: "claude-opus-4-6", name: "Opus 4.6", shortLabel: "Opus" },
+            { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", shortLabel: "Haiku" },
+          ],
+        },
+        gemini: {
+          models: [
+            { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", shortLabel: "2.5 Pro" },
+            { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash", shortLabel: "2.5 Flash" },
+          ],
+        },
+        codex: {
+          models: [
+            { id: "gpt-5.4", name: "GPT-5.4", shortLabel: "GPT-5.4" },
+            { id: "o3", name: "o3", shortLabel: "o3" },
+          ],
+        },
+      };
+      return configs[agentId];
     });
     Object.defineProperty(globalThis, "window", {
       value: {
@@ -205,5 +249,50 @@ describe("help.launchAgent", () => {
     expect(action.kind).toBe("command");
     expect(action.danger).toBe("safe");
     expect(action.scope).toBe("renderer");
+  });
+
+  it("passes assistantModelId from settings to agent.launch when valid", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetAgentSettingsState.mockReturnValue({
+      settings: { agents: { claude: { assistantModelId: "claude-opus-4-6" } } },
+    });
+
+    await action.run(undefined, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "claude", model: "claude-opus-4-6" }),
+      { source: "user" }
+    );
+  });
+
+  it("omits model when stored assistantModelId is not in agent's model list", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetAgentSettingsState.mockReturnValue({
+      settings: { agents: { claude: { assistantModelId: "stale-model-id" } } },
+    });
+
+    await action.run(undefined, stubCtx);
+
+    const dispatchArgs = mockDispatch.mock.calls[0][1];
+    expect(dispatchArgs).not.toHaveProperty("model");
+  });
+
+  it("omits model when no assistantModelId is stored", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetAgentSettingsState.mockReturnValue({
+      settings: { agents: { claude: {} } },
+    });
+
+    await action.run(undefined, stubCtx);
+
+    const dispatchArgs = mockDispatch.mock.calls[0][1];
+    expect(dispatchArgs).not.toHaveProperty("model");
   });
 });

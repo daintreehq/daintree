@@ -9,8 +9,9 @@ import {
   HELP_PANEL_MIN_WIDTH,
   HELP_PANEL_MAX_WIDTH,
 } from "@/store/helpPanelStore";
-import { useTerminalStore, getTerminalRefreshTier } from "@/store";
+import { useTerminalStore, getTerminalRefreshTier, useAgentSettingsStore } from "@/store";
 import { AGENT_REGISTRY } from "@/config/agents";
+import { getAgentSettingsEntry } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { TerminalRefreshTier } from "@/types";
 import type { TerminalType } from "@/types";
@@ -18,6 +19,15 @@ import type { TerminalType } from "@/types";
 const RESIZE_STEP = 10;
 
 const HELP_PROMPT = "I need help with Canopy. Please briefly tell me how you can help.";
+
+function resolveAssistantModel(agentId: string): string | undefined {
+  const settings = useAgentSettingsStore.getState().settings;
+  const entry = getAgentSettingsEntry(settings, agentId);
+  const stored = entry.assistantModelId as string | undefined;
+  if (!stored) return undefined;
+  const cfg = AGENT_REGISTRY[agentId];
+  return cfg?.models?.some((m) => m.id === stored) ? stored : undefined;
+}
 
 export function HelpPanel() {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -64,9 +74,16 @@ export function HelpPanel() {
       const folderPath = await window.electron.help.getFolderPath();
       if (!folderPath) return;
 
+      const model = resolveAssistantModel(preferredAgentId);
       const result = await actionService.dispatch<{ terminalId: string | null }>(
         "agent.launch",
-        { agentId: preferredAgentId, location: "dock", cwd: folderPath, prompt: HELP_PROMPT },
+        {
+          agentId: preferredAgentId,
+          location: "dock",
+          cwd: folderPath,
+          prompt: HELP_PROMPT,
+          ...(model && { model }),
+        },
         { source: "user" }
       );
       if (result.ok && result.result?.terminalId) {
@@ -149,9 +166,16 @@ export function HelpPanel() {
       const folderPath = await window.electron.help.getFolderPath();
       if (!folderPath) return;
 
+      const model = resolveAssistantModel(selectedAgentId);
       const result = await actionService.dispatch<{ terminalId: string | null }>(
         "agent.launch",
-        { agentId: selectedAgentId, location: "dock", cwd: folderPath, prompt: HELP_PROMPT },
+        {
+          agentId: selectedAgentId,
+          location: "dock",
+          cwd: folderPath,
+          prompt: HELP_PROMPT,
+          ...(model && { model }),
+        },
         { source: "user" }
       );
 

@@ -85,6 +85,8 @@ export interface AgentSettingsEntry {
   inlineMode?: boolean;
   /** When true, inject --include-directories for the clipboard temp directory (Gemini only) */
   shareClipboardDirectory?: boolean;
+  /** Override the default model for this agent in assistant/help contexts (e.g., "claude-opus-4-6") */
+  assistantModelId?: string;
   [key: string]: unknown;
 }
 
