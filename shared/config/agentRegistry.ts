@@ -572,6 +572,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     models: [
       { id: "gpt-5.4", name: "GPT-5.4", shortLabel: "GPT-5.4" },
       { id: "o3", name: "o3", shortLabel: "o3" },
+      { id: "gpt-5.3-codex-spark", name: "Codex Spark", shortLabel: "Spark" },
     ],
     contextWindow: 128_000,
     capabilities: {
@@ -991,6 +992,16 @@ export function getAgentModelConfig(
   const config = getEffectiveAgentConfig(agentId);
   return config?.models?.find((m) => m.id === modelId);
 }
+
+/**
+ * Default fast/cost-efficient model IDs for the assistant (HelpPanel) use case.
+ * Used as fallback when no user-configured assistantModelId is stored.
+ */
+export const ASSISTANT_FAST_MODELS: Record<string, string> = {
+  claude: "claude-sonnet-4-6",
+  gemini: "gemini-2.5-flash",
+  codex: "gpt-5.3-codex-spark",
+};
 
 export function getAgentDisplayTitle(agentId: string, modelId?: string): string {
   const config = getEffectiveAgentConfig(agentId);

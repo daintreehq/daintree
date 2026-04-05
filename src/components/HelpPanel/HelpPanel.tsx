@@ -12,6 +12,7 @@ import {
 import { useTerminalStore, getTerminalRefreshTier, useAgentSettingsStore } from "@/store";
 import { getAgentConfig } from "@/config/agents";
 import { getAgentSettingsEntry } from "@shared/types";
+import { ASSISTANT_FAST_MODELS } from "@shared/config/agentRegistry";
 import { actionService } from "@/services/ActionService";
 import { TerminalRefreshTier } from "@/types";
 import type { TerminalType } from "@/types";
@@ -24,9 +25,11 @@ function resolveAssistantModel(agentId: string): string | undefined {
   const settings = useAgentSettingsStore.getState().settings;
   const entry = getAgentSettingsEntry(settings, agentId);
   const stored = entry.assistantModelId as string | undefined;
-  if (!stored) return undefined;
   const cfg = getAgentConfig(agentId);
-  return cfg?.models?.some((m) => m.id === stored) ? stored : undefined;
+  if (stored && cfg?.models?.some((m) => m.id === stored)) return stored;
+  const fast = ASSISTANT_FAST_MODELS[agentId];
+  if (fast && cfg?.models?.some((m) => m.id === fast)) return fast;
+  return undefined;
 }
 
 export function HelpPanel() {

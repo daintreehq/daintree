@@ -646,12 +646,16 @@ export function registerPreferencesActions(
       const agentSettings = useAgentSettingsStore.getState().settings;
       const agentEntry = getAgentSettingsEntry(agentSettings, agentId);
       const storedModel = agentEntry.assistantModelId as string | undefined;
-      const { getEffectiveAgentConfig } = await import("@shared/config/agentRegistry");
+      const { getEffectiveAgentConfig, ASSISTANT_FAST_MODELS } =
+        await import("@shared/config/agentRegistry");
       const agentCfg = getEffectiveAgentConfig(agentId);
-      const model =
-        storedModel && agentCfg?.models?.some((m) => m.id === storedModel)
-          ? storedModel
-          : undefined;
+      let model: string | undefined;
+      if (storedModel && agentCfg?.models?.some((m) => m.id === storedModel)) {
+        model = storedModel;
+      } else {
+        const fast = ASSISTANT_FAST_MODELS[agentId];
+        model = fast && agentCfg?.models?.some((m) => m.id === fast) ? fast : undefined;
+      }
 
       const helpPrompt =
         "I need help with Canopy, an Electron-based IDE for orchestrating AI coding agents. Please briefly tell me how you can help.";

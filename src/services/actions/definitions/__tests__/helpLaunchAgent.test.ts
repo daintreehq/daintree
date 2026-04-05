@@ -95,6 +95,7 @@ describe("help.launchAgent", () => {
           models: [
             { id: "gpt-5.4", name: "GPT-5.4", shortLabel: "GPT-5.4" },
             { id: "o3", name: "o3", shortLabel: "o3" },
+            { id: "gpt-5.3-codex-spark", name: "Codex Spark", shortLabel: "Spark" },
           ],
         },
       };
@@ -268,7 +269,7 @@ describe("help.launchAgent", () => {
     );
   });
 
-  it("omits model when stored assistantModelId is not in agent's model list", async () => {
+  it("falls back to fast model when stored assistantModelId is not in agent's model list", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
@@ -278,11 +279,14 @@ describe("help.launchAgent", () => {
 
     await action.run(undefined, stubCtx);
 
-    const dispatchArgs = mockDispatch.mock.calls[0][1];
-    expect(dispatchArgs).not.toHaveProperty("model");
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ model: "claude-sonnet-4-6" }),
+      { source: "user" }
+    );
   });
 
-  it("omits model when no assistantModelId is stored", async () => {
+  it("uses fast model default when no assistantModelId is stored", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
@@ -292,7 +296,61 @@ describe("help.launchAgent", () => {
 
     await action.run(undefined, stubCtx);
 
-    const dispatchArgs = mockDispatch.mock.calls[0][1];
-    expect(dispatchArgs).not.toHaveProperty("model");
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ model: "claude-sonnet-4-6" }),
+      { source: "user" }
+    );
+  });
+
+  it("uses gemini fast model default when launching gemini with no override", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetAgentSettingsState.mockReturnValue({
+      settings: { agents: {} },
+    });
+
+    await action.run({ agentId: "gemini" }, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "gemini", model: "gemini-2.5-flash" }),
+      { source: "user" }
+    );
+  });
+
+  it("uses codex fast model default when launching codex with no override", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetAgentSettingsState.mockReturnValue({
+      settings: { agents: {} },
+    });
+
+    await action.run({ agentId: "codex" }, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "codex", model: "gpt-5.3-codex-spark" }),
+      { source: "user" }
+    );
+  });
+
+  it("user-stored assistantModelId takes precedence over fast default", async () => {
+    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
+      "/mock/help"
+    );
+    mockGetAgentSettingsState.mockReturnValue({
+      settings: { agents: { gemini: { assistantModelId: "gemini-2.5-pro" } } },
+    });
+
+    await action.run({ agentId: "gemini" }, stubCtx);
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({ agentId: "gemini", model: "gemini-2.5-pro" }),
+      { source: "user" }
+    );
   });
 });

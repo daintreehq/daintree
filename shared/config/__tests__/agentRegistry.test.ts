@@ -11,6 +11,7 @@ import {
   isUserDefinedAgent,
   getAgentModelConfig,
   getAgentDisplayTitle,
+  ASSISTANT_FAST_MODELS,
   type AgentConfig,
 } from "../agentRegistry.js";
 import {
@@ -441,6 +442,7 @@ describe("model configuration", () => {
     expect(config!.models!.length).toBeGreaterThanOrEqual(1);
     const modelIds = config!.models!.map((m) => m.id);
     expect(modelIds).toContain("gpt-5.4");
+    expect(modelIds).toContain("gpt-5.3-codex-spark");
   });
 
   it("each model has id, name, and shortLabel", () => {
@@ -742,6 +744,22 @@ describe("all built-in agents have Windows or generic install", () => {
       expect(hasWindows || hasGeneric).toBe(true);
     }
   );
+});
+
+describe("ASSISTANT_FAST_MODELS", () => {
+  it("has entries for claude, gemini, and codex", () => {
+    expect(ASSISTANT_FAST_MODELS).toHaveProperty("claude");
+    expect(ASSISTANT_FAST_MODELS).toHaveProperty("gemini");
+    expect(ASSISTANT_FAST_MODELS).toHaveProperty("codex");
+  });
+
+  it("each fast model ID exists in the agent's models array", () => {
+    for (const [agentId, modelId] of Object.entries(ASSISTANT_FAST_MODELS)) {
+      const config = getAgentConfig(agentId);
+      const modelIds = config?.models?.map((m) => m.id) ?? [];
+      expect(modelIds).toContain(modelId);
+    }
+  });
 });
 
 describe("opencode detection patterns", () => {
