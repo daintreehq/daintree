@@ -635,6 +635,8 @@ const CHANNELS = {
   PROJECT_SET_TERMINALS: "project:set-terminals",
   PROJECT_GET_TERMINAL_SIZES: "project:get-terminal-sizes",
   PROJECT_SET_TERMINAL_SIZES: "project:set-terminal-sizes",
+  PROJECT_GET_DRAFT_INPUTS: "project:get-draft-inputs",
+  PROJECT_SET_DRAFT_INPUTS: "project:set-draft-inputs",
   PROJECT_GET_TAB_GROUPS: "project:get-tab-groups",
   PROJECT_SET_TAB_GROUPS: "project:set-tab-groups",
   PROJECT_GET_FOCUS_MODE: "project:get-focus-mode",
