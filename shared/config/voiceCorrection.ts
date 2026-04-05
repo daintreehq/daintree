@@ -149,7 +149,8 @@ export function buildCorrectionSystemPrompt(context: CorrectionPromptContext): s
       projectParts.push(`Project: ${context.projectName}`);
     }
     if (context.projectPath) {
-      const dirName = context.projectPath.split(/[/\\]/).filter(Boolean).pop() || context.projectPath;
+      const dirName =
+        context.projectPath.split(/[/\\]/).filter(Boolean).pop() || context.projectPath;
       if (dirName !== context.projectName) {
         projectParts.push(`Repository: ${dirName}`);
       }
@@ -185,7 +186,8 @@ export function buildMicroCorrectionSystemPrompt(context: CorrectionPromptContex
       projectParts.push(`Project: ${context.projectName}`);
     }
     if (context.projectPath) {
-      const dirName = context.projectPath.split(/[/\\]/).filter(Boolean).pop() || context.projectPath;
+      const dirName =
+        context.projectPath.split(/[/\\]/).filter(Boolean).pop() || context.projectPath;
       if (dirName !== context.projectName) {
         projectParts.push(`Repository: ${dirName}`);
       }

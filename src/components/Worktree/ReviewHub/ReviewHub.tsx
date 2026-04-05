@@ -618,7 +618,10 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                           </span>
                           <span className="text-canopy-text/30 truncate min-w-0 text-[10px] ml-auto pl-2">
                             {/[/\\]/.test(file.path)
-                              ? file.path.substring(0, Math.max(file.path.lastIndexOf("/"), file.path.lastIndexOf("\\")))
+                              ? file.path.substring(
+                                  0,
+                                  Math.max(file.path.lastIndexOf("/"), file.path.lastIndexOf("\\"))
+                                )
                               : ""}
                           </span>
                         </button>
