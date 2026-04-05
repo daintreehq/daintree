@@ -10,7 +10,7 @@ import {
   HELP_PANEL_MAX_WIDTH,
 } from "@/store/helpPanelStore";
 import { useTerminalStore, getTerminalRefreshTier, useAgentSettingsStore } from "@/store";
-import { AGENT_REGISTRY } from "@/config/agents";
+import { getAgentConfig } from "@/config/agents";
 import { getAgentSettingsEntry } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { TerminalRefreshTier } from "@/types";
@@ -25,7 +25,7 @@ function resolveAssistantModel(agentId: string): string | undefined {
   const entry = getAgentSettingsEntry(settings, agentId);
   const stored = entry.assistantModelId as string | undefined;
   if (!stored) return undefined;
-  const cfg = AGENT_REGISTRY[agentId];
+  const cfg = getAgentConfig(agentId);
   return cfg?.models?.some((m) => m.id === stored) ? stored : undefined;
 }
 
