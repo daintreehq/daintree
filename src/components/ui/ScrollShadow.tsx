@@ -47,11 +47,11 @@ export const ScrollShadow = forwardRef<HTMLDivElement, ScrollShadowProps>(
     const { canScrollUp, canScrollDown } = useVerticalScrollShadows(internalRef);
 
     return (
-      <div className={cn("relative overflow-hidden min-h-0 h-full", className)}>
+      <div className={cn("relative overflow-hidden min-h-0 flex flex-col", className)}>
         {canScrollUp && TOP_SHADOW}
         <div
           ref={mergeRefs(internalRef, forwardedRef)}
-          className={cn("h-full overflow-y-auto", scrollClassName)}
+          className={cn("flex-1 overflow-y-auto", scrollClassName)}
           {...rest}
         >
           {children}
