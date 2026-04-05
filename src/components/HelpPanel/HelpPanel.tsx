@@ -54,16 +54,20 @@ export function HelpPanel() {
 
   const agentConfig = agentId ? getAgentConfig(agentId) : undefined;
 
-  // Clean up help terminal before window unload so it doesn't persist as a dock terminal
+  // Clean up help terminal when the view becomes hidden (project switch, window close).
+  // In Electron 41, beforeunload does not fire on WebContentsView detach, but
+  // visibilitychange does — this covers both project switches and window unload.
   useEffect(() => {
     const handler = () => {
+      if (!document.hidden) return;
       const { terminalId: tid } = useHelpPanelStore.getState();
       if (tid) {
         useTerminalStore.getState().removeTerminal(tid);
+        useHelpPanelStore.getState().clearTerminal();
       }
     };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
+    document.addEventListener("visibilitychange", handler);
+    return () => document.removeEventListener("visibilitychange", handler);
   }, []);
 
   // Auto-launch preferred agent when panel opens without an active terminal.
@@ -90,6 +94,7 @@ export function HelpPanel() {
         { source: "user" }
       );
       if (result.ok && result.result?.terminalId) {
+        if (document.hidden) return;
         useHelpPanelStore.getState().setTerminal(result.result.terminalId, preferredAgentId);
         window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
       }

@@ -216,6 +216,13 @@ export class AgentAvailabilityStore {
   }
 
   /**
+   * Check if a terminal is marked as a help terminal.
+   */
+  isHelpTerminal(terminalId: string): boolean {
+    return this.helpTerminalIds.has(terminalId);
+  }
+
+  /**
    * Remove the help terminal mark from a terminal.
    */
   unmarkAsHelp(terminalId: string): void {
