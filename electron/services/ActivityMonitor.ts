@@ -74,10 +74,11 @@ export interface ActivityMonitorOptions {
   workingRecoveryDelayMs?: number;
   pollingMaxBootMs?: number;
   maxWorkingSilenceMs?: number;
+  maxCpuHighEscapeMs?: number;
 }
 
 export interface ActivityStateMetadata {
-  trigger: "input" | "output" | "pattern" | "timeout";
+  trigger: "input" | "output" | "pattern" | "timeout" | "dispose";
   patternConfidence?: number;
   waitingReason?: WaitingReason;
   sessionCost?: number;
@@ -98,9 +99,12 @@ export class ActivityMonitor {
   private readonly COMPLETION_HOLD_MS = 500;
   private readonly WORKING_INDICATOR_TTL_MS = 5000;
   private readonly MAX_WORKING_SILENCE_MS: number;
+  private readonly MAX_CPU_HIGH_ESCAPE_MS: number;
   private readonly CPU_HIGH_THRESHOLD = 10;
   private readonly CPU_LOW_THRESHOLD = 3;
   private isCpuHigh = false;
+  private cpuHighSince = 0;
+  private lastPatternResultAt = 0;
   private workingHoldUntil = 0;
 
   // Subsystem instances
@@ -161,6 +165,7 @@ export class ActivityMonitor {
     this.PROMPT_FAST_PATH_MIN_QUIET_MS = options?.promptFastPathMinQuietMs ?? 3000;
     this.POLLING_MAX_BOOT_MS = options?.pollingMaxBootMs ?? 15000;
     this.MAX_WORKING_SILENCE_MS = options?.maxWorkingSilenceMs ?? 180000;
+    this.MAX_CPU_HIGH_ESCAPE_MS = options?.maxCpuHighEscapeMs ?? 60000;
 
     this.processStateValidator = options?.processStateValidator;
 
@@ -291,6 +296,7 @@ export class ActivityMonitor {
         : undefined;
       if (patternResult) {
         this.lastPatternResult = patternResult;
+        this.lastPatternResultAt = now;
       }
       const isWorking = patternResult
         ? patternResult.isWorking
@@ -336,6 +342,7 @@ export class ActivityMonitor {
       this.patternBuf.update(data);
       const patternResult = this.patternDetector.detect(this.patternBuf.getText());
       this.lastPatternResult = patternResult;
+      this.lastPatternResultAt = now;
 
       if (patternResult.isWorking) {
         this.lastWorkingIndicatorTimestamp = now;
@@ -377,6 +384,13 @@ export class ActivityMonitor {
 
   dispose(): void {
     if (this.isDisposed) return;
+
+    // Emit final idle transition if still busy — ensures renderer never stays stuck in "working"
+    if (this.state === "busy") {
+      this.state = "idle";
+      this.onStateChange(this.terminalId, this.spawnedAt, "idle", { trigger: "dispose" });
+    }
+
     this.isDisposed = true;
     this.stopPolling();
     if (this.debounceTimer) {
@@ -393,7 +407,9 @@ export class ActivityMonitor {
     this.bootDetector.reset();
     this.resizeSuppressUntil = 0;
     this.lastPatternResult = undefined;
+    this.lastPatternResultAt = 0;
     this.isCpuHigh = false;
+    this.cpuHighSince = 0;
     this.workingHoldUntil = 0;
     this.lastDataTimestamp = 0;
     this.lastOutputActivityAt = 0;
@@ -466,6 +482,7 @@ export class ActivityMonitor {
       : undefined;
     if (patternResult) {
       this.lastPatternResult = patternResult;
+      this.lastPatternResultAt = now;
     }
 
     const isWorkingPattern = patternResult
@@ -508,7 +525,7 @@ export class ActivityMonitor {
     }
 
     // Update CPU hysteresis state once per polling cycle
-    this.updateCpuHighState();
+    this.updateCpuHighState(now);
 
     // Safety timeout: if no PTY output for MAX_WORKING_SILENCE_MS, force idle
     if (this.isWorkingSilenceTimeout(now)) {
@@ -649,7 +666,7 @@ export class ActivityMonitor {
       shouldPreferPrompt &&
       quietForMs >= this.PROMPT_FAST_PATH_MIN_QUIET_MS &&
       now >= this.workingHoldUntil &&
-      !this.isCpuHigh &&
+      !this.isCpuHighAndNotDeadlined(now) &&
       !(this.inputTracker.pendingInputUntil > 0 && now < this.inputTracker.pendingInputUntil)
     ) {
       this.state = "idle";
@@ -677,7 +694,7 @@ export class ActivityMonitor {
       !hasHighOutputActivity &&
       quietForMs >= LEXEME_STALL_MIN_QUIET_MS &&
       now >= this.workingHoldUntil &&
-      !this.isCpuHigh &&
+      !this.isCpuHighAndNotDeadlined(now) &&
       !(this.inputTracker.pendingInputUntil > 0 && now < this.inputTracker.pendingInputUntil)
     ) {
       const candidateLine =
@@ -704,7 +721,7 @@ export class ActivityMonitor {
       isQuietForIdle &&
       now >= this.workingHoldUntil &&
       !hasHighOutputActivity &&
-      !this.isCpuHigh &&
+      !this.isCpuHighAndNotDeadlined(now) &&
       !(this.inputTracker.pendingInputUntil > 0 && now < this.inputTracker.pendingInputUntil)
     ) {
       this.state = "idle";
@@ -891,13 +908,17 @@ export class ActivityMonitor {
 
       // actuallyBusy === null (no validator) — fall through to pattern/TTL checks
       // CPU high prevents idle transition even without a definitive hasActiveChildren answer
-      this.updateCpuHighState();
-      if (this.isCpuHigh) {
+      const now = Date.now();
+      if (this.isCpuHighAndNotDeadlined(now)) {
         this.resetDebounceTimer();
         return;
       }
 
-      if (this.lastPatternResult?.isWorking) {
+      // Stale pattern results are expired via the same TTL as working indicators
+      if (
+        this.lastPatternResult?.isWorking &&
+        now - this.lastPatternResultAt < this.WORKING_INDICATOR_TTL_MS
+      ) {
         this.resetDebounceTimer();
         return;
       }
@@ -927,9 +948,8 @@ export class ActivityMonitor {
     if (now - this.lastDataTimestamp < this.MAX_WORKING_SILENCE_MS) return false;
     // Non-polling terminals have no boot phase; polling terminals must exit boot first
     if (this.getVisibleLines && !this.bootDetector.hasExitedBootState) return false;
-    // High CPU prevents premature silence timeout — agent is silently processing
-    this.updateCpuHighState();
-    if (this.isCpuHigh) return false;
+    // High CPU prevents premature silence timeout — but only up to the escape deadline
+    if (this.isCpuHighAndNotDeadlined(now)) return false;
     return true;
   }
 
@@ -961,17 +981,25 @@ export class ActivityMonitor {
     }
   }
 
-  private updateCpuHighState(): void {
+  private updateCpuHighState(now: number): void {
     const cpu = this.getCpuUsageSafe();
     if (cpu === null) return;
     if (this.isCpuHigh) {
       if (cpu < this.CPU_LOW_THRESHOLD) {
         this.isCpuHigh = false;
+        this.cpuHighSince = 0;
       }
     } else {
       if (cpu >= this.CPU_HIGH_THRESHOLD) {
         this.isCpuHigh = true;
+        this.cpuHighSince = now;
       }
     }
+  }
+
+  private isCpuHighAndNotDeadlined(now: number): boolean {
+    this.updateCpuHighState(now);
+    if (!this.isCpuHigh) return false;
+    return now - this.cpuHighSince < this.MAX_CPU_HIGH_ESCAPE_MS;
   }
 }
