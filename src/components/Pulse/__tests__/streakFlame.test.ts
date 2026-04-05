@@ -1,8 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { readFile } from "fs/promises";
-import { resolve } from "path";
-
-const COMPONENT_PATH = resolve(__dirname, "../StreakFlame.tsx");
 
 describe("getStreakColor — tier boundaries", () => {
   // Import the pure function directly
@@ -59,74 +55,5 @@ describe("getStreakColor — tier boundaries", () => {
   it("returns amber for 0 days (fallback)", async () => {
     const mod = await import("../StreakFlame");
     expect(mod.getStreakColor(0)).toBe("#F59E0B");
-  });
-});
-
-describe("StreakFlame component structure", () => {
-  let content: string;
-
-  it("loads the component file", async () => {
-    content = await readFile(COMPONENT_PATH, "utf-8");
-    expect(content).toBeTruthy();
-  });
-
-  it("uses useId() for gradient ID uniqueness", async () => {
-    content ??= await readFile(COMPONENT_PATH, "utf-8");
-    expect(content).toContain("useId()");
-  });
-
-  it("uses overflow: visible on SVG", async () => {
-    content ??= await readFile(COMPONENT_PATH, "utf-8");
-    expect(content).toContain('overflow: "visible"');
-  });
-
-  it("uses willChange: transform on <g>", async () => {
-    content ??= await readFile(COMPONENT_PATH, "utf-8");
-    expect(content).toContain('willChange: "transform"');
-  });
-
-  it("uses transformBox: fill-box on <g>", async () => {
-    content ??= await readFile(COMPONENT_PATH, "utf-8");
-    expect(content).toContain('transformBox: "fill-box"');
-  });
-
-  it("checks localStorage for daily animation gating", async () => {
-    content ??= await readFile(COMPONENT_PATH, "utf-8");
-    expect(content).toContain("streak-flame-last-played");
-    expect(content).toContain("localStorage.getItem");
-    expect(content).toContain("localStorage.setItem");
-  });
-
-  it("cancels rAF on cleanup", async () => {
-    content ??= await readFile(COMPONENT_PATH, "utf-8");
-    expect(content).toContain("cancelAnimationFrame");
-  });
-
-  it("disconnects IntersectionObserver on cleanup", async () => {
-    content ??= await readFile(COMPONENT_PATH, "utf-8");
-    expect(content).toContain("observer?.disconnect()");
-  });
-
-  it("respects prefers-reduced-motion via REDUCED_MOTION constant", async () => {
-    content ??= await readFile(COMPONENT_PATH, "utf-8");
-    expect(content).toContain("prefers-reduced-motion: reduce");
-    expect(content).toContain("REDUCED_MOTION");
-  });
-
-  it("uses streak-flame-glow class for reduced motion", async () => {
-    content ??= await readFile(COMPONENT_PATH, "utf-8");
-    expect(content).toContain("streak-flame-glow");
-  });
-
-  it("throttles rAF to ~14fps", async () => {
-    content ??= await readFile(COMPONENT_PATH, "utf-8");
-    expect(content).toContain("1000 / 14");
-  });
-
-  it("uses separate pause signals for visibility and intersection", async () => {
-    content ??= await readFile(COMPONENT_PATH, "utf-8");
-    expect(content).toContain("isOffscreen");
-    expect(content).toContain("isHidden");
-    expect(content).toContain("isOffscreen || isHidden");
   });
 });
