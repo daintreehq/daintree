@@ -212,6 +212,37 @@ describe("recipeStore", () => {
     expect(spawned.command).not.toContain("gemini");
   });
 
+  it("runRecipe passes recipe args to the spawned agent command", async () => {
+    useRecipeStore.setState({
+      recipes: [
+        {
+          id: "recipe-args",
+          name: "Args Recipe",
+          projectId: "project-1",
+          terminals: [
+            {
+              type: "claude",
+              title: "Claude with args",
+              args: "--verbose --model sonnet",
+              env: {},
+            },
+          ],
+          createdAt: Date.now(),
+        },
+      ],
+      isLoading: false,
+      currentProjectId: "project-1",
+    });
+
+    await useRecipeStore.getState().runRecipe("recipe-args", "/tmp/worktree", "worktree-1");
+
+    expect(addTerminalMock).toHaveBeenCalledTimes(1);
+    const spawned = addTerminalMock.mock.calls[0]?.[0];
+    expect(spawned.command).toContain("--verbose");
+    expect(spawned.command).toContain("--model");
+    expect(spawned.command).toContain("sonnet");
+  });
+
   describe("runRecipeWithResults", () => {
     it("returns all spawned terminal IDs on full success", async () => {
       let callIndex = 0;
