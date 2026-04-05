@@ -286,7 +286,7 @@ export function RecipeEditor({
               id="recipe-scope"
               value={scope}
               onChange={(e) => setScope(e.target.value as "global" | "project")}
-              className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+              className="w-full px-3 pr-8 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
             >
               <option value="project">Project (current project only)</option>
               <option value="global">Global (all projects)</option>
@@ -323,7 +323,7 @@ export function RecipeEditor({
             value={autoAssign}
             onChange={(e) => setAutoAssign(e.target.value as "always" | "never" | "prompt")}
             aria-describedby="auto-assign-help"
-            className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+            className="w-full px-3 pr-8 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
           >
             <option value="always">Always assign to me</option>
             <option value="prompt">Ask before assigning</option>
@@ -387,7 +387,7 @@ export function RecipeEditor({
                           return updated;
                         });
                       }}
-                      className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                      className="w-full px-2 pr-8 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
                     >
                       {TERMINAL_TYPES.map((type) => (
                         <option key={type} value={type}>
@@ -462,7 +462,7 @@ export function RecipeEditor({
                           )
                         }
                         aria-describedby={`terminal-exit-behavior-help-${index}`}
-                        className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                        className="w-full px-2 pr-8 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
                       >
                         <option value="trash">Send to Trash (default)</option>
                         <option value="keep">Keep for Review</option>
@@ -550,7 +550,7 @@ export function RecipeEditor({
                           )
                         }
                         aria-describedby={`terminal-agent-exit-behavior-help-${index}`}
-                        className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                        className="w-full px-2 pr-8 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
                       >
                         <option value="keep">Keep for Review (default)</option>
                         <option value="trash">Send to Trash</option>
@@ -609,7 +609,7 @@ export function RecipeEditor({
                           )
                         }
                         aria-describedby={`terminal-dev-exit-behavior-help-${index}`}
-                        className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                        className="w-full px-2 pr-8 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
                       >
                         <option value="trash">Send to Trash (default)</option>
                         <option value="keep">Keep for Review</option>

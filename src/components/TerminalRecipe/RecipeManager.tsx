@@ -442,7 +442,7 @@ export function RecipeManager({
             <select
               value={importScope}
               onChange={(e) => setImportScope(e.target.value as "global" | "project")}
-              className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text text-sm"
+              className="w-full px-3 pr-8 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text text-sm"
             >
               <option value="project">Project Recipe</option>
               <option value="global">Global Recipe</option>

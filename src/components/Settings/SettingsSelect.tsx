@@ -4,7 +4,7 @@ import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const SELECT_CLASSES =
-  "w-full bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
+  "w-full bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 pr-8 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
 
 interface SettingsSelectProps extends Omit<ComponentPropsWithoutRef<"select">, "id"> {
   label: string;

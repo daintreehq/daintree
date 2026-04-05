@@ -90,6 +90,16 @@ describe("SettingsSelect", () => {
     expect(document.getElementById(descId!)?.textContent).toBe("Choose a color theme");
   });
 
+  it("includes pr-8 right padding for native chevron clearance", () => {
+    render(
+      <SettingsSelect label="Theme">
+        <option>Default</option>
+      </SettingsSelect>
+    );
+    const select = screen.getByLabelText("Theme");
+    expect(select.className).toContain("pr-8");
+  });
+
   it("shows reset button when modified", () => {
     const onReset = vi.fn();
     render(
