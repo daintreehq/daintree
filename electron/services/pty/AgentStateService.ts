@@ -286,7 +286,7 @@ export class AgentStateService {
     terminal: TerminalInfo,
     activity: "busy" | "idle" | "completed",
     metadata?: {
-      trigger: "input" | "output" | "pattern" | "timeout";
+      trigger: "input" | "output" | "pattern" | "timeout" | "dispose";
       patternConfidence?: number;
       waitingReason?: WaitingReason;
       sessionCost?: number;

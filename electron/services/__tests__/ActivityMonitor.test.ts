@@ -1382,10 +1382,14 @@ describe("ActivityMonitor", () => {
 
       vi.advanceTimersByTime(1500);
 
-      expect(onStateChange).toHaveBeenCalledTimes(1);
+      // 2 calls: busy from input + idle from dispose
+      expect(onStateChange).toHaveBeenCalledTimes(2);
+      expect(onStateChange).toHaveBeenLastCalledWith("test-1", 1000, "idle", {
+        trigger: "dispose",
+      });
     });
 
-    it("should preserve state on dispose", () => {
+    it("should transition to idle on dispose when busy", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
@@ -1397,8 +1401,11 @@ describe("ActivityMonitor", () => {
 
       monitor.dispose();
 
-      // State is preserved, only timers are cleared
-      expect(monitor.getState()).toBe("busy");
+      // Dispose emits idle to prevent renderer from staying stuck in "working"
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).toHaveBeenLastCalledWith("test-1", 1000, "idle", {
+        trigger: "dispose",
+      });
     });
 
     it("should stop recursive debounce chain after dispose", () => {
@@ -1421,8 +1428,11 @@ describe("ActivityMonitor", () => {
       expect(processStateValidator.hasActiveChildren).toHaveBeenCalled();
       expect(monitor.getState()).toBe("busy");
 
-      // Dispose mid-chain
+      // Dispose mid-chain — emits idle then stops
       monitor.dispose();
+      expect(onStateChange).toHaveBeenLastCalledWith("test-1", 1000, "idle", {
+        trigger: "dispose",
+      });
       const callCountAfterDispose = onStateChange.mock.calls.length;
       const validatorCallsAfterDispose = processStateValidator.hasActiveChildren.mock.calls.length;
 
@@ -1529,7 +1539,10 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
       monitor.dispose();
 
-      expect(monitor.getState()).toBe("busy");
+      // First dispose transitions to idle, subsequent calls are no-ops
+      expect(monitor.getState()).toBe("idle");
+      // Only 2 calls: busy from input + idle from first dispose
+      expect(onStateChange).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -3430,7 +3443,7 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("should reset isCpuHigh on dispose", () => {
+    it("should reset isCpuHigh on dispose and emit idle", () => {
       const onStateChange = vi.fn();
       const processStateValidator = {
         hasActiveChildren: vi.fn().mockReturnValue(true),
@@ -3452,12 +3465,285 @@ describe("ActivityMonitor", () => {
       vi.advanceTimersByTime(200);
       expect(monitor.getState()).toBe("busy");
 
-      const callCountBeforeDispose = onStateChange.mock.calls.length;
       monitor.dispose();
+      // Dispose emits idle even when CPU was high
+      expect(onStateChange).toHaveBeenLastCalledWith("cpu-10", 100, "idle", {
+        trigger: "dispose",
+      });
+      const callCountAfterDispose = onStateChange.mock.calls.length;
 
       // After dispose, no further state changes should occur
       vi.advanceTimersByTime(5000);
-      expect(onStateChange.mock.calls.length).toBe(callCountBeforeDispose);
+      expect(onStateChange.mock.calls.length).toBe(callCountAfterDispose);
+    });
+
+    it("should allow idle transition after CPU-high deadline expires (polling)", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(true),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(20),
+      };
+      const monitor = new ActivityMonitor("cpu-deadline-1", 100, onStateChange, {
+        getVisibleLines: () => [""],
+        pollingIntervalMs: 50,
+        pollingMaxBootMs: 0,
+        idleDebounceMs: 500,
+        initialState: "busy",
+        maxCpuHighEscapeMs: 5000,
+        processStateValidator,
+      });
+
+      monitor.onData("output");
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      // CPU stays high — stays busy before deadline
+      vi.advanceTimersByTime(3000);
+      expect(monitor.getState()).toBe("busy");
+
+      // Advance past deadline (5s) + WORKING_HOLD_MS (1.5s) + idleDebounceMs (0.5s)
+      vi.advanceTimersByTime(5000);
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should allow idle transition after CPU-high deadline expires (non-polling debounce)", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(null as unknown as boolean),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(20),
+      };
+      const monitor = new ActivityMonitor("cpu-deadline-2", 100, onStateChange, {
+        idleDebounceMs: 1000,
+        maxCpuHighEscapeMs: 3000,
+        processStateValidator,
+      });
+
+      monitor.onInput("\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+      monitor.onData("some output");
+
+      // First debounce fires at 1s — cpuHighSince set to 1000, blocks idle
+      vi.advanceTimersByTime(1000);
+      expect(monitor.getState()).toBe("busy");
+
+      // Second debounce at 2s — 1s into deadline, still within
+      vi.advanceTimersByTime(1000);
+      expect(monitor.getState()).toBe("busy");
+
+      // Third debounce at 3s — 2s into deadline, still within
+      vi.advanceTimersByTime(1000);
+      expect(monitor.getState()).toBe("busy");
+
+      // Fourth debounce at 4s — 3s since cpuHighSince, deadline expired → idle
+      vi.advanceTimersByTime(1000);
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should reset cpuHighSince when CPU drops and restart fresh deadline on next spike", () => {
+      const onStateChange = vi.fn();
+      const lines = { current: ["working..."] };
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(true),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(20),
+      };
+      const monitor = new ActivityMonitor("cpu-deadline-3", 100, onStateChange, {
+        getVisibleLines: (_n: number) => lines.current,
+        pollingIntervalMs: 50,
+        pollingMaxBootMs: 0,
+        idleDebounceMs: 500,
+        initialState: "busy",
+        maxCpuHighEscapeMs: 5000,
+        processStateValidator,
+      });
+
+      monitor.onData("output");
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      // CPU high for 3s — stays busy (within deadline)
+      vi.advanceTimersByTime(3000);
+      expect(monitor.getState()).toBe("busy");
+
+      // CPU drops — resets deadline; keep working signals active to stay busy
+      processStateValidator.getDescendantsCpuUsage.mockReturnValue(1);
+      monitor.onData("more output");
+      vi.advanceTimersByTime(50);
+
+      // CPU spikes again — fresh deadline starts from now
+      processStateValidator.getDescendantsCpuUsage.mockReturnValue(20);
+      monitor.onData("even more output");
+      vi.advanceTimersByTime(3000);
+      // Only 3s into new 5s deadline, should still be busy
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+  });
+
+  describe("CPU-high deadline for silence timeout", () => {
+    it("should allow silence timeout after CPU-high deadline expires", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(true),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(50),
+      };
+      const monitor = new ActivityMonitor("cpu-silence-1", 100, onStateChange, {
+        getVisibleLines: () => [""],
+        pollingIntervalMs: 50,
+        pollingMaxBootMs: 0,
+        maxWorkingSilenceMs: 5000,
+        maxCpuHighEscapeMs: 3000,
+        idleDebounceMs: 2000,
+        initialState: "busy",
+        processStateValidator,
+      });
+
+      monitor.onData("initial");
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      // CPU-high deadline is 3s, silence timeout is 5s, idle debounce is 2s
+      // At 2s: idle debounce exceeded but CPU deadline (3s) still active → blocks idle
+      vi.advanceTimersByTime(2000);
+      expect(monitor.getState()).toBe("busy");
+
+      // At 6s: silence timeout fires, CPU deadline (3s) already exceeded → idle allowed
+      vi.advanceTimersByTime(4000);
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+  });
+
+  describe("Stale pattern buffer TTL", () => {
+    it("should allow idle transition after stale pattern result expires (non-polling)", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(null as unknown as boolean),
+        getDescendantsCpuUsage: vi.fn().mockReturnValue(0),
+      };
+      const monitor = new ActivityMonitor("stale-1", 100, onStateChange, {
+        idleDebounceMs: 1000,
+        processStateValidator,
+        patternConfig: {
+          primaryPatterns: [/working/i],
+          scanLineCount: 10,
+        },
+      });
+
+      // Enter busy via input
+      monitor.onInput("\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      // Send data with working pattern — sets lastPatternResult.isWorking = true
+      monitor.onData("Working on task...\n");
+      const patternResult = monitor.getLastPatternResult();
+      expect(patternResult?.isWorking).toBe(true);
+
+      // First debounce: pattern result still fresh, reschedules
+      vi.advanceTimersByTime(1000);
+      expect(monitor.getState()).toBe("busy");
+
+      // Advance past WORKING_INDICATOR_TTL_MS (5s) — pattern result expires
+      // The stale lastPatternResult.isWorking no longer blocks idle
+      vi.advanceTimersByTime(5000);
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+  });
+
+  describe("Dispose emits idle", () => {
+    it("should emit idle with dispose trigger when busy monitor is disposed", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("dispose-1", 100, onStateChange);
+
+      monitor.onInput("\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      monitor.dispose();
+
+      expect(onStateChange).toHaveBeenCalledTimes(1);
+      expect(onStateChange).toHaveBeenCalledWith("dispose-1", 100, "idle", {
+        trigger: "dispose",
+      });
+      expect(monitor.getState()).toBe("idle");
+    });
+
+    it("should NOT emit idle when idle monitor is disposed", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("dispose-2", 100, onStateChange);
+
+      // Monitor starts idle — no state change on dispose
+      monitor.dispose();
+      expect(onStateChange).not.toHaveBeenCalled();
+    });
+
+    it("should emit idle only once on double dispose", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("dispose-3", 100, onStateChange);
+
+      monitor.onInput("\r");
+      onStateChange.mockClear();
+
+      monitor.dispose();
+      monitor.dispose();
+
+      expect(onStateChange).toHaveBeenCalledTimes(1);
+      expect(onStateChange).toHaveBeenCalledWith("dispose-3", 100, "idle", {
+        trigger: "dispose",
+      });
+    });
+
+    it("should complete cleanup even if onStateChange throws during dispose", () => {
+      const onStateChange = vi.fn().mockImplementation((_id, _at, state) => {
+        if (state === "idle") throw new Error("callback failed");
+      });
+      const monitor = new ActivityMonitor("dispose-4", 100, onStateChange);
+
+      monitor.onInput("\r");
+      expect(monitor.getState()).toBe("busy");
+
+      // dispose() should not throw despite callback failure
+      expect(() => monitor.dispose()).not.toThrow();
+      expect(monitor.getState()).toBe("idle");
+
+      // Further calls are no-ops — cleanup completed
+      monitor.onInput("\r");
+      monitor.onData("test");
+      vi.advanceTimersByTime(10000);
+      // Only 2 calls: busy from input + idle from dispose (which threw)
+      expect(onStateChange).toHaveBeenCalledTimes(2);
+    });
+
+    it("should remain disposed if callback re-enters via notifySubmission", () => {
+      const ref: { monitor?: InstanceType<typeof ActivityMonitor> } = {};
+      const onStateChange = vi
+        .fn()
+        .mockImplementation(
+          (_id: string, _at: number, _state: string, meta?: { trigger?: string }) => {
+            if (meta?.trigger === "dispose") {
+              ref.monitor?.notifySubmission();
+            }
+          }
+        );
+      const monitor = new ActivityMonitor("dispose-5", 100, onStateChange);
+      ref.monitor = monitor;
+
+      monitor.onInput("\r");
+      onStateChange.mockClear();
+
+      monitor.dispose();
+      // Should still be idle — re-entrant notifySubmission was blocked by isDisposed
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).toHaveBeenCalledTimes(1);
     });
   });
 });
