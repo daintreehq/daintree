@@ -451,9 +451,9 @@ describe("hydrateAppState", () => {
     );
   });
 
-  it("skips agent panels when not found in backend (phantom agent prevention)", async () => {
-    // When an agent terminal can't be reconnected (not found in backend),
-    // it should be silently dropped — not respawned as a phantom idle panel.
+  it("skips phantom agent panel during project switch when not found in backend", async () => {
+    // During a live project switch (switchId defined), an agent terminal that
+    // can't be reconnected should be silently dropped — not respawned as a phantom.
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -486,15 +486,67 @@ describe("hydrateAppState", () => {
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
 
-    await hydrateAppState({
-      addTerminal,
-      setActiveWorktree,
-      loadRecipes,
-      openDiagnosticsDock,
+    await hydrateAppState(
+      {
+        addTerminal,
+        setActiveWorktree,
+        loadRecipes,
+        openDiagnosticsDock,
+      },
+      "switch-abc"
+    );
+
+    // Agent terminal not found during project switch → should NOT be respawned
+    expect(addTerminal).not.toHaveBeenCalled();
+  });
+
+  it("respawns agent panel on cold start when reconnect returns not_found", async () => {
+    // On cold app restart (no switchId), not_found means the PTY process was
+    // killed on quit — the agent panel should be respawned.
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "agent-1",
+            kind: "agent",
+            type: "claude",
+            agentId: "claude",
+            title: "Claude",
+            cwd: "/project",
+            location: "grid",
+            command: "claude -p 'Old prompt'",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings: {
+        agents: {
+          claude: {
+            customFlags: "--model sonnet-4",
+          },
+        },
+      },
     });
 
-    // Agent terminal not found in backend → should NOT be respawned
-    expect(addTerminal).not.toHaveBeenCalled();
+    const addTerminal = vi.fn().mockResolvedValue("agent-1");
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    // Cold start: agent panel should be respawned
+    expect(addTerminal).toHaveBeenCalledTimes(1);
+    expect(addTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "agent",
+        requestedId: "agent-1",
+      })
+    );
   });
 
   it("reconnects via fallback when getForProject misses the terminal but reconnect finds it", async () => {
@@ -1138,9 +1190,96 @@ describe("hydrateAppState", () => {
     expect(hydrateTabGroups).toHaveBeenCalledWith([], { skipPersist: true });
   });
 
-  it("skips agent panel with agentSessionId when no backend process exists", async () => {
-    // Agent with agentSessionId but no backend process should be dropped,
-    // not respawned — it would create a phantom panel.
+  it("skips phantom agent with agentSessionId during project switch when not found in backend", async () => {
+    // During project switch, agent with agentSessionId but no backend process
+    // should be dropped — it would create a phantom panel.
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "agent-1",
+            kind: "agent",
+            type: "claude",
+            agentId: "claude",
+            title: "Claude",
+            cwd: "/project",
+            location: "grid",
+            command: "claude --model sonnet-4",
+            agentSessionId: "session-uuid-123",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings: {
+        agents: {
+          claude: { customFlags: "--model sonnet-4" },
+        },
+      },
+    });
+
+    const addTerminal = vi.fn().mockResolvedValue("agent-1");
+
+    await hydrateAppState(
+      {
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      },
+      "switch-abc"
+    );
+
+    // Phantom agent during project switch should NOT be respawned
+    expect(addTerminal).not.toHaveBeenCalled();
+  });
+
+  it("skips phantom agent without agentSessionId during project switch when not found in backend", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "agent-1",
+            kind: "agent",
+            type: "claude",
+            agentId: "claude",
+            title: "Claude",
+            cwd: "/project",
+            location: "grid",
+            command: "claude",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings: {
+        agents: {
+          claude: { customFlags: "--model sonnet-4" },
+        },
+      },
+    });
+
+    const addTerminal = vi.fn().mockResolvedValue("agent-1");
+
+    await hydrateAppState(
+      {
+        addTerminal,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      },
+      "switch-abc"
+    );
+
+    // Phantom agent during project switch should NOT be respawned
+    expect(addTerminal).not.toHaveBeenCalled();
+  });
+
+  it("respawns agent panel with agentSessionId on cold start when not found in backend", async () => {
+    // On cold restart (no switchId), agent with agentSessionId should be
+    // respawned — not_found means PTY was killed on quit.
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -1176,47 +1315,14 @@ describe("hydrateAppState", () => {
       openDiagnosticsDock: vi.fn(),
     });
 
-    // Dead agent should NOT be respawned
-    expect(addTerminal).not.toHaveBeenCalled();
-  });
-
-  it("skips agent panel without agentSessionId when no backend process exists", async () => {
-    appClientMock.hydrate.mockResolvedValue({
-      appState: {
-        terminals: [
-          {
-            id: "agent-1",
-            kind: "agent",
-            type: "claude",
-            agentId: "claude",
-            title: "Claude",
-            cwd: "/project",
-            location: "grid",
-            command: "claude",
-          },
-        ],
-        sidebarWidth: 350,
-      },
-      terminalConfig,
-      project,
-      agentSettings: {
-        agents: {
-          claude: { customFlags: "--model sonnet-4" },
-        },
-      },
-    });
-
-    const addTerminal = vi.fn().mockResolvedValue("agent-1");
-
-    await hydrateAppState({
-      addTerminal,
-      setActiveWorktree: vi.fn(),
-      loadRecipes: vi.fn().mockResolvedValue(undefined),
-      openDiagnosticsDock: vi.fn(),
-    });
-
-    // Dead agent should NOT be respawned
-    expect(addTerminal).not.toHaveBeenCalled();
+    // Cold start: agent panel should be respawned
+    expect(addTerminal).toHaveBeenCalledTimes(1);
+    expect(addTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "agent",
+        requestedId: "agent-1",
+      })
+    );
   });
 
   it("preserves agentSessionId on successful reconnect to live backend", async () => {
@@ -2452,7 +2558,7 @@ describe("hydrateAppState", () => {
       );
     });
 
-    it("skips older agent snapshot with type but no kind when not found", async () => {
+    it("skips older agent snapshot with type but no kind during project switch when not found", async () => {
       appClientMock.hydrate.mockResolvedValue({
         appState: {
           terminals: [
@@ -2477,14 +2583,17 @@ describe("hydrateAppState", () => {
 
       const addTerminal = vi.fn().mockResolvedValue("agent-old");
 
-      await hydrateAppState({
-        addTerminal,
-        setActiveWorktree: vi.fn(),
-        loadRecipes: vi.fn().mockResolvedValue(undefined),
-        openDiagnosticsDock: vi.fn(),
-      });
+      await hydrateAppState(
+        {
+          addTerminal,
+          setActiveWorktree: vi.fn(),
+          loadRecipes: vi.fn().mockResolvedValue(undefined),
+          openDiagnosticsDock: vi.fn(),
+        },
+        "switch-abc"
+      );
 
-      // Older agent snapshots (type: "claude" but no kind) should also be skipped
+      // Older agent snapshots (type: "claude" but no kind) should be skipped during project switch
       expect(addTerminal).not.toHaveBeenCalled();
     });
   });

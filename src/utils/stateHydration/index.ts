@@ -520,11 +520,20 @@ export async function hydrateAppState(
                         location,
                       });
                     } else {
-                      // Don't auto-respawn agent panels that no longer exist in the backend
+                      // During a live project switch (_switchId defined), don't respawn agent
+                      // panels that no longer exist in the backend — they are phantoms.
+                      // On cold app restart (_switchId undefined), not_found simply means the
+                      // PTY process was killed on quit and needs to be respawned.
                       const isAgentKind =
                         kind === "agent" || resolveAgentId(saved.agentId, saved.type) !== undefined;
-                      if (isAgentKind && reconnectOutcome.status === "not_found") {
-                        logHydrationInfo(`Skipping respawn for dead agent: ${saved.id}`);
+                      if (
+                        isAgentKind &&
+                        reconnectOutcome.status === "not_found" &&
+                        _switchId !== undefined
+                      ) {
+                        logHydrationInfo(
+                          `Skipping phantom agent during project switch: ${saved.id}`
+                        );
                         return;
                       }
 
