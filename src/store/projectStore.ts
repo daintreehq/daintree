@@ -8,6 +8,15 @@ import { logDebug } from "@/utils/logger";
 import { useUrlHistoryStore } from "./urlHistoryStore";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { terminalPersistence } from "./persistence/terminalPersistence";
+import { useTerminalInputStore } from "./terminalInputStore";
+import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
+
+function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
+  const draftInputs = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
+  return {
+    ...(Object.keys(draftInputs).length > 0 && { draftInputs }),
+  };
+}
 
 interface ProjectState {
   projects: Project[];
@@ -190,11 +199,15 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   switchProject: async (projectId) => {
     if (get().currentProject?.id === projectId) return;
 
+    // Capture outgoing state before the renderer gets detached
+    const currentProjectId = get().currentProject?.id;
+    const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
+
     set({ isLoading: true, error: null });
     // Fire-and-forget: the main process swaps WebContentsViews, so this
     // renderer gets detached. Don't write the response into stores — the
     // new view handles its own state independently.
-    projectClient.switch(projectId).catch((error) => {
+    projectClient.switch(projectId, outgoingState).catch((error) => {
       logErrorWithContext(error, {
         operation: "switch_project",
         component: "projectStore",
@@ -342,8 +355,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   reopenProject: async (projectId) => {
+    const currentProjectId = get().currentProject?.id;
+    const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
+
     set({ isLoading: true, error: null });
-    projectClient.reopen(projectId).catch((error) => {
+    projectClient.reopen(projectId, outgoingState).catch((error) => {
       logErrorWithContext(error, {
         operation: "reopen_project",
         component: "projectStore",

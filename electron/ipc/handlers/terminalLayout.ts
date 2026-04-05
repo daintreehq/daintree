@@ -52,6 +52,20 @@ export function sanitizeTerminalSizes(
   return sanitized;
 }
 
+/**
+ * Validate and sanitize draft input records.
+ * Entries with non-string values or empty keys/values are dropped.
+ */
+export function sanitizeDraftInputs(inputs: Record<string, unknown>): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  for (const [terminalId, value] of Object.entries(inputs)) {
+    if (terminalId && typeof value === "string" && value !== "") {
+      sanitized[terminalId] = value;
+    }
+  }
+  return sanitized;
+}
+
 export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
@@ -96,6 +110,7 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
       focusMode: existingState?.focusMode,
       focusPanelState: existingState?.focusPanelState,
       terminalSizes: existingState?.terminalSizes,
+      draftInputs: existingState?.draftInputs,
     };
 
     await projectStore.saveProjectState(projectId, newState);
@@ -152,6 +167,7 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
       focusMode: existingState?.focusMode,
       focusPanelState: existingState?.focusPanelState,
       terminalSizes: sanitizedSizes,
+      draftInputs: existingState?.draftInputs,
     };
 
     await projectStore.saveProjectState(projectId, newState);
@@ -200,6 +216,7 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
       focusMode: existingState?.focusMode,
       focusPanelState: existingState?.focusPanelState,
       terminalSizes: existingState?.terminalSizes,
+      draftInputs: existingState?.draftInputs,
     };
     await projectStore.saveProjectState(projectId, newState);
   };
@@ -277,12 +294,70 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
       focusMode,
       focusPanelState: validFocusPanelState,
       terminalSizes: existingState?.terminalSizes,
+      draftInputs: existingState?.draftInputs,
     };
 
     await projectStore.saveProjectState(projectId, newState);
   };
   ipcMain.handle(CHANNELS.PROJECT_SET_FOCUS_MODE, handleProjectSetFocusMode);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SET_FOCUS_MODE));
+
+  const handleProjectGetDraftInputs = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string
+  ): Promise<Record<string, string>> => {
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    const state = await projectStore.getProjectState(projectId);
+    return state?.draftInputs ?? {};
+  };
+  ipcMain.handle(CHANNELS.PROJECT_GET_DRAFT_INPUTS, handleProjectGetDraftInputs);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_DRAFT_INPUTS));
+
+  const handleProjectSetDraftInputs = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: unknown
+  ): Promise<void> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    const { projectId, draftInputs } = payload as {
+      projectId: string;
+      draftInputs: Record<string, string>;
+    };
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    if (
+      !draftInputs ||
+      typeof draftInputs !== "object" ||
+      Array.isArray(draftInputs) ||
+      draftInputs === null
+    ) {
+      throw new Error("Invalid draft inputs");
+    }
+
+    const sanitized = sanitizeDraftInputs(draftInputs as Record<string, unknown>);
+
+    const existingState = await projectStore.getProjectState(projectId);
+    const newState = {
+      projectId,
+      activeWorktreeId: existingState?.activeWorktreeId,
+      sidebarWidth: existingState?.sidebarWidth ?? 350,
+      terminals: existingState?.terminals ?? [],
+      tabGroups: existingState?.tabGroups ?? [],
+      terminalLayout: existingState?.terminalLayout,
+      focusMode: existingState?.focusMode,
+      focusPanelState: existingState?.focusPanelState,
+      terminalSizes: existingState?.terminalSizes,
+      draftInputs: sanitized,
+    };
+
+    await projectStore.saveProjectState(projectId, newState);
+  };
+  ipcMain.handle(CHANNELS.PROJECT_SET_DRAFT_INPUTS, handleProjectSetDraftInputs);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SET_DRAFT_INPUTS));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

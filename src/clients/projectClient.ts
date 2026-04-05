@@ -248,6 +248,14 @@ export const projectClient = {
     return window.electron.project.setTerminalSizes(projectId, terminalSizes);
   },
 
+  getDraftInputs: (projectId: string): Promise<Record<string, string>> => {
+    return window.electron.project.getDraftInputs(projectId);
+  },
+
+  setDraftInputs: (projectId: string, draftInputs: Record<string, string>): Promise<void> => {
+    return window.electron.project.setDraftInputs(projectId, draftInputs);
+  },
+
   getTabGroups: (projectId: string): Promise<TabGroup[]> => {
     return window.electron.project.getTabGroups(projectId);
   },

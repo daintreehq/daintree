@@ -1,4 +1,5 @@
 import { appClient, terminalClient, worktreeClient, projectClient, systemClient } from "@/clients";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { suppressMruRecording } from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
@@ -279,6 +280,17 @@ export async function hydrateAppState(
             return emptyTerminalSizes;
           })
       : Promise.resolve(emptyTerminalSizes);
+
+    const emptyDraftInputs: Record<string, string> = {};
+    const draftInputsPromise: Promise<Record<string, string>> = currentProjectId
+      ? projectClient
+          .getDraftInputs(currentProjectId)
+          .then((drafts) => drafts ?? emptyDraftInputs)
+          .catch((error) => {
+            logWarn("Failed to prefetch draft inputs", { error });
+            return emptyDraftInputs;
+          })
+      : Promise.resolve(emptyDraftInputs);
 
     const recipeLoadPromise = currentProjectId
       ? loadRecipes(currentProjectId).catch((error) => {
@@ -842,6 +854,19 @@ export async function hydrateAppState(
     // Restore focus mode from per-project state (hydrate returns per-project focus mode)
     if (options.setFocusMode && appState.focusMode !== undefined) {
       options.setFocusMode(appState.focusMode, appState.focusPanelState);
+    }
+
+    // Restore hybrid input bar draft inputs from per-project state
+    if (currentProjectId) {
+      try {
+        const draftInputs = await draftInputsPromise;
+        if (!checkCurrent()) return;
+        if (Object.keys(draftInputs).length > 0) {
+          useTerminalInputStore.getState().restoreProjectDraftInputs(currentProjectId, draftInputs);
+        }
+      } catch (error) {
+        logWarn("Failed to restore draft inputs", { error });
+      }
     }
 
     // Restore MRU list

@@ -1,0 +1,15 @@
+{
+  "id": "inrepo-work",
+  "name": "Work",
+  "terminals": [
+    {
+      "type": "claude",
+      "title": "Work",
+      "env": {},
+      "initialPrompt": "/work {{issue_number}}"
+    }
+  ],
+  "createdAt": 1775381905486,
+  "showInEmptyState": false,
+  "autoAssign": "always"
+}

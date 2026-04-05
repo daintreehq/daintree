@@ -466,6 +466,16 @@ export interface ElectronAPI {
       terminalSizes: Record<string, { cols: number; rows: number }>
     ): Promise<void>;
     /**
+     * Get draft inputs for a project.
+     * Used for restoring hybrid input bar drafts when switching to a project.
+     */
+    getDraftInputs(projectId: string): Promise<Record<string, string>>;
+    /**
+     * Save draft inputs for a project.
+     * Used for preserving hybrid input bar drafts when switching away from a project.
+     */
+    setDraftInputs(projectId: string, draftInputs: Record<string, string>): Promise<void>;
+    /**
      * Get tab groups for a project.
      * Used for restoring tab groups when switching to a project.
      */

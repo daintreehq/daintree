@@ -1648,6 +1648,12 @@ const api: ElectronAPI = {
     ): Promise<void> =>
       _unwrappingInvoke(CHANNELS.PROJECT_SET_TERMINAL_SIZES, { projectId, terminalSizes }),
 
+    getDraftInputs: (projectId: string): Promise<Record<string, string>> =>
+      _unwrappingInvoke(CHANNELS.PROJECT_GET_DRAFT_INPUTS, projectId),
+
+    setDraftInputs: (projectId: string, draftInputs: Record<string, string>): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.PROJECT_SET_DRAFT_INPUTS, { projectId, draftInputs }),
+
     getTabGroups: (projectId: string): Promise<import("../shared/types/index.js").TabGroup[]> =>
       _unwrappingInvoke(CHANNELS.PROJECT_GET_TAB_GROUPS, projectId),
 

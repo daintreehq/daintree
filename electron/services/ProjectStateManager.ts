@@ -130,6 +130,7 @@ export class ProjectStateManager {
         activeWorktreeId: parsed.activeWorktreeId,
         sidebarWidth: typeof parsed.sidebarWidth === "number" ? parsed.sidebarWidth : 350,
         terminals: validTerminals,
+        tabGroups: Array.isArray(parsed.tabGroups) ? parsed.tabGroups : undefined,
         terminalLayout: parsed.terminalLayout || undefined,
         focusMode: typeof parsed.focusMode === "boolean" ? parsed.focusMode : undefined,
         focusPanelState:
@@ -140,6 +141,18 @@ export class ProjectStateManager {
                 sidebarWidth: parsed.focusPanelState.sidebarWidth,
                 diagnosticsOpen: Boolean(parsed.focusPanelState.diagnosticsOpen),
               }
+            : undefined,
+        terminalSizes:
+          parsed.terminalSizes &&
+          typeof parsed.terminalSizes === "object" &&
+          !Array.isArray(parsed.terminalSizes)
+            ? parsed.terminalSizes
+            : undefined,
+        draftInputs:
+          parsed.draftInputs &&
+          typeof parsed.draftInputs === "object" &&
+          !Array.isArray(parsed.draftInputs)
+            ? parsed.draftInputs
             : undefined,
       };
 

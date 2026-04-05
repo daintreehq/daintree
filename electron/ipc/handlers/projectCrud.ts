@@ -13,7 +13,7 @@ import type {
   BulkProjectStats,
   ProjectSwitchOutgoingState,
 } from "../../../shared/types/ipc/project.js";
-import { sanitizeTerminals, sanitizeTerminalSizes } from "./terminalLayout.js";
+import { sanitizeTerminals, sanitizeTerminalSizes, sanitizeDraftInputs } from "./terminalLayout.js";
 import { ProjectStatsService } from "../../services/ProjectStatsService.js";
 import type {
   GitInitOptions,
@@ -182,12 +182,16 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       const validSizes = sanitizeTerminalSizes(
         (outgoingState.terminalSizes ?? {}) as Record<string, unknown>
       );
+      const validDrafts = outgoingState.draftInputs
+        ? sanitizeDraftInputs(outgoingState.draftInputs as Record<string, unknown>)
+        : undefined;
       const existing = await projectStore.getProjectState(previousProjectId);
       await projectStore.saveProjectState(previousProjectId, {
         ...(existing ?? { projectId: previousProjectId, sidebarWidth: 350, terminals: [] }),
         projectId: previousProjectId,
         terminals: validTerminals,
         terminalSizes: validSizes,
+        ...(validDrafts !== undefined && { draftInputs: validDrafts }),
       });
     }
 
@@ -457,12 +461,16 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       const validSizes = sanitizeTerminalSizes(
         (outgoingState.terminalSizes ?? {}) as Record<string, unknown>
       );
+      const validDrafts = outgoingState.draftInputs
+        ? sanitizeDraftInputs(outgoingState.draftInputs as Record<string, unknown>)
+        : undefined;
       const existing = await projectStore.getProjectState(previousProjectId);
       await projectStore.saveProjectState(previousProjectId, {
         ...(existing ?? { projectId: previousProjectId, sidebarWidth: 350, terminals: [] }),
         projectId: previousProjectId,
         terminals: validTerminals,
         terminalSizes: validSizes,
+        ...(validDrafts !== undefined && { draftInputs: validDrafts }),
       });
     }
 

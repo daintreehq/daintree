@@ -158,6 +158,8 @@ export interface ProjectState {
   focusPanelState?: FocusPanelState;
   /** Terminal dimensions per terminal ID (preserved across project switches) */
   terminalSizes?: Record<string, { cols: number; rows: number }>;
+  /** Hybrid input bar draft text per terminal ID (preserved across project switches) */
+  draftInputs?: Record<string, string>;
 }
 
 /** Recipe terminal type */

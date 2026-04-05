@@ -10,6 +10,7 @@ import type { HydrateResult } from "./app.js";
 export interface ProjectSwitchOutgoingState {
   terminals?: TerminalSnapshot[];
   terminalSizes?: Record<string, { cols: number; rows: number }>;
+  draftInputs?: Record<string, string>;
 }
 
 /** Payload for project:on-switch event with cancellation token */

@@ -128,6 +128,8 @@ export interface TerminalInputState {
   isVoiceSubmitting: (panelId: string) => boolean;
   clearTerminalState: (terminalId: string) => void;
   resetForProjectSwitch: (projectId: string, preserveTerminalIds?: Set<string>) => void;
+  getProjectDraftInputs: (projectId: string) => Record<string, string>;
+  restoreProjectDraftInputs: (projectId: string, inputs: Record<string, string>) => void;
 }
 
 export const useTerminalInputStore = create<TerminalInputState>()((set, get) => ({
@@ -435,5 +437,30 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         historyIndex: newIndex,
         tempDraft: newTempDraft,
       };
+    }),
+
+  getProjectDraftInputs: (projectId) => {
+    const prefix = `${projectId}:`;
+    const result: Record<string, string> = {};
+    for (const [key, value] of get().draftInputs) {
+      if (key.startsWith(prefix) && value) {
+        const terminalId = key.slice(prefix.length);
+        if (terminalId) {
+          result[terminalId] = value;
+        }
+      }
+    }
+    return result;
+  },
+
+  restoreProjectDraftInputs: (projectId, inputs) =>
+    set((state) => {
+      const newDraftInputs = new Map(state.draftInputs);
+      for (const [terminalId, value] of Object.entries(inputs)) {
+        if (terminalId && value) {
+          newDraftInputs.set(`${projectId}:${terminalId}`, value);
+        }
+      }
+      return { draftInputs: newDraftInputs };
     }),
 }));
