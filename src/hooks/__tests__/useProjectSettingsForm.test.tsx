@@ -10,6 +10,7 @@ const {
   mockEnableInRepoSettings,
   mockDisableInRepoSettings,
   mockProjects,
+  mockIsLoading,
 } = vi.hoisted(() => ({
   mockSettings: { value: null as ProjectSettings | null },
   mockSaveSettings: vi.fn().mockResolvedValue(undefined),
@@ -27,24 +28,28 @@ const {
       path: string;
     }>,
   },
+  mockIsLoading: { value: false },
 }));
 
 vi.mock("@/hooks/useProjectSettings", () => ({
   useProjectSettings: () => ({
     settings: mockSettings.value,
     saveSettings: mockSaveSettings,
-    isLoading: false,
+    isLoading: mockIsLoading.value,
     error: null,
   }),
 }));
 
 vi.mock("@/store/projectStore", () => ({
-  useProjectStore: () => ({
-    projects: mockProjects.value,
-    updateProject: mockUpdateProject,
-    enableInRepoSettings: mockEnableInRepoSettings,
-    disableInRepoSettings: mockDisableInRepoSettings,
-  }),
+  useProjectStore: (selector?: (state: Record<string, unknown>) => unknown) => {
+    const state = {
+      projects: mockProjects.value,
+      updateProject: mockUpdateProject,
+      enableInRepoSettings: mockEnableInRepoSettings,
+      disableInRepoSettings: mockDisableInRepoSettings,
+    };
+    return selector ? selector(state) : state;
+  },
 }));
 
 vi.mock("@/hooks/useWorktrees", () => ({
@@ -80,6 +85,7 @@ const baseSettings: ProjectSettings = {
 
 function resetMocks() {
   mockSettings.value = null;
+  mockIsLoading.value = false;
   mockProjects.value = [
     { id: "proj-1", name: "Test Project", emoji: "🌲", color: undefined, path: "/test" },
   ];
@@ -335,6 +341,91 @@ describe("useProjectSettingsForm", () => {
     expect(typeof result.current.enableInRepoSettings).toBe("function");
     expect(typeof result.current.disableInRepoSettings).toBe("function");
     expect(typeof result.current.flush).toBe("function");
+  });
+
+  it("initializes correctly when settings are already loaded at dialog open", async () => {
+    mockSettings.value = baseSettings;
+    const { result, rerender } = renderHook(
+      ({ isOpen, projectId }: FormProps) => useProjectSettingsForm({ projectId, isOpen }),
+      { initialProps: { isOpen: false, tick: 0, projectId: "proj-1" } }
+    );
+    expect(result.current.projectIsInitialized).toBe(false);
+
+    rerender({ isOpen: true, tick: 1, projectId: "proj-1" });
+
+    await waitFor(() => {
+      expect(result.current.projectIsInitialized).toBe(true);
+    });
+    expect(result.current.projectName).toBe("Test Project");
+    expect(result.current.devServerCommand).toBe("npm run dev");
+  });
+
+  it("rehydrates when projectId changes while dialog stays open", async () => {
+    mockProjects.value = [
+      { id: "proj-1", name: "Test Project", emoji: "🌲", color: undefined, path: "/test" },
+      { id: "proj-2", name: "Other Project", emoji: "🚀", color: "#ff0000", path: "/other" },
+    ];
+    const otherSettings: ProjectSettings = {
+      ...baseSettings,
+      devServerCommand: "yarn dev",
+      branchPrefixMode: "none",
+    };
+
+    const { result, rerender } = renderOpenForm("proj-1");
+    await waitFor(() => {
+      expect(result.current.projectIsInitialized).toBe(true);
+    });
+    expect(result.current.projectName).toBe("Test Project");
+
+    // Simulate the loading gap: settings are stale while useProjectSettings refetches
+    mockIsLoading.value = true;
+    rerender({ isOpen: true, tick: 3, projectId: "proj-2" });
+
+    // Form should be uninitialized while loading new project's settings
+    await waitFor(() => {
+      expect(result.current.projectIsInitialized).toBe(false);
+    });
+
+    // New settings arrive
+    mockIsLoading.value = false;
+    mockSettings.value = otherSettings;
+    rerender({ isOpen: true, tick: 4, projectId: "proj-2" });
+
+    await waitFor(() => {
+      expect(result.current.projectName).toBe("Other Project");
+    });
+    expect(result.current.projectEmoji).toBe("🚀");
+    expect(result.current.projectColor).toBe("#ff0000");
+    expect(result.current.devServerCommand).toBe("yarn dev");
+  });
+
+  it("cancels pending debounce on close without firing save", async () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(
+      ({ isOpen, projectId }: FormProps) => useProjectSettingsForm({ projectId, isOpen }),
+      { initialProps: { isOpen: false, tick: 0, projectId: "proj-1" } }
+    );
+    rerender({ isOpen: true, tick: 1, projectId: "proj-1" });
+    mockSettings.value = baseSettings;
+    rerender({ isOpen: true, tick: 2, projectId: "proj-1" });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+    expect(result.current.projectIsInitialized).toBe(true);
+
+    act(() => {
+      result.current.setProjectName("Unsaved Name");
+    });
+    // Debounce is now pending (500ms). Close the dialog before it fires.
+    rerender({ isOpen: false, tick: 3, projectId: "proj-1" });
+    vi.clearAllMocks();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+    expect(mockUpdateProject).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it("filters invalid env var keys on save", async () => {

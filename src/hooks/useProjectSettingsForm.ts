@@ -28,8 +28,10 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     isLoading: projectIsLoading,
     error: projectError,
   } = useProjectSettings(projectId ?? "");
-  const { projects, updateProject, enableInRepoSettings, disableInRepoSettings } =
-    useProjectStore();
+  const projects = useProjectStore((state) => state.projects);
+  const updateProject = useProjectStore((state) => state.updateProject);
+  const enableInRepoSettings = useProjectStore((state) => state.enableInRepoSettings);
+  const disableInRepoSettings = useProjectStore((state) => state.disableInRepoSettings);
   const currentProject = projectId ? projects.find((p) => p.id === projectId) : undefined;
 
   const [projectAutoSaveError, setProjectAutoSaveError] = useState<string | null>(null);
@@ -65,6 +67,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   const currentProjectSnapshotRef = useRef<ReturnType<typeof createProjectSettingsSnapshot> | null>(
     null
   );
+  const prevProjectIdRef = useRef<string | null>(null);
 
   const { recipes, isLoading: recipesLoading } = useRecipeStore();
   const { worktreeMap, worktrees } = useWorktrees();
@@ -129,77 +132,10 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   currentProjectSnapshotRef.current = currentProjectSnapshot;
 
   useEffect(() => {
-    if (isOpen && !projectIsLoading && projectSettings && currentProject && !projectIsInitialized) {
-      const initialRunCommands = projectSettings.runCommands || [];
-      const envVars = projectSettings.environmentVariables || {};
-      const initialEnvVars = Object.entries(envVars).map(([key, value]) => ({
-        id: `env-${Date.now()}-${Math.random()}`,
-        key,
-        value,
-      }));
-      const initialExcludedPaths = projectSettings.excludedPaths || [];
-      const initialProjectIconSvg = projectSettings.projectIconSvg;
-      const initialDefaultWorktreeRecipeId = projectSettings.defaultWorktreeRecipeId;
-      const initialDevServerCommand = projectSettings.devServerCommand || "";
-      const initialDevServerLoadTimeout = projectSettings.devServerLoadTimeout;
-      const initialCommandOverrides = projectSettings.commandOverrides || [];
-      const initialCopyTreeSettings = projectSettings.copyTreeSettings || {};
-      const initialBranchPrefixMode = projectSettings.branchPrefixMode ?? "none";
-      const initialBranchPrefixCustom = projectSettings.branchPrefixCustom ?? "";
-      const initialWorktreePathPattern = projectSettings.worktreePathPattern ?? "";
-      const initialTerminalSettings = projectSettings.terminalSettings;
-      const initialNotificationOverrides = projectSettings.notificationOverrides ?? {};
-      const initialGithubRemote = projectSettings.githubRemote;
-
-      setProjectName(currentProject.name);
-      setProjectEmoji(currentProject.emoji || "🌲");
-      setProjectColor(currentProject.color);
-      setRunCommands(initialRunCommands);
-      setEnvironmentVariables(initialEnvVars);
-      setExcludedPaths(initialExcludedPaths);
-      setProjectIconSvg(initialProjectIconSvg);
-      setDefaultWorktreeRecipeId(initialDefaultWorktreeRecipeId);
-      setDevServerCommand(initialDevServerCommand);
-      setDevServerLoadTimeout(initialDevServerLoadTimeout);
-      setCommandOverrides(initialCommandOverrides);
-      setCopyTreeSettings(initialCopyTreeSettings);
-      setBranchPrefixMode(initialBranchPrefixMode);
-      setBranchPrefixCustom(initialBranchPrefixCustom);
-      setWorktreePathPattern(initialWorktreePathPattern);
-      setTerminalShell(initialTerminalSettings?.shell ?? "");
-      setTerminalShellArgs(initialTerminalSettings?.shellArgs?.join(" ") ?? "");
-      setTerminalDefaultCwd(initialTerminalSettings?.defaultWorkingDirectory ?? "");
-      setTerminalScrollback(
-        initialTerminalSettings?.scrollbackLines !== undefined
-          ? String(initialTerminalSettings.scrollbackLines)
-          : ""
-      );
-      setNotificationOverrides(initialNotificationOverrides);
-      setGithubRemote(initialGithubRemote);
-
-      lastSavedSnapshotRef.current = createProjectSettingsSnapshot(
-        currentProject.name,
-        currentProject.emoji || "🌲",
-        initialDevServerCommand,
-        initialProjectIconSvg,
-        initialExcludedPaths,
-        initialEnvVars,
-        initialRunCommands,
-        initialDefaultWorktreeRecipeId,
-        initialCommandOverrides,
-        initialCopyTreeSettings,
-        initialBranchPrefixMode,
-        initialBranchPrefixCustom,
-        initialDevServerLoadTimeout,
-        initialGithubRemote,
-        initialWorktreePathPattern,
-        initialTerminalSettings,
-        initialNotificationOverrides,
-        currentProject.color
-      );
-      setProjectIsInitialized(true);
-    }
     if (!isOpen) {
+      debouncedProjectSaveRef.current.cancel();
+      prevProjectIdRef.current = null;
+      lastSavedSnapshotRef.current = null;
       setProjectIsInitialized(false);
       setEnvironmentVariables([]);
       setProjectIconSvg(undefined);
@@ -219,13 +155,94 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       setTerminalScrollback("");
       setNotificationOverrides({});
       setGithubRemote(undefined);
-      lastSavedSnapshotRef.current = null;
+      return;
     }
-  }, [projectSettings, isOpen, projectIsInitialized, currentProject, projectIsLoading]);
 
-  useEffect(() => {
-    setProjectIsInitialized(false);
-  }, [projectId]);
+    const projectChanged =
+      prevProjectIdRef.current !== null && projectId !== prevProjectIdRef.current;
+
+    // When the project changes while the dialog is open, cancel any pending save
+    // from the old project and defer initialization until fresh settings arrive.
+    if (projectChanged) {
+      debouncedProjectSaveRef.current.cancel();
+      prevProjectIdRef.current = projectId;
+      setProjectIsInitialized(false);
+      return;
+    }
+
+    if (projectIsLoading || !projectSettings || !currentProject) return;
+    if (projectIsInitialized) return;
+
+    const initialRunCommands = projectSettings.runCommands || [];
+    const envVars = projectSettings.environmentVariables || {};
+    const initialEnvVars = Object.entries(envVars).map(([key, value]) => ({
+      id: `env-${Date.now()}-${Math.random()}`,
+      key,
+      value,
+    }));
+    const initialExcludedPaths = projectSettings.excludedPaths || [];
+    const initialProjectIconSvg = projectSettings.projectIconSvg;
+    const initialDefaultWorktreeRecipeId = projectSettings.defaultWorktreeRecipeId;
+    const initialDevServerCommand = projectSettings.devServerCommand || "";
+    const initialDevServerLoadTimeout = projectSettings.devServerLoadTimeout;
+    const initialCommandOverrides = projectSettings.commandOverrides || [];
+    const initialCopyTreeSettings = projectSettings.copyTreeSettings || {};
+    const initialBranchPrefixMode = projectSettings.branchPrefixMode ?? "none";
+    const initialBranchPrefixCustom = projectSettings.branchPrefixCustom ?? "";
+    const initialWorktreePathPattern = projectSettings.worktreePathPattern ?? "";
+    const initialTerminalSettings = projectSettings.terminalSettings;
+    const initialNotificationOverrides = projectSettings.notificationOverrides ?? {};
+    const initialGithubRemote = projectSettings.githubRemote;
+
+    setProjectName(currentProject.name);
+    setProjectEmoji(currentProject.emoji || "🌲");
+    setProjectColor(currentProject.color);
+    setRunCommands(initialRunCommands);
+    setEnvironmentVariables(initialEnvVars);
+    setExcludedPaths(initialExcludedPaths);
+    setProjectIconSvg(initialProjectIconSvg);
+    setDefaultWorktreeRecipeId(initialDefaultWorktreeRecipeId);
+    setDevServerCommand(initialDevServerCommand);
+    setDevServerLoadTimeout(initialDevServerLoadTimeout);
+    setCommandOverrides(initialCommandOverrides);
+    setCopyTreeSettings(initialCopyTreeSettings);
+    setBranchPrefixMode(initialBranchPrefixMode);
+    setBranchPrefixCustom(initialBranchPrefixCustom);
+    setWorktreePathPattern(initialWorktreePathPattern);
+    setTerminalShell(initialTerminalSettings?.shell ?? "");
+    setTerminalShellArgs(initialTerminalSettings?.shellArgs?.join(" ") ?? "");
+    setTerminalDefaultCwd(initialTerminalSettings?.defaultWorkingDirectory ?? "");
+    setTerminalScrollback(
+      initialTerminalSettings?.scrollbackLines !== undefined
+        ? String(initialTerminalSettings.scrollbackLines)
+        : ""
+    );
+    setNotificationOverrides(initialNotificationOverrides);
+    setGithubRemote(initialGithubRemote);
+
+    lastSavedSnapshotRef.current = createProjectSettingsSnapshot(
+      currentProject.name,
+      currentProject.emoji || "🌲",
+      initialDevServerCommand,
+      initialProjectIconSvg,
+      initialExcludedPaths,
+      initialEnvVars,
+      initialRunCommands,
+      initialDefaultWorktreeRecipeId,
+      initialCommandOverrides,
+      initialCopyTreeSettings,
+      initialBranchPrefixMode,
+      initialBranchPrefixCustom,
+      initialDevServerLoadTimeout,
+      initialGithubRemote,
+      initialWorktreePathPattern,
+      initialTerminalSettings,
+      initialNotificationOverrides,
+      currentProject.color
+    );
+    prevProjectIdRef.current = projectId;
+    setProjectIsInitialized(true);
+  }, [projectSettings, isOpen, projectIsInitialized, currentProject, projectIsLoading, projectId]);
 
   const projectPersistRef = useRef<() => Promise<void>>(undefined);
   projectPersistRef.current = async () => {
