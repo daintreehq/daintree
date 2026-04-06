@@ -103,23 +103,22 @@ test.describe.serial("Core: IPC Cleanup Verification", () => {
 
   test("AC3: renderer subscriptions stable across project switches", async () => {
     test.setTimeout(180_000);
-    const { app, window } = ctx;
 
     const fixture = createMultiProjectFixture();
 
     try {
-      const beforeRenderer = await getRendererListenerSnapshot(window, RENDERER_CHANNELS);
+      const beforeRenderer = await getRendererListenerSnapshot(ctx.window, RENDERER_CHANNELS);
 
-      await addAndSwitchToProject(app, window, fixture.repoB, "IPC Project B");
-      await window.waitForTimeout(T_SETTLE);
+      ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, fixture.repoB, "IPC Project B");
+      await ctx.window.waitForTimeout(T_SETTLE);
 
-      await selectExistingProject(window, "IPC Cleanup");
-      await window.waitForTimeout(T_SETTLE);
+      await selectExistingProject(ctx.window, "IPC Cleanup");
+      await ctx.window.waitForTimeout(T_SETTLE);
 
-      await selectExistingProject(window, "IPC Project B");
-      await window.waitForTimeout(T_SETTLE);
+      await selectExistingProject(ctx.window, "IPC Project B");
+      await ctx.window.waitForTimeout(T_SETTLE);
 
-      const afterRenderer = await getRendererListenerSnapshot(window, RENDERER_CHANNELS);
+      const afterRenderer = await getRendererListenerSnapshot(ctx.window, RENDERER_CHANNELS);
 
       for (const ch of RENDERER_CHANNELS) {
         const delta = Math.abs((afterRenderer[ch] ?? 0) - (beforeRenderer[ch] ?? 0));

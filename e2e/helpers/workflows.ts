@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import type { ElectronApplication, Locator, Page } from "@playwright/test";
-import { mockOpenDialog } from "./launch";
+import { mockOpenDialog, refreshActiveWindow } from "./launch";
 import { completeOnboarding } from "./project";
 import { waitForTerminalText } from "./terminal";
 import { getGridPanelCount, openTerminal } from "./panels";
@@ -12,7 +12,7 @@ export async function addAndSwitchToProject(
   window: Page,
   projectPath: string,
   projectName: string
-): Promise<void> {
+): Promise<Page> {
   await test.step(
     `Add and switch to project "${projectName}"`,
     async () => {
@@ -30,6 +30,7 @@ export async function addAndSwitchToProject(
     },
     { box: true }
   );
+  return await refreshActiveWindow(app, window);
 }
 
 export async function selectExistingProject(window: Page, projectName: string): Promise<void> {

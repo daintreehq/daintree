@@ -1,6 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- window.electron is untyped in Playwright evaluate() */
 import { test, expect } from "@playwright/test";
-import { launchApp, closeApp, mockOpenDialog, type AppContext } from "../helpers/launch";
+import {
+  launchApp,
+  closeApp,
+  mockOpenDialog,
+  refreshActiveWindow,
+  type AppContext,
+} from "../helpers/launch";
 import { createFixtureRepos } from "../helpers/fixtures";
 import { openAndOnboardProject, completeOnboarding } from "../helpers/project";
 import { injectDelay, clearAllFaults } from "../helpers/ipcFaults";
@@ -83,8 +89,8 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
 
     await completeOnboarding(ctx.window, PROJECT_B_NAME);
 
-    // Wait for onboarding transition to settle before switching
-    await ctx.window.waitForTimeout(2000);
+    // Re-acquire window after onboarding may have created a new WebContentsView
+    ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
 
     // Switch back to Project A as the starting baseline
     await switchToProject(ctx.window, PROJECT_A_NAME);

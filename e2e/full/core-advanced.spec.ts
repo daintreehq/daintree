@@ -200,9 +200,7 @@ test.describe.serial("Core: Advanced", () => {
     });
 
     test("switch to new project via project switcher", async () => {
-      const { app, window } = ctx;
-
-      await addAndSwitchToProject(app, window, switchRepo, "Switch Project B");
+      ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, switchRepo, "Switch Project B");
     });
 
     test("new project has 0 panels (isolation verified)", async () => {

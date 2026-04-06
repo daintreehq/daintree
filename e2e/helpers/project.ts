@@ -1,6 +1,6 @@
 import type { ElectronApplication, Page } from "@playwright/test";
 import { expect } from "@playwright/test";
-import { mockOpenDialog, getActiveAppWindow } from "./launch";
+import { mockOpenDialog, getActiveAppWindow, refreshActiveWindow } from "./launch";
 
 export async function openProject(
   app: ElectronApplication,
@@ -57,20 +57,5 @@ export async function openAndOnboardProject(
     : activeWindow;
   await completeOnboarding(onboardingWindow, name);
 
-  // After onboarding, the ProjectViewManager may have created a new
-  // WebContentsView for the project. Re-acquire the active page.
-  const newWindow = await getActiveAppWindow(app);
-
-  // Set up standard event listeners on the new page
-  newWindow.on("crash", () => console.error("[e2e] Renderer crashed"));
-  newWindow.on("console", (msg) => {
-    if (msg.type() === "error") console.error("[e2e:console]", msg.text());
-  });
-
-  // Wait for the new view to be ready
-  await newWindow
-    .locator('[aria-label="Toggle Sidebar"]')
-    .waitFor({ state: "visible", timeout: 10_000 });
-
-  return newWindow;
+  return await refreshActiveWindow(app, window);
 }

@@ -140,7 +140,7 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
     // Spawn a terminal in A so it has panels when we switch back
     await spawnTerminalAndVerify(ctx.window);
 
-    await addAndSwitchToProject(ctx.app, ctx.window, fixtureB, PROJECT_B);
+    ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, fixtureB, PROJECT_B);
 
     // Spawn a terminal in project B
     const panelB = await spawnTerminalAndVerify(ctx.window);
@@ -265,7 +265,7 @@ test.describe.serial("Deletion Cleanup: Background removal persists across resta
     // Session 1: Launch, onboard both projects, remove B
     ctx = await launchApp({ userDataDir });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureA, PROJECT_A);
-    await addAndSwitchToProject(ctx.app, ctx.window, fixtureB, PROJECT_B);
+    ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, fixtureB, PROJECT_B);
 
     // Switch to A so B is background
     await selectExistingProject(ctx.window, PROJECT_A);

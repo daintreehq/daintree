@@ -32,9 +32,8 @@ test.describe.serial("Core: Project Lifecycle", () => {
   });
 
   test("add second project via project switcher", async () => {
-    const { app, window } = ctx;
-
-    await addAndSwitchToProject(app, window, repoBPath, PROJECT_B);
+    ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, repoBPath, PROJECT_B);
+    const { window } = ctx;
 
     // Verify both projects are listed in the switcher
     await window.locator(SEL.toolbar.projectSwitcherTrigger).click();

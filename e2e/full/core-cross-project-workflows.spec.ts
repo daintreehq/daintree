@@ -1,6 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- window.electron is untyped in Playwright evaluate() */
 import { test, expect } from "@playwright/test";
-import { launchApp, closeApp, mockOpenDialog, type AppContext } from "../helpers/launch";
+import {
+  launchApp,
+  closeApp,
+  mockOpenDialog,
+  refreshActiveWindow,
+  type AppContext,
+} from "../helpers/launch";
 import { createFixtureRepos } from "../helpers/fixtures";
 import { openAndOnboardProject, completeOnboarding } from "../helpers/project";
 import { selectExistingProject, spawnTerminalAndVerify } from "../helpers/workflows";
@@ -69,7 +75,7 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
     await expect(palette).toBeVisible({ timeout: T_MEDIUM });
     await ctx.window.locator(SEL.projectSwitcher.addButton).click({ force: true });
     await completeOnboarding(ctx.window, PROJECT_B);
-    await ctx.window.waitForTimeout(2000);
+    ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
 
     // Switch back to A, then add Project C
     await selectExistingProject(ctx.window, PROJECT_A);
@@ -80,7 +86,7 @@ test.describe.serial("Core: Cross-Project Terminal Workflows", () => {
     await expect(palette2).toBeVisible({ timeout: T_MEDIUM });
     await ctx.window.locator(SEL.projectSwitcher.addButton).click({ force: true });
     await completeOnboarding(ctx.window, PROJECT_C);
-    await ctx.window.waitForTimeout(2000);
+    ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
 
     // Return to A as baseline
     await selectExistingProject(ctx.window, PROJECT_A);
