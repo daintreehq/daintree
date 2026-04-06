@@ -122,13 +122,17 @@ vi.mock("@/store/terminalStore", () => ({
 
 let mockSelectedRecipeId: string | null = null;
 vi.mock("@/components/Worktree/hooks/useRecipePicker", () => ({
+  CLONE_LAYOUT_ID: "__clone_layout__",
   useRecipePicker: () => ({
     selectedRecipeId: mockSelectedRecipeId,
     setSelectedRecipeId: vi.fn(),
     recipePickerOpen: false,
     setRecipePickerOpen: vi.fn(),
     recipeSelectionTouchedRef: { current: false },
-    selectedRecipe: mockSelectedRecipeId ? { name: "Test Recipe", terminals: [{}] } : null,
+    selectedRecipe:
+      mockSelectedRecipeId && mockSelectedRecipeId !== "__clone_layout__"
+        ? { name: "Test Recipe", terminals: [{}] }
+        : null,
   }),
 }));
 

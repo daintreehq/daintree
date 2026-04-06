@@ -44,9 +44,21 @@ vi.mock("@/clients/systemClient", () => ({
   systemClient: { openExternal: vi.fn() },
 }));
 
+const mockAddTerminal = vi.fn().mockResolvedValue("new-terminal-id");
+vi.mock("@/store/terminalStore", () => ({
+  useTerminalStore: Object.assign(() => ({}), {
+    getState: () => ({ addTerminal: mockAddTerminal }),
+  }),
+}));
+
+const mockGenerateRecipeFromActiveTerminals = vi.fn().mockReturnValue([]);
 vi.mock("@/store/recipeStore", () => ({
   useRecipeStore: Object.assign(() => ({ recipes: [], runRecipe: vi.fn() }), {
-    getState: () => ({ runRecipeWithResults: vi.fn(), getRecipeById: () => null }),
+    getState: () => ({
+      runRecipeWithResults: vi.fn(),
+      getRecipeById: () => null,
+      generateRecipeFromActiveTerminals: mockGenerateRecipeFromActiveTerminals,
+    }),
   }),
 }));
 
@@ -98,6 +110,7 @@ vi.mock("@/store/worktreeStore", () => ({
 }));
 
 vi.mock("@/components/Worktree/hooks/useRecipePicker", () => ({
+  CLONE_LAYOUT_ID: "__clone_layout__",
   useRecipePicker: () => ({
     selectedRecipeId: null,
     setSelectedRecipeId: vi.fn(),

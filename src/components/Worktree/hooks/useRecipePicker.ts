@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import type { TerminalRecipe } from "@/types";
 
+export const CLONE_LAYOUT_ID = "__clone_layout__";
+
 export interface UseRecipePickerResult {
   selectedRecipeId: string | null;
   setSelectedRecipeId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -40,29 +42,33 @@ export function useRecipePicker({
     recipeSelectionTouchedRef.current = false;
   }, [isOpen]);
 
-  // Auto-select recipe: initialRecipeId > lastSelected > default > null
+  // Auto-select recipe: initialRecipeId > lastSelected > default > clone layout
   useEffect(() => {
     if (!isOpen) return;
     if (!projectId) return;
-    if (globalRecipes.length === 0) return;
     if (recipeSelectionTouchedRef.current) return;
 
     if (initialRecipeId && globalRecipes.some((r) => r.id === initialRecipeId)) {
       setSelectedRecipeId(initialRecipeId);
     } else if (lastSelectedWorktreeRecipeId !== undefined) {
-      if (
-        lastSelectedWorktreeRecipeId === null ||
-        globalRecipes.some((r) => r.id === lastSelectedWorktreeRecipeId)
-      ) {
+      if (lastSelectedWorktreeRecipeId === null) {
+        setSelectedRecipeId(null);
+      } else if (lastSelectedWorktreeRecipeId === CLONE_LAYOUT_ID) {
+        setSelectedRecipeId(CLONE_LAYOUT_ID);
+      } else if (globalRecipes.some((r) => r.id === lastSelectedWorktreeRecipeId)) {
         setSelectedRecipeId(lastSelectedWorktreeRecipeId);
       } else {
         if (projectId) setLastSelectedWorktreeRecipeIdByProject(projectId, undefined);
         if (defaultRecipeId && globalRecipes.some((r) => r.id === defaultRecipeId)) {
           setSelectedRecipeId(defaultRecipeId);
+        } else {
+          setSelectedRecipeId(CLONE_LAYOUT_ID);
         }
       }
     } else if (defaultRecipeId && globalRecipes.some((r) => r.id === defaultRecipeId)) {
       setSelectedRecipeId(defaultRecipeId);
+    } else {
+      setSelectedRecipeId(CLONE_LAYOUT_ID);
     }
   }, [
     isOpen,
@@ -74,9 +80,10 @@ export function useRecipePicker({
     setLastSelectedWorktreeRecipeIdByProject,
   ]);
 
-  // Invalidate stale recipe
+  // Invalidate stale recipe (skip sentinel IDs)
   useEffect(() => {
     if (!selectedRecipeId) return;
+    if (selectedRecipeId === CLONE_LAYOUT_ID) return;
     if (globalRecipes.some((recipe) => recipe.id === selectedRecipeId)) return;
     setSelectedRecipeId(null);
     if (projectId) setLastSelectedWorktreeRecipeIdByProject(projectId, undefined);
