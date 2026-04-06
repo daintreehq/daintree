@@ -1,47 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { getRecipeGridClasses, getRecipeTerminalSummary } from "../recipeUtils";
+import { getRecipeTerminalSummary } from "../recipeUtils";
 import type { RecipeTerminal } from "@/types";
 
 describe("recipeUtils", () => {
-  describe("getRecipeGridClasses", () => {
-    it("returns centered single column for 1 recipe", () => {
-      const classes = getRecipeGridClasses(1);
-      expect(classes).toContain("grid-cols-1");
-      expect(classes).toContain("max-w-md");
-      expect(classes).toContain("mx-auto");
-    });
-
-    it("handles zero recipes", () => {
-      const classes = getRecipeGridClasses(0);
-      expect(classes).toContain("grid");
-      expect(classes).toContain("grid-cols-1");
-    });
-
-    it("returns two-column grid for 2 recipes", () => {
-      const classes = getRecipeGridClasses(2);
-      expect(classes).toContain("sm:grid-cols-2");
-    });
-
-    it("returns three-column grid for 3 recipes", () => {
-      const classes = getRecipeGridClasses(3);
-      expect(classes).toContain("md:grid-cols-3");
-    });
-
-    it("returns two-column grid for 4 recipes", () => {
-      const classes = getRecipeGridClasses(4);
-      expect(classes).toContain("sm:grid-cols-2");
-      expect(classes).not.toContain("md:grid-cols-3");
-    });
-
-    it("returns three-column grid for 5+ recipes", () => {
-      const classes = getRecipeGridClasses(5);
-      expect(classes).toContain("md:grid-cols-3");
-
-      const classes6 = getRecipeGridClasses(6);
-      expect(classes6).toContain("md:grid-cols-3");
-    });
-  });
-
   describe("getRecipeTerminalSummary", () => {
     it("handles empty array", () => {
       const terminals: RecipeTerminal[] = [];

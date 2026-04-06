@@ -1,3 +1,14 @@
+// Silence EPIPE on stdout/stderr — the main process may close the pipe
+// at any time during shutdown or host restart.
+for (const stream of [process.stdout, process.stderr]) {
+  if (stream && typeof stream.on === "function") {
+    stream.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EPIPE") return;
+      throw err;
+    });
+  }
+}
+
 import { MessagePort } from "node:worker_threads";
 import { initializeLogger } from "./utils/logger.js";
 import { copyTreeService } from "./services/CopyTreeService.js";
@@ -19,6 +30,138 @@ if (process.env.CANOPY_USER_DATA) {
 
 const port = process.parentPort as unknown as MessagePort;
 
+// Worktree-specific ports with request/response correlation (Phase 1)
+const worktreePorts: MessagePort[] = [];
+
+// Event types delivered directly to renderers via MessagePort
+const DIRECT_RENDERER_EVENTS = new Set([
+  "worktree-update",
+  "worktree-removed",
+  "pr-detected",
+  "pr-cleared",
+  "issue-detected",
+  "issue-not-found",
+]);
+
+function sendToWorktreePorts(event: WorkspaceHostEvent): void {
+  for (let i = worktreePorts.length - 1; i >= 0; i--) {
+    try {
+      worktreePorts[i].postMessage({ type: "event", event });
+    } catch {
+      worktreePorts.splice(i, 1);
+    }
+  }
+}
+
+async function handleWorktreePortRequest(
+  rPort: MessagePort,
+  id: string,
+  action: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  try {
+    let result: unknown;
+
+    switch (action) {
+      case "get-all-states": {
+        const states = workspaceService.getSnapshotsSync();
+        result = { states };
+        break;
+      }
+
+      case "set-active": {
+        const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        workspaceService.setActiveWorktree(requestId, payload.worktreeId as string);
+        result = { ok: true };
+        break;
+      }
+
+      case "refresh": {
+        const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await workspaceService.refresh(requestId, payload.worktreeId as string | undefined);
+        result = { ok: true };
+        break;
+      }
+
+      case "create-worktree": {
+        const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await workspaceService.createWorktree(
+          requestId,
+          payload.rootPath as string,
+          payload.options as any
+        );
+        result = { ok: true };
+        break;
+      }
+
+      case "delete-worktree": {
+        const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await workspaceService.deleteWorktree(
+          requestId,
+          payload.worktreeId as string,
+          payload.force as boolean | undefined,
+          payload.deleteBranch as boolean | undefined
+        );
+        result = { ok: true };
+        break;
+      }
+
+      case "list-branches": {
+        const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await workspaceService.listBranches(requestId, payload.rootPath as string);
+        result = { ok: true };
+        break;
+      }
+
+      case "get-recent-branches": {
+        const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await workspaceService.getRecentBranches(requestId, payload.rootPath as string);
+        result = { ok: true };
+        break;
+      }
+
+      case "refresh-prs": {
+        const { pullRequestService } = await import("./services/PullRequestService.js");
+        await pullRequestService.refresh();
+        result = { ok: true };
+        break;
+      }
+
+      default:
+        throw new Error(`Unknown worktree port action: ${action}`);
+    }
+
+    rPort.postMessage({ id, result });
+  } catch (error) {
+    rPort.postMessage({ id, error: (error as Error).message });
+  }
+}
+
+function attachWorktreePort(newPort: MessagePort): void {
+  newPort.start();
+  worktreePorts.push(newPort);
+
+  newPort.on("message", (rawMsg: any) => {
+    const msg = rawMsg?.data ? rawMsg.data : rawMsg;
+    if (!msg?.id || !msg?.action) return;
+
+    handleWorktreePortRequest(newPort, msg.id, msg.action, msg.payload || {}).catch((err) => {
+      try {
+        newPort.postMessage({ id: msg.id, error: (err as Error).message });
+      } catch {
+        // Port closed
+      }
+    });
+  });
+
+  newPort.on("close", () => {
+    const idx = worktreePorts.indexOf(newPort);
+    if (idx >= 0) worktreePorts.splice(idx, 1);
+  });
+
+  console.log(`[WorkspaceHost] Worktree port attached (${worktreePorts.length} active)`);
+}
+
 // Global error handlers to prevent silent crashes
 process.on("uncaughtException", (err) => {
   console.error("[WorkspaceHost] Uncaught Exception:", err);
@@ -33,7 +176,7 @@ process.on("unhandledRejection", (reason) => {
   });
 });
 
-// Helper to send events to Main process
+// Helper to send events to Main process (and directly to renderers for spontaneous events)
 function sendEvent(event: WorkspaceHostEvent): void {
   try {
     port.postMessage(event);
@@ -58,7 +201,17 @@ function sendEvent(event: WorkspaceHostEvent): void {
       });
     }
   }
+
+  // Direct delivery to renderer(s) via MessagePort (bypasses main-process relay)
+  if (DIRECT_RENDERER_EVENTS.has((event as { type: string }).type)) {
+    if (worktreePorts.length > 0) {
+      sendToWorktreePorts(event);
+    }
+  }
 }
+
+// Process-level shutdown controller — aborted on dispose/SIGTERM to kill in-flight git operations
+const shutdownController = new AbortController();
 
 // Create singleton instance
 const workspaceService = new WorkspaceService(sendEvent);
@@ -67,25 +220,26 @@ const workspaceService = new WorkspaceService(sendEvent);
 port.on("message", async (rawMsg: any) => {
   const msg = rawMsg?.data ? rawMsg.data : rawMsg;
 
+  // Handle MessagePort transfers (worktree-specific port with request/response correlation)
+  const transferredPorts = rawMsg?.ports || [];
+  // Legacy renderer ports are no longer used — worktreePorts replaced them.
+  // Accept and close the port silently to avoid "Unknown message type" warnings.
+  if (msg?.type === "attach-renderer-port" && transferredPorts.length > 0) {
+    transferredPorts[0].close();
+    return;
+  }
+
+  if (msg?.type === "attach-worktree-port" && transferredPorts.length > 0) {
+    attachWorktreePort(transferredPorts[0] as MessagePort);
+    return;
+  }
+
   try {
     const request = msg as WorkspaceHostRequest;
 
     switch (request.type) {
       case "load-project":
-        if (!request.projectScopeId || typeof request.projectScopeId !== "string") {
-          sendEvent({
-            type: "load-project-result",
-            requestId: request.requestId,
-            success: false,
-            error: "Invalid projectScopeId: must be a non-empty string",
-          });
-          break;
-        }
-        await workspaceService.loadProject(
-          request.requestId,
-          request.rootPath,
-          request.projectScopeId
-        );
+        await workspaceService.loadProject(request.requestId, request.rootPath);
         break;
 
       case "sync":
@@ -173,6 +327,15 @@ port.on("message", async (rawMsg: any) => {
         await workspaceService.getRecentBranches(request.requestId, request.rootPath);
         break;
 
+      case "fetch-pr-branch":
+        await workspaceService.fetchPRBranch(
+          request.requestId,
+          request.rootPath,
+          request.prNumber,
+          request.headRefName
+        );
+        break;
+
       case "get-file-diff":
         await workspaceService.getFileDiff(
           request.requestId,
@@ -186,11 +349,20 @@ port.on("message", async (rawMsg: any) => {
         workspaceService.setPollingEnabled(request.enabled);
         break;
 
+      case "background":
+        workspaceService.pause();
+        break;
+
+      case "foreground":
+        workspaceService.resume();
+        break;
+
       case "health-check":
         sendEvent({ type: "pong" });
         break;
 
       case "dispose":
+        shutdownController.abort();
         workspaceService.dispose();
         break;
 
@@ -259,6 +431,24 @@ port.on("message", async (rawMsg: any) => {
         }
         break;
       }
+
+      case "update-monitor-config":
+        try {
+          workspaceService.updateMonitorConfig(request.config);
+          sendEvent({
+            type: "update-monitor-config-result",
+            requestId: request.requestId,
+            success: true,
+          });
+        } catch (error) {
+          sendEvent({
+            type: "update-monitor-config-result",
+            requestId: request.requestId,
+            success: false,
+            error: (error as Error).message,
+          });
+        }
+        break;
 
       case "update-github-token":
         workspaceService.updateGitHubToken(request.token);
@@ -351,10 +541,11 @@ port.on("message", async (rawMsg: any) => {
   }
 });
 
-// Handle process exit
-process.on("exit", () => {
+// Graceful shutdown on SIGTERM (macOS/Linux; Windows uses TerminateProcess so this won't fire)
+process.on("SIGTERM", () => {
+  console.log("[WorkspaceHost] SIGTERM received, shutting down");
+  shutdownController.abort();
   workspaceService.dispose();
-  console.log("[WorkspaceHost] Disposed");
 });
 
 // Signal ready

@@ -2,7 +2,7 @@ import { useCallback, useMemo, type Dispatch, type SetStateAction } from "react"
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import type { Compartment } from "@codemirror/state";
-import { useTerminalInputStore, useVoiceRecordingStore } from "@/store";
+import { useVoiceRecordingStore } from "@/store";
 import { createCustomKeymap } from "../inputEditorExtensions";
 import type { AutocompleteItem } from "../AutocompleteMenu";
 import type { AtFileContext, SlashCommandContext, AtDiffContext } from "../hybridInputParsing";
@@ -23,6 +23,13 @@ interface LatestRefShape {
   isExpanded: boolean;
 }
 
+function hasVoiceWorkPending(panelId: string, isVoiceActiveForPanel: boolean): boolean {
+  if (isVoiceActiveForPanel) return true;
+  const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
+  if (!buffer) return false;
+  return buffer.pendingCorrections.length > 0 || buffer.transcriptPhase === "paragraph_pending_ai";
+}
+
 interface UseEditorKeymapParams {
   latestRef: React.RefObject<LatestRefShape | null>;
   editorViewRef: React.RefObject<EditorView | null>;
@@ -33,6 +40,8 @@ interface UseEditorKeymapParams {
   applyAutocompleteSelection: (action: "insert" | "execute") => boolean;
   handleHistoryNavigation: (direction: "up" | "down") => boolean;
   sendFromEditor: () => void;
+  startVoiceWaitSubmit: () => void;
+  cancelVoiceWaitSubmit: () => boolean;
   stashEditorState: (terminalId: string, state: EditorView["state"], projectId?: string) => void;
   popStashedEditorState: (
     terminalId: string,
@@ -55,6 +64,8 @@ export function useEditorKeymap({
   applyAutocompleteSelection,
   handleHistoryNavigation,
   sendFromEditor,
+  startVoiceWaitSubmit,
+  cancelVoiceWaitSubmit,
   stashEditorState,
   popStashedEditorState,
   setAtContext,
@@ -114,24 +125,13 @@ export function useEditorKeymap({
 
           if (latest.disabled) return true;
 
-          if (latest.isVoiceActiveForPanel) {
+          if (hasVoiceWorkPending(latest.terminalId, latest.isVoiceActiveForPanel)) {
             handledEnterRef.current = true;
             setTimeout(() => {
               handledEnterRef.current = false;
             }, 0);
 
-            const { terminalId: tid, projectId: pid } = latest;
-            const voiceStore = useVoiceRecordingStore.getState();
-
-            void window.electron.voiceInput.flushParagraph();
-
-            const inputStore = useTerminalInputStore.getState();
-            const draft = inputStore.getDraftInput(tid, pid);
-            inputStore.setDraftInput(tid, draft + "\n", pid);
-            inputStore.bumpVoiceDraftRevision();
-
-            voiceStore.resetParagraphState(tid);
-
+            startVoiceWaitSubmit();
             return true;
           }
 
@@ -158,6 +158,8 @@ export function useEditorKeymap({
           const latest = latestRef.current;
           if (!latest) return false;
           if (isComposingRef.current) return false;
+
+          if (cancelVoiceWaitSubmit()) return true;
 
           if (latest.isAutocompleteOpen) {
             setAtContext(null);
@@ -301,6 +303,8 @@ export function useEditorKeymap({
       handleStash,
       handlePopStash,
       sendFromEditor,
+      startVoiceWaitSubmit,
+      cancelVoiceWaitSubmit,
       latestRef,
       editorViewRef,
       isComposingRef,

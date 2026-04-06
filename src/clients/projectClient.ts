@@ -9,11 +9,17 @@ import type {
   TerminalSnapshot,
   TabGroup,
 } from "@shared/types";
+import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
 import type {
   GitInitOptions,
   GitInitResult,
   GitInitProgressEvent,
 } from "@shared/types/ipc/gitInit";
+import type {
+  CloneRepoOptions,
+  CloneRepoResult,
+  CloneRepoProgressEvent,
+} from "@shared/types/ipc/gitClone";
 
 let inflight: Promise<Project | null> | null = null;
 let cachedResult: Project | null = null;
@@ -88,9 +94,9 @@ export const projectClient = {
     return window.electron.project.update(projectId, updates);
   },
 
-  switch: (projectId: string): Promise<Project> => {
+  switch: (projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project> => {
     invalidateCurrentCache();
-    return window.electron.project.switch(projectId);
+    return window.electron.project.switch(projectId, outgoingState);
   },
 
   openDialog: (): Promise<string | null> => {
@@ -98,7 +104,12 @@ export const projectClient = {
   },
 
   onSwitch: (
-    callback: (payload: { project: Project; switchId: string; worktreeLoadError?: string }) => void
+    callback: (payload: {
+      project: Project;
+      switchId: string;
+      worktreeLoadError?: string;
+      hydrateResult?: import("@shared/types/ipc/app").HydrateResult;
+    }) => void
   ): (() => void) => {
     return window.electron.project.onSwitch(callback);
   },
@@ -123,9 +134,9 @@ export const projectClient = {
     return window.electron.project.close(projectId, options);
   },
 
-  reopen: (projectId: string): Promise<Project> => {
+  reopen: (projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project> => {
     invalidateCurrentCache();
-    return window.electron.project.reopen(projectId);
+    return window.electron.project.reopen(projectId, outgoingState);
   },
 
   getStats: (projectId: string): Promise<ProjectStats> => {
@@ -152,6 +163,18 @@ export const projectClient = {
     return window.electron.project.onInitGitProgress(callback);
   },
 
+  cloneRepo: (options: CloneRepoOptions): Promise<CloneRepoResult> => {
+    return window.electron.project.cloneRepo(options);
+  },
+
+  onCloneProgress: (callback: (event: CloneRepoProgressEvent) => void): (() => void) => {
+    return window.electron.project.onCloneProgress(callback);
+  },
+
+  cancelClone: (): Promise<void> => {
+    return window.electron.project.cancelClone();
+  },
+
   getRecipes: (projectId: string): Promise<TerminalRecipe[]> => {
     return window.electron.project.getRecipes(projectId);
   },
@@ -176,6 +199,34 @@ export const projectClient = {
     return window.electron.project.deleteRecipe(projectId, recipeId);
   },
 
+  exportRecipeToFile: (name: string, json: string): Promise<boolean> => {
+    return window.electron.project.exportRecipeToFile(name, json);
+  },
+
+  importRecipeFromFile: (): Promise<string | null> => {
+    return window.electron.project.importRecipeFromFile();
+  },
+
+  getInRepoRecipes: (projectId: string): Promise<TerminalRecipe[]> => {
+    return window.electron.project.getInRepoRecipes(projectId);
+  },
+
+  syncInRepoRecipes: (projectId: string, recipes: TerminalRecipe[]): Promise<void> => {
+    return window.electron.project.syncInRepoRecipes(projectId, recipes);
+  },
+
+  updateInRepoRecipe: (
+    projectId: string,
+    recipe: TerminalRecipe,
+    previousName?: string
+  ): Promise<void> => {
+    return window.electron.project.updateInRepoRecipe(projectId, recipe, previousName);
+  },
+
+  deleteInRepoRecipe: (projectId: string, recipeName: string): Promise<void> => {
+    return window.electron.project.deleteInRepoRecipe(projectId, recipeName);
+  },
+
   getTerminals: (projectId: string): Promise<TerminalSnapshot[]> => {
     return window.electron.project.getTerminals(projectId);
   },
@@ -195,6 +246,14 @@ export const projectClient = {
     terminalSizes: Record<string, { cols: number; rows: number }>
   ): Promise<void> => {
     return window.electron.project.setTerminalSizes(projectId, terminalSizes);
+  },
+
+  getDraftInputs: (projectId: string): Promise<Record<string, string>> => {
+    return window.electron.project.getDraftInputs(projectId);
+  },
+
+  setDraftInputs: (projectId: string, draftInputs: Record<string, string>): Promise<void> => {
+    return window.electron.project.setDraftInputs(projectId, draftInputs);
   },
 
   getTabGroups: (projectId: string): Promise<TabGroup[]> => {

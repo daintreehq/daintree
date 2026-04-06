@@ -3,13 +3,13 @@ import type { ProjectPulse } from "@shared/types";
 import {
   GitCommit,
   Calendar,
-  Flame,
   GitBranch,
   ArrowUp,
   ArrowDown,
   FileCode,
   FilePenLine,
 } from "lucide-react";
+import { StreakFlame } from "./StreakFlame";
 import { cn } from "@/lib/utils";
 
 interface PulseSummaryProps {
@@ -62,7 +62,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
         />
         {hasStreak && (
           <Stat
-            icon={<Flame className="w-3 h-3 text-status-warning" />}
+            icon={<StreakFlame streakDays={pulse.currentStreakDays!} size={12} />}
             value={pulse.currentStreakDays!}
             label="streak"
             highlight
@@ -95,7 +95,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
         />
         {hasStreak && (
           <Stat
-            icon={<Flame className="w-3.5 h-3.5 text-status-warning" />}
+            icon={<StreakFlame streakDays={pulse.currentStreakDays!} size={14} />}
             value={pulse.currentStreakDays!}
             label="day streak"
             highlight

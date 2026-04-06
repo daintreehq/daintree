@@ -407,7 +407,7 @@ export function TroubleshootingTab() {
           <h5 className="text-xs font-medium text-canopy-text mb-2">
             Advanced: Persistent Verbose Logging
           </h5>
-          <p className="text-xs text-canopy-text/60 mb-2">
+          <p className="text-xs text-canopy-text/60 mb-2 select-text">
             Use the toggle above for quick debugging. For persistent verbose logs across restarts,
             launch the app with environment variables:
           </p>
@@ -419,7 +419,7 @@ export function TroubleshootingTab() {
 
       <div className="space-y-2">
         <h4 className="text-sm font-medium text-canopy-text">Keyboard Shortcuts</h4>
-        <p className="text-xs text-canopy-text/50">
+        <p className="text-xs text-canopy-text/50 select-text">
           Use Cmd+Option+I (Mac) or Ctrl+Shift+I (Windows/Linux) to open DevTools.
         </p>
       </div>

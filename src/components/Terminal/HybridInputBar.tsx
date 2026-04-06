@@ -10,7 +10,7 @@ import {
 } from "react";
 import { EditorView, drawSelection } from "@codemirror/view";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import type { LegacyAgentType } from "@shared/types";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentState } from "@/types";
 import { getAgentConfig } from "@/config/agents";
 import { cn } from "@/lib/utils";
@@ -36,9 +36,11 @@ import { CommandPickerHost } from "@/components/Commands";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
-import { useTerminalStore, useVoiceRecordingStore, useWorktreeDataStore } from "@/store";
+import { usePanelStore, useVoiceRecordingStore } from "@/store";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
-import { Archive } from "lucide-react";
+import { Archive, Loader2 } from "lucide-react";
+import { useVoiceWaitSubmit } from "./hooks/useVoiceWaitSubmit";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
 import type { CommandContext, CommandResult } from "@shared/types/commands";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
@@ -96,7 +98,7 @@ export interface HybridInputBarProps {
   onSendKey?: (key: string) => void;
   onActivate?: () => void;
   cwd: string;
-  agentId?: LegacyAgentType;
+  agentId?: BuiltInAgentId;
   agentHasLifecycleEvent?: boolean;
   agentState?: AgentState;
   restartKey?: number;
@@ -164,7 +166,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
     const stashEditorState = useTerminalInputStore((s) => s.stashEditorState);
     const popStashedEditorState = useTerminalInputStore((s) => s.popStashedEditorState);
-    const isFocusedTerminal = useTerminalStore((s) => s.focusedId === terminalId);
+    const isFocusedTerminal = usePanelStore((s) => s.focusedId === terminalId);
     const hasStash = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
       return s.stashedEditorStates.has(key);
@@ -203,19 +205,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const voiceStatus = useVoiceRecordingStore((s) => s.status);
     const activeVoicePanelId = useVoiceRecordingStore((s) => s.activeTarget?.panelId ?? null);
     const voiceDraftRevision = useTerminalInputStore((s) => s.voiceDraftRevision);
-    const panelWorktreeId = useTerminalStore(
-      useCallback(
-        (s) => s.terminals.find((terminal) => terminal.id === terminalId)?.worktreeId,
-        [terminalId]
-      )
+    const panelWorktreeId = usePanelStore(
+      useCallback((s) => s.panelsById[terminalId]?.worktreeId, [terminalId])
     );
-    const panelWorktree = useWorktreeDataStore((s) =>
+    const panelWorktree = useWorktreeStore((s) =>
       panelWorktreeId ? s.worktrees.get(panelWorktreeId) : undefined
     );
     const isVoiceRecording = activeVoicePanelId === terminalId && voiceStatus === "recording";
     const isVoiceConnecting = activeVoicePanelId === terminalId && voiceStatus === "connecting";
     const isVoiceFinishing = activeVoicePanelId === terminalId && voiceStatus === "finishing";
     const isVoiceActiveForPanel = isVoiceRecording || isVoiceConnecting || isVoiceFinishing;
+    const isVoiceSubmitting = useTerminalInputStore(
+      useCallback((s) => s.voiceSubmittingPanels.has(terminalId), [terminalId])
+    );
 
     const commandContext = useMemo(
       (): CommandContext => ({ terminalId, cwd, projectId }),
@@ -591,6 +593,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       sendText(text);
     }, [sendText]);
 
+    const { startVoiceWaitSubmit, cancelVoiceWaitSubmit } = useVoiceWaitSubmit({
+      terminalId,
+      editorViewRef,
+      editableCompartmentRef,
+      sendFromEditor,
+    });
+
     const collapseEditor = useCallback(() => setIsExpanded(false), []);
 
     const focusEditor = useCallback(() => {
@@ -830,6 +839,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       applyAutocompleteSelection,
       handleHistoryNavigation,
       sendFromEditor,
+      startVoiceWaitSubmit,
+      cancelVoiceWaitSubmit,
       stashEditorState,
       popStashedEditorState,
       setAtContext,
@@ -868,6 +879,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               submitAfterCompositionRef.current = true;
               return true;
             }
+            if (useTerminalInputStore.getState().isVoiceSubmitting(latest.terminalId)) {
+              event.preventDefault();
+              return true;
+            }
             const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
             if (text.trim().length === 0) {
               if (latest.onSendKey) latest.onSendKey("enter");
@@ -886,6 +901,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             isComposingRef.current = false;
             if (!submitAfterCompositionRef.current) return false;
             submitAfterCompositionRef.current = false;
+            const latest = latestRef.current;
+            if (latest && useTerminalInputStore.getState().isVoiceSubmitting(latest.terminalId)) {
+              return false;
+            }
             setTimeout(sendFromEditor, 0);
             return false;
           },
@@ -1138,7 +1157,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const barContent = (
       <div
-        className="group cursor-text px-4 pb-3 pt-3"
+        className="group cursor-text px-3.5 pb-2.5 pt-2.5"
         style={{ backgroundColor: inputBarColors.background, ...shellVars }}
       >
         <div className="flex items-end gap-2">
@@ -1187,11 +1206,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 <span className="text-xs font-medium text-canopy-accent">Drop to attach</span>
               </div>
             )}
+            {isVoiceSubmitting && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-sm bg-canopy-bg/80 pointer-events-none">
+                <Loader2 className="h-4 w-4 animate-spin text-canopy-accent" />
+              </div>
+            )}
             <button
               type="button"
               onClick={openPicker}
               disabled={disabled}
-              className="select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-canopy-accent/85 hover:text-canopy-accent transition-colors cursor-pointer focus-visible:outline-none"
+              className="select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-canopy-accent/65 hover:text-canopy-accent/85 transition-colors cursor-pointer focus-visible:outline-none"
               aria-label="Open command picker"
             >
               ❯
@@ -1211,7 +1235,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 <button
                   type="button"
                   onClick={handlePopStash}
-                  className="flex items-center justify-center h-5 w-5 rounded-sm text-canopy-accent/70 hover:text-canopy-accent hover:bg-tint/[0.06] transition-colors cursor-pointer"
+                  className="flex items-center justify-center h-5 w-5 rounded-sm text-canopy-accent/55 hover:text-canopy-accent/80 hover:bg-tint/[0.06] transition-colors cursor-pointer"
                   aria-label="Restore stashed input"
                   title="Restore stashed input (⌘⇧X)"
                 >

@@ -1,14 +1,15 @@
-import { useCallback, useReducer, useRef, useMemo, useEffect } from "react";
+import { useCallback, useReducer, useRef, useMemo, useEffect, useLayoutEffect } from "react";
 import PQueue from "p-queue";
 import {
-  Loader2,
   Check,
   AlertTriangle,
   UserPlus,
   Play,
   ChevronsUpDown,
   RotateCcw,
+  Copy,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { WorktreeIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -22,17 +23,22 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
 import { useRecipeStore, type RecipeSpawnResults } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useTerminalStore } from "@/store/terminalStore";
-import { useRecipePicker } from "@/components/Worktree/hooks/useRecipePicker";
+import { usePanelStore } from "@/store/panelStore";
+import { useRecipePicker, CLONE_LAYOUT_ID } from "@/components/Worktree/hooks/useRecipePicker";
 import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNewWorktreeProjectSettings";
-import type { GitHubIssue } from "@shared/types/github";
+import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+
+type BulkCreateMode = "issue" | "pr";
 
 interface BulkCreateWorktreeDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  mode: BulkCreateMode;
   selectedIssues: GitHubIssue[];
+  selectedPRs: GitHubPR[];
   onComplete: () => void;
 }
 
@@ -248,21 +254,24 @@ function nextBackoffDelay(prevDelay: number): number {
 }
 
 interface PlannedWorktree {
-  issue: GitHubIssue;
+  item: GitHubIssue | GitHubPR;
+  mode: BulkCreateMode;
   branchName: string;
   prefix: string;
   skipped: boolean;
   skipReason?: string;
+  headRefName?: string;
 }
 
-function planWorktrees(
+function planIssueWorktrees(
   issues: GitHubIssue[],
   existingIssueNumbers: Set<number>
 ): PlannedWorktree[] {
   return issues.map((issue) => {
     if (issue.state !== "OPEN") {
       return {
-        issue,
+        item: issue,
+        mode: "issue",
         branchName: "",
         prefix: "",
         skipped: true,
@@ -271,7 +280,8 @@ function planWorktrees(
     }
     if (existingIssueNumbers.has(issue.number)) {
       return {
-        issue,
+        item: issue,
+        mode: "issue",
         branchName: "",
         prefix: "",
         skipped: true,
@@ -284,7 +294,51 @@ function planWorktrees(
     const issuePrefix = `issue-${issue.number}-`;
     const branchName = buildBranchName(prefix, `${issuePrefix}${slug || "worktree"}`);
 
-    return { issue, branchName, prefix, skipped: false };
+    return { item: issue, mode: "issue", branchName, prefix, skipped: false };
+  });
+}
+
+function planPRWorktrees(prs: GitHubPR[], existingPRNumbers: Set<number>): PlannedWorktree[] {
+  return prs.map((pr) => {
+    if (pr.state !== "OPEN") {
+      return {
+        item: pr,
+        mode: "pr",
+        branchName: "",
+        prefix: "",
+        skipped: true,
+        skipReason: pr.state === "MERGED" ? "Merged" : "Closed",
+      };
+    }
+    if (!pr.headRefName) {
+      return {
+        item: pr,
+        mode: "pr",
+        branchName: "",
+        prefix: "",
+        skipped: true,
+        skipReason: "No branch info",
+      };
+    }
+    if (existingPRNumbers.has(pr.number)) {
+      return {
+        item: pr,
+        mode: "pr",
+        branchName: "",
+        prefix: "",
+        skipped: true,
+        skipReason: "Has worktree",
+      };
+    }
+
+    return {
+      item: pr,
+      mode: "pr",
+      branchName: pr.headRefName,
+      prefix: "",
+      skipped: false,
+      headRefName: pr.headRefName,
+    };
   });
 }
 
@@ -311,7 +365,9 @@ function getStageLabel(status: ItemStatus | undefined): string | null {
 export function BulkCreateWorktreeDialog({
   isOpen,
   onClose,
+  mode,
   selectedIssues,
+  selectedPRs,
   onComplete,
 }: BulkCreateWorktreeDialogProps) {
   const [progress, dispatchProgress] = useReducer(progressReducer, {
@@ -322,6 +378,7 @@ export function BulkCreateWorktreeDialog({
   const queueRef = useRef<PQueue | null>(null);
   const runIdRef = useRef(0);
   const isExecutingRef = useRef(false);
+  const prevIsOpenRef = useRef(false);
 
   // Shared preferences (same store as single create dialog)
   const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
@@ -369,14 +426,21 @@ export function BulkCreateWorktreeDialog({
   }, [initializeGitHubConfig]);
 
   // Plan worktrees
+  const worktreeMap = useWorktreeStore((s) => s.worktrees);
   const planned = useMemo(() => {
-    const worktrees = useWorktreeDataStore.getState().worktrees;
+    if (mode === "pr") {
+      const existingPRNumbers = new Set<number>();
+      for (const wt of worktreeMap.values()) {
+        if (wt.prNumber) existingPRNumbers.add(wt.prNumber);
+      }
+      return planPRWorktrees(selectedPRs, existingPRNumbers);
+    }
     const existingIssueNumbers = new Set<number>();
-    for (const wt of worktrees.values()) {
+    for (const wt of worktreeMap.values()) {
       if (wt.issueNumber) existingIssueNumbers.add(wt.issueNumber);
     }
-    return planWorktrees(selectedIssues, existingIssueNumbers);
-  }, [selectedIssues]);
+    return planIssueWorktrees(selectedIssues, existingIssueNumbers);
+  }, [mode, selectedIssues, selectedPRs, worktreeMap]);
 
   const creatableCount = planned.filter((p) => !p.skipped).length;
 
@@ -405,9 +469,18 @@ export function BulkCreateWorktreeDialog({
         resolvedBranch?: string;
         spawnedTerminalIds: string[];
         failedTerminalIndices: number[];
+        cloneComplete?: boolean;
       }
     >()
   );
+
+  useLayoutEffect(() => {
+    if (isOpen && !prevIsOpenRef.current) {
+      dispatchProgress({ type: "RESET" });
+      batchTrackingRef.current = new Map();
+    }
+    prevIsOpenRef.current = isOpen;
+  }, [isOpen]);
 
   const runBatch = useCallback(
     async (toCreate: PlannedWorktree[]) => {
@@ -417,6 +490,12 @@ export function BulkCreateWorktreeDialog({
 
       const tracking = batchTrackingRef.current;
 
+      const sourceWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+      const cloneTerminals =
+        selectedRecipeId === CLONE_LAYOUT_ID && sourceWorktreeId
+          ? useRecipeStore.getState().generateRecipeFromActiveTerminals(sourceWorktreeId)
+          : null;
+
       const queue = new PQueue({
         concurrency: QUEUE_CONCURRENCY,
         intervalCap: QUEUE_INTERVAL_CAP,
@@ -424,16 +503,17 @@ export function BulkCreateWorktreeDialog({
         strict: true,
       });
       queueRef.current = queue;
-      const currentRunIssues = new Set(toCreate.map((item) => item.issue.number));
-      const succeededIssues = new Set<number>();
-      const failedIssues = new Set<number>();
+      const currentRunItems = new Set(toCreate.map((p) => p.item.number));
+      const succeededItems = new Set<number>();
+      const failedItems = new Set<number>();
       let lastSuccessfulWorktreeId: string | null = null;
 
-      for (const item of toCreate) {
+      for (const planned of toCreate) {
         void queue.add(async () => {
           if (runIdRef.current !== currentRunId) return;
 
-          const tracked = tracking.get(item.issue.number);
+          const itemNumber = planned.item.number;
+          const tracked = tracking.get(itemNumber);
           let backoffDelay = BACKOFF_BASE_MS;
 
           for (let attempt = 1; attempt <= MAX_AUTO_RETRIES + 1; attempt++) {
@@ -446,10 +526,9 @@ export function BulkCreateWorktreeDialog({
               let resolvedBranch = tracked?.resolvedBranch;
 
               if (!worktreeId) {
-                // Check if a worktree for this branch already exists (idempotent retry)
-                const worktrees = useWorktreeDataStore.getState().worktrees;
+                const worktrees = getCurrentViewStore().getState().worktrees;
                 for (const wt of worktrees.values()) {
-                  if (wt.branch && wt.branch === item.branchName) {
+                  if (wt.branch && wt.branch === planned.branchName) {
                     worktreeId = wt.worktreeId;
                     worktreePath = wt.path;
                     resolvedBranch = wt.branch;
@@ -461,58 +540,119 @@ export function BulkCreateWorktreeDialog({
               if (!worktreeId) {
                 dispatchProgress({
                   type: "ITEM_WORKTREE_CREATING",
-                  issueNumber: item.issue.number,
+                  issueNumber: itemNumber,
                   attempt,
                 });
 
-                // Determine base branch
-                const mainWorktree = Array.from(
-                  useWorktreeDataStore.getState().worktrees.values()
-                ).find((w) => w.isMainWorktree);
-                const baseBranch = mainWorktree?.branch;
-                if (!baseBranch) throw new Error("No main worktree found for base branch");
+                if (planned.mode === "pr" && planned.headRefName) {
+                  // PR mode: resolve branch from headRefName
+                  const branches = await worktreeClient.listBranches(rootPath);
+                  const remoteBranchName = `origin/${planned.headRefName}`;
+                  const remoteBranch = branches.find((b) => b.name === remoteBranchName);
+                  const localBranch = branches.find(
+                    (b) => b.name === planned.headRefName && !b.remote
+                  );
 
-                const availableBranch = await worktreeClient.getAvailableBranch(
-                  rootPath,
-                  item.branchName
-                );
-                const path = await worktreeClient.getDefaultPath(rootPath, availableBranch);
+                  let createFromRemote = false;
+                  let createUseExisting = false;
+                  let createBaseBranch: string;
 
-                const createdId = await worktreeClient.create(
-                  {
-                    baseBranch,
-                    newBranch: availableBranch,
-                    path,
-                    fromRemote: false,
-                    useExistingBranch: false,
-                  },
-                  rootPath
-                );
+                  if (remoteBranch) {
+                    createFromRemote = true;
+                    createBaseBranch = remoteBranchName;
+                  } else if (localBranch) {
+                    createUseExisting = true;
+                    createBaseBranch = localBranch.name;
+                  } else {
+                    // Branch not found — fetch from GitHub's PR refs
+                    const prItem = planned.item as GitHubPR;
+                    await worktreeClient.fetchPRBranch(
+                      rootPath,
+                      prItem.number,
+                      planned.headRefName
+                    );
+                    // Re-check after fetch
+                    const updatedBranches = await worktreeClient.listBranches(rootPath);
+                    const fetchedLocal = updatedBranches.find(
+                      (b) => b.name === planned.headRefName && !b.remote
+                    );
+                    if (fetchedLocal) {
+                      createUseExisting = true;
+                      createBaseBranch = fetchedLocal.name;
+                    } else {
+                      throw new Error(
+                        `Branch "${planned.headRefName}" could not be fetched from the remote.`
+                      );
+                    }
+                  }
 
-                if (!createdId) throw new Error("Failed to create worktree: no ID returned");
+                  const path = await worktreeClient.getDefaultPath(rootPath, planned.headRefName);
 
-                worktreeId = createdId;
-                worktreePath = path;
-                resolvedBranch = availableBranch;
+                  const createdId = await worktreeClient.create(
+                    {
+                      baseBranch: createBaseBranch,
+                      newBranch: planned.headRefName,
+                      path,
+                      fromRemote: createFromRemote,
+                      useExistingBranch: createUseExisting,
+                    },
+                    rootPath
+                  );
 
-                tracking.set(item.issue.number, {
+                  if (!createdId) throw new Error("Failed to create worktree: no ID returned");
+
+                  worktreeId = createdId;
+                  worktreePath = path;
+                  resolvedBranch = planned.headRefName;
+                } else {
+                  // Issue mode: create new branch from base
+                  const mainWorktree = Array.from(
+                    getCurrentViewStore().getState().worktrees.values()
+                  ).find((w) => w.isMainWorktree);
+                  const baseBranch = mainWorktree?.branch;
+                  if (!baseBranch) throw new Error("No main worktree found for base branch");
+
+                  const availableBranch = await worktreeClient.getAvailableBranch(
+                    rootPath,
+                    planned.branchName
+                  );
+                  const path = await worktreeClient.getDefaultPath(rootPath, availableBranch);
+
+                  const createdId = await worktreeClient.create(
+                    {
+                      baseBranch,
+                      newBranch: availableBranch,
+                      path,
+                      fromRemote: false,
+                      useExistingBranch: false,
+                    },
+                    rootPath
+                  );
+
+                  if (!createdId) throw new Error("Failed to create worktree: no ID returned");
+
+                  worktreeId = createdId;
+                  worktreePath = path;
+                  resolvedBranch = availableBranch;
+                }
+
+                tracking.set(itemNumber, {
                   worktreeId,
-                  worktreePath: path,
-                  resolvedBranch: availableBranch,
+                  worktreePath: worktreePath!,
+                  resolvedBranch: resolvedBranch!,
                   spawnedTerminalIds: [],
                   failedTerminalIndices: [],
                 });
 
                 dispatchProgress({
                   type: "ITEM_WORKTREE_CREATED",
-                  issueNumber: item.issue.number,
+                  issueNumber: itemNumber,
                   worktreeId,
-                  worktreePath: path,
-                  branch: availableBranch,
+                  worktreePath: worktreePath!,
+                  branch: resolvedBranch!,
                 });
               } else if (!tracked?.worktreeId) {
-                // Existing worktree found in data store — record in tracking
-                tracking.set(item.issue.number, {
+                tracking.set(itemNumber, {
                   worktreeId,
                   worktreePath: worktreePath!,
                   resolvedBranch: resolvedBranch!,
@@ -521,24 +661,68 @@ export function BulkCreateWorktreeDialog({
                 });
                 dispatchProgress({
                   type: "ITEM_WORKTREE_CREATED",
-                  issueNumber: item.issue.number,
+                  issueNumber: itemNumber,
                   worktreeId,
                   worktreePath: worktreePath!,
                   branch: resolvedBranch!,
                 });
               }
 
-              // Step 2: Recipe execution (skip if no recipe)
-              if (selectedRecipeId && worktreePath && worktreeId) {
-                const currentTracked = tracking.get(item.issue.number);
+              // Step 2: Clone layout or run recipe
+              const currentItem = tracking.get(itemNumber);
+              if (cloneTerminals && worktreePath && worktreeId && !currentItem?.cloneComplete) {
+                dispatchProgress({
+                  type: "ITEM_TERMINALS_SPAWNING",
+                  issueNumber: itemNumber,
+                });
+                try {
+                  for (const t of cloneTerminals) {
+                    await usePanelStore.getState().addPanel({
+                      kind:
+                        t.type === "dev-preview"
+                          ? "dev-preview"
+                          : t.type === "terminal"
+                            ? "terminal"
+                            : "agent",
+                      agentId:
+                        t.type !== "terminal" && t.type !== "dev-preview" ? t.type : undefined,
+                      title: t.title,
+                      cwd: worktreePath,
+                      worktreeId,
+                      exitBehavior: t.exitBehavior,
+                    });
+                  }
+                  const updatedTracked = tracking.get(itemNumber);
+                  if (updatedTracked) updatedTracked.cloneComplete = true;
+                } catch {
+                  // Clone is best-effort; worktree was created
+                }
+                dispatchProgress({
+                  type: "ITEM_TERMINALS_RESULT",
+                  issueNumber: itemNumber,
+                  spawnedTerminalIds: [],
+                  failedTerminalIndices: [],
+                });
+              } else if (
+                selectedRecipeId &&
+                selectedRecipeId !== CLONE_LAYOUT_ID &&
+                worktreePath &&
+                worktreeId
+              ) {
+                const currentTracked = tracking.get(itemNumber);
                 const failedIndices = currentTracked?.failedTerminalIndices;
                 const shouldRetryTerminals =
                   failedIndices && failedIndices.length > 0 ? failedIndices : undefined;
 
                 dispatchProgress({
                   type: "ITEM_TERMINALS_SPAWNING",
-                  issueNumber: item.issue.number,
+                  issueNumber: itemNumber,
                 });
+
+                const recipeContext =
+                  planned.mode === "pr"
+                    ? { worktreePath, branchName: resolvedBranch!, prNumber: itemNumber }
+                    : { worktreePath, branchName: resolvedBranch!, issueNumber: itemNumber };
 
                 const results: RecipeSpawnResults = await useRecipeStore
                   .getState()
@@ -546,16 +730,11 @@ export function BulkCreateWorktreeDialog({
                     selectedRecipeId,
                     worktreePath,
                     worktreeId,
-                    {
-                      worktreePath,
-                      branchName: resolvedBranch!,
-                      issueNumber: item.issue.number,
-                    },
+                    recipeContext,
                     shouldRetryTerminals
                   );
 
-                // Update local tracking with results
-                const updatedTracked = tracking.get(item.issue.number);
+                const updatedTracked = tracking.get(itemNumber);
                 if (updatedTracked) {
                   updatedTracked.spawnedTerminalIds = [
                     ...updatedTracked.spawnedTerminalIds,
@@ -566,7 +745,7 @@ export function BulkCreateWorktreeDialog({
 
                 dispatchProgress({
                   type: "ITEM_TERMINALS_RESULT",
-                  issueNumber: item.issue.number,
+                  issueNumber: itemNumber,
                   spawnedTerminalIds: results.spawned.map((s) => s.terminalId),
                   failedTerminalIndices: results.failed.map((f) => f.index),
                 });
@@ -579,10 +758,10 @@ export function BulkCreateWorktreeDialog({
                     continue;
                   }
                   const errorMsg = `${results.failed.length} terminal(s) failed to spawn`;
-                  failedIssues.add(item.issue.number);
+                  failedItems.add(itemNumber);
                   dispatchProgress({
                     type: "ITEM_FAILED",
-                    issueNumber: item.issue.number,
+                    issueNumber: itemNumber,
                     error: errorMsg,
                     attempts: attempt,
                     failedStep: "terminals",
@@ -591,16 +770,16 @@ export function BulkCreateWorktreeDialog({
                 }
               }
 
-              // Step 3: Issue assignment (best-effort)
-              if (assignWorktreeToSelf && item.issue.number) {
+              // Step 3: Issue assignment (best-effort, issues only)
+              if (planned.mode === "issue" && assignWorktreeToSelf && itemNumber) {
                 const username = useGitHubConfigStore.getState().config?.username;
                 if (username) {
                   dispatchProgress({
                     type: "ITEM_ASSIGNING",
-                    issueNumber: item.issue.number,
+                    issueNumber: itemNumber,
                   });
                   try {
-                    await githubClient.assignIssue(rootPath, item.issue.number, username);
+                    await githubClient.assignIssue(rootPath, itemNumber, username);
                   } catch {
                     // Best-effort — silent failure
                   }
@@ -610,8 +789,8 @@ export function BulkCreateWorktreeDialog({
               if (runIdRef.current !== currentRunId) return;
 
               lastSuccessfulWorktreeId = worktreeId!;
-              succeededIssues.add(item.issue.number);
-              dispatchProgress({ type: "ITEM_SUCCEEDED", issueNumber: item.issue.number });
+              succeededItems.add(itemNumber);
+              dispatchProgress({ type: "ITEM_SUCCEEDED", issueNumber: itemNumber });
               return;
             } catch (err) {
               if (runIdRef.current !== currentRunId) return;
@@ -623,10 +802,10 @@ export function BulkCreateWorktreeDialog({
                 continue;
               }
 
-              failedIssues.add(item.issue.number);
+              failedItems.add(itemNumber);
               dispatchProgress({
                 type: "ITEM_FAILED",
-                issueNumber: item.issue.number,
+                issueNumber: itemNumber,
                 error: errorMsg,
                 attempts: attempt,
                 failedStep: "worktree",
@@ -646,33 +825,30 @@ export function BulkCreateWorktreeDialog({
         await delay(VERIFICATION_SETTLE_MS);
         if (runIdRef.current !== currentRunId) return;
 
-        const terminals = useTerminalStore.getState().terminals;
+        const { panelsById } = usePanelStore.getState();
 
-        for (const [issueNumber, tracked] of tracking) {
-          // Only verify items from this run that succeeded with spawned terminals
-          if (!currentRunIssues.has(issueNumber)) continue;
+        for (const [itemNumber, tracked] of tracking) {
+          if (!currentRunItems.has(itemNumber)) continue;
           if (!tracked.worktreeId || tracked.spawnedTerminalIds.length === 0) continue;
           if (tracked.failedTerminalIndices.length > 0) continue;
 
           const crashedCount = tracked.spawnedTerminalIds.filter((tid) => {
-            const t = terminals.find((term) => term.id === tid);
+            const t = panelsById[tid];
             return t && t.exitCode !== undefined && t.exitCode !== 0;
           }).length;
 
           if (crashedCount > 0) {
-            // Only dispatch verifying/failed for items with crashed terminals
-            succeededIssues.delete(issueNumber);
-            failedIssues.add(issueNumber);
-            dispatchProgress({ type: "ITEM_VERIFYING", issueNumber });
+            succeededItems.delete(itemNumber);
+            failedItems.add(itemNumber);
+            dispatchProgress({ type: "ITEM_VERIFYING", issueNumber: itemNumber });
             dispatchProgress({
               type: "ITEM_FAILED",
-              issueNumber,
+              issueNumber: itemNumber,
               error: `${crashedCount} terminal(s) crashed after spawn`,
               attempts: 1,
               failedStep: "verification",
             });
           }
-          // Healthy items: no dispatch needed — already in succeeded state
         }
       }
 
@@ -683,8 +859,8 @@ export function BulkCreateWorktreeDialog({
 
       dispatchProgress({ type: "DONE" });
 
-      const sCount = succeededIssues.size;
-      const fCount = failedIssues.size;
+      const sCount = succeededItems.size;
+      const fCount = failedItems.size;
       if (fCount === 0) {
         notify({
           type: "success",
@@ -711,7 +887,10 @@ export function BulkCreateWorktreeDialog({
         notify({
           type: "info",
           title: "Nothing to Create",
-          message: "All selected issues already have worktrees or are closed",
+          message:
+            mode === "pr"
+              ? "All selected PRs already have worktrees or are ineligible"
+              : "All selected issues already have worktrees or are closed",
         });
         return;
       }
@@ -724,7 +903,7 @@ export function BulkCreateWorktreeDialog({
       batchTrackingRef.current = new Map();
       dispatchProgress({
         type: "START",
-        issueNumbers: toCreate.map((p) => p.issue.number),
+        issueNumbers: toCreate.map((p) => p.item.number),
       });
       await runBatch(toCreate);
     } finally {
@@ -732,6 +911,7 @@ export function BulkCreateWorktreeDialog({
     }
   }, [
     planned,
+    mode,
     selectedRecipeId,
     projectId,
     recipeSelectionTouchedRef,
@@ -755,7 +935,10 @@ export function BulkCreateWorktreeDialog({
       }
       if (failedIssueNumbers.size === 0) return;
 
-      const toRetry = planned.filter((p) => !p.skipped && failedIssueNumbers.has(p.issue.number));
+      const toRetry = planned.filter(
+        (p) => progress.items.has(p.item.number) && failedIssueNumbers.has(p.item.number)
+      );
+      if (toRetry.length === 0) return;
 
       // Reset terminal tracking for retried items so verification doesn't use stale data
       for (const issueNumber of failedIssueNumbers) {
@@ -780,14 +963,10 @@ export function BulkCreateWorktreeDialog({
       queueRef.current = null;
     }
     isExecutingRef.current = false;
-    dispatchProgress({ type: "RESET" });
-    batchTrackingRef.current = new Map();
     onClose();
   }, [isExecuting, onClose]);
 
   const handleDone = useCallback(() => {
-    dispatchProgress({ type: "RESET" });
-    batchTrackingRef.current = new Map();
     onComplete();
     onClose();
   }, [onComplete, onClose]);
@@ -833,7 +1012,7 @@ export function BulkCreateWorktreeDialog({
         <AppDialog.Title
           icon={
             isExecuting ? (
-              <Loader2 className="w-5 h-5 text-canopy-accent animate-spin" />
+              <Spinner size="lg" className="text-canopy-accent" />
             ) : isDone ? (
               failedCount > 0 ? (
                 <AlertTriangle className="w-5 h-5 text-status-warning" />
@@ -857,8 +1036,8 @@ export function BulkCreateWorktreeDialog({
       <AppDialog.Body>
         {progress.phase === "idle" ? (
           <div className="space-y-4">
-            {/* Assign to self */}
-            {currentUser && (
+            {/* Assign to self (issues only) */}
+            {mode === "issue" && currentUser && (
               <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-canopy-bg/50 border-canopy-border transition-colors">
                 {currentUserAvatar ? (
                   <img
@@ -901,112 +1080,142 @@ export function BulkCreateWorktreeDialog({
               </div>
             )}
 
-            {/* Recipe picker */}
-            {globalRecipes.length > 0 && (
-              <div className="space-y-2">
-                <label
-                  htmlFor="bulk-recipe-selector"
-                  className="block text-sm font-medium text-canopy-text"
+            {/* Starting Layout picker */}
+            <div className="space-y-2">
+              <label
+                htmlFor="bulk-recipe-selector"
+                className="block text-sm font-medium text-canopy-text"
+              >
+                Starting Layout
+              </label>
+              <Popover open={recipePickerOpen} onOpenChange={setRecipePickerOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    id="bulk-recipe-selector"
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={recipePickerOpen}
+                    aria-haspopup="listbox"
+                    aria-controls="bulk-recipe-list"
+                    className="w-full justify-between bg-canopy-bg border-canopy-border text-canopy-text hover:bg-canopy-bg hover:text-canopy-text"
+                  >
+                    <span className="flex items-center gap-2 truncate">
+                      {selectedRecipeId === CLONE_LAYOUT_ID ? (
+                        <>
+                          <Copy className="shrink-0 text-canopy-accent" />
+                          <span>Clone current layout</span>
+                        </>
+                      ) : selectedRecipe ? (
+                        <>
+                          <Play className="shrink-0 text-canopy-accent" />
+                          <span>{selectedRecipe.name}</span>
+                          <span className="text-xs text-canopy-text/50">
+                            ({selectedRecipe.terminals.length} terminal
+                            {selectedRecipe.terminals.length !== 1 ? "s" : ""})
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="shrink-0 text-canopy-accent" />
+                          <span className="text-canopy-text/60">Empty</span>
+                        </>
+                      )}
+                    </span>
+                    <ChevronsUpDown className="opacity-50 shrink-0" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  className="w-[400px] p-0"
+                  align="start"
+                  onEscapeKeyDown={(e) => e.stopPropagation()}
                 >
-                  Run Recipe (Optional)
-                </label>
-                <Popover open={recipePickerOpen} onOpenChange={setRecipePickerOpen}>
-                  <PopoverTrigger asChild>
-                    <Button
-                      id="bulk-recipe-selector"
-                      variant="outline"
-                      role="combobox"
-                      aria-expanded={recipePickerOpen}
-                      aria-haspopup="listbox"
-                      aria-controls="bulk-recipe-list"
-                      className="w-full justify-between bg-canopy-bg border-canopy-border text-canopy-text hover:bg-canopy-bg hover:text-canopy-text"
-                    >
-                      <span className="flex items-center gap-2 truncate">
-                        <Play className="shrink-0 text-canopy-accent" />
-                        {selectedRecipe ? (
-                          <>
-                            <span>{selectedRecipe.name}</span>
-                            <span className="text-xs text-canopy-text/50">
-                              ({selectedRecipe.terminals.length} terminal
-                              {selectedRecipe.terminals.length !== 1 ? "s" : ""})
-                            </span>
-                          </>
-                        ) : (
-                          <span className="text-canopy-text/60">No recipe</span>
-                        )}
-                      </span>
-                      <ChevronsUpDown className="opacity-50 shrink-0" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent
-                    className="w-[400px] p-0"
-                    align="start"
-                    onEscapeKeyDown={(e) => e.stopPropagation()}
+                  <div
+                    id="bulk-recipe-list"
+                    role="listbox"
+                    className="max-h-[300px] overflow-y-auto p-1"
                   >
                     <div
-                      id="bulk-recipe-list"
-                      role="listbox"
-                      className="max-h-[300px] overflow-y-auto p-1"
+                      role="option"
+                      aria-selected={selectedRecipeId === CLONE_LAYOUT_ID}
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleRecipeSelect(CLONE_LAYOUT_ID);
+                        }
+                      }}
+                      onClick={() => handleRecipeSelect(CLONE_LAYOUT_ID)}
+                      className={cn(
+                        "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
+                        selectedRecipeId === CLONE_LAYOUT_ID && "bg-canopy-border"
+                      )}
                     >
+                      <div className="flex items-center gap-2">
+                        <Copy className="h-3.5 w-3.5 text-canopy-text/50" />
+                        <span>Clone current layout</span>
+                      </div>
+                      {selectedRecipeId === CLONE_LAYOUT_ID && (
+                        <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
+                      )}
+                    </div>
+                    <div
+                      role="option"
+                      aria-selected={selectedRecipeId === null}
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleRecipeSelectNone();
+                        }
+                      }}
+                      onClick={handleRecipeSelectNone}
+                      className={cn(
+                        "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
+                        selectedRecipeId === null && "bg-canopy-border"
+                      )}
+                    >
+                      <span className="text-canopy-text/60">Empty</span>
+                      {selectedRecipeId === null && (
+                        <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
+                      )}
+                    </div>
+                    {globalRecipes.map((recipe) => (
                       <div
+                        key={recipe.id}
                         role="option"
-                        aria-selected={selectedRecipeId === null}
+                        aria-selected={recipe.id === selectedRecipeId}
                         tabIndex={0}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
-                            handleRecipeSelectNone();
+                            handleRecipeSelect(recipe.id);
                           }
                         }}
-                        onClick={handleRecipeSelectNone}
+                        onClick={() => handleRecipeSelect(recipe.id)}
                         className={cn(
                           "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                          selectedRecipeId === null && "bg-canopy-border"
+                          recipe.id === selectedRecipeId && "bg-canopy-border"
                         )}
                       >
-                        <span className="text-canopy-text/60">No recipe</span>
-                        {selectedRecipeId === null && (
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="truncate">{recipe.name}</span>
+                          <span className="text-xs text-canopy-text/50 shrink-0">
+                            {recipe.terminals.length} terminal
+                            {recipe.terminals.length !== 1 ? "s" : ""}
+                          </span>
+                          {recipe.id === defaultRecipeId && (
+                            <span className="text-xs text-canopy-accent shrink-0">(default)</span>
+                          )}
+                        </div>
+                        {recipe.id === selectedRecipeId && (
                           <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
                         )}
                       </div>
-                      {globalRecipes.map((recipe) => (
-                        <div
-                          key={recipe.id}
-                          role="option"
-                          aria-selected={recipe.id === selectedRecipeId}
-                          tabIndex={0}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              handleRecipeSelect(recipe.id);
-                            }
-                          }}
-                          onClick={() => handleRecipeSelect(recipe.id)}
-                          className={cn(
-                            "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                            recipe.id === selectedRecipeId && "bg-canopy-border"
-                          )}
-                        >
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="truncate">{recipe.name}</span>
-                            <span className="text-xs text-canopy-text/50 shrink-0">
-                              {recipe.terminals.length} terminal
-                              {recipe.terminals.length !== 1 ? "s" : ""}
-                            </span>
-                            {recipe.id === defaultRecipeId && (
-                              <span className="text-xs text-canopy-accent shrink-0">(default)</span>
-                            )}
-                          </div>
-                          {recipe.id === selectedRecipeId && (
-                            <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </PopoverContent>
-                </Popover>
-              </div>
-            )}
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            </div>
 
             {/* Worktree list */}
             <div className="space-y-2">
@@ -1016,7 +1225,7 @@ export function BulkCreateWorktreeDialog({
               <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-canopy-border divide-y divide-canopy-border">
                 {planned.map((item) => (
                   <div
-                    key={item.issue.number}
+                    key={item.item.number}
                     className={cn(
                       "px-3 py-2 flex items-center gap-3 text-sm",
                       item.skipped && "opacity-50"
@@ -1025,9 +1234,9 @@ export function BulkCreateWorktreeDialog({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-canopy-text/50 text-xs font-mono shrink-0">
-                          #{item.issue.number}
+                          #{item.item.number}
                         </span>
-                        <span className="text-canopy-text truncate">{item.issue.title}</span>
+                        <span className="text-canopy-text truncate">{item.item.title}</span>
                       </div>
                       {!item.skipped && (
                         <div className="flex items-center gap-1.5 mt-0.5">
@@ -1053,9 +1262,9 @@ export function BulkCreateWorktreeDialog({
             {/* Per-item status list */}
             <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-canopy-border divide-y divide-canopy-border">
               {planned
-                .filter((p) => !p.skipped)
+                .filter((p) => progress.items.has(p.item.number))
                 .map((item) => {
-                  const itemStatus = progress.items.get(item.issue.number);
+                  const itemStatus = progress.items.get(item.item.number);
                   const stageLabel = getStageLabel(itemStatus);
                   const isInProgress =
                     itemStatus &&
@@ -1064,12 +1273,12 @@ export function BulkCreateWorktreeDialog({
                     itemStatus.stage !== "failed";
                   return (
                     <div
-                      key={item.issue.number}
+                      key={item.item.number}
                       className="px-3 py-2 flex items-start gap-3 text-sm"
                     >
                       <div className="mt-0.5 shrink-0">
                         {isInProgress ? (
-                          <Loader2 className="w-4 h-4 animate-spin text-canopy-accent" />
+                          <Spinner size="md" className="text-canopy-accent" />
                         ) : itemStatus?.stage === "succeeded" ? (
                           <Check className="w-4 h-4 text-status-success" />
                         ) : itemStatus?.stage === "failed" ? (
@@ -1081,9 +1290,9 @@ export function BulkCreateWorktreeDialog({
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="text-canopy-text/50 text-xs font-mono shrink-0">
-                            #{item.issue.number}
+                            #{item.item.number}
                           </span>
-                          <span className="text-canopy-text truncate">{item.issue.title}</span>
+                          <span className="text-canopy-text truncate">{item.item.title}</span>
                           {isInProgress && itemStatus.attempt > 1 && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-canopy-accent/10 text-canopy-accent shrink-0">
                               retry {itemStatus.attempt - 1}
@@ -1108,7 +1317,7 @@ export function BulkCreateWorktreeDialog({
             <div className="space-y-2">
               <div className="h-2 rounded-full bg-overlay-soft overflow-hidden">
                 <div
-                  className="h-full rounded-full bg-canopy-accent transition-all duration-300"
+                  className="h-full rounded-full bg-canopy-accent transition-[width] duration-300"
                   style={{
                     width: `${progress.items.size > 0 ? (processedCount / progress.items.size) * 100 : 0}%`,
                   }}

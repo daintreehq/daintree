@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo } from "react";
-import { useTerminalStore, type TerminalInstance } from "@/store";
+import { usePanelStore, type TerminalInstance } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { getPanelComponent, type PanelComponentProps } from "@/registry";
+import { getPanelKindDefinition, type PanelComponentProps } from "@/registry";
 import { ContentPanel, triggerPanelTransition } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { usePanelLifecycle } from "@/hooks/usePanelLifecycle";
@@ -78,7 +78,8 @@ export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProp
       a.createdAt !== b.createdAt ||
       a.isRestarting !== b.isRestarting ||
       a.runtimeStatus !== b.runtimeStatus ||
-      a.isInputLocked !== b.isInputLocked
+      a.isInputLocked !== b.isInputLocked ||
+      a.extensionState !== b.extensionState
     ) {
       return false;
     }
@@ -126,9 +127,9 @@ export const GridPanel = React.memo(function GridPanel({
   onAddTab,
   onTabReorder,
 }: GridPanelProps) {
-  const toggleMaximize = useTerminalStore((state) => state.toggleMaximize);
-  const getPanelGroup = useTerminalStore((state) => state.getPanelGroup);
-  const moveTerminalToDock = useTerminalStore((state) => state.moveTerminalToDock);
+  const toggleMaximize = usePanelStore((state) => state.toggleMaximize);
+  const getPanelGroup = usePanelStore((state) => state.getPanelGroup);
+  const moveTerminalToDock = usePanelStore((state) => state.moveTerminalToDock);
 
   const lifecycle = usePanelLifecycle();
   const { handleFocus, handleClose, handleTitleChange } = usePanelHandlers({
@@ -171,7 +172,7 @@ export const GridPanel = React.memo(function GridPanel({
   }, [moveTerminalToDock, terminal.id]);
 
   const kind = terminal.kind ?? "terminal";
-  const registration = getPanelComponent(kind);
+  const definition = getPanelKindDefinition(kind);
 
   const panelProps: PanelComponentProps = useMemo(
     () =>
@@ -220,7 +221,7 @@ export const GridPanel = React.memo(function GridPanel({
     ]
   );
 
-  if (!registration) {
+  if (!definition) {
     console.warn(`[GridPanel] No component registered for kind: ${kind}`);
     return (
       <ContentPanel
@@ -257,7 +258,7 @@ export const GridPanel = React.memo(function GridPanel({
     );
   }
 
-  const PanelComponent = registration.component;
+  const PanelComponent = definition.component;
   const componentName = PanelComponent.displayName || PanelComponent.name || `Panel(${kind})`;
 
   return (

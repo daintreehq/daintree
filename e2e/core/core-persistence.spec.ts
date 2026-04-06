@@ -95,7 +95,7 @@ test.describe.serial("Persistence: Project memory across restart", () => {
   test("previously onboarded project appears after restart", async () => {
     // Session 1: Launch, onboard project, close
     ctx = await launchApp({ userDataDir });
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Persistence Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Persistence Test");
 
     const trigger = ctx.window.locator(SEL.toolbar.projectSwitcherTrigger);
     await expect(trigger).toBeVisible({ timeout: T_MEDIUM });

@@ -2,6 +2,7 @@ import { BrowserWindow, Menu, WebContentsView, app, clipboard } from "electron";
 import type { PortalBounds, PortalNavEvent } from "../../shared/types/portal.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
+import { getAppWebContents } from "../window/webContentsRegistry.js";
 
 export const PORTAL_MAX_LIVE_TABS = 3;
 
@@ -17,14 +18,30 @@ export class PortalManager {
     this.window = window;
   }
 
+  private sendToApp(channel: string, ...args: unknown[]): void {
+    if (this.window?.isDestroyed()) return;
+    const wc = getAppWebContents(this.window);
+    if (!wc.isDestroyed()) {
+      try {
+        wc.send(channel, ...args);
+      } catch {
+        // Silently ignore send failures during window disposal.
+      }
+    }
+  }
+
   private touchLru(tabId: string): void {
     this.lruOrder.delete(tabId);
     this.lruOrder.set(tabId, true);
   }
 
-  private destroyView(tabId: string): void {
+  private async destroyView(tabId: string): Promise<void> {
     const view = this.viewMap.get(tabId);
     if (!view) return;
+
+    // Detach state synchronously first so hasTab() returns false immediately
+    this.viewMap.delete(tabId);
+    this.lruOrder.delete(tabId);
 
     if (this.activeView === view) {
       try {
@@ -36,14 +53,20 @@ export class PortalManager {
       this.activeTabId = null;
     }
 
+    // Flush storage before closing to prevent localStorage data loss
+    if (!view.webContents.isDestroyed()) {
+      try {
+        await view.webContents.session.flushStorageData();
+      } catch {
+        // Best-effort flush — proceed to close even if flush fails
+      }
+    }
+
     try {
       view.webContents.close();
     } catch (error) {
       console.error(`[PortalManager] Error closing view for tab ${tabId}:`, error);
     }
-
-    this.viewMap.delete(tabId);
-    this.lruOrder.delete(tabId);
   }
 
   private evictIfNeeded(): void {
@@ -56,11 +79,10 @@ export class PortalManager {
         continue;
       }
 
-      this.destroyView(tabId);
+      // Fire-and-forget: eviction is synchronous caller path, flush is best-effort
+      void this.destroyView(tabId);
 
-      if (!this.window?.isDestroyed()) {
-        this.window.webContents.send(CHANNELS.PORTAL_TAB_EVICTED, { tabId });
-      }
+      this.sendToApp(CHANNELS.PORTAL_TAB_EVICTED, { tabId });
       break;
     }
   }
@@ -101,9 +123,7 @@ export class PortalManager {
       });
 
       const sendNavEvent = (navEvent: PortalNavEvent) => {
-        if (!this.window?.isDestroyed()) {
-          this.window.webContents.send(CHANNELS.PORTAL_NAV_EVENT, navEvent);
-        }
+        this.sendToApp(CHANNELS.PORTAL_NAV_EVENT, navEvent);
       };
 
       view.webContents.on("page-title-updated", (_, title) => {
@@ -145,15 +165,11 @@ export class PortalManager {
       });
 
       view.webContents.on("focus", () => {
-        if (!this.window?.isDestroyed()) {
-          this.window.webContents.send(CHANNELS.PORTAL_FOCUS);
-        }
+        this.sendToApp(CHANNELS.PORTAL_FOCUS);
       });
 
       view.webContents.on("blur", () => {
-        if (!this.window?.isDestroyed()) {
-          this.window.webContents.send(CHANNELS.PORTAL_BLUR);
-        }
+        this.sendToApp(CHANNELS.PORTAL_BLUR);
       });
 
       view.webContents.on("context-menu", (_event, params) => {
@@ -316,8 +332,8 @@ export class PortalManager {
     }
   }
 
-  closeTab(tabId: string): void {
-    this.destroyView(tabId);
+  async closeTab(tabId: string): Promise<void> {
+    await this.destroyView(tabId);
   }
 
   navigate(tabId: string, url: string): void {
@@ -365,28 +381,16 @@ export class PortalManager {
     return this.viewMap.has(tabId);
   }
 
-  destroyHiddenTabs(): string[] {
+  async destroyHiddenTabs(): Promise<string[]> {
     // Use lastShownTabId as fallback when activeTabId is null (e.g., hideAll was called for overlays)
     const skipId = this.activeTabId ?? this.lastShownTabId;
     const destroyed: string[] = [];
-    for (const [tabId, view] of this.viewMap) {
+    for (const tabId of [...this.viewMap.keys()]) {
       if (tabId === skipId) continue;
-
-      try {
-        this.window.contentView.removeChildView(view);
-      } catch {
-        // already removed
-      }
-      try {
-        view.webContents.close();
-      } catch {
-        // already destroyed
-      }
-
-      this.viewMap.delete(tabId);
       destroyed.push(tabId);
     }
     if (destroyed.length > 0) {
+      await Promise.allSettled(destroyed.map((tabId) => this.destroyView(tabId)));
       console.log(
         `[PortalManager] Destroyed ${destroyed.length} hidden tab(s) for memory pressure`
       );
@@ -397,7 +401,8 @@ export class PortalManager {
   destroy(): void {
     const tabIds = [...this.viewMap.keys()];
     for (const tabId of tabIds) {
-      this.destroyView(tabId);
+      // Fire-and-forget: window teardown is best-effort; Electron flushes sessions on shutdown
+      void this.destroyView(tabId);
     }
     this.activeView = null;
     this.activeTabId = null;

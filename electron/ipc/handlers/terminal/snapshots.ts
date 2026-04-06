@@ -7,6 +7,7 @@ import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 import { TerminalReplayHistoryPayloadSchema } from "../../../schemas/index.js";
 import { logDebug, logInfo, logWarn, logError } from "../../../utils/logger.js";
+import { getAgentAvailabilityStore } from "../../../services/AgentAvailabilityStore.js";
 
 export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -187,9 +188,13 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       const terminals = [];
       for (const id of terminalIds) {
         const terminal = await ptyClient.getTerminalAsync(id);
-        // Dev preview PTYs should not be rehydrated as generic terminal panels
-        // during project switching/hydration.
-        if (terminal && terminal.kind !== "dev-preview") {
+        // Dev preview and help PTYs should not be rehydrated as generic terminal
+        // panels during project switching/hydration.
+        if (
+          terminal &&
+          terminal.kind !== "dev-preview" &&
+          !getAgentAvailabilityStore().isHelpTerminal(terminal.id)
+        ) {
           terminals.push({
             id: terminal.id,
             projectId: terminal.projectId,
@@ -276,7 +281,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         throw new Error("Invalid state: must be a non-empty string");
       }
 
-      const validStates = ["idle", "working", "waiting", "completed"];
+      const validStates = ["idle", "working", "waiting", "completed", "exited"];
       if (!validStates.includes(state)) {
         throw new Error(`Invalid state: must be one of ${validStates.join(", ")}`);
       }
@@ -369,6 +374,11 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       if (!terminal) {
         logWarn(`terminal:reconnect: Terminal ${terminalId} not found`);
         return { exists: false, error: "Terminal not found in backend" };
+      }
+
+      if (getAgentAvailabilityStore().isHelpTerminal(terminal.id)) {
+        logInfo(`terminal:reconnect: Skipping help terminal ${terminalId}`);
+        return { exists: false, error: "Terminal is a help terminal" };
       }
 
       logInfo(`terminal:reconnect: Reconnecting to ${terminalId}`);

@@ -9,7 +9,12 @@ type ChecklistState = OnboardingState["checklist"];
 const DEFAULT_CHECKLIST: ChecklistState = {
   dismissed: false,
   celebrationShown: false,
-  items: { openedProject: false, launchedAgent: false, createdWorktree: false },
+  items: {
+    openedProject: false,
+    launchedAgent: false,
+    createdWorktree: false,
+    subscribedNewsletter: false,
+  },
 };
 
 interface MigratePayload {
@@ -29,11 +34,17 @@ function getOnboardingState(): OnboardingState {
       agentSetupIds: [],
       firstRunToastSeen: true,
       newsletterPromptSeen: true,
+      waitingNudgeSeen: true,
       migratedFromLocalStorage: true,
       checklist: {
         dismissed: true,
         celebrationShown: true,
-        items: { openedProject: true, launchedAgent: true, createdWorktree: true },
+        items: {
+          openedProject: true,
+          launchedAgent: true,
+          createdWorktree: true,
+          subscribedNewsletter: true,
+        },
       },
     };
   }
@@ -46,18 +57,24 @@ function getOnboardingState(): OnboardingState {
       agentSetupIds: [],
       firstRunToastSeen: false,
       newsletterPromptSeen: false,
+      waitingNudgeSeen: false,
       migratedFromLocalStorage: false,
       checklist: DEFAULT_CHECKLIST,
     };
   }
   const checklist = raw.checklist ?? DEFAULT_CHECKLIST;
+  const mergedItems = { ...DEFAULT_CHECKLIST.items, ...checklist.items };
   return {
     ...raw,
     agentSetupIds: Array.isArray(raw.agentSetupIds) ? raw.agentSetupIds : [],
     checklist: {
       ...DEFAULT_CHECKLIST,
       ...checklist,
-      items: { ...DEFAULT_CHECKLIST.items, ...checklist.items },
+      items: {
+        ...mergedItems,
+        subscribedNewsletter:
+          mergedItems.subscribedNewsletter || (raw.newsletterPromptSeen ?? false),
+      },
     },
   };
 }
@@ -93,7 +110,12 @@ export function registerOnboardingHandlers(): () => void {
         ? {
             dismissed: true,
             celebrationShown: true,
-            items: { openedProject: true, launchedAgent: true, createdWorktree: true },
+            items: {
+              openedProject: true,
+              launchedAgent: true,
+              createdWorktree: true,
+              subscribedNewsletter: true,
+            },
           }
         : state.checklist,
     };
@@ -149,6 +171,15 @@ export function registerOnboardingHandlers(): () => void {
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN));
 
+  ipcMain.handle(CHANNELS.ONBOARDING_MARK_WAITING_NUDGE_SEEN, () => {
+    const state = getOnboardingState();
+    store.set("onboarding", {
+      ...state,
+      waitingNudgeSeen: true,
+    });
+  });
+  cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_MARK_WAITING_NUDGE_SEEN));
+
   ipcMain.handle(CHANNELS.ONBOARDING_CHECKLIST_GET, () => getChecklistState());
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_CHECKLIST_GET));
 
@@ -171,7 +202,12 @@ export function registerOnboardingHandlers(): () => void {
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN));
 
   ipcMain.handle(CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM, (_event, item: unknown) => {
-    const validItems = ["openedProject", "launchedAgent", "createdWorktree"];
+    const validItems = [
+      "openedProject",
+      "launchedAgent",
+      "createdWorktree",
+      "subscribedNewsletter",
+    ];
     if (typeof item !== "string" || !validItems.includes(item)) return;
     const state = getOnboardingState();
     const key = item as keyof typeof state.checklist.items;

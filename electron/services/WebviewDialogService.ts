@@ -8,9 +8,12 @@ interface PendingDialog {
   panelId: string;
 }
 
+type SessionStorageEntry = [string, string];
+
 class WebviewDialogService {
   private panelMap = new Map<number, string>();
   private pendingDialogs = new Map<string, PendingDialog>();
+  private pendingOAuthSessionStorage = new Map<string, Promise<SessionStorageEntry[]>>();
   private destroyedListeners = new Set<number>();
 
   registerPanel(webContentsId: number, panelId: string): void {
@@ -22,6 +25,10 @@ class WebviewDialogService {
       if (wc && !wc.isDestroyed()) {
         wc.once("destroyed", () => {
           this.cancelPendingForGuest(webContentsId);
+          const panelId = this.panelMap.get(webContentsId);
+          if (panelId) {
+            this.pendingOAuthSessionStorage.delete(panelId);
+          }
           this.panelMap.delete(webContentsId);
           this.destroyedListeners.delete(webContentsId);
         });
@@ -51,6 +58,36 @@ class WebviewDialogService {
 
     this.pendingDialogs.delete(dialogId);
     pending.callback(confirmed, response);
+  }
+
+  storeOAuthSessionStorage(
+    panelId: string,
+    entries: SessionStorageEntry[] | Promise<SessionStorageEntry[]>
+  ): void {
+    this.pendingOAuthSessionStorage.set(
+      panelId,
+      Promise.resolve(entries).then((resolved) =>
+        resolved.filter(
+          (entry): entry is SessionStorageEntry =>
+            Array.isArray(entry) &&
+            entry.length === 2 &&
+            typeof entry[0] === "string" &&
+            typeof entry[1] === "string"
+        )
+      )
+    );
+  }
+
+  async consumeOAuthSessionStorage(panelId: string): Promise<SessionStorageEntry[]> {
+    const pending = this.pendingOAuthSessionStorage.get(panelId);
+    this.pendingOAuthSessionStorage.delete(panelId);
+    if (!pending) return [];
+
+    try {
+      return await pending;
+    } catch {
+      return [];
+    }
   }
 
   private cancelPendingForGuest(webContentsId: number): void {

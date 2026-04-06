@@ -19,7 +19,12 @@ test.describe.serial("Core: Focus Management", () => {
   test.beforeAll(async () => {
     ctx = await launchApp();
     const fixtureDir = createFixtureRepo({ name: "focus-management" });
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Focus Management Test");
+    ctx.window = await openAndOnboardProject(
+      ctx.app,
+      ctx.window,
+      fixtureDir,
+      "Focus Management Test"
+    );
   });
 
   test.afterAll(async () => {
@@ -29,6 +34,10 @@ test.describe.serial("Core: Focus Management", () => {
   test("action palette dismiss restores terminal focus", async () => {
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);
+
+    // Click the main content area to ensure the app has keyboard focus
+    await window.locator("main").click({ force: true });
+    await window.waitForTimeout(200);
 
     const before = await getGridPanelCount(window);
     await window.keyboard.press(`${mod}+Alt+t`);

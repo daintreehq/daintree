@@ -1,5 +1,5 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import { AgentSettingsEntrySchema } from "./schemas";
+import { AgentIdSchema, AgentSettingsEntrySchema } from "./schemas";
 import { z } from "zod";
 import {
   agentSettingsClient,
@@ -8,11 +8,17 @@ import {
   terminalConfigClient,
   worktreeConfigClient,
 } from "@/clients";
+import { notify } from "@/lib/notify";
 import { keybindingService } from "@/services/KeybindingService";
+import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { getAgentSettingsEntry } from "@shared/types";
+import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
+import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
 import { useScrollbackStore } from "@/store/scrollbackStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -525,6 +531,30 @@ export function registerPreferencesActions(
     },
   }));
 
+  actions.set("terminalConfig.setCachedProjectViews", () => ({
+    id: "terminalConfig.setCachedProjectViews",
+    title: "Set Cached Project Views",
+    description: "Set the number of project views to keep cached in memory (1–5)",
+    category: "settings",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ cachedProjectViews: z.number().int().min(1).max(5) }),
+    run: async (args: unknown) => {
+      const { cachedProjectViews } = args as { cachedProjectViews: number };
+      const state = useCachedProjectViewsStore.getState();
+      const previous = state.cachedProjectViews;
+      state.setCachedProjectViews(cachedProjectViews);
+
+      try {
+        await terminalConfigClient.setCachedProjectViews(cachedProjectViews);
+      } catch (error) {
+        state.setCachedProjectViews(previous);
+        throw error;
+      }
+    },
+  }));
+
   actions.set("worktreeConfig.get", () => ({
     id: "worktreeConfig.get",
     title: "Get Worktree Config",
@@ -576,6 +606,88 @@ export function registerPreferencesActions(
     scope: "renderer",
     run: async () => {
       callbacks.onOpenShortcuts();
+    },
+  }));
+
+  actions.set("help.launchAgent", () => ({
+    id: "help.launchAgent",
+    title: "Launch Help Agent",
+    description: "Open an AI agent in the help workspace folder",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ agentId: AgentIdSchema.optional() }).optional(),
+    run: async (args?: unknown) => {
+      const folderPath = await window.electron.help.getFolderPath();
+      if (!folderPath) {
+        notify({
+          type: "error",
+          title: "Help Agent",
+          message: "Help folder not available. Please ensure the help workspace is configured.",
+        });
+        return;
+      }
+
+      const parsed = args as { agentId?: string } | undefined;
+      let agentId: string;
+      if (parsed?.agentId) {
+        agentId = parsed.agentId;
+      } else {
+        const { defaultAgent } = useAgentPreferencesStore.getState();
+        const { availability, isInitialized } = useCliAvailabilityStore.getState();
+        const resolved = isInitialized
+          ? getDefaultAgentId(defaultAgent, undefined, availability)
+          : null;
+        agentId = resolved ?? "claude";
+      }
+
+      // Resolve assistant model override from agent settings
+      const agentSettings = useAgentSettingsStore.getState().settings;
+      const agentEntry = getAgentSettingsEntry(agentSettings, agentId);
+      const storedModel = agentEntry.assistantModelId as string | undefined;
+      const { getEffectiveAgentConfig, ASSISTANT_FAST_MODELS } =
+        await import("@shared/config/agentRegistry");
+      const agentCfg = getEffectiveAgentConfig(agentId);
+      let model: string | undefined;
+      if (storedModel && agentCfg?.models?.some((m) => m.id === storedModel)) {
+        model = storedModel;
+      } else {
+        const fast = ASSISTANT_FAST_MODELS[agentId];
+        model = fast && agentCfg?.models?.some((m) => m.id === fast) ? fast : undefined;
+      }
+
+      const helpPrompt =
+        "I need help with Canopy, an Electron-based IDE for orchestrating AI coding agents. Please briefly tell me how you can help.";
+
+      const { actionService } = await import("@/services/ActionService");
+      const result = await actionService.dispatch<{ terminalId: string | null }>(
+        "agent.launch",
+        { agentId, cwd: folderPath, location: "dock", prompt: helpPrompt, ...(model && { model }) },
+        { source: "user" }
+      );
+
+      // Store the terminal in the help panel
+      const { useHelpPanelStore } = await import("@/store/helpPanelStore");
+      if (result.ok && result.result?.terminalId) {
+        useHelpPanelStore.getState().setTerminal(result.result.terminalId, agentId);
+        useHelpPanelStore.getState().setOpen(true);
+        window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
+      }
+    },
+  }));
+
+  actions.set("help.togglePanel", () => ({
+    id: "help.togglePanel",
+    title: "Toggle Help Panel",
+    description: "Show or hide the help panel",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const { useHelpPanelStore } = await import("@/store/helpPanelStore");
+      useHelpPanelStore.getState().toggle();
     },
   }));
 

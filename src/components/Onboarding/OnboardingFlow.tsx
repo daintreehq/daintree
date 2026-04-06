@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isCanopyEnvEnabled } from "@/utils/env";
-import { TelemetryConsentStep } from "./TelemetryConsentStep";
-import { AgentSelectionStep } from "@/components/Setup/AgentSelectionStep";
 import { AgentSetupWizard } from "@/components/Setup/AgentSetupWizard";
-import { ThemeSelectionStep } from "./ThemeSelectionStep";
+import { actionService } from "@/services/ActionService";
+import { WelcomeStep } from "./WelcomeStep";
 import { OnboardingProgressIndicator } from "./OnboardingProgressIndicator";
 import type { OnboardingState } from "@shared/types";
 import type { CliAvailability } from "@shared/types";
@@ -16,17 +15,13 @@ const LEGACY_KEYS = {
   firstRunToast: "canopy:first-run-toast",
 } as const;
 
-type OnboardingStep = "themeSelection" | "telemetry" | "agentSelection" | "agentSetup";
-const STEP_ORDER: OnboardingStep[] = [
-  "themeSelection",
-  "telemetry",
-  "agentSelection",
-  "agentSetup",
-];
+type OnboardingStep = "welcome" | "agentSetup";
+const STEP_ORDER: OnboardingStep[] = ["welcome", "agentSetup"];
 
 interface OnboardingFlowProps {
   availability: CliAvailability;
   onRefreshSettings: () => Promise<void>;
+  hasAnySelectedAgent: boolean | null;
   onComplete?: () => void;
 }
 
@@ -37,15 +32,18 @@ function trackOnboarding(event: string, properties: Record<string, unknown> = {}
 export function OnboardingFlow({
   availability,
   onRefreshSettings,
+  hasAnySelectedAgent,
   onComplete,
 }: OnboardingFlowProps) {
   const [state, setState] = useState<OnboardingState | null>(null);
   const [currentStep, setCurrentStep] = useState<OnboardingStep | null>(null);
-  const [agentSetupIds, setAgentSetupIds] = useState<string[]>([]);
+  const [telemetryEnabled, setTelemetryEnabled] = useState(false);
   const [manualWizardOpen, setManualWizardOpen] = useState(false);
+  const returnToPaletteRef = useRef(false);
   const flowStartTimeRef = useRef<number>(0);
   const completedRef = useRef(false);
   const currentStepRef = useRef<OnboardingStep | null>(null);
+  const autoOpenedRef = useRef(false);
 
   // Hydrate state from electron-store and run localStorage migration
   useEffect(() => {
@@ -87,15 +85,13 @@ export function OnboardingFlow({
       setState(onboardingState);
 
       if (!onboardingState.completed) {
-        let resumeStep = onboardingState.currentStep as OnboardingStep | null;
+        const rawStep = onboardingState.currentStep;
+        const resumeStep = rawStep as OnboardingStep | null;
         if (resumeStep && STEP_ORDER.includes(resumeStep)) {
-          // If resuming at agentSetup but no agent IDs were persisted, fall back to agentSelection
-          if (resumeStep === "agentSetup" && onboardingState.agentSetupIds.length === 0) {
-            resumeStep = "agentSelection";
-          } else if (resumeStep === "agentSetup") {
-            setAgentSetupIds(onboardingState.agentSetupIds);
-          }
           setCurrentStep(resumeStep);
+        } else if (rawStep === "agentSelection") {
+          // Legacy: "agentSelection" no longer exists; map to "agentSetup"
+          setCurrentStep("agentSetup");
         } else {
           setCurrentStep(STEP_ORDER[0]);
         }
@@ -103,12 +99,25 @@ export function OnboardingFlow({
     })().catch(console.error);
   }, []);
 
-  // Listen for manual wizard open events (from Settings / toolbar button)
+  // Listen for manual wizard open events (from Settings / toolbar button / panel palette)
   useEffect(() => {
-    const handleOpenWizard = () => setManualWizardOpen(true);
+    const handleOpenWizard = (e: Event) => {
+      const detail = (e as CustomEvent<{ returnToPanelPalette?: boolean }>).detail;
+      returnToPaletteRef.current = detail?.returnToPanelPalette === true;
+      setManualWizardOpen(true);
+    };
     window.addEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
     return () => window.removeEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
   }, []);
+
+  // Auto-open wizard when onboarding is complete but no agents are selected
+  useEffect(() => {
+    if (hasAnySelectedAgent !== false) return;
+    if (!state?.completed) return;
+    if (autoOpenedRef.current) return;
+    autoOpenedRef.current = true;
+    setManualWizardOpen(true);
+  }, [hasAnySelectedAgent, state?.completed]);
 
   // Track step views and keep ref in sync
   useEffect(() => {
@@ -136,28 +145,14 @@ export function OnboardingFlow({
     };
   }, []);
 
-  const skipAgentSetupRef = useRef(false);
-
   const advanceStep = useCallback(
-    async (fromStep: OnboardingStep, persistAgentIds?: string[]) => {
+    async (fromStep: OnboardingStep) => {
       const idx = STEP_ORDER.indexOf(fromStep);
-      let nextStep = STEP_ORDER[idx + 1] ?? null;
-
-      // Skip agent setup if user skipped selection or had no uninstalled agents
-      if (nextStep === "agentSetup" && skipAgentSetupRef.current) {
-        nextStep = STEP_ORDER[idx + 2] ?? null;
-      }
+      const nextStep = STEP_ORDER[idx + 1] ?? null;
 
       if (nextStep) {
         setCurrentStep(nextStep);
-        if (persistAgentIds !== undefined) {
-          await window.electron.onboarding.setStep({
-            step: nextStep,
-            agentSetupIds: persistAgentIds,
-          });
-        } else {
-          await window.electron.onboarding.setStep(nextStep);
-        }
+        await window.electron.onboarding.setStep(nextStep);
       } else {
         // Flow complete
         completedRef.current = true;
@@ -174,59 +169,42 @@ export function OnboardingFlow({
     [onComplete]
   );
 
-  // Theme selection handlers
-  const handleThemeSelectionContinue = useCallback(async () => {
-    await advanceStep("themeSelection");
+  // Welcome step handlers
+  const handleWelcomeContinue = useCallback(async () => {
+    await window.electron.privacy.setTelemetryLevel(telemetryEnabled ? "errors" : "off");
+    await window.electron.telemetry.markPromptShown();
+    await advanceStep("welcome");
+  }, [advanceStep, telemetryEnabled]);
+
+  const handleWelcomeSkip = useCallback(async () => {
+    trackOnboarding("onboarding_step_skipped", { step: "welcome" });
+    await window.electron.privacy.setTelemetryLevel("off");
+    await window.electron.telemetry.markPromptShown();
+    await advanceStep("welcome");
   }, [advanceStep]);
 
-  const handleThemeSelectionSkip = useCallback(async () => {
-    trackOnboarding("onboarding_step_skipped", { step: "themeSelection" });
-    await advanceStep("themeSelection");
-  }, [advanceStep]);
-
-  // Telemetry step handlers
-  const handleTelemetryDismiss = useCallback(
-    async (enabled: boolean) => {
-      await window.electron.privacy.setTelemetryLevel(enabled ? "errors" : "off");
-      await window.electron.telemetry.markPromptShown();
-      await advanceStep("telemetry");
-    },
-    [advanceStep]
-  );
-
-  // Agent selection handlers
-  const handleAgentSelectionContinue = useCallback(
-    async (uninstalledIds: string[]) => {
-      void onRefreshSettings();
-      if (uninstalledIds.length > 0) {
-        setAgentSetupIds(uninstalledIds);
-        skipAgentSetupRef.current = false;
-      } else {
-        skipAgentSetupRef.current = true;
-      }
-      await advanceStep("agentSelection", uninstalledIds);
-    },
-    [advanceStep, onRefreshSettings]
-  );
-
-  const handleAgentSelectionSkip = useCallback(async () => {
-    trackOnboarding("onboarding_step_skipped", { step: "agentSelection" });
-    skipAgentSetupRef.current = true;
-    await advanceStep("agentSelection", []);
-  }, [advanceStep]);
+  const handleManualWizardClose = useCallback(() => {
+    void onRefreshSettings();
+    const shouldReturn = returnToPaletteRef.current;
+    returnToPaletteRef.current = false;
+    setManualWizardOpen(false);
+    if (shouldReturn) {
+      void actionService.dispatch("panel.palette", undefined, { source: "user" });
+    }
+  }, [onRefreshSettings]);
 
   // Agent setup wizard close
   const handleAgentSetupClose = useCallback(async () => {
-    setAgentSetupIds([]);
+    void onRefreshSettings();
     await advanceStep("agentSetup");
-  }, [advanceStep]);
+  }, [advanceStep, onRefreshSettings]);
 
   // Render nothing until hydration completes or if E2E skip is enabled
   if (SKIP_FIRST_RUN_DIALOGS) {
     return manualWizardOpen ? (
       <AgentSetupWizard
         isOpen
-        onClose={() => setManualWizardOpen(false)}
+        onClose={handleManualWizardClose}
         initialAvailability={availability}
       />
     ) : null;
@@ -235,12 +213,12 @@ export function OnboardingFlow({
   // Still hydrating
   if (state === null) return null;
 
-  // Manual wizard re-open (from Settings / toolbar)
+  // Manual wizard re-open (from Settings / toolbar / panel palette)
   if (manualWizardOpen) {
     return (
       <AgentSetupWizard
         isOpen
-        onClose={() => setManualWizardOpen(false)}
+        onClose={handleManualWizardClose}
         initialAvailability={availability}
       />
     );
@@ -255,23 +233,13 @@ export function OnboardingFlow({
     <>
       <OnboardingProgressIndicator currentIndex={currentStepIndex} total={STEP_ORDER.length} />
 
-      {currentStep === "themeSelection" && (
-        <ThemeSelectionStep
+      {currentStep === "welcome" && (
+        <WelcomeStep
           isOpen
-          onContinue={handleThemeSelectionContinue}
-          onSkip={handleThemeSelectionSkip}
-        />
-      )}
-
-      {currentStep === "telemetry" && (
-        <TelemetryConsentStep isOpen onDismiss={handleTelemetryDismiss} />
-      )}
-
-      {currentStep === "agentSelection" && (
-        <AgentSelectionStep
-          isOpen
-          onContinue={handleAgentSelectionContinue}
-          onSkip={handleAgentSelectionSkip}
+          telemetryEnabled={telemetryEnabled}
+          onTelemetryChange={setTelemetryEnabled}
+          onContinue={handleWelcomeContinue}
+          onSkip={handleWelcomeSkip}
         />
       )}
 
@@ -280,7 +248,6 @@ export function OnboardingFlow({
           isOpen
           onClose={handleAgentSetupClose}
           initialAvailability={availability}
-          agentIds={agentSetupIds.length > 0 ? agentSetupIds : undefined}
         />
       )}
     </>

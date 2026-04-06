@@ -215,6 +215,9 @@ export class GitService {
       throw new Error("Path is outside worktree root");
     }
 
+    // Git always uses forward slashes in diff output, even on Windows
+    const gitPath = normalizedPath.replaceAll("\\", "/");
+
     try {
       const stats = await stat(absolutePath);
       if (stats.size > 1024 * 1024) {
@@ -235,10 +238,10 @@ export class GitService {
         const content = buffer.toString("utf-8");
         const lines = content.split("\n");
 
-        return `diff --git a/${normalizedPath} b/${normalizedPath}
+        return `diff --git a/${gitPath} b/${gitPath}
 new file mode 100644
 --- /dev/null
-+++ b/${normalizedPath}
++++ b/${gitPath}
 @@ -0,0 +1,${lines.length} @@
 ${lines.map((l) => "+" + l).join("\n")}`;
       } catch (error) {
@@ -396,6 +399,14 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       const origin = remotes.find((r) => r.name === "origin");
       return origin?.refs?.fetch || null;
     }, "getRemoteUrl");
+  }
+
+  async listRemotes(repoPath: string): Promise<Array<{ name: string; fetchUrl: string }>> {
+    return this.handleGitOperation(async () => {
+      const git = createHardenedGit(repoPath);
+      const remotes = await git.getRemotes(true);
+      return remotes.map((r) => ({ name: r.name, fetchUrl: r.refs?.fetch || "" }));
+    }, "listRemotes");
   }
 
   async getWorktreeChangesWithStats(

@@ -45,10 +45,6 @@ vi.mock("../resetStores", () => ({
   resetAllStoresForProjectSwitch: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../worktreeDataStore", () => ({
-  forceReinitializeWorktreeDataStore: vi.fn(),
-}));
-
 vi.mock("../worktreeStore", () => ({
   useWorktreeSelectionStore: {
     getState: () => ({
@@ -58,8 +54,8 @@ vi.mock("../worktreeStore", () => ({
 }));
 
 vi.mock("../slices", () => ({
-  flushTerminalPersistence: vi.fn(),
-  createTerminalRegistrySlice: vi.fn(() => () => ({})),
+  flushPanelPersistence: vi.fn(),
+  createPanelRegistrySlice: vi.fn(() => () => ({})),
   createTerminalFocusSlice: vi.fn(() => () => ({})),
   createTerminalCommandQueueSlice: vi.fn(() => () => ({})),
   createTerminalMruSlice: vi.fn(() => () => ({})),

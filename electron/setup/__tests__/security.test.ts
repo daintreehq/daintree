@@ -21,19 +21,19 @@ function createMockSession() {
   };
 }
 
-const { defaultSession, browserSession, portalSession, sessionCreatedListeners } = vi.hoisted(
-  () => {
+const { defaultSession, browserSession, portalSession, canopyAppSession, sessionCreatedListeners } =
+  vi.hoisted(() => {
     return {
       defaultSession: createMockSession(),
       browserSession: createMockSession(),
       portalSession: createMockSession(),
+      canopyAppSession: createMockSession(),
       sessionCreatedListeners: [] as Array<
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (ses: any) => void
       >,
     };
-  }
-);
+  });
 
 vi.mock("electron", () => ({
   app: {
@@ -57,6 +57,7 @@ vi.mock("electron", () => ({
     fromPartition: vi.fn((partition: string) => {
       if (partition === "persist:browser") return browserSession;
       if (partition === "persist:portal") return portalSession;
+      if (partition === "persist:canopy-app") return canopyAppSession;
       return createMockSession();
     }),
   },
@@ -99,7 +100,7 @@ describe("setupPermissionLockdown", () => {
     _resetPermissionLockdownForTesting();
   });
 
-  it("configures handlers on default, browser, and portal sessions", () => {
+  it("configures handlers on default, browser, portal, and canopy-app sessions", () => {
     setupPermissionLockdown();
 
     expect(defaultSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
@@ -108,6 +109,8 @@ describe("setupPermissionLockdown", () => {
     expect(browserSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
     expect(portalSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
     expect(portalSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
+    expect(canopyAppSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
+    expect(canopyAppSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
   });
 
   describe("default session (trusted)", () => {
@@ -235,6 +238,32 @@ describe("setupPermissionLockdown", () => {
     });
   });
 
+  describe("canopy-app session (trusted)", () => {
+    it("allows clipboard-read, clipboard-sanitized-write, and media", () => {
+      setupPermissionLockdown();
+      const handler = getRequestHandler(canopyAppSession);
+      expect(testPermissionRequest(handler, "clipboard-read")).toBe(true);
+      expect(testPermissionRequest(handler, "clipboard-sanitized-write")).toBe(true);
+      expect(testPermissionRequest(handler, "media")).toBe(true);
+    });
+
+    it("denies untrusted permissions", () => {
+      setupPermissionLockdown();
+      const handler = getRequestHandler(canopyAppSession);
+      expect(testPermissionRequest(handler, "geolocation")).toBe(false);
+      expect(testPermissionRequest(handler, "notifications")).toBe(false);
+      expect(testPermissionRequest(handler, "fileSystem")).toBe(false);
+    });
+
+    it("check handler grants trusted and denies untrusted", () => {
+      setupPermissionLockdown();
+      const handler = getCheckHandler(canopyAppSession);
+      expect(handler(mockWebContents, "clipboard-read", "app://canopy", {})).toBe(true);
+      expect(handler(mockWebContents, "media", "app://canopy", {})).toBe(true);
+      expect(handler(mockWebContents, "geolocation", "app://canopy", {})).toBe(false);
+    });
+  });
+
   describe("dynamic session-created handler", () => {
     it("registers session-created listener", () => {
       setupPermissionLockdown();
@@ -272,6 +301,19 @@ describe("setupPermissionLockdown", () => {
 
       const handler = getRequestHandler(dynamicBrowserSession);
       expect(testPermissionRequest(handler, "clipboard-read")).toBe(false);
+    });
+
+    it("does not double-lock canopy-app partition via session-created (eagerly locked)", () => {
+      setupPermissionLockdown();
+      const dynamicCanopySession = createMockSession();
+      Object.defineProperty(dynamicCanopySession, "partition", {
+        value: "persist:canopy-app",
+      });
+
+      sessionCreatedListeners[0](dynamicCanopySession);
+
+      expect(dynamicCanopySession.setPermissionRequestHandler).not.toHaveBeenCalled();
+      expect(dynamicCanopySession.setPermissionCheckHandler).not.toHaveBeenCalled();
     });
 
     it("handles sessions with missing partition property", () => {

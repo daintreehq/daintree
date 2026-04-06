@@ -15,7 +15,26 @@ test.describe.serial("Core: Panel Tab Groups", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "tab-groups", withMultipleFiles: true });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Tab Groups Test");
+
+    // Disable two-pane split mode before the project loads. The 1→2 panel
+    // transition from "Duplicate as new tab" triggers a race condition where
+    // the split layout briefly activates during the intermediate state (two
+    // single-panel groups) and crashes the app. Seeding localStorage before
+    // the zustand store hydrates avoids this.
+    await ctx.window.evaluate(() => {
+      localStorage.setItem(
+        "canopy-two-pane-split",
+        JSON.stringify({
+          state: {
+            config: { enabled: false, defaultRatio: 0.5, preferPreview: false },
+            ratioByWorktreeId: {},
+          },
+          version: 1,
+        })
+      );
+    });
+
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Tab Groups Test");
   });
 
   test.afterAll(async () => {
@@ -30,6 +49,11 @@ test.describe.serial("Core: Panel Tab Groups", () => {
       await openTerminal(window);
       const panel = getFirstGridPanel(window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
+
+      // Ensure xterm-screen has non-zero dimensions (regression guard for #4913:
+      // Windows blank terminal caused by fit/resize race during transient hidden state)
+      const xtermScreen = panel.locator(SEL.terminal.xtermRows);
+      await expect(xtermScreen).toBeVisible({ timeout: T_LONG });
 
       await runTerminalCommand(window, panel, "node -e \"console.log('TAB_ORIGINAL_MARKER')\"");
       await waitForTerminalText(panel, "TAB_ORIGINAL_MARKER", T_LONG);

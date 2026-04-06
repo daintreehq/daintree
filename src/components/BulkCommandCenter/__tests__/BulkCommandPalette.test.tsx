@@ -4,6 +4,15 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { BulkCommandPalette, openBulkCommandPalette } from "../BulkCommandPalette";
 import { usePaletteStore } from "@/store/paletteStore";
 
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+);
+
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
 
 vi.mock("@/lib/utils", () => ({
@@ -78,11 +87,54 @@ vi.mock("p-queue", () => ({
     constructor(opts: { concurrency: number }) {
       this.concurrency = opts.concurrency;
     }
+    async add(fn: () => Promise<unknown>) {
+      return fn();
+    }
     async addAll(fns: (() => Promise<unknown>)[]) {
       for (const fn of fns) await fn();
     }
+    clear() {}
   },
 }));
+
+const mockRecordPrompt = vi.fn();
+const mockGetProjectHistory = vi.fn().mockReturnValue([]);
+vi.mock("@/store/commandHistoryStore", () => ({
+  useCommandHistoryStore: Object.assign(
+    (selector: (s: Record<string, unknown>) => unknown) =>
+      selector({ getProjectHistory: mockGetProjectHistory }),
+    {
+      getState: () => ({
+        recordPrompt: mockRecordPrompt,
+      }),
+    }
+  ),
+}));
+
+const mockAddNotification = vi.fn().mockReturnValue("notif-1");
+vi.mock("@/store/notificationStore", () => ({
+  useNotificationStore: Object.assign(
+    (selector: (s: Record<string, unknown>) => unknown) => selector({ notifications: [] }),
+    {
+      getState: () => ({
+        addNotification: mockAddNotification,
+      }),
+    }
+  ),
+}));
+
+vi.mock("@/utils/recipeVariables", async () => {
+  const actual = await vi.importActual("@/utils/recipeVariables");
+  return {
+    ...actual,
+    getAvailableVariables: () => [
+      { name: "issue_number", description: "GitHub issue number" },
+      { name: "pr_number", description: "GitHub PR number" },
+      { name: "worktree_path", description: "Absolute path to worktree directory" },
+      { name: "branch_name", description: "Git branch name" },
+    ],
+  };
+});
 
 const mockRunRecipeWithResults = vi
   .fn()
@@ -219,17 +271,28 @@ const mockTerminals = [
   },
 ];
 
-vi.mock("@/store/worktreeDataStore", () => ({
-  useWorktreeDataStore: (selector: (s: { worktrees: typeof mockWorktrees }) => unknown) =>
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (s: { worktrees: typeof mockWorktrees }) => unknown) =>
     selector({ worktrees: mockWorktrees }),
 }));
 
-vi.mock("@/store/terminalStore", () => ({
-  useTerminalStore: Object.assign(
-    (selector: (s: { terminals: typeof mockTerminals }) => unknown) =>
-      selector({ terminals: mockTerminals }),
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: Object.assign(
+    (
+      selector: (s: {
+        panelsById: Record<string, (typeof mockTerminals)[number]>;
+        panelIds: string[];
+      }) => unknown
+    ) =>
+      selector({
+        panelsById: Object.fromEntries(mockTerminals.map((t) => [t.id, t])),
+        panelIds: mockTerminals.map((t) => t.id),
+      }),
     {
-      getState: () => ({ terminals: mockTerminals }),
+      getState: () => ({
+        panelsById: Object.fromEntries(mockTerminals.map((t) => [t.id, t])),
+        panelIds: mockTerminals.map((t) => t.id),
+      }),
     }
   ),
 }));
@@ -246,6 +309,9 @@ describe("BulkCommandPalette", () => {
     mockSendKey.mockClear();
     mockSubmit.mockClear();
     mockRunRecipeWithResults.mockClear();
+    mockRecordPrompt.mockClear();
+    mockAddNotification.mockClear();
+    mockGetProjectHistory.mockReturnValue([]);
     usePaletteStore.setState({ activePaletteId: null });
   });
 
@@ -258,12 +324,20 @@ describe("BulkCommandPalette", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("renders worktree rows excluding main worktree when open", () => {
+  it("renders worktree rows including main worktree when open", () => {
     render(<BulkCommandPalette />);
     openPalette();
     expect(screen.getByText("feature/a")).toBeTruthy();
     expect(screen.getByText("feature/b")).toBeTruthy();
-    expect(screen.queryByText("main")).toBeNull();
+    expect(screen.getByText("main")).toBeTruthy();
+  });
+
+  it("renders main worktree as disabled when it has no agent terminals", () => {
+    render(<BulkCommandPalette />);
+    openPalette();
+    const mainRow = screen.getByText("main").closest("button")!;
+    const checkbox = mainRow.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox.disabled).toBe(true);
   });
 
   it("shows agent terminal count per worktree", () => {
@@ -312,13 +386,18 @@ describe("BulkCommandPalette", () => {
     expect(mockSendKey).toHaveBeenCalledWith("t2", "escape");
   });
 
-  it("sends double-escape with 1s delay between escapes", () => {
+  it("sends double-escape with 1s delay after confirmation", () => {
     render(<BulkCommandPalette />);
     openPalette();
     fireEvent.click(screen.getByText("feature/b").closest("button")!);
     fireEvent.click(screen.getByText("Double Escape"));
     const sendBtn = screen.getByRole("button", { name: "Send" });
     fireEvent.click(sendBtn);
+    // Should show confirmation instead of sending
+    expect(mockSendKey).toHaveBeenCalledTimes(0);
+    expect(screen.getByText(/Send Double Escape to 1 worktree\?/)).toBeTruthy();
+    // Click Confirm to actually send
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
     expect(mockSendKey).toHaveBeenCalledTimes(1);
     expect(mockSendKey).toHaveBeenCalledWith("t3", "escape");
     act(() => vi.advanceTimersByTime(1000));
@@ -330,11 +409,11 @@ describe("BulkCommandPalette", () => {
     openPalette();
     fireEvent.click(screen.getByText("Text Command"));
     fireEvent.click(screen.getByText("feature/a").closest("button")!);
-    const input = screen.getByPlaceholderText(/Enter command to send/);
+    const input = screen.getByPlaceholderText(/Type a command/);
     fireEvent.change(input, { target: { value: "npm test" } });
     expect(screen.getByText("Preview")).toBeTruthy();
     fireEvent.click(screen.getByText("Preview"));
-    expect(screen.getByText(/Back/)).toBeTruthy();
+    expect(screen.getByText("← Back")).toBeTruthy();
     expect(screen.getByText("feature/a")).toBeTruthy();
   });
 
@@ -343,7 +422,7 @@ describe("BulkCommandPalette", () => {
     openPalette();
     fireEvent.click(screen.getByText("Text Command"));
     fireEvent.click(screen.getByText("feature/a").closest("button")!);
-    const input = screen.getByPlaceholderText(/Enter command to send/);
+    const input = screen.getByPlaceholderText(/Type a command/);
     fireEvent.change(input, { target: { value: "npm test" } });
     fireEvent.click(screen.getByText("Preview"));
     await act(async () => {
@@ -360,7 +439,7 @@ describe("BulkCommandPalette", () => {
     fireEvent.click(screen.getByText("Text Command"));
     fireEvent.click(screen.getByText("feature/a").closest("button")!);
     fireEvent.click(screen.getByText("feature/b").closest("button")!);
-    const input = screen.getByPlaceholderText(/Enter command to send/);
+    const input = screen.getByPlaceholderText(/Type a command/);
     fireEvent.change(input, { target: { value: "fix {{issue_number}}" } });
     fireEvent.click(screen.getByText("Preview"));
     expect(screen.getByText("fix #101")).toBeTruthy();
@@ -372,7 +451,7 @@ describe("BulkCommandPalette", () => {
     openPalette();
     fireEvent.click(screen.getByText("Text Command"));
     fireEvent.click(screen.getByText("feature/b").closest("button")!);
-    const input = screen.getByPlaceholderText(/Enter command to send/);
+    const input = screen.getByPlaceholderText(/Type a command/);
     fireEvent.change(input, { target: { value: "fix {{issue_number}}" } });
     fireEvent.click(screen.getByText("Preview"));
     expect(screen.getByText(/Missing:.*issue_number/)).toBeTruthy();
@@ -403,19 +482,19 @@ describe("BulkCommandPalette", () => {
   });
 
   describe("state presets", () => {
-    it("renders preset buttons", () => {
+    it("renders preset buttons with counts", () => {
       render(<BulkCommandPalette />);
       openPalette();
-      expect(screen.getByText("Active")).toBeTruthy();
-      expect(screen.getByText("Waiting")).toBeTruthy();
-      expect(screen.getByText("Idle")).toBeTruthy();
-      expect(screen.getByText("Completed")).toBeTruthy();
+      expect(screen.getByText("Active (1)")).toBeTruthy();
+      expect(screen.getByText("Waiting (1)")).toBeTruthy();
+      expect(screen.getByText("Idle (1)")).toBeTruthy();
+      expect(screen.getByText("Completed (0)")).toBeTruthy();
     });
 
     it("Active preset selects worktrees with working state", () => {
       render(<BulkCommandPalette />);
       openPalette();
-      fireEvent.click(screen.getByText("Active"));
+      fireEvent.click(screen.getByText("Active (1)"));
       // wt-1 has dominant state "working" (mock returns first valid state)
       const wt1Checkbox = screen
         .getByText("feature/a")
@@ -427,7 +506,7 @@ describe("BulkCommandPalette", () => {
     it("Waiting preset selects worktrees with waiting state", () => {
       render(<BulkCommandPalette />);
       openPalette();
-      fireEvent.click(screen.getByText("Waiting"));
+      fireEvent.click(screen.getByText("Waiting (1)"));
       const wt2Checkbox = screen
         .getByText("feature/b")
         .closest("button")!
@@ -439,7 +518,7 @@ describe("BulkCommandPalette", () => {
       render(<BulkCommandPalette />);
       openPalette();
       // wt-3 has a single terminal with undefined agentState, so mock returns null
-      fireEvent.click(screen.getByText("Idle"));
+      fireEvent.click(screen.getByText("Idle (1)"));
       const wt3Checkbox = screen
         .getByText("feature/c")
         .closest("button")!
@@ -453,7 +532,7 @@ describe("BulkCommandPalette", () => {
       // First select wt-1 manually
       fireEvent.click(screen.getByText("feature/a").closest("button")!);
       // Then apply Waiting preset
-      fireEvent.click(screen.getByText("Waiting"));
+      fireEvent.click(screen.getByText("Waiting (1)"));
       // Both should be selected
       const wt1Checkbox = screen
         .getByText("feature/a")
@@ -534,12 +613,129 @@ describe("BulkCommandPalette", () => {
     openPalette();
     fireEvent.click(screen.getByText("Text Command"));
     fireEvent.click(screen.getByText("feature/a").closest("button")!);
-    const input = screen.getByPlaceholderText(/Enter command to send/);
+    const input = screen.getByPlaceholderText(/Type a command/);
     fireEvent.change(input, { target: { value: "test" } });
     fireEvent.click(screen.getByText("Preview"));
-    expect(screen.getByText(/Back/)).toBeTruthy();
+    expect(screen.getByText("← Back")).toBeTruthy();
     // Switch mode — should reset to select step
     fireEvent.click(screen.getByText("Keystroke"));
-    expect(screen.queryByText(/Back/)).toBeNull();
+    expect(screen.queryByText("← Back")).toBeNull();
+  });
+
+  describe("variable chips", () => {
+    it("renders variable chip buttons in text mode", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("Text Command"));
+      expect(screen.getByText("{{issue_number}}")).toBeTruthy();
+      expect(screen.getByText("{{branch_name}}")).toBeTruthy();
+      expect(screen.getByText("{{pr_number}}")).toBeTruthy();
+      expect(screen.getByText("{{worktree_path}}")).toBeTruthy();
+    });
+
+    it("shows caption text below chips", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("Text Command"));
+      expect(screen.getByText(/Click to insert/)).toBeTruthy();
+      expect(screen.getByText(/Variables resolve per worktree/)).toBeTruthy();
+    });
+  });
+
+  describe("destructive keystroke confirmation", () => {
+    it("ctrl+c shows confirmation before sending", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("feature/a").closest("button")!);
+      fireEvent.click(screen.getByText("Ctrl+C"));
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      expect(mockSendKey).not.toHaveBeenCalled();
+      expect(screen.getByText(/Send Ctrl\+C to 1 worktree\?/)).toBeTruthy();
+    });
+
+    it("non-destructive keystrokes send immediately", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("feature/a").closest("button")!);
+      // Escape is already default, should send immediately
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      expect(mockSendKey).toHaveBeenCalledTimes(2);
+    });
+
+    it("cancel dismisses confirmation", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("feature/a").closest("button")!);
+      fireEvent.click(screen.getByText("Ctrl+C"));
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByText(/Send Ctrl\+C/)).toBeNull();
+      expect(screen.getByText("Ctrl+C")).toBeTruthy();
+    });
+  });
+
+  describe("post-execution toast", () => {
+    it("emits notification toast after text command confirm", async () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("Text Command"));
+      fireEvent.click(screen.getByText("feature/a").closest("button")!);
+      const input = screen.getByPlaceholderText(/Type a command/);
+      fireEvent.change(input, { target: { value: "npm test" } });
+      fireEvent.click(screen.getByText("Preview"));
+      await act(async () => {
+        fireEvent.click(screen.getByText("Confirm"));
+      });
+      expect(mockAddNotification).toHaveBeenCalledTimes(1);
+      expect(mockAddNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "success", priority: "low" })
+      );
+    });
+
+    it("records command in history after text confirm", async () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("Text Command"));
+      fireEvent.click(screen.getByText("feature/a").closest("button")!);
+      const input = screen.getByPlaceholderText(/Type a command/);
+      fireEvent.change(input, { target: { value: "npm test" } });
+      fireEvent.click(screen.getByText("Preview"));
+      await act(async () => {
+        fireEvent.click(screen.getByText("Confirm"));
+      });
+      expect(mockRecordPrompt).toHaveBeenCalledWith("bulk-commands", "npm test");
+    });
+  });
+
+  describe("footer", () => {
+    it("shows worktree and agent count", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("feature/a").closest("button")!);
+      expect(screen.getByText(/1 worktree, 2 agents/)).toBeTruthy();
+    });
+
+    it("shows keyboard hints", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      expect(screen.getByText(/Navigate/)).toBeTruthy();
+      expect(screen.getByText(/Esc Back/)).toBeTruthy();
+    });
+  });
+
+  describe("command history", () => {
+    it("shows history dropdown when input is empty and focused", () => {
+      mockGetProjectHistory.mockReturnValue([
+        { id: "h1", prompt: "npm test", agentId: null, addedAt: 1 },
+        { id: "h2", prompt: "npm run build", agentId: null, addedAt: 2 },
+      ]);
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("Text Command"));
+      const input = screen.getByPlaceholderText(/Type a command/);
+      fireEvent.focus(input);
+      expect(screen.getByText("npm test")).toBeTruthy();
+      expect(screen.getByText("npm run build")).toBeTruthy();
+    });
   });
 });

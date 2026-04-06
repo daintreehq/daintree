@@ -22,7 +22,7 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
 }));
 
 vi.mock("../../menu.js", () => ({
-  handleDirectoryOpen: vi.fn(),
+  handleDirectoryOpen: vi.fn(() => Promise.resolve()),
 }));
 
 const setSignalShutdownMock = vi.fn();
@@ -31,12 +31,14 @@ vi.mock("../signalShutdownState.js", () => ({
 }));
 
 import type { AppLifecycleOptions } from "../appLifecycle.js";
+import { handleDirectoryOpen } from "../../menu.js";
 
-function makeOpts(): AppLifecycleOptions {
+function makeOpts(overrides?: Partial<AppLifecycleOptions>): AppLifecycleOptions {
   return {
     onCreateWindow: vi.fn(),
     getMainWindow: vi.fn(() => null),
     getCliAvailabilityService: vi.fn(() => null),
+    ...overrides,
   };
 }
 
@@ -113,5 +115,141 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
 
     expect(setSignalShutdownMock).toHaveBeenCalledOnce();
     expect(appMock.quit).toHaveBeenCalledOnce();
+  });
+});
+
+describe("registerAppLifecycleHandlers – second-instance", () => {
+  function makeBrowserWindow(overrides?: Partial<{ isMinimized: boolean; isDestroyed: boolean }>) {
+    return {
+      isMinimized: vi.fn(() => overrides?.isMinimized ?? false),
+      isDestroyed: vi.fn(() => overrides?.isDestroyed ?? false),
+      restore: vi.fn(),
+      focus: vi.fn(),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(process, "on").mockImplementation(() => process);
+    vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+  });
+
+  it("creates a new window via onCreateWindowForPath when CLI path and existing window", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const mainWindow = makeBrowserWindow();
+    const onCreateWindowForPath = vi.fn();
+    registerAppLifecycleHandlers(
+      makeOpts({
+        getMainWindow: vi.fn(() => mainWindow as unknown as import("electron").BrowserWindow),
+        onCreateWindowForPath,
+      })
+    );
+
+    const secondInstanceCall = appMock.on.mock.calls.find(
+      ([event]: string[]) => event === "second-instance"
+    );
+    const handler = secondInstanceCall![1] as (
+      event: unknown,
+      commandLine: string[],
+      workingDirectory: string
+    ) => void;
+
+    handler({}, ["canopy", "--cli-path", "/path/to/repo"], "/");
+
+    expect(onCreateWindowForPath).toHaveBeenCalledWith("/path/to/repo");
+    expect(handleDirectoryOpen).not.toHaveBeenCalled();
+    expect(mainWindow.focus).not.toHaveBeenCalled();
+  });
+
+  it("falls back to handleDirectoryOpen when onCreateWindowForPath is not provided", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const mainWindow = makeBrowserWindow();
+    registerAppLifecycleHandlers(
+      makeOpts({
+        getMainWindow: vi.fn(() => mainWindow as unknown as import("electron").BrowserWindow),
+      })
+    );
+
+    const secondInstanceCall = appMock.on.mock.calls.find(
+      ([event]: string[]) => event === "second-instance"
+    );
+    const handler = secondInstanceCall![1] as (
+      event: unknown,
+      commandLine: string[],
+      workingDirectory: string
+    ) => void;
+
+    handler({}, ["canopy", "--cli-path", "/path/to/repo"], "/");
+
+    expect(handleDirectoryOpen).toHaveBeenCalledWith("/path/to/repo", mainWindow, undefined);
+  });
+
+  it("queues CLI path as pending when no window exists", async () => {
+    const { registerAppLifecycleHandlers, getPendingCliPath } = await import("../appLifecycle.js");
+    const onCreateWindowForPath = vi.fn();
+    registerAppLifecycleHandlers(makeOpts({ onCreateWindowForPath }));
+
+    const secondInstanceCall = appMock.on.mock.calls.find(
+      ([event]: string[]) => event === "second-instance"
+    );
+    const handler = secondInstanceCall![1] as (
+      event: unknown,
+      commandLine: string[],
+      workingDirectory: string
+    ) => void;
+
+    handler({}, ["canopy", "--cli-path", "/pending/path"], "/");
+
+    expect(onCreateWindowForPath).not.toHaveBeenCalled();
+    expect(handleDirectoryOpen).not.toHaveBeenCalled();
+    expect(getPendingCliPath()).toBe("/pending/path");
+  });
+
+  it("focuses primary window when no CLI path is provided", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const mainWindow = makeBrowserWindow();
+    registerAppLifecycleHandlers(
+      makeOpts({
+        getMainWindow: vi.fn(() => mainWindow as unknown as import("electron").BrowserWindow),
+      })
+    );
+
+    const secondInstanceCall = appMock.on.mock.calls.find(
+      ([event]: string[]) => event === "second-instance"
+    );
+    const handler = secondInstanceCall![1] as (
+      event: unknown,
+      commandLine: string[],
+      workingDirectory: string
+    ) => void;
+
+    handler({}, ["canopy"], "/");
+
+    expect(mainWindow.focus).toHaveBeenCalled();
+    expect(handleDirectoryOpen).not.toHaveBeenCalled();
+  });
+
+  it("restores minimized window before focusing when no CLI path", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const mainWindow = makeBrowserWindow({ isMinimized: true });
+    registerAppLifecycleHandlers(
+      makeOpts({
+        getMainWindow: vi.fn(() => mainWindow as unknown as import("electron").BrowserWindow),
+      })
+    );
+
+    const secondInstanceCall = appMock.on.mock.calls.find(
+      ([event]: string[]) => event === "second-instance"
+    );
+    const handler = secondInstanceCall![1] as (
+      event: unknown,
+      commandLine: string[],
+      workingDirectory: string
+    ) => void;
+
+    handler({}, ["canopy"], "/");
+
+    expect(mainWindow.restore).toHaveBeenCalled();
+    expect(mainWindow.focus).toHaveBeenCalled();
   });
 });

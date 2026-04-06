@@ -81,6 +81,11 @@ export class UserAgentRegistryService {
     setUserRegistry(this.getRegistry());
   }
 
+  reload(): void {
+    this.loadRegistry();
+    this.syncToSharedRegistry();
+  }
+
   getRegistry(): UserAgentRegistry {
     const cloned: UserAgentRegistry = {};
     for (const [id, config] of Object.entries(this.registry)) {

@@ -630,4 +630,99 @@ describe("terminalInputStore", () => {
       expect(after).toBe(before);
     });
   });
+
+  describe("getProjectDraftInputs", () => {
+    it("should return only drafts for the specified project, stripped of project prefix", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("term-1", "echo hello", "project-a");
+      store.setDraftInput("term-2", "ls -la", "project-a");
+      store.setDraftInput("term-3", "other project draft", "project-b");
+
+      const drafts = useTerminalInputStore.getState().getProjectDraftInputs("project-a");
+      expect(drafts).toEqual({ "term-1": "echo hello", "term-2": "ls -la" });
+    });
+
+    it("should return empty object when no drafts exist for the project", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("term-1", "draft", "project-b");
+
+      const drafts = useTerminalInputStore.getState().getProjectDraftInputs("project-a");
+      expect(drafts).toEqual({});
+    });
+
+    it("should exclude empty draft values", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("term-1", "hello", "project-a");
+      // Setting empty clears the draft internally
+      store.setDraftInput("term-2", "", "project-a");
+
+      const drafts = useTerminalInputStore.getState().getProjectDraftInputs("project-a");
+      expect(drafts).toEqual({ "term-1": "hello" });
+    });
+  });
+
+  describe("restoreProjectDraftInputs", () => {
+    it("should restore drafts with the project prefix", () => {
+      useTerminalInputStore.getState().restoreProjectDraftInputs("project-a", {
+        "term-1": "echo hello",
+        "term-2": "ls -la",
+      });
+
+      const store = useTerminalInputStore.getState();
+      expect(store.getDraftInput("term-1", "project-a")).toBe("echo hello");
+      expect(store.getDraftInput("term-2", "project-a")).toBe("ls -la");
+    });
+
+    it("should not overwrite drafts from other projects", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("term-1", "other project draft", "project-b");
+
+      useTerminalInputStore.getState().restoreProjectDraftInputs("project-a", {
+        "term-1": "project-a draft",
+      });
+
+      expect(useTerminalInputStore.getState().getDraftInput("term-1", "project-b")).toBe(
+        "other project draft"
+      );
+      expect(useTerminalInputStore.getState().getDraftInput("term-1", "project-a")).toBe(
+        "project-a draft"
+      );
+    });
+
+    it("should skip empty keys and values", () => {
+      useTerminalInputStore.getState().restoreProjectDraftInputs("project-a", {
+        "": "should be skipped",
+        "term-1": "",
+        "term-2": "valid",
+      });
+
+      const drafts = useTerminalInputStore.getState().getProjectDraftInputs("project-a");
+      expect(drafts).toEqual({ "term-2": "valid" });
+    });
+
+    it("should round-trip through getProjectDraftInputs and restoreProjectDraftInputs", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("term-1", "echo hello", "project-a");
+      store.setDraftInput("term-2", "npm test", "project-a");
+      store.setDraftInput("term-3", "other project", "project-b");
+
+      // Capture project-a drafts
+      const captured = useTerminalInputStore.getState().getProjectDraftInputs("project-a");
+
+      // Clear all state
+      useTerminalInputStore.getState().clearAllDraftInputs();
+
+      // Restore project-a drafts
+      useTerminalInputStore.getState().restoreProjectDraftInputs("project-a", captured);
+
+      expect(useTerminalInputStore.getState().getDraftInput("term-1", "project-a")).toBe(
+        "echo hello"
+      );
+      expect(useTerminalInputStore.getState().getDraftInput("term-2", "project-a")).toBe(
+        "npm test"
+      );
+      // project-b was cleared and not restored
+      expect(useTerminalInputStore.getState().getDraftInput("term-3", "project-b")).toBe("");
+    });
+  });
 });

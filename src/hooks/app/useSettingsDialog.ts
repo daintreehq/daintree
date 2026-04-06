@@ -26,13 +26,19 @@ export function useSettingsDialog() {
       "portal",
       "toolbar",
       "notifications",
-      "editor",
-      "imageViewer",
-      "voice",
+      "integrations",
+
       "mcp",
       "environment",
       "privacy",
       "troubleshooting",
+      "project:general",
+      "project:context",
+      "project:automation",
+      "project:recipes",
+      "project:commands",
+      "project:notifications",
+      "project:github",
     ];
     const tab = allowedTabs.includes(target.tab as SettingsTab)
       ? (target.tab as SettingsTab)

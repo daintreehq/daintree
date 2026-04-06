@@ -76,3 +76,10 @@ export {
   type WorktreeChanges as ValidatedWorktreeChanges,
   type GitWorktreeEntry,
 } from "./external.js";
+
+export {
+  PluginManifestSchema,
+  PanelContributionSchema,
+  type PluginManifest,
+  type PanelContribution,
+} from "./plugin.js";

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { scheduleDeferredSnapshotRestore } from "../batchScheduler";
+import { scheduleBackgroundFetchAndRestore } from "../batchScheduler";
 
 vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
@@ -7,7 +7,7 @@ vi.mock("@/utils/logger", () => ({
 
 const globalAny = global as Record<string, unknown>;
 
-describe("scheduleDeferredSnapshotRestore", () => {
+describe("scheduleBackgroundFetchAndRestore", () => {
   let postTaskCallbacks: Array<() => void>;
 
   beforeEach(() => {
@@ -29,18 +29,18 @@ describe("scheduleDeferredSnapshotRestore", () => {
   });
 
   it("calls scheduler.postTask with background priority when available", () => {
-    const runRestore = vi.fn().mockResolvedValue(undefined);
+    const restoreFn = vi.fn().mockResolvedValue(undefined);
 
-    scheduleDeferredSnapshotRestore(runRestore);
+    scheduleBackgroundFetchAndRestore(restoreFn);
 
     const schedulerMock = globalAny["scheduler"] as { postTask: ReturnType<typeof vi.fn> };
     expect(schedulerMock.postTask).toHaveBeenCalledWith(expect.any(Function), {
       priority: "background",
     });
-    expect(runRestore).not.toHaveBeenCalled();
+    expect(restoreFn).not.toHaveBeenCalled();
 
     postTaskCallbacks.forEach((cb) => cb());
-    expect(runRestore).toHaveBeenCalledTimes(1);
+    expect(restoreFn).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to setTimeout when scheduler is unavailable", () => {
@@ -53,32 +53,32 @@ describe("scheduleDeferredSnapshotRestore", () => {
       return 0 as unknown as ReturnType<typeof setTimeout>;
     }) as unknown as typeof setTimeout;
 
-    const runRestore = vi.fn().mockResolvedValue(undefined);
+    const restoreFn = vi.fn().mockResolvedValue(undefined);
 
-    scheduleDeferredSnapshotRestore(runRestore);
+    scheduleBackgroundFetchAndRestore(restoreFn);
 
     expect(global.setTimeout).toHaveBeenCalled();
-    expect(runRestore).not.toHaveBeenCalled();
+    expect(restoreFn).not.toHaveBeenCalled();
 
     timeouts.forEach((cb) => cb());
-    expect(runRestore).toHaveBeenCalledTimes(1);
+    expect(restoreFn).toHaveBeenCalledTimes(1);
 
     global.setTimeout = origSetTimeout;
   });
 
-  it("logs a warning when runRestore rejects", async () => {
+  it("logs a warning when restoreFn rejects", async () => {
     const { logWarn } = await import("@/utils/logger");
     const error = new Error("restore failed");
-    const runRestore = vi.fn().mockRejectedValue(error);
+    const restoreFn = vi.fn().mockRejectedValue(error);
 
-    scheduleDeferredSnapshotRestore(runRestore);
+    scheduleBackgroundFetchAndRestore(restoreFn);
     postTaskCallbacks.forEach((cb) => cb());
 
     await new Promise<void>((resolve) => queueMicrotask(resolve));
     await new Promise<void>((resolve) => queueMicrotask(resolve));
 
     expect(logWarn).toHaveBeenCalledWith(
-      "Deferred terminal snapshot restore failed",
+      "Background scrollback restore failed",
       expect.objectContaining({ error })
     );
   });

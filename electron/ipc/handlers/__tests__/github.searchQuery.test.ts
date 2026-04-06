@@ -1,4 +1,18 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+vi.mock("electron", () => ({
+  ipcMain: {
+    handle: vi.fn(),
+    removeHandler: vi.fn(),
+  },
+  shell: {
+    openExternal: vi.fn(),
+  },
+  BrowserWindow: {
+    getAllWindows: () => [],
+  },
+}));
+
 import { buildGitHubSearchQuery } from "../github.js";
 
 describe("buildGitHubSearchQuery", () => {

@@ -6,12 +6,14 @@ import { useFocusStore } from "@/store/focusStore";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
+import { setWorktreeSelectionStoreGetter } from "./projectStore";
 
 interface CreateDialogState {
   isOpen: boolean;
   initialIssue: GitHubIssue | null;
   initialPR: GitHubPR | null;
   initialRecipeId: string | null;
+  onCreated?: (worktreeId: string) => void;
 }
 
 interface QuickCreateState {
@@ -22,7 +24,9 @@ interface QuickCreateState {
 
 interface BulkCreateDialogState {
   isOpen: boolean;
+  mode: "issue" | "pr";
   selectedIssues: GitHubIssue[];
+  selectedPRs: GitHubPR[];
 }
 
 interface CrossDiffDialogState {
@@ -55,11 +59,12 @@ interface WorktreeSelectionState {
   setTerminalsExpanded: (id: string, expanded: boolean) => void;
   openCreateDialog: (
     initialIssue?: GitHubIssue | null,
-    options?: { initialRecipeId?: string | null }
+    options?: { initialRecipeId?: string | null; onCreated?: (worktreeId: string) => void }
   ) => void;
   openCreateDialogForPR: (pr: GitHubPR) => void;
   closeCreateDialog: () => void;
   openBulkCreateDialog: (selectedIssues: GitHubIssue[]) => void;
+  openBulkCreateDialogForPRs: (selectedPRs: GitHubPR[]) => void;
   closeBulkCreateDialog: () => void;
   openQuickCreate: (context?: { issue?: GitHubIssue | null; pr?: GitHubPR | null }) => void;
   closeQuickCreate: () => void;
@@ -71,7 +76,7 @@ interface WorktreeSelectionState {
 }
 
 type ClientsModule = typeof import("@/clients");
-type TerminalStoreModule = typeof import("@/store/terminalStore");
+type TerminalStoreModule = typeof import("@/store/panelStore");
 
 let clientsModulePromise: Promise<ClientsModule> | null = null;
 let terminalStoreModulePromise: Promise<TerminalStoreModule> | null = null;
@@ -161,12 +166,12 @@ function loadClientsModule(): Promise<ClientsModule> {
 function loadTerminalStoreModule(): Promise<TerminalStoreModule> {
   if (!terminalStoreModulePromise) {
     const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
-    markRendererPerformance("dynamic_import_start", { module: "@/store/terminalStore" });
-    terminalStoreModulePromise = import("@/store/terminalStore")
+    markRendererPerformance("dynamic_import_start", { module: "@/store/panelStore" });
+    terminalStoreModulePromise = import("@/store/panelStore")
       .then((module) => {
         const now = typeof performance !== "undefined" ? performance.now() : Date.now();
         markRendererPerformance("dynamic_import_end", {
-          module: "@/store/terminalStore",
+          module: "@/store/panelStore",
           durationMs: Number((now - startedAt).toFixed(3)),
           ok: true,
         });
@@ -175,7 +180,7 @@ function loadTerminalStoreModule(): Promise<TerminalStoreModule> {
       .catch((error) => {
         const now = typeof performance !== "undefined" ? performance.now() : Date.now();
         markRendererPerformance("dynamic_import_end", {
-          module: "@/store/terminalStore",
+          module: "@/store/panelStore",
           durationMs: Number((now - startedAt).toFixed(3)),
           ok: false,
           error: error instanceof Error ? error.message : String(error),
@@ -227,8 +232,14 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   pendingWorktreeId: null,
   expandedWorktrees: new Set<string>(),
   expandedTerminals: new Set<string>(),
-  createDialog: { isOpen: false, initialIssue: null, initialPR: null, initialRecipeId: null },
-  bulkCreateDialog: { isOpen: false, selectedIssues: [] },
+  createDialog: {
+    isOpen: false,
+    initialIssue: null,
+    initialPR: null,
+    initialRecipeId: null,
+    onCreated: undefined,
+  },
+  bulkCreateDialog: { isOpen: false, mode: "issue", selectedIssues: [], selectedPRs: [] },
   quickCreate: { isOpen: false, issue: null, pr: null },
   crossDiffDialog: { isOpen: false, initialWorktreeId: null },
   _policyGeneration: 0,
@@ -246,6 +257,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     // Auto-collapse terminals accordion when switching worktrees
     const updates: Partial<WorktreeSelectionState> = {
       activeWorktreeId: id,
+      focusedWorktreeId: id,
       _policyGeneration: generation,
     };
 
@@ -299,9 +311,9 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     // Record worktree MRU on explicit selection (suppressed during hydration)
     if (!mruRecordingSuppressed) {
       void loadTerminalStoreModule()
-        .then(({ useTerminalStore }) => {
-          useTerminalStore.getState().recordMru(`worktree:${id}`);
-          persistMruList(useTerminalStore.getState().mruList);
+        .then(({ usePanelStore }) => {
+          usePanelStore.getState().recordMru(`worktree:${id}`);
+          persistMruList(usePanelStore.getState().mruList);
         })
         .catch(() => {});
     }
@@ -318,18 +330,17 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     const lastFocusedTerminalId = get().lastFocusedTerminalByWorktree.get(id);
     if (lastFocusedTerminalId) {
       void loadTerminalStoreModule()
-        .then(({ useTerminalStore }) => {
+        .then(({ usePanelStore }) => {
           // Check generation to ensure we're not applying stale focus from a previous switch
           if (get()._policyGeneration !== generation) return;
           // Verify the worktree hasn't changed
           if (get().activeWorktreeId !== id) return;
 
-          const terminals = useTerminalStore.getState().terminals;
-          const terminal = terminals.find((t) => t.id === lastFocusedTerminalId);
+          const terminal = usePanelStore.getState().panelsById[lastFocusedTerminalId];
 
           // Validate terminal still exists, belongs to this worktree, and isn't in trash
           if (terminal && terminal.worktreeId === id && terminal.location !== "trash") {
-            useTerminalStore.getState().setFocused(lastFocusedTerminalId);
+            usePanelStore.getState().setFocused(lastFocusedTerminalId);
           }
         })
         .catch((error) => {
@@ -415,6 +426,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialIssue,
         initialPR: null,
         initialRecipeId: options?.initialRecipeId ?? null,
+        onCreated: options?.onCreated,
       },
     });
   },
@@ -424,23 +436,43 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
     }
     set({
-      createDialog: { isOpen: true, initialIssue: null, initialPR: pr, initialRecipeId: null },
+      createDialog: {
+        isOpen: true,
+        initialIssue: null,
+        initialPR: pr,
+        initialRecipeId: null,
+        onCreated: undefined,
+      },
     });
   },
 
   closeCreateDialog: () =>
     set({
-      createDialog: { isOpen: false, initialIssue: null, initialPR: null, initialRecipeId: null },
+      createDialog: {
+        isOpen: false,
+        initialIssue: null,
+        initialPR: null,
+        initialRecipeId: null,
+        onCreated: undefined,
+      },
     }),
 
   openBulkCreateDialog: (selectedIssues) => {
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
       window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
     }
-    set({ bulkCreateDialog: { isOpen: true, selectedIssues } });
+    set({ bulkCreateDialog: { isOpen: true, mode: "issue", selectedIssues, selectedPRs: [] } });
   },
 
-  closeBulkCreateDialog: () => set({ bulkCreateDialog: { isOpen: false, selectedIssues: [] } }),
+  openBulkCreateDialogForPRs: (selectedPRs) => {
+    if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
+    }
+    set({ bulkCreateDialog: { isOpen: true, mode: "pr", selectedIssues: [], selectedPRs } });
+  },
+
+  closeBulkCreateDialog: () =>
+    set((s) => ({ bulkCreateDialog: { ...s.bulkCreateDialog, isOpen: false } })),
 
   openQuickCreate: (context) => {
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
@@ -484,8 +516,14 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       pendingWorktreeId: null,
       expandedWorktrees: new Set<string>(),
       expandedTerminals: new Set<string>(),
-      createDialog: { isOpen: false, initialIssue: null, initialPR: null, initialRecipeId: null },
-      bulkCreateDialog: { isOpen: false, selectedIssues: [] },
+      createDialog: {
+        isOpen: false,
+        initialIssue: null,
+        initialPR: null,
+        initialRecipeId: null,
+        onCreated: undefined,
+      },
+      bulkCreateDialog: { isOpen: false, mode: "issue", selectedIssues: [], selectedPRs: [] },
       quickCreate: { isOpen: false, issue: null, pr: null },
       crossDiffDialog: { isOpen: false, initialWorktreeId: null },
       lastFocusedTerminalByWorktree: new Map<string, string>(),
@@ -495,6 +533,9 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 export const useWorktreeSelectionStore = create<WorktreeSelectionState>()(
   createWorktreeSelectionStore
 );
+
+// Inject lazy reference into projectStore to break circular dependency.
+setWorktreeSelectionStoreGetter(() => useWorktreeSelectionStore.getState());
 
 function applyWorktreeTerminalPolicy(
   get: () => WorktreeSelectionState,
@@ -507,16 +548,18 @@ function applyWorktreeTerminalPolicy(
   // They remain alive in the backend headless model and will be restored on wake.
   // Terminals in the active worktree must be activated to resume streaming.
   void loadTerminalStoreModule()
-    .then(({ useTerminalStore }) => {
+    .then(({ usePanelStore }) => {
       // Check generation to ensure we're not applying a stale policy from a previous switch
       if (get()._policyGeneration !== generation) return;
       // Double check that the active worktree hasn't changed underneath us
       if ((get().activeWorktreeId ?? null) !== (targetWorktreeId ?? null)) return;
 
-      const terminals = useTerminalStore.getState().terminals;
-      const activeDockTerminalId = useTerminalStore.getState().activeDockTerminalId;
+      const { panelsById, panelIds } = usePanelStore.getState();
+      const activeDockTerminalId = usePanelStore.getState().activeDockTerminalId;
 
-      for (const terminal of terminals) {
+      for (const id of panelIds) {
+        const terminal = panelsById[id];
+        if (!terminal) continue;
         const isInActiveWorktree = (terminal.worktreeId ?? null) === (targetWorktreeId ?? null);
 
         const location = terminal.location ?? "grid";
@@ -528,15 +571,15 @@ function applyWorktreeTerminalPolicy(
           continue;
         }
 
+        const targetTier =
+          isInActiveWorktree && !isDockOrTrash
+            ? TerminalRefreshTier.VISIBLE
+            : TerminalRefreshTier.BACKGROUND;
+
         // Apply appropriate renderer policy based on worktree membership.
         // Avoid waking dock/trash terminals - they manage their own visibility.
         // applyRendererPolicy handles backend tier transitions internally.
-        terminalInstanceService.applyRendererPolicy(
-          terminal.id,
-          isInActiveWorktree && !isDockOrTrash
-            ? TerminalRefreshTier.VISIBLE
-            : TerminalRefreshTier.BACKGROUND
-        );
+        terminalInstanceService.applyRendererPolicy(terminal.id, targetTier);
       }
 
       onComplete?.();

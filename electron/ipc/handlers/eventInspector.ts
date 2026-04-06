@@ -6,6 +6,10 @@ import type { EventRecord } from "../../../shared/types/index.js";
 
 const subscribedWebContents = new Map<WebContents, () => void>();
 let eventBufferUnsubscribe: (() => void) | null = null;
+let pendingBatch: EventRecord[] = [];
+let batchTimeout: NodeJS.Timeout | null = null;
+const BATCH_WINDOW_MS = 50;
+const MAX_BATCH_SIZE = 200;
 
 export function registerEventInspectorHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -40,7 +44,17 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
   ipcMain.handle(CHANNELS.EVENT_INSPECTOR_CLEAR, handleEventInspectorClear);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.EVENT_INSPECTOR_CLEAR));
 
-  const broadcastEvent = (record: EventRecord) => {
+  const flushBatch = () => {
+    if (batchTimeout) {
+      clearTimeout(batchTimeout);
+      batchTimeout = null;
+    }
+
+    if (pendingBatch.length === 0) return;
+
+    const batch = pendingBatch;
+    pendingBatch = [];
+
     for (const [webContents, destroyListener] of subscribedWebContents.entries()) {
       if (webContents.isDestroyed()) {
         webContents.removeListener("destroyed", destroyListener);
@@ -48,10 +62,13 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
         continue;
       }
       try {
-        webContents.send(CHANNELS.EVENT_INSPECTOR_EVENT, record);
+        for (let i = 0; i < batch.length; i += MAX_BATCH_SIZE) {
+          const chunk = batch.slice(i, i + MAX_BATCH_SIZE);
+          webContents.send(CHANNELS.EVENT_INSPECTOR_EVENT_BATCH, chunk);
+        }
       } catch (error) {
         console.warn(
-          "[EventInspector] Failed to send event to renderer, keeping subscription:",
+          "[EventInspector] Failed to send event batch to renderer, keeping subscription:",
           error
         );
       }
@@ -60,6 +77,13 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
     if (subscribedWebContents.size === 0 && eventBufferUnsubscribe) {
       eventBufferUnsubscribe();
       eventBufferUnsubscribe = null;
+    }
+  };
+
+  const queueEvent = (record: EventRecord) => {
+    pendingBatch.push(record);
+    if (!batchTimeout) {
+      batchTimeout = setTimeout(flushBatch, BATCH_WINDOW_MS);
     }
   };
 
@@ -83,7 +107,7 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
     sender.once("destroyed", destroyListener);
 
     if (!eventBufferUnsubscribe && deps.eventBuffer) {
-      eventBufferUnsubscribe = deps.eventBuffer.onRecord(broadcastEvent);
+      eventBufferUnsubscribe = deps.eventBuffer.onRecord(queueEvent);
     }
   };
   ipcMain.on(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE, handleSubscribe);
@@ -111,12 +135,20 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
   return () => {
     handlers.forEach((cleanup) => cleanup());
 
+    flushBatch();
+
     for (const [webContents, destroyListener] of subscribedWebContents.entries()) {
       if (!webContents.isDestroyed()) {
         webContents.removeListener("destroyed", destroyListener);
       }
     }
     subscribedWebContents.clear();
+
+    pendingBatch = [];
+    if (batchTimeout) {
+      clearTimeout(batchTimeout);
+      batchTimeout = null;
+    }
 
     if (eventBufferUnsubscribe) {
       eventBufferUnsubscribe();

@@ -18,7 +18,7 @@ test.describe.serial("Core: Worktree Cards", () => {
     });
 
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixture, "Worktree Cards");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, "Worktree Cards");
   });
 
   test.afterAll(async () => {

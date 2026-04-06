@@ -11,6 +11,7 @@ import type {
   WorkerOutboundMessage,
   WorkerInboundMessage,
 } from "../../shared/types/worker-messages.js";
+import { logDebug, logWarn, logError } from "@/utils/logger";
 
 /** Event handlers for semantic analysis events */
 export interface SemanticAnalysisEventHandlers {
@@ -55,7 +56,7 @@ class SemanticAnalysisService {
 
   private async doInitialize(handlers?: SemanticAnalysisEventHandlers): Promise<void> {
     if (this.isInitialized) {
-      console.warn("[SemanticAnalysisService] Already initialized");
+      logWarn("[SemanticAnalysisService] Already initialized");
       return;
     }
 
@@ -77,7 +78,7 @@ class SemanticAnalysisService {
       if (!analysisBuffer) {
         const errorMsg =
           "No analysis buffer available - semantic analysis disabled (SharedArrayBuffer may not be supported)";
-        console.warn(`[SemanticAnalysisService] ${errorMsg}`);
+        logWarn(`[SemanticAnalysisService] ${errorMsg}`);
         this.handlers.onError?.(errorMsg, "initialization");
 
         // Clean up worker and reset state so re-init is possible
@@ -96,9 +97,9 @@ class SemanticAnalysisService {
         buffer: analysisBuffer,
       });
 
-      console.log("[SemanticAnalysisService] Worker initialized with analysis buffer");
+      logDebug("[SemanticAnalysisService] Worker initialized with analysis buffer");
     } catch (error) {
-      console.error("[SemanticAnalysisService] Failed to get analysis buffer:", error);
+      logError("[SemanticAnalysisService] Failed to get analysis buffer", error);
       this.handlers.onError?.(
         error instanceof Error ? error.message : String(error),
         "initialization"
@@ -125,7 +126,7 @@ class SemanticAnalysisService {
         case "READY":
           this.isInitialized = true;
           this.handlers.onReady?.();
-          console.log("[SemanticAnalysisService] Worker ready");
+          logDebug("[SemanticAnalysisService] Worker ready");
           break;
 
         case "ARTIFACT_DETECTED":
@@ -147,10 +148,10 @@ class SemanticAnalysisService {
           break;
 
         case "ERROR":
-          console.error(
-            `[SemanticAnalysisService] Worker error: ${message.error}`,
-            message.context
-          );
+          logError("[SemanticAnalysisService] Worker error", undefined, {
+            workerError: message.error,
+            workerContext: message.context,
+          });
           this.handlers.onError?.(message.error, message.context);
           break;
 
@@ -165,7 +166,7 @@ class SemanticAnalysisService {
     if (!this.worker) return;
 
     this.worker.onerror = (event: ErrorEvent) => {
-      console.error("[SemanticAnalysisService] Worker error:", event.message);
+      logError("[SemanticAnalysisService] Worker crashed", undefined, { message: event.message });
       this.handlers.onError?.(event.message, "worker crash");
 
       // Attempt to restart worker
@@ -174,7 +175,7 @@ class SemanticAnalysisService {
   }
 
   private async restartWorker(): Promise<void> {
-    console.log("[SemanticAnalysisService] Attempting to restart worker...");
+    logDebug("[SemanticAnalysisService] Attempting to restart worker");
 
     // Clean up old worker
     if (this.worker) {
@@ -192,7 +193,7 @@ class SemanticAnalysisService {
       await this.initialize(this.handlers);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error("[SemanticAnalysisService] Worker restart failed:", message);
+      logError("[SemanticAnalysisService] Worker restart failed", undefined, { message });
       this.handlers.onError?.(message, "restart");
       return;
     }
@@ -209,9 +210,9 @@ class SemanticAnalysisService {
       });
     }
 
-    console.log(
-      `[SemanticAnalysisService] Re-registered ${this.registeredTerminals.size} terminals after restart`
-    );
+    logDebug("[SemanticAnalysisService] Re-registered terminals after restart", {
+      count: this.registeredTerminals.size,
+    });
   }
 
   /**
@@ -219,7 +220,7 @@ class SemanticAnalysisService {
    */
   private postMessage(message: WorkerInboundMessage): void {
     if (!this.worker) {
-      console.warn("[SemanticAnalysisService] Cannot post message - worker not initialized");
+      logWarn("[SemanticAnalysisService] Cannot post message — worker not initialized");
       return;
     }
     this.worker.postMessage(message);
@@ -327,7 +328,7 @@ class SemanticAnalysisService {
     this.initPromise = null;
     this.handlers = {};
     this.registeredTerminals.clear();
-    console.log("[SemanticAnalysisService] Disposed");
+    logDebug("[SemanticAnalysisService] Disposed");
   }
 }
 

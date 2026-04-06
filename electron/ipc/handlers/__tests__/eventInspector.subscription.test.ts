@@ -27,6 +27,7 @@ describe("event inspector subscription", () => {
   let cleanup: () => void;
 
   beforeEach(() => {
+    vi.useFakeTimers();
     vi.clearAllMocks();
     onRecordUnsubscribe = vi.fn();
     onRecordCallback = null;
@@ -57,6 +58,7 @@ describe("event inspector subscription", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
   });
 
   function getRegisteredHandler(channel: string): ((...args: unknown[]) => void) | undefined {
@@ -82,6 +84,17 @@ describe("event inspector subscription", () => {
     };
   }
 
+  function createTestRecord(id: string): EventRecord {
+    return {
+      id,
+      timestamp: Date.now(),
+      type: "agent:spawned",
+      category: "agent",
+      payload: { agentId: "a1" },
+      source: "main",
+    };
+  }
+
   it("registers subscribe and unsubscribe handlers", () => {
     const onCalls = (ipcMain.on as Mock).mock.calls.map(([ch]) => ch);
     expect(onCalls).toContain(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE);
@@ -100,26 +113,47 @@ describe("event inspector subscription", () => {
     expect(mockEventBuffer.onRecord).toHaveBeenCalled();
   });
 
-  it("broadcasts events to subscribed webcontents", () => {
+  it("broadcasts batched events to subscribed webcontents after flush", () => {
     const subscribeHandler = getRegisteredHandler(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE);
     const sender = createMockSender();
-    const event = { sender };
 
-    subscribeHandler!(event);
+    subscribeHandler!({ sender });
 
-    const testRecord: EventRecord = {
-      id: "test-1",
-      timestamp: Date.now(),
-      type: "agent:spawned",
-      category: "agent",
-      payload: { agentId: "a1" },
-      source: "main",
-    };
-
+    const testRecord = createTestRecord("test-1");
     expect(onRecordCallback).not.toBeNull();
     onRecordCallback!(testRecord);
 
-    expect(sender.send).toHaveBeenCalledWith(CHANNELS.EVENT_INSPECTOR_EVENT, testRecord);
+    expect(sender.send).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(50);
+
+    expect(sender.send).toHaveBeenCalledWith(CHANNELS.EVENT_INSPECTOR_EVENT_BATCH, [testRecord]);
+  });
+
+  it("batches multiple events within the batch window into one send", () => {
+    const subscribeHandler = getRegisteredHandler(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE);
+    const sender = createMockSender();
+
+    subscribeHandler!({ sender });
+
+    const record1 = createTestRecord("batch-1");
+    const record2 = createTestRecord("batch-2");
+    const record3 = createTestRecord("batch-3");
+
+    onRecordCallback!(record1);
+    onRecordCallback!(record2);
+    onRecordCallback!(record3);
+
+    expect(sender.send).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(50);
+
+    expect(sender.send).toHaveBeenCalledTimes(1);
+    expect(sender.send).toHaveBeenCalledWith(CHANNELS.EVENT_INSPECTOR_EVENT_BATCH, [
+      record1,
+      record2,
+      record3,
+    ]);
   });
 
   it("unsubscribes webcontents from event stream", () => {
@@ -142,19 +176,13 @@ describe("event inspector subscription", () => {
     subscribeHandler!({ sender: sender1 });
     subscribeHandler!({ sender: sender2 });
 
-    const testRecord: EventRecord = {
-      id: "test-2",
-      timestamp: Date.now(),
-      type: "agent:state-changed",
-      category: "agent",
-      payload: { agentId: "a1", state: "working" },
-      source: "main",
-    };
-
+    const testRecord = createTestRecord("test-2");
     onRecordCallback!(testRecord);
 
-    expect(sender1.send).toHaveBeenCalledWith(CHANNELS.EVENT_INSPECTOR_EVENT, testRecord);
-    expect(sender2.send).toHaveBeenCalledWith(CHANNELS.EVENT_INSPECTOR_EVENT, testRecord);
+    vi.advanceTimersByTime(50);
+
+    expect(sender1.send).toHaveBeenCalledWith(CHANNELS.EVENT_INSPECTOR_EVENT_BATCH, [testRecord]);
+    expect(sender2.send).toHaveBeenCalledWith(CHANNELS.EVENT_INSPECTOR_EVENT_BATCH, [testRecord]);
   });
 
   it("cleans up destroyed webcontents during broadcast", () => {
@@ -167,19 +195,13 @@ describe("event inspector subscription", () => {
 
     sender1.isDestroyed.mockReturnValue(true);
 
-    const testRecord: EventRecord = {
-      id: "test-3",
-      timestamp: Date.now(),
-      type: "task:created",
-      category: "task",
-      payload: { taskId: "t1" },
-      source: "main",
-    };
-
+    const testRecord = createTestRecord("test-3");
     onRecordCallback!(testRecord);
 
+    vi.advanceTimersByTime(50);
+
     expect(sender1.send).not.toHaveBeenCalled();
-    expect(sender2.send).toHaveBeenCalledWith(CHANNELS.EVENT_INSPECTOR_EVENT, testRecord);
+    expect(sender2.send).toHaveBeenCalledWith(CHANNELS.EVENT_INSPECTOR_EVENT_BATCH, [testRecord]);
   });
 
   it("cleans up when webcontents is destroyed via event", () => {
@@ -240,5 +262,26 @@ describe("event inspector subscription", () => {
     subscribeHandler!({ sender });
 
     expect(mockEventBuffer.onRecord).not.toHaveBeenCalled();
+  });
+
+  it("flushes pending events immediately on cleanup without waiting for timer", () => {
+    const subscribeHandler = getRegisteredHandler(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE);
+    const sender = createMockSender();
+
+    subscribeHandler!({ sender });
+
+    const record1 = createTestRecord("flush-1");
+    const record2 = createTestRecord("flush-2");
+    onRecordCallback!(record1);
+    onRecordCallback!(record2);
+
+    expect(sender.send).not.toHaveBeenCalled();
+
+    cleanup();
+
+    expect(sender.send).toHaveBeenCalledWith(CHANNELS.EVENT_INSPECTOR_EVENT_BATCH, [
+      record1,
+      record2,
+    ]);
   });
 });

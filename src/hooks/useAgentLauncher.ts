@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTerminalStore, type AddTerminalOptions } from "@/store/terminalStore";
+import { usePanelStore, type AddPanelOptions } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -7,14 +7,16 @@ import { useWorktrees } from "./useWorktrees";
 import { isElectronAvailable } from "./useElectron";
 
 import { agentSettingsClient, systemClient } from "@/clients";
+import { useHomeDir } from "@/hooks/app/useHomeDir";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { generateAgentCommand, buildAgentLaunchFlags } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent, getAgentDisplayTitle } from "@/config/agents";
+import { normalizeAgentSelection } from "@/store/agentSettingsStore";
 
 const CLIPBOARD_DIR_NAME = "canopy-clipboard";
 
 export interface LaunchAgentOptions {
-  location?: AddTerminalOptions["location"];
+  location?: AddPanelOptions["location"];
   cwd?: string;
   worktreeId?: string;
   prompt?: string;
@@ -31,10 +33,11 @@ export interface UseAgentLauncherReturn {
 }
 
 export function useAgentLauncher(): UseAgentLauncherReturn {
-  const addTerminal = useTerminalStore((state) => state.addTerminal);
-  const { worktreeMap } = useWorktrees();
+  const addPanel = usePanelStore((state) => state.addPanel);
+  const { worktreeMap, isInitialized } = useWorktrees();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const currentProject = useProjectStore((state) => state.currentProject);
+  const { homeDir } = useHomeDir();
   const availability = useCliAvailabilityStore((state) => state.availability);
   const isLoading = useCliAvailabilityStore((state) => state.isLoading);
   const isRefreshing = useCliAvailabilityStore((state) => state.isRefreshing);
@@ -55,18 +58,22 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       agentSettingsClient.get(),
     ]);
 
-    if (isMounted.current && settingsResult.status === "fulfilled") {
-      setAgentSettings(settingsResult.value);
+    if (isMounted.current && settingsResult.status === "fulfilled" && settingsResult.value) {
+      const currentAvailability = useCliAvailabilityStore.getState().availability;
+      setAgentSettings(normalizeAgentSelection(settingsResult.value, currentAvailability));
     }
   }, [refreshCliAvailability]);
 
   useEffect(() => {
     isMounted.current = true;
-    void initializeCliAvailability();
-    agentSettingsClient
-      .get()
-      .then((settings) => {
-        if (isMounted.current) setAgentSettings(settings);
+
+    Promise.allSettled([initializeCliAvailability(), agentSettingsClient.get()])
+      .then(([, settingsResult]) => {
+        if (!isMounted.current) return;
+        if (settingsResult.status === "fulfilled" && settingsResult.value) {
+          const currentAvailability = useCliAvailabilityStore.getState().availability;
+          setAgentSettings(normalizeAgentSelection(settingsResult.value, currentAvailability));
+        }
       })
       .catch((error) => {
         console.error("Failed to load agent settings:", error);
@@ -87,17 +94,18 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       const targetWorktreeId = launchOptions?.worktreeId ?? activeWorktreeId;
       const targetWorktree = targetWorktreeId ? worktreeMap.get(targetWorktreeId) : null;
 
-      if (targetWorktreeId && !targetWorktree) {
+      if (targetWorktreeId && !targetWorktree && isInitialized) {
         console.warn(`Worktree ${targetWorktreeId} not found, cannot launch agent`);
         return null;
       }
 
-      const cwd = launchOptions?.cwd ?? targetWorktree?.path ?? currentProject?.path ?? "";
+      const cwd =
+        launchOptions?.cwd ?? targetWorktree?.path ?? currentProject?.path ?? homeDir ?? "";
 
       // Handle browser pane specially
       if (agentId === "browser") {
         try {
-          const terminalId = await addTerminal({
+          const terminalId = await addPanel({
             kind: "browser",
             cwd,
             worktreeId: targetWorktreeId || undefined,
@@ -106,6 +114,23 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           return terminalId;
         } catch (error) {
           console.error("Failed to launch browser pane:", error);
+          return null;
+        }
+      }
+
+      // Handle dev-preview pane specially
+      if (agentId === "dev-preview") {
+        try {
+          const terminalId = await addPanel({
+            kind: "dev-preview",
+            title: "Dev Server",
+            cwd,
+            worktreeId: targetWorktreeId || undefined,
+            location: launchOptions?.location,
+          });
+          return terminalId;
+        } catch (error) {
+          console.error("Failed to launch dev-preview pane:", error);
           return null;
         }
       }
@@ -150,7 +175,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           ? getAgentDisplayTitle(agentId, launchOptions.modelId)
           : (agentConfig?.name ?? "Terminal");
 
-      const options: AddTerminalOptions = {
+      const options: AddPanelOptions = {
         kind: isAgent ? "agent" : "terminal",
         type: isAgent ? (agentId as any) : "terminal",
         agentId: isAgent ? agentId : undefined,
@@ -164,14 +189,14 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       };
 
       try {
-        const terminalId = await addTerminal(options);
+        const terminalId = await addPanel(options);
         return terminalId;
       } catch (error) {
         console.error(`Failed to launch ${agentId} agent:`, error);
         return null;
       }
     },
-    [activeWorktreeId, worktreeMap, addTerminal, currentProject, agentSettings]
+    [activeWorktreeId, worktreeMap, isInitialized, addPanel, currentProject, agentSettings, homeDir]
   );
 
   return {

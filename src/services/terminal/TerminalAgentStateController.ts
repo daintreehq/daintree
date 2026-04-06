@@ -1,6 +1,6 @@
 import type { AgentState } from "@/types";
 import type { ManagedTerminal } from "./types";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { logError } from "@/utils/logger";
 
 export interface AgentStateControllerDeps {
@@ -39,6 +39,10 @@ export class TerminalAgentStateController {
 
     managed.agentState = state;
 
+    if (previousState === "working" && state === "waiting") {
+      this.firePostCompleteHook(managed);
+    }
+
     this.notifySubscribers(managed, state);
   }
 
@@ -70,7 +74,7 @@ export class TerminalAgentStateController {
       if (managed.agentState !== "directing") {
         managed.agentState = "directing";
         this.notifySubscribers(managed, "directing");
-        useTerminalStore.getState().updateAgentState(id, "directing");
+        usePanelStore.getState().updateAgentState(id, "directing");
       }
 
       const existingTimer = this.directingTimers.get(id);
@@ -107,7 +111,7 @@ export class TerminalAgentStateController {
 
     managed.agentState = "working";
     this.notifySubscribers(managed, "working");
-    useTerminalStore.getState().updateAgentState(id, "working");
+    usePanelStore.getState().updateAgentState(id, "working");
   }
 
   clearDirectingState(id: string): void {
@@ -125,7 +129,7 @@ export class TerminalAgentStateController {
     managed.agentState = revertState;
 
     this.notifySubscribers(managed, revertState);
-    useTerminalStore.getState().updateAgentState(id, revertState);
+    usePanelStore.getState().updateAgentState(id, revertState);
   }
 
   destroy(id: string): void {
@@ -143,6 +147,41 @@ export class TerminalAgentStateController {
     }
     this.directingTimers.clear();
     this.compositionCounts.clear();
+  }
+
+  private firePostCompleteHook(managed: ManagedTerminal): void {
+    const hook = managed.postCompleteHook;
+    if (!hook) return;
+
+    // One-shot: remove before calling to prevent re-entry
+    managed.postCompleteHook = undefined;
+    const marker = managed.postCompleteMarker;
+    managed.postCompleteMarker = undefined;
+
+    // Extract plain text from marker position to buffer end
+    const buf = managed.terminal.buffer.active;
+    let startLine = 0;
+    if (marker && !marker.isDisposed && marker.line >= 0) {
+      startLine = marker.line;
+      marker.dispose();
+    }
+
+    const lines: string[] = [];
+    for (let i = startLine; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+    const output = lines.join("\n");
+
+    // Fire-and-forget — do not block state transition path
+    try {
+      const result = hook(output);
+      if (result instanceof Promise) {
+        result.catch((err) => logError("Post-complete hook error", err));
+      }
+    } catch (err) {
+      logError("Post-complete hook error", err);
+    }
   }
 
   private notifySubscribers(managed: ManagedTerminal, state: AgentState): void {

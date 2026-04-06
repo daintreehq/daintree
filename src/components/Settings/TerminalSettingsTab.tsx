@@ -15,12 +15,15 @@ import {
   Activity,
   Shield,
   Cpu,
+  MemoryStick,
+  Layers,
 } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
+import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import {
@@ -40,8 +43,10 @@ import {
   PERFORMANCE_MODE_SCROLLBACK,
 } from "@/utils/scrollbackConfig";
 import { actionService } from "@/services/ActionService";
+import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
+import { useMemoryLeakConfigStore } from "@/store/memoryLeakConfigStore";
 import type { HardwareInfo } from "@shared/types/ipc/system";
 
 const STRATEGIES: Array<{
@@ -75,6 +80,14 @@ const SCROLLBACK_OPTIONS = [
   { value: 1000, label: "1,000 lines", description: "Default" },
   { value: 2500, label: "2,500 lines", description: "Extended" },
   { value: 5000, label: "5,000 lines", description: "Full history" },
+] as const;
+
+const CACHED_VIEWS_OPTIONS = [
+  { value: 1, label: "1 project", description: "Default" },
+  { value: 2, label: "2 projects", description: "Balanced" },
+  { value: 3, label: "3 projects", description: "Balanced" },
+  { value: 4, label: "4 projects", description: "More cache" },
+  { value: 5, label: "5 projects", description: "Max cache" },
 ] as const;
 
 const TYPICAL_TERMINAL_COUNTS: Partial<Record<TerminalType, number>> = {
@@ -134,6 +147,13 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const setPanelHardLimit = usePanelLimitStore((state) => state.setHardLimit);
   const resetToHardwareDefaults = usePanelLimitStore((state) => state.resetToHardwareDefaults);
   const initializeFromHardware = usePanelLimitStore((state) => state.initializeFromHardware);
+
+  const memoryLeakDetectionEnabled = useMemoryLeakConfigStore((s) => s.enabled);
+  const autoRestartThresholdMb = useMemoryLeakConfigStore((s) => s.autoRestartThresholdMb);
+  const setMemoryLeakDetectionEnabled = useMemoryLeakConfigStore((s) => s.setEnabled);
+  const setAutoRestartThresholdMb = useMemoryLeakConfigStore((s) => s.setAutoRestartThresholdMb);
+
+  const cachedProjectViews = useCachedProjectViewsStore((s) => s.cachedProjectViews);
 
   const [hardwareInfo, setHardwareInfo] = useState<HardwareInfo | null>(null);
 
@@ -255,6 +275,21 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
     }
   };
 
+  const handleCachedProjectViewsChange = async (value: number) => {
+    try {
+      const result = await actionService.dispatch(
+        "terminalConfig.setCachedProjectViews",
+        { cachedProjectViews: value },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+    } catch (error) {
+      console.error("Failed to persist cached project views setting:", error);
+    }
+  };
+
   const effectiveSubtab =
     activeSubtab && TERMINAL_SUBTAB_IDS.includes(activeSubtab) ? activeSubtab : "performance";
 
@@ -298,7 +333,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           />
 
           {performanceMode && (
-            <p className="text-xs text-status-warning/80 flex items-center gap-1.5">
+            <p className="text-xs text-status-warning/80 flex items-center gap-1.5 select-text">
               <AlertTriangle className="w-3 h-3" />
               New terminals will use reduced scrollback. Existing terminals are unchanged until
               respawned.
@@ -340,6 +375,72 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
       {effectiveSubtab === "performance" && (
         <SettingsSection
+          icon={MemoryStick}
+          title="Memory Leak Detection"
+          id="terminal-memory-leak-detection"
+          description="Detect runaway memory growth in terminal processes and alert with restart options. Requires resource monitoring."
+        >
+          <SettingsSwitchCard
+            icon={MemoryStick}
+            title={
+              memoryLeakDetectionEnabled
+                ? "Memory Leak Detection Enabled"
+                : "Enable Memory Leak Detection"
+            }
+            subtitle="Show warnings when a terminal's memory grows continuously"
+            isEnabled={memoryLeakDetectionEnabled}
+            onChange={() => {
+              const newValue = !memoryLeakDetectionEnabled;
+              setMemoryLeakDetectionEnabled(newValue);
+              window.electron.terminalConfig.setMemoryLeakDetection(newValue);
+            }}
+            ariaLabel="Memory Leak Detection Toggle"
+            isModified={memoryLeakDetectionEnabled}
+            onReset={() => {
+              setMemoryLeakDetectionEnabled(false);
+              window.electron.terminalConfig.setMemoryLeakDetection(false);
+            }}
+            disabled={!resourceMonitoringEnabled}
+          />
+
+          <div
+            className={cn(
+              "space-y-2",
+              (!memoryLeakDetectionEnabled || !resourceMonitoringEnabled) &&
+                "opacity-50 pointer-events-none"
+            )}
+          >
+            <SettingsNumberInput
+              label="Auto-Restart Threshold (MB)"
+              description="Automatically restart a terminal when its RSS exceeds this threshold. Set between 1,024 MB and 32,768 MB."
+              min={1024}
+              max={32768}
+              step={1024}
+              value={autoRestartThresholdMb}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val)) {
+                  setAutoRestartThresholdMb(val);
+                  if (val >= 1024 && val <= 32768) {
+                    window.electron.terminalConfig.setMemoryLeakAutoRestartThresholdMb(val);
+                  }
+                }
+              }}
+              disabled={!memoryLeakDetectionEnabled || !resourceMonitoringEnabled}
+            />
+          </div>
+
+          {!resourceMonitoringEnabled && (
+            <p className="text-xs text-status-warning/80 flex items-center gap-1.5 select-text">
+              <AlertTriangle className="w-3 h-3" />
+              Enable Resource Monitoring above to use memory leak detection.
+            </p>
+          )}
+        </SettingsSection>
+      )}
+
+      {effectiveSubtab === "performance" && (
+        <SettingsSection
           icon={Shield}
           title="Panel Limits"
           id="terminal-panel-limits"
@@ -368,71 +469,44 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               panelLimits.warningsDisabled && "opacity-50 pointer-events-none"
             )}
           >
-            <div className="space-y-2">
-              <label htmlFor="soft-warning-limit" className="text-sm text-canopy-text/70">
-                Soft Warning
-              </label>
-              <input
-                id="soft-warning-limit"
-                type="number"
-                min="4"
-                max="100"
-                value={panelLimits.softWarningLimit}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  if (!isNaN(val)) setSoftWarningLimit(val);
-                }}
-                disabled={panelLimits.warningsDisabled}
-                className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
-              />
-              <p className="text-xs text-canopy-text/40">
-                Show a dismissible banner when panel count reaches this number.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor="confirmation-limit" className="text-sm text-canopy-text/70">
-                Confirmation Required
-              </label>
-              <input
-                id="confirmation-limit"
-                type="number"
-                min="4"
-                max="100"
-                value={panelLimits.confirmationLimit}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  if (!isNaN(val)) setConfirmationLimit(val);
-                }}
-                disabled={panelLimits.warningsDisabled}
-                className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
-              />
-              <p className="text-xs text-canopy-text/40">
-                Require explicit confirmation before adding panels beyond this count.
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label htmlFor="hard-limit" className="text-sm text-canopy-text/70">
-              Hard Limit
-            </label>
-            <input
-              id="hard-limit"
-              type="number"
-              min="4"
-              max="100"
-              value={panelLimits.hardLimit}
+            <SettingsNumberInput
+              label="Soft Warning"
+              description="Show a dismissible banner when panel count reaches this number."
+              min={4}
+              max={100}
+              value={panelLimits.softWarningLimit}
               onChange={(e) => {
                 const val = parseInt(e.target.value, 10);
-                if (!isNaN(val)) setPanelHardLimit(val);
+                if (!isNaN(val)) setSoftWarningLimit(val);
               }}
-              className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+              disabled={panelLimits.warningsDisabled}
             />
-            <p className="text-xs text-canopy-text/40">
-              Absolute maximum number of panels. Cannot be bypassed.
-            </p>
+
+            <SettingsNumberInput
+              label="Confirmation Required"
+              description="Require explicit confirmation before adding panels beyond this count."
+              min={4}
+              max={100}
+              value={panelLimits.confirmationLimit}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val)) setConfirmationLimit(val);
+              }}
+              disabled={panelLimits.warningsDisabled}
+            />
           </div>
+
+          <SettingsNumberInput
+            label="Hard Limit"
+            description="Absolute maximum number of panels. Cannot be bypassed."
+            min={4}
+            max={100}
+            value={panelLimits.hardLimit}
+            onChange={(e) => {
+              const val = parseInt(e.target.value, 10);
+              if (!isNaN(val)) setPanelHardLimit(val);
+            }}
+          />
 
           {hardwareInfo && hardwareInfo.totalMemoryBytes > 0 && (
             <div className="flex items-center gap-2 text-xs text-canopy-text/50">
@@ -451,6 +525,40 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             <RotateCcw className="w-3 h-3" />
             <span>Reset to hardware-recommended defaults</span>
           </button>
+        </SettingsSection>
+      )}
+
+      {effectiveSubtab === "performance" && (
+        <SettingsSection
+          icon={Layers}
+          title="Cached Project Views"
+          id="terminal-cached-project-views"
+          description="Number of project views to keep loaded in memory. Lower values save memory; switching to an evicted project takes ~500ms to reload."
+        >
+          <div
+            className="grid grid-cols-5 gap-2"
+            role="radiogroup"
+            aria-label="Cached project views"
+          >
+            {CACHED_VIEWS_OPTIONS.map(({ value, label, description }) => (
+              <button
+                key={value}
+                onClick={() => handleCachedProjectViewsChange(value)}
+                role="radio"
+                aria-checked={cachedProjectViews === value}
+                aria-label={`${label} - ${description}`}
+                className={cn(
+                  "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
+                  cachedProjectViews === value
+                    ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
+                    : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"
+                )}
+              >
+                <span className="text-xs font-medium">{label}</span>
+                <span className="text-[11px] mt-0.5 opacity-60">{description}</span>
+              </button>
+            ))}
+          </div>
         </SettingsSection>
       )}
 
@@ -581,7 +689,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                     {Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)}
                   </span>
                 </div>
-                <p className="text-xs text-canopy-text/40">
+                <p className="text-xs text-canopy-text/40 select-text">
                   Default split ratio when no worktree-specific ratio is saved.
                 </p>
               </div>
@@ -614,7 +722,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   key={id}
                   onClick={() => handleStrategyChange(id)}
                   className={cn(
-                    "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-all",
+                    "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-colors",
                     layoutConfig.strategy === id
                       ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
                       : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"
@@ -628,29 +736,23 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             </div>
 
             {layoutConfig.strategy !== "automatic" && (
-              <div className="space-y-2">
-                <label className="text-sm text-canopy-text/70">
-                  {layoutConfig.strategy === "fixed-columns"
-                    ? "Number of Columns"
-                    : "Number of Rows"}
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={layoutConfig.value}
-                  onChange={(e) => handleValueChange(e.target.value)}
-                  className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
-                />
-                <p className="text-xs text-canopy-text/40">
-                  {layoutConfig.strategy === "fixed-columns"
+              <SettingsNumberInput
+                label={
+                  layoutConfig.strategy === "fixed-columns" ? "Number of Columns" : "Number of Rows"
+                }
+                description={
+                  layoutConfig.strategy === "fixed-columns"
                     ? "Terminals will stack vertically when this many columns are filled."
-                    : "Terminals will expand horizontally when this many rows are filled."}
-                </p>
-              </div>
+                    : "Terminals will expand horizontally when this many rows are filled."
+                }
+                min={1}
+                max={10}
+                value={layoutConfig.value}
+                onChange={(e) => handleValueChange(e.target.value)}
+              />
             )}
 
-            <p className="text-xs text-canopy-text/40 leading-relaxed">
+            <p className="text-xs text-canopy-text/40 leading-relaxed select-text">
               {layoutConfig.strategy === "automatic" &&
                 "Uses a balanced square grid that adapts to the number of terminals (1-4 terminals use 2 columns, 5+ use up to 4 columns)."}
               {layoutConfig.strategy === "fixed-columns" &&
@@ -680,7 +782,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 aria-checked={scrollbackLines === value}
                 aria-label={`${label} - ${description}`}
                 className={cn(
-                  "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-all",
+                  "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
                   performanceMode && "opacity-50 cursor-not-allowed",
                   scrollbackLines === value
                     ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
@@ -777,7 +879,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 aria-checked={screenReaderMode === value}
                 aria-label={`${label} - ${description}`}
                 className={cn(
-                  "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-all",
+                  "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
                   screenReaderMode === value
                     ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
                     : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"
@@ -789,7 +891,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             ))}
           </div>
 
-          <p className="text-xs text-canopy-text/50 leading-relaxed">
+          <p className="text-xs text-canopy-text/50 leading-relaxed select-text">
             Screen reader mode adds an accessible DOM overlay to each terminal, which has a
             performance cost. For best results, only enable when using a screen reader.
           </p>

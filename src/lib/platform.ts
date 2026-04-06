@@ -1,25 +1,25 @@
-let _isMac: boolean | undefined;
-
 export function isMac(): boolean {
-  if (_isMac === undefined) {
-    _isMac =
-      typeof navigator !== "undefined" &&
-      !!navigator.platform &&
-      navigator.platform.toUpperCase().indexOf("MAC") >= 0;
-  }
-  return _isMac;
+  return (
+    typeof navigator !== "undefined" &&
+    !!navigator.platform &&
+    navigator.platform.toUpperCase().indexOf("MAC") >= 0
+  );
 }
 
-let _isLinux: boolean | undefined;
+export function isWindows(): boolean {
+  return (
+    typeof navigator !== "undefined" &&
+    !!navigator.platform &&
+    navigator.platform.toUpperCase().includes("WIN")
+  );
+}
 
 export function isLinux(): boolean {
-  if (_isLinux === undefined) {
-    _isLinux =
-      typeof navigator !== "undefined" &&
-      !!navigator.userAgent &&
-      navigator.userAgent.includes("Linux");
-  }
-  return _isLinux;
+  return (
+    typeof navigator !== "undefined" &&
+    !!navigator.userAgent &&
+    navigator.userAgent.includes("Linux")
+  );
 }
 
 /**

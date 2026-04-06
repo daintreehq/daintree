@@ -1,18 +1,22 @@
 import { existsSync, readFileSync } from "fs";
 import path from "path";
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, ipcMain } from "electron";
 import electronUpdater from "electron-updater";
 import type { UpdateInfo, ProgressInfo } from "electron-updater";
 import { CHANNELS } from "../ipc/channels.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
 import { getCrashRecoveryService } from "./CrashRecoveryService.js";
+import { store } from "../store.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+const STABLE_FEED_URL = "https://updates.canopyide.com/releases/";
+const NIGHTLY_FEED_URL = "https://updates.canopyide.com/nightly/";
 const { autoUpdater } = electronUpdater;
 
 class AutoUpdaterService {
   private checkInterval: NodeJS.Timeout | null = null;
   private initialized = false;
-  private window: BrowserWindow | null = null;
+  private channelHandlersRegistered = false;
   private updateDownloaded = false;
   private isManualCheck = false;
   private checkingHandler: (() => void) | null = null;
@@ -22,14 +26,13 @@ class AutoUpdaterService {
   private progressHandler: ((progress: ProgressInfo) => void) | null = null;
   private downloadedHandler: ((info: UpdateInfo) => void) | null = null;
 
-  private sendToWindow(channel: string, payload: unknown): void {
-    if (this.window && !this.window.isDestroyed() && !this.window.webContents.isDestroyed()) {
-      try {
-        this.window.webContents.send(channel, payload);
-      } catch {
-        // Silently ignore send failures during window disposal.
-      }
-    }
+  private configureFeedForChannel(channel: "stable" | "nightly"): void {
+    autoUpdater.setFeedURL({
+      provider: "generic",
+      url: channel === "nightly" ? NIGHTLY_FEED_URL : STABLE_FEED_URL,
+      channel: channel === "nightly" ? "nightly" : "latest",
+    });
+    autoUpdater.allowDowngrade = true;
   }
 
   private runUpdateCheck(context: "Initial" | "Periodic"): void {
@@ -61,18 +64,31 @@ class AutoUpdaterService {
     }
   }
 
-  initialize(window?: BrowserWindow): void {
+  initialize(): void {
     if (this.initialized) {
       console.log("[MAIN] Auto-updater already initialized, skipping");
       return;
     }
 
-    if (!window) {
-      console.warn("[MAIN] Auto-updater requires a window, skipping initialization");
-      return;
-    }
+    // Register channel-preference handlers unconditionally — they only
+    // read/write electron-store and don't depend on electron-updater.
+    if (!this.channelHandlersRegistered) {
+      ipcMain.handle(CHANNELS.UPDATE_GET_CHANNEL, () => {
+        return store.get("updateChannel") ?? "stable";
+      });
 
-    this.window = window;
+      ipcMain.handle(CHANNELS.UPDATE_SET_CHANNEL, (_event, channel: unknown) => {
+        const validated: "stable" | "nightly" = channel === "nightly" ? "nightly" : "stable";
+        store.set("updateChannel", validated);
+        if (this.initialized) {
+          this.configureFeedForChannel(validated);
+        }
+        this.updateDownloaded = false;
+        return validated;
+      });
+
+      this.channelHandlersRegistered = true;
+    }
 
     if (!app.isPackaged) {
       console.log("[MAIN] Auto-updater disabled in non-packaged mode");
@@ -105,6 +121,9 @@ class AutoUpdaterService {
       autoUpdater.autoDownload = true;
       autoUpdater.autoInstallOnAppQuit = true;
 
+      const initialChannel = store.get("updateChannel") ?? "stable";
+      this.configureFeedForChannel(initialChannel);
+
       this.checkingHandler = () => {
         console.log("[MAIN] Checking for update...");
       };
@@ -113,7 +132,7 @@ class AutoUpdaterService {
       this.availableHandler = (info: UpdateInfo) => {
         console.log("[MAIN] Update available:", info.version);
         this.isManualCheck = false;
-        this.sendToWindow(CHANNELS.UPDATE_AVAILABLE, { version: info.version });
+        broadcastToRenderer(CHANNELS.UPDATE_AVAILABLE, { version: info.version });
       };
       autoUpdater.on("update-available", this.availableHandler);
 
@@ -121,15 +140,11 @@ class AutoUpdaterService {
         console.log("[MAIN] Update not available");
         if (this.isManualCheck) {
           this.isManualCheck = false;
-          const win = this.window && !this.window.isDestroyed() ? this.window : null;
-          const opts = {
-            type: "info" as const,
+          broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+            type: "info",
             title: "No Updates Available",
-            message: "You're up to date!",
-            detail: `Canopy ${app.getVersion()} is the latest version.`,
-            buttons: ["OK"],
-          };
-          (win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)).catch(() => {});
+            message: `Canopy ${app.getVersion()} is the latest version.`,
+          });
         }
       };
       autoUpdater.on("update-not-available", this.notAvailableHandler);
@@ -139,37 +154,29 @@ class AutoUpdaterService {
         const wasManual = this.isManualCheck;
         this.isManualCheck = false;
         if (wasManual) {
-          const win = this.window && !this.window.isDestroyed() ? this.window : null;
-          const opts = {
-            type: "error" as const,
+          broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+            type: "error",
             title: "Update Failed",
-            message: "Unable to check for updates.",
-            detail: err.message,
-            buttons: ["Retry", "Cancel"],
-            defaultId: 0,
-            cancelId: 1,
-          };
-          (win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts))
-            .then(({ response }) => {
-              if (response === 0 && this.initialized) {
-                this.checkForUpdatesManually();
-              }
-            })
-            .catch(() => {});
+            message: err.message,
+            action: {
+              label: "Retry",
+              ipcChannel: CHANNELS.UPDATE_CHECK_FOR_UPDATES,
+            },
+          });
         }
       };
       autoUpdater.on("error", this.errorHandler);
 
       this.progressHandler = (progress: ProgressInfo) => {
         console.log(`[MAIN] Download progress: ${Math.round(progress.percent)}%`);
-        this.sendToWindow(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, { percent: progress.percent });
+        broadcastToRenderer(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, { percent: progress.percent });
       };
       autoUpdater.on("download-progress", this.progressHandler);
 
       this.downloadedHandler = (info: UpdateInfo) => {
         console.log("[MAIN] Update downloaded:", info.version);
         this.updateDownloaded = true;
-        this.sendToWindow(CHANNELS.UPDATE_DOWNLOADED, { version: info.version });
+        broadcastToRenderer(CHANNELS.UPDATE_DOWNLOADED, { version: info.version });
       };
       autoUpdater.on("update-downloaded", this.downloadedHandler);
 
@@ -249,9 +256,21 @@ class AutoUpdaterService {
       // Handler may not have been registered
     }
 
-    this.window = null;
+    try {
+      ipcMain.removeHandler(CHANNELS.UPDATE_GET_CHANNEL);
+    } catch {
+      // Handler may not have been registered
+    }
+
+    try {
+      ipcMain.removeHandler(CHANNELS.UPDATE_SET_CHANNEL);
+    } catch {
+      // Handler may not have been registered
+    }
+
     this.updateDownloaded = false;
     this.isManualCheck = false;
+    this.channelHandlersRegistered = false;
     this.initialized = false;
   }
 }

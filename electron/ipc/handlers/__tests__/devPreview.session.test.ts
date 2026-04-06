@@ -5,6 +5,12 @@ import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vite
 vi.mock("node:http", () => ({ default: { request: vi.fn() }, request: vi.fn() }));
 vi.mock("node:https", () => ({ default: { request: vi.fn() }, request: vi.fn() }));
 
+const broadcastMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../utils.js", () => ({
+  broadcastToRenderer: broadcastMock,
+}));
+
 vi.mock("electron", () => ({
   ipcMain: {
     handle: vi.fn(),
@@ -194,7 +200,7 @@ describe("dev preview session handlers", () => {
     ptyClient.emitData(ensureResult.terminalId!, "ready");
 
     await vi.waitFor(() => {
-      const lastCall = send.mock.calls.at(-1);
+      const lastCall = broadcastMock.mock.calls.at(-1);
       expect(lastCall?.[0]).toBe(CHANNELS.DEV_PREVIEW_STATE_CHANGED);
       expect(lastCall?.[1]).toEqual({
         state: expect.objectContaining({
@@ -245,7 +251,7 @@ describe("dev preview session handlers", () => {
     ptyClient.emitData(second.terminalId!, "ready");
 
     await vi.waitFor(() => {
-      const stateEvents = send.mock.calls
+      const stateEvents = broadcastMock.mock.calls
         .filter(([channel]) => channel === CHANNELS.DEV_PREVIEW_STATE_CHANGED)
         .map(([, payload]) => (payload as { state: Record<string, unknown> }).state);
 

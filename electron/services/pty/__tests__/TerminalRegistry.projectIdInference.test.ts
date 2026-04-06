@@ -159,6 +159,54 @@ describe("TerminalRegistry projectId inference", () => {
     expect(stats.terminalTypes).toEqual({ terminal: 1 });
   });
 
+  it("does not match terminal with no projectId and non-git cwd to any project", () => {
+    const registry = new TerminalRegistry();
+    const terminal = createMockTerminalProcess({
+      id: "t-orphan",
+      cwd: "/tmp/not-a-git-repo-" + Date.now(),
+    });
+
+    registry.add("t-orphan", terminal);
+
+    expect(registry.getForProject("project-a")).toEqual([]);
+    expect(registry.getForProject("project-b")).toEqual([]);
+    expect(registry.terminalBelongsToProject(terminal, "project-a")).toBe(false);
+    expect(registry.terminalBelongsToProject(terminal, "project-b")).toBe(false);
+  });
+
+  it("does not leak terminals across projects after repeated getForProject calls", () => {
+    const registry = new TerminalRegistry();
+    const projectA = "project-aaa";
+    const projectB = "project-bbb";
+
+    const terminalA = createMockTerminalProcess({
+      id: "t-a",
+      cwd: "/tmp",
+      projectId: projectA,
+    });
+
+    const terminalNoProject = createMockTerminalProcess({
+      id: "t-no-project",
+      cwd: "/tmp/random-" + Date.now(),
+    });
+
+    registry.add("t-a", terminalA);
+    registry.add("t-no-project", terminalNoProject);
+
+    // Query for project A — should only find t-a
+    expect(registry.getForProject(projectA)).toEqual(["t-a"]);
+
+    // Query for project B — should find nothing (t-no-project must NOT leak here)
+    expect(registry.getForProject(projectB)).toEqual([]);
+
+    // Query project A again — still only t-a
+    expect(registry.getForProject(projectA)).toEqual(["t-a"]);
+
+    // t-no-project should not have been assigned to any project
+    const info = terminalNoProject.getInfo();
+    expect(info.projectId).toBeUndefined();
+  });
+
   it("clears trash timeout when terminal is deleted", () => {
     const registry = new TerminalRegistry(120000);
     const projectId = "project-123";

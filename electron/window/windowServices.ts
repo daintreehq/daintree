@@ -1,16 +1,9 @@
-import {
-  app,
-  BrowserWindow,
-  dialog,
-  ipcMain,
-  MessageChannelMain,
-  MessagePortMain,
-  session,
-} from "electron";
+import { app, BrowserWindow, dialog, ipcMain, session, webContents } from "electron";
 import os from "os";
-import { randomBytes } from "crypto";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { registerIpcHandlers, sendToRenderer } from "../ipc/handlers.js";
+import { getAppWebContents } from "./webContentsRegistry.js";
+import { distributePortsToView } from "./portDistribution.js";
 import { registerErrorHandlers, flushPendingErrors } from "../ipc/errorHandlers.js";
 import { PtyClient, disposePtyClient } from "../services/PtyClient.js";
 import {
@@ -35,6 +28,7 @@ import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import { secureStorage } from "../services/SecureStorage.js";
 import { notificationService } from "../services/NotificationService.js";
 import { agentNotificationService } from "../services/AgentNotificationService.js";
+import { preAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
 import {
   initializeAgentAvailabilityStore,
   disposeAgentAvailabilityStore,
@@ -44,8 +38,7 @@ import {
   disposePowerSaveBlockerService,
 } from "../services/PowerSaveBlockerService.js";
 import { initializeAgentRouter, disposeAgentRouter } from "../services/AgentRouter.js";
-import { initializeWorkflowEngine, disposeWorkflowEngine } from "../services/WorkflowEngine.js";
-import { workflowLoader } from "../services/WorkflowLoader.js";
+
 import {
   initializeTaskOrchestrator,
   disposeTaskOrchestrator,
@@ -73,33 +66,41 @@ import {
   startProcessMemoryMonitor,
 } from "../utils/performance.js";
 import { startAppMetricsMonitor } from "../services/ProcessMemoryMonitor.js";
+import { ResourceProfileService } from "../services/ResourceProfileService.js";
 import { startDiskSpaceMonitor, getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
-import { logInfo, setLoggerWindow } from "../utils/logger.js";
+import { logInfo } from "../utils/logger.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { isSmokeTest, isDemoMode, smokeTestStart, exposeGc } from "../setup/environment.js";
 import { extractCliPath, getPendingCliPath, setPendingCliPath } from "../lifecycle/appLifecycle.js";
+import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 
 const DEFAULT_TERMINAL_ID = "default";
 
-// Module-level mutable service refs
+// Guard: process.argv CLI path should only be consumed by the first window
+let processArgvCliHandled = false;
+
+// ── Global service refs (shared across all windows) ──
 let ptyClient: PtyClient | null = null;
 let workspaceClient: WorkspaceClient | null = null;
 let cliAvailabilityService: CliAvailabilityService | null = null;
 let agentVersionService: AgentVersionService | null = null;
 let agentUpdateHandler: AgentUpdateHandler | null = null;
-let portalManager: PortalManager | null = null;
-let projectSwitchService: ProjectSwitchService | null = null;
 let cleanupIpcHandlers: (() => void) | null = null;
 let cleanupErrorHandlers: (() => void) | null = null;
-let eventBuffer: EventBuffer | null = null;
-let eventBufferUnsubscribe: (() => void) | null = null;
-let activeRendererPort: MessagePortMain | null = null;
-let activePtyHostPort: MessagePortMain | null = null;
 let stopEventLoopLagMonitor: (() => void) | null = null;
 let stopProcessMemoryMonitor: (() => void) | null = null;
 let stopAppMetricsMonitor: (() => void) | null = null;
 let stopDiskSpaceMonitor: (() => void) | null = null;
+let resourceProfileService: ResourceProfileService | null = null;
+let worktreePortBroker: import("../services/WorktreePortBroker.js").WorktreePortBroker | null =
+  null;
+
+// Guard: IPC handlers are globally scoped (ipcMain.handle throws on re-registration)
+let ipcHandlersRegistered = false;
+
+// Guard: one-time global initialization (migrations, GitHubAuth, etc.)
+let globalServicesInitialized = false;
 
 // Expose getters for shutdown handler
 export function getPtyClient(): PtyClient | null {
@@ -111,8 +112,10 @@ export function setPtyClientRef(v: PtyClient | null): void {
 export function getWorkspaceClientRef(): WorkspaceClient | null {
   return workspaceClient;
 }
-export function getProjectSwitchServiceRef(): ProjectSwitchService | null {
-  return projectSwitchService;
+export function getWorktreePortBrokerRef():
+  | import("../services/WorktreePortBroker.js").WorktreePortBroker
+  | null {
+  return worktreePortBroker;
 }
 export function getCliAvailabilityServiceRef(): CliAvailabilityService | null {
   return cliAvailabilityService;
@@ -154,44 +157,19 @@ export function setStopDiskSpaceMonitor(v: (() => void) | null): void {
   stopDiskSpaceMonitor = v;
 }
 
-function createAndDistributePorts(win: BrowserWindow): void {
-  if (activeRendererPort) {
-    try {
-      activeRendererPort.close();
-    } catch {
-      /* ignore */
-    }
-  }
-  if (activePtyHostPort) {
-    try {
-      activePtyHostPort.close();
-    } catch {
-      /* ignore */
-    }
-  }
-
-  const { port1, port2 } = new MessageChannelMain();
-  const handshakeToken = randomBytes(32).toString("hex");
-
-  activeRendererPort = port1;
-  activePtyHostPort = port2;
-
-  if (ptyClient) {
-    ptyClient.connectMessagePort(port2);
-  }
-
-  if (win && !win.isDestroyed()) {
-    win.webContents.postMessage("terminal-port-token", { token: handshakeToken });
-    win.webContents.postMessage("terminal-port", { token: handshakeToken }, [port1]);
-  }
+function createAndDistributePorts(win: BrowserWindow, ctx: WindowContext): void {
+  const wc = getAppWebContents(win);
+  distributePortsToView(win, ctx, wc, ptyClient);
 }
 
 async function initializeDeferredServices(
   window: BrowserWindow,
   cliService: CliAvailabilityService,
-  eventBuf: EventBuffer
+  eventBuf: EventBuffer,
+  windowRegistry?: WindowRegistry
 ): Promise<void> {
   console.log("[MAIN] Initializing deferred services in background...");
+  markPerformance(PERF_MARKS.DEFERRED_SERVICES_START);
   const startTime = Date.now();
 
   const results = await Promise.allSettled([
@@ -219,9 +197,11 @@ async function initializeDeferredServices(
   eventBuf.start();
   console.log("[MAIN] EventBuffer started");
 
-  mcpServerService.start(window).catch((err) => {
-    console.error("[MAIN] MCP server failed to start:", err);
-  });
+  if (windowRegistry) {
+    mcpServerService.start(windowRegistry).catch((err) => {
+      console.error("[MAIN] MCP server failed to start:", err);
+    });
+  }
 
   // Fire-and-forget session file eviction
   (async () => {
@@ -262,194 +242,354 @@ async function initializeDeferredServices(
   })();
 
   const elapsed = Date.now() - startTime;
+  markPerformance(PERF_MARKS.DEFERRED_SERVICES_COMPLETE, { durationMs: elapsed });
   console.log(`[MAIN] All deferred services initialized in ${elapsed}ms`);
 }
 
 export interface SetupWindowServicesOptions {
-  loadRenderer: (reason: string) => void;
+  loadRenderer: (reason: string, projectId?: string) => void;
   smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
   smokeRendererUnresponsive: () => boolean;
-  windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
+  windowRegistry?: WindowRegistry;
+  initialProjectPath?: string;
+  /** Last-active projectId read before window creation for session partition assignment */
+  initialProjectId?: string;
+  projectViewManager?: import("./ProjectViewManager.js").ProjectViewManager;
+  initialAppView?: import("electron").WebContentsView;
 }
 
 export async function setupWindowServices(
   win: BrowserWindow,
   opts: SetupWindowServicesOptions
 ): Promise<void> {
-  // Store migrations
-  console.log("[MAIN] Running store migrations...");
-  try {
-    const migrationRunner = new MigrationRunner(store);
-    await migrationRunner.runMigrations(migrations);
-    console.log("[MAIN] Store migrations completed");
-  } catch (error) {
-    console.error("[MAIN] Store migration failed:", error);
-    const message = error instanceof Error ? error.message : String(error);
-    dialog.showErrorBox(
-      "Migration Failed",
-      `Failed to migrate application data:\n\n${message}\n\nThe application will now exit. Please check the logs for details.`
-    );
-    app.exit(1);
+  const windowRegistry = opts.windowRegistry;
+  const ctx = windowRegistry?.getByWindowId(win.id);
+  if (!ctx) {
+    console.error("[MAIN] Window not registered before setupWindowServices — skipping");
     return;
   }
 
-  // Initialize GitHubAuth
-  GitHubAuth.initializeStorage({
-    get: () => secureStorage.get("userConfig.githubToken"),
-    set: (token) => secureStorage.set("userConfig.githubToken", token),
-    delete: () => secureStorage.delete("userConfig.githubToken"),
-  });
-  console.log("[MAIN] GitHubAuth initialized with storage");
+  markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
 
-  if (GitHubAuth.hasToken()) {
-    const token = GitHubAuth.getToken();
-    if (token) {
-      const versionAtStart = GitHubAuth.getTokenVersion();
-      GitHubAuth.validate(token)
-        .then((validation) => {
-          if (validation.valid && validation.username) {
-            GitHubAuth.setValidatedUserInfo(
-              validation.username,
-              validation.avatarUrl,
-              validation.scopes,
-              versionAtStart
-            );
-            console.log("[MAIN] GitHubAuth user info cached for:", validation.username);
-          }
+  // ── One-time global initialization (first window only) ──
+  if (!globalServicesInitialized) {
+    globalServicesInitialized = true;
+    markPerformance(PERF_MARKS.SERVICE_INIT_START);
+
+    // Store migrations
+    console.log("[MAIN] Running store migrations...");
+    try {
+      const migrationRunner = new MigrationRunner(store);
+      await migrationRunner.runMigrations(migrations);
+      console.log("[MAIN] Store migrations completed");
+      markPerformance(PERF_MARKS.SERVICE_INIT_MIGRATIONS_DONE);
+    } catch (error) {
+      console.error("[MAIN] Store migration failed:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      dialog
+        .showMessageBox(win, {
+          type: "error",
+          title: "Migration Failed",
+          message: `Failed to migrate application data:\n\n${message}\n\nThe application will now exit. Please check the logs for details.`,
+          buttons: ["OK"],
         })
-        .catch((err) => {
-          console.warn("[MAIN] Failed to validate stored GitHub token:", err);
-        });
-    }
-  }
-
-  // Menu & Notifications
-  console.log("[MAIN] Creating application menu (initial, no agent availability yet)...");
-  cliAvailabilityService = new CliAvailabilityService();
-  createApplicationMenu(win, cliAvailabilityService);
-
-  notificationService.initialize(win);
-  agentNotificationService.initialize();
-  console.log("[MAIN] NotificationService initialized");
-
-  // Critical services
-  console.log("[MAIN] Starting critical services...");
-
-  ptyClient = new PtyClient({
-    maxRestartAttempts: 3,
-    healthCheckIntervalMs: 30000,
-    showCrashDialog: true,
-  });
-
-  agentVersionService = new AgentVersionService(cliAvailabilityService);
-  agentUpdateHandler = new AgentUpdateHandler(
-    ptyClient,
-    agentVersionService,
-    cliAvailabilityService
-  );
-
-  ptyClient.on("host-crash-details", (details) => {
-    console.error(`[MAIN] Pty Host crashed:`, details);
-    if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
-      try {
-        win.webContents.send(CHANNELS.TERMINAL_BACKEND_CRASHED, {
-          crashType: details.crashType,
-          code: details.code,
-          signal: details.signal,
-          timestamp: details.timestamp,
-        });
-      } catch {
-        // Silently ignore send failures during window disposal.
-      }
-    }
-  });
-  ptyClient.on("host-crash", (code) => {
-    console.error(`[MAIN] Pty Host crashed with code ${code} (max restarts exceeded)`);
-  });
-  ptyClient.on("host-throttled", (payload) => {
-    if (!payload.isThrottled) {
-      logInfo("pty-host-resumed", { duration: payload.duration });
+        .then(() => app.exit(1))
+        .catch(() => app.exit(1));
       return;
     }
-    logInfo("pty-host-throttled", { reason: payload.reason });
-    try {
-      session.defaultSession.clearCache().catch(() => {});
-    } catch {
-      /* non-critical */
-    }
-    try {
-      sendToRenderer(win, CHANNELS.WINDOW_RECLAIM_MEMORY, { reason: "pty-host-pressure" });
-    } catch {
-      /* non-critical */
-    }
-    try {
-      ptyClient!.trimState(SCROLLBACK_BACKGROUND);
-    } catch {
-      /* non-critical */
-    }
-  });
-  ptyClient.setPortRefreshCallback(() => {
-    console.log("[MAIN] Pty Host restarted, refreshing ports...");
-    createAndDistributePorts(win);
-    if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
-      try {
-        win.webContents.send(CHANNELS.TERMINAL_BACKEND_READY);
-      } catch {
-        // Silently ignore send failures during window disposal.
+
+    // Initialize GitHubAuth
+    GitHubAuth.initializeStorage({
+      get: () => secureStorage.get("userConfig.githubToken"),
+      set: (token) => secureStorage.set("userConfig.githubToken", token),
+      delete: () => secureStorage.delete("userConfig.githubToken"),
+    });
+    console.log("[MAIN] GitHubAuth initialized with storage");
+
+    if (GitHubAuth.hasToken()) {
+      const token = GitHubAuth.getToken();
+      if (token) {
+        const versionAtStart = GitHubAuth.getTokenVersion();
+        GitHubAuth.validate(token)
+          .then((validation) => {
+            if (validation.valid && validation.username) {
+              GitHubAuth.setValidatedUserInfo(
+                validation.username,
+                validation.avatarUrl,
+                validation.scopes,
+                versionAtStart
+              );
+              console.log("[MAIN] GitHubAuth user info cached for:", validation.username);
+            }
+          })
+          .catch((err) => {
+            console.warn("[MAIN] Failed to validate stored GitHub token:", err);
+          });
       }
     }
-  });
 
-  eventBuffer = new EventBuffer(1000);
-  portalManager = new PortalManager(win);
+    // Notifications (global singletons)
+    agentNotificationService.initialize();
+    preAgentSnapshotService.initialize();
 
-  console.log("[MAIN] Registering IPC handlers...");
-  const handlerDeps: HandlerDependencies = {
+    // Auto-updater
+    autoUpdaterService.initialize();
+  }
+
+  // ── Per-window initialization ──
+
+  // Menu & Notifications (per-window: menu references this window)
+  console.log("[MAIN] Creating application menu (initial, no agent availability yet)...");
+  if (!cliAvailabilityService) {
+    cliAvailabilityService = new CliAvailabilityService();
+  }
+  createApplicationMenu(win, cliAvailabilityService);
+
+  if (windowRegistry) {
+    notificationService.initialize(windowRegistry);
+  }
+  console.log("[MAIN] NotificationService initialized");
+
+  // Critical services (global, first window only)
+  if (!ptyClient) {
+    console.log("[MAIN] Starting critical services...");
+
+    ptyClient = new PtyClient({
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+      showCrashDialog: false,
+    });
+
+    agentVersionService = new AgentVersionService(cliAvailabilityService);
+    agentUpdateHandler = new AgentUpdateHandler(
+      ptyClient,
+      agentVersionService,
+      cliAvailabilityService
+    );
+
+    ptyClient.on("host-crash-details", (details) => {
+      console.error(`[MAIN] Pty Host crashed:`, details);
+      // Broadcast to all windows
+      if (windowRegistry) {
+        for (const wCtx of windowRegistry.all()) {
+          const w = wCtx.browserWindow;
+          if (!w.isDestroyed()) {
+            const wc = getAppWebContents(w);
+            if (!wc.isDestroyed()) {
+              try {
+                wc.send(CHANNELS.TERMINAL_BACKEND_CRASHED, {
+                  crashType: details.crashType,
+                  code: details.code,
+                  signal: details.signal,
+                  timestamp: details.timestamp,
+                });
+              } catch {
+                // Silently ignore send failures during window disposal.
+              }
+            }
+          }
+        }
+      }
+    });
+    ptyClient.on("host-crash", (code) => {
+      console.error(`[MAIN] Pty Host crashed with code ${code} (max restarts exceeded)`);
+    });
+    ptyClient.on("host-throttled", (payload) => {
+      if (!payload.isThrottled) {
+        logInfo("pty-host-resumed", { duration: payload.duration });
+        return;
+      }
+      logInfo("pty-host-throttled", { reason: payload.reason });
+      try {
+        session.defaultSession.clearCache().catch(() => {});
+      } catch {
+        /* non-critical */
+      }
+      // Broadcast to all windows
+      if (windowRegistry) {
+        for (const wCtx of windowRegistry.all()) {
+          const w = wCtx.browserWindow;
+          if (!w.isDestroyed()) {
+            try {
+              sendToRenderer(w, CHANNELS.WINDOW_RECLAIM_MEMORY, { reason: "pty-host-pressure" });
+            } catch {
+              /* non-critical */
+            }
+          }
+        }
+      }
+      try {
+        ptyClient!.trimState(SCROLLBACK_BACKGROUND);
+      } catch {
+        /* non-critical */
+      }
+    });
+    ptyClient.setPortRefreshCallback(() => {
+      console.log("[MAIN] Pty Host restarted, refreshing ports...");
+      // Refresh ports for ALL registered windows — target the active view
+      if (windowRegistry) {
+        for (const wCtx of windowRegistry.all()) {
+          if (!wCtx.browserWindow.isDestroyed()) {
+            const wc = getAppWebContents(wCtx.browserWindow);
+            if (!wc.isDestroyed()) {
+              distributePortsToView(wCtx.browserWindow, wCtx, wc, ptyClient);
+              try {
+                wc.send(CHANNELS.TERMINAL_BACKEND_READY);
+              } catch {
+                // Silently ignore send failures during window disposal.
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  // Per-window services
+  ctx.services.eventBuffer = new EventBuffer(1000);
+  ctx.services.portalManager = new PortalManager(win);
+  ctx.services.projectSwitchService = new ProjectSwitchService({
     mainWindow: win,
-    ptyClient,
-    eventBuffer,
-    portalManager,
+    ptyClient: ptyClient ?? undefined,
+    eventBuffer: ctx.services.eventBuffer,
+    portalManager: ctx.services.portalManager,
     cliAvailabilityService,
     agentVersionService,
     agentUpdateHandler,
     isDemoMode,
-    windowRegistry: opts.windowRegistry,
-  };
+    windowRegistry,
+  } as HandlerDependencies);
 
-  projectSwitchService = new ProjectSwitchService(handlerDeps);
-  handlerDeps.projectSwitchService = projectSwitchService;
-
-  cleanupIpcHandlers = registerIpcHandlers(handlerDeps);
-
-  // Wait for pty-host before workspace-host
-  console.log("[MAIN] Waiting for Pty Host to be ready before starting Workspace Host...");
-  try {
-    await ptyClient.waitForReady();
-    console.log("[MAIN] Pty Host ready, starting Workspace Host...");
-  } catch (error) {
-    console.error("[MAIN] Pty Host failed to start:", error);
-  }
-
-  workspaceClient = getWorkspaceClient({
-    maxRestartAttempts: 3,
-    healthCheckIntervalMs: 60000,
-    showCrashDialog: true,
+  // Per-window cleanup: ports, portalManager, eventBuffer
+  ctx.cleanup.push(() => {
+    // Notify PTY host to disconnect this window's port before closing it
+    if (ptyClient) {
+      ptyClient.disconnectMessagePort(ctx.windowId);
+    }
+    if (ctx.services.activeRendererPort) {
+      try {
+        ctx.services.activeRendererPort.close();
+      } catch {
+        /* ignore */
+      }
+      ctx.services.activeRendererPort = undefined;
+    }
+    if (ctx.services.activePtyHostPort) {
+      try {
+        ctx.services.activePtyHostPort.close();
+      } catch {
+        /* ignore */
+      }
+      ctx.services.activePtyHostPort = undefined;
+    }
+    if (ctx.services.portalManager) {
+      ctx.services.portalManager.destroy();
+      ctx.services.portalManager = undefined;
+    }
+    if (ctx.services.eventBuffer) {
+      ctx.services.eventBuffer.stop();
+      ctx.services.eventBuffer = undefined;
+    }
+    ctx.services.projectSwitchService = undefined;
+    if (workspaceClient) {
+      workspaceClient.unregisterWindow(win.id);
+    }
   });
 
-  handlerDeps.worktreeService = workspaceClient;
+  console.log("[MAIN] Registering IPC handlers...");
+  const handlerDeps: HandlerDependencies = {
+    mainWindow: win,
+    ptyClient: ptyClient ?? undefined,
+    eventBuffer: ctx.services.eventBuffer,
+    portalManager: ctx.services.portalManager,
+    cliAvailabilityService,
+    agentVersionService: agentVersionService ?? undefined,
+    agentUpdateHandler: agentUpdateHandler ?? undefined,
+    isDemoMode,
+    windowRegistry,
+  };
+
+  handlerDeps.projectSwitchService = ctx.services.projectSwitchService;
+
+  // IPC handlers are globally scoped — register only once
+  if (!ipcHandlersRegistered) {
+    ipcHandlersRegistered = true;
+    cleanupIpcHandlers = registerIpcHandlers(handlerDeps);
+    markPerformance(PERF_MARKS.SERVICE_INIT_IPC_READY);
+
+    try {
+      const { pluginService } = await import("../services/PluginService.js");
+      await pluginService.initialize();
+    } catch (error) {
+      console.error("[MAIN] PluginService initialization failed:", error);
+    }
+  }
+
+  // Initialize workspace client (first window only) — per-project hosts
+  // are started on-demand when loadProject() is called, not at init time.
+  if (!workspaceClient) {
+    console.log("[MAIN] Waiting for Pty Host to be ready before initializing Workspace Client...");
+    try {
+      await ptyClient!.waitForReady();
+      console.log("[MAIN] Pty Host ready, initializing Workspace Client...");
+      markPerformance(PERF_MARKS.SERVICE_INIT_PTY_READY);
+    } catch (error) {
+      console.error("[MAIN] Pty Host failed to start:", error);
+    }
+
+    workspaceClient = getWorkspaceClient({
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 60000,
+      showCrashDialog: false,
+    });
+
+    markPerformance(PERF_MARKS.SERVICE_INIT_WORKSPACE_READY);
+
+    // Create WorktreePortBroker alongside WorkspaceClient
+    if (!worktreePortBroker) {
+      const { WorktreePortBroker } = await import("../services/WorktreePortBroker.js");
+      worktreePortBroker = new WorktreePortBroker();
+    }
+
+    handlerDeps.worktreeService = workspaceClient;
+    handlerDeps.worktreePortBroker = worktreePortBroker ?? undefined;
+
+    workspaceClient.on("host-crash", (code: number) => {
+      console.error(`[MAIN] Workspace Host crashed with code ${code}`);
+    });
+
+    // Re-broker worktree ports when a workspace host restarts
+    workspaceClient.on(
+      "host-restarted",
+      ({
+        projectPath,
+        host,
+      }: {
+        projectPath: string;
+        host: import("../services/WorkspaceHostProcess.js").WorkspaceHostProcess;
+      }) => {
+        if (!worktreePortBroker) return;
+        const wcIds = worktreePortBroker.closePortsForHost(projectPath);
+        if (wcIds.length > 0) {
+          worktreePortBroker.reBrokerForHost(
+            host,
+            (wcId: number) => webContents.fromId(wcId) ?? undefined,
+            wcIds
+          );
+          console.log(`[MAIN] Re-brokered ${wcIds.length} worktree port(s) after host restart`);
+        }
+      }
+    );
+  }
 
   const { armRestoreQuota } = await import("../ipc/utils.js");
   armRestoreQuota(50, 120_000);
 
-  opts.loadRenderer("after-services-ready");
-
-  cleanupErrorHandlers = registerErrorHandlers(win, workspaceClient, ptyClient);
-
-  console.log("[MAIN] All critical services ready");
-
-  // Handle reloads
-  win.webContents.on("did-finish-load", () => {
-    const currentUrl = win.webContents.getURL();
+  // Handle reloads (per-window) — listen on the app view's webContents.
+  // MUST be attached BEFORE loadRenderer() to avoid missing the first did-finish-load.
+  const appWc = getAppWebContents(win);
+  appWc.on("did-finish-load", () => {
+    const currentUrl = appWc.getURL();
     if (currentUrl.includes("recovery.html")) {
       console.log("[MAIN] Recovery page loaded, skipping normal renderer bootstrap");
       return;
@@ -457,7 +597,19 @@ export async function setupWindowServices(
     console.log("[MAIN] Renderer loaded, ensuring MessagePort connection...");
     if (isSmokeTest) console.error("[SMOKE] CHECK: Renderer did-finish-load — OK");
     markPerformance(PERF_MARKS.RENDERER_READY);
-    createAndDistributePorts(win);
+    createAndDistributePorts(win, ctx);
+    // Refresh workspace direct port on reload (preload context is reset)
+    if (workspaceClient) {
+      workspaceClient.attachDirectPort(win.id, appWc);
+
+      // Re-broker worktree port for initial view reload
+      if (worktreePortBroker) {
+        const host = workspaceClient.getHostForWindow(win.id);
+        if (host) {
+          worktreePortBroker.brokerPort(host, appWc);
+        }
+      }
+    }
     flushPendingErrors();
     const diskStatus = getCurrentDiskSpaceStatus();
     if (diskStatus.status !== "normal") {
@@ -465,25 +617,30 @@ export async function setupWindowServices(
     }
   });
 
-  workspaceClient.on("host-crash", (code: number) => {
-    console.error(`[MAIN] Workspace Host crashed with code ${code}`);
-  });
+  markPerformance(PERF_MARKS.SERVICE_INIT_COMPLETE);
+  opts.loadRenderer("after-services-ready", opts.initialProjectId);
+
+  // Error handlers also use ipcMain.handle — register once
+  if (!cleanupErrorHandlers) {
+    cleanupErrorHandlers = registerErrorHandlers(workspaceClient, ptyClient);
+  }
+
+  console.log("[MAIN] All critical services ready");
 
   // Wait for remaining services
   console.log("[MAIN] Waiting for remaining services to initialize...");
   let ptyReady = false;
-  let workspaceReady = false;
+  // Workspace client is always "ready" — per-project hosts start on-demand via loadProject()
+  const workspaceReady = true;
 
   try {
     const results = await Promise.allSettled([
-      ptyClient.waitForReady(),
-      workspaceClient.waitForReady(),
+      ptyClient!.waitForReady(),
       projectStore.initialize(),
     ]);
 
     ptyReady = results[0].status === "fulfilled";
-    workspaceReady = results[1].status === "fulfilled";
-    const projectStoreReady = results[2].status === "fulfilled";
+    const projectStoreReady = results[1].status === "fulfilled";
 
     if (ptyReady && workspaceReady && projectStoreReady) {
       console.log("[MAIN] All critical services ready");
@@ -493,19 +650,15 @@ export async function setupWindowServices(
         failures.push(
           `PTY service: ${results[0].status === "rejected" ? results[0].reason?.message || "unknown error" : "timeout"}`
         );
-      if (!workspaceReady)
-        failures.push(
-          `Workspace service: ${results[1].status === "rejected" ? results[1].reason?.message || "unknown error" : "timeout"}`
-        );
       if (!projectStoreReady)
         failures.push(
-          `Project store: ${results[2].status === "rejected" ? results[2].reason?.message || "unknown error" : "timeout"}`
+          `Project store: ${results[1].status === "rejected" ? results[1].reason?.message || "unknown error" : "timeout"}`
         );
 
       console.error("[MAIN] Service initialization failed:", failures);
 
       dialog
-        .showMessageBox({
+        .showMessageBox(win, {
           type: "error",
           title: "Service Initialization Failed",
           message: `One or more services failed to start:\n\n${failures.join("\n")}\n\nThe application will continue in degraded mode. Some features may be unavailable.\n\nTry restarting the application if problems persist.`,
@@ -519,26 +672,31 @@ export async function setupWindowServices(
 
   // PTY-related features
   if (ptyReady) {
-    createAndDistributePorts(win);
+    createAndDistributePorts(win, ctx);
 
     const currentProjectId = projectStore.getCurrentProjectId();
-    ptyClient.setActiveProject(currentProjectId);
+    ptyClient!.setActiveProject(win.id, currentProjectId);
 
     const availabilityStore = initializeAgentAvailabilityStore();
     const agentRouter = initializeAgentRouter(availabilityStore);
     initializePowerSaveBlockerService();
     console.log("[MAIN] AgentAvailabilityStore, AgentRouter, and PowerSaveBlocker initialized");
 
-    initializeTaskOrchestrator(ptyClient, agentRouter);
+    initializeTaskOrchestrator(ptyClient!, agentRouter);
     console.log("[MAIN] TaskOrchestrator initialized");
 
-    const pendingCliPath = extractCliPath(process.argv) ?? getPendingCliPath();
-    if (pendingCliPath) {
-      console.log("[MAIN] CLI path pending, skipping default terminal spawn");
+    const processArgvCli = !processArgvCliHandled ? extractCliPath(process.argv) : null;
+    const skipDefaultSpawn =
+      opts.initialProjectPath || processArgvCli || getPendingCliPath() || currentProjectId;
+    if (skipDefaultSpawn) {
+      console.log(
+        "[MAIN] CLI path, initial project path, or existing project set, skipping default terminal spawn"
+      );
     } else {
-      console.log("[MAIN] Spawning default terminal...");
+      const terminalId = `${DEFAULT_TERMINAL_ID}-${win.id}`;
+      console.log("[MAIN] Spawning default terminal:", terminalId);
       try {
-        ptyClient.spawn(DEFAULT_TERMINAL_ID, {
+        ptyClient!.spawn(terminalId, {
           cwd: os.homedir(),
           cols: 80,
           rows: 30,
@@ -552,22 +710,52 @@ export async function setupWindowServices(
     console.warn("[MAIN] PTY service unavailable - skipping terminal setup");
   }
 
-  // Load worktrees
+  // Register the initial view with ProjectViewManager once we know the project
   const currentProject = projectStore.getCurrentProject();
-  if (currentProject && workspaceClient && workspaceReady) {
-    console.log("[MAIN] Loading worktrees for current project:", currentProject.name);
+  if (opts.projectViewManager && opts.initialAppView && currentProject) {
+    opts.projectViewManager.registerInitialView(
+      opts.initialAppView,
+      currentProject.id,
+      currentProject.path
+    );
+  }
+
+  // Add ProjectViewManager to handler deps for IPC handlers
+  if (opts.projectViewManager) {
+    handlerDeps.projectViewManager = opts.projectViewManager;
+    ctx.services.projectViewManager = opts.projectViewManager;
+  }
+
+  // Load worktrees — prefer initialProjectPath for windows opened with a specific path
+  const projectPathForWorktrees = opts.initialProjectPath ?? currentProject?.path;
+  if (projectPathForWorktrees && workspaceClient && workspaceReady) {
+    console.log("[MAIN] Loading worktrees for project path:", projectPathForWorktrees);
     try {
-      await workspaceClient.loadProject(currentProject.path);
-      console.log("[MAIN] Worktrees loaded for current project");
+      await workspaceClient.loadProject(projectPathForWorktrees, win.id);
+      console.log("[MAIN] Worktrees loaded");
+
+      // Attach direct MessagePort for workspace events (bypasses main-process relay)
+      const directPortTarget = opts.initialAppView?.webContents ?? getAppWebContents(win);
+      if (directPortTarget && !directPortTarget.isDestroyed()) {
+        workspaceClient.attachDirectPort(win.id, directPortTarget);
+        console.log("[MAIN] Workspace direct port attached");
+
+        // Broker new worktree port (Phase 1)
+        const host = workspaceClient.getHostForProject(projectPathForWorktrees);
+        if (host && worktreePortBroker) {
+          worktreePortBroker.brokerPort(host, directPortTarget);
+          console.log("[MAIN] Worktree port brokered");
+        }
+      }
     } catch (error) {
-      console.error("[MAIN] Failed to load worktrees for current project:", error);
+      console.error("[MAIN] Failed to load worktrees:", error);
     }
-  } else if (currentProject && !workspaceReady) {
+  } else if (projectPathForWorktrees && !workspaceReady) {
     console.warn("[MAIN] Workspace service unavailable - skipping worktree loading");
   }
 
-  // Task queue & workflow
-  if (currentProject) {
+  // Task queue & workflow (only initialize once for the first window)
+  if (currentProject && !opts.initialProjectPath) {
     console.log("[MAIN] Initializing task queue for current project:", currentProject.name);
     try {
       await taskQueueService.initialize(currentProject.id);
@@ -575,38 +763,29 @@ export async function setupWindowServices(
     } catch (error) {
       console.error("[MAIN] Failed to initialize task queue:", error);
     }
-
-    try {
-      await workflowLoader.initialize();
-      initializeWorkflowEngine();
-      console.log("[MAIN] WorkflowEngine initialized");
-    } catch (error) {
-      console.error("[MAIN] Failed to initialize workflow engine:", error);
-    }
   }
 
-  // Event inspector
+  // Event inspector (per-window: uses named listeners for safe per-window cleanup)
   let eventInspectorActive = false;
-  ipcMain.on(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE, () => {
+  const onEventInspectorSubscribe = () => {
     eventInspectorActive = true;
-  });
-  ipcMain.on(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE, () => {
+  };
+  const onEventInspectorUnsubscribe = () => {
     eventInspectorActive = false;
-  });
+  };
+  ipcMain.on(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE, onEventInspectorSubscribe);
+  ipcMain.on(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE, onEventInspectorUnsubscribe);
 
-  const unsubscribeFromEventBuffer = eventBuffer.onRecord((record) => {
+  const unsubscribeFromEventBuffer = ctx.services.eventBuffer!.onRecord((record) => {
     if (!eventInspectorActive) return;
     sendToRenderer(win, CHANNELS.EVENT_INSPECTOR_EVENT, record);
   });
 
-  eventBufferUnsubscribe = () => {
+  ctx.cleanup.push(() => {
     unsubscribeFromEventBuffer();
-    ipcMain.removeAllListeners(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE);
-    ipcMain.removeAllListeners(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE);
-  };
-
-  // Auto-updater
-  autoUpdaterService.initialize(win);
+    ipcMain.removeListener(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE, onEventInspectorSubscribe);
+    ipcMain.removeListener(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE, onEventInspectorUnsubscribe);
+  });
 
   // Smoke test
   if (isSmokeTest) {
@@ -651,17 +830,29 @@ export async function setupWindowServices(
   }
 
   // Deferred services
-  initializeDeferredServices(win, cliAvailabilityService!, eventBuffer!).catch((error) => {
+  initializeDeferredServices(
+    win,
+    cliAvailabilityService!,
+    ctx.services.eventBuffer!,
+    windowRegistry
+  ).catch((error) => {
     console.error("[MAIN] Deferred services initialization failed:", error);
   });
 
   getCrashRecoveryService().startBackupTimer();
 
-  // Disk space monitor
+  // Disk space monitor (global)
   if (!stopDiskSpaceMonitor) {
     stopDiskSpaceMonitor = startDiskSpaceMonitor({
       sendStatus: (payload) => {
-        sendToRenderer(win, CHANNELS.WINDOW_DISK_SPACE_STATUS, payload);
+        // Broadcast to all windows
+        if (windowRegistry) {
+          for (const wCtx of windowRegistry.all()) {
+            if (!wCtx.browserWindow.isDestroyed()) {
+              sendToRenderer(wCtx.browserWindow, CHANNELS.WINDOW_DISK_SPACE_STATUS, payload);
+            }
+          }
+        }
       },
       onCriticalChange: (isCritical) => {
         if (isCritical) {
@@ -679,18 +870,26 @@ export async function setupWindowServices(
     });
   }
 
-  // CLI path handling
-  const firstLaunchCliPath = extractCliPath(process.argv);
-  const cliPath = firstLaunchCliPath ?? getPendingCliPath();
-  if (cliPath) {
-    setPendingCliPath(null);
-    console.log("[MAIN] Opening CLI path from launch args:", cliPath);
-    handleDirectoryOpen(cliPath, win, cliAvailabilityService ?? undefined).catch((err) =>
-      console.error("[MAIN] Failed to open CLI path:", err)
+  // CLI path handling — skip if this window was opened with an explicit initialProjectPath
+  if (!opts.initialProjectPath) {
+    const firstLaunchCliPath = !processArgvCliHandled ? extractCliPath(process.argv) : null;
+    if (firstLaunchCliPath) processArgvCliHandled = true;
+    const cliPath = firstLaunchCliPath ?? getPendingCliPath();
+    if (cliPath) {
+      setPendingCliPath(null);
+      console.log("[MAIN] Opening CLI path from launch args:", cliPath);
+      handleDirectoryOpen(cliPath, win, cliAvailabilityService ?? undefined).catch((err) =>
+        console.error("[MAIN] Failed to open CLI path:", err)
+      );
+    }
+  } else {
+    console.log("[MAIN] Window opened with initial project path:", opts.initialProjectPath);
+    handleDirectoryOpen(opts.initialProjectPath, win, cliAvailabilityService ?? undefined).catch(
+      (err) => console.error("[MAIN] Failed to open initial project path:", err)
     );
   }
 
-  // Performance monitors
+  // Performance monitors (global)
   if (!stopEventLoopLagMonitor) {
     stopEventLoopLagMonitor = startEventLoopLagMonitor();
   }
@@ -718,29 +917,46 @@ export async function setupWindowServices(
         } catch {
           /* non-critical */
         }
-        try {
-          sendToRenderer(win, CHANNELS.WINDOW_RECLAIM_MEMORY, { reason: "memory-pressure" });
-        } catch {
-          /* non-critical */
+        // Broadcast to all windows
+        if (windowRegistry) {
+          for (const wCtx of windowRegistry.all()) {
+            if (!wCtx.browserWindow.isDestroyed()) {
+              try {
+                sendToRenderer(wCtx.browserWindow, CHANNELS.WINDOW_RECLAIM_MEMORY, {
+                  reason: "memory-pressure",
+                });
+              } catch {
+                /* non-critical */
+              }
+            }
+          }
         }
       },
       destroyHiddenWebviews: async (tier) => {
-        // Destroy hidden portal tabs (main-process WebContentsViews)
-        try {
-          if (portalManager) {
-            const evictedTabIds = portalManager.destroyHiddenTabs();
-            if (evictedTabIds.length > 0) {
-              sendToRenderer(win, CHANNELS.PORTAL_TABS_EVICTED, { tabIds: evictedTabIds });
+        // Destroy hidden portal tabs for ALL windows
+        if (windowRegistry) {
+          for (const wCtx of windowRegistry.all()) {
+            if (wCtx.browserWindow.isDestroyed()) continue;
+            try {
+              if (wCtx.services.portalManager) {
+                const evictedTabIds = await wCtx.services.portalManager.destroyHiddenTabs();
+                if (evictedTabIds.length > 0) {
+                  sendToRenderer(wCtx.browserWindow, CHANNELS.PORTAL_TABS_EVICTED, {
+                    tabIds: evictedTabIds,
+                  });
+                }
+              }
+            } catch {
+              /* non-critical */
+            }
+            try {
+              sendToRenderer(wCtx.browserWindow, CHANNELS.WINDOW_DESTROY_HIDDEN_WEBVIEWS, {
+                tier,
+              });
+            } catch {
+              /* non-critical */
             }
           }
-        } catch {
-          /* non-critical */
-        }
-        // Signal renderer to destroy hidden <webview> tags
-        try {
-          sendToRenderer(win, CHANNELS.WINDOW_DESTROY_HIDDEN_WEBVIEWS, { tier });
-        } catch {
-          /* non-critical */
         }
       },
       hibernateIdleProjects: async () => {
@@ -752,12 +968,26 @@ export async function setupWindowServices(
     });
   }
 
-  // Cleanup handler
+  // Resource Profile Service
+  if (!resourceProfileService) {
+    resourceProfileService = new ResourceProfileService({
+      getPtyClient: () => ptyClient,
+      getWorkspaceClient: () => workspaceClient,
+      getHibernationService: () => getHibernationService(),
+    });
+    resourceProfileService.start();
+  }
+
+  // ── Last-window-close: dispose global services ──
+  // Per-window cleanup is handled by ctx.cleanup (run by WindowRegistry.unregister).
+  // This handler only disposes global singletons when the last window closes.
   win.on("closed", async () => {
-    if (eventBufferUnsubscribe) eventBufferUnsubscribe();
-    if (eventBuffer) eventBuffer.stop();
-    if (cleanupIpcHandlers) cleanupIpcHandlers();
-    if (cleanupErrorHandlers) cleanupErrorHandlers();
+    if (windowRegistry && windowRegistry.size > 0) {
+      // Other windows still open — do not dispose global services
+      return;
+    }
+
+    // Last window closed — dispose global services
     if (stopEventLoopLagMonitor) {
       stopEventLoopLagMonitor();
       stopEventLoopLagMonitor = null;
@@ -774,41 +1004,42 @@ export async function setupWindowServices(
       stopDiskSpaceMonitor();
       stopDiskSpaceMonitor = null;
     }
+    if (resourceProfileService) {
+      resourceProfileService.stop();
+      resourceProfileService = null;
+    }
 
-    // Clean up window-specific IPC handlers
-    ipcMain.removeHandler(CHANNELS.WINDOW_TOGGLE_FULLSCREEN);
-    ipcMain.removeHandler(CHANNELS.WINDOW_RELOAD);
-    ipcMain.removeHandler(CHANNELS.WINDOW_FORCE_RELOAD);
-    ipcMain.removeHandler(CHANNELS.WINDOW_TOGGLE_DEVTOOLS);
-    ipcMain.removeHandler(CHANNELS.WINDOW_ZOOM_IN);
-    ipcMain.removeHandler(CHANNELS.WINDOW_ZOOM_OUT);
-    ipcMain.removeHandler(CHANNELS.WINDOW_ZOOM_RESET);
-    ipcMain.removeHandler(CHANNELS.WINDOW_CLOSE);
-
+    if (worktreePortBroker) worktreePortBroker.dispose();
+    worktreePortBroker = null;
     if (workspaceClient) workspaceClient.dispose();
     workspaceClient = null;
     disposeWorkspaceClient();
-
-    if (portalManager) portalManager.destroy();
-    portalManager = null;
 
     disposeTaskOrchestrator();
     disposeAgentRouter();
     disposePowerSaveBlockerService();
     disposeAgentAvailabilityStore();
-    disposeWorkflowEngine();
-
-    projectSwitchService = null;
 
     if (ptyClient) ptyClient.dispose();
     ptyClient = null;
     disposePtyClient();
 
+    // Clean up IPC handlers and reset guards so next window re-registers fresh
+    if (cleanupIpcHandlers) {
+      cleanupIpcHandlers();
+      cleanupIpcHandlers = null;
+    }
+    if (cleanupErrorHandlers) {
+      cleanupErrorHandlers();
+      cleanupErrorHandlers = null;
+    }
+    ipcHandlersRegistered = false;
+    globalServicesInitialized = false;
+
     getSystemSleepService().dispose();
     notificationService.dispose();
     agentNotificationService.dispose();
+    preAgentSnapshotService.dispose();
     autoUpdaterService.dispose();
-
-    setLoggerWindow(null);
   });
 }

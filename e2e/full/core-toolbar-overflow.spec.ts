@@ -11,7 +11,7 @@ test.describe.serial("Core: Toolbar Overflow", () => {
   test.beforeAll(async () => {
     ctx = await launchApp();
     const dir = createFixtureRepo({ name: "toolbar-overflow" });
-    await openAndOnboardProject(ctx.app, ctx.window, dir, "Overflow Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir, "Overflow Test");
   });
 
   test.afterAll(async () => {

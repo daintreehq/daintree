@@ -475,6 +475,31 @@ describe("buildArgsForNonPtyRecreation", () => {
     );
     expect(result.devCommand).toBe("npm run dev");
   });
+
+  it("forwards extensionState from saved data", () => {
+    const extState = { activeTab: "stats", zoom: 1.5 };
+    const result = buildArgsForNonPtyRecreation(
+      {
+        id: "ext-1",
+        kind: "my-plugin",
+        title: "Plugin",
+        location: "grid",
+        extensionState: extState,
+      },
+      "my-plugin",
+      "/project"
+    );
+    expect(result.extensionState).toEqual(extState);
+  });
+
+  it("passes undefined extensionState when not present in saved data", () => {
+    const result = buildArgsForNonPtyRecreation(
+      { id: "b1", kind: "browser", title: "Browser", location: "grid" },
+      "browser",
+      "/project"
+    );
+    expect(result.extensionState).toBeUndefined();
+  });
 });
 
 describe("buildArgsForOrphanedTerminal", () => {
@@ -548,6 +573,45 @@ describe("buildArgsForOrphanedTerminal", () => {
     expect(result.agentLaunchFlags).toBeUndefined();
     expect(result.agentModelId).toBeUndefined();
     expect(result.agentSessionId).toBeUndefined();
+  });
+});
+
+describe("buildArgsForBackendTerminal — extensionState", () => {
+  it("forwards extensionState from saved data", () => {
+    const extState = { tab: "overview" };
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", kind: "terminal", title: "Shell", cwd: "/p" },
+      { id: "t1", extensionState: extState },
+      "/p"
+    );
+    expect(result.extensionState).toEqual(extState);
+  });
+});
+
+describe("buildArgsForReconnectedFallback — extensionState", () => {
+  it("forwards extensionState from saved data", () => {
+    const extState = { scroll: 42 };
+    const result = buildArgsForReconnectedFallback(
+      { id: "t1", kind: "terminal", title: "Shell", cwd: "/p" },
+      { id: "t1", extensionState: extState },
+      "/p"
+    );
+    expect(result.extensionState).toEqual(extState);
+  });
+});
+
+describe("buildArgsForRespawn — extensionState", () => {
+  it("forwards extensionState from saved data", () => {
+    const extState = { config: true };
+    const result = buildArgsForRespawn(
+      { id: "t1", kind: "terminal", title: "Shell", cwd: "/p", extensionState: extState },
+      "terminal",
+      "/p",
+      undefined,
+      false,
+      undefined
+    );
+    expect(result.extensionState).toEqual(extState);
   });
 });
 

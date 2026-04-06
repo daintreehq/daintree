@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import type { TerminalInstance } from "./terminalRegistrySlice";
+import type { TerminalInstance } from "./panelRegistrySlice";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isAgentTerminal } from "@/utils/terminalType";
@@ -110,18 +110,23 @@ export const createTerminalFocusSlice =
       pingedId: null,
       preMaximizeLayout: null,
       setFocused: (id, shouldPing = false) => {
-        set({ focusedId: id });
         if (id) {
-          // Wake-on-focus: sync terminal state from backend when focused.
-          // This is a safety net to recover from any missed data.
-          // Skip wake for non-PTY panels - they don't have backend PTY processes.
           const terminal = getTerminals().find((t) => t.id === id);
+          if (terminal?.location === "dock") {
+            set({ focusedId: id, activeDockTerminalId: id });
+          } else {
+            set({ focusedId: id, activeDockTerminalId: null });
+          }
+          // Wake-on-focus: sync terminal state from backend when focused.
+          // Skip wake for non-PTY panels - they don't have backend PTY processes.
           if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
             terminalInstanceService.wake(id);
           }
           if (shouldPing) {
             get().pingTerminal(id);
           }
+        } else {
+          set({ focusedId: null, activeDockTerminalId: null });
         }
       },
 
@@ -289,32 +294,28 @@ export const createTerminalFocusSlice =
       },
 
       focusDirection: (direction, findNearest) => {
-        set((state) => {
-          if (!state.focusedId) return state;
-          const nextId = findNearest(state.focusedId, direction);
-          if (nextId) {
-            return { focusedId: nextId };
-          }
-          return state;
-        });
+        const { focusedId, activateTerminal } = get();
+        if (!focusedId) return;
+        const nextId = findNearest(focusedId, direction);
+        if (nextId) {
+          activateTerminal(nextId);
+        }
       },
 
       focusByIndex: (index, findByIndex) => {
         const nextId = findByIndex(index);
         if (nextId) {
-          set({ focusedId: nextId });
+          get().activateTerminal(nextId);
         }
       },
 
       focusDockDirection: (direction, findDockByIndex) => {
-        set((state) => {
-          if (!state.focusedId) return state;
-          const nextId = findDockByIndex(state.focusedId, direction);
-          if (nextId) {
-            return { focusedId: nextId };
-          }
-          return state;
-        });
+        const { focusedId, activateTerminal } = get();
+        if (!focusedId) return;
+        const nextId = findDockByIndex(focusedId, direction);
+        if (nextId) {
+          activateTerminal(nextId);
+        }
       },
 
       openDockTerminal: (id) => {
@@ -325,6 +326,9 @@ export const createTerminalFocusSlice =
         }
         if (terminal?.agentState === "waiting") {
           window.electron?.notification?.acknowledgeWaiting(id);
+        }
+        if (terminal?.agentState === "working") {
+          window.electron?.notification?.acknowledgeWorkingPulse(id);
         }
         set({ activeDockTerminalId: id, focusedId: id });
       },
@@ -345,6 +349,9 @@ export const createTerminalFocusSlice =
         if (terminal.location === "dock") {
           if (terminal.agentState === "waiting") {
             window.electron?.notification?.acknowledgeWaiting(id);
+          }
+          if (terminal.agentState === "working") {
+            window.electron?.notification?.acknowledgeWorkingPulse(id);
           }
           set({ activeDockTerminalId: id, focusedId: id });
         } else {
@@ -451,7 +458,7 @@ export const createTerminalFocusSlice =
       focusNextBlockedDock: (activeWorktreeId, getPanelGroup) => {
         const terminals = getTerminals();
         const { activeDockTerminalId, openDockTerminal, pingTerminal } = get();
-        // setActiveTab lives on TerminalRegistrySlice; accessed via composed store at runtime
+        // setActiveTab lives on PanelRegistrySlice; accessed via composed store at runtime
         const setActiveTab = (get() as unknown as { setActiveTab: (g: string, p: string) => void })
           .setActiveTab;
 

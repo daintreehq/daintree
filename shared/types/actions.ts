@@ -1,4 +1,4 @@
-import type { KeyAction } from "./keymap.js";
+import type { BuiltInKeyAction } from "./keymap.js";
 import type { z } from "zod";
 
 export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu";
@@ -9,8 +9,8 @@ export type ActionDanger = "safe" | "confirm" | "restricted";
 
 export type ActionScope = "renderer";
 
-export type ActionId =
-  | KeyAction
+export type BuiltInActionId =
+  | BuiltInKeyAction
   // Query actions for App Agent
   | "terminal.list"
   | "terminal.getOutput"
@@ -43,6 +43,7 @@ export type ActionId =
   | "terminalConfig.setHybridInputEnabled"
   | "terminalConfig.setHybridInputAutoFocus"
   | "terminalConfig.setScreenReaderMode"
+  | "terminalConfig.setCachedProjectViews"
   | "worktreeConfig.get"
   | "worktreeConfig.setPattern"
   | "files.search"
@@ -68,6 +69,10 @@ export type ActionId =
   | "git.commit"
   | "git.push"
   | "git.getStagingStatus"
+  | "git.snapshotGet"
+  | "git.snapshotList"
+  | "git.snapshotRevert"
+  | "git.snapshotDelete"
   | "preferences.showProjectPulse.set"
   | "preferences.showDeveloperTools.set"
   | "preferences.showGridAgentHighlights.set"
@@ -106,6 +111,8 @@ export type ActionId =
   | "project.detectRunners"
   | "project.getStats"
   | "project.settings.open"
+  | "project.cloneRepo"
+  | "app.reloadConfig"
   | "app.developerMode.set"
   | "logs.openFile"
   | "logs.clear"
@@ -147,6 +154,8 @@ export type ActionId =
   | "recipe.list"
   | "recipe.editor.open"
   | "recipe.editor.openFromLayout"
+  | "recipe.manager.open"
+  | "recipe.saveToRepo"
   | "panel.focus"
   | "panel.focusIndex"
   | "panel.palette"
@@ -177,6 +186,7 @@ export type ActionId =
   | "terminal.trash"
   | "terminal.kill"
   | "terminal.moveToWorktree"
+  | "terminal.moveToNewWorktree"
   | "terminal.convertType"
   | "terminal.watch"
   | "terminal.viewInfo"
@@ -241,11 +251,19 @@ export type ActionId =
   | "notes.delete"
   | "notes.reveal"
   | "devServer.start"
-  | "devServer.openDetected"
   | "worktree.compareDiff"
+  | "terminal.copy"
+  | "terminal.paste"
+  | "terminal.copyLink"
+  | "terminal.deleteNote"
+  | "terminal.contextMenu"
+  | "terminal.sendToAgent"
+  | "terminal.bulkCommand"
   | "terminal.stashInput"
   | "terminal.popStash"
   | "terminal.restartService";
+
+export type ActionId = BuiltInActionId | (string & {});
 
 export interface ActionContext {
   projectId?: string;

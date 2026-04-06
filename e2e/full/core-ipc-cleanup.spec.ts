@@ -12,7 +12,7 @@ import {
   getMainListenerSnapshot,
   getRendererListenerSnapshot,
 } from "../helpers/ipcFaults";
-import { addAndSwitchToProject, selectExistingProject } from "../helpers/workflows";
+import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../helpers/workflows";
 import { rmSync } from "fs";
 
 const MONITORED_CHANNELS = [
@@ -32,7 +32,7 @@ test.describe.serial("Core: IPC Cleanup Verification", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "ipc-cleanup" });
     ctx = await launchApp({ env: { CANOPY_E2E_FAULT_MODE: "1" } });
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "IPC Cleanup");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "IPC Cleanup");
   });
 
   test.afterAll(async () => {
@@ -103,23 +103,22 @@ test.describe.serial("Core: IPC Cleanup Verification", () => {
 
   test("AC3: renderer subscriptions stable across project switches", async () => {
     test.setTimeout(180_000);
-    const { app, window } = ctx;
 
     const fixture = createMultiProjectFixture();
 
     try {
-      const beforeRenderer = await getRendererListenerSnapshot(window, RENDERER_CHANNELS);
+      const beforeRenderer = await getRendererListenerSnapshot(ctx.window, RENDERER_CHANNELS);
 
-      await addAndSwitchToProject(app, window, fixture.repoB, "IPC Project B");
-      await window.waitForTimeout(T_SETTLE);
+      ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, fixture.repoB, "IPC Project B");
+      await ctx.window.waitForTimeout(T_SETTLE);
 
-      await selectExistingProject(window, "IPC Cleanup");
-      await window.waitForTimeout(T_SETTLE);
+      ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, "IPC Cleanup");
+      await ctx.window.waitForTimeout(T_SETTLE);
 
-      await selectExistingProject(window, "IPC Project B");
-      await window.waitForTimeout(T_SETTLE);
+      ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, "IPC Project B");
+      await ctx.window.waitForTimeout(T_SETTLE);
 
-      const afterRenderer = await getRendererListenerSnapshot(window, RENDERER_CHANNELS);
+      const afterRenderer = await getRendererListenerSnapshot(ctx.window, RENDERER_CHANNELS);
 
       for (const ch of RENDERER_CHANNELS) {
         const delta = Math.abs((afterRenderer[ch] ?? 0) - (beforeRenderer[ch] ?? 0));
@@ -159,14 +158,18 @@ test.describe.serial("Core: IPC Cleanup Verification", () => {
     // Counter should be 0 before any event is sent
     expect(count).toBe(0);
 
-    // Send a single terminal:activity event from the main process
-    await app.evaluate(({ BrowserWindow }) => {
-      const wins = BrowserWindow.getAllWindows();
-      if (wins.length > 0) {
-        wins[0].webContents.send("terminal:activity", {
-          terminalId: "test-terminal-id",
-          headline: "e2e test",
-        });
+    // Send a single terminal:activity event to every alive WebContents —
+    // after the WebContentsView migration the renderer lives inside a
+    // child view, not the BrowserWindow's main webContents, so a single
+    // `wins[0].webContents.send` would miss it.
+    await app.evaluate(({ webContents }) => {
+      for (const wc of webContents.getAllWebContents()) {
+        if (!wc.isDestroyed()) {
+          wc.send("terminal:activity", {
+            terminalId: "test-terminal-id",
+            headline: "e2e test",
+          });
+        }
       }
     });
 

@@ -39,7 +39,7 @@ test.describe.serial("Core: Notes Panel", () => {
   test.beforeAll(async () => {
     const fixture = createFixtureRepo({ name: "notes-panel-test" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixture, "Notes Panel Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, "Notes Panel Test");
   });
 
   test.afterAll(async () => {
@@ -50,13 +50,7 @@ test.describe.serial("Core: Notes Panel", () => {
     const { window } = ctx;
     await openNotesPalette(window);
     const palette = window.locator(SEL.notes.palette);
-    await expect(palette.getByText("No notes yet")).toBeVisible({ timeout: T_SHORT });
-  });
-
-  test("create a new note", async () => {
-    const { window } = ctx;
-    const palette = window.locator(SEL.notes.palette);
-    await palette.locator(SEL.notes.createButton).click();
+    // Notes palette auto-creates a first note when opened with no existing notes
     await expect(palette.locator(SEL.notes.option)).toBeVisible({ timeout: T_MEDIUM });
     await expect(palette.locator(SEL.notes.editor)).toBeVisible({ timeout: T_MEDIUM });
   });

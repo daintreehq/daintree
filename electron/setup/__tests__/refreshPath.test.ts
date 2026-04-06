@@ -151,6 +151,92 @@ describe("refreshPath", () => {
     expect(process.env.PATH).toContain("Program Files\\nodejs");
   });
 
+  it("expands %VAR% references from REG_EXPAND_SZ values", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", writable: true });
+    process.env.PATH = "C:\\old";
+    process.env.SystemRoot = "C:\\Windows";
+    process.env.USERPROFILE = "C:\\Users\\test";
+
+    execFileMock.mockImplementation(
+      (
+        _cmd: string,
+        args: string[],
+        _opts: unknown,
+        cb: (err: Error | null, stdout: string) => void
+      ) => {
+        const key = args[1] as string;
+        if (key.startsWith("HKLM")) {
+          cb(null, "    Path    REG_EXPAND_SZ    %SystemRoot%\\system32");
+        } else {
+          cb(null, "    Path    REG_EXPAND_SZ    %USERPROFILE%\\AppData\\Local\\bin");
+        }
+      }
+    );
+
+    const { refreshPath } = await import("../environment.js");
+    await refreshPath();
+
+    // Check expanded values appear (use fragments to avoid path.delimiter issues on macOS)
+    expect(process.env.PATH).toContain("Windows\\system32");
+    expect(process.env.PATH).toContain("Users\\test\\AppData\\Local\\bin");
+    // Should NOT contain unexpanded %VAR% tokens
+    expect(process.env.PATH).not.toContain("%SystemRoot%");
+    expect(process.env.PATH).not.toContain("%USERPROFILE%");
+
+    delete process.env.SystemRoot;
+    delete process.env.USERPROFILE;
+  });
+
+  it("preserves unknown %VAR% tokens instead of replacing with empty string", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", writable: true });
+    process.env.PATH = "C:\\old";
+
+    execFileMock.mockImplementation(
+      (
+        _cmd: string,
+        _args: string[],
+        _opts: unknown,
+        cb: (err: Error | null, stdout: string) => void
+      ) => {
+        cb(null, "    Path    REG_EXPAND_SZ    %UNKNOWN_VAR_12345%\\bin;C:\\real\\path");
+      }
+    );
+
+    const { refreshPath } = await import("../environment.js");
+    await refreshPath();
+
+    // Unknown var should be preserved as-is, not replaced with empty string
+    expect(process.env.PATH).toContain("%UNKNOWN_VAR_12345%\\bin");
+    expect(process.env.PATH).toContain("C:\\real\\path");
+  });
+
+  it("is idempotent on Windows — repeated calls don't explode PATH", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", writable: true });
+    process.env.PATH = "C:\\Windows\\System32";
+    process.env.SystemRoot = "C:\\Windows";
+
+    execFileMock.mockImplementation(
+      (
+        _cmd: string,
+        _args: string[],
+        _opts: unknown,
+        cb: (err: Error | null, stdout: string) => void
+      ) => {
+        cb(null, "    Path    REG_EXPAND_SZ    %SystemRoot%\\system32");
+      }
+    );
+
+    const { refreshPath } = await import("../environment.js");
+    await refreshPath();
+    const firstPath = process.env.PATH;
+    await refreshPath();
+    const secondPath = process.env.PATH;
+
+    expect(firstPath).toBe(secondPath);
+
+    delete process.env.SystemRoot;
+  });
+
   it("falls back on Windows when reg query fails", async () => {
     Object.defineProperty(process, "platform", { value: "win32", writable: true });
     process.env.PATH = "C:\\Windows\\System32";

@@ -165,6 +165,7 @@ describe("subtab-aware search", () => {
       {
         id: "test-entry",
         tab: "agents" as const,
+        scope: "global" as const,
         tabLabel: "CLI Agents",
         section: "Settings",
         title: "Some Setting",
@@ -183,6 +184,7 @@ describe("subtab-aware search", () => {
       {
         id: "sub-entry",
         tab: "agents" as const,
+        scope: "global" as const,
         tabLabel: "CLI Agents",
         section: "Runtime",
         title: "Enable Agent",
@@ -202,6 +204,7 @@ describe("subtab-aware search", () => {
       {
         id: "no-subtab",
         tab: "general" as const,
+        scope: "global" as const,
         tabLabel: "General",
         section: "About",
         title: "App Version",
@@ -218,6 +221,7 @@ describe("subtab-aware search", () => {
       {
         id: "a",
         tab: "agents" as const,
+        scope: "global" as const,
         tabLabel: "CLI Agents",
         section: "S",
         title: "Enable",
@@ -227,6 +231,7 @@ describe("subtab-aware search", () => {
       {
         id: "b",
         tab: "agents" as const,
+        scope: "global" as const,
         tabLabel: "CLI Agents",
         section: "S",
         title: "Enable Gemini",
@@ -241,7 +246,7 @@ describe("subtab-aware search", () => {
 });
 
 describe("SETTINGS_SEARCH_INDEX", () => {
-  it("has entries covering all 17 settings tabs", () => {
+  it("has entries covering all settings tabs", () => {
     const tabs = new Set(SETTINGS_SEARCH_INDEX.map((e) => e.tab));
     const expectedTabs = [
       "general",
@@ -254,13 +259,19 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       "portal",
       "toolbar",
       "notifications",
-      "editor",
-      "imageViewer",
+      "integrations",
       "voice",
       "mcp",
       "environment",
       "privacy",
       "troubleshooting",
+      "project:general",
+      "project:context",
+      "project:automation",
+      "project:recipes",
+      "project:commands",
+      "project:notifications",
+      "project:github",
     ];
     for (const tab of expectedTabs) {
       expect(tabs.has(tab as never), `tab "${tab}" should be in index`).toBe(true);
@@ -300,13 +311,20 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       portal: "Portal Links",
       toolbar: "Toolbar Customization",
       notifications: "Notifications",
-      editor: "Editor Integration",
-      imageViewer: "Image Viewer",
+      integrations: "Integrations",
       voice: "Voice Input",
+
       mcp: "MCP Server",
       environment: "Environment Variables",
       privacy: "Privacy & Data",
       troubleshooting: "Troubleshooting",
+      "project:general": "General",
+      "project:context": "Context",
+      "project:automation": "Worktree Setup",
+      "project:recipes": "Recipes",
+      "project:commands": "Commands",
+      "project:notifications": "Notifications",
+      "project:github": "GitHub",
     };
     for (const entry of SETTINGS_SEARCH_INDEX) {
       expect(
@@ -328,13 +346,20 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       portal: "Portal Links",
       toolbar: "Toolbar Customization",
       notifications: "Notifications",
-      editor: "Editor Integration",
-      imageViewer: "Image Viewer",
+      integrations: "Integrations",
       voice: "Voice Input",
+
       mcp: "MCP Server",
       environment: "Environment Variables",
       privacy: "Privacy & Data",
       troubleshooting: "Troubleshooting",
+      "project:general": "General",
+      "project:context": "Context",
+      "project:automation": "Worktree Setup",
+      "project:recipes": "Recipes",
+      "project:commands": "Commands",
+      "project:notifications": "Notifications",
+      "project:github": "GitHub",
     };
     for (const tabKey of Object.keys(tabTitles)) {
       const navEntry = SETTINGS_SEARCH_INDEX.find((e) => e.id === `tab-nav-${tabKey}`);
@@ -372,7 +397,7 @@ describe("voice tab coverage", () => {
 
 describe("tab-name ranking", () => {
   it("tab-nav entry ranks first for exact tab name queries", () => {
-    const queries = ["Panel Grid", "Keyboard Shortcuts", "Voice Input", "GitHub Integration"];
+    const queries = ["Panel Grid", "Keyboard Shortcuts", "GitHub Integration"];
     for (const query of queries) {
       const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
       expect(
@@ -392,7 +417,7 @@ describe("tab-name ranking", () => {
   });
 
   it("nav group label queries return tab-nav results", () => {
-    const groups = ["general", "terminal", "integrations", "input", "support"];
+    const groups = ["general", "terminal", "integrations", "support"];
     for (const group of groups) {
       const results = filterSettings(SETTINGS_SEARCH_INDEX, group);
       expect(
@@ -450,6 +475,7 @@ describe("fuzzy matching", () => {
       {
         id: "a",
         tab: "general" as const,
+        scope: "global" as const,
         tabLabel: "General",
         section: "S",
         title: "Font Size",
@@ -458,6 +484,7 @@ describe("fuzzy matching", () => {
       {
         id: "b",
         tab: "general" as const,
+        scope: "global" as const,
         tabLabel: "General",
         section: "S",
         title: "Color Scheme",
@@ -556,5 +583,128 @@ describe("@modified filter", () => {
     const modifiedTabs = new Set<SettingsTab>(["github"]);
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "font @modified", { modifiedTabs });
     expect(results).toHaveLength(0);
+  });
+});
+
+describe("scope filtering", () => {
+  it("filters results to global scope only", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "notifications", { scope: "global" });
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((r) => r.scope === "global")).toBe(true);
+  });
+
+  it("filters results to project scope only", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "notifications", { scope: "project" });
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((r) => r.scope === "project")).toBe(true);
+  });
+
+  it("project scope search for 'general' returns only project:general entries", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "general", { scope: "project" });
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((r) => r.tab.startsWith("project:"))).toBe(true);
+  });
+
+  it("global scope search does not include project entries", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "recipes", { scope: "global" });
+    expect(results.every((r) => !r.tab.startsWith("project:"))).toBe(true);
+  });
+
+  it("returns results from both scopes when no scope filter is set", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "notifications");
+    const scopes = new Set(results.map((r) => r.scope));
+    expect(scopes.has("global")).toBe(true);
+    expect(scopes.has("project")).toBe(true);
+  });
+
+  it("every entry in the index has a scope field", () => {
+    for (const entry of SETTINGS_SEARCH_INDEX) {
+      expect(entry.scope, `entry "${entry.id}" should have scope`).toBeTruthy();
+      expect(["global", "project"]).toContain(entry.scope);
+    }
+  });
+});
+
+describe("requiresEnabled metadata", () => {
+  const byId = (id: string) => SETTINGS_SEARCH_INDEX.find((e) => e.id === id);
+
+  it("MCP hidden entries reference mcp-server-enable", () => {
+    for (const id of ["mcp-server-config", "mcp-server-port", "mcp-server-auth"]) {
+      const entry = byId(id);
+      expect(entry?.requiresEnabled?.settingId).toBe("mcp-server-enable");
+      expect(entry?.requiresEnabled?.label).toBe("MCP Server");
+    }
+  });
+
+  it("Voice speech-to-text sub-settings reference voice-enable", () => {
+    for (const id of [
+      "voice-deepgram-key",
+      "voice-language",
+      "voice-transcription-model",
+      "voice-paragraph-breaks",
+      "voice-custom-dictionary",
+      "voice-ai-correction-enable",
+    ]) {
+      const entry = byId(id);
+      expect(entry?.requiresEnabled?.settingId, `${id} should require voice-enable`).toBe(
+        "voice-enable"
+      );
+      expect(entry?.requiresEnabled?.label).toBe("Voice Input");
+    }
+  });
+
+  it("Voice AI correction sub-settings reference voice-ai-correction-enable", () => {
+    for (const id of ["voice-openai-key", "voice-correction-model", "voice-custom-instructions"]) {
+      const entry = byId(id);
+      expect(
+        entry?.requiresEnabled?.settingId,
+        `${id} should require voice-ai-correction-enable`
+      ).toBe("voice-ai-correction-enable");
+      expect(entry?.requiresEnabled?.label).toBe("AI Text Correction");
+    }
+  });
+
+  it("gate entries themselves do NOT have requiresEnabled", () => {
+    for (const id of ["mcp-server-enable", "voice-enable"]) {
+      expect(byId(id)?.requiresEnabled).toBeUndefined();
+    }
+  });
+
+  it("every requiresEnabled.settingId references an existing entry", () => {
+    const allIds = new Set(SETTINGS_SEARCH_INDEX.map((e) => e.id));
+    for (const entry of SETTINGS_SEARCH_INDEX) {
+      if (entry.requiresEnabled) {
+        expect(
+          allIds.has(entry.requiresEnabled.settingId),
+          `${entry.id} references non-existent entry "${entry.requiresEnabled.settingId}"`
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("hidden settings still appear in search results", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "MCP port");
+    expect(results.some((r) => r.id === "mcp-server-port")).toBe(true);
+  });
+
+  it("two-level dependency chain is fully connected", () => {
+    const openaiKey = byId("voice-openai-key");
+    expect(openaiKey?.requiresEnabled?.settingId).toBe("voice-ai-correction-enable");
+    const aiCorrection = byId("voice-ai-correction-enable");
+    expect(aiCorrection?.requiresEnabled?.settingId).toBe("voice-enable");
+    const voiceEnable = byId("voice-enable");
+    expect(voiceEnable?.requiresEnabled).toBeUndefined();
+  });
+});
+
+describe("help dock discoverability", () => {
+  it("finds default agent entry when searching for 'help dock'", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "help dock");
+    expect(results.some((r) => r.id === "agents-default-agent")).toBe(true);
+  });
+
+  it("finds default agent entry when searching for 'keyboard shortcut'", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "keyboard shortcut");
+    expect(results.some((r) => r.id === "agents-default-agent")).toBe(true);
   });
 });

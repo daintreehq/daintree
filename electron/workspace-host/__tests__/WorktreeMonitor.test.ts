@@ -4,10 +4,11 @@ import { WorktreeRemovedError } from "../../utils/errorTypes.js";
 
 const mockGetWorktreeChangesWithStats = vi.fn();
 const mockInvalidateGitStatusCache = vi.fn();
+const mockGitRaw = vi.fn();
 
 vi.mock("../../utils/hardenedGit.js", () => ({
   createHardenedGit: vi.fn(() => ({
-    raw: vi.fn(),
+    raw: (...args: unknown[]) => mockGitRaw(...args),
     log: vi.fn().mockResolvedValue({ latest: null }),
   })),
   validateCwd: vi.fn(),
@@ -168,11 +169,10 @@ describe("WorktreeMonitor", () => {
     monitor.stop();
   });
 
-  it("includes createdAt, lifecycleStatus, projectScopeId in snapshot", () => {
+  it("includes createdAt and lifecycleStatus in snapshot", () => {
     const callbacks = makeCallbacks();
     const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
     monitor.setCreatedAt(1234567890);
-    monitor.setProjectScopeId("scope-1");
     monitor.setLifecycleStatus({
       phase: "setup",
       state: "running",
@@ -245,6 +245,84 @@ describe("WorktreeMonitor", () => {
     expect(monitor.isMainWorktree).toBe(false);
     monitor.isMainWorktree = true;
     expect(monitor.isMainWorktree).toBe(true);
+  });
+
+  describe("ahead/behind upstream tracking", () => {
+    const CLEAN_CHANGES = {
+      worktreeId: "/test/worktree",
+      rootPath: "/test",
+      changes: [],
+      changedFileCount: 0,
+      lastUpdated: Date.now(),
+    };
+
+    it("includes aheadCount and behindCount in snapshot when upstream is configured", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+      mockGitRaw.mockResolvedValue("3\t1\n");
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.aheadCount).toBe(3);
+      expect(snapshot.behindCount).toBe(1);
+
+      monitor.stop();
+    });
+
+    it("leaves counts undefined when no upstream is configured", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+      mockGitRaw.mockRejectedValue(
+        new Error("fatal: no upstream configured for branch 'test-branch'")
+      );
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.aheadCount).toBeUndefined();
+      expect(snapshot.behindCount).toBeUndefined();
+
+      monitor.stop();
+    });
+
+    it("leaves counts undefined on detached HEAD (no branch)", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+      mockGitRaw.mockResolvedValue("0\t0\n");
+
+      const detachedWorktree: Worktree = {
+        ...TEST_WORKTREE,
+        branch: undefined,
+      };
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(detachedWorktree, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.aheadCount).toBeUndefined();
+      expect(snapshot.behindCount).toBeUndefined();
+      expect(mockGitRaw).not.toHaveBeenCalledWith(expect.arrayContaining(["rev-list"]));
+
+      monitor.stop();
+    });
+
+    it("reports zero counts when branch is in sync with upstream", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(CLEAN_CHANGES);
+      mockGitRaw.mockResolvedValue("0\t0\n");
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      const snapshot = monitor.getSnapshot();
+      expect(snapshot.aheadCount).toBe(0);
+      expect(snapshot.behindCount).toBe(0);
+
+      monitor.stop();
+    });
   });
 
   describe("watcher retry", () => {
@@ -370,6 +448,174 @@ describe("WorktreeMonitor", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       expect(monitor.hasWatcher).toBe(true);
 
+      monitor.stop();
+    });
+  });
+
+  describe("poll queue concurrency", () => {
+    let PQueue: typeof import("p-queue").default;
+
+    beforeEach(async () => {
+      PQueue = (await import("p-queue")).default;
+    });
+
+    it("deduplicates rapid poll calls — only one executePoll per cycle", async () => {
+      let resolveGit!: () => void;
+      mockGetWorktreeChangesWithStats.mockImplementation(
+        () =>
+          new Promise<{
+            worktreeId: string;
+            rootPath: string;
+            changes: never[];
+            changedFileCount: number;
+            lastUpdated: number;
+          }>((resolve) => {
+            resolveGit = () =>
+              resolve({
+                worktreeId: "/test/worktree",
+                rootPath: "/test",
+                changes: [],
+                changedFileCount: 0,
+                lastUpdated: Date.now(),
+              });
+          })
+      );
+
+      const queue = new PQueue({ concurrency: 1 });
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main", queue);
+      monitor.startWithoutGitStatus();
+
+      // Fire two rapid polls — second should be deduplicated
+      const p1 = (monitor as unknown as { poll: () => Promise<void> }).poll();
+      const p2 = (monitor as unknown as { poll: () => Promise<void> }).poll();
+
+      // Resolve the single git call
+      resolveGit();
+      await p1;
+      await p2;
+
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      monitor.stop();
+    });
+
+    it("stop() aborts a queued poll via AbortController", async () => {
+      let resolveBlocker!: () => void;
+      const blockerPromise = new Promise<void>((r) => {
+        resolveBlocker = r;
+      });
+
+      const queue = new PQueue({ concurrency: 1 });
+      const callbacks = makeCallbacks();
+
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      // Block the queue with a long-running task so the monitor's poll is pending
+      const blockerDone = queue.add(() => blockerPromise);
+
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main", queue);
+      monitor.startWithoutGitStatus();
+
+      // Enqueue a poll — it will wait behind the blocker
+      const pollPromise = (monitor as unknown as { poll: () => Promise<void> }).poll();
+
+      // Stop the monitor — should abort the queued poll
+      monitor.stop();
+
+      // Release the blocker
+      resolveBlocker();
+      await blockerDone;
+      await pollPromise;
+
+      // The aborted poll should never have executed updateGitStatus
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+    });
+
+    it("active worktree polls with higher priority than background", async () => {
+      const addSpy = vi.fn().mockResolvedValue(undefined);
+      const fakeQueue = { add: addSpy } as unknown as import("p-queue").default;
+
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      // Background monitor (isCurrent: false)
+      const bgCallbacks = makeCallbacks();
+      const bgMonitor = new WorktreeMonitor(
+        TEST_WORKTREE,
+        TEST_CONFIG,
+        bgCallbacks,
+        "main",
+        fakeQueue
+      );
+      bgMonitor.startWithoutGitStatus();
+      await (bgMonitor as unknown as { poll: () => Promise<void> }).poll();
+
+      expect(addSpy).toHaveBeenCalledTimes(1);
+      expect(addSpy.mock.calls[0][1]).toMatchObject({ priority: 0 });
+
+      addSpy.mockClear();
+
+      // Active monitor (isCurrent: true)
+      const activeWorktree = {
+        ...TEST_WORKTREE,
+        id: "/test/active",
+        path: "/test/active",
+        isCurrent: true,
+      };
+      const activeCallbacks = makeCallbacks();
+      const activeMonitor = new WorktreeMonitor(
+        activeWorktree,
+        TEST_CONFIG,
+        activeCallbacks,
+        "main",
+        fakeQueue
+      );
+      activeMonitor.startWithoutGitStatus();
+      await (activeMonitor as unknown as { poll: () => Promise<void> }).poll();
+
+      expect(addSpy).toHaveBeenCalledTimes(1);
+      expect(addSpy.mock.calls[0][1]).toMatchObject({ priority: 1 });
+
+      bgMonitor.stop();
+      activeMonitor.stop();
+    });
+
+    it("monitor can restart after stop with fresh AbortController", async () => {
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const queue = new PQueue({ concurrency: 1 });
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main", queue);
+
+      // Start, poll, stop
+      monitor.startWithoutGitStatus();
+      await (monitor as unknown as { poll: () => Promise<void> }).poll();
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      monitor.stop();
+
+      mockGetWorktreeChangesWithStats.mockClear();
+
+      // Restart — should get a fresh AbortController and poll successfully
+      monitor.startWithoutGitStatus();
+      await (monitor as unknown as { poll: () => Promise<void> }).poll();
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
       monitor.stop();
     });
   });

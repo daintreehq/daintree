@@ -1,5 +1,117 @@
 # Changelog
 
+## [0.6.0] - 2026-04-08
+
+### Features
+
+**Help System**
+
+- Persistent HelpPanel with SearchSocket MCP for documentation search (#4939)
+- Help agent dock button with agent picker and session continuity (#4938, #4937)
+- Fast models used by default for help assistant (#4969)
+
+**Project Switcher**
+
+- Frecency-based project sorting with temporal sections (#4908, #4926)
+- MRU ordering with second item pre-selected for quick toggle (#4989)
+- Push-based project status replacing N+1 IPC polling (#4902)
+
+**Panel Architecture**
+
+- Unified PanelKindRegistry merging config, components, serializers, and defaults (#5002, #5003, #5004)
+- Co-located panel kind modules into `src/panels/` directory (#5006)
+- Renamed terminal store and types to panel (#5005)
+
+**Per-View Worktree Stores**
+
+- MessagePort broker with request/response protocol for per-view worktree data (#4834)
+- Per-view worktree store replacing global store (#4862)
+- Cached view rehydration and issue association hydration (#4862)
+
+**Recipes**
+
+- In-repo recipe storage with `.canopy/recipes/` as default for project-level recipes (#4936)
+- Save-to-repo action for promoting user recipes to project storage (#4940)
+- Support editing and deleting in-repo recipes (#4933)
+- Custom CLI arguments per terminal in recipe editor (#4963)
+
+**Demo System**
+
+- Scene/Stage DSL with runner and capture pipeline for demo video production
+- Scroll, drag, pressKey, spotlight, annotate, and waitForIdle primitives
+- Raw BGRA bitmap piping with text-crisp encoding
+
+**Other Features**
+
+- Agent 'exited' state for cleanly terminated terminals (#4998, #4999)
+- OAuth loopback flow for external auth redirects in dev preview (#4980)
+- Git credential support for private repo operations (#4948)
+- Per-agent assistant model selection in settings (#4962)
+- Smart defaults for new worktree panel layout (#4993)
+- Theme picker replaced with dedicated AppDialog modal (#4991)
+- Existing branch mode in New Worktree dialog
+- Terminal "Move to New Worktree" action for agent panels
+- Cmd+T falls back to last-closed terminal config (#4717)
+- Panel palette shows agent availability status (#4918)
+- Clone Repository improved discoverability (#4884)
+- Toolbar shows only installed agents with auto-open setup wizard (#4994)
+- Include main worktree in bulk operations
+- ScrollShadow component for scrollable containers
+- Structural skeleton fallbacks replacing loading spinners
+- Custom Canopy icon set additions
+- Fullscreen state persisted and restored across sessions
+- Blocked cross-origin navigations surfaced with Open in Browser action
+- Standardized settings dialog layout and form components (#4883)
+- Soundscape toned down to minimal defaults
+
+### Bug Fixes
+
+- Fix terminal blank panels on Linux/Windows from fit/resize race (#4913, #4935)
+- Fix phantom agent terminals appearing on project open (#4911, #4881)
+- Fix agent terminal getting stuck in working state (#4974)
+- Fix dock state corruption on docked terminal expand and project switch (#4945)
+- Fix project settings not persisting after dialog consolidation (#4958)
+- Fix clone dialog hanging with cancellation support (#4949)
+- Fix help terminal leaking into dock on project switch (#4978)
+- Fix hybrid input bar drafts lost on project switch (#4977)
+- Fix agent terminal panels not restored on cold app restart (#4973)
+- Fix Windows voice correction path handling (#4979)
+- Fix dev preview losing navigated URL on worktree/project switch (#5017)
+- Fix palette not selecting first navigable item on open
+- Fix tab group panels leaking between dock and grid
+- Fix project switch losing active worktree selection (#5011)
+- Fix project switch state capture and flush (#5009)
+- Fix oversized window recovery regardless of visibility
+- Fix menu DevTools and zoom items targeting wrong webContents
+- Fix worktree delete dialog conflating untracked and uncommitted changes (#4927)
+- Fix recipe editor dialog overflow scrolling (#4957)
+- Fix terminal data loss and render freeze on project switch
+- Fix stale draft restoring after submit and project switch (#4990)
+- Fix dev preview auto-injecting --turbopack for Next.js (#4557)
+- Fix Windows registry PATH expansion for tool discovery (#4932)
+
+### Performance
+
+- Startup performance capture pipeline with end-to-end timing (#4859)
+- Lazy-load HybridInputBar for non-agent terminals (#4831)
+- Lazy-load NewWorktreeDialog (#4835)
+- Adaptive batching on MessagePort data path (#4899)
+- Compile caching for UtilityProcess entry points (#4837)
+- Throttle polling services when window is backgrounded (#4838)
+- Bound coalesced terminal batch size to 256 KB (#4853)
+- Normalize terminal store from array to Record for O(1) lookups (#4902)
+- React Compiler switched to infer mode (#4836)
+- Reduce scrollback multipliers to lower memory baseline
+- Batch IPC broadcasts with 50ms flush window (#4834)
+- Debounce MRU list persistence in store orchestrator (#4830)
+- Singleflight cache for workspace state queries (#4832)
+- Fire-and-forget recipe loading on initial hydration (#4852)
+- Defer MessagePort ACK to xterm write callback (#4862)
+- Pre-compute command queue count per terminal (#4833)
+- Use replaceChildren() to clear hibernated terminal DOM (#4828)
+
+---
+
 ## [0.5.3] - 2026-03-28
 
 ### Features

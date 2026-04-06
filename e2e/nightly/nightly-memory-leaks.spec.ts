@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { getGridPanelCount, getGridPanelIds, getPanelById } from "../helpers/panels";
+import { getGridPanelCount, getGridPanelIds, getPanelById, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_LONG, T_MEDIUM } from "../helpers/timeouts";
 import { measureMainMemory } from "../helpers/stress";
@@ -21,7 +21,7 @@ function toMB(bytes: number): number {
 
 async function openAndCloseTerminal(window: AppContext["window"]): Promise<void> {
   const idsBefore = await getGridPanelIds(window);
-  await window.locator(SEL.toolbar.openTerminal).click();
+  await openTerminal(window);
   await expect
     .poll(() => getGridPanelCount(window), { timeout: T_LONG })
     .toBe(idsBefore.length + 1);
@@ -31,8 +31,10 @@ async function openAndCloseTerminal(window: AppContext["window"]): Promise<void>
   const panel = newId ? getPanelById(window, newId) : window.locator(SEL.panel.gridPanel).last();
   await expect(panel).toBeVisible({ timeout: T_MEDIUM });
 
+  // Use force click to handle the close button being momentarily detached
+  // from the DOM during re-renders (common on Windows CI)
   const closeBtn = panel.locator(SEL.panel.close);
-  await closeBtn.click({ modifiers: ["Alt"] });
+  await closeBtn.click({ modifiers: ["Alt"], force: true, timeout: T_MEDIUM });
   await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(idsBefore.length);
 }
 
@@ -43,7 +45,7 @@ test.describe.serial("Nightly: Memory Leak Detection", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "memory-leaks" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Memory Leak Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Memory Leak Test");
   });
 
   test.afterAll(async () => {

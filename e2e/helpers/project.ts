@@ -1,6 +1,6 @@
 import type { ElectronApplication, Page } from "@playwright/test";
 import { expect } from "@playwright/test";
-import { mockOpenDialog } from "./launch";
+import { mockOpenDialog, getActiveAppWindow, refreshActiveWindow } from "./launch";
 
 export async function openProject(
   app: ElectronApplication,
@@ -44,7 +44,18 @@ export async function openAndOnboardProject(
   window: Page,
   projectPath: string,
   name: string
-): Promise<void> {
+): Promise<Page> {
   await openProject(app, window, projectPath);
-  await completeOnboarding(window, name);
+  // The onboarding wizard may appear on the initial view or the new project view.
+  // Try the initial view first, then fall back to the new active view.
+  const activeWindow = await getActiveAppWindow(app);
+  const onboardingWindow = (await window
+    .locator("h2", { hasText: "Set up your project" })
+    .isVisible({ timeout: 2000 })
+    .catch(() => false))
+    ? window
+    : activeWindow;
+  await completeOnboarding(onboardingWindow, name);
+
+  return await refreshActiveWindow(app, window);
 }

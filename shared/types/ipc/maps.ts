@@ -72,12 +72,21 @@ import type {
   SystemHealthCheckResult,
   AppMetricsSummary,
   HardwareInfo,
+  ProcessMetricEntry,
+  HeapStats,
+  DiagnosticsInfo,
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
 import type { RetryAction, AppError, RetryProgressPayload } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
-import type { ProjectCloseResult, ProjectStats, ProjectSwitchPayload } from "./project.js";
+import type {
+  ProjectCloseResult,
+  ProjectStats,
+  ProjectStatusMap,
+  ProjectSwitchPayload,
+  ProjectSwitchOutgoingState,
+} from "./project.js";
 import type {
   RepositoryStats,
   ProjectHealthData,
@@ -93,6 +102,8 @@ import type {
   GitGetFileDiffPayload,
   GitCompareWorktreesPayload,
   CrossWorktreeDiffResult,
+  SnapshotInfo,
+  SnapshotRevertResult,
 } from "./git.js";
 import type { TerminalConfig } from "./config.js";
 import type { SystemSleepMetrics } from "./systemSleep.js";
@@ -111,10 +122,6 @@ import type {
   DevPreviewSessionState,
   DevPreviewStateChangedPayload,
 } from "./devPreview.js";
-import type {
-  GlobalDevServersGetResult,
-  GlobalDevServersChangedPayload,
-} from "./globalDevServers.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type {
   GitCommitListOptions,
@@ -147,12 +154,17 @@ import type {
   DemoEncodeResult,
 } from "./demo.js";
 
-export type ChecklistItemId = "openedProject" | "launchedAgent" | "createdWorktree";
+export type ChecklistItemId =
+  | "openedProject"
+  | "launchedAgent"
+  | "createdWorktree"
+  | "subscribedNewsletter";
 
 export interface ChecklistItems {
   openedProject: boolean;
   launchedAgent: boolean;
   createdWorktree: boolean;
+  subscribedNewsletter: boolean;
 }
 
 export interface ChecklistState {
@@ -168,8 +180,21 @@ export interface OnboardingState {
   agentSetupIds: string[];
   firstRunToastSeen: boolean;
   newsletterPromptSeen: boolean;
+  waitingNudgeSeen: boolean;
   migratedFromLocalStorage: boolean;
   checklist: ChecklistState;
+}
+
+/** Serializable toast payload sent from main process to renderer via IPC. */
+export interface MainProcessToastPayload {
+  type: "success" | "error" | "info" | "warning";
+  title?: string;
+  message: string;
+  action?: {
+    label: string;
+    /** IPC channel to invoke when the action button is clicked */
+    ipcChannel: string;
+  };
 }
 
 // IPC Contract Maps
@@ -468,6 +493,18 @@ export interface IpcInvokeMap {
     args: [];
     result: HardwareInfo;
   };
+  "diagnostics:get-process-metrics": {
+    args: [];
+    result: ProcessMetricEntry[];
+  };
+  "diagnostics:get-heap-stats": {
+    args: [];
+    result: HeapStats;
+  };
+  "diagnostics:get-info": {
+    args: [];
+    result: DiagnosticsInfo;
+  };
 
   // App state channels
   "app:get-state": {
@@ -493,6 +530,10 @@ export interface IpcInvokeMap {
   "app:force-quit": {
     args: [];
     result: void;
+  };
+  "app:reload-config": {
+    args: [];
+    result: { success: boolean };
   };
   "menu:show-context": {
     args: [payload: ShowContextMenuPayload];
@@ -624,7 +665,7 @@ export interface IpcInvokeMap {
     result: Project;
   };
   "project:switch": {
-    args: [projectId: string];
+    args: [projectId: string, outgoingState?: ProjectSwitchOutgoingState];
     result: Project;
   };
   "project:open-dialog": {
@@ -648,7 +689,7 @@ export interface IpcInvokeMap {
     result: ProjectCloseResult;
   };
   "project:reopen": {
-    args: [projectId: string];
+    args: [projectId: string, outgoingState?: ProjectSwitchOutgoingState];
     result: Project;
   };
   "project:get-stats": {
@@ -1000,6 +1041,22 @@ export interface IpcInvokeMap {
     args: [payload: { cwd: string; type: "unstaged" | "staged" | "head" }];
     result: string;
   };
+  "git:snapshot-get": {
+    args: [worktreeId: string];
+    result: SnapshotInfo | null;
+  };
+  "git:snapshot-list": {
+    args: [];
+    result: SnapshotInfo[];
+  };
+  "git:snapshot-revert": {
+    args: [worktreeId: string];
+    result: SnapshotRevertResult;
+  };
+  "git:snapshot-delete": {
+    args: [worktreeId: string];
+    result: void;
+  };
 
   // Portal channels
   "portal:create": {
@@ -1203,36 +1260,21 @@ export interface IpcInvokeMap {
     };
   };
 
-  // Workflow channels
-  "workflow:list": {
+  // Plugin channels
+  "plugin:list": {
     args: [];
-    result: import("../workflow.js").WorkflowSummary[];
+    result: import("../plugin.js").LoadedPluginInfo[];
   };
-  "workflow:start": {
-    args: [workflowId: string];
-    result: string;
-  };
-  "workflow:cancel": {
-    args: [runId: string];
-    result: void;
-  };
-  "workflow:get-run": {
-    args: [runId: string];
-    result: import("./api.js").WorkflowRunIpc | null;
-  };
-  "workflow:list-runs": {
+  "plugin:toolbar-buttons": {
     args: [];
-    result: import("./api.js").WorkflowRunIpc[];
+    result: import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[];
   };
-
-  // Workflow approval channels
-  "workflow:list-pending-approvals": {
+  "plugin:menu-items": {
     args: [];
-    result: import("../workflowRun.js").PendingWorkflowApproval[];
-  };
-  "workflow:resolve-approval": {
-    args: [payload: { runId: string; nodeId: string; approved: boolean; feedback?: string }];
-    result: void;
+    result: Array<{
+      pluginId: string;
+      item: import("../plugin.js").MenuItemContribution;
+    }>;
   };
 
   // Dev Preview channels
@@ -1257,12 +1299,6 @@ export interface IpcInvokeMap {
     result: DevPreviewSessionState;
   };
 
-  // Global Dev Servers channels
-  "global-dev-servers:get": {
-    args: [];
-    result: GlobalDevServersGetResult;
-  };
-
   // Auto-update channels
   "update:quit-and-install": {
     args: [];
@@ -1271,6 +1307,14 @@ export interface IpcInvokeMap {
   "update:check-for-updates": {
     args: [];
     result: void;
+  };
+  "update:get-channel": {
+    args: [];
+    result: "stable" | "nightly";
+  };
+  "update:set-channel": {
+    args: [channel: "stable" | "nightly"];
+    result: "stable" | "nightly";
   };
 
   // Agent Capabilities channels
@@ -1310,6 +1354,10 @@ export interface IpcInvokeMap {
     args: [filePath: string];
     result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
   };
+  "clipboard:write-image": {
+    args: [pngData: Uint8Array];
+    result: { ok: true } | { ok: false; error: string };
+  };
 
   // Notification settings channels
   "notification:settings-get": {
@@ -1318,9 +1366,12 @@ export interface IpcInvokeMap {
       completedEnabled: boolean;
       waitingEnabled: boolean;
       soundEnabled: boolean;
-      soundFile: string;
+      completedSoundFile: string;
+      waitingSoundFile: string;
+      escalationSoundFile: string;
       waitingEscalationEnabled: boolean;
       waitingEscalationDelayMs: number;
+      uiFeedbackSoundEnabled: boolean;
     };
   };
   "notification:settings-set": {
@@ -1329,9 +1380,12 @@ export interface IpcInvokeMap {
         completedEnabled: boolean;
         waitingEnabled: boolean;
         soundEnabled: boolean;
-        soundFile: string;
+        completedSoundFile: string;
+        waitingSoundFile: string;
+        escalationSoundFile: string;
         waitingEscalationEnabled: boolean;
         waitingEscalationDelayMs: number;
+        uiFeedbackSoundEnabled: boolean;
       }>,
     ];
     result: void;
@@ -1339,6 +1393,16 @@ export interface IpcInvokeMap {
   "notification:play-sound": {
     args: [string];
     result: void;
+  };
+  "sound:play-ui-event": {
+    args: [string];
+    result: void;
+  };
+
+  // Sound channels
+  "sound:get-dir": {
+    args: [];
+    result: string;
   };
 
   // App theme channels
@@ -1358,8 +1422,24 @@ export interface IpcInvokeMap {
     args: [];
     result: import("../appTheme.js").AppThemeImportResult;
   };
+  "app-theme:export": {
+    args: [scheme: import("../appTheme.js").AppColorScheme];
+    result: boolean;
+  };
   "app-theme:set-color-vision-mode": {
     args: [mode: import("../appTheme.js").ColorVisionMode];
+    result: void;
+  };
+  "app-theme:set-follow-system": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "app-theme:set-preferred-dark-scheme": {
+    args: [schemeId: string];
+    result: void;
+  };
+  "app-theme:set-preferred-light-scheme": {
+    args: [schemeId: string];
     result: void;
   };
   "telemetry:get": {
@@ -1454,6 +1534,10 @@ export interface IpcInvokeMap {
     args: [];
     result: void;
   };
+  "onboarding:mark-waiting-nudge-seen": {
+    args: [];
+    result: void;
+  };
   "onboarding:checklist-get": {
     args: [];
     result: ChecklistState;
@@ -1468,6 +1552,16 @@ export interface IpcInvokeMap {
   };
   "onboarding:checklist-mark-celebration-shown": {
     args: [];
+    result: void;
+  };
+
+  // Milestones
+  "milestones:get": {
+    args: [];
+    result: Record<string, boolean>;
+  };
+  "milestones:mark-shown": {
+    args: [milestoneId: string];
     result: void;
   };
 
@@ -1669,7 +1763,7 @@ export interface IpcInvokeMap {
  */
 export interface IpcEventMap {
   // Worktree events
-  "worktree:update": WorktreeState;
+  "worktree:update": { worktree: WorktreeState };
   "worktree:remove": { worktreeId: string };
   "worktree:activated": { worktreeId: string };
 
@@ -1695,6 +1789,7 @@ export interface IpcEventMap {
 
   // Agent events
   "agent:state-changed": AgentStateChangePayload;
+  "agent:all-clear": { timestamp: number };
   "agent:detected": AgentDetectedPayload;
   "agent:exited": AgentExitedPayload;
 
@@ -1728,9 +1823,13 @@ export interface IpcEventMap {
 
   // Event inspector events
   "event-inspector:event": EventRecord;
+  "event-inspector:event-batch": EventRecord[];
 
   // Project events
   "project:on-switch": ProjectSwitchPayload;
+  "project:stats-updated": ProjectStatusMap;
+  "project:updated": Project;
+  "project:removed": string;
 
   // System events
   "system:wake": SystemWakePayload;
@@ -1760,9 +1859,14 @@ export interface IpcEventMap {
   };
   "portal:tabs-evicted": { tabIds: string[] };
 
+  // Sound events (main → renderer)
+  "sound:trigger": { soundFile: string };
+  "sound:cancel": void;
+
   // Notification events
   "notification:update": { waitingCount: number };
   "notification:watch-navigate": { panelId: string; panelTitle: string; worktreeId?: string };
+  "notification:show-toast": MainProcessToastPayload;
 
   // Auto-update events
   "update:available": { version: string };
@@ -1772,36 +1876,11 @@ export interface IpcEventMap {
   // Dev Preview events
   "dev-preview:state-changed": DevPreviewStateChangedPayload;
 
-  // Global Dev Servers events
-  "global-dev-servers:changed": GlobalDevServersChangedPayload;
-
   // Notes events
   "notes:updated": {
     notePath: string;
     title: string;
     action: "created" | "updated" | "deleted";
-  };
-
-  // Workflow events
-  "workflow:started": import("./api.js").WorkflowStartedPayload;
-  "workflow:completed": import("./api.js").WorkflowCompletedPayload;
-  "workflow:failed": import("./api.js").WorkflowFailedPayload;
-  "workflow:approval-requested": {
-    runId: string;
-    nodeId: string;
-    workflowId: string;
-    workflowName: string;
-    prompt: string;
-    requestedAt: number;
-    timeoutMs?: number;
-    timeoutAt?: number;
-    timestamp: number;
-  };
-  "workflow:approval-cleared": {
-    runId: string;
-    nodeId: string;
-    reason: string;
-    timestamp: number;
   };
 
   // Webview console events
@@ -1823,6 +1902,13 @@ export interface IpcEventMap {
     shortcut: "find" | "next" | "prev" | "close";
   };
 
+  // Webview navigation blocked — cross-origin navigation was prevented
+  "webview:navigation-blocked": {
+    panelId: string;
+    url: string;
+    canOpenExternal: boolean;
+  };
+
   // Voice input events
   "voice-input:transcription-delta": string;
   "voice-input:transcription-complete": { text: string; willCorrect: boolean };
@@ -1833,6 +1919,11 @@ export interface IpcEventMap {
   };
   "voice-input:correction-replace": { correctionId: string; correctedText: string };
   "voice-input:paragraph-boundary": { rawText: string | null; correctionId: string | null };
+  "voice-input:file-token-resolved": {
+    description: string;
+    replacement: string;
+    resolved: boolean;
+  };
   "voice-input:error": string;
   "voice-input:status": "idle" | "connecting" | "recording" | "error";
 
@@ -1853,6 +1944,12 @@ export interface IpcEventMap {
 
   // Hibernation events
   "hibernation:project-hibernated": HibernationProjectHibernatedPayload;
+
+  // App theme events
+  "app-theme:system-appearance-changed": { isDark: boolean; schemeId: string };
+
+  // Config reload events
+  "app:config-reloaded": void;
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];

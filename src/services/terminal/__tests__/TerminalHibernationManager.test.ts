@@ -1,0 +1,332 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { TerminalHibernationManager, HibernationManagerDeps } from "../TerminalHibernationManager";
+import type { ManagedTerminal } from "../types";
+import { TerminalRefreshTier } from "../../../../shared/types/panel";
+
+vi.mock("@/clients", () => ({
+  terminalClient: {
+    write: vi.fn(),
+  },
+}));
+
+vi.mock("../TerminalAddonManager", () => ({
+  setupTerminalAddons: vi.fn(() => ({
+    fitAddon: { fit: vi.fn() },
+    serializeAddon: { serialize: vi.fn() },
+    imageAddon: { dispose: vi.fn() },
+    searchAddon: {},
+    fileLinksDisposable: { dispose: vi.fn() },
+    webLinksAddon: { dispose: vi.fn() },
+  })),
+}));
+
+vi.mock("../TerminalParserHandler", () => ({
+  TerminalParserHandler: class {
+    dispose = vi.fn();
+    constructor(_managed: unknown, _onResize: () => void) {}
+  },
+}));
+
+vi.mock("../TerminalScrollbackController", () => ({
+  reduceScrollback: vi.fn(),
+}));
+
+vi.mock("@/utils/logger", () => ({
+  logDebug: vi.fn(),
+  logError: vi.fn(),
+}));
+
+vi.mock("@shared/config/scrollback", () => ({
+  SCROLLBACK_BACKGROUND: 1000,
+}));
+
+function makeMockTerminal() {
+  return {
+    options: { scrollback: 5000 },
+    rows: 24,
+    cols: 80,
+    buffer: {
+      active: { length: 100, type: "normal", baseY: 0, viewportY: 0 },
+      onBufferChange: vi.fn(() => ({ dispose: vi.fn() })),
+    },
+    parser: {
+      registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })),
+    },
+    dispose: vi.fn(),
+    onData: vi.fn(() => ({ dispose: vi.fn() })),
+    onScroll: vi.fn(() => ({ dispose: vi.fn() })),
+    onWriteParsed: vi.fn(() => ({ dispose: vi.fn() })),
+    onSelectionChange: vi.fn(() => ({ dispose: vi.fn() })),
+    getSelection: vi.fn(() => ""),
+  };
+}
+
+function makeMockManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
+  return {
+    terminal: makeMockTerminal() as unknown as ManagedTerminal["terminal"],
+    type: "terminal" as ManagedTerminal["type"],
+    kind: "terminal",
+    fitAddon: { fit: vi.fn() } as unknown as ManagedTerminal["fitAddon"],
+    serializeAddon: { serialize: vi.fn() } as unknown as ManagedTerminal["serializeAddon"],
+    imageAddon: { dispose: vi.fn() } as unknown as ManagedTerminal["imageAddon"],
+    searchAddon: {} as ManagedTerminal["searchAddon"],
+    fileLinksDisposable: { dispose: vi.fn() } as unknown as ManagedTerminal["fileLinksDisposable"],
+    webLinksAddon: { dispose: vi.fn() } as unknown as ManagedTerminal["webLinksAddon"],
+    hostElement: document.createElement("div"),
+    isOpened: true,
+    isVisible: true,
+    isFocused: false,
+    isUserScrolledBack: false,
+    isAltBuffer: false,
+    lastActiveTime: Date.now(),
+    lastWidth: 0,
+    lastHeight: 0,
+    getRefreshTier: () => TerminalRefreshTier.FOCUSED,
+    agentStateSubscribers: new Set(),
+    altBufferListeners: new Set(),
+    listeners: [],
+    exitSubscribers: new Set(),
+    latestCols: 80,
+    latestRows: 24,
+    latestWasAtBottom: true,
+    keyHandlerInstalled: false,
+    lastAttachAt: 0,
+    lastDetachAt: 0,
+    writeChain: Promise.resolve(),
+    restoreGeneration: 0,
+    isSerializedRestoreInProgress: false,
+    deferredOutput: [],
+    scrollbackRestoreState: "none",
+    attachGeneration: 0,
+    attachRevealToken: 0,
+    isHibernated: false,
+    hibernationTimer: undefined,
+    ipcListenerCount: 0,
+    ...overrides,
+  } as ManagedTerminal;
+}
+
+function makeMockDeps(managed?: ManagedTerminal): HibernationManagerDeps {
+  const store = new Map<string, ManagedTerminal>();
+  if (managed) store.set("t1", managed);
+  return {
+    getInstance: (id) => store.get(id),
+    destroyRestoreState: vi.fn(),
+    resetBufferedOutput: vi.fn(),
+    releaseWebGL: vi.fn(),
+    clearResizeJob: vi.fn(),
+    clearSettledTimer: vi.fn(),
+    applyDeferredResize: vi.fn(),
+    openLink: vi.fn(),
+    getCwdProvider: vi.fn(() => undefined),
+    onBufferModeChange: vi.fn(),
+    notifyParsed: vi.fn(),
+    scrollToBottomSafe: vi.fn(),
+    clearUnseen: vi.fn(),
+    updateScrollState: vi.fn(),
+    setCachedSelection: vi.fn(),
+    clearDirectingState: vi.fn(),
+    onUserInput: vi.fn(),
+    onEnterPressed: vi.fn(),
+  };
+}
+
+describe("TerminalHibernationManager", () => {
+  let manager: TerminalHibernationManager;
+  let deps: HibernationManagerDeps;
+  let managed: ManagedTerminal;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    managed = makeMockManaged();
+    deps = makeMockDeps(managed);
+    manager = new TerminalHibernationManager(deps);
+  });
+
+  describe("hibernate()", () => {
+    it("should no-op for unknown id", () => {
+      manager.hibernate("unknown");
+      expect(deps.destroyRestoreState).not.toHaveBeenCalled();
+    });
+
+    it("should no-op for already-hibernated terminal", () => {
+      managed.isHibernated = true;
+      manager.hibernate("t1");
+      expect(deps.destroyRestoreState).not.toHaveBeenCalled();
+    });
+
+    it("should no-op for working agent terminal", () => {
+      managed.kind = "agent";
+      managed.canonicalAgentState = "working";
+      manager.hibernate("t1");
+      expect(managed.isHibernated).toBeFalsy();
+    });
+
+    it("should no-op for waiting agent terminal", () => {
+      managed.kind = "agent";
+      managed.canonicalAgentState = "waiting";
+      manager.hibernate("t1");
+      expect(managed.isHibernated).toBeFalsy();
+    });
+
+    it("should hibernate completed agent terminal", () => {
+      managed.kind = "agent";
+      managed.canonicalAgentState = "completed";
+      manager.hibernate("t1");
+      expect(managed.isHibernated).toBe(true);
+    });
+
+    it("should dispose terminal and set flags", () => {
+      const terminalDispose = managed.terminal.dispose;
+      manager.hibernate("t1");
+
+      expect(managed.isHibernated).toBe(true);
+      expect(managed.isOpened).toBe(false);
+      expect(managed.keyHandlerInstalled).toBe(false);
+      expect(terminalDispose).toHaveBeenCalled();
+    });
+
+    it("should call all collaborator deps", () => {
+      manager.hibernate("t1");
+
+      expect(deps.destroyRestoreState).toHaveBeenCalledWith("t1");
+      expect(deps.resetBufferedOutput).toHaveBeenCalledWith("t1");
+      expect(deps.releaseWebGL).toHaveBeenCalledWith("t1");
+      expect(deps.clearResizeJob).toHaveBeenCalledWith(managed);
+      expect(deps.clearSettledTimer).toHaveBeenCalledWith("t1");
+    });
+
+    it("should dispose addons and null them", () => {
+      const imageDispose = (managed.imageAddon as unknown as { dispose: ReturnType<typeof vi.fn> })
+        .dispose;
+      const fileLinksDispose = (
+        managed.fileLinksDisposable as unknown as { dispose: ReturnType<typeof vi.fn> }
+      ).dispose;
+      const webLinksDispose = (
+        managed.webLinksAddon as unknown as { dispose: ReturnType<typeof vi.fn> }
+      ).dispose;
+
+      manager.hibernate("t1");
+
+      expect(imageDispose).toHaveBeenCalled();
+      expect(fileLinksDispose).toHaveBeenCalled();
+      expect(webLinksDispose).toHaveBeenCalled();
+      expect(managed.imageAddon).toBeNull();
+      expect(managed.fileLinksDisposable).toBeNull();
+      expect(managed.webLinksAddon).toBeNull();
+    });
+
+    it("should not throw when addons are already null", () => {
+      managed.imageAddon = null;
+      managed.fileLinksDisposable = null;
+      managed.webLinksAddon = null;
+
+      expect(() => manager.hibernate("t1")).not.toThrow();
+    });
+
+    it("should clear hibernation timer", () => {
+      managed.hibernationTimer = setTimeout(() => {}, 30000) as ReturnType<typeof setTimeout>;
+      manager.hibernate("t1");
+      expect(managed.hibernationTimer).toBeUndefined();
+    });
+
+    it("should splice terminal-bound listeners but keep IPC listeners", () => {
+      managed.ipcListenerCount = 2;
+      managed.listeners = [vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn()];
+
+      manager.hibernate("t1");
+
+      expect(managed.listeners.length).toBe(2);
+    });
+
+    it("should dispose parser handler and last activity marker", () => {
+      const parserDispose = vi.fn();
+      const markerDispose = vi.fn();
+      managed.parserHandler = { dispose: parserDispose };
+      managed.lastActivityMarker = {
+        dispose: markerDispose,
+      } as unknown as ManagedTerminal["lastActivityMarker"];
+
+      manager.hibernate("t1");
+
+      expect(parserDispose).toHaveBeenCalled();
+      expect(markerDispose).toHaveBeenCalled();
+      expect(managed.parserHandler).toBeUndefined();
+      expect(managed.lastActivityMarker).toBeUndefined();
+    });
+  });
+
+  describe("unhibernate()", () => {
+    beforeEach(() => {
+      managed.isHibernated = true;
+      managed.isOpened = false;
+    });
+
+    it("should no-op for unknown id", () => {
+      manager.unhibernate("unknown");
+      // no crash
+    });
+
+    it("should no-op for non-hibernated terminal", () => {
+      managed.isHibernated = false;
+      const oldTerminal = managed.terminal;
+      manager.unhibernate("t1");
+      expect(managed.terminal).toBe(oldTerminal);
+    });
+
+    it("should create fresh terminal and clear hibernated flag", () => {
+      const oldTerminal = managed.terminal;
+      manager.unhibernate("t1");
+
+      expect(managed.isHibernated).toBe(false);
+      expect(managed.isDetached).toBe(false);
+      expect(managed.terminal).not.toBe(oldTerminal);
+    });
+
+    it("should clear DOM children to prevent ghosting", () => {
+      managed.hostElement.appendChild(document.createElement("span"));
+      managed.hostElement.appendChild(document.createElement("span"));
+
+      manager.unhibernate("t1");
+
+      expect(managed.hostElement.children.length).toBe(0);
+    });
+
+    it("should increment restoreGeneration and reset restore state", () => {
+      managed.restoreGeneration = 5;
+      managed.isSerializedRestoreInProgress = true;
+      managed.deferredOutput = ["data"];
+
+      manager.unhibernate("t1");
+
+      expect(managed.restoreGeneration).toBe(6);
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+      expect(managed.deferredOutput).toEqual([]);
+    });
+
+    it("should register new terminal-bound listeners", () => {
+      managed.ipcListenerCount = 1;
+      managed.listeners = [vi.fn()]; // 1 IPC listener
+      const initialCount = managed.listeners.length;
+
+      manager.unhibernate("t1");
+
+      expect(managed.listeners.length).toBeGreaterThan(initialCount);
+    });
+
+    it("should not leak listeners across hibernate/unhibernate cycles", () => {
+      managed.ipcListenerCount = 1;
+      managed.listeners = [vi.fn()];
+
+      manager.unhibernate("t1");
+      const afterFirst = managed.listeners.length;
+
+      manager.hibernate("t1");
+      expect(managed.listeners.length).toBe(1);
+
+      manager.unhibernate("t1");
+      expect(managed.listeners.length).toBe(afterFirst);
+    });
+  });
+});

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { appClient } from "@/clients";
 import { computeGridColumns } from "@/lib/terminalLayout";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 export function registerTerminalLayoutActions(
   actions: ActionRegistry,
@@ -20,10 +20,10 @@ export function registerTerminalLayoutActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        const terminal = state.terminals.find((t) => t.id === targetId);
+        const terminal = state.panelsById[targetId];
         if (!terminal) {
           return;
         }
@@ -32,7 +32,7 @@ export function registerTerminalLayoutActions(
 
         state.moveTerminalToDock(targetId);
 
-        const moved = useTerminalStore.getState().terminals.find((t) => t.id === targetId);
+        const moved = usePanelStore.getState().panelsById[targetId];
         if (moved?.location === "dock") {
           state.openDockTerminal(targetId);
         }
@@ -51,7 +51,7 @@ export function registerTerminalLayoutActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
         useLayoutUndoStore.getState().pushLayoutSnapshot();
@@ -71,7 +71,7 @@ export function registerTerminalLayoutActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
         // Pass getPanelGroup to enable group-aware maximize
@@ -89,7 +89,7 @@ export function registerTerminalLayoutActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       if (state.focusedId) {
         // Pass getPanelGroup to enable group-aware maximize
         state.toggleMaximize(state.focusedId, undefined, undefined, state.getPanelGroup);
@@ -107,16 +107,19 @@ export function registerTerminalLayoutActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const state = useTerminalStore.getState();
-      const { focusedId, terminals, reorderTerminals } = state;
+      const state = usePanelStore.getState();
+      const { focusedId, panelIds, panelsById, reorderTerminals } = state;
       if (!focusedId) return;
       useLayoutUndoStore.getState().pushLayoutSnapshot();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
-      const gridTerminals = terminals.filter(
-        (t) =>
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      );
+      const gridTerminals = panelIds
+        .map((id) => panelsById[id])
+        .filter(
+          (t) =>
+            t &&
+            (t.location === "grid" || t.location === undefined) &&
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+        );
       const currentIndex = gridTerminals.findIndex((t) => t.id === focusedId);
       if (currentIndex > 0) {
         reorderTerminals(currentIndex, currentIndex - 1, "grid", activeWorktreeId);
@@ -133,16 +136,19 @@ export function registerTerminalLayoutActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const state = useTerminalStore.getState();
-      const { focusedId, terminals, reorderTerminals } = state;
+      const state = usePanelStore.getState();
+      const { focusedId, panelIds, panelsById, reorderTerminals } = state;
       if (!focusedId) return;
       useLayoutUndoStore.getState().pushLayoutSnapshot();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
-      const gridTerminals = terminals.filter(
-        (t) =>
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      );
+      const gridTerminals = panelIds
+        .map((id) => panelsById[id])
+        .filter(
+          (t) =>
+            t &&
+            (t.location === "grid" || t.location === undefined) &&
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+        );
       const currentIndex = gridTerminals.findIndex((t) => t.id === focusedId);
       if (currentIndex >= 0 && currentIndex < gridTerminals.length - 1) {
         reorderTerminals(currentIndex, currentIndex + 1, "grid", activeWorktreeId);
@@ -159,18 +165,21 @@ export function registerTerminalLayoutActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const state = useTerminalStore.getState();
-      const { focusedId, terminals, reorderTerminals } = state;
+      const state = usePanelStore.getState();
+      const { focusedId, panelIds, panelsById, reorderTerminals } = state;
       if (!focusedId) return;
       useLayoutUndoStore.getState().pushLayoutSnapshot();
-      const terminal = terminals.find((t) => t.id === focusedId);
+      const terminal = panelsById[focusedId];
       if (!terminal || terminal.location === "dock") return;
       const activeWorktreeId = callbacks.getActiveWorktreeId();
-      const gridTerminals = terminals.filter(
-        (t) =>
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      );
+      const gridTerminals = panelIds
+        .map((id) => panelsById[id])
+        .filter(
+          (t) =>
+            t &&
+            (t.location === "grid" || t.location === undefined) &&
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+        );
       const currentIndex = gridTerminals.findIndex((t) => t.id === focusedId);
       if (currentIndex < 0) return;
       const { layoutConfig } = useLayoutConfigStore.getState();
@@ -195,18 +204,21 @@ export function registerTerminalLayoutActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const state = useTerminalStore.getState();
-      const { focusedId, terminals, reorderTerminals } = state;
+      const state = usePanelStore.getState();
+      const { focusedId, panelIds, panelsById, reorderTerminals } = state;
       if (!focusedId) return;
       useLayoutUndoStore.getState().pushLayoutSnapshot();
-      const terminal = terminals.find((t) => t.id === focusedId);
+      const terminal = panelsById[focusedId];
       if (!terminal || terminal.location === "dock") return;
       const activeWorktreeId = callbacks.getActiveWorktreeId();
-      const gridTerminals = terminals.filter(
-        (t) =>
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      );
+      const gridTerminals = panelIds
+        .map((id) => panelsById[id])
+        .filter(
+          (t) =>
+            t &&
+            (t.location === "grid" || t.location === undefined) &&
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+        );
       const currentIndex = gridTerminals.findIndex((t) => t.id === focusedId);
       if (currentIndex < 0) return;
       const { layoutConfig } = useLayoutConfigStore.getState();
@@ -231,11 +243,11 @@ export function registerTerminalLayoutActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const focusedId = state.focusedId;
       if (!focusedId) return;
       useLayoutUndoStore.getState().pushLayoutSnapshot();
-      const terminal = state.terminals.find((t) => t.id === focusedId);
+      const terminal = state.panelsById[focusedId];
       if (!terminal) return;
       if (terminal.location === "dock") {
         state.moveTerminalToGrid(focusedId);
@@ -256,12 +268,16 @@ export function registerTerminalLayoutActions(
     scope: "renderer",
     run: async () => {
       useLayoutUndoStore.getState().pushLayoutSnapshot();
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
-      const activeTerminals = state.terminals.filter(
-        (t) =>
-          t.location !== "trash" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      );
+      const activeTerminals = state.panelIds
+        .map((id) => state.panelsById[id])
+        .filter(
+          (t) =>
+            t &&
+            t.location !== "trash" &&
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+        );
       const allDocked = activeTerminals.every((t) => t.location === "dock");
       if (allDocked) {
         state.bulkMoveToGrid();

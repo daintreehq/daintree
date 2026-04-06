@@ -62,6 +62,22 @@ describe("replaceRecipeVariables", () => {
     expect(replaceRecipeVariables("{{issue_number}}", { issueNumber: 0 })).toBe("#0");
     expect(replaceRecipeVariables("{{issue_number}}", {})).toBe("");
   });
+
+  it("resolves {{number}} to issueNumber when present", () => {
+    expect(replaceRecipeVariables("{{number}}", { issueNumber: 42 })).toBe("#42");
+  });
+
+  it("resolves {{number}} to prNumber when issueNumber is absent", () => {
+    expect(replaceRecipeVariables("{{number}}", { prNumber: 99 })).toBe("#99");
+  });
+
+  it("prefers issueNumber over prNumber for {{number}}", () => {
+    expect(replaceRecipeVariables("{{number}}", { issueNumber: 10, prNumber: 20 })).toBe("#10");
+  });
+
+  it("resolves {{number}} to empty string when neither is set", () => {
+    expect(replaceRecipeVariables("{{number}}", {})).toBe("");
+  });
 });
 
 describe("detectUnresolvedVariables", () => {
@@ -108,6 +124,18 @@ describe("detectUnresolvedVariables", () => {
     expect(detectUnresolvedVariables("{{issue_number}}", { issueNumber: 0 })).toEqual([]);
   });
 
+  it("marks {{number}} as unresolved when both issueNumber and prNumber are absent", () => {
+    expect(detectUnresolvedVariables("{{number}}", {})).toEqual(["number"]);
+  });
+
+  it("marks {{number}} as resolved when issueNumber is set", () => {
+    expect(detectUnresolvedVariables("{{number}}", { issueNumber: 1 })).toEqual([]);
+  });
+
+  it("marks {{number}} as resolved when prNumber is set", () => {
+    expect(detectUnresolvedVariables("{{number}}", { prNumber: 1 })).toEqual([]);
+  });
+
   it("deduplicates repeated variables", () => {
     const text = "{{issue_number}} and {{issue_number}}";
     expect(detectUnresolvedVariables(text, {})).toEqual(["issue_number"]);
@@ -124,6 +152,7 @@ describe("getAvailableVariables", () => {
     const names = vars.map((v) => v.name);
     expect(names).toContain("issue_number");
     expect(names).toContain("pr_number");
+    expect(names).toContain("number");
     expect(names).toContain("worktree_path");
     expect(names).toContain("branch_name");
   });

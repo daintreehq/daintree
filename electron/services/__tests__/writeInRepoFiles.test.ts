@@ -2,11 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import type { ProjectSettings } from "../../types/index.js";
+import type { ProjectSettings, TerminalRecipe } from "../../types/index.js";
 import { ProjectIdentityFiles } from "../ProjectIdentityFiles.js";
 
 const CANOPY_PROJECT_JSON = ".canopy/project.json";
 const CANOPY_SETTINGS_JSON = ".canopy/settings.json";
+const CANOPY_RECIPES_DIR = ".canopy/recipes";
 
 function makeSettings(overrides: Partial<ProjectSettings> = {}): ProjectSettings {
   return { runCommands: [], ...overrides };
@@ -180,5 +181,186 @@ describe("writeInRepoSettings", () => {
     await identityFiles.writeInRepoSettings(tmpDir, makeSettings());
     const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8"));
     expect(content).not.toHaveProperty("runCommands");
+  });
+});
+
+function makeRecipe(overrides: Partial<TerminalRecipe> = {}): TerminalRecipe {
+  return {
+    id: "recipe-test-1",
+    name: "Test Recipe",
+    projectId: "proj-1",
+    terminals: [{ type: "terminal", title: "Shell" }],
+    createdAt: Date.now(),
+    ...overrides,
+  };
+}
+
+describe("writeInRepoRecipe", () => {
+  let tmpDir: string;
+  let identityFiles: ProjectIdentityFiles;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-recipe-write-test-"));
+    identityFiles = new ProjectIdentityFiles();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("creates .canopy/recipes/ directory and writes recipe file", async () => {
+    await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ name: "My Recipe" }));
+    const filePath = path.join(tmpDir, CANOPY_RECIPES_DIR, "my-recipe.json");
+    const content = JSON.parse(await fs.readFile(filePath, "utf-8"));
+    expect(content.name).toBe("My Recipe");
+    expect(content.terminals).toHaveLength(1);
+  });
+
+  it("strips projectId and worktreeId from output", async () => {
+    await identityFiles.writeInRepoRecipe(
+      tmpDir,
+      makeRecipe({ projectId: "proj-1", worktreeId: "wt-1" })
+    );
+    const filePath = path.join(tmpDir, CANOPY_RECIPES_DIR, "test-recipe.json");
+    const content = JSON.parse(await fs.readFile(filePath, "utf-8"));
+    expect(content).not.toHaveProperty("projectId");
+    expect(content).not.toHaveProperty("worktreeId");
+  });
+
+  it("redacts env values (keeps keys)", async () => {
+    await identityFiles.writeInRepoRecipe(
+      tmpDir,
+      makeRecipe({
+        terminals: [{ type: "terminal", env: { API_KEY: "secret123", DB_HOST: "localhost" } }],
+      })
+    );
+    const filePath = path.join(tmpDir, CANOPY_RECIPES_DIR, "test-recipe.json");
+    const content = JSON.parse(await fs.readFile(filePath, "utf-8"));
+    expect(content.terminals[0].env).toEqual({ API_KEY: "", DB_HOST: "" });
+  });
+
+  it("writes pretty-printed JSON", async () => {
+    await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe());
+    const filePath = path.join(tmpDir, CANOPY_RECIPES_DIR, "test-recipe.json");
+    const raw = await fs.readFile(filePath, "utf-8");
+    expect(raw).toContain("\n");
+    expect(raw).toContain("  ");
+  });
+
+  it("overwrites existing recipe file", async () => {
+    await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ name: "Same Name" }));
+    await identityFiles.writeInRepoRecipe(
+      tmpDir,
+      makeRecipe({ name: "Same Name", id: "recipe-2" })
+    );
+    const filePath = path.join(tmpDir, CANOPY_RECIPES_DIR, "same-name.json");
+    const content = JSON.parse(await fs.readFile(filePath, "utf-8"));
+    expect(content.id).toBe("recipe-2");
+  });
+});
+
+describe("readInRepoRecipes", () => {
+  let tmpDir: string;
+  let identityFiles: ProjectIdentityFiles;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-recipe-read-test-"));
+    identityFiles = new ProjectIdentityFiles();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns empty array when .canopy/recipes/ does not exist", async () => {
+    const recipes = await identityFiles.readInRepoRecipes(tmpDir);
+    expect(recipes).toEqual([]);
+  });
+
+  it("reads valid recipe files", async () => {
+    const recipesDir = path.join(tmpDir, CANOPY_RECIPES_DIR);
+    await fs.mkdir(recipesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(recipesDir, "my-recipe.json"),
+      JSON.stringify({
+        id: "r1",
+        name: "My Recipe",
+        terminals: [{ type: "terminal" }],
+        createdAt: 100,
+      }),
+      "utf-8"
+    );
+    const recipes = await identityFiles.readInRepoRecipes(tmpDir);
+    expect(recipes).toHaveLength(1);
+    expect(recipes[0]!.name).toBe("My Recipe");
+  });
+
+  it("skips malformed JSON files", async () => {
+    const recipesDir = path.join(tmpDir, CANOPY_RECIPES_DIR);
+    await fs.mkdir(recipesDir, { recursive: true });
+    await fs.writeFile(path.join(recipesDir, "bad.json"), "not json", "utf-8");
+    await fs.writeFile(
+      path.join(recipesDir, "good.json"),
+      JSON.stringify({ name: "Good", terminals: [{ type: "terminal" }], createdAt: 100 }),
+      "utf-8"
+    );
+    const recipes = await identityFiles.readInRepoRecipes(tmpDir);
+    expect(recipes).toHaveLength(1);
+    expect(recipes[0]!.name).toBe("Good");
+  });
+
+  it("skips files missing required fields", async () => {
+    const recipesDir = path.join(tmpDir, CANOPY_RECIPES_DIR);
+    await fs.mkdir(recipesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(recipesDir, "no-name.json"),
+      JSON.stringify({ terminals: [{ type: "terminal" }] }),
+      "utf-8"
+    );
+    await fs.writeFile(
+      path.join(recipesDir, "no-terminals.json"),
+      JSON.stringify({ name: "No Terminals" }),
+      "utf-8"
+    );
+    const recipes = await identityFiles.readInRepoRecipes(tmpDir);
+    expect(recipes).toHaveLength(0);
+  });
+
+  it("assigns stable ID from filename when missing", async () => {
+    const recipesDir = path.join(tmpDir, CANOPY_RECIPES_DIR);
+    await fs.mkdir(recipesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(recipesDir, "my-recipe.json"),
+      JSON.stringify({ name: "My Recipe", terminals: [{ type: "terminal" }] }),
+      "utf-8"
+    );
+    const recipes = await identityFiles.readInRepoRecipes(tmpDir);
+    expect(recipes[0]!.id).toBe("inrepo-my-recipe");
+  });
+});
+
+describe("deleteInRepoRecipe", () => {
+  let tmpDir: string;
+  let identityFiles: ProjectIdentityFiles;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-recipe-delete-test-"));
+    identityFiles = new ProjectIdentityFiles();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("deletes an existing recipe file", async () => {
+    await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ name: "To Delete" }));
+    await identityFiles.deleteInRepoRecipe(tmpDir, "To Delete");
+    const recipesDir = path.join(tmpDir, CANOPY_RECIPES_DIR);
+    const files = await fs.readdir(recipesDir);
+    expect(files).toHaveLength(0);
+  });
+
+  it("silently succeeds when file does not exist", async () => {
+    await expect(identityFiles.deleteInRepoRecipe(tmpDir, "Nonexistent")).resolves.toBeUndefined();
   });
 });

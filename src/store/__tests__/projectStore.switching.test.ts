@@ -1,116 +1,51 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-const {
-  projectClientMock,
-  terminalState,
-  worktreeSelectionState,
-  terminalPersistenceMock,
-  resetAllStoresForProjectSwitchMock,
-  forceReinitializeWorktreeDataStoreMock,
-  prePopulateWorktreeSnapshotMock,
-  snapshotProjectWorktreesMock,
-  loadProjectSettingsMock,
-  snapshotProjectSettingsMock,
-  prePopulateProjectSettingsMock,
-  flushTerminalPersistenceMock,
-  terminalToSnapshotMock,
-  prepareProjectSwitchRendererCacheMock,
-  cancelPreparedProjectSwitchRendererCacheMock,
-  notifyMock,
-  getTerminalInstanceMock,
-  destroyTerminalInstanceMock,
-} = vi.hoisted(() => ({
-  projectClientMock: {
-    getAll: vi.fn(),
-    getCurrent: vi.fn(),
-    add: vi.fn(),
-    remove: vi.fn(),
-    update: vi.fn(),
-    switch: vi.fn(),
-    reopen: vi.fn(),
-    openDialog: vi.fn(),
-    onSwitch: vi.fn(() => () => {}),
-    getSettings: vi.fn(),
-    saveSettings: vi.fn(),
-    detectRunners: vi.fn(),
-    close: vi.fn(),
-    getStats: vi.fn(),
-    setTerminals: vi.fn(),
-    setTerminalSizes: vi.fn(),
-  },
-  terminalState: {
-    terminals: [] as Array<{
-      id: string;
-      kind?: string;
-      cwd?: string;
-      location?: "grid" | "dock" | "trash";
-      worktreeId?: string;
-    }>,
-  },
-  worktreeSelectionState: {
-    activeWorktreeId: "wt-active" as string | null,
-  },
-  terminalPersistenceMock: {
-    whenIdle: vi.fn(),
-    setProjectIdGetter: vi.fn(),
-  },
-  resetAllStoresForProjectSwitchMock: vi.fn().mockResolvedValue(undefined),
-  forceReinitializeWorktreeDataStoreMock: vi.fn(),
-  prePopulateWorktreeSnapshotMock: vi.fn(),
-  snapshotProjectWorktreesMock: vi.fn(),
-  loadProjectSettingsMock: vi.fn().mockResolvedValue(undefined),
-  snapshotProjectSettingsMock: vi.fn(),
-  prePopulateProjectSettingsMock: vi.fn(),
-  flushTerminalPersistenceMock: vi.fn(),
-  terminalToSnapshotMock: vi.fn(
-    (terminal: { id: string; cwd?: string; location?: string; worktreeId?: string }) => ({
-      id: terminal.id,
-      cwd: terminal.cwd ?? "",
-      location: terminal.location ?? "grid",
-      worktreeId: terminal.worktreeId,
-    })
-  ),
-  prepareProjectSwitchRendererCacheMock: vi.fn(),
-  cancelPreparedProjectSwitchRendererCacheMock: vi.fn(),
-  notifyMock: vi.fn(),
-  getTerminalInstanceMock: vi.fn(),
-  destroyTerminalInstanceMock: vi.fn(),
-}));
+const projectClientMock = {
+  getAll: vi.fn().mockResolvedValue([]),
+  getCurrent: vi.fn().mockResolvedValue(null),
+  add: vi.fn(),
+  remove: vi.fn(),
+  update: vi.fn(),
+  switch: vi.fn().mockResolvedValue(undefined),
+  reopen: vi.fn().mockResolvedValue(undefined),
+  openDialog: vi.fn(),
+  onSwitch: vi.fn(() => () => {}),
+  getSettings: vi.fn(),
+  saveSettings: vi.fn(),
+  detectRunners: vi.fn(),
+  close: vi.fn(),
+  getStats: vi.fn(),
+  setTerminals: vi.fn(),
+  setTerminalSizes: vi.fn(),
+  createFolder: vi.fn(),
+};
 
 vi.mock("@/clients", () => ({
   projectClient: projectClientMock,
 }));
 
 vi.mock("../resetStores", () => ({
-  resetAllStoresForProjectSwitch: resetAllStoresForProjectSwitchMock,
+  resetAllStoresForProjectSwitch: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../worktreeDataStore", () => ({
-  forceReinitializeWorktreeDataStore: forceReinitializeWorktreeDataStoreMock,
-  prePopulateWorktreeSnapshot: prePopulateWorktreeSnapshotMock,
-  snapshotProjectWorktrees: snapshotProjectWorktreesMock,
-}));
-
+let mockActiveWorktreeId: string | null = null;
 vi.mock("../worktreeStore", () => ({
   useWorktreeSelectionStore: {
-    getState: () => worktreeSelectionState,
+    getState: () => ({
+      activeWorktreeId: mockActiveWorktreeId,
+    }),
   },
 }));
 
-vi.mock("../terminalStore", () => ({
-  useTerminalStore: {
-    getState: () => terminalState,
+vi.mock("../panelStore", () => ({
+  usePanelStore: {
+    getState: () => ({
+      terminals: [],
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+    }),
   },
 }));
 
@@ -118,374 +53,334 @@ vi.mock("../projectSettingsStore", () => ({
   useProjectSettingsStore: {
     getState: () => ({
       reset: vi.fn(),
-      loadSettings: loadProjectSettingsMock,
+      loadSettings: vi.fn().mockResolvedValue(undefined),
     }),
   },
-  snapshotProjectSettings: snapshotProjectSettingsMock,
-  prePopulateProjectSettings: prePopulateProjectSettingsMock,
-}));
-
-vi.mock("../notificationStore", () => ({
-  useNotificationStore: {
-    getState: () => ({
-      addNotification: vi.fn(),
-    }),
-  },
+  snapshotProjectSettings: vi.fn(),
+  prePopulateProjectSettings: vi.fn(),
 }));
 
 vi.mock("../slices", () => ({
-  flushTerminalPersistence: flushTerminalPersistenceMock,
+  flushPanelPersistence: vi.fn(),
 }));
 
-vi.mock("../persistence/terminalPersistence", () => ({
-  terminalPersistence: terminalPersistenceMock,
-  terminalToSnapshot: terminalToSnapshotMock,
+vi.mock("../persistence/panelPersistence", () => ({
+  panelPersistence: {
+    setProjectIdGetter: vi.fn(),
+  },
+  panelToSnapshot: vi.fn((t: { id: string; kind: string }) => ({
+    id: t.id,
+    kind: t.kind,
+  })),
+}));
+
+vi.mock("@/lib/notify", () => ({
+  notify: vi.fn(),
 }));
 
 vi.mock("@/utils/errorContext", () => ({
   logErrorWithContext: vi.fn(),
 }));
 
+vi.mock("@shared/utils/smokeTestTerminals", () => ({
+  isSmokeTestTerminalId: vi.fn((id: string) => id.startsWith("smoke-test-")),
+}));
+
 vi.mock("@/services/projectSwitchRendererCache", () => ({
-  prepareProjectSwitchRendererCache: prepareProjectSwitchRendererCacheMock,
-  cancelPreparedProjectSwitchRendererCache: cancelPreparedProjectSwitchRendererCacheMock,
+  prepareProjectSwitchRendererCache: vi.fn().mockReturnValue(null),
+  cancelPreparedProjectSwitchRendererCache: vi.fn(),
 }));
 
-vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
-    get: getTerminalInstanceMock,
-    destroy: destroyTerminalInstanceMock,
-  },
-}));
+const projectA = {
+  id: "project-a",
+  name: "Project A",
+  path: "/tmp/project-a",
+  emoji: "folder",
+  lastOpened: Date.now(),
+};
 
-vi.mock("@/lib/notify", () => ({
-  notify: notifyMock,
-}));
+const projectB = {
+  id: "project-b",
+  name: "Project B",
+  path: "/tmp/project-b",
+  emoji: "folder",
+  lastOpened: Date.now(),
+};
 
-const { useProjectStore, SWITCH_SAFETY_TIMEOUT_MS } = await import("../projectStore");
+beforeEach(() => {
+  mockActiveWorktreeId = null;
+  vi.resetModules();
+  vi.clearAllMocks();
+});
 
-describe("projectStore switching races", () => {
-  const projectA = {
-    id: "project-a",
-    name: "Project A",
-    path: "/project-a",
-    emoji: "folder",
-    lastOpened: Date.now() - 2_000,
-  };
-  const projectB = {
-    id: "project-b",
-    name: "Project B",
-    path: "/project-b",
-    emoji: "folder",
-    lastOpened: Date.now() - 1_000,
-  };
-  const projectC = {
-    id: "project-c",
-    name: "Project C",
-    path: "/project-c",
-    emoji: "folder",
-    lastOpened: Date.now(),
-  };
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
-  beforeEach(() => {
-    vi.clearAllMocks();
+describe("buildOutgoingState draft propagation (#4985)", () => {
+  it("sends empty draftInputs when drafts were cleared before switch", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    const { useTerminalInputStore } = await import("../terminalInputStore");
 
-    useProjectStore.setState({
-      projects: [projectA, projectB, projectC],
-      currentProject: projectA,
-      isLoading: false,
-      isSwitching: false,
-      switchingToProjectName: null,
-      error: null,
-    });
+    // Set up current project
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
-    terminalState.terminals = [];
-    worktreeSelectionState.activeWorktreeId = "wt-active";
+    // Set a draft then clear it (simulates typing + submitting)
+    useTerminalInputStore.getState().setDraftInput("terminal-1", "hello", projectA.id);
+    useTerminalInputStore.getState().clearDraftInput("terminal-1", projectA.id);
 
-    terminalPersistenceMock.whenIdle.mockResolvedValue(undefined);
-    projectClientMock.setTerminals.mockResolvedValue(undefined);
-    projectClientMock.setTerminalSizes.mockResolvedValue(undefined);
-    projectClientMock.getAll.mockResolvedValue([projectA, projectB, projectC]);
-    prepareProjectSwitchRendererCacheMock.mockReturnValue({
-      preserveTerminalIds: new Set<string>(),
-      evictTerminalIds: [],
-    });
-    getTerminalInstanceMock.mockReturnValue(null);
-  });
-
-  it("passes only live persisted terminals into switch preservation and eviction flow", async () => {
-    const preserveTerminalIds = new Set(["term-active", "term-dock"]);
-    prepareProjectSwitchRendererCacheMock.mockReturnValue({
-      preserveTerminalIds,
-      evictTerminalIds: ["term-evict-a", "term-evict-b"],
-    });
-
-    terminalState.terminals = [
-      {
-        id: "term-active",
-        kind: "terminal",
-        cwd: "/project-a",
-        location: "grid",
-        worktreeId: "wt-active",
-      },
-      {
-        id: "term-other",
-        kind: "terminal",
-        cwd: "/project-a/feature",
-        location: "grid",
-        worktreeId: "wt-other",
-      },
-      {
-        id: "term-dock",
-        kind: "terminal",
-        cwd: "/project-a",
-        location: "dock",
-      },
-      {
-        id: "term-trash",
-        kind: "terminal",
-        cwd: "/project-a",
-        location: "trash",
-        worktreeId: "wt-active",
-      },
-      {
-        id: "smoke-test-terminal-1",
-        kind: "terminal",
-        cwd: "/project-a",
-        location: "grid",
-        worktreeId: "wt-active",
-      },
-    ];
-
-    getTerminalInstanceMock.mockImplementation((terminalId: string) => {
-      if (terminalId === "term-active") {
-        return { latestCols: 120, latestRows: 40 };
-      }
-      if (terminalId === "term-dock") {
-        return { latestCols: 90, latestRows: 20 };
-      }
-      return null;
-    });
-
-    projectClientMock.switch.mockResolvedValue(projectB);
-
-    await useProjectStore.getState().switchProject("project-b");
-    await vi.waitFor(() => {
-      expect(destroyTerminalInstanceMock).toHaveBeenCalledTimes(2);
-    });
-
-    expect(terminalToSnapshotMock).toHaveBeenCalledTimes(3);
-    expect(projectClientMock.setTerminals).toHaveBeenCalledWith("project-a", [
-      {
-        id: "term-active",
-        cwd: "/project-a",
-        location: "grid",
-        worktreeId: "wt-active",
-      },
-      {
-        id: "term-other",
-        cwd: "/project-a/feature",
-        location: "grid",
-        worktreeId: "wt-other",
-      },
-      {
-        id: "term-dock",
-        cwd: "/project-a",
-        location: "dock",
-        worktreeId: undefined,
-      },
-    ]);
-    expect(projectClientMock.setTerminalSizes).toHaveBeenCalledWith("project-a", {
-      "term-active": { cols: 120, rows: 40 },
-      "term-dock": { cols: 90, rows: 20 },
-    });
-    expect(prepareProjectSwitchRendererCacheMock).toHaveBeenCalledWith({
-      outgoingProjectId: "project-a",
-      targetProjectId: "project-b",
-      outgoingActiveWorktreeId: "wt-active",
-      outgoingTerminals: [
-        { id: "term-active", worktreeId: "wt-active" },
-        { id: "term-other", worktreeId: "wt-other" },
-        { id: "term-dock", worktreeId: undefined },
-      ],
-    });
-    expect(resetAllStoresForProjectSwitchMock).toHaveBeenCalledWith({
-      preserveTerminalIds,
-      outgoingProjectId: "project-a",
-    });
-    expect(destroyTerminalInstanceMock.mock.calls).toEqual([["term-evict-a"], ["term-evict-b"]]);
-  });
-
-  it("ignores a stale failed switch after a newer switch succeeds", async () => {
-    const switchToB = deferred<typeof projectB>();
-    const switchToC = deferred<typeof projectC>();
-
-    projectClientMock.switch
-      .mockImplementationOnce(() => switchToB.promise)
-      .mockImplementationOnce(() => switchToC.promise);
-
-    await useProjectStore.getState().switchProject("project-b");
-    await useProjectStore.getState().switchProject("project-c");
-
-    switchToC.resolve(projectC);
-    await Promise.resolve();
+    // Switch away — the cleared draft state should still be sent as {}
+    await useProjectStore.getState().switchProject(projectB.id);
     await Promise.resolve();
 
-    switchToB.reject(new Error("project-b exploded late"));
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(useProjectStore.getState().currentProject?.id).toBe("project-c");
-    expect(useProjectStore.getState().error).toBeNull();
-    expect(forceReinitializeWorktreeDataStoreMock).toHaveBeenCalledTimes(1);
-    expect(forceReinitializeWorktreeDataStoreMock).toHaveBeenCalledWith("project-c");
-    expect(notifyMock).not.toHaveBeenCalled();
-    expect(cancelPreparedProjectSwitchRendererCacheMock).not.toHaveBeenCalled();
-  });
-
-  it("rolls back to the previous project when the latest switch fails", async () => {
-    projectClientMock.switch.mockRejectedValue(new Error("switch failed"));
-
-    await useProjectStore.getState().switchProject("project-b");
-    await vi.waitFor(() => {
-      expect(useProjectStore.getState().error).toBe("switch failed");
-    });
-
-    expect(useProjectStore.getState().currentProject?.id).toBe("project-a");
-    expect(cancelPreparedProjectSwitchRendererCacheMock).toHaveBeenCalledWith("project-a");
-    expect(prePopulateWorktreeSnapshotMock).toHaveBeenNthCalledWith(1, "project-b", "/project-b");
-    expect(prePopulateWorktreeSnapshotMock).toHaveBeenNthCalledWith(2, "project-a", "/project-a");
-    expect(prePopulateProjectSettingsMock).toHaveBeenNthCalledWith(1, "project-b");
-    expect(prePopulateProjectSettingsMock).toHaveBeenNthCalledWith(2, "project-a");
-    expect(forceReinitializeWorktreeDataStoreMock).toHaveBeenCalledWith("project-a");
-    expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "error",
-        title: "Failed to switch project",
-        message: "switch failed",
-      })
+    expect(projectClientMock.switch).toHaveBeenCalledWith(
+      projectB.id,
+      expect.objectContaining({ draftInputs: {} })
     );
+  });
+
+  it("sends empty draftInputs when drafts were cleared before reopen", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    const { useTerminalInputStore } = await import("../terminalInputStore");
+
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    useTerminalInputStore.getState().setDraftInput("terminal-1", "hello", projectA.id);
+    useTerminalInputStore.getState().clearDraftInput("terminal-1", projectA.id);
+
+    await useProjectStore.getState().reopenProject(projectB.id);
+    await Promise.resolve();
+
+    expect(projectClientMock.reopen).toHaveBeenCalledWith(
+      projectB.id,
+      expect.objectContaining({ draftInputs: {} })
+    );
+  });
+
+  it("sends non-empty draftInputs when drafts exist", async () => {
+    const { useProjectStore } = await import("../projectStore");
+    const { useTerminalInputStore } = await import("../terminalInputStore");
+
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    useTerminalInputStore.getState().setDraftInput("terminal-1", "hello world", projectA.id);
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    expect(projectClientMock.switch).toHaveBeenCalledWith(
+      projectB.id,
+      expect.objectContaining({ draftInputs: { "terminal-1": "hello world" } })
+    );
+  });
+
+  it("sends undefined outgoingState when no current project", async () => {
+    const { useProjectStore } = await import("../projectStore");
+
+    // No currentProject set
+    useProjectStore.setState({ projects: [projectB], currentProject: null });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    expect(projectClientMock.switch).toHaveBeenCalledWith(projectB.id, undefined);
   });
 });
 
-describe("projectStore safety timeout", () => {
-  const projectA = {
-    id: "project-a",
-    name: "Project A",
-    path: "/project-a",
-    emoji: "folder",
-    lastOpened: Date.now() - 2_000,
-  };
-  const projectB = {
-    id: "project-b",
-    name: "Project B",
-    path: "/project-b",
-    emoji: "folder",
-    lastOpened: Date.now() - 1_000,
-  };
-  const projectC = {
-    id: "project-c",
-    name: "Project C",
-    path: "/project-c",
-    emoji: "folder",
-    lastOpened: Date.now(),
-  };
+describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
+  it("includes browser panel snapshots in outgoing terminals", async () => {
+    const { setPanelStoreGetter } = await import("../projectStore");
+    const browserPanel = {
+      id: "browser-1",
+      kind: "browser",
+      title: "Browser",
+      location: "grid",
+      browserUrl: "https://example.com",
+    };
+    setPanelStoreGetter(() => ({
+      panelsById: { "browser-1": browserPanel } as never,
+      panelIds: ["browser-1"],
+      tabGroups: new Map(),
+    }));
 
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.clearAllMocks();
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
-    useProjectStore.setState({
-      projects: [projectA, projectB, projectC],
-      currentProject: projectA,
-      isLoading: false,
-      isSwitching: false,
-      switchingToProjectName: null,
-      error: null,
-    });
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
 
-    terminalState.terminals = [];
-    worktreeSelectionState.activeWorktreeId = "wt-active";
-
-    terminalPersistenceMock.whenIdle.mockResolvedValue(undefined);
-    projectClientMock.setTerminals.mockResolvedValue(undefined);
-    projectClientMock.setTerminalSizes.mockResolvedValue(undefined);
-    projectClientMock.getAll.mockResolvedValue([projectA, projectB, projectC]);
-    prepareProjectSwitchRendererCacheMock.mockReturnValue({
-      preserveTerminalIds: new Set<string>(),
-      evictTerminalIds: [],
-    });
-    getTerminalInstanceMock.mockReturnValue(null);
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.terminals).toEqual([{ id: "browser-1", kind: "browser" }]);
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
+  it("includes dev-preview panel snapshots in outgoing terminals", async () => {
+    const { setPanelStoreGetter } = await import("../projectStore");
+    const devPreview = {
+      id: "dev-1",
+      kind: "dev-preview",
+      title: "Dev Preview",
+      location: "grid",
+    };
+    setPanelStoreGetter(() => ({
+      panelsById: { "dev-1": devPreview } as never,
+      panelIds: ["dev-1"],
+      tabGroups: new Map(),
+    }));
+
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.terminals).toEqual([{ id: "dev-1", kind: "dev-preview" }]);
   });
 
-  it("auto-clears isSwitching after 30s when switchProject IPC never resolves", async () => {
-    projectClientMock.switch.mockReturnValue(new Promise(() => {}));
+  it("excludes trash, background, assistant, and smoke-test panels", async () => {
+    const { setPanelStoreGetter } = await import("../projectStore");
+    const panels = {
+      "t-trash": { id: "t-trash", kind: "terminal", location: "trash" },
+      "t-bg": { id: "t-bg", kind: "terminal", location: "background" },
+      "t-assistant": { id: "t-assistant", kind: "assistant", location: "grid" },
+      "smoke-test-1": { id: "smoke-test-1", kind: "terminal", location: "grid" },
+      "t-keep": { id: "t-keep", kind: "browser", location: "grid" },
+    } as never;
+    setPanelStoreGetter(() => ({
+      panelsById: panels,
+      panelIds: Object.keys(panels),
+      tabGroups: new Map(),
+    }));
 
-    await useProjectStore.getState().switchProject("project-b");
-    expect(useProjectStore.getState().isSwitching).toBe(true);
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
-    vi.advanceTimersByTime(SWITCH_SAFETY_TIMEOUT_MS - 1);
-    expect(useProjectStore.getState().isSwitching).toBe(true);
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
 
-    vi.advanceTimersByTime(1);
-    expect(useProjectStore.getState().isSwitching).toBe(false);
-    expect(useProjectStore.getState().switchingToProjectName).toBeNull();
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.terminals).toHaveLength(1);
+    expect(outgoing.terminals[0].id).toBe("t-keep");
   });
 
-  it("auto-clears isSwitching after 30s when reopenProject IPC never resolves", async () => {
-    projectClientMock.reopen.mockReturnValue(new Promise(() => {}));
+  it("includes multi-panel tab groups, excludes single-panel groups", async () => {
+    const { setPanelStoreGetter } = await import("../projectStore");
+    const tabGroups = new Map([
+      ["g1", { id: "g1", location: "grid" as const, activeTabId: "a", panelIds: ["a", "b"] }],
+      ["g2", { id: "g2", location: "grid" as const, activeTabId: "c", panelIds: ["c"] }],
+    ]);
+    setPanelStoreGetter(() => ({
+      panelsById: {} as never,
+      panelIds: [],
+      tabGroups,
+    }));
 
-    await useProjectStore.getState().reopenProject("project-b");
-    expect(useProjectStore.getState().isSwitching).toBe(true);
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
-    vi.advanceTimersByTime(SWITCH_SAFETY_TIMEOUT_MS);
-    expect(useProjectStore.getState().isSwitching).toBe(false);
-    expect(useProjectStore.getState().switchingToProjectName).toBeNull();
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.tabGroups).toEqual([
+      { id: "g1", location: "grid", activeTabId: "a", panelIds: ["a", "b"] },
+    ]);
   });
 
-  it("does not fire timeout when finishProjectSwitch is called before 30s", async () => {
-    projectClientMock.switch.mockReturnValue(new Promise(() => {}));
+  it("sends empty tabGroups array to clear stale groups when none exist", async () => {
+    const { setPanelStoreGetter } = await import("../projectStore");
+    setPanelStoreGetter(() => ({
+      panelsById: {} as never,
+      panelIds: [],
+      tabGroups: new Map(),
+    }));
 
-    await useProjectStore.getState().switchProject("project-b");
-    expect(useProjectStore.getState().isSwitching).toBe(true);
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
-    useProjectStore.getState().finishProjectSwitch();
-    expect(useProjectStore.getState().isSwitching).toBe(false);
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
 
-    notifyMock.mockClear();
-    vi.advanceTimersByTime(SWITCH_SAFETY_TIMEOUT_MS);
-    expect(notifyMock).not.toHaveBeenCalled();
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.tabGroups).toEqual([]);
   });
 
-  it("invalidates older timeout when a newer switch starts", async () => {
-    projectClientMock.switch.mockReturnValue(new Promise(() => {}));
+  it("includes terminals in reopen outgoing state", async () => {
+    const { setPanelStoreGetter } = await import("../projectStore");
+    const panel = { id: "b-1", kind: "browser", location: "grid" };
+    setPanelStoreGetter(() => ({
+      panelsById: { "b-1": panel } as never,
+      panelIds: ["b-1"],
+      tabGroups: new Map(),
+    }));
 
-    await useProjectStore.getState().switchProject("project-b");
-    vi.advanceTimersByTime(20_000);
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
-    await useProjectStore.getState().switchProject("project-c");
-    vi.advanceTimersByTime(15_000);
-    expect(useProjectStore.getState().isSwitching).toBe(true);
+    await useProjectStore.getState().reopenProject(projectB.id);
+    await Promise.resolve();
 
-    vi.advanceTimersByTime(15_000);
-    expect(useProjectStore.getState().isSwitching).toBe(false);
+    const outgoing = projectClientMock.reopen.mock.calls[0][1];
+    expect(outgoing.terminals).toEqual([{ id: "b-1", kind: "browser" }]);
+  });
+});
+
+describe("buildOutgoingState worktree selection (#5000)", () => {
+  it("includes non-root activeWorktreeId in switchProject outgoing state", async () => {
+    mockActiveWorktreeId = "wt-feature";
+
+    const { useProjectStore, setWorktreeSelectionStoreGetter } = await import("../projectStore");
+    setWorktreeSelectionStoreGetter(() => ({ activeWorktreeId: mockActiveWorktreeId }));
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.activeWorktreeId).toBe("wt-feature");
   });
 
-  it("fires a warning notification on timeout", async () => {
-    projectClientMock.switch.mockReturnValue(new Promise(() => {}));
+  it("includes non-root activeWorktreeId in reopenProject outgoing state", async () => {
+    mockActiveWorktreeId = "wt-feature";
 
-    await useProjectStore.getState().switchProject("project-b");
-    vi.advanceTimersByTime(SWITCH_SAFETY_TIMEOUT_MS);
+    const { useProjectStore, setWorktreeSelectionStoreGetter } = await import("../projectStore");
+    setWorktreeSelectionStoreGetter(() => ({ activeWorktreeId: mockActiveWorktreeId }));
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
-    expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "warning",
-        title: "Project switch timed out",
-      })
-    );
+    await useProjectStore.getState().reopenProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.reopen.mock.calls[0][1];
+    expect(outgoing.activeWorktreeId).toBe("wt-feature");
+  });
+
+  it("converts null activeWorktreeId to undefined in outgoing state", async () => {
+    mockActiveWorktreeId = null;
+
+    const { useProjectStore, setWorktreeSelectionStoreGetter } = await import("../projectStore");
+    setWorktreeSelectionStoreGetter(() => ({ activeWorktreeId: mockActiveWorktreeId }));
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.activeWorktreeId).toBeUndefined();
+    expect("activeWorktreeId" in outgoing).toBe(true);
+  });
+
+  it("includes activeWorktreeId even when terminal store getter is null (early return)", async () => {
+    mockActiveWorktreeId = "wt-early";
+
+    // Don't call setPanelStoreGetter — forces the early return path
+    const { useProjectStore, setWorktreeSelectionStoreGetter } = await import("../projectStore");
+    setWorktreeSelectionStoreGetter(() => ({ activeWorktreeId: mockActiveWorktreeId }));
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.activeWorktreeId).toBe("wt-early");
   });
 });

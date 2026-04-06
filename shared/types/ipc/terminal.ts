@@ -1,4 +1,4 @@
-import type { TerminalType, TerminalKind, TerminalLocation } from "../panel.js";
+import type { TerminalType, PanelKind, PanelLocation } from "../panel.js";
 import type { AgentId } from "../agent.js";
 import type { AgentState } from "../agent.js";
 
@@ -7,7 +7,7 @@ export interface TerminalSpawnOptions {
   /** Optional custom ID for the terminal */
   id?: string;
   /** Terminal category */
-  kind?: TerminalKind;
+  kind?: PanelKind;
   /** Agent ID when kind is 'agent' */
   agentId?: AgentId;
   /** Project ID to associate with the terminal (captured at action time to avoid race conditions) */
@@ -45,7 +45,7 @@ export interface TerminalState {
   /** Terminal ID */
   id: string;
   /** Terminal category */
-  kind?: TerminalKind;
+  kind?: PanelKind;
   /** Legacy terminal type for persisted state */
   type?: TerminalType;
   /** Agent ID when kind is an agent - enables extensibility */
@@ -57,7 +57,7 @@ export interface TerminalState {
   /** Associated worktree ID */
   worktreeId?: string;
   /** Location in the UI - grid or dock */
-  location?: TerminalLocation;
+  location?: PanelLocation;
   /** Command to execute after shell starts (e.g., 'claude' for AI agents) */
   command?: string;
   /** Last detected agent type (for restoration hints) */
@@ -137,7 +137,7 @@ export interface TerminalErrorPayload {
 export interface BackendTerminalInfo {
   id: string;
   projectId?: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: AgentId;
   title?: string;
@@ -165,7 +165,7 @@ export interface TerminalReconnectResult {
   exists: boolean;
   id?: string;
   projectId?: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: AgentId;
   title?: string;
@@ -185,7 +185,7 @@ export interface TerminalReconnectResult {
 export interface TerminalInfoPayload {
   id: string;
   projectId?: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: AgentId;
   title?: string;

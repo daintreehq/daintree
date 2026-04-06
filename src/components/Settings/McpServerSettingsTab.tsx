@@ -1,16 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import {
-  Plug,
-  Copy,
-  Check,
-  AlertCircle,
-  Key,
-  Hash,
-  Shield,
-  Eye,
-  EyeOff,
-  RefreshCw,
-} from "lucide-react";
+import { Copy, Check, AlertCircle, Key, Hash, Shield, Eye, EyeOff, RefreshCw } from "lucide-react";
+import { McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
@@ -127,7 +117,7 @@ export function McpServerSettingsTab() {
   return (
     <div className="space-y-6">
       <SettingsSwitchCard
-        icon={Plug}
+        icon={McpServerIcon}
         title="MCP Server"
         subtitle="Start a local Model Context Protocol server so AI agents can discover and invoke Canopy actions directly."
         isEnabled={status.enabled}
@@ -140,7 +130,7 @@ export function McpServerSettingsTab() {
         <>
           {/* Connection Status */}
           <SettingsSection
-            icon={Plug}
+            icon={McpServerIcon}
             title="Connection"
             description="The server binds to 127.0.0.1 (loopback only) — it is never accessible from outside this machine."
           >
@@ -171,7 +161,7 @@ export function McpServerSettingsTab() {
                   {copied ? "Copied!" : "Copy MCP config"}
                 </button>
 
-                <p className="text-xs text-canopy-text/50 leading-relaxed">
+                <p className="text-xs text-canopy-text/50 leading-relaxed select-text">
                   Paste the copied config into your MCP client (e.g. Claude Code, Cursor,{" "}
                   <code className="text-canopy-text/70">~/.canopy/mcp.json</code>).
                   {status.apiKey && " The config includes the authorization header."}
@@ -199,7 +189,7 @@ export function McpServerSettingsTab() {
                   if (e.key === "Enter") handlePortSave();
                 }}
                 placeholder="45454"
-                className="w-40 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 font-mono focus:outline-none focus:ring-1 focus:ring-canopy-accent"
+                className="w-40 bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 font-mono focus:outline-none focus:ring-1 focus:ring-canopy-accent"
               />
               <button
                 onClick={handlePortSave}
@@ -216,7 +206,7 @@ export function McpServerSettingsTab() {
               </button>
             </div>
             {status.port && status.configuredPort && status.port !== status.configuredPort && (
-              <p className="text-xs text-status-warning/80 mt-2">
+              <p className="text-xs text-status-warning/80 mt-2 select-text">
                 Configured port {status.configuredPort} was in use — bound to {status.port} instead.
               </p>
             )}
@@ -241,7 +231,7 @@ export function McpServerSettingsTab() {
                       type={showApiKey ? "text" : "password"}
                       value={status.apiKey}
                       readOnly
-                      className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 pr-10 font-mono text-xs text-canopy-text/80 focus:outline-none select-all"
+                      className="w-full bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 pr-10 font-mono text-xs text-canopy-text/80 focus:outline-none select-all"
                     />
                     <button
                       type="button"
@@ -295,7 +285,7 @@ export function McpServerSettingsTab() {
 
       {/* Auto-Discovery — always visible */}
       <SettingsSection
-        icon={Plug}
+        icon={McpServerIcon}
         title="Auto-Discovery"
         description={
           status.enabled

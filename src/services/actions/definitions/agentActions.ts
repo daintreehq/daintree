@@ -1,10 +1,9 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { AgentIdSchema, LaunchLocationSchema } from "./schemas";
 import { z } from "zod";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { AGENT_REGISTRY } from "@/config/agents";
 import type { ActionId } from "@shared/types/actions";
-
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("agent.launch", () => ({
     id: "agent.launch",
@@ -98,9 +97,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const state = useTerminalStore.getState();
-      const { useWorktreeDataStore } = await import("@/store/worktreeDataStore");
-      const worktreeData = useWorktreeDataStore.getState();
+      const state = usePanelStore.getState();
+      const { getCurrentViewStore } = await import("@/store/createWorktreeStore");
+      const worktreeData = getCurrentViewStore().getState();
       const validWorktreeIds = new Set<string>();
       for (const [id, wt] of worktreeData.worktrees) {
         validWorktreeIds.add(id);
@@ -119,9 +118,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const state = useTerminalStore.getState();
-      const { useWorktreeDataStore } = await import("@/store/worktreeDataStore");
-      const worktreeData = useWorktreeDataStore.getState();
+      const state = usePanelStore.getState();
+      const { getCurrentViewStore } = await import("@/store/createWorktreeStore");
+      const worktreeData = getCurrentViewStore().getState();
       const validWorktreeIds = new Set<string>();
       for (const [id, wt] of worktreeData.worktrees) {
         validWorktreeIds.add(id);
@@ -140,9 +139,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const state = useTerminalStore.getState();
-      const { useWorktreeDataStore } = await import("@/store/worktreeDataStore");
-      const worktreeData = useWorktreeDataStore.getState();
+      const state = usePanelStore.getState();
+      const { getCurrentViewStore } = await import("@/store/createWorktreeStore");
+      const worktreeData = getCurrentViewStore().getState();
       const validWorktreeIds = new Set<string>();
       for (const [id, wt] of worktreeData.worktrees) {
         validWorktreeIds.add(id);
@@ -161,7 +160,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
       const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
       state.focusNextBlockedDock(activeWorktreeId ?? undefined, state.getPanelGroup);
@@ -177,9 +176,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const state = useTerminalStore.getState();
-      const { useWorktreeDataStore } = await import("@/store/worktreeDataStore");
-      const worktreeData = useWorktreeDataStore.getState();
+      const state = usePanelStore.getState();
+      const { getCurrentViewStore } = await import("@/store/createWorktreeStore");
+      const worktreeData = getCurrentViewStore().getState();
       const validWorktreeIds = new Set<string>();
       for (const [id, wt] of worktreeData.worktrees) {
         validWorktreeIds.add(id);

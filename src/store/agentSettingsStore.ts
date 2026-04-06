@@ -4,6 +4,35 @@ import { agentSettingsClient } from "@/clients";
 import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 import { getEffectiveAgentIds } from "../../shared/config/agentRegistry";
 
+/**
+ * In-memory normalization: fills `selected: undefined` entries using CLI availability
+ * and migrates deprecated `enabled: false` to `selected: false`.
+ * Does NOT persist — persistent migration is handled by `migrateAgentSelection`.
+ */
+export function normalizeAgentSelection(
+  settings: AgentSettings,
+  availability: CliAvailability
+): AgentSettings {
+  const registeredIds = getEffectiveAgentIds();
+  let changed = false;
+  const agents = { ...settings.agents };
+
+  for (const id of registeredIds) {
+    const entry = agents[id];
+    if (!entry) continue;
+
+    if (entry.enabled === false && entry.selected === undefined) {
+      agents[id] = { ...entry, selected: false };
+      changed = true;
+    } else if (entry.selected === undefined) {
+      agents[id] = { ...entry, selected: availability[id] === true };
+      changed = true;
+    }
+  }
+
+  return changed ? { ...settings, agents } : settings;
+}
+
 interface AgentSettingsState {
   settings: AgentSettings | null;
   isLoading: boolean;
@@ -13,6 +42,7 @@ interface AgentSettingsState {
 
 interface AgentSettingsActions {
   initialize: () => Promise<void>;
+  refresh: () => Promise<void>;
   updateAgent: (agentId: string, updates: Partial<AgentSettingsEntry>) => Promise<void>;
   setAgentSelected: (agentId: string, selected: boolean) => Promise<void>;
   reset: (agentId?: string) => Promise<void>;
@@ -48,6 +78,17 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     })();
 
     return initPromise;
+  },
+
+  refresh: async () => {
+    set({ error: null });
+    try {
+      const settings = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
+      set({ settings });
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : "Failed to refresh agent settings" });
+      throw e;
+    }
   },
 
   updateAgent: async (agentId: string, updates: Partial<AgentSettingsEntry>) => {

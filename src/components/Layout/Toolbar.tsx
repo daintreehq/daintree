@@ -1,16 +1,6 @@
-import {
-  Suspense,
-  lazy,
-  useRef,
-  useState,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useCallback,
-} from "react";
+import { useRef, useState, useEffect, useLayoutEffect, useMemo, useCallback } from "react";
 import type React from "react";
 import { Button } from "@/components/ui/button";
-import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import {
   SlidersHorizontal,
   SquareTerminal,
@@ -18,40 +8,25 @@ import {
   GitCommit,
   GitPullRequest,
   CircleDot,
-  PanelRightOpen,
-  PanelRightClose,
   PanelLeftOpen,
   PanelLeftClose,
   Check,
-  Loader2,
   ChevronsUpDown,
   Globe,
-  Leaf,
   Monitor,
   Bell,
   LayoutGrid,
-  Signal,
   Ellipsis,
   GitBranch,
+  StickyNote,
 } from "lucide-react";
-import { CopyTreeIcon } from "@/components/icons";
+import { Spinner } from "@/components/ui/Spinner";
+import { CopyTreeIcon, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
+import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
-const LazyGitHubResourceList = lazy(() =>
-  import("@/components/GitHub/GitHubResourceList").then((m) => ({
-    default: m.GitHubResourceList,
-  }))
-);
-const LazyCommitList = lazy(() =>
-  import("@/components/GitHub/CommitList").then((m) => ({ default: m.CommitList }))
-);
-import {
-  GitHubResourceListSkeleton,
-  CommitListSkeleton,
-} from "@/components/GitHub/GitHubDropdownSkeletons";
 import { AgentButton } from "./AgentButton";
 import { AgentSetupButton } from "./AgentSetupButton";
-import { GitHubStatusIndicator, type GitHubStatusIndicatorStatus } from "./GitHubStatusIndicator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -62,35 +37,28 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
-import { useProjectSettings, useKeybindingDisplay } from "@/hooks";
+import { useKeybindingDisplay } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
+import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useProjectStore } from "@/store/projectStore";
-import {
-  usePortalStore,
-  usePreferencesStore,
-  useToolbarPreferencesStore,
-  useVoiceRecordingStore,
-  usePaletteStore,
-} from "@/store";
-import type { ToolbarButtonId } from "@/../../shared/types/toolbar";
+import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
+import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
+import type { ToolbarButtonId, AnyToolbarButtonId } from "@/../../shared/types/toolbar";
+import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
-import { useGitHubFilterStore } from "@/store/githubFilterStore";
-import { useRepositoryStats } from "@/hooks/useRepositoryStats";
-import { useNativeContextMenu } from "@/hooks";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { CliAvailability, AgentSettings } from "@shared/types";
-import type { MenuItemOption } from "@/types";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { ProjectSwitcherPalette } from "@/components/Project/ProjectSwitcherPalette";
-import { NotificationCenter } from "@/components/Notifications/NotificationCenter";
-import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
-import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
-import { DetectedServersList } from "@/components/DetectedServers/DetectedServersList";
-import type { DetectedDevServer } from "@shared/types/ipc/globalDevServers";
 import { useUIStore } from "@/store/uiStore";
-import { useShallow } from "zustand/react/shallow";
+import { GitHubStatsToolbarButton, type GitHubStatsHandle } from "./GitHubStatsToolbarButton";
+import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
+import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
+import { ToolbarSettingsButton } from "./ToolbarSettingsButton";
+import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
+import { ToolbarPortalButton } from "./ToolbarPortalButton";
 
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
@@ -100,7 +68,7 @@ const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
 ]);
 
 const OVERFLOW_MENU_META: Partial<
-  Record<ToolbarButtonId, { label: string; icon: React.ComponentType<{ className?: string }> }>
+  Record<AnyToolbarButtonId, { label: string; icon: React.ComponentType<{ className?: string }> }>
 > = {
   claude: { label: "Claude", icon: SquareTerminal },
   gemini: { label: "Gemini", icon: SquareTerminal },
@@ -109,11 +77,11 @@ const OVERFLOW_MENU_META: Partial<
   cursor: { label: "Cursor", icon: SquareTerminal },
   terminal: { label: "Terminal", icon: SquareTerminal },
   browser: { label: "Browser", icon: Globe },
-  "dev-server": { label: "Dev Server", icon: Monitor },
+  "dev-server": { label: "Dev Preview", icon: Monitor },
   "panel-palette": { label: "Panel Palette", icon: LayoutGrid },
   "github-stats": { label: "GitHub Stats", icon: GitPullRequest },
   "notification-center": { label: "Notifications", icon: Bell },
-  notes: { label: "Notes", icon: Leaf },
+  notes: { label: "Notes", icon: StickyNote },
   "copy-tree": { label: "Copy Context", icon: CopyTreeIcon },
   settings: { label: "Settings", icon: SlidersHorizontal },
   problems: { label: "Problems", icon: AlertCircle },
@@ -122,6 +90,7 @@ const OVERFLOW_MENU_META: Partial<
 interface ToolbarProps {
   onLaunchAgent: (type: string) => void;
   onSettings: () => void;
+  onPreloadSettings?: () => void;
   errorCount?: number;
   onToggleProblems?: () => void;
   isFocusMode?: boolean;
@@ -134,6 +103,7 @@ interface ToolbarProps {
 export function Toolbar({
   onLaunchAgent,
   onSettings,
+  onPreloadSettings,
   errorCount = 0,
   onToggleProblems,
   isFocusMode = false,
@@ -142,23 +112,13 @@ export function Toolbar({
   agentSettings,
   projectSwitcherPalette,
 }: ToolbarProps) {
-  const { showMenu } = useNativeContextMenu();
   const currentProject = useProjectStore((state) => state.currentProject);
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const getCurrentProject = useProjectStore((state) => state.getCurrentProject);
   const projectSwitcher = projectSwitcherPalette;
-  const { settings: projectSettings } = useProjectSettings();
-  const devServerCommand = projectSettings?.devServerCommand?.trim();
-  const {
-    stats,
-    loading: statsLoading,
-    error: statsError,
-    refresh: refreshStats,
-    isStale,
-    lastUpdated,
-  } = useRepositoryStats();
+
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
-  const activeWorktree = useWorktreeDataStore((state) =>
+  const activeWorktree = useWorktreeStore((state) =>
     activeWorktreeId ? state.worktrees.get(activeWorktreeId) : null
   );
   const branchName = activeWorktree?.branch;
@@ -175,51 +135,16 @@ export function Toolbar({
     return cleanup;
   }, [loadProjects, getCurrentProject]);
 
-  const portalOpen = usePortalStore((state) => state.isOpen);
-  const togglePortal = usePortalStore((state) => state.toggle);
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
+  const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
 
-  const [detectedServers, setDetectedServers] = useState<DetectedDevServer[]>([]);
-  const [detectedServersOpen, setDetectedServersOpen] = useState(false);
-  const detectedServersButtonRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    void window.electron.globalDevServers.get().then((result) => {
-      setDetectedServers(result.servers);
-    });
-    const cleanup = window.electron.globalDevServers.onChanged((payload) => {
-      setDetectedServers(payload.servers);
-    });
-    return cleanup;
-  }, []);
-
-  const [issuesOpen, setIssuesOpen] = useState(false);
-  const [prsOpen, setPrsOpen] = useState(false);
-  const [commitsOpen, setCommitsOpen] = useState(false);
-  const setIssueSearchQuery = useGitHubFilterStore((s) => s.setIssueSearchQuery);
-  const setPrSearchQuery = useGitHubFilterStore((s) => s.setPrSearchQuery);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [treeCopied, setTreeCopied] = useState(false);
   const [isCopyingTree, setIsCopyingTree] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string>("");
-  const issuesButtonRef = useRef<HTMLButtonElement>(null);
-  const prsButtonRef = useRef<HTMLButtonElement>(null);
-  const commitsButtonRef = useRef<HTMLButtonElement>(null);
   const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { notificationCenterOpen, toggleNotificationCenter, closeNotificationCenter } = useUIStore(
-    useShallow((s) => ({
-      notificationCenterOpen: s.notificationCenterOpen,
-      toggleNotificationCenter: s.toggleNotificationCenter,
-      closeNotificationCenter: s.closeNotificationCenter,
-    }))
-  );
-  const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
-  const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
-  const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
-  useEffect(() => {
-    if (!notificationsEnabled && notificationCenterOpen) closeNotificationCenter();
-  }, [notificationsEnabled, notificationCenterOpen, closeNotificationCenter]);
+
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
       state.activeTarget !== null &&
@@ -227,31 +152,17 @@ export function Toolbar({
         state.status === "recording" ||
         state.status === "finishing")
   );
-  const [statsJustUpdated, setStatsJustUpdated] = useState(false);
-  const prevLastUpdatedRef = useRef<number | null>(null);
+
   const toolbarRef = useRef<HTMLDivElement>(null);
   const leftGroupRef = useRef<HTMLDivElement>(null);
   const rightGroupRef = useRef<HTMLDivElement>(null);
   const activeToolbarIndexRef = useRef<number>(0);
+  const githubStatsRef = useRef<GitHubStatsHandle>(null);
 
   const { handleCopyTree } = useWorktreeActions();
-  const terminalShortcut = useKeybindingDisplay("agent.terminal");
-  const browserShortcut = useKeybindingDisplay("agent.browser");
-  const panelPaletteShortcut = useKeybindingDisplay("panel.palette");
   const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
-  const diagnosticsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
-  const portalShortcut = useKeybindingDisplay("panel.togglePortal");
   const notesShortcut = useKeybindingDisplay("notes.openPalette");
-  const settingsShortcut = useKeybindingDisplay("app.settings");
-  const panelPaletteOpen = usePaletteStore((state) => state.activePaletteId === "panel");
-
-  const handleTogglePanelPalette = useCallback(() => {
-    if (usePaletteStore.getState().activePaletteId === "panel") {
-      usePaletteStore.getState().closePalette("panel");
-    } else {
-      void actionService.dispatch("panel.palette", undefined, { source: "user" });
-    }
-  }, []);
+  const copyTreeShortcut = useKeybindingDisplay("worktree.copyTree");
 
   const handleOpenProjectSettings = useCallback(() => {
     projectSwitcher.close();
@@ -272,24 +183,22 @@ export function Toolbar({
     [projectSwitcher]
   );
 
-  const getTimeSinceUpdate = useCallback((timestamp: number | null): string => {
-    if (timestamp == null || !Number.isFinite(timestamp) || timestamp <= 0) {
-      return "unknown";
-    }
+  const handleRemoveConfirmClose = useCallback(() => {
+    projectSwitcher.setRemoveConfirmProject(null);
+  }, [projectSwitcher]);
 
-    const seconds = Math.floor((Date.now() - timestamp) / 1000);
-    if (seconds < 0) return "just now";
-    if (seconds < 60) return "just now";
-
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-
-    const days = Math.floor(hours / 24);
-    return `${days}d ago`;
-  }, []);
+  const handleSelectNewWindow = useCallback(
+    (project: SearchableProject) => {
+      if (project.isMissing) return;
+      projectSwitcher.close();
+      void actionService.dispatch(
+        "app.newWindow",
+        { projectPath: project.path },
+        { source: "user" }
+      );
+    },
+    [projectSwitcher]
+  );
 
   useEffect(() => {
     return window.electron.window.onFullscreenChange(setIsFullscreen);
@@ -303,30 +212,6 @@ export function Toolbar({
     };
   }, []);
 
-  useEffect(() => {
-    if (statsLoading || statsError) {
-      setStatsJustUpdated(false);
-    } else if (
-      lastUpdated != null &&
-      prevLastUpdatedRef.current != null &&
-      lastUpdated > prevLastUpdatedRef.current
-    ) {
-      setStatsJustUpdated(true);
-    }
-    prevLastUpdatedRef.current = lastUpdated;
-  }, [lastUpdated, statsLoading, statsError]);
-
-  const getGitHubIndicatorStatus = useCallback((): GitHubStatusIndicatorStatus => {
-    if (statsLoading) return "loading";
-    if (statsError) return "error";
-    if (statsJustUpdated) return "success";
-    return "idle";
-  }, [statsLoading, statsError, statsJustUpdated]);
-
-  const handleGitHubStatusTransitionEnd = useCallback(() => {
-    setStatsJustUpdated(false);
-  }, []);
-
   const handleCopyTreeClick = useCallback(async () => {
     if (isCopyingTree || !activeWorktree) return;
 
@@ -338,6 +223,7 @@ export function Toolbar({
       if (resultMessage) {
         setTreeCopied(true);
         setCopyFeedback(resultMessage);
+        shortcutHintStore.getState().hide();
 
         if (treeCopyTimeoutRef.current) {
           clearTimeout(treeCopyTimeoutRef.current);
@@ -353,29 +239,6 @@ export function Toolbar({
       setIsCopyingTree(false);
     }
   }, [isCopyingTree, activeWorktree, handleCopyTree]);
-
-  const handleSettingsContextMenu = useCallback(
-    async (event: React.MouseEvent) => {
-      const template: MenuItemOption[] = [
-        { id: "settings:general", label: "General" },
-        { id: "settings:agents", label: "Agents" },
-        { id: "settings:terminal", label: "Terminal" },
-        { id: "settings:keyboard", label: "Keyboard" },
-        { id: "settings:notifications", label: "Notifications" },
-        { id: "settings:portal", label: "Portal" },
-        { type: "separator" },
-        { id: "settings:toolbar", label: "Customize Toolbar…" },
-        { id: "settings:troubleshooting", label: "Troubleshooting" },
-      ];
-
-      const actionId = await showMenu(event, template);
-      if (!actionId) return;
-
-      const tab = actionId.replace("settings:", "");
-      void actionService.dispatch("app.settings.openTab", { tab }, { source: "context-menu" });
-    },
-    [showMenu]
-  );
 
   const getToolbarItems = useCallback(
     () =>
@@ -457,8 +320,10 @@ export function Toolbar({
   const toolbarIconButtonClass = "toolbar-icon-button text-canopy-text transition-colors";
   const toolbarDividerClass = "toolbar-divider w-px h-5 mx-1";
 
+  const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
+
   const buttonRegistry = useMemo<
-    Record<ToolbarButtonId, { render: () => React.ReactNode; isAvailable: boolean }>
+    Record<string, { render: () => React.ReactNode; isAvailable: boolean }>
   >(
     () => ({
       "sidebar-toggle": {
@@ -502,7 +367,7 @@ export function Toolbar({
             data-toolbar-item=""
           />
         ),
-        isAvailable: !agentSettings || agentSettings.agents?.claude?.selected !== false,
+        isAvailable: agentSettings != null && agentSettings.agents?.claude?.selected !== false,
       },
       gemini: {
         render: () => (
@@ -513,7 +378,7 @@ export function Toolbar({
             data-toolbar-item=""
           />
         ),
-        isAvailable: !agentSettings || agentSettings.agents?.gemini?.selected !== false,
+        isAvailable: agentSettings != null && agentSettings.agents?.gemini?.selected !== false,
       },
       codex: {
         render: () => (
@@ -524,7 +389,7 @@ export function Toolbar({
             data-toolbar-item=""
           />
         ),
-        isAvailable: !agentSettings || agentSettings.agents?.codex?.selected !== false,
+        isAvailable: agentSettings != null && agentSettings.agents?.codex?.selected !== false,
       },
       opencode: {
         render: () => (
@@ -535,7 +400,7 @@ export function Toolbar({
             data-toolbar-item=""
           />
         ),
-        isAvailable: !agentSettings || agentSettings.agents?.opencode?.selected !== false,
+        isAvailable: agentSettings != null && agentSettings.agents?.opencode?.selected !== false,
       },
       cursor: {
         render: () => (
@@ -546,164 +411,62 @@ export function Toolbar({
             data-toolbar-item=""
           />
         ),
-        isAvailable: !agentSettings || agentSettings.agents?.cursor?.selected !== false,
+        isAvailable: agentSettings != null && agentSettings.agents?.cursor?.selected !== false,
       },
       terminal: {
         render: () => (
-          <TooltipProvider key="terminal">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={() => onLaunchAgent("terminal")}
-                  className={toolbarIconButtonClass}
-                  aria-label="Open Terminal"
-                >
-                  <SquareTerminal />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Open Terminal", terminalShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <ToolbarLauncherButton
+            key="terminal"
+            type="terminal"
+            onLaunchAgent={onLaunchAgent}
+            data-toolbar-item=""
+          />
         ),
         isAvailable: true,
       },
       browser: {
         render: () => (
-          <TooltipProvider key="browser">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={() => onLaunchAgent("browser")}
-                  className={toolbarIconButtonClass}
-                  aria-label="Open Browser"
-                >
-                  <Globe />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Open Browser", browserShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <ToolbarLauncherButton
+            key="browser"
+            type="browser"
+            onLaunchAgent={onLaunchAgent}
+            data-toolbar-item=""
+          />
         ),
         isAvailable: true,
       },
       "dev-server": {
         render: () => (
-          <div key="dev-server" className="relative inline-flex items-center gap-0.5">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="inline-flex">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      data-toolbar-item=""
-                      onClick={() => {
-                        void actionService.dispatch("devServer.start", undefined, {
-                          source: "user",
-                        });
-                      }}
-                      disabled={!currentProject}
-                      className={toolbarIconButtonClass}
-                      aria-label={
-                        !currentProject
-                          ? "Open a project to use Dev Preview"
-                          : devServerCommand
-                            ? "Start Dev Server"
-                            : "Open Dev Preview"
-                      }
-                    >
-                      <Monitor />
-                    </Button>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {!currentProject
-                    ? "Open a project to use Dev Preview"
-                    : devServerCommand
-                      ? "Start Dev Server"
-                      : "Open Dev Preview"}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            {detectedServers.length > 0 && (
-              <>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        ref={detectedServersButtonRef}
-                        variant="ghost"
-                        size="icon"
-                        data-toolbar-item=""
-                        onClick={() => setDetectedServersOpen(!detectedServersOpen)}
-                        className={cn(toolbarIconButtonClass, "relative h-8 w-8")}
-                        aria-label={`${detectedServers.length} detected dev servers`}
-                      >
-                        <Signal className="h-4 w-4" />
-                        <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-canopy-accent text-[10px] font-bold tabular-nums text-accent-foreground">
-                          {detectedServers.length}
-                        </span>
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Detected Dev Servers</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-                <FixedDropdown
-                  open={detectedServersOpen}
-                  onOpenChange={setDetectedServersOpen}
-                  anchorRef={detectedServersButtonRef}
-                  className="p-0 w-[350px]"
-                >
-                  <DetectedServersList
-                    servers={detectedServers}
-                    onOpen={(url) => {
-                      void actionService.dispatch(
-                        "devServer.openDetected",
-                        { url },
-                        { source: "user" }
-                      );
-                    }}
-                    onClose={() => setDetectedServersOpen(false)}
-                  />
-                </FixedDropdown>
-              </>
-            )}
-          </div>
-        ),
-        isAvailable: true,
-      },
-      "panel-palette": {
-        render: () => (
-          <TooltipProvider key="panel-palette">
+          <TooltipProvider key="dev-server">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
                   data-toolbar-item=""
-                  onClick={handleTogglePanelPalette}
+                  onClick={() =>
+                    actionService.dispatch("devServer.start", undefined, { source: "user" })
+                  }
                   className={toolbarIconButtonClass}
-                  aria-label={panelPaletteOpen ? "Close panel palette" : "Open panel palette"}
-                  aria-pressed={panelPaletteOpen}
+                  aria-label="Open Dev Preview"
                 >
-                  <LayoutGrid />
+                  <Monitor />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Panel Palette", panelPaletteShortcut)}
-              </TooltipContent>
+              <TooltipContent side="bottom">Open Dev Preview</TooltipContent>
             </Tooltip>
           </TooltipProvider>
+        ),
+        isAvailable: !!currentProject,
+      },
+      "panel-palette": {
+        render: () => (
+          <ToolbarLauncherButton
+            key="panel-palette"
+            type="panel-palette"
+            onLaunchAgent={onLaunchAgent}
+            data-toolbar-item=""
+          />
         ),
         isAvailable: true,
       },
@@ -712,255 +475,19 @@ export function Toolbar({
         isAvailable: hasActiveVoiceRecording,
       },
       "github-stats": {
-        render: () =>
-          currentProject ? (
-            <div
-              key="github-stats"
-              className="toolbar-stats relative mr-2 flex h-8 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,0.5rem)] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))]"
-              style={{
-                ["--toolbar-stats-divider" as string]:
-                  "var(--toolbar-stats-divider,var(--theme-border-subtle))",
-              }}
-            >
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      ref={issuesButtonRef}
-                      variant="ghost"
-                      data-toolbar-item=""
-                      onClick={() => {
-                        setPrsOpen(false);
-                        setPrSearchQuery("");
-                        setCommitsOpen(false);
-                        const willOpen = !issuesOpen;
-                        setIssuesOpen(willOpen);
-                        if (!willOpen) setIssueSearchQuery("");
-                        if (willOpen) refreshStats({ force: true });
-                      }}
-                      className={cn(
-                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
-                        stats?.issueCount === 0 && "opacity-50",
-                        isStale && "opacity-60",
-                        issuesOpen &&
-                          "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-github-open/20"
-                      )}
-                      aria-label={`${stats?.issueCount ?? "\u2014"} open issues${isStale ? " (cached)" : ""}`}
-                    >
-                      <CircleDot className="h-4 w-4 text-github-open" />
-                      <span className="text-xs font-medium tabular-nums">
-                        {stats?.issueCount ?? "\u2014"}
-                      </span>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {isStale
-                      ? `${stats?.issueCount ?? "\u2014"} open issues (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
-                      : "Browse GitHub Issues"}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <FixedDropdown
-                open={issuesOpen}
-                onOpenChange={(open) => {
-                  setIssuesOpen(open);
-                  if (!open) {
-                    setIssueSearchQuery("");
-                    issuesButtonRef.current?.focus();
-                  }
-                }}
-                anchorRef={issuesButtonRef}
-                className="p-0 w-[450px]"
-                persistThroughChildOverlays
-              >
-                <Suspense
-                  fallback={
-                    <GitHubResourceListSkeleton count={stats?.issueCount} immediate type="issue" />
-                  }
-                >
-                  <LazyGitHubResourceList
-                    type="issue"
-                    projectPath={currentProject.path}
-                    onClose={() => {
-                      setIssuesOpen(false);
-                      setIssueSearchQuery("");
-                      issuesButtonRef.current?.focus();
-                    }}
-                    initialCount={stats?.issueCount}
-                  />
-                </Suspense>
-              </FixedDropdown>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      ref={prsButtonRef}
-                      variant="ghost"
-                      data-toolbar-item=""
-                      onClick={() => {
-                        setIssuesOpen(false);
-                        setIssueSearchQuery("");
-                        setCommitsOpen(false);
-                        const willOpen = !prsOpen;
-                        setPrsOpen(willOpen);
-                        if (!willOpen) setPrSearchQuery("");
-                        if (willOpen) refreshStats({ force: true });
-                      }}
-                      className={cn(
-                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
-                        stats?.prCount === 0 && "opacity-50",
-                        isStale && "opacity-60",
-                        prsOpen &&
-                          "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-github-merged/20"
-                      )}
-                      aria-label={`${stats?.prCount ?? "\u2014"} open pull requests${isStale ? " (cached)" : ""}`}
-                    >
-                      <GitPullRequest className="h-4 w-4 text-github-merged" />
-                      <span className="text-xs font-medium tabular-nums">
-                        {stats?.prCount ?? "\u2014"}
-                      </span>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {isStale
-                      ? `${stats?.prCount ?? "\u2014"} open PRs (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
-                      : "Browse GitHub Pull Requests"}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <FixedDropdown
-                open={prsOpen}
-                onOpenChange={(open) => {
-                  setPrsOpen(open);
-                  if (!open) {
-                    setPrSearchQuery("");
-                    prsButtonRef.current?.focus();
-                  }
-                }}
-                anchorRef={prsButtonRef}
-                className="p-0 w-[450px]"
-              >
-                <Suspense
-                  fallback={
-                    <GitHubResourceListSkeleton count={stats?.prCount} immediate type="pr" />
-                  }
-                >
-                  <LazyGitHubResourceList
-                    type="pr"
-                    projectPath={currentProject.path}
-                    onClose={() => {
-                      setPrsOpen(false);
-                      setPrSearchQuery("");
-                      prsButtonRef.current?.focus();
-                    }}
-                    initialCount={stats?.prCount}
-                  />
-                </Suspense>
-              </FixedDropdown>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      ref={commitsButtonRef}
-                      variant="ghost"
-                      data-toolbar-item=""
-                      onClick={() => {
-                        setIssuesOpen(false);
-                        setIssueSearchQuery("");
-                        setPrsOpen(false);
-                        setPrSearchQuery("");
-                        setCommitsOpen(!commitsOpen);
-                      }}
-                      className={cn(
-                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
-                        stats?.commitCount === 0 && "opacity-50",
-                        commitsOpen &&
-                          "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-border-strong"
-                      )}
-                      aria-label={`${stats?.commitCount ?? "\u2014"} commits`}
-                    >
-                      <GitCommit className="h-4 w-4" />
-                      <span className="text-xs font-medium tabular-nums">
-                        {stats?.commitCount ?? "\u2014"}
-                      </span>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Browse Git Commits</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <FixedDropdown
-                open={commitsOpen}
-                onOpenChange={(open) => {
-                  setCommitsOpen(open);
-                  if (!open) commitsButtonRef.current?.focus();
-                }}
-                anchorRef={commitsButtonRef}
-                className="p-0 w-[450px]"
-              >
-                <Suspense fallback={<CommitListSkeleton count={stats?.commitCount} immediate />}>
-                  <LazyCommitList
-                    projectPath={activeWorktree?.path ?? currentProject.path}
-                    branch={activeWorktree?.branch ?? activeWorktree?.head}
-                    onClose={() => {
-                      setCommitsOpen(false);
-                      commitsButtonRef.current?.focus();
-                    }}
-                    initialCount={stats?.commitCount}
-                  />
-                </Suspense>
-              </FixedDropdown>
-              <GitHubStatusIndicator
-                status={getGitHubIndicatorStatus()}
-                error={statsError ?? undefined}
-                onTransitionEnd={handleGitHubStatusTransitionEnd}
-              />
-            </div>
-          ) : null,
+        render: () => (
+          <GitHubStatsToolbarButton
+            key="github-stats"
+            ref={githubStatsRef}
+            currentProject={currentProject}
+            data-toolbar-item=""
+          />
+        ),
         isAvailable: !!currentProject,
       },
       "notification-center": {
         render: () => (
-          <div key="notification-center" className="relative">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    ref={notificationCenterButtonRef}
-                    variant="ghost"
-                    size="icon"
-                    data-toolbar-item=""
-                    onClick={toggleNotificationCenter}
-                    className={toolbarIconButtonClass}
-                    aria-label={
-                      notificationUnreadCount > 0
-                        ? `Notifications — ${notificationUnreadCount} unread`
-                        : "Notifications"
-                    }
-                    aria-expanded={notificationCenterOpen}
-                    aria-haspopup="dialog"
-                  >
-                    <Bell />
-                    {notificationUnreadCount > 0 && (
-                      <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-canopy-accent text-[9px] font-bold tabular-nums text-canopy-bg px-0.5 leading-none">
-                        {notificationUnreadCount > 99 ? "99+" : notificationUnreadCount}
-                      </span>
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Notifications</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            <FixedDropdown
-              open={notificationCenterOpen}
-              onOpenChange={(open) => {
-                if (!open) closeNotificationCenter();
-              }}
-              anchorRef={notificationCenterButtonRef}
-              className="p-0"
-            >
-              <NotificationCenter open={notificationCenterOpen} onClose={closeNotificationCenter} />
-            </FixedDropdown>
-          </div>
+          <NotificationCenterToolbarButton key="notification-center" data-toolbar-item="" />
         ),
         isAvailable: notificationsEnabled,
       },
@@ -977,7 +504,7 @@ export function Toolbar({
                   className={toolbarIconButtonClass}
                   aria-label="Open notes palette"
                 >
-                  <Leaf />
+                  <StickyNote />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
@@ -1009,13 +536,7 @@ export function Toolbar({
                     isCopyingTree ? "Copying…" : treeCopied ? "Context Copied" : "Copy Context"
                   }
                 >
-                  {isCopyingTree ? (
-                    <Loader2 className="animate-spin motion-reduce:animate-none" />
-                  ) : treeCopied ? (
-                    <Check />
-                  ) : (
-                    <CopyTreeIcon />
-                  )}
+                  {isCopyingTree ? <Spinner /> : treeCopied ? <Check /> : <CopyTreeIcon />}
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="font-medium">
@@ -1026,7 +547,7 @@ export function Toolbar({
                     {copyFeedback}
                   </span>
                 ) : (
-                  "Copy Context"
+                  createTooltipWithShortcut("Copy Context", copyTreeShortcut)
                 )}
               </TooltipContent>
             </Tooltip>
@@ -1036,92 +557,66 @@ export function Toolbar({
       },
       settings: {
         render: () => (
-          <TooltipProvider key="settings">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={onSettings}
-                  onContextMenu={handleSettingsContextMenu}
-                  className={toolbarIconButtonClass}
-                  aria-label="Open settings"
-                >
-                  <SlidersHorizontal />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Open Settings", settingsShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <ToolbarSettingsButton
+            key="settings"
+            onSettings={onSettings}
+            onPreloadSettings={onPreloadSettings}
+            data-toolbar-item=""
+          />
         ),
         isAvailable: true,
       },
       problems: {
         render: () => (
-          <TooltipProvider key="problems">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={onToggleProblems}
-                  className={cn(
-                    toolbarIconButtonClass,
-                    "relative",
-                    errorCount > 0 && "text-status-error"
-                  )}
-                  aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}`}
-                >
-                  <AlertCircle />
-                  {errorCount > 0 && (
-                    <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-status-error rounded-full" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Show Problems Panel", diagnosticsShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <ToolbarProblemsButton
+            key="problems"
+            errorCount={errorCount}
+            onToggleProblems={onToggleProblems}
+            data-toolbar-item=""
+          />
         ),
         isAvailable: showDeveloperTools,
       },
       "portal-toggle": {
-        render: () => (
-          <TooltipProvider key="portal-toggle">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  data-toolbar-item=""
-                  onClick={togglePortal}
-                  className={toolbarIconButtonClass}
-                  aria-label={portalOpen ? "Close context portal" : "Open context portal"}
-                  aria-pressed={portalOpen}
-                >
-                  {portalOpen ? (
-                    <PanelRightClose aria-hidden="true" />
-                  ) : (
-                    <PanelRightOpen aria-hidden="true" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut(
-                  portalOpen ? "Close Context Portal" : "Open Context Portal",
-                  portalShortcut
-                )}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        ),
+        render: () => <ToolbarPortalButton key="portal-toggle" data-toolbar-item="" />,
         isAvailable: true,
       },
+      ...Object.fromEntries(
+        pluginButtonIds.map((pluginId) => {
+          const config = pluginConfigs.get(pluginId);
+          return [
+            pluginId,
+            {
+              render: () => (
+                <TooltipProvider key={pluginId}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        data-toolbar-item=""
+                        onClick={() => {
+                          void actionService.dispatch(
+                            config!.actionId as Parameters<typeof actionService.dispatch>[0],
+                            undefined,
+                            { source: "user" }
+                          );
+                        }}
+                        className={toolbarIconButtonClass}
+                        aria-label={config?.label ?? pluginId}
+                      >
+                        <McpServerIcon />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{config?.label ?? pluginId}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              ),
+              isAvailable: true,
+            },
+          ];
+        })
+      ),
     }),
     [
       isFocusMode,
@@ -1130,62 +625,51 @@ export function Toolbar({
       agentSettings,
       hasAnySelectedAgent,
       onLaunchAgent,
-      terminalShortcut,
-      browserShortcut,
       sidebarShortcut,
-      diagnosticsShortcut,
-      portalShortcut,
       notesShortcut,
-      settingsShortcut,
-      devServerCommand,
-      panelPaletteOpen,
-      panelPaletteShortcut,
-      handleTogglePanelPalette,
+      copyTreeShortcut,
       hasActiveVoiceRecording,
-      stats,
       currentProject,
-      issuesOpen,
-      prsOpen,
-      commitsOpen,
-      isStale,
-      lastUpdated,
-      refreshStats,
-      getGitHubIndicatorStatus,
-      handleGitHubStatusTransitionEnd,
-      statsError,
       handleCopyTreeClick,
       isCopyingTree,
       activeWorktree,
       treeCopied,
       copyFeedback,
       onSettings,
-      handleSettingsContextMenu,
+      onPreloadSettings,
       onToggleProblems,
       errorCount,
       showDeveloperTools,
-      togglePortal,
-      portalOpen,
-      getTimeSinceUpdate,
-      notificationCenterOpen,
-      toggleNotificationCenter,
-      closeNotificationCenter,
-      notificationUnreadCount,
-      detectedServers,
-      detectedServersOpen,
-      setIssueSearchQuery,
-      setPrSearchQuery,
       notificationsEnabled,
+      pluginButtonIds,
+      pluginConfigs,
     ]
   );
 
+  const hiddenSet = useMemo(
+    () => new Set(toolbarLayout.hiddenButtons),
+    [toolbarLayout.hiddenButtons]
+  );
+
+  const effectiveLeftButtons = useMemo(
+    () => toolbarLayout.leftButtons.filter((id) => !hiddenSet.has(id)),
+    [toolbarLayout.leftButtons, hiddenSet]
+  );
+
+  const effectiveRightButtons = useMemo(() => {
+    const existing = new Set(toolbarLayout.rightButtons);
+    const extra = pluginButtonIds.filter((id) => !existing.has(id));
+    return [...toolbarLayout.rightButtons, ...extra].filter((id) => !hiddenSet.has(id));
+  }, [toolbarLayout.rightButtons, pluginButtonIds, hiddenSet]);
+
   const availableLeftIds = useMemo(
-    () => toolbarLayout.leftButtons.filter((id) => buttonRegistry[id]?.isAvailable),
-    [toolbarLayout.leftButtons, buttonRegistry]
+    () => effectiveLeftButtons.filter((id) => buttonRegistry[id]?.isAvailable),
+    [effectiveLeftButtons, buttonRegistry]
   );
 
   const availableRightIds = useMemo(
-    () => toolbarLayout.rightButtons.filter((id) => buttonRegistry[id]?.isAvailable),
-    [toolbarLayout.rightButtons, buttonRegistry]
+    () => effectiveRightButtons.filter((id) => buttonRegistry[id]?.isAvailable),
+    [effectiveRightButtons, buttonRegistry]
   );
 
   const { leftVisible, leftOverflow, rightVisible, rightOverflow } = useToolbarOverflow(
@@ -1195,26 +679,21 @@ export function Toolbar({
     availableRightIds
   );
 
-  const leftVisibleSet = useMemo(() => new Set(leftVisible), [leftVisible]);
-  const rightVisibleSet = useMemo(() => new Set(rightVisible), [rightVisible]);
+  const leftVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(leftVisible), [leftVisible]);
+  const rightVisibleSet = useMemo(() => new Set<AnyToolbarButtonId>(rightVisible), [rightVisible]);
 
   // Close open dropdowns when their buttons move into overflow
   useEffect(() => {
-    const overflowSet = new Set([...leftOverflow, ...rightOverflow]);
+    const overflowSet = new Set<AnyToolbarButtonId>([...leftOverflow, ...rightOverflow]);
     if (overflowSet.has("github-stats")) {
-      setIssuesOpen(false);
-      setPrsOpen(false);
-      setCommitsOpen(false);
+      githubStatsRef.current?.closeAll();
     }
     if (overflowSet.has("notification-center")) {
-      closeNotificationCenter();
+      useUIStore.getState().closeNotificationCenter();
     }
-    if (overflowSet.has("dev-server")) {
-      setDetectedServersOpen(false);
-    }
-  }, [leftOverflow, rightOverflow, closeNotificationCenter]);
+  }, [leftOverflow, rightOverflow]);
 
-  const renderButtons = (buttonIds: ToolbarButtonId[], visibleSet: Set<ToolbarButtonId>) => {
+  const renderButtons = (buttonIds: AnyToolbarButtonId[], visibleSet: Set<AnyToolbarButtonId>) => {
     return buttonIds
       .filter((id) => buttonRegistry[id]?.isAvailable)
       .map((id) => (
@@ -1232,7 +711,10 @@ export function Toolbar({
       ));
   };
 
-  const renderLeftButtons = (buttonIds: ToolbarButtonId[], visibleSet: Set<ToolbarButtonId>) => {
+  const renderLeftButtons = (
+    buttonIds: AnyToolbarButtonId[],
+    visibleSet: Set<AnyToolbarButtonId>
+  ) => {
     const available = buttonIds.filter((id) => buttonRegistry[id]?.isAvailable);
     const visible = available.filter((id) => visibleSet.has(id));
     const elements: React.ReactNode[] = [];
@@ -1258,11 +740,11 @@ export function Toolbar({
     for (const el of elements) {
       withDividers.push(el);
       const key = (el as React.ReactElement).key as string;
-      if (visibleSet.has(key as ToolbarButtonId)) {
+      if (visibleSet.has(key as AnyToolbarButtonId)) {
         if (
           visibleIdx < visible.length - 1 &&
-          AGENT_TOOLBAR_IDS.has(visible[visibleIdx]) !==
-            AGENT_TOOLBAR_IDS.has(visible[visibleIdx + 1])
+          AGENT_TOOLBAR_IDS.has(visible[visibleIdx] as ToolbarButtonId) !==
+            AGENT_TOOLBAR_IDS.has(visible[visibleIdx + 1] as ToolbarButtonId)
         ) {
           withDividers.push(
             <div
@@ -1278,7 +760,21 @@ export function Toolbar({
     return withDividers;
   };
 
-  const overflowActions = useMemo<Partial<Record<ToolbarButtonId, () => void>>>(
+  const pluginOverflowMeta = useMemo(() => {
+    const meta: Record<
+      string,
+      { label: string; icon: React.ComponentType<{ className?: string }> }
+    > = {};
+    for (const id of pluginButtonIds) {
+      const config = pluginConfigs.get(id);
+      if (config) {
+        meta[id] = { label: config.label, icon: McpServerIcon };
+      }
+    }
+    return meta;
+  }, [pluginButtonIds, pluginConfigs]);
+
+  const overflowActions = useMemo<Partial<Record<AnyToolbarButtonId, () => void>>>(
     () => ({
       claude: () => onLaunchAgent("claude"),
       gemini: () => onLaunchAgent("gemini"),
@@ -1290,8 +786,12 @@ export function Toolbar({
       "dev-server": () => {
         void actionService.dispatch("devServer.start", undefined, { source: "user" });
       },
-      "panel-palette": handleTogglePanelPalette,
-      "notification-center": toggleNotificationCenter,
+      "panel-palette": () => {
+        void actionService.dispatch("panel.palette", undefined, { source: "user" });
+      },
+      "notification-center": () => {
+        useUIStore.getState().toggleNotificationCenter();
+      },
       notes: () => {
         void actionService.dispatch("notes.create", {}, { source: "user" });
       },
@@ -1300,18 +800,35 @@ export function Toolbar({
       },
       settings: onSettings,
       problems: onToggleProblems,
+      ...Object.fromEntries(
+        pluginButtonIds.map((id) => {
+          const config = pluginConfigs.get(id);
+          return [
+            id,
+            () => {
+              if (config) {
+                void actionService.dispatch(
+                  config.actionId as Parameters<typeof actionService.dispatch>[0],
+                  undefined,
+                  { source: "user" }
+                );
+              }
+            },
+          ];
+        })
+      ),
     }),
     [
       onLaunchAgent,
-      handleTogglePanelPalette,
-      toggleNotificationCenter,
       handleCopyTreeClick,
       onSettings,
       onToggleProblems,
+      pluginButtonIds,
+      pluginConfigs,
     ]
   );
 
-  const renderOverflowMenu = (overflowIds: ToolbarButtonId[], side: "left" | "right") => {
+  const renderOverflowMenu = (overflowIds: AnyToolbarButtonId[], side: "left" | "right") => {
     if (overflowIds.length === 0) return null;
     return (
       <DropdownMenu>
@@ -1336,18 +853,25 @@ export function Toolbar({
         <DropdownMenuContent align={side === "left" ? "start" : "end"} sideOffset={4}>
           {overflowIds.flatMap((id, idx) => {
             if (id === "github-stats") {
+              const ghStats = githubStatsRef.current?.stats;
               const items = [
-                <DropdownMenuItem key="gh-issues" onClick={() => setIssuesOpen((p) => !p)}>
+                <DropdownMenuItem
+                  key="gh-issues"
+                  onClick={() => githubStatsRef.current?.openIssues()}
+                >
                   <CircleDot className="mr-2 h-4 w-4 text-github-open" />
-                  Issues {stats?.issueCount != null ? `(${stats.issueCount})` : ""}
+                  Issues {ghStats?.issueCount != null ? `(${ghStats.issueCount})` : ""}
                 </DropdownMenuItem>,
-                <DropdownMenuItem key="gh-prs" onClick={() => setPrsOpen((p) => !p)}>
+                <DropdownMenuItem key="gh-prs" onClick={() => githubStatsRef.current?.openPrs()}>
                   <GitPullRequest className="mr-2 h-4 w-4 text-github-merged" />
-                  Pull Requests {stats?.prCount != null ? `(${stats.prCount})` : ""}
+                  Pull Requests {ghStats?.prCount != null ? `(${ghStats.prCount})` : ""}
                 </DropdownMenuItem>,
-                <DropdownMenuItem key="gh-commits" onClick={() => setCommitsOpen((p) => !p)}>
+                <DropdownMenuItem
+                  key="gh-commits"
+                  onClick={() => githubStatsRef.current?.openCommits()}
+                >
                   <GitCommit className="mr-2 h-4 w-4" />
-                  Commits {stats?.commitCount != null ? `(${stats.commitCount})` : ""}
+                  Commits {ghStats?.commitCount != null ? `(${ghStats.commitCount})` : ""}
                 </DropdownMenuItem>,
               ];
               if (idx < overflowIds.length - 1) {
@@ -1355,7 +879,7 @@ export function Toolbar({
               }
               return items;
             }
-            const meta = OVERFLOW_MENU_META[id];
+            const meta = OVERFLOW_MENU_META[id] ?? pluginOverflowMeta[id];
             if (!meta) return [];
             const Icon = meta.icon;
             return [
@@ -1410,7 +934,7 @@ export function Toolbar({
             ref={leftGroupRef}
             className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden"
           >
-            {renderLeftButtons(toolbarLayout.leftButtons, leftVisibleSet)}
+            {renderLeftButtons(effectiveLeftButtons, leftVisibleSet)}
           </div>
           <div className="app-no-drag">{renderOverflowMenu(leftOverflow, "left")}</div>
         </div>
@@ -1433,13 +957,15 @@ export function Toolbar({
             onSelect={projectSwitcher.selectProject}
             onClose={handleDropdownClose}
             onAddProject={projectSwitcher.addProject}
+            onCloneRepo={projectSwitcher.cloneRepo}
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
-            onTogglePinProject={(projectId) => projectSwitcher.togglePinProject(projectId)}
+            onTogglePinProject={projectSwitcher.togglePinProject}
             onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
+            onSelectNewWindow={handleSelectNewWindow}
             dropdownAlign="center"
             removeConfirmProject={projectSwitcher.removeConfirmProject}
-            onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
+            onRemoveConfirmClose={handleRemoveConfirmClose}
             onConfirmRemove={projectSwitcher.confirmRemoveProject}
             isRemovingProject={projectSwitcher.isRemovingProject}
           >
@@ -1471,7 +997,7 @@ export function Toolbar({
               ) : (
                 <>
                   <span className="text-xs font-medium text-canopy-text tracking-wide truncate min-w-0">
-                    Canopy Command Center
+                    Canopy
                   </span>
                   <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent shrink-0">
                     Beta
@@ -1493,7 +1019,7 @@ export function Toolbar({
             ref={rightGroupRef}
             className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden justify-end"
           >
-            {renderButtons(toolbarLayout.rightButtons, rightVisibleSet)}
+            {renderButtons(effectiveRightButtons, rightVisibleSet)}
           </div>
           <div className="app-no-drag">{renderOverflowMenu(rightOverflow, "right")}</div>
 

@@ -33,7 +33,7 @@ test.describe.serial("Core: Rate Limiting", () => {
   test.beforeAll(async () => {
     repoPath = createFixtureRepo({ name: "rate-limit-test" });
     ctx = await launchApp({ env: { CANOPY_E2E_FAULT_MODE: "1" } });
-    await openAndOnboardProject(ctx.app, ctx.window, repoPath, "RateLimitTest");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, repoPath, "RateLimitTest");
   });
 
   test.afterEach(async () => {

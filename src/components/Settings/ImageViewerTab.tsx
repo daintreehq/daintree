@@ -18,6 +18,7 @@ export function ImageViewerTab() {
   const activeProjectId = activeProject?.id;
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
     };
@@ -156,7 +157,7 @@ export function ImageViewerTab() {
                     value={customCommand}
                     onChange={(e) => handleCommandChange(e.target.value)}
                     placeholder="e.g. open -a Photoshop, gimp"
-                    className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors font-mono"
+                    className="w-full bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors font-mono"
                   />
                   <p className="text-xs text-canopy-text/40">
                     The file path will be appended as the last argument.

@@ -134,6 +134,29 @@ export interface AppMetricsSummary {
   totalMemoryMB: number;
 }
 
+/** Per-process metrics entry from app.getAppMetrics() */
+export interface ProcessMetricEntry {
+  pid: number;
+  type: string;
+  name: string;
+  memoryMB: number;
+  cpuPercent: number;
+}
+
+/** V8 heap statistics from the main process */
+export interface HeapStats {
+  usedMB: number;
+  limitMB: number;
+  percent: number;
+  externalMB: number;
+}
+
+/** Diagnostics info including uptime and event loop lag */
+export interface DiagnosticsInfo {
+  uptimeSeconds: number;
+  eventLoopP99Ms: number;
+}
+
 /** Status of the installed Canopy CLI tool */
 export interface CliInstallStatus {
   /** Whether the CLI script is installed */

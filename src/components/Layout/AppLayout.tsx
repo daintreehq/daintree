@@ -5,10 +5,12 @@ import { TerminalDockRegion } from "./TerminalDockRegion";
 import { DiagnosticsDock } from "../Diagnostics";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { PortalDock, PortalVisibilityController } from "../Portal";
-import { ProjectSettingsDialog, ProjectSwitchOverlay } from "@/components/Project";
+import { HelpPanel } from "../HelpPanel";
+import { ProjectSwitchOverlay } from "@/components/Project";
 import { ChordIndicator } from "./ChordIndicator";
-import { DemoCursor } from "../Demo";
-import { ApprovalQueue } from "../Workflow/ApprovalQueue";
+import { DemoCursor, DemoOverlay } from "../Demo";
+
+import { AllClearOverlay } from "../AllClearOverlay";
 import { useDiagnosticsStore, useDockStore, type PanelState } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
@@ -23,6 +25,7 @@ interface AppLayoutProps {
   sidebarContent?: ReactNode;
   onLaunchAgent?: (type: string) => void;
   onSettings?: () => void;
+  onPreloadSettings?: () => void;
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
   onCancelRetry?: (id: string) => void;
   agentAvailability?: CliAvailability;
@@ -40,6 +43,7 @@ export function AppLayout({
   sidebarContent,
   onLaunchAgent,
   onSettings,
+  onPreloadSettings,
   onRetry,
   onCancelRetry,
   agentAvailability,
@@ -48,11 +52,7 @@ export function AppLayout({
   projectSwitcherPalette,
 }: AppLayoutProps) {
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
-  const [isProjectSettingsOpen, setIsProjectSettingsOpen] = useState(false);
-
   const currentProject = useProjectStore((state) => state.currentProject);
-  const isProjectSwitching = useProjectStore((state) => state.isSwitching);
-  const switchingToProjectName = useProjectStore((state) => state.switchingToProjectName);
   const layout = useLayoutState();
 
   useEffect(() => {
@@ -113,7 +113,7 @@ export function AppLayout({
   useEffect(() => {
     // Gate persistence until hydration completes and project switching ends
     // to avoid overwriting restored focus mode during initial load or project switches
-    if (!isHydrated || isProjectSwitching) {
+    if (!isHydrated) {
       return;
     }
 
@@ -142,13 +142,7 @@ export function AppLayout({
 
     const timer = setTimeout(persistFocusMode, 100);
     return () => clearTimeout(timer);
-  }, [
-    layout.isFocusMode,
-    layout.savedPanelState,
-    currentProject?.id,
-    isHydrated,
-    isProjectSwitching,
-  ]);
+  }, [layout.isFocusMode, layout.savedPanelState, currentProject?.id, isHydrated]);
 
   const handleToggleFocusMode = useCallback(async () => {
     if (layout.isFocusMode) {
@@ -226,13 +220,6 @@ export function AppLayout({
   }, [layout.togglePortal]);
 
   useEffect(() => {
-    const handleOpenProjectSettings = () => setIsProjectSettingsOpen(true);
-    window.addEventListener("canopy:open-project-settings", handleOpenProjectSettings);
-    return () =>
-      window.removeEventListener("canopy:open-project-settings", handleOpenProjectSettings);
-  }, []);
-
-  useEffect(() => {
     const handleResetSidebarWidth = () => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
     window.addEventListener("canopy:reset-sidebar-width", handleResetSidebarWidth);
     return () => window.removeEventListener("canopy:reset-sidebar-width", handleResetSidebarWidth);
@@ -303,6 +290,7 @@ export function AppLayout({
       <Toolbar
         onLaunchAgent={handleLaunchAgent}
         onSettings={handleSettings}
+        onPreloadSettings={onPreloadSettings}
         errorCount={layout.errorCount}
         onToggleProblems={handleToggleProblems}
         isFocusMode={layout.isFocusMode}
@@ -340,6 +328,18 @@ export function AppLayout({
               <div className="flex-1 overflow-hidden min-h-0">{children}</div>
               {/* Terminal Dock Region - manages dock visibility and overlays */}
               <TerminalDockRegion />
+              {layout.helpPanelOpen && (
+                <ErrorBoundary variant="section" componentName="HelpPanel">
+                  <div
+                    className="absolute top-0 bottom-0 z-40"
+                    style={{
+                      right: layout.portalOpen ? `${layout.portalWidth}px` : "0px",
+                    }}
+                  >
+                    <HelpPanel />
+                  </div>
+                </ErrorBoundary>
+              )}
               {layout.portalOpen && (
                 <ErrorBoundary variant="section" componentName="PortalDock">
                   <div className="absolute right-0 top-0 bottom-0 z-50 shadow-2xl border-l border-canopy-border">
@@ -356,21 +356,16 @@ export function AppLayout({
         </ErrorBoundary>
       </div>
 
-      {currentProject && isProjectSettingsOpen && (
-        <ProjectSettingsDialog
-          projectId={currentProject.id}
-          isOpen={isProjectSettingsOpen}
-          onClose={() => setIsProjectSettingsOpen(false)}
-        />
-      )}
-
-      <ProjectSwitchOverlay
-        isSwitching={isProjectSwitching}
-        projectName={switchingToProjectName ?? undefined}
-      />
+      <ProjectSwitchOverlay isSwitching={false} projectName={undefined} />
       <ChordIndicator />
-      <ApprovalQueue />
-      {window.electron?.demo && <DemoCursor />}
+
+      <AllClearOverlay />
+      {window.electron?.demo && (
+        <>
+          <DemoOverlay />
+          <DemoCursor />
+        </>
+      )}
     </div>
   );
 }

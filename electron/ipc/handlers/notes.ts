@@ -1,5 +1,6 @@
 import { app, ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
+import { broadcastToRenderer } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import { NotesService, NoteConflictError, type NoteMetadata } from "../../services/NotesService.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -64,21 +65,11 @@ function getNotesService(): NotesService {
   return notesService;
 }
 
-export function registerNotesHandlers(deps: HandlerDependencies): () => void {
+export function registerNotesHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
   const broadcastUpdate = (payload: NoteUpdatedPayload) => {
-    if (
-      deps.mainWindow &&
-      !deps.mainWindow.isDestroyed() &&
-      !deps.mainWindow.webContents.isDestroyed()
-    ) {
-      try {
-        deps.mainWindow.webContents.send(CHANNELS.NOTES_UPDATED, payload);
-      } catch {
-        // Silently ignore send failures during window disposal.
-      }
-    }
+    broadcastToRenderer(CHANNELS.NOTES_UPDATED, payload);
   };
 
   const handleNotesCreate = async (

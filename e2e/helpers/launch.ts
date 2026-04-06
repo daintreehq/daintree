@@ -35,6 +35,35 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function pollForAppWindow(app: ElectronApplication, timeoutMs: number): Promise<Page> {
+  // Prefer a project view (URL with `projectId=`) when it appears — this handles
+  // session-2 relaunches where the previously-active project auto-opens into a
+  // separate WebContentsView. Falls back to any app page after a short grace
+  // period so first-run launches (no projects) still succeed.
+  const deadline = Date.now() + timeoutMs;
+  const fallbackGraceMs = 1_500;
+  let fallbackSeenAt = 0;
+  while (Date.now() < deadline) {
+    let fallback: Page | null = null;
+    for (const w of app.windows()) {
+      const url = w.url();
+      if (url.startsWith("app://canopy/") || url.includes("localhost")) {
+        if (url.includes("projectId=")) return w;
+        fallback = w;
+      }
+    }
+    if (fallback) {
+      if (fallbackSeenAt === 0) fallbackSeenAt = Date.now();
+      if (Date.now() - fallbackSeenAt >= fallbackGraceMs) return fallback;
+    } else {
+      fallbackSeenAt = 0;
+    }
+    await wait(200);
+  }
+  const urls = app.windows().map((w) => w.url());
+  throw new Error(`App WebContentsView page not found. Available pages: ${urls.join(", ")}`);
+}
+
 export async function launchApp(options: LaunchOptions = {}): Promise<AppContext> {
   // Windows CI can hang during Playwright's electron.launch handshake even when
   // the app process is already running. Keep attempts high, but fail fast.
@@ -84,6 +113,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         ...process.env,
         ...options.env,
         NODE_ENV: "production",
+        CANOPY_E2E_MODE: "1",
         CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS: options.env?.CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS ?? "1",
         CANOPY_DISABLE_WEBGL: "1",
         ...(isWindowsCI
@@ -104,7 +134,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
 
       app.on("close", () => console.log("[e2e] Electron app closed"));
 
-      const window = await app.firstWindow();
+      // After WebContentsView migration, firstWindow() returns the BW sentinel page.
+      // Poll for the real app page loaded in the WebContentsView.
+      const window = await pollForAppWindow(app, launchTimeout);
       window.on("crash", () => console.error("[e2e] Renderer crashed"));
       window.on("console", (msg) => {
         if (msg.type() === "error") console.error("[e2e:console]", msg.text());
@@ -159,6 +191,244 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
   }
 
   throw lastError instanceof Error ? lastError : new Error("Failed to launch Electron app");
+}
+
+/**
+ * Re-acquire the active app window after a project switch.
+ * The ProjectViewManager creates new WebContentsViews, so the Playwright
+ * page reference from launchApp() becomes stale. This returns the latest
+ * app page (preferring one with a projectId query param).
+ */
+export interface GetActiveAppWindowOptions {
+  /**
+   * If true, wait the full timeout for a project view (URL with `projectId=`)
+   * to appear before returning. Use this after operations that should result
+   * in a project view being created/activated (e.g., onboarding, project switch).
+   */
+  requireProject?: boolean;
+}
+
+export async function getActiveAppWindow(
+  app: ElectronApplication,
+  timeoutMsOrOptions: number | GetActiveAppWindowOptions = 10_000,
+  maybeOptions: GetActiveAppWindowOptions = {}
+): Promise<Page> {
+  const timeoutMs = typeof timeoutMsOrOptions === "number" ? timeoutMsOrOptions : 10_000;
+  const options = typeof timeoutMsOrOptions === "number" ? maybeOptions : timeoutMsOrOptions;
+  const requireProject = options.requireProject ?? false;
+
+  // Ask the main process for the URL of the WebContentsView currently
+  // attached to the BrowserWindow's contentView tree (the visible project
+  // view). With more than one cached project view alive at a time, URL
+  // matching alone is ambiguous — Playwright's `app.windows()` returns all
+  // alive pages including cached/inactive views.
+  const getActiveAttachedUrl = async (): Promise<string | null> => {
+    try {
+      return await app.evaluate(({ BrowserWindow }) => {
+        const win = BrowserWindow.getAllWindows()[0];
+        if (!win || win.isDestroyed()) return null;
+        const views = win.contentView?.children ?? [];
+        // The welcome appView is permanently added to contentView and is
+        // typically first. Project views are added on top — iterate from
+        // last to first and prefer the topmost projectId-bearing view.
+        // Fall back to the welcome view URL only if no project view is found.
+        let fallbackUrl: string | null = null;
+        for (let i = views.length - 1; i >= 0; i--) {
+          const wc = (views[i] as Electron.WebContentsView).webContents;
+          if (!wc || wc.isDestroyed()) continue;
+          const url = wc.getURL();
+          if (url.includes("projectId=")) return url;
+          if (fallbackUrl === null) fallbackUrl = url;
+        }
+        return fallbackUrl;
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  const deadline = Date.now() + timeoutMs;
+  // Grace period before returning a non-project fallback: after a project
+  // operation, the project WebContentsView may take a moment to load its
+  // URL. Returning the welcome page too early causes tests to grab the
+  // wrong renderer.
+  const fallbackGraceMs = 1_500;
+  let fallback: Page | null = null;
+  let fallbackSeenAt = 0;
+  while (Date.now() < deadline) {
+    fallback = null;
+    const activeUrl = await getActiveAttachedUrl();
+    let projectFallback: Page | null = null;
+
+    for (const w of app.windows()) {
+      const url = w.url();
+      if (!(url.startsWith("app://canopy/") || url.includes("localhost"))) continue;
+
+      // Best match: a project view that the main process currently has
+      // attached to the BrowserWindow.
+      if (activeUrl && url === activeUrl && url.includes("projectId=")) {
+        return w;
+      }
+
+      if (url.includes("projectId=")) {
+        if (projectFallback === null) projectFallback = w;
+      } else {
+        fallback = w;
+      }
+    }
+
+    if (projectFallback) return projectFallback;
+
+    if (fallback) {
+      if (!requireProject) {
+        if (fallbackSeenAt === 0) fallbackSeenAt = Date.now();
+        if (Date.now() - fallbackSeenAt >= fallbackGraceMs) return fallback;
+      }
+    } else {
+      fallbackSeenAt = 0;
+    }
+    await wait(200);
+  }
+  if (fallback) return fallback;
+  const urls = app.windows().map((w) => w.url());
+  throw new Error(`No active app window found. Available pages: ${urls.join(", ")}`);
+}
+
+const registeredPages = new WeakSet<Page>();
+
+/**
+ * Re-acquire the active app window and wait for it to be ready.
+ * Use after any operation that may create a new WebContentsView
+ * (project open, onboarding, empty-grid transition, etc.).
+ * If the page hasn't changed, this is a no-op that just confirms readiness.
+ */
+export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Page): Promise<Page> {
+  // After a project op (open/onboard/switch) the new project WebContentsView
+  // may take a moment to load its URL. Wait for the project view rather than
+  // returning the welcome page early.
+  //
+  // When called with an `oldPage`, also wait until the currently-attached
+  // WebContents differs from oldPage's URL — otherwise we may snapshot the
+  // attached view *before* the main process has finished swapping it out and
+  // return the still-active outgoing view.
+  const oldUrl = oldPage?.url() ?? null;
+  if (oldUrl && oldUrl.includes("projectId=")) {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      try {
+        const attached = await app.evaluate(({ BrowserWindow }) => {
+          const win = BrowserWindow.getAllWindows()[0];
+          if (!win || win.isDestroyed()) return null;
+          const views = win.contentView?.children ?? [];
+          // The welcome appView is permanently added to contentView and is
+          // typically first. Project views are added on top — iterate from
+          // last to first and prefer the topmost projectId-bearing view.
+          for (let i = views.length - 1; i >= 0; i--) {
+            const wc = (views[i] as Electron.WebContentsView).webContents;
+            if (wc && !wc.isDestroyed()) {
+              const url = wc.getURL();
+              if (url.includes("projectId=")) return url;
+            }
+          }
+          return null;
+        });
+        if (attached && attached !== oldUrl) break;
+      } catch {
+        // ignore and retry
+      }
+      await wait(150);
+    }
+  }
+
+  const newWindow = await getActiveAppWindow(app, 10_000, { requireProject: true });
+
+  if (!registeredPages.has(newWindow)) {
+    registeredPages.add(newWindow);
+    newWindow.on("crash", () => console.error("[e2e] Renderer crashed"));
+    newWindow.on("console", (msg) => {
+      if (msg.type() === "error") console.error("[e2e:console]", msg.text());
+    });
+  }
+
+  await newWindow
+    .locator('[aria-label="Toggle Sidebar"]')
+    .waitFor({ state: "visible", timeout: 10_000 });
+
+  // Wait for the project's active worktree to finish loading. Without this,
+  // shortcuts like Cmd+Alt+T fire with `activeWorktreeId=undefined`, which
+  // creates an orphan panel that never renders (worktree-filtered out) — the
+  // root cause of the original "Cmd+Alt+T opens a new terminal" flake.
+  // The worktree sidebar heading stops showing "Loading worktrees..." once
+  // the first worktree entry is in the DOM.
+  await newWindow
+    .locator('[aria-label="Worktrees"] a, [aria-label="Worktrees"] [role="button"], .worktree-item')
+    .first()
+    .waitFor({ state: "attached", timeout: 10_000 })
+    .catch(async () => {
+      // Fallback: just wait for the loading text to disappear.
+      await newWindow
+        .locator("text=Loading worktrees...")
+        .waitFor({ state: "hidden", timeout: 5_000 })
+        .catch(() => {});
+    });
+
+  // After WebContentsView creation, the new view's renderer may not receive
+  // keyboard events from Playwright's CDP `Input.dispatchKeyEvent` until the
+  // view has been focused by the main process, the CDP target brought to
+  // front, and a click inside the document has landed. Without all three,
+  // the first `keyboard.press` after a project switch can be silently
+  // dropped — manifesting as flaky/failed shortcut tests.
+  try {
+    // 1. Tell the main process to focus this project's WebContentsView.
+    const url = newWindow.url();
+    const match = url.match(/[?&]projectId=([^&]+)/);
+    const projectId = match ? decodeURIComponent(match[1]) : null;
+    if (projectId) {
+      await app.evaluate(({ BrowserWindow }, pid) => {
+        const win = BrowserWindow.getAllWindows()[0];
+        if (!win || win.isDestroyed()) return;
+        win.focus();
+        const views = win.contentView?.children ?? [];
+        for (const child of views) {
+          const wc = (child as Electron.WebContentsView).webContents;
+          if (!wc || wc.isDestroyed()) continue;
+          if (wc.getURL().includes(`projectId=${encodeURIComponent(pid)}`)) {
+            wc.focus();
+            break;
+          }
+        }
+      }, projectId);
+    }
+
+    // 2. Bring the Playwright CDP target for this page to the front so that
+    // `Input.dispatchKeyEvent` events are routed to this WebContents.
+    await newWindow.bringToFront().catch(() => {});
+
+    // 3. Click inside the document to give the browser keyboard focus to a
+    // real node, then poll `document.hasFocus()` and retry a few times if
+    // the document isn't claiming focus yet.
+    const grid = newWindow.locator('[role="grid"][aria-label="Panel grid"]').first();
+    const clickTarget = (await grid.isVisible({ timeout: 2_000 }).catch(() => false))
+      ? grid
+      : newWindow.locator("body");
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await clickTarget.click({ position: { x: 5, y: 5 }, force: true });
+      const hasFocus = await newWindow.evaluate(() => document.hasFocus()).catch(() => false);
+      if (hasFocus) break;
+      await wait(200);
+    }
+
+    // 4. Warm up the CDP keyboard input pipeline. The very first
+    // `Input.dispatchKeyEvent` to a freshly-created WebContentsView can be
+    // silently dropped on macOS even when the document has focus. Pressing
+    // and releasing a harmless modifier here ensures the input channel is
+    // primed before tests send their real shortcut presses.
+    await newWindow.keyboard.press("Shift").catch(() => {});
+  } catch {
+    // Best-effort focus; tests can still proceed.
+  }
+
+  return newWindow;
 }
 
 export async function closeApp(app: ElectronApplication): Promise<void> {

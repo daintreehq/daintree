@@ -6,7 +6,7 @@ import { runTerminalCommand } from "../helpers/terminal";
 import { getGridPanelCount } from "../helpers/panels";
 import {
   addAndSwitchToProject,
-  selectExistingProject,
+  selectExistingProjectAndRefresh,
   spawnTerminalAndVerify,
 } from "../helpers/workflows";
 import { SEL } from "../helpers/selectors";
@@ -25,7 +25,12 @@ test.describe.serial("Core: Error Recovery — Terminal Exit", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "error-recovery-exit" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Error Recovery Exit");
+    ctx.window = await openAndOnboardProject(
+      ctx.app,
+      ctx.window,
+      fixtureDir,
+      "Error Recovery Exit"
+    );
   });
 
   test.afterAll(async () => {
@@ -74,7 +79,7 @@ test.describe.serial("Core: Error Recovery — Missing Worktree", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "error-recovery-wt", withFeatureBranch: true });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Error Recovery WT");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Error Recovery WT");
   });
 
   test.afterAll(async () => {
@@ -113,10 +118,10 @@ test.describe.serial("Core: Error Recovery — Missing Project", () => {
   test.beforeAll(async () => {
     fixture = createMultiProjectFixture();
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixture.repoA, "Project A");
-    await addAndSwitchToProject(ctx.app, ctx.window, fixture.repoB, "Project B");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.repoA, "Project A");
+    ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, fixture.repoB, "Project B");
     // Switch back to A so B is inactive (checkMissingProjects skips the active project)
-    await selectExistingProject(ctx.window, "Project A");
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, "Project A");
   });
 
   test.afterAll(async () => {

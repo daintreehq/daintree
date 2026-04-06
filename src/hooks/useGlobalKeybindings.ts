@@ -2,7 +2,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { keybindingService, normalizeKeyForBinding } from "../services/KeybindingService";
 import { actionService } from "../services/ActionService";
 import { openPanelContextMenu } from "../lib/panelContextMenu";
-import { useTerminalStore } from "../store";
+import { usePanelStore } from "../store";
 
 /**
  * Global keybinding handler that provides:
@@ -47,7 +47,7 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         if (effectiveCombo !== undefined) {
           e.preventDefault();
           e.stopPropagation();
-          const focusedId = useTerminalStore.getState().focusedId;
+          const focusedId = usePanelStore.getState().focusedId;
           if (focusedId) {
             openPanelContextMenu(focusedId);
           }

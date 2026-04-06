@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
-import { CircleDot, Search, Loader2, Link, Unlink, CircleCheck } from "lucide-react";
+import { CircleDot, Search, Link, Unlink, CircleCheck } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 import { githubClient } from "@/clients";
 import type { GitHubIssue } from "@shared/types/github";
@@ -166,7 +167,7 @@ export function IssuePickerDialog({
       <div className="flex-1 overflow-y-auto min-h-0 px-6 pb-4">
         {isLoading && issues.length === 0 ? (
           <div className="flex items-center justify-center py-8 text-canopy-text/50">
-            <Loader2 className="w-5 h-5 animate-spin mr-2" />
+            <Spinner size="lg" className="mr-2" />
             <span className="text-sm">Loading issues...</span>
           </div>
         ) : error ? (

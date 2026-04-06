@@ -45,7 +45,7 @@ test.describe.serial("Core: File Viewer Modal", () => {
       withUncommittedChanges: true,
     });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "File Viewer Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "File Viewer Test");
   });
 
   test.afterAll(async () => {

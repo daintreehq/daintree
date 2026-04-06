@@ -3,11 +3,19 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { getAgentConfig } from "@/config/agents";
-import type React from "react";
-import { useNativeContextMenu, useKeybindingDisplay } from "@/hooks";
+import { useKeybindingDisplay } from "@/hooks";
 import { useWorktrees } from "@/hooks/useWorktrees";
-import type { MenuItemOption } from "@/types";
 import { actionService } from "@/services/ActionService";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 
@@ -24,7 +32,6 @@ export function AgentButton({
   availability,
   "data-toolbar-item": dataToolbarItem,
 }: AgentButtonProps) {
-  const { showMenu } = useNativeContextMenu();
   const { worktrees } = useWorktrees();
   const displayCombo = useKeybindingDisplay(`agent.${type}`);
 
@@ -60,102 +67,119 @@ export function AgentButton({
     }
   };
 
-  const handleContextMenu = async (event: React.MouseEvent) => {
-    const worktreeItems: MenuItemOption[] = worktrees.map((wt) => ({
-      id: `launch:worktree:${wt.id}`,
-      label: wt.isMainWorktree ? wt.name : wt.branch?.trim() || wt.name,
-      sublabel: wt.isMainWorktree ? undefined : wt.branch?.trim() ? wt.name : undefined,
-      submenu: [
-        { id: `launch:worktree:${wt.id}:grid`, label: "Grid" },
-        { id: `launch:worktree:${wt.id}:dock`, label: "Dock" },
-      ],
-    }));
-
-    const template: MenuItemOption[] = [
-      { id: "launch:current", label: `Launch ${config.name}`, enabled: isAvailable },
-      { id: "launch:current:dock", label: `Launch ${config.name} in Dock`, enabled: isAvailable },
-      {
-        id: "launch:worktree",
-        label: "Launch in Worktree",
-        enabled: isAvailable && worktreeItems.length > 0,
-        submenu: worktreeItems,
-      },
-      { type: "separator" },
-      {
-        id: "settings:agents",
-        label: `${config.name} Settings...`,
-      },
-    ];
-
-    const actionId = await showMenu(event, template);
-    if (!actionId) return;
-
-    if (actionId === "launch:current") {
-      void actionService.dispatch("agent.launch", { agentId: type }, { source: "context-menu" });
-      return;
-    }
-
-    if (actionId === "launch:current:dock") {
-      void actionService.dispatch(
-        "agent.launch",
-        { agentId: type, location: "dock" },
-        { source: "context-menu" }
-      );
-      return;
-    }
-
-    if (actionId.startsWith("launch:worktree:")) {
-      const parts = actionId.split(":");
-      const worktreeId = parts[2];
-      const location = parts[3] === "dock" ? "dock" : "grid";
-      void actionService.dispatch(
-        "agent.launch",
-        { agentId: type, worktreeId, location },
-        { source: "context-menu" }
-      );
-      return;
-    }
-
-    if (actionId === "settings:agents") {
-      void actionService.dispatch(
-        "app.settings.openTab",
-        { tab: "agents", subtab: type },
-        { source: "context-menu" }
-      );
-    }
-  };
-
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={handleClick}
-              onContextMenu={handleContextMenu}
-              disabled={isLoading}
-              data-toolbar-item={dataToolbarItem}
-              className={cn(
-                "toolbar-agent-button text-canopy-text transition-colors",
-                isAvailable &&
-                  "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
-                !isAvailable && !isLoading && "opacity-60"
-              )}
-              aria-label={ariaLabel}
-            >
-              <div className="relative">
-                <config.icon brandColor={getBrandColorHex(type)} />
-                {!isAvailable && !isLoading && (
-                  <div className="absolute -top-1 -right-1 w-2 h-2 bg-status-warning rounded-full ring-2 ring-canopy-sidebar" />
-                )}
-              </div>
-            </Button>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{tooltip}</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleClick}
+                  disabled={isLoading}
+                  data-toolbar-item={dataToolbarItem}
+                  className={cn(
+                    "toolbar-agent-button text-canopy-text transition-colors",
+                    isAvailable &&
+                      "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
+                    !isAvailable && !isLoading && "opacity-60"
+                  )}
+                  aria-label={ariaLabel}
+                >
+                  <div className="relative">
+                    <config.icon brandColor={getBrandColorHex(type)} />
+                    {!isAvailable && !isLoading && (
+                      <div className="absolute -top-1 -right-1 w-2 h-2 bg-status-warning rounded-full ring-2 ring-canopy-sidebar" />
+                    )}
+                  </div>
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{tooltip}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem
+          disabled={!isAvailable}
+          onSelect={() =>
+            void actionService.dispatch(
+              "agent.launch",
+              { agentId: type },
+              { source: "context-menu" }
+            )
+          }
+        >
+          Launch {config.name}
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!isAvailable}
+          onSelect={() =>
+            void actionService.dispatch(
+              "agent.launch",
+              { agentId: type, location: "dock" },
+              { source: "context-menu" }
+            )
+          }
+        >
+          Launch {config.name} in Dock
+        </ContextMenuItem>
+        {worktrees.length > 0 && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger disabled={!isAvailable}>
+              Launch in Worktree
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {worktrees.map((wt) => {
+                const label = wt.isMainWorktree ? wt.name : wt.branch?.trim() || wt.name;
+                return (
+                  <ContextMenuSub key={wt.id}>
+                    <ContextMenuSubTrigger>{label}</ContextMenuSubTrigger>
+                    <ContextMenuSubContent>
+                      <ContextMenuItem
+                        onSelect={() =>
+                          void actionService.dispatch(
+                            "agent.launch",
+                            { agentId: type, worktreeId: wt.id, location: "grid" },
+                            { source: "context-menu" }
+                          )
+                        }
+                      >
+                        Grid
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() =>
+                          void actionService.dispatch(
+                            "agent.launch",
+                            { agentId: type, worktreeId: wt.id, location: "dock" },
+                            { source: "context-menu" }
+                          )
+                        }
+                      >
+                        Dock
+                      </ContextMenuItem>
+                    </ContextMenuSubContent>
+                  </ContextMenuSub>
+                );
+              })}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onSelect={() =>
+            void actionService.dispatch(
+              "app.settings.openTab",
+              { tab: "agents", subtab: type },
+              { source: "context-menu" }
+            )
+          }
+        >
+          {config.name} Settings...
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

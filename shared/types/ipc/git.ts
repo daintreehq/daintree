@@ -1,5 +1,20 @@
 import type { GitStatus } from "../git.js";
 
+/** Pre-agent file snapshot info */
+export interface SnapshotInfo {
+  worktreeId: string;
+  stashRef: string;
+  createdAt: number;
+  hasChanges: boolean;
+}
+
+/** Result of reverting to a pre-agent snapshot */
+export interface SnapshotRevertResult {
+  success: boolean;
+  hasConflicts: boolean;
+  message: string;
+}
+
 /** Get file diff payload */
 export interface GitGetFileDiffPayload {
   /** Working directory (worktree path) */

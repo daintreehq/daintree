@@ -18,6 +18,10 @@ const projectStoreMock = vi.hoisted(() => ({
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   clipboard: clipboardMock,
+  BrowserWindow: {
+    fromWebContents: vi.fn(() => null),
+    getAllWindows: vi.fn(() => []),
+  },
 }));
 
 vi.mock("../../../services/ProjectStore.js", () => ({
@@ -56,10 +60,12 @@ describe("copyTree handlers", () => {
     } as never);
   });
 
+  const mockEvent = { sender: { id: 1 } } as never;
+
   it("returns validation errors instead of throwing for invalid generate payloads", async () => {
     const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
 
-    await expect(handler({} as never, null as never)).resolves.toEqual(
+    await expect(handler(mockEvent, null as never)).resolves.toEqual(
       expect.objectContaining({
         error: expect.stringContaining("Invalid payload"),
       })
@@ -69,7 +75,7 @@ describe("copyTree handlers", () => {
   it("returns validation errors instead of throwing for invalid generate-and-copy payloads", async () => {
     const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE);
 
-    await expect(handler({} as never, null as never)).resolves.toEqual(
+    await expect(handler(mockEvent, null as never)).resolves.toEqual(
       expect.objectContaining({
         error: expect.stringContaining("Invalid payload"),
       })
@@ -79,7 +85,7 @@ describe("copyTree handlers", () => {
   it("returns validation errors instead of throwing for invalid inject payloads", async () => {
     const handler = getInvokeHandler(CHANNELS.COPYTREE_INJECT);
 
-    await expect(handler({} as never, null as never)).resolves.toEqual(
+    await expect(handler(mockEvent, null as never)).resolves.toEqual(
       expect.objectContaining({
         error: expect.stringContaining("Invalid payload"),
       })

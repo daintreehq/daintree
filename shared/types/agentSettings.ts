@@ -85,6 +85,8 @@ export interface AgentSettingsEntry {
   inlineMode?: boolean;
   /** When true, inject --include-directories for the clipboard temp directory (Gemini only) */
   shareClipboardDirectory?: boolean;
+  /** Override the default model for this agent in assistant/help contexts (e.g., "claude-opus-4-6") */
+  assistantModelId?: string;
   [key: string]: unknown;
 }
 
@@ -96,6 +98,7 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
   claude: "--dangerously-skip-permissions",
   gemini: "--yolo",
   codex: "--dangerously-bypass-approvals-and-sandbox",
+  cursor: "--force",
 };
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
@@ -174,6 +177,8 @@ export interface GenerateAgentCommandOptions {
   clipboardDirectory?: string;
   /** Model ID to pass via --model flag (e.g., "claude-opus-4-6") */
   modelId?: string;
+  /** Additional CLI arguments from recipe terminal (whitespace-separated string) */
+  recipeArgs?: string;
 }
 
 /**
@@ -230,6 +235,17 @@ export function generateAgentCommand(
   // Add --model flag if a specific model was selected for this launch
   if (options?.modelId) {
     parts.push("--model", options.modelId);
+  }
+
+  // Add recipe-level args (per-terminal overrides from recipe editor)
+  if (options?.recipeArgs) {
+    for (const token of options.recipeArgs.trim().split(/\s+/).filter(Boolean)) {
+      if (token.startsWith("-")) {
+        parts.push(token);
+      } else {
+        parts.push(escapeShellArg(token));
+      }
+    }
   }
 
   // Add flags, escaping non-flag values

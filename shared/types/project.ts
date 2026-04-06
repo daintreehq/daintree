@@ -1,9 +1,9 @@
 import type { AgentId, AgentState } from "./agent.js";
 import type { BrowserHistory } from "./browser.js";
 import type {
-  TerminalKind,
+  PanelKind,
   TerminalType,
-  TerminalLocation,
+  PanelLocation,
   TabGroup,
   PanelExitBehavior,
 } from "./panel.js";
@@ -42,17 +42,18 @@ export interface Project {
   inRepoSettings?: boolean;
   /** Whether the project is pinned to the top of the project switcher */
   pinned?: boolean;
+  /** Frecency score for sorting (exponential decay, default 3.0) */
+  frecencyScore?: number;
+  /** Timestamp (ms) of last frecency update */
+  lastAccessedAt?: number;
 }
 
-/**
- * Panel snapshot for state preservation.
- * Note: Named TerminalSnapshot for backward compatibility.
- */
-export interface TerminalSnapshot {
+/** Panel snapshot for state preservation. */
+export interface PanelSnapshot {
   /** Terminal ID */
   id: string;
   /** Terminal category */
-  kind?: TerminalKind;
+  kind?: PanelKind;
   /** Terminal type */
   type?: TerminalType;
   /** Agent ID when kind is an agent - enables extensibility */
@@ -64,7 +65,7 @@ export interface TerminalSnapshot {
   /** Associated worktree ID */
   worktreeId?: string;
   /** Location in the UI - grid or dock */
-  location: TerminalLocation;
+  location: PanelLocation;
   /** Command to execute after shell starts (e.g., 'claude --model sonnet-4' for AI agents) */
   command?: string;
   /** Current URL for browser/dev-preview panes */
@@ -105,11 +106,13 @@ export interface TerminalSnapshot {
   agentState?: AgentState;
   /** Timestamp of last agent state change */
   lastStateChange?: number;
+  /** Opaque state bag for extension panels — survives the save/restore round-trip */
+  extensionState?: Record<string, unknown>;
   // Note: Tab membership is now stored in ProjectState.tabGroups, not on terminals
 }
 
-/** Type alias for TerminalSnapshot. Use this in new code. */
-export type PanelSnapshot = TerminalSnapshot;
+/** @deprecated Use PanelSnapshot instead. */
+export type TerminalSnapshot = PanelSnapshot;
 
 /** Terminal layout metadata */
 export interface TerminalLayout {
@@ -152,6 +155,8 @@ export interface ProjectState {
   focusPanelState?: FocusPanelState;
   /** Terminal dimensions per terminal ID (preserved across project switches) */
   terminalSizes?: Record<string, { cols: number; rows: number }>;
+  /** Hybrid input bar draft text per terminal ID (preserved across project switches) */
+  draftInputs?: Record<string, string>;
 }
 
 /** Recipe terminal type */
@@ -169,6 +174,8 @@ export interface RecipeTerminal {
   env?: Record<string, string>;
   /** Initial prompt to send to agent terminals after boot (optional). Supports {{issue_number}}, {{pr_number}}, {{worktree_path}}, {{branch_name}} variables replaced at runtime. */
   initialPrompt?: string;
+  /** Additional CLI arguments for agent terminals (e.g., "--model sonnet"). Whitespace-separated; applied at spawn time only. */
+  args?: string;
   /** Dev server command for dev-preview terminals (optional). Falls back to project devServerCommand if not set. */
   devCommand?: string;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely (optional, defaults to "keep") */
@@ -181,8 +188,8 @@ export interface TerminalRecipe {
   id: string;
   /** Human-readable name for the recipe */
   name: string;
-  /** Project ID this recipe belongs to (required for project-scoped storage) */
-  projectId: string;
+  /** Project ID this recipe belongs to; undefined means global (not tied to any project) */
+  projectId?: string;
   /** Associated worktree ID (optional for worktree-specific recipes) */
   worktreeId?: string;
   /** List of terminals to spawn when recipe is executed */
@@ -193,6 +200,8 @@ export interface TerminalRecipe {
   showInEmptyState?: boolean;
   /** Timestamp of last run (milliseconds since epoch) */
   lastUsedAt?: number;
+  /** Timestamps of recent runs for frecency scoring (capped at 20 entries) */
+  usageHistory?: number[];
   /** Controls whether the linked GitHub issue is auto-assigned during quick worktree creation */
   autoAssign?: "always" | "never" | "prompt";
 }
@@ -303,6 +312,8 @@ export interface ProjectSettings {
   /** Custom branch prefix string when branchPrefixMode is "custom" (e.g., "feature/") */
   branchPrefixCustom?: string;
 
+  /** Git remote name to use for GitHub integration (defaults to "origin") */
+  githubRemote?: string;
   /** Per-project worktree path pattern override (uses global default when unset) */
   worktreePathPattern?: string;
   /** Per-project terminal configuration overrides */

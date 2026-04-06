@@ -11,7 +11,7 @@ import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
 } from "@/components/Worktree/terminalStateConfig";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 
 export interface TabInfo {
   id: string;
@@ -206,9 +206,9 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     [onClick]
   );
 
-  const waitingReason = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.waitingReason
-  ) as WaitingReason | undefined;
+  const waitingReason = usePanelStore((state) => state.panelsById[id]?.waitingReason) as
+    | WaitingReason
+    | undefined;
   const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
   const StateIcon = showStateIcon ? getEffectiveStateIcon(agentState, waitingReason) : null;
 

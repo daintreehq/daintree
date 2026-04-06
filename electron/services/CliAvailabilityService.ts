@@ -19,6 +19,10 @@ export class CliAvailabilityService {
 
     this.inFlightCheck = (async () => {
       try {
+        if (this.availability === null) {
+          await refreshPath();
+        }
+
         const entries = Object.entries(getEffectiveRegistry());
 
         const checksPromise = Promise.allSettled(

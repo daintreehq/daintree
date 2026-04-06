@@ -109,6 +109,7 @@ const SESSION_OPTIONS: { value: SessionFilter; label: string }[] = [
   { value: "running", label: "Running" },
   { value: "waiting", label: "Waiting" },
   { value: "completed", label: "Completed" },
+  { value: "exited", label: "Exited" },
 ];
 
 const ACTIVITY_OPTIONS: { value: ActivityFilter; label: string }[] = [

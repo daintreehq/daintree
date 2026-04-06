@@ -1,3 +1,4 @@
+import type { BrowserWindow } from "electron";
 import type { AgentAvailabilityStore } from "../services/AgentAvailabilityStore.js";
 
 type Dialog = typeof import("electron").dialog;
@@ -10,9 +11,10 @@ export function getActiveAgentCount(store: AgentAvailabilityStore): number {
 
 export async function showQuitWarning(
   activeCount: number,
-  showMessageBox: Dialog["showMessageBox"]
+  showMessageBox: Dialog["showMessageBox"],
+  win?: BrowserWindow | null
 ): Promise<boolean> {
-  const { response } = await showMessageBox({
+  const opts: Electron.MessageBoxOptions = {
     type: "warning",
     buttons: ["Quit Anyway", "Cancel"],
     defaultId: 1,
@@ -20,7 +22,9 @@ export async function showQuitWarning(
     title: "Agents are working",
     message: `${activeCount} agent${activeCount > 1 ? "s are" : " is"} currently working`,
     detail: "Quitting now will interrupt active agents. Any unsaved progress may be lost.",
-  });
+  };
+
+  const { response } = win ? await showMessageBox(win, opts) : await showMessageBox(opts);
 
   return response === 0;
 }

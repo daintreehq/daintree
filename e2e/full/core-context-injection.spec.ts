@@ -21,7 +21,7 @@ test.describe.serial("Core: Context Injection", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ withMultipleFiles: true });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "context-test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "context-test");
 
     // Wait for action dispatch hook to be available
     await expect

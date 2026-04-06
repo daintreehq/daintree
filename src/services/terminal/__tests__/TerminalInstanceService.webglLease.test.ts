@@ -207,11 +207,12 @@ describe("onTierApplied handler — WebGL manager integration", () => {
   let webGLManager: import("../TerminalWebGLManager").TerminalWebGLManager;
   let managed: ManagedTerminal;
 
-  function makeManagedTerminal(): ManagedTerminal {
+  function makeManagedTerminal(kind: "agent" | "terminal" = "agent"): ManagedTerminal {
     return {
-      terminal: { loadAddon: vi.fn() },
+      terminal: { loadAddon: vi.fn(), refresh: vi.fn(), rows: 24 },
       isOpened: true,
       lastActiveTime: Date.now(),
+      kind,
     } as unknown as ManagedTerminal;
   }
 
@@ -225,6 +226,8 @@ describe("onTierApplied handler — WebGL manager integration", () => {
   });
 
   function simulateOnTierApplied(id: string, tier: TerminalRefreshTier, m: ManagedTerminal) {
+    if ((m as unknown as { kind?: string }).kind !== "agent") return;
+
     if (
       tier === TerminalRefreshTier.FOCUSED ||
       tier === TerminalRefreshTier.BURST ||
@@ -232,7 +235,11 @@ describe("onTierApplied handler — WebGL manager integration", () => {
     ) {
       webGLManager.ensureContext(id, m);
     } else {
+      const hadWebGL = webGLManager.isActive(id);
       webGLManager.releaseContext(id);
+      if (hadWebGL && m.terminal.rows > 0) {
+        m.terminal.refresh(0, m.terminal.rows - 1);
+      }
     }
   }
 
@@ -292,5 +299,67 @@ describe("onTierApplied handler — WebGL manager integration", () => {
     simulateOnTierApplied("t2", TerminalRefreshTier.FOCUSED, managedB);
     expect(webGLManager.isActive("t2")).toBe(true);
     expect(webGLManager.isActive("t1")).toBe(true);
+  });
+
+  it("standard terminal at FOCUSED never acquires WebGL context", () => {
+    const stdManaged = makeManagedTerminal("terminal");
+    simulateOnTierApplied("t-std", TerminalRefreshTier.FOCUSED, stdManaged);
+    expect(webGLManager.isActive("t-std")).toBe(false);
+  });
+
+  it("standard terminal at BURST/VISIBLE never acquires WebGL context", () => {
+    const stdManaged = makeManagedTerminal("terminal");
+    simulateOnTierApplied("t-std", TerminalRefreshTier.BURST, stdManaged);
+    expect(webGLManager.isActive("t-std")).toBe(false);
+    simulateOnTierApplied("t-std", TerminalRefreshTier.VISIBLE, stdManaged);
+    expect(webGLManager.isActive("t-std")).toBe(false);
+  });
+
+  it("rapid tier churn on standard terminal does not create pool entries", () => {
+    const stdManaged = makeManagedTerminal("terminal");
+    const tiers = [
+      TerminalRefreshTier.FOCUSED,
+      TerminalRefreshTier.BURST,
+      TerminalRefreshTier.FOCUSED,
+      TerminalRefreshTier.BACKGROUND,
+      TerminalRefreshTier.VISIBLE,
+    ];
+    for (const tier of tiers) {
+      simulateOnTierApplied("t-std", tier, stdManaged);
+    }
+    expect(webGLManager.isActive("t-std")).toBe(false);
+  });
+
+  it("mixed pool: standard terminals don't consume agent WebGL slots", () => {
+    const agents = Array.from({ length: 3 }, (_, i) => ({
+      id: `agent-${i}`,
+      m: makeManagedTerminal("agent"),
+    }));
+    const stdManaged = makeManagedTerminal("terminal");
+
+    for (const { id, m } of agents) {
+      simulateOnTierApplied(id, TerminalRefreshTier.FOCUSED, m);
+    }
+    simulateOnTierApplied("t-std", TerminalRefreshTier.FOCUSED, stdManaged);
+
+    for (const { id } of agents) {
+      expect(webGLManager.isActive(id)).toBe(true);
+    }
+    expect(webGLManager.isActive("t-std")).toBe(false);
+  });
+
+  it("agent terminal refresh is called after WebGL release", () => {
+    simulateOnTierApplied("t1", TerminalRefreshTier.FOCUSED, managed);
+    expect(webGLManager.isActive("t1")).toBe(true);
+
+    simulateOnTierApplied("t1", TerminalRefreshTier.BACKGROUND, managed);
+    expect(webGLManager.isActive("t1")).toBe(false);
+    expect(managed.terminal.refresh).toHaveBeenCalledWith(0, 23);
+  });
+
+  it("agent terminal refresh is NOT called when no WebGL was active", () => {
+    // Never acquired WebGL, go to BACKGROUND
+    simulateOnTierApplied("t1", TerminalRefreshTier.BACKGROUND, managed);
+    expect(managed.terminal.refresh).not.toHaveBeenCalled();
   });
 });

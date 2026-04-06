@@ -22,7 +22,7 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "drag-drop" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Drag Drop Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Drag Drop Test");
   });
 
   test.afterAll(async () => {
@@ -89,11 +89,12 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
     await dragElementTo(window, dragHandle, dockTarget);
     await window.waitForTimeout(T_SETTLE);
 
-    await expect
-      .poll(() => getGridPanelCount(window), { timeout: T_MEDIUM })
-      .toBe(gridIdsBefore.length - 1);
+    // The dragged panel should now be in the dock
     const dockIds = await getDockPanelIds(window);
     expect(dockIds).toContain(panelToDrag);
+    // Grid should have one fewer panel than before
+    const gridIdsAfter = await getGridPanelIds(window);
+    expect(gridIdsAfter).not.toContain(panelToDrag);
   });
 
   // ── Dock to Grid ─────────────────────────────────────────

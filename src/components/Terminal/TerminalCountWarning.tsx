@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { X, AlertTriangle, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelLimitStore, shouldShowSoftWarning } from "@/store/panelLimitStore";
 
@@ -11,14 +11,15 @@ interface TerminalCountWarningProps {
 }
 
 export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalCountWarningProps) {
-  const { activeCount, completedCount } = useTerminalStore(
+  const { activeCount, completedCount } = usePanelStore(
     useShallow((state) => {
       let active = 0;
       let completed = 0;
-      for (const t of state.terminals) {
-        if (t.location !== "trash") {
+      for (const id of state.panelIds) {
+        const t = state.panelsById[id];
+        if (t && t.location !== "trash") {
           active++;
-          if (t.agentState === "completed") completed++;
+          if (t.agentState === "completed" || t.agentState === "exited") completed++;
         }
       }
       return { activeCount: active, completedCount: completed };
@@ -82,13 +83,17 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
     if (onOpenBulkActions) {
       onOpenBulkActions();
     } else {
-      const terminals = useTerminalStore.getState().terminals;
-      const completedNonTrashed = terminals.filter(
-        (t) => t.agentState === "completed" && t.location !== "trash"
-      );
-      completedNonTrashed.forEach((t) => {
-        useTerminalStore.getState().trashTerminal(t.id);
-      });
+      const { panelsById, panelIds } = usePanelStore.getState();
+      for (const id of panelIds) {
+        const t = panelsById[id];
+        if (
+          t &&
+          (t.agentState === "completed" || t.agentState === "exited") &&
+          t.location !== "trash"
+        ) {
+          usePanelStore.getState().trashPanel(t.id);
+        }
+      }
     }
   }, [onOpenBulkActions]);
 
@@ -100,7 +105,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
         "flex items-center justify-between gap-4 px-4 py-3 rounded-[var(--radius-lg)]",
         "bg-[color-mix(in_oklab,var(--color-status-warning)_12%,transparent)]",
         "border border-status-warning/30",
-        "transition-all duration-200",
+        "transition duration-200",
         isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2",
         className
       )}

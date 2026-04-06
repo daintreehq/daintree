@@ -10,14 +10,14 @@ vi.mock("@/store", () => {
       state = { ...state, ...next };
     },
   });
-  return { useTerminalStore: store };
+  return { usePanelStore: store };
 });
 
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 import { useHasBeenVisible } from "../useHasBeenVisible";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockStore = useTerminalStore as any;
+const mockStore = usePanelStore as any;
 
 describe("useHasBeenVisible", () => {
   beforeEach(() => {

@@ -1,6 +1,7 @@
 {
   "name": "canopy-app",
-  "version": "0.5.3",
+  "productName": "Canopy",
+  "version": "0.6.0",
   "description": "Canopy IDE - An Electron-based development environment",
   "author": {
     "name": "Greg Priday",
@@ -17,6 +18,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:fresh": "cross-env CANOPY_RESET_DATA=1 node scripts/dev.mjs",
+    "dev:perf": "cross-env CANOPY_PERF_CAPTURE=1 CANOPY_PERF_METRICS_FILE=perf-metrics.ndjson node scripts/dev.mjs",
     "dev:vite": "vite",
     "dev:electron": "nodemon --delay 500ms --watch dist-electron/.build-ready.js --ext js --exec \"cross-env NODE_ENV=development electron .\"",
     "build:main": "cross-env NODE_ENV=production node scripts/build-main.mjs",
@@ -43,7 +45,7 @@
     "lint:ci": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit && tsc -b electron/tsconfig.preload.json electron/tsconfig.json",
+    "typecheck": "tsc --noEmit && tsc -b electron/tsconfig.json && tsc --noEmit -p electron/tsconfig.preload.json",
     "check": "npm run typecheck && npm run lint:ratchet && npm run format:check",
     "fix": "npm run format && npm run lint:fix",
     "test:smoke": "node scripts/run-smoke.mjs",
@@ -52,11 +54,16 @@
     "test:e2e:full": "npx playwright test --project=full",
     "test:e2e:online": "npx playwright test --project=online",
     "test:e2e:nightly": "npx playwright test --project=nightly --workers=1",
+    "demo": "electron . --demo-mode",
+    "demo:record": "tsx demo/runner.ts",
     "perf:smoke": "tsx scripts/perf/run.ts --mode smoke",
     "perf:ci": "tsx scripts/perf/run.ts --mode ci",
     "perf:nightly": "tsx scripts/perf/run.ts --mode nightly",
     "perf:soak": "tsx scripts/perf/run.ts --mode soak",
     "perf:trend": "tsx scripts/perf/report/trend.ts --mode ci",
+    "pattern-discovery:run": "tsx scripts/pattern-discovery/runner.ts",
+    "pattern-discovery:analyze": "tsx scripts/pattern-discovery/analyzer.ts",
+    "pattern-discovery:update": "tsx scripts/pattern-discovery/update-registry.ts",
     "prepare": "husky"
   },
   "dependencies": {
@@ -120,7 +127,6 @@
     "@xterm/headless": "^6.0.0",
     "@xterm/xterm": "^6.0.0",
     "anser": "^2.3.5",
-    "autoprefixer": "^10.4.27",
     "babel-plugin-react-compiler": "^1.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -128,7 +134,7 @@
     "cross-env": "^10.1.0",
     "drizzle-kit": "^0.31.9",
     "drizzle-orm": "^0.45.1",
-    "electron": "^40.8.3",
+    "electron": "^41.1.0",
     "electron-builder": "^26.8.1",
     "electron-store": "^11.0.2",
     "electron-updater": "^6.3.0",
@@ -145,7 +151,6 @@
     "frimousse": "^0.3.0",
     "fuse.js": "^7.1.0",
     "gray-matter": "^4.0.3",
-    "happy-dom": "^20.8.4",
     "highlight.js": "^11.11.1",
     "husky": "^9.1.7",
     "ink": "^6.5.1",
@@ -154,9 +159,9 @@
     "lint-staged": "^16.4.0",
     "lucide-react": "^0.577.0",
     "nodemon": "^3.1.11",
+    "openai": "^6.33.0",
     "p-queue": "^9.0.1",
     "path-browserify": "^1.0.1",
-    "postcss": "^8.5.8",
     "prettier": "^3.7.2",
     "react": "^19.2.1",
     "react-diff-view": "^3.3.2",
@@ -207,7 +212,16 @@
       "!node_modules/node-pty/bin",
       "!node_modules/node-pty/prebuilds"
     ],
-    "extraResources": [],
+    "extraResources": [
+      {
+        "from": "help",
+        "to": "help"
+      },
+      {
+        "from": "electron/resources/sounds",
+        "to": "sounds"
+      }
+    ],
     "asarUnpack": [
       "node_modules/node-pty/**/*",
       "node_modules/better-sqlite3/**/*"
@@ -350,7 +364,8 @@
         "libsecret-1-0",
         "xdg-utils"
       ],
-      "afterInstall": "build/linux/postinst.sh"
+      "afterInstall": "build/linux/postinst.sh",
+      "afterRemove": "build/linux/postrm.sh"
     }
   }
 }

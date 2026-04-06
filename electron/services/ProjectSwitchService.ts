@@ -7,18 +7,21 @@ import { taskQueueService } from "./TaskQueueService.js";
 import { taskWorktreeService } from "./TaskWorktreeService.js";
 import { contextInjectionTracker } from "./ContextInjectionTracker.js";
 import { CHANNELS } from "../ipc/channels.js";
-import { sendToRenderer } from "../ipc/utils.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
 import { randomUUID } from "crypto";
 import { store } from "../store.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
+import { buildSwitchHydrateResult } from "./AppHydrationService.js";
 
 export class ProjectSwitchService {
   private deps: HandlerDependencies;
   private switchChain: Promise<void> = Promise.resolve();
+  private readonly windowId: number | null;
 
   constructor(deps: HandlerDependencies) {
     this.deps = deps;
+    this.windowId = deps.mainWindow?.id ?? null;
   }
 
   async switchProject(projectId: string): Promise<Project> {
@@ -82,7 +85,7 @@ export class ProjectSwitchService {
         throw new Error(`Project not found after update: ${projectId}`);
       }
 
-      const [, worktreeLoadError] = await Promise.all([
+      const [, loadResult] = await Promise.all([
         cleanupPromise,
         withPerformanceSpan(
           PERF_MARKS.PROJECT_SWITCH_LOAD_PROJECT,
@@ -90,12 +93,29 @@ export class ProjectSwitchService {
           { projectId }
         ),
       ]);
+      const worktreeLoadError = loadResult?.error;
 
       const switchId = randomUUID();
-      sendToRenderer(this.deps.mainWindow, CHANNELS.PROJECT_ON_SWITCH, {
+
+      // Pre-build hydration data to embed in the switch payload, eliminating
+      // the ~50-150ms IPC round-trip the renderer would otherwise make via
+      // appClient.hydrate(). Soft-fail: if the builder throws, broadcast
+      // without it and the renderer falls back to the IPC pull model.
+      let hydrateResult: import("../../shared/types/ipc/app.js").HydrateResult | undefined;
+      try {
+        hydrateResult = await buildSwitchHydrateResult(projectId);
+      } catch (error) {
+        console.warn(
+          "[ProjectSwitch] Failed to pre-build hydrate result, renderer will fallback to IPC:",
+          error
+        );
+      }
+
+      broadcastToRenderer(CHANNELS.PROJECT_ON_SWITCH, {
         project: updatedProject,
         switchId,
         ...(worktreeLoadError ? { worktreeLoadError } : {}),
+        ...(hydrateResult ? { hydrateResult } : {}),
       });
 
       console.log("[ProjectSwitch] Project switch complete, switchId:", switchId);
@@ -104,9 +124,9 @@ export class ProjectSwitchService {
       console.error("[ProjectSwitch] Project switch failed, rolling back:", error);
       try {
         if (previousProjectId) {
-          this.deps.ptyClient!.onProjectSwitch(previousProjectId);
+          this.deps.ptyClient!.onProjectSwitch(this.windowId!, previousProjectId);
         } else {
-          this.deps.ptyClient!.setActiveProject(null);
+          this.deps.ptyClient!.setActiveProject(this.windowId!, null);
         }
       } catch (rollbackError) {
         console.error("[ProjectSwitch] Rollback failed:", rollbackError);
@@ -155,15 +175,8 @@ export class ProjectSwitchService {
   }
 
   private async cleanupWorktreeService(): Promise<void> {
-    if (!this.deps.worktreeService?.onProjectSwitch) {
-      return;
-    }
-
-    try {
-      await Promise.resolve().then(() => this.deps.worktreeService!.onProjectSwitch());
-    } catch (error) {
-      console.error("[ProjectSwitch] WorktreeService cleanup failed:", error);
-    }
+    // No-op: blue-green swap in WorkspaceClient.loadProject() handles
+    // the old host release atomically after the new host is ready.
   }
 
   private async cleanupSupportingServices(
@@ -174,7 +187,7 @@ export class ProjectSwitchService {
 
     const safeCall = (fn: () => unknown): Promise<unknown> => Promise.resolve().then(fn);
     const cleanupResults = await Promise.allSettled([
-      safeCall(() => this.deps.ptyClient!.onProjectSwitch(projectId)),
+      safeCall(() => this.deps.ptyClient!.onProjectSwitch(this.windowId!, projectId)),
       safeCall(() => logBuffer.onProjectSwitch()),
       this.deps.eventBuffer?.onProjectSwitch
         ? safeCall(() => this.deps.eventBuffer!.onProjectSwitch())
@@ -199,19 +212,19 @@ export class ProjectSwitchService {
     });
   }
 
-  private async loadNewProject(project: Project): Promise<string | undefined> {
-    if (!this.deps.worktreeService) {
+  private async loadNewProject(project: Project): Promise<{ error?: string } | undefined> {
+    if (!this.deps.worktreeService || this.windowId === null) {
       return undefined;
     }
 
     try {
       console.log("[ProjectSwitch] Loading worktrees for new project...");
-      await this.deps.worktreeService.loadProject(project.path);
+      await this.deps.worktreeService.loadProject(project.path, this.windowId);
       console.log("[ProjectSwitch] Worktrees loaded successfully");
-      return undefined;
+      return {};
     } catch (err) {
-      console.error("Failed to load worktrees for project:", err);
-      return err instanceof Error ? err.message : "Failed to load worktrees";
+      console.error("[ProjectSwitch] Failed to load worktrees for project:", err);
+      return { error: err instanceof Error ? err.message : "Failed to load worktrees" };
     }
   }
 

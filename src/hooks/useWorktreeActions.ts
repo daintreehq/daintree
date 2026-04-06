@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import type { WorktreeState, RecipeTerminal } from "@/types";
+import type { WorktreeSnapshot, RecipeTerminal } from "@/types";
 import { useErrorStore, type AppError } from "@/store";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useNotificationStore } from "@/store/notificationStore";
@@ -104,11 +104,11 @@ export interface UseWorktreeActionsOptions {
 }
 
 export interface WorktreeActions {
-  handleCopyTree: (worktree: WorktreeState) => Promise<string | undefined>;
-  handleOpenEditor: (worktree: WorktreeState) => void;
-  handleOpenIssue: (worktree: WorktreeState) => void;
-  handleOpenPR: (worktree: WorktreeState) => void;
-  handleSaveLayout: (worktree: WorktreeState) => void;
+  handleCopyTree: (worktree: WorktreeSnapshot) => Promise<string | undefined>;
+  handleOpenEditor: (worktree: WorktreeSnapshot) => void;
+  handleOpenIssue: (worktree: WorktreeSnapshot) => void;
+  handleOpenPR: (worktree: WorktreeSnapshot) => void;
+  handleSaveLayout: (worktree: WorktreeSnapshot) => void;
   handleLaunchAgent: (worktreeId: string, agentId: string) => void;
 }
 
@@ -119,7 +119,7 @@ export function useWorktreeActions({
   const addError = useErrorStore((state) => state.addError);
 
   const handleCopyTree = useCallback(
-    async (worktree: WorktreeState): Promise<string | undefined> => {
+    async (worktree: WorktreeSnapshot): Promise<string | undefined> => {
       try {
         const result = await actionService.dispatch(
           "worktree.copyTree",
@@ -174,7 +174,7 @@ export function useWorktreeActions({
     [addError]
   );
 
-  const handleOpenEditor = useCallback((worktree: WorktreeState) => {
+  const handleOpenEditor = useCallback((worktree: WorktreeSnapshot) => {
     void actionService.dispatch(
       "worktree.openEditor",
       { worktreeId: worktree.id },
@@ -182,7 +182,7 @@ export function useWorktreeActions({
     );
   }, []);
 
-  const handleOpenIssue = useCallback((worktree: WorktreeState) => {
+  const handleOpenIssue = useCallback((worktree: WorktreeSnapshot) => {
     if (worktree.issueNumber) {
       void actionService.dispatch(
         "worktree.openIssue",
@@ -192,7 +192,7 @@ export function useWorktreeActions({
     }
   }, []);
 
-  const handleOpenPR = useCallback((worktree: WorktreeState) => {
+  const handleOpenPR = useCallback((worktree: WorktreeSnapshot) => {
     if (worktree.prUrl) {
       void actionService.dispatch(
         "worktree.openPR",
@@ -203,7 +203,7 @@ export function useWorktreeActions({
   }, []);
 
   const handleSaveLayout = useCallback(
-    (worktree: WorktreeState) => {
+    (worktree: WorktreeSnapshot) => {
       const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals(worktree.id);
 
       if (terminals.length === 0) {

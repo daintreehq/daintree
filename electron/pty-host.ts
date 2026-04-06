@@ -9,12 +9,24 @@
  * pattern matching or AI classification.
  */
 
+// Silence EPIPE on stdout/stderr — the main process may close the pipe
+// at any time during shutdown or host restart.
+for (const stream of [process.stdout, process.stderr]) {
+  if (stream && typeof stream.on === "function") {
+    stream.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EPIPE") return;
+      throw err;
+    });
+  }
+}
+
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
 import { PtyManager } from "./services/PtyManager.js";
 import { PtyPool, getPtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
 import { TerminalResourceMonitor } from "./services/pty/TerminalResourceMonitor.js";
+import { RESOURCE_PROFILE_CONFIGS, type ResourceProfile } from "../shared/types/resourceProfile.js";
 import { events } from "./services/events.js";
 import { SharedRingBuffer, PacketFramer } from "../shared/utils/SharedRingBuffer.js";
 import { selectShard } from "../shared/utils/shardSelection.js";
@@ -29,12 +41,15 @@ import {
   ResourceGovernor,
   BackpressureManager,
   IpcQueueManager,
+  PortQueueManager,
+  PortBatcher,
   metricsEnabled,
   parseSpawnError,
   toHostSnapshot,
   MAX_PACKET_PAYLOAD,
   BACKPRESSURE_SAFETY_TIMEOUT_MS,
 } from "./pty-host/index.js";
+import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
 
 // Validate we're running in UtilityProcess context
 if (!process.parentPort) {
@@ -113,10 +128,15 @@ function getOrCreatePauseCoordinator(id: string): PtyPauseCoordinator | undefine
   return coordinator;
 }
 
-// MessagePort for direct Renderer ↔ Pty Host communication (bypasses Main)
-// Note: This variable holds the port reference so the message handler stays active
-let rendererPort: MessagePort | null = null;
-let rendererPortMessageHandler: ((event: any) => void) | null = null;
+// Per-window MessagePort connections for direct Renderer ↔ Pty Host communication
+interface RendererConnection {
+  port: MessagePort;
+  handler: (e: MessageEvent) => void;
+  portQueueManager: PortQueueManager;
+  batcher: PortBatcher;
+}
+const rendererConnections = new Map<number, RendererConnection>();
+const windowProjectMap = new Map<number, string | null>();
 
 // Helper to send events to Main process
 function sendEvent(event: PtyHostEvent): void {
@@ -139,6 +159,63 @@ const ipcQueueManager = new IpcQueueManager({
   emitTerminalStatus: (...args) => backpressureManager.emitTerminalStatus(...args),
   emitReliabilityMetric: (payload) => backpressureManager.emitReliabilityMetric(payload),
 });
+
+// PortQueueManager deps factory — creates per-window instances with unique pause tokens
+function createPortQueueManager(windowId: number): PortQueueManager {
+  return new PortQueueManager({
+    getTerminal: (id) => ptyManager.getTerminal(id),
+    getPauseCoordinator,
+    sendEvent,
+    metricsEnabled,
+    emitTerminalStatus: (...args) => backpressureManager.emitTerminalStatus(...args),
+    emitReliabilityMetric: (payload) => backpressureManager.emitReliabilityMetric(payload),
+    pauseToken: `port-queue-${windowId}`,
+  });
+}
+
+/** Recompute activity tiers for all terminals based on union of connected windows' projects */
+function recomputeActivityTiers(): void {
+  const activeProjects = new Set<string>();
+  for (const projectId of windowProjectMap.values()) {
+    if (projectId !== null) activeProjects.add(projectId);
+  }
+
+  for (const terminal of ptyManager.getAll()) {
+    const isActiveInAnyWindow =
+      activeProjects.size === 0 ||
+      (terminal.projectId !== undefined && activeProjects.has(terminal.projectId));
+    const tier = isActiveInAnyWindow ? "active" : "background";
+    backpressureManager.setActivityTier(terminal.id, tier);
+    ptyManager.setActivityMonitorTier(terminal.id, tier === "active" ? 50 : 500);
+  }
+}
+
+/** Disconnect a window's renderer port and clean up its resources */
+function disconnectWindow(windowId: number, reason: string): void {
+  const conn = rendererConnections.get(windowId);
+  if (!conn) return;
+
+  try {
+    conn.port.removeListener("message", conn.handler);
+  } catch {
+    // ignore
+  }
+  // Dispose batcher (drops buffered data — port is closing)
+  conn.batcher.dispose();
+  // Release port-queue pause holds before disposing
+  conn.portQueueManager.resumeAll();
+  conn.portQueueManager.dispose();
+  try {
+    conn.port.close();
+  } catch {
+    // ignore
+  }
+
+  rendererConnections.delete(windowId);
+  windowProjectMap.delete(windowId);
+  recomputeActivityTiers();
+  console.log(`[PtyHost] Window ${windowId} disconnected (${reason})`);
+}
 
 const resourceGovernor = new ResourceGovernor({
   getTerminalIds: () => ptyManager.getAll().map((t) => t.id),
@@ -165,13 +242,43 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   // Analysis buffer writes still occur for agent state detection
   const activityTier = backpressureManager.getActivityTier(id);
   const isBackgrounded = activityTier === "background";
-  // PRIORITY 1: VISUAL RENDERER (Zero-Latency Path)
-  // Write to SharedArrayBuffer immediately before doing ANY processing.
-  // This ensures terminal output reaches xterm.js with minimal latency.
-  // Skip visual writes if suspended, but continue to analysis buffer for agent state detection.
+  // PRIORITY 1: MESSAGEPORT (Per-Window Routed Path)
+  // Send data directly to renderer windows via MessagePort with per-window project filtering.
+  // MessagePort is primary because SharedArrayBuffer ring buffers use a single shared read pointer
+  // (single-consumer design). With per-project WebContentsViews, multiple SAB workers race on the
+  // same read pointer, causing data meant for one view to be consumed by another view's worker
+  // and silently dropped. MessagePort avoids this by routing data to the correct project view.
+  // Skip MessagePort for smoke test terminals — the smoke test monitors data via PtyClient
+  // (IPC events in the main process), so these must always use the IPC fallback path.
   let visualWritten = isSuspended;
 
-  if (!isSuspended && !isBackgrounded && visualBuffers.length > 0) {
+  if (
+    !isSuspended &&
+    !isBackgrounded &&
+    rendererConnections.size > 0 &&
+    !isSmokeTestTerminalId(id)
+  ) {
+    const dataString = toStringForIpc(data);
+    const byteCount = Buffer.byteLength(dataString, "utf8");
+
+    for (const [windowId, conn] of rendererConnections) {
+      const windowProject = windowProjectMap.get(windowId) ?? null;
+      const termProject = terminalInfo?.projectId ?? null;
+      const filtered = windowProject !== null && termProject !== windowProject;
+
+      if (filtered) continue;
+
+      if (conn.batcher.write(id, dataString, byteCount)) {
+        visualWritten = true;
+      }
+    }
+    // If at capacity on all ports, fall through to SAB or IPC fallback
+  }
+
+  // PRIORITY 2: SHARED ARRAY BUFFER (Zero-Copy Fallback)
+  // Used when no MessagePort renderer connections are available (e.g., during startup before
+  // port handshake completes). SAB is single-consumer — safe only when one view is reading.
+  if (!visualWritten && !isSuspended && !isBackgrounded && visualBuffers.length > 0) {
     const shardIndex = selectShard(id, visualBuffers.length);
     const shard = visualBuffers[shardIndex];
 
@@ -285,17 +392,6 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     }
   }
 
-  // Direct MessagePort output: send data directly to renderer, bypassing main process
-  if (!visualWritten && !isBackgrounded && !isSuspended && rendererPort) {
-    try {
-      rendererPort.postMessage({ type: "data", id, data: toStringForIpc(data) });
-      visualWritten = true;
-    } catch {
-      rendererPort = null;
-      rendererPortMessageHandler = null;
-    }
-  }
-
   // IPC Data Mirror: Always send data via IPC for terminals that need main-process
   // monitoring (e.g., UrlDetector for dev preview URL detection), even when SAB write succeeded.
   // Skip mirroring for suspended/backgrounded terminals to respect backpressure semantics.
@@ -362,8 +458,16 @@ ptyManager.on("exit", (id: string, exitCode: number) => {
   // Clean up any active backpressure monitoring for this terminal
   backpressureManager.cleanupTerminal(id);
 
-  // Clean up IPC backpressure state
+  // Flush pending batched data for exiting terminal, then clean up backpressure state
   ipcQueueManager.clearQueue(id);
+  for (const conn of rendererConnections.values()) {
+    try {
+      conn.batcher.flushTerminal(id);
+    } catch {
+      // Port may already be closed — safe to ignore
+    }
+    conn.portQueueManager.clearQueue(id);
+  }
 
   // Clean up IPC data mirror state
   ipcDataMirrorTerminals.delete(id);
@@ -391,9 +495,15 @@ events.on("agent:state-changed", (payload) => {
       confidence: payload.confidence,
       worktreeId: payload.worktreeId,
       waitingReason: payload.waitingReason,
+      sessionCost: payload.sessionCost,
+      sessionTokens: payload.sessionTokens,
     });
 
-    if (payload.state === "waiting" || payload.state === "completed") {
+    if (
+      payload.state === "waiting" ||
+      payload.state === "completed" ||
+      payload.state === "exited"
+    ) {
       ptyManager.flushAgentSnapshot(payload.terminalId);
     }
   }
@@ -586,43 +696,54 @@ port.on("message", async (rawMsg: any) => {
 
   try {
     switch (msg.type) {
-      case "connect-port":
-        // Receive MessagePort for direct Renderer ↔ Pty Host communication
+      case "connect-port": {
+        // Receive MessagePort for direct Renderer ↔ Pty Host communication (per-window)
+        const windowId: number | undefined = msg.windowId;
+        if (typeof windowId !== "number") {
+          console.warn("[PtyHost] connect-port missing windowId, ignoring");
+          break;
+        }
+
         if (ports && ports.length > 0) {
           const receivedPort = ports[0] as MessagePort;
-          if (rendererPort === receivedPort && rendererPortMessageHandler) {
+          const existing = rendererConnections.get(windowId);
+
+          // Duplicate port check
+          if (existing?.port === receivedPort) {
             try {
               receivedPort.start();
             } catch {
               // ignore
             }
-            console.log("[PtyHost] MessagePort already connected, ignoring duplicate connect-port");
+            console.log(
+              `[PtyHost] MessagePort already connected for window ${windowId}, ignoring duplicate`
+            );
             break;
           }
 
-          if (rendererPort) {
-            if (rendererPortMessageHandler) {
-              try {
-                rendererPort.removeListener("message", rendererPortMessageHandler);
-              } catch {
-                // ignore
-              }
-            }
-            try {
-              rendererPort.close();
-            } catch {
-              // ignore
-            }
+          // Replace existing connection for this window
+          if (existing) {
+            disconnectWindow(windowId, "port-replace");
           }
 
-          rendererPort = receivedPort;
+          const perWindowQueueManager = createPortQueueManager(windowId);
+          const perWindowBatcher = new PortBatcher({
+            portQueueManager: perWindowQueueManager,
+            postMessage: (id, data, bytes) => {
+              receivedPort.postMessage({ type: "data", id, data, bytes });
+            },
+            onError: () => {
+              disconnectWindow(windowId, "postMessage-error");
+            },
+          });
           receivedPort.start();
-          console.log("[PtyHost] MessagePort received from Main, starting listener...");
+          console.log(
+            `[PtyHost] MessagePort received from Main for window ${windowId}, starting listener...`
+          );
 
-          rendererPortMessageHandler = (event: any) => {
+          const handler = (event: MessageEvent) => {
             const portMsg = event?.data ? event.data : event;
 
-            // Validate message structure
             if (!portMsg || typeof portMsg !== "object") {
               console.warn("[PtyHost] Invalid MessagePort message:", portMsg);
               return;
@@ -642,6 +763,13 @@ port.on("message", async (rawMsg: any) => {
                 typeof portMsg.rows === "number"
               ) {
                 ptyManager.resize(portMsg.id, portMsg.cols, portMsg.rows);
+              } else if (
+                portMsg.type === "ack" &&
+                typeof portMsg.id === "string" &&
+                typeof portMsg.bytes === "number"
+              ) {
+                perWindowQueueManager.removeBytes(portMsg.id, portMsg.bytes);
+                perWindowQueueManager.tryResume(portMsg.id);
               } else {
                 console.warn(
                   "[PtyHost] Unknown or invalid MessagePort message type:",
@@ -653,21 +781,28 @@ port.on("message", async (rawMsg: any) => {
             }
           };
 
-          receivedPort.on("message", rendererPortMessageHandler);
+          receivedPort.on("message", handler);
 
           receivedPort.on("close", () => {
-            if (rendererPort === receivedPort) {
-              rendererPort = null;
-              rendererPortMessageHandler = null;
-              console.log("[PtyHost] MessagePort closed, falling back to IPC");
+            // Guard: only disconnect if this port is still the active one for this window
+            const current = rendererConnections.get(windowId);
+            if (current?.port === receivedPort) {
+              disconnectWindow(windowId, "port-close");
             }
           });
 
-          console.log("[PtyHost] MessagePort listener installed");
+          rendererConnections.set(windowId, {
+            port: receivedPort,
+            handler,
+            portQueueManager: perWindowQueueManager,
+            batcher: perWindowBatcher,
+          });
+          console.log(`[PtyHost] MessagePort listener installed for window ${windowId}`);
         } else {
           console.warn("[PtyHost] connect-port message received but no ports provided");
         }
         break;
+      }
 
       case "init-buffers": {
         const visualOk =
@@ -706,15 +841,19 @@ port.on("message", async (rawMsg: any) => {
       }
 
       case "set-active-project": {
-        ptyManager.setActiveProject(msg.projectId);
+        windowProjectMap.set(msg.windowId, msg.projectId);
+        recomputeActivityTiers();
         break;
       }
 
       case "project-switch": {
-        ptyManager.onProjectSwitch(msg.projectId, (id, tier) => {
-          backpressureManager.setActivityTier(id, tier);
-        });
-        ptyManager.setActiveProject(msg.projectId);
+        windowProjectMap.set(msg.windowId, msg.projectId);
+        recomputeActivityTiers();
+        break;
+      }
+
+      case "disconnect-port": {
+        disconnectWindow(msg.windowId, "explicit-disconnect");
         break;
       }
 
@@ -1272,7 +1411,7 @@ port.on("message", async (rawMsg: any) => {
             waitingReason: t.waitingReason,
             lastStateChange: t.lastStateChange,
             spawnedAt: t.spawnedAt,
-            isTrashed: t.isTrashed,
+            isTrashed: ptyManager.isInTrash(t.id),
             trashExpiresAt: t.trashExpiresAt,
             activityTier: ptyManager.getActivityTier(t.id),
             hasPty: !t.wasKilled && !t.isExited,
@@ -1302,7 +1441,7 @@ port.on("message", async (rawMsg: any) => {
             waitingReason: t.waitingReason,
             lastStateChange: t.lastStateChange,
             spawnedAt: t.spawnedAt,
-            isTrashed: t.isTrashed,
+            isTrashed: ptyManager.isInTrash(t.id),
             trashExpiresAt: t.trashExpiresAt,
             activityTier: ptyManager.getActivityTier(t.id),
             hasPty: !t.wasKilled && !t.isExited,
@@ -1318,6 +1457,24 @@ port.on("message", async (rawMsg: any) => {
         terminalResourceMonitor.setEnabled(msg.enabled === true);
         break;
 
+      case "set-resource-profile": {
+        const profileConfig = RESOURCE_PROFILE_CONFIGS[msg.profile as ResourceProfile];
+        if (profileConfig) {
+          processTreeCache.setPollInterval(profileConfig.processTreePollInterval);
+          console.log(
+            `[PtyHost] Resource profile set to: ${msg.profile} (processTree poll: ${profileConfig.processTreePollInterval}ms)`
+          );
+        }
+        break;
+      }
+
+      case "set-process-tree-poll-interval": {
+        if (typeof msg.ms === "number" && msg.ms > 0) {
+          processTreeCache.setPollInterval(msg.ms);
+        }
+        break;
+      }
+
       case "dispose":
         cleanup();
         break;
@@ -1332,6 +1489,11 @@ port.on("message", async (rawMsg: any) => {
 
 function cleanup(): void {
   console.log("[PtyHost] Disposing resources...");
+
+  // Disconnect all renderer windows
+  for (const windowId of Array.from(rendererConnections.keys())) {
+    disconnectWindow(windowId, "cleanup");
+  }
 
   resourceGovernor.dispose();
 

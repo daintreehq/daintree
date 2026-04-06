@@ -410,7 +410,7 @@ describe("ActionService", () => {
       expect(mockIncrementCount).toHaveBeenCalledWith("test.action");
     });
 
-    it("does not increment count when show returns false", async () => {
+    it("increments count unconditionally even when show returns false", async () => {
       mockGetEffectiveCombo.mockReturnValue("Cmd+K");
       mockGetDisplayCombo.mockReturnValue("⌘K");
       mockShow.mockReturnValue(false);
@@ -419,7 +419,7 @@ describe("ActionService", () => {
       await service.dispatch("test.action" as ActionId, undefined, { source: "user" });
 
       expect(mockShow).toHaveBeenCalled();
-      expect(mockIncrementCount).not.toHaveBeenCalled();
+      expect(mockIncrementCount).toHaveBeenCalledWith("test.action");
     });
 
     it("does not emit hint for keybinding source", async () => {

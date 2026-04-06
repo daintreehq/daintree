@@ -15,6 +15,7 @@ vi.mock("@/clients", () => ({
       signalBuffer: null,
     })),
     acknowledgeData: vi.fn(),
+    acknowledgePortData: vi.fn(),
   },
   systemClient: { openExternal: vi.fn() },
   appClient: { getHydrationState: vi.fn() },
@@ -64,6 +65,7 @@ type ScrollbackTestService = {
   instances: Map<string, unknown>;
   reduceScrollback: (id: string, targetLines: number) => void;
   restoreScrollback: (id: string) => void;
+  reduceScrollbackAllBackground: (targetLines: number) => void;
 };
 
 function makeMockManaged(overrides: Record<string, unknown> = {}) {
@@ -201,8 +203,8 @@ describe("TerminalInstanceService - Scrollback", () => {
 
       service.restoreScrollback("t1");
 
-      // getScrollbackForType("terminal", 5000) = min(2000, max(200, floor(5000*0.2))) = 1000
-      expect(managed.terminal.options.scrollback).toBe(1000);
+      // getScrollbackForType("terminal", 5000) = min(2000, max(200, floor(5000*0.3))) = 1500
+      expect(managed.terminal.options.scrollback).toBe(1500);
     });
 
     it("uses project-level scrollback override for non-agent terminals", () => {
@@ -213,8 +215,8 @@ describe("TerminalInstanceService - Scrollback", () => {
 
       service.restoreScrollback("t1");
 
-      // getScrollbackForType("terminal", 2000) = min(2000, max(200, floor(2000*0.2))) = 400
-      expect(managed.terminal.options.scrollback).toBe(400);
+      // getScrollbackForType("terminal", 2000) = min(2000, max(200, floor(2000*0.3))) = 600
+      expect(managed.terminal.options.scrollback).toBe(600);
     });
 
     it("ignores project override for agent terminals", () => {
@@ -225,8 +227,64 @@ describe("TerminalInstanceService - Scrollback", () => {
 
       service.restoreScrollback("t1");
 
-      // getScrollbackForType("claude", 5000) = min(5000, max(500, floor(5000*1.0))) = 5000
+      // getScrollbackForType("claude", 5000) = min(5000, max(500, floor(5000*1.5))) = 5000
       expect(managed.terminal.options.scrollback).toBe(5000);
+    });
+  });
+
+  describe("reduceScrollbackAllBackground", () => {
+    it("reduces scrollback on non-focused background terminals", () => {
+      const bg1 = makeMockManaged({ isFocused: false });
+      bg1.terminal.buffer.active.length = 3000;
+      const bg2 = makeMockManaged({ isFocused: false });
+      bg2.terminal.buffer.active.length = 3000;
+      service.instances.set("t1", bg1);
+      service.instances.set("t2", bg2);
+
+      service.reduceScrollbackAllBackground(500);
+
+      expect(bg1.terminal.options.scrollback).toBe(500);
+      expect(bg2.terminal.options.scrollback).toBe(500);
+    });
+
+    it("skips focused terminals", () => {
+      const focused = makeMockManaged({ isFocused: true });
+      service.instances.set("t1", focused);
+
+      service.reduceScrollbackAllBackground(500);
+
+      expect(focused.terminal.options.scrollback).toBe(5000);
+    });
+
+    it("skips hibernated terminals", () => {
+      const hibernated = makeMockManaged({ isHibernated: true });
+      service.instances.set("t1", hibernated);
+
+      service.reduceScrollbackAllBackground(500);
+
+      expect(hibernated.terminal.options.scrollback).toBe(5000);
+    });
+
+    it("skips active agent terminals but reduces completed agents", () => {
+      const working = makeMockManaged({
+        kind: "agent",
+        type: "claude",
+        canonicalAgentState: "working",
+      });
+      working.terminal.buffer.active.length = 3000;
+      const completed = makeMockManaged({
+        kind: "agent",
+        type: "claude",
+        canonicalAgentState: "completed",
+      });
+      completed.terminal.buffer.active.length = 3000;
+      service.instances.set("t1", working);
+      service.instances.set("t2", completed);
+
+      service.reduceScrollbackAllBackground(500);
+
+      expect(working.terminal.options.scrollback).toBe(5000);
+      expect(completed.terminal.options.scrollback).toBe(500);
     });
   });
 });

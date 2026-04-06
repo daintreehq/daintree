@@ -1,3 +1,6 @@
+import { initBuiltInPanelKinds } from "./panels/registry";
+initBuiltInPanelKinds();
+
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource/jetbrains-mono/400.css";
@@ -10,6 +13,12 @@ import { ensureTerminalFontLoaded } from "./config/terminalFont";
 import { initStoreOrchestrator } from "./store/rendererStoreOrchestrator";
 import { registerRendererGlobalErrorHandlers } from "./utils/rendererGlobalErrorHandlers";
 import { renderBootstrapError } from "./utils/renderBootstrapError";
+import {
+  onCaughtError,
+  onUncaughtError,
+  onRecoverableError,
+} from "./utils/reactRootErrorCallbacks";
+import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupOrchestrator: (() => void) | undefined;
@@ -19,6 +28,12 @@ async function bootstrap() {
 
   applyDefaultAppTheme(document.documentElement);
 
+  try {
+    localStorage.removeItem("project-groups-storage");
+  } catch {
+    // localStorage may not be available
+  }
+
   cleanupOrchestrator = initStoreOrchestrator();
 
   await ensureTerminalFontLoaded();
@@ -26,9 +41,15 @@ async function bootstrap() {
   const { default: App } = await import("./App");
 
   const rootEl = document.getElementById("root")!;
-  createRoot(rootEl).render(
+  createRoot(rootEl, {
+    onCaughtError,
+    onUncaughtError,
+    onRecoverableError,
+  }).render(
     <StrictMode>
-      <App />
+      <WorktreeStoreProvider>
+        <App />
+      </WorktreeStoreProvider>
     </StrictMode>
   );
 }

@@ -12,8 +12,8 @@ describe("Trash Toast Removal - Issue #3113", () => {
     expect(exists).toBe(false);
   });
 
-  it("should not reference showUndoToast in terminalStore", async () => {
-    const filePath = path.resolve(__dirname, "../../../store/terminalStore.ts");
+  it("should not reference showUndoToast in panelStore", async () => {
+    const filePath = path.resolve(__dirname, "../../../store/panelStore.ts");
     const content = await fs.readFile(filePath, "utf-8");
     expect(content).not.toContain("showUndoToast");
     expect(content).not.toContain("terminalTrashUndoToast");

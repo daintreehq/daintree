@@ -3,12 +3,12 @@
  */
 
 import { CHANNELS } from "../../channels.js";
-import { sendToRenderer } from "../../utils.js";
+import { broadcastToRenderer } from "../../utils.js";
 import { events, type CanopyEventMap } from "../../../services/events.js";
 import type { HandlerDependencies } from "../../types.js";
 
 export function registerTerminalEventHandlers(deps: HandlerDependencies): () => void {
-  const { mainWindow, ptyClient } = deps;
+  const { ptyClient } = deps;
   if (!ptyClient) {
     return () => {};
   }
@@ -16,19 +16,19 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // PTY data/exit/error events
   const handlePtyData = (id: string, data: string | Uint8Array) => {
-    sendToRenderer(mainWindow, CHANNELS.TERMINAL_DATA, id, data);
+    broadcastToRenderer(CHANNELS.TERMINAL_DATA, id, data);
   };
   ptyClient.on("data", handlePtyData);
   handlers.push(() => ptyClient.off("data", handlePtyData));
 
   const handlePtyExit = (id: string, exitCode: number) => {
-    sendToRenderer(mainWindow, CHANNELS.TERMINAL_EXIT, id, exitCode);
+    broadcastToRenderer(CHANNELS.TERMINAL_EXIT, id, exitCode);
   };
   ptyClient.on("exit", handlePtyExit);
   handlers.push(() => ptyClient.off("exit", handlePtyExit));
 
   const handlePtyError = (id: string, error: string) => {
-    sendToRenderer(mainWindow, CHANNELS.TERMINAL_ERROR, id, error);
+    broadcastToRenderer(CHANNELS.TERMINAL_ERROR, id, error);
   };
   ptyClient.on("error", handlePtyError);
   handlers.push(() => ptyClient.off("error", handlePtyError));
@@ -38,7 +38,7 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     id: string,
     result: { success: boolean; id: string; error?: unknown }
   ) => {
-    sendToRenderer(mainWindow, CHANNELS.TERMINAL_SPAWN_RESULT, id, result);
+    broadcastToRenderer(CHANNELS.TERMINAL_SPAWN_RESULT, id, result);
   };
   ptyClient.on("spawn-result", handleSpawnResult);
   handlers.push(() => ptyClient.off("spawn-result", handleSpawnResult));
@@ -51,36 +51,41 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     pauseDuration?: number;
     timestamp: number;
   }) => {
-    sendToRenderer(mainWindow, CHANNELS.TERMINAL_STATUS, payload);
+    broadcastToRenderer(CHANNELS.TERMINAL_STATUS, payload);
   };
   ptyClient.on("terminal-status", handleTerminalStatus);
   handlers.push(() => ptyClient.off("terminal-status", handleTerminalStatus));
 
   // Agent events
   const unsubAgentState = events.on("agent:state-changed", (payload: unknown) => {
-    sendToRenderer(mainWindow, CHANNELS.AGENT_STATE_CHANGED, payload);
+    broadcastToRenderer(CHANNELS.AGENT_STATE_CHANGED, payload);
   });
   handlers.push(unsubAgentState);
 
+  const unsubAllClear = events.on("agent:all-clear", (payload) => {
+    broadcastToRenderer(CHANNELS.AGENT_ALL_CLEAR, payload);
+  });
+  handlers.push(unsubAllClear);
+
   const unsubAgentDetected = events.on("agent:detected", (payload: unknown) => {
-    sendToRenderer(mainWindow, CHANNELS.AGENT_DETECTED, payload);
+    broadcastToRenderer(CHANNELS.AGENT_DETECTED, payload);
   });
   handlers.push(unsubAgentDetected);
 
   const unsubAgentExited = events.on("agent:exited", (payload: unknown) => {
-    sendToRenderer(mainWindow, CHANNELS.AGENT_EXITED, payload);
+    broadcastToRenderer(CHANNELS.AGENT_EXITED, payload);
   });
   handlers.push(unsubAgentExited);
 
   // Artifact events
   const unsubArtifactDetected = events.on("artifact:detected", (payload: unknown) => {
-    sendToRenderer(mainWindow, CHANNELS.ARTIFACT_DETECTED, payload);
+    broadcastToRenderer(CHANNELS.ARTIFACT_DETECTED, payload);
   });
   handlers.push(unsubArtifactDetected);
 
   // Resource metrics (batched from pty-host)
   const handleResourceMetrics = (metrics: unknown, timestamp: unknown) => {
-    sendToRenderer(mainWindow, CHANNELS.TERMINAL_RESOURCE_METRICS, { metrics, timestamp });
+    broadcastToRenderer(CHANNELS.TERMINAL_RESOURCE_METRICS, { metrics, timestamp });
   };
   ptyClient.on("resource-metrics", handleResourceMetrics);
   handlers.push(() => ptyClient.off("resource-metrics", handleResourceMetrics));
@@ -89,7 +94,7 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   const unsubTerminalActivity = events.on(
     "terminal:activity",
     (payload: CanopyEventMap["terminal:activity"]) => {
-      sendToRenderer(mainWindow, CHANNELS.TERMINAL_ACTIVITY, payload);
+      broadcastToRenderer(CHANNELS.TERMINAL_ACTIVITY, payload);
     }
   );
   handlers.push(unsubTerminalActivity);
@@ -98,13 +103,13 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   const unsubTerminalTrashed = events.on(
     "terminal:trashed",
     (payload: { id: string; expiresAt: number }) => {
-      sendToRenderer(mainWindow, CHANNELS.TERMINAL_TRASHED, payload);
+      broadcastToRenderer(CHANNELS.TERMINAL_TRASHED, payload);
     }
   );
   handlers.push(unsubTerminalTrashed);
 
   const unsubTerminalRestored = events.on("terminal:restored", (payload: { id: string }) => {
-    sendToRenderer(mainWindow, CHANNELS.TERMINAL_RESTORED, payload);
+    broadcastToRenderer(CHANNELS.TERMINAL_RESTORED, payload);
   });
   handlers.push(unsubTerminalRestored);
 

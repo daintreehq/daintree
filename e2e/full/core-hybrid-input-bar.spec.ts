@@ -16,7 +16,12 @@ test.describe.serial("Core: HybridInputBar", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "hybrid-input-bar" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "HybridInputBar Test");
+    ctx.window = await openAndOnboardProject(
+      ctx.app,
+      ctx.window,
+      fixtureDir,
+      "HybridInputBar Test"
+    );
 
     // Agent panel requires CLI availability — skip all tests if not present
     const startBtn = ctx.window.locator(SEL.agent.startButton);

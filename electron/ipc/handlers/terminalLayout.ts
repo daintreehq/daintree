@@ -9,6 +9,63 @@ import {
 import type { HandlerDependencies } from "../types.js";
 import type { TerminalSnapshot, TabGroup } from "../../types/index.js";
 
+/**
+ * Validate and filter terminal snapshots using the Zod schema.
+ * Invalid entries are silently dropped with a console warning.
+ */
+export function sanitizeTerminals(terminals: unknown[], context: string): TerminalSnapshot[] {
+  return filterValidTerminalEntries(terminals, TerminalSnapshotSchema, context);
+}
+
+/**
+ * Validate and sanitize terminal size records.
+ * Entries with invalid dimensions (non-finite, non-integer, out of 1–500 range) are dropped.
+ */
+export function sanitizeTerminalSizes(
+  sizes: Record<string, unknown>
+): Record<string, { cols: number; rows: number }> {
+  const sanitized: Record<string, { cols: number; rows: number }> = {};
+  for (const [terminalId, size] of Object.entries(sizes)) {
+    if (
+      size &&
+      typeof size === "object" &&
+      "cols" in size &&
+      "rows" in size &&
+      typeof (size as { cols: unknown }).cols === "number" &&
+      typeof (size as { rows: unknown }).rows === "number"
+    ) {
+      const { cols, rows } = size as { cols: number; rows: number };
+      if (
+        Number.isFinite(cols) &&
+        Number.isFinite(rows) &&
+        Number.isInteger(cols) &&
+        Number.isInteger(rows) &&
+        cols > 0 &&
+        cols <= 500 &&
+        rows > 0 &&
+        rows <= 500
+      ) {
+        sanitized[terminalId] = { cols, rows };
+      }
+    }
+  }
+  return sanitized;
+}
+
+/**
+ * Validate and sanitize draft input records.
+ * Entries with non-string values or empty keys/values are dropped.
+ */
+export function sanitizeDraftInputs(inputs: Record<string, unknown>): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  for (const [terminalId, value] of Object.entries(inputs)) {
+    if (terminalId && typeof value === "string" && value !== "") {
+      sanitized[terminalId] = value;
+    }
+  }
+  return sanitized;
+}
+
 export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
@@ -40,11 +97,7 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
       throw new Error("Invalid terminals array");
     }
 
-    const validTerminals = filterValidTerminalEntries(
-      terminals,
-      TerminalSnapshotSchema,
-      `project:set-terminals(${projectId})`
-    );
+    const validTerminals = sanitizeTerminals(terminals, `project:set-terminals(${projectId})`);
 
     const existingState = await projectStore.getProjectState(projectId);
     const newState = {
@@ -57,6 +110,7 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
       focusMode: existingState?.focusMode,
       focusPanelState: existingState?.focusPanelState,
       terminalSizes: existingState?.terminalSizes,
+      draftInputs: existingState?.draftInputs,
     };
 
     await projectStore.saveProjectState(projectId, newState);
@@ -100,25 +154,7 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
       throw new Error("Invalid terminal sizes");
     }
 
-    const sanitizedSizes: Record<string, { cols: number; rows: number }> = {};
-    for (const [terminalId, size] of Object.entries(terminalSizes)) {
-      if (
-        size &&
-        typeof size === "object" &&
-        typeof size.cols === "number" &&
-        typeof size.rows === "number" &&
-        Number.isFinite(size.cols) &&
-        Number.isFinite(size.rows) &&
-        Number.isInteger(size.cols) &&
-        Number.isInteger(size.rows) &&
-        size.cols > 0 &&
-        size.cols <= 500 &&
-        size.rows > 0 &&
-        size.rows <= 500
-      ) {
-        sanitizedSizes[terminalId] = { cols: size.cols, rows: size.rows };
-      }
-    }
+    const sanitizedSizes = sanitizeTerminalSizes(terminalSizes as Record<string, unknown>);
 
     const existingState = await projectStore.getProjectState(projectId);
     const newState = {
@@ -131,6 +167,7 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
       focusMode: existingState?.focusMode,
       focusPanelState: existingState?.focusPanelState,
       terminalSizes: sanitizedSizes,
+      draftInputs: existingState?.draftInputs,
     };
 
     await projectStore.saveProjectState(projectId, newState);
@@ -179,6 +216,7 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
       focusMode: existingState?.focusMode,
       focusPanelState: existingState?.focusPanelState,
       terminalSizes: existingState?.terminalSizes,
+      draftInputs: existingState?.draftInputs,
     };
     await projectStore.saveProjectState(projectId, newState);
   };
@@ -256,12 +294,70 @@ export function registerTerminalLayoutHandlers(_deps: HandlerDependencies): () =
       focusMode,
       focusPanelState: validFocusPanelState,
       terminalSizes: existingState?.terminalSizes,
+      draftInputs: existingState?.draftInputs,
     };
 
     await projectStore.saveProjectState(projectId, newState);
   };
   ipcMain.handle(CHANNELS.PROJECT_SET_FOCUS_MODE, handleProjectSetFocusMode);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SET_FOCUS_MODE));
+
+  const handleProjectGetDraftInputs = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string
+  ): Promise<Record<string, string>> => {
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    const state = await projectStore.getProjectState(projectId);
+    return state?.draftInputs ?? {};
+  };
+  ipcMain.handle(CHANNELS.PROJECT_GET_DRAFT_INPUTS, handleProjectGetDraftInputs);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_DRAFT_INPUTS));
+
+  const handleProjectSetDraftInputs = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: unknown
+  ): Promise<void> => {
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Invalid payload");
+    }
+    const { projectId, draftInputs } = payload as {
+      projectId: string;
+      draftInputs: Record<string, string>;
+    };
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    if (
+      !draftInputs ||
+      typeof draftInputs !== "object" ||
+      Array.isArray(draftInputs) ||
+      draftInputs === null
+    ) {
+      throw new Error("Invalid draft inputs");
+    }
+
+    const sanitized = sanitizeDraftInputs(draftInputs as Record<string, unknown>);
+
+    const existingState = await projectStore.getProjectState(projectId);
+    const newState = {
+      projectId,
+      activeWorktreeId: existingState?.activeWorktreeId,
+      sidebarWidth: existingState?.sidebarWidth ?? 350,
+      terminals: existingState?.terminals ?? [],
+      tabGroups: existingState?.tabGroups ?? [],
+      terminalLayout: existingState?.terminalLayout,
+      focusMode: existingState?.focusMode,
+      focusPanelState: existingState?.focusPanelState,
+      terminalSizes: existingState?.terminalSizes,
+      draftInputs: sanitized,
+    };
+
+    await projectStore.saveProjectState(projectId, newState);
+  };
+  ipcMain.handle(CHANNELS.PROJECT_SET_DRAFT_INPUTS, handleProjectSetDraftInputs);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SET_DRAFT_INPUTS));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

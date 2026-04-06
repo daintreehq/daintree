@@ -1,29 +1,12 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { projectClient } from "@/clients";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 
 export function registerDevServerActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
 ): void {
-  actions.set("devServer.openDetected", () => ({
-    id: "devServer.openDetected",
-    title: "Open Detected Dev Server",
-    description: "Open a detected dev server URL in the system browser",
-    category: "devServer",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async (args: unknown) => {
-      const { url } = args as { url?: string };
-      if (!url) {
-        throw new Error("No URL provided");
-      }
-      await window.electron.system.openExternal(url);
-    },
-  }));
-
   actions.set("devServer.start", () => ({
     id: "devServer.start",
     title: "Open Dev Preview",
@@ -42,7 +25,7 @@ export function registerDevServerActions(
 
       const cwd = ctx.activeWorktreePath ?? ctx.projectPath;
 
-      await useTerminalStore.getState().addTerminal({
+      await usePanelStore.getState().addPanel({
         kind: "dev-preview",
         title: "Dev Server",
         cwd,

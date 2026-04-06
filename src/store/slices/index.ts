@@ -1,13 +1,15 @@
 export {
-  createTerminalRegistrySlice,
-  flushTerminalPersistence,
-  type TerminalRegistrySlice,
+  createPanelRegistrySlice,
+  flushPanelPersistence,
+  selectOrderedTerminals,
+  type PanelRegistrySlice,
   type TerminalInstance,
-  type AddTerminalOptions,
-  type TerminalRegistryMiddleware,
+  type AddPanelOptions,
+  type PanelRegistryMiddleware,
   type TrashedTerminal,
   type TrashedTerminalGroupMetadata,
-} from "./terminalRegistrySlice";
+  type BackgroundedTerminal,
+} from "./panelRegistrySlice";
 
 export {
   createTerminalFocusSlice,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
-import { handleDockInteractOutside } from "../dockPopoverGuard";
+import { handleDockInteractOutside, handleDockEscapeKeyDown } from "../dockPopoverGuard";
 
 function makeEvent(target: EventTarget | null): Event & { preventDefault: () => void } {
   const preventDefault = vi.fn();
@@ -67,6 +67,61 @@ describe("handleDockInteractOutside", () => {
 
     expect(event.preventDefault).toHaveBeenCalled();
     wrapper.remove();
+  });
+});
+
+function makeEscapeEvent(): KeyboardEvent & { preventDefault: () => void } {
+  const preventDefault = vi.fn();
+  return { preventDefault } as unknown as KeyboardEvent & { preventDefault: () => void };
+}
+
+describe("handleDockEscapeKeyDown", () => {
+  it("prevents dismissal when activeElement is inside the portal container", () => {
+    const container = document.createElement("div");
+    const input = document.createElement("input");
+    container.appendChild(input);
+    document.body.appendChild(container);
+    input.focus();
+
+    const event = makeEscapeEvent();
+    handleDockEscapeKeyDown(event, container);
+
+    expect(event.preventDefault).toHaveBeenCalled();
+    container.remove();
+  });
+
+  it("allows dismissal when activeElement is outside the portal container", () => {
+    const container = document.createElement("div");
+    const outside = document.createElement("input");
+    document.body.appendChild(container);
+    document.body.appendChild(outside);
+    outside.focus();
+
+    const event = makeEscapeEvent();
+    handleDockEscapeKeyDown(event, container);
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    container.remove();
+    outside.remove();
+  });
+
+  it("allows dismissal when portalContainer is null", () => {
+    const event = makeEscapeEvent();
+    handleDockEscapeKeyDown(event, null);
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("allows dismissal when no element has focus", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    (document.activeElement as HTMLElement)?.blur?.();
+
+    const event = makeEscapeEvent();
+    handleDockEscapeKeyDown(event, container);
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    container.remove();
   });
 });
 

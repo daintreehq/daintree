@@ -87,10 +87,25 @@ const mockProjects = [
     path: "/alpha",
     emoji: "🌲",
     lastOpened: 3000,
+    frecencyScore: 10.0,
     color: "#ff0000",
   },
-  { id: "p2", name: "Project Beta", path: "/beta", emoji: "🌿", lastOpened: 1000 },
-  { id: "p3", name: "Project Gamma", path: "/gamma", emoji: "🌳", lastOpened: 2000 },
+  {
+    id: "p2",
+    name: "Project Beta",
+    path: "/beta",
+    emoji: "🌿",
+    lastOpened: 1000,
+    frecencyScore: 2.0,
+  },
+  {
+    id: "p3",
+    name: "Project Gamma",
+    path: "/gamma",
+    emoji: "🌳",
+    lastOpened: 2000,
+    frecencyScore: 5.0,
+  },
 ];
 
 let storeState = {
@@ -120,25 +135,45 @@ import type { ChecklistState } from "@shared/types/ipc/maps";
 const allIncomplete: ChecklistState = {
   dismissed: false,
   celebrationShown: false,
-  items: { openedProject: false, launchedAgent: false, createdWorktree: false },
+  items: {
+    openedProject: false,
+    launchedAgent: false,
+    createdWorktree: false,
+    subscribedNewsletter: false,
+  },
 };
 
 const oneComplete: ChecklistState = {
   dismissed: false,
   celebrationShown: false,
-  items: { openedProject: true, launchedAgent: false, createdWorktree: false },
+  items: {
+    openedProject: true,
+    launchedAgent: false,
+    createdWorktree: false,
+    subscribedNewsletter: false,
+  },
 };
 
 const allComplete: ChecklistState = {
   dismissed: false,
   celebrationShown: false,
-  items: { openedProject: true, launchedAgent: true, createdWorktree: true },
+  items: {
+    openedProject: true,
+    launchedAgent: true,
+    createdWorktree: true,
+    subscribedNewsletter: true,
+  },
 };
 
 const dismissed: ChecklistState = {
   dismissed: true,
   celebrationShown: false,
-  items: { openedProject: false, launchedAgent: false, createdWorktree: false },
+  items: {
+    openedProject: false,
+    launchedAgent: false,
+    createdWorktree: false,
+    subscribedNewsletter: false,
+  },
 };
 
 function makeGettingStarted(
@@ -153,6 +188,7 @@ function makeGettingStarted(
     dismiss: vi.fn(),
     toggleCollapse: vi.fn(),
     notifyOnboardingComplete: vi.fn(),
+    markItem: vi.fn(),
   };
 }
 
@@ -178,7 +214,7 @@ describe("WelcomeScreen", () => {
 
   // --- Recent Projects ---
 
-  it("renders recent projects sorted by lastOpened descending", () => {
+  it("renders recent projects sorted by frecencyScore descending", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
     expect(screen.getByText("Recent Projects")).toBeTruthy();
@@ -217,13 +253,14 @@ describe("WelcomeScreen", () => {
       path: `/path/${i}`,
       emoji: "🌲",
       lastOpened: i * 1000,
+      frecencyScore: i,
     }));
     storeState = { ...storeState, projects: manyProjects };
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
     const projectNames = screen.getAllByText(/Project \d/).map((el) => el.textContent);
     expect(projectNames).toHaveLength(5);
-    // Should be the 5 most recent in descending order (7000, 6000, 5000, 4000, 3000)
+    // Should be the 5 highest frecencyScore in descending order (7, 6, 5, 4, 3)
     expect(projectNames).toEqual(["Project 7", "Project 6", "Project 5", "Project 4", "Project 3"]);
   });
 
@@ -247,33 +284,33 @@ describe("WelcomeScreen", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
     const buttons = screen.getAllByRole("button", {
-      name: /open a project|launch an ai agent|create a worktree/i,
+      name: /open your project|ask ai to help with your code|start a parallel task/i,
     });
     expect(buttons).toHaveLength(3);
   });
 
-  it("dispatches project.openDialog when Open a project is clicked", () => {
+  it("dispatches project.openDialog when Open your project is clicked", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /open a project/i }));
+    fireEvent.click(screen.getByRole("button", { name: /open your project/i }));
     expect(dispatchMock).toHaveBeenCalledWith("project.openDialog", undefined, {
       source: "user",
     });
   });
 
-  it("dispatches panel.palette when Launch an AI agent is clicked", () => {
+  it("dispatches panel.palette when Ask AI to help with your code is clicked", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /launch an ai agent/i }));
+    fireEvent.click(screen.getByRole("button", { name: /ask ai to help with your code/i }));
     expect(dispatchMock).toHaveBeenCalledWith("panel.palette", undefined, {
       source: "user",
     });
   });
 
-  it("dispatches worktree.createDialog.open when Create a worktree is clicked", () => {
+  it("dispatches worktree.createDialog.open when Start a parallel task is clicked", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /create a worktree/i }));
+    fireEvent.click(screen.getByRole("button", { name: /start a parallel task/i }));
     expect(dispatchMock).toHaveBeenCalledWith("worktree.createDialog.open", undefined, {
       source: "user",
     });
@@ -283,9 +320,9 @@ describe("WelcomeScreen", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(oneComplete)} />);
 
     // openedProject is complete — should not be a button
-    const openProjectButton = screen.queryByRole("button", { name: /open a project/i });
+    const openProjectButton = screen.queryByRole("button", { name: /open your project/i });
     expect(openProjectButton).toBeNull();
-    expect(screen.getByText("Open a project")).toBeTruthy();
+    expect(screen.getByText("Open your project")).toBeTruthy();
   });
 
   it("hides checklist when dismissed", () => {

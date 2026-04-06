@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useTerminalStore, type TerminalInstance } from "@/store";
+import { usePanelStore, type TerminalInstance } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { TrashedTerminal } from "@/store/slices";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -14,8 +14,8 @@ interface TrashBinItemProps {
 }
 
 export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinItemProps) {
-  const restoreTerminal = useTerminalStore((s) => s.restoreTerminal);
-  const removeTerminal = useTerminalStore((s) => s.removeTerminal);
+  const restoreTerminal = usePanelStore((s) => s.restoreTerminal);
+  const removePanel = usePanelStore((s) => s.removePanel);
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
 
   const isOrphan = !!terminal.worktreeId && !worktreeName;
@@ -50,8 +50,8 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
   }, [restoreTerminal, terminal.id, isOrphan, activeWorktreeId]);
 
   const handleKill = useCallback(() => {
-    removeTerminal(terminal.id);
-  }, [removeTerminal, terminal.id]);
+    removePanel(terminal.id);
+  }, [removePanel, terminal.id]);
 
   const terminalName = terminal.title || terminal.type || "Terminal";
 

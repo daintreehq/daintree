@@ -25,7 +25,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 interface GitHubListItemProps {
@@ -106,7 +106,7 @@ export function GitHubListItem({
     };
   }, []);
 
-  const matchedWorktree = useWorktreeDataStore((s) => {
+  const matchedWorktree = useWorktreeStore((s) => {
     for (const wt of s.worktrees.values()) {
       if (type === "issue" ? wt.issueNumber === item.number : wt.prNumber === item.number)
         return wt;
@@ -116,8 +116,6 @@ export function GitHubListItem({
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const hasWorktree = matchedWorktree !== undefined;
   const isActiveWorktree = hasWorktree && matchedWorktree.id === activeWorktreeId;
-
-  const isForkPR = isItemPR && (item as GitHubPR).isFork === true;
 
   const handleOpenExternal = () => {
     void actionService.dispatch("system.openExternal", { url: item.url }, { source: "user" });
@@ -145,14 +143,13 @@ export function GitHubListItem({
       aria-selected={isSelected}
       className={cn(
         "hover:bg-muted/50 transition-colors group cursor-default select-none",
-        isActive && "bg-muted/50",
-        isSelected && "bg-canopy-accent/10 border-l-2 border-canopy-accent",
-        !isSelected && "border-l-2 border-transparent"
+        isActive && !isSelected && "bg-muted/50",
+        isSelected && "bg-muted/80 hover:bg-muted/80"
       )}
       onClick={isSelectionActive && onToggleSelect ? (e) => onToggleSelect(e) : undefined}
     >
       <div className="flex items-start gap-2 px-3 py-2.5">
-        {type === "issue" && onToggleSelect ? (
+        {onToggleSelect ? (
           <span className="group/icon shrink-0 mt-0.5 relative w-4 h-4">
             {/* State icon: visible by default, hidden on hover or when selection active */}
             <span
@@ -367,7 +364,7 @@ export function GitHubListItem({
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-            ) : item.state === "OPEN" && !isForkPR && onCreateWorktree ? (
+            ) : item.state === "OPEN" && onCreateWorktree ? (
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -394,7 +391,7 @@ export function GitHubListItem({
                   type="button"
                   onClick={(e) => e.stopPropagation()}
                   className={cn(
-                    "shrink-0 p-0.5 rounded hover:bg-muted transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    "shrink-0 p-0.5 rounded hover:bg-muted transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     isActive
                       ? "opacity-100"
                       : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
@@ -423,24 +420,10 @@ export function GitHubListItem({
                 {!hasWorktree && onCreateWorktree && item.state === "OPEN" && (
                   <>
                     <DropdownMenuSeparator />
-                    {isForkPR ? (
-                      <DropdownMenuItem disabled>
-                        <div className="flex flex-col gap-0.5">
-                          <span className="flex items-center gap-2">
-                            <WorktreeIcon className="h-3.5 w-3.5" />
-                            Create Worktree
-                          </span>
-                          <span className="text-[10px] text-muted-foreground leading-tight">
-                            Not available for fork PRs
-                          </span>
-                        </div>
-                      </DropdownMenuItem>
-                    ) : (
-                      <DropdownMenuItem onSelect={() => onCreateWorktree(item)}>
-                        <WorktreeIcon className="h-3.5 w-3.5 mr-2" />
-                        Create Worktree
-                      </DropdownMenuItem>
-                    )}
+                    <DropdownMenuItem onSelect={() => onCreateWorktree(item)}>
+                      <WorktreeIcon className="h-3.5 w-3.5 mr-2" />
+                      Create Worktree
+                    </DropdownMenuItem>
                   </>
                 )}
               </DropdownMenuContent>

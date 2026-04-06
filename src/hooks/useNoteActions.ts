@@ -6,6 +6,7 @@ interface UseNoteActionsOptions {
   notes: NoteListItem[];
   visibleNotes: NoteListItem[];
   isLoading: boolean;
+  isInitialized: boolean;
   isSearching: boolean;
   lastSelectedNoteId: string | null;
   setLastSelectedNoteId: (id: string | null) => void;
@@ -62,8 +63,10 @@ export interface UseNoteActionsReturn {
 
 export function useNoteActions({
   isOpen,
+  notes,
   visibleNotes,
   isLoading,
+  isInitialized,
   isSearching,
   lastSelectedNoteId,
   setLastSelectedNoteId,
@@ -95,11 +98,13 @@ export function useNoteActions({
   const [deleteConfirmNote, setDeleteConfirmNote] = useState<NoteListItem | null>(null);
 
   const hasRestoredRef = useRef(false);
+  const autoCreatedRef = useRef(false);
 
   // Initialize notes on open
   useEffect(() => {
     if (isOpen) {
       hasRestoredRef.current = false;
+      autoCreatedRef.current = false;
       initialize();
       setQuery("");
       setSelectedIndex(0);
@@ -267,6 +272,14 @@ export function useNoteActions({
       setSelectedNote,
     ]
   );
+
+  // Auto-create first note when palette opens on a project with no notes
+  useEffect(() => {
+    if (!isOpen || !isInitialized || isLoading || notes.length > 0) return;
+    if (autoCreatedRef.current) return;
+    autoCreatedRef.current = true;
+    handleCreateNote();
+  }, [isOpen, isInitialized, isLoading, notes.length, handleCreateNote]);
 
   const handleDeleteNote = useCallback((note: NoteListItem, e: React.MouseEvent) => {
     e.stopPropagation();

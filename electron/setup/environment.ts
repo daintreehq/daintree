@@ -1,3 +1,15 @@
+// Silence EPIPE errors on stdout/stderr. When the parent terminal is closed
+// (e.g. user quits Terminal.app while Canopy runs), writes to the broken pipe
+// throw an uncaught EPIPE that would crash the main process. These are harmless.
+for (const stream of [process.stdout, process.stderr]) {
+  if (stream && typeof stream.on === "function") {
+    stream.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EPIPE") return;
+      throw err;
+    });
+  }
+}
+
 import nodeV8 from "node:v8";
 import vm from "node:vm";
 import { execFile } from "child_process";
@@ -17,7 +29,9 @@ try {
   // GC exposure not available — non-critical
 }
 
-fixPath();
+if (app.isPackaged) {
+  fixPath();
+}
 
 // In development, use a separate userData directory so the dev instance
 // doesn't conflict with the production app's single-instance lock or storage.
@@ -25,7 +39,7 @@ fixPath();
 // each test run gets its own isolated data directory.
 const hasExplicitUserDataDir = process.argv.some((a) => a.startsWith("--user-data-dir"));
 if (!app.isPackaged && !hasExplicitUserDataDir) {
-  app.setPath("userData", path.join(app.getPath("appData"), `${app.name}-dev`));
+  app.setPath("userData", path.join(app.getPath("appData"), "canopy-app-dev"));
 }
 
 // GPU crash fallback: disable hardware acceleration before app.whenReady()
@@ -53,32 +67,27 @@ if (shouldResetData) {
   }
 }
 
+// Chromium feature flags: memory reclamation + platform-specific features
+const enabledFeatures = ["PartitionAllocMemoryReclaimer"];
+
 // Enable native Wayland support on Linux (Electron < 38)
 // Electron 38+ auto-detects via XDG_SESSION_TYPE; this flag is ignored.
 if (process.platform === "linux") {
   app.commandLine.appendSwitch("ozone-platform-hint", "auto");
   if (process.env.XDG_SESSION_TYPE === "wayland") {
-    app.commandLine.appendSwitch("enable-features", "WaylandWindowDecorations");
+    enabledFeatures.push("WaylandWindowDecorations");
     app.commandLine.appendSwitch("enable-wayland-ime");
   }
 }
+
+app.commandLine.appendSwitch("enable-features", enabledFeatures.join(","));
 
 // Cap GPU tile memory budget and disable MSAA to reduce VRAM usage
 app.commandLine.appendSwitch("force-gpu-mem-available-mb", "512");
 app.commandLine.appendSwitch("gpu-rasterization-msaa-sample-count", "0");
 
 if (process.platform === "win32") {
-  const programFiles = process.env["ProgramFiles"] || "C:\\Program Files";
-  const programFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
-  const chocoInstall = process.env["ChocolateyInstall"] || "C:\\ProgramData\\chocolatey";
-
-  const extraPaths = [
-    path.join(os.homedir(), "AppData", "Local", "Programs", "Git", "cmd"),
-    path.join(programFiles, "Git", "cmd"),
-    path.join(programFilesX86, "Git", "cmd"),
-    path.join(os.homedir(), "scoop", "shims"),
-    path.join(chocoInstall, "bin"),
-  ];
+  const extraPaths = getWindowsExtraPaths();
   const current = process.env.PATH || "";
   const existingEntries = current.split(path.delimiter).map((e) => e.toLowerCase());
   const missing = extraPaths.filter(
@@ -105,6 +114,50 @@ function deduplicatePath(pathStr: string, caseInsensitive: boolean): string {
   return unique.join(path.delimiter);
 }
 
+function expandWindowsEnvVars(str: string): string {
+  return str.replace(/%([^%]+)%/g, (match, name: string) => process.env[name] ?? match);
+}
+
+function getWindowsExtraPaths(): string[] {
+  const programFiles = process.env["ProgramFiles"] || "C:\\Program Files";
+  const programFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+  const chocoInstall = process.env["ChocolateyInstall"] || "C:\\ProgramData\\chocolatey";
+  const home = os.homedir();
+
+  const paths = [
+    path.join(home, "AppData", "Roaming", "npm"),
+    path.join(home, "AppData", "Local", "Programs", "Git", "cmd"),
+    path.join(programFiles, "Git", "cmd"),
+    path.join(programFilesX86, "Git", "cmd"),
+    path.join(home, "scoop", "shims"),
+    path.join(chocoInstall, "bin"),
+  ];
+
+  // Volta: env var first, hardcoded fallback
+  if (process.env["VOLTA_HOME"]) {
+    paths.push(path.join(process.env["VOLTA_HOME"], "bin"));
+  } else {
+    paths.push(path.join(home, "AppData", "Local", "Volta", "bin"));
+  }
+
+  // pnpm: env var only
+  if (process.env["PNPM_HOME"]) {
+    paths.push(process.env["PNPM_HOME"]);
+  }
+
+  // fnm: env var only (dynamic per session)
+  if (process.env["FNM_MULTISHELL_PATH"]) {
+    paths.push(process.env["FNM_MULTISHELL_PATH"]);
+  }
+
+  // nvm-windows: env var only
+  if (process.env["NVM_SYMLINK"]) {
+    paths.push(process.env["NVM_SYMLINK"]);
+  }
+
+  return paths;
+}
+
 function readWindowsRegistryPath(): Promise<string> {
   const keys = [
     "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
@@ -118,7 +171,7 @@ function readWindowsRegistryPath(): Promise<string> {
           execFile("reg", ["query", key, "/v", "Path"], { timeout: 3_000 }, (err, stdout) => {
             if (err || !stdout) return resolve("");
             const match = stdout.match(/Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/i);
-            resolve(match?.[1]?.trim() ?? "");
+            resolve(expandWindowsEnvVars(match?.[1]?.trim() ?? ""));
           });
         })
     )
@@ -126,18 +179,7 @@ function readWindowsRegistryPath(): Promise<string> {
 }
 
 function applyWindowsExtraPaths(currentPath: string): string {
-  const programFiles = process.env["ProgramFiles"] || "C:\\Program Files";
-  const programFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
-  const chocoInstall = process.env["ChocolateyInstall"] || "C:\\ProgramData\\chocolatey";
-
-  const extraPaths = [
-    path.join(os.homedir(), "AppData", "Local", "Programs", "Git", "cmd"),
-    path.join(programFiles, "Git", "cmd"),
-    path.join(programFilesX86, "Git", "cmd"),
-    path.join(os.homedir(), "scoop", "shims"),
-    path.join(chocoInstall, "bin"),
-  ];
-
+  const extraPaths = getWindowsExtraPaths();
   const existingEntries = currentPath.split(path.delimiter).map((e) => e.toLowerCase());
   const missing = extraPaths.filter(
     (p) => !existingEntries.includes(p.toLowerCase()) && existsSync(p)
@@ -223,6 +265,19 @@ if (isSmokeTest) {
     console.error("[SMOKE] CHECK: node-pty native module — OK");
   } catch (err) {
     console.error("[SMOKE] FAILED — node-pty native module:", (err as Error).message);
+    app.exit(1);
+  }
+
+  // Verify better-sqlite3 loads and can execute queries
+  try {
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(":memory:");
+    const row = db.prepare("SELECT 1 AS n").get() as { n: number };
+    db.close();
+    if (row?.n !== 1) throw new Error("unexpected query result");
+    console.error("[SMOKE] CHECK: better-sqlite3 native module — OK");
+  } catch (err) {
+    console.error("[SMOKE] FAILED — better-sqlite3 native module:", (err as Error).message);
     app.exit(1);
   }
 }

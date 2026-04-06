@@ -24,4 +24,10 @@ export interface TerminalConfig {
   screenReaderMode?: "auto" | "on" | "off";
   /** Show per-terminal CPU and memory usage in panel headers (default: false) */
   resourceMonitoringEnabled?: boolean;
+  /** Enable memory leak detection for terminal processes (default: true when resource monitoring is on) */
+  memoryLeakDetectionEnabled?: boolean;
+  /** Auto-restart threshold in MB — restart terminal when RSS exceeds this (default: 8192) */
+  memoryLeakAutoRestartThresholdMb?: number;
+  /** Number of project views to keep cached in memory (1–5, default: 1) */
+  cachedProjectViews?: number;
 }

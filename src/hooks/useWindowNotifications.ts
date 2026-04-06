@@ -3,11 +3,13 @@ import { updateFaviconBadge, clearFaviconBadge } from "@/services/FaviconBadgeSe
 import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
 
 const DEBOUNCE_MS = 300;
+const FOCUS_BLUR_DEBOUNCE_MS = 150;
 
 export function useWindowNotifications(): void {
   const prevWaitingRef = useRef(0);
   const windowFocusedRef = useRef(true);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const blurDimTimerRef = useRef<NodeJS.Timeout | null>(null);
   const blurTimeRef = useRef<number | null>(null);
   const [, setTick] = useState(0);
 
@@ -17,6 +19,12 @@ export function useWindowNotifications(): void {
     const handleFocus = () => {
       windowFocusedRef.current = true;
       blurTimeRef.current = null;
+
+      if (blurDimTimerRef.current) {
+        clearTimeout(blurDimTimerRef.current);
+        blurDimTimerRef.current = null;
+      }
+      delete document.body.dataset.windowFocused;
 
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
@@ -37,6 +45,15 @@ export function useWindowNotifications(): void {
     const handleBlur = () => {
       windowFocusedRef.current = false;
       blurTimeRef.current = Date.now();
+
+      if (blurDimTimerRef.current) {
+        clearTimeout(blurDimTimerRef.current);
+      }
+      blurDimTimerRef.current = setTimeout(() => {
+        blurDimTimerRef.current = null;
+        document.body.dataset.windowFocused = "false";
+      }, FOCUS_BLUR_DEBOUNCE_MS);
+
       setTick((t) => t + 1);
     };
 
@@ -46,6 +63,11 @@ export function useWindowNotifications(): void {
     return () => {
       window.removeEventListener("focus", handleFocus);
       window.removeEventListener("blur", handleBlur);
+      if (blurDimTimerRef.current) {
+        clearTimeout(blurDimTimerRef.current);
+        blurDimTimerRef.current = null;
+      }
+      delete document.body.dataset.windowFocused;
     };
   }, []);
 

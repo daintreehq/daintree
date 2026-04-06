@@ -4,7 +4,8 @@ import { useHasBeenVisible } from "@/hooks/useHasBeenVisible";
 import { useWebviewEviction } from "@/hooks/useWebviewEviction";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { AlertTriangle, ExternalLink } from "lucide-react";
-import { useTerminalStore } from "@/store";
+import { Spinner } from "@/components/ui/Spinner";
+import { usePanelStore } from "@/store";
 import type { BrowserHistory } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "./BrowserToolbar";
@@ -65,9 +66,9 @@ export function BrowserPane({
     webviewRef.current = node;
     setWebviewElement(node);
   }, []);
-  const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
-  const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
-  const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
+  const setBrowserUrl = usePanelStore((state) => state.setBrowserUrl);
+  const setBrowserHistory = usePanelStore((state) => state.setBrowserHistory);
+  const setBrowserZoom = usePanelStore((state) => state.setBrowserZoom);
   const isDragging = useIsDragging();
   const addStructuredMessage = useConsoleCaptureStore((state) => state.addStructuredMessage);
   const markStale = useConsoleCaptureStore((state) => state.markStale);
@@ -80,15 +81,20 @@ export function BrowserPane({
   );
   const loadTimeoutMs = Math.min(Math.max(devServerLoadTimeout ?? 30, 1), 120) * 1000;
 
-  const isConsoleOpen = useTerminalStore(
+  const isConsoleOpen = usePanelStore(
     (state) => state.getTerminal(id)?.browserConsoleOpen ?? false
   );
-  const setBrowserConsoleOpen = useTerminalStore((state) => state.setBrowserConsoleOpen);
+  const setBrowserConsoleOpen = usePanelStore((state) => state.setBrowserConsoleOpen);
+
+  // Track whether the current load is the initial session-restored load (not a fresh panel)
+  const isInitialRestoredLoadRef = useRef(true);
 
   // Initialize history from persisted state or initialUrl
   const [history, setHistory] = useState<BrowserHistory>(() => {
-    const terminal = useTerminalStore.getState().getTerminal(id);
+    const terminal = usePanelStore.getState().getTerminal(id);
     const saved = terminal?.browserHistory;
+    // Only treat this as a restored session load if we actually have persisted history
+    isInitialRestoredLoadRef.current = Boolean(saved?.present);
     const normalized = normalizeBrowserUrl(initialUrl);
     const fallbackPresent = terminal?.browserUrl || normalized.url || initialUrl;
     return initializeBrowserHistory(saved, fallbackPresent);
@@ -97,13 +103,18 @@ export function BrowserPane({
   // Initialize zoom factor from persisted state (default 1.0 = 100%)
   // Clamp to valid range [0.25, 2.0] to handle corrupt storage
   const [zoomFactor, setZoomFactor] = useState<number>(() => {
-    const terminal = useTerminalStore.getState().getTerminal(id);
+    const terminal = usePanelStore.getState().getTerminal(id);
     const savedZoom = terminal?.browserZoom ?? 1.0;
     return Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0;
   });
 
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [blockedNav, setBlockedNav] = useState<{
+    url: string;
+    canOpenExternal: boolean;
+  } | null>(null);
+  const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
   // Track the last URL we set on the webview to detect in-webview navigation
   const lastSetUrlRef = useRef<string>(history.present);
   // Track if webview has been mounted and is ready
@@ -150,6 +161,34 @@ export function BrowserPane({
   useEffect(() => {
     return () => removePane(id);
   }, [id, removePane]);
+
+  // Listen for blocked navigation events from main process (debounced 150ms for redirect chains)
+  useEffect(() => {
+    const cleanup = window.electron.webview.onNavigationBlocked((data) => {
+      if (data.panelId !== id) return;
+      if (blockedNavTimerRef.current) {
+        clearTimeout(blockedNavTimerRef.current);
+      }
+      blockedNavTimerRef.current = setTimeout(() => {
+        setBlockedNav({ url: data.url, canOpenExternal: data.canOpenExternal });
+        blockedNavTimerRef.current = null;
+      }, 150);
+    });
+    return () => {
+      cleanup();
+      if (blockedNavTimerRef.current) {
+        clearTimeout(blockedNavTimerRef.current);
+        blockedNavTimerRef.current = null;
+      }
+    };
+  }, [id]);
+
+  // Auto-dismiss blocked navigation notification after 10 seconds
+  useEffect(() => {
+    if (!blockedNav) return;
+    const timer = setTimeout(() => setBlockedNav(null), 10_000);
+    return () => clearTimeout(timer);
+  }, [blockedNav]);
 
   // CDP console capture: start when webview is ready, subscribe to push events
   useEffect(() => {
@@ -200,6 +239,7 @@ export function BrowserPane({
     }
 
     const handleDomReady = () => {
+      isInitialRestoredLoadRef.current = false;
       setIsWebviewReady(true);
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
@@ -242,13 +282,26 @@ export function BrowserPane({
       // Ignore cancellations
       if (event.errorCode === -6) return;
       setIsLoading(false);
-      setLoadError(event.errorDescription || "Failed to load page. The site may be unavailable.");
+      const ERR_CONNECTION_REFUSED = -102;
+      if (
+        event.isMainFrame &&
+        event.errorCode === ERR_CONNECTION_REFUSED &&
+        isInitialRestoredLoadRef.current
+      ) {
+        setLoadError(
+          "The saved URL is no longer reachable. The server may have moved to a different port."
+        );
+      } else {
+        setLoadError(event.errorDescription || "Failed to load page. The site may be unavailable.");
+      }
     };
 
     const handleDidNavigate = (event: Electron.DidNavigateEvent) => {
       const newUrl = event.url;
       // Suppress about:blank navigations triggered by eviction
       if (newUrl === "about:blank" && evictingRef.current) return;
+      isInitialRestoredLoadRef.current = false;
+      setBlockedNav(null);
       // Only update history if this is a new URL (not our programmatic navigation)
       if (newUrl !== lastSetUrlRef.current) {
         setHistory((prev) => pushBrowserHistory(prev, newUrl));
@@ -267,6 +320,7 @@ export function BrowserPane({
 
     const handleDidNavigateInPage = (event: Electron.DidNavigateInPageEvent) => {
       if (!event.isMainFrame) return;
+      setBlockedNav(null);
       const newUrl = event.url;
       if (newUrl !== lastSetUrlRef.current) {
         setHistory((prev) => pushBrowserHistory(prev, newUrl));
@@ -342,6 +396,8 @@ export function BrowserPane({
       const result = normalizeBrowserUrl(url);
       if (result.error || !result.url) return;
 
+      isInitialRestoredLoadRef.current = false;
+      setBlockedNav(null);
       setHistory((prev) => pushBrowserHistory(prev, result.url!));
       setIsLoading(true);
       setLoadError(null);
@@ -357,6 +413,8 @@ export function BrowserPane({
   );
 
   const handleBack = useCallback(() => {
+    isInitialRestoredLoadRef.current = false;
+    setBlockedNav(null);
     setHistory((prev) => {
       const next = goBackBrowserHistory(prev);
       if (next === prev) return prev;
@@ -376,6 +434,8 @@ export function BrowserPane({
   }, [isWebviewReady]);
 
   const handleForward = useCallback(() => {
+    isInitialRestoredLoadRef.current = false;
+    setBlockedNav(null);
     setHistory((prev) => {
       const next = goForwardBrowserHistory(prev);
       if (next === prev) return prev;
@@ -395,6 +455,7 @@ export function BrowserPane({
   }, [isWebviewReady]);
 
   const handleReload = useCallback(() => {
+    setBlockedNav(null);
     setIsLoading(true);
     setLoadError(null);
     const webview = webviewRef.current;
@@ -405,19 +466,17 @@ export function BrowserPane({
 
   const handleCaptureScreenshot = useCallback(async () => {
     const webview = webviewRef.current;
-    // Check webviewRef directly to avoid stale closure over isWebviewReady state
-    if (!webview) return;
+    if (!webview || !isWebviewReady) return;
     try {
       const url = webview.getURL();
       if (!url || url === "about:blank") return;
       const image = await webview.capturePage();
       const pngData = new Uint8Array(image.toPNG());
-      const blob = new Blob([pngData], { type: "image/png" });
-      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      await window.electron.clipboard.writeImage(pngData);
     } catch (err) {
       console.error("[BrowserPane] Screenshot capture failed:", err);
     }
-  }, []);
+  }, [isWebviewReady]);
 
   const handleToggleDevTools = useCallback(() => {
     const webview = webviewRef.current;
@@ -441,9 +500,12 @@ export function BrowserPane({
     clearConsoleMessages(id);
   }, [id, clearConsoleMessages]);
 
-  // Cleanup timeout on unmount
+  // Cleanup timeouts on unmount
   useEffect(() => {
     return () => {
+      if (blockedNavTimerRef.current) {
+        clearTimeout(blockedNavTimerRef.current);
+      }
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
       }
@@ -742,11 +804,50 @@ export function BrowserPane({
           </div>
         ) : (
           <>
+            {blockedNav && (
+              <div className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-canopy-text/80">
+                <ExternalLink className="h-3.5 w-3.5 shrink-0 text-status-warning" />
+                <span className="truncate flex-1">
+                  Navigation to external site blocked:{" "}
+                  {(() => {
+                    try {
+                      return new URL(blockedNav.url).hostname;
+                    } catch {
+                      return blockedNav.url;
+                    }
+                  })()}
+                </span>
+                {blockedNav.canOpenExternal && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void actionService.dispatch(
+                        "browser.openExternal",
+                        { terminalId: id, url: blockedNav.url },
+                        { source: "user" }
+                      );
+                      setBlockedNav(null);
+                    }}
+                    className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-canopy-text/90 transition-colors"
+                  >
+                    Open in External Browser
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setBlockedNav(null)}
+                  className="shrink-0 text-canopy-text/40 hover:text-canopy-text/70 transition-colors"
+                  aria-label="Dismiss"
+                >
+                  ×
+                </button>
+              </div>
+            )}
             <div className="relative flex-1 min-h-0">
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
               {isLoading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg z-10">
-                  <div className="w-8 h-8 border-2 border-status-info border-t-transparent rounded-full animate-spin" />
+                  <Spinner size="2xl" className="text-status-info" />
                 </div>
               )}
               {findInPage.isOpen && <FindBar find={findInPage} />}

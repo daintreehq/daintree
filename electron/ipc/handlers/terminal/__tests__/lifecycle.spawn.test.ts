@@ -10,11 +10,13 @@ vi.mock("electron", () => ({
   },
 }));
 
-const { mockGetCurrentProject, mockGetProjectById, mockGetProjectSettings } = vi.hoisted(() => ({
-  mockGetCurrentProject: vi.fn(),
-  mockGetProjectById: vi.fn(),
-  mockGetProjectSettings: vi.fn(),
-}));
+const { mockGetCurrentProject, mockGetProjectById, mockGetProjectSettings, mockGetMonitorAsync } =
+  vi.hoisted(() => ({
+    mockGetCurrentProject: vi.fn(),
+    mockGetProjectById: vi.fn(),
+    mockGetProjectSettings: vi.fn(),
+    mockGetMonitorAsync: vi.fn(),
+  }));
 
 vi.mock("../../../../services/ProjectStore.js", () => ({
   projectStore: {
@@ -183,5 +185,103 @@ describe("terminal spawn handler - projectId resolution", () => {
     expect(mockGetProjectSettings).toHaveBeenCalledWith("project-a-id");
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.shell).toBe("/bin/bash");
+  });
+});
+
+describe("terminal spawn handler - worktree cwd fallback (issue #4888)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ptyClient = {
+      spawn: vi.fn(),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    mockGetCurrentProject.mockReturnValue(null);
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+    mockGetMonitorAsync.mockResolvedValue(null);
+  });
+
+  it("falls back to worktree path when cwd is inaccessible and worktreeId is provided", async () => {
+    const os = await import("os");
+    const tmpDir = os.tmpdir();
+    mockGetMonitorAsync.mockResolvedValue({ path: tmpDir });
+
+    const worktreeService = { getMonitorAsync: mockGetMonitorAsync };
+    const deps = { ptyClient, worktreeService } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cwd: "/nonexistent/path",
+      worktreeId: "wt-123",
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(mockGetMonitorAsync).toHaveBeenCalledWith("wt-123");
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.cwd).toBe(tmpDir);
+  });
+
+  it("falls back to homedir when worktreeService returns null", async () => {
+    mockGetMonitorAsync.mockResolvedValue(null);
+
+    const worktreeService = { getMonitorAsync: mockGetMonitorAsync };
+    const deps = { ptyClient, worktreeService } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    const os = await import("os");
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cwd: "/nonexistent/path",
+      worktreeId: "wt-123",
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(mockGetMonitorAsync).toHaveBeenCalledWith("wt-123");
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.cwd).toBe(os.homedir());
+  });
+
+  it("does not call worktreeService when cwd is valid", async () => {
+    const worktreeService = { getMonitorAsync: mockGetMonitorAsync };
+    const deps = { ptyClient, worktreeService } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    const os = await import("os");
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cwd: os.homedir(),
+      worktreeId: "wt-123",
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(mockGetMonitorAsync).not.toHaveBeenCalled();
+  });
+
+  it("works when worktreeService is not available on deps", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    const os = await import("os");
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cwd: "/nonexistent/path",
+      worktreeId: "wt-123",
+      cols: 80,
+      rows: 24,
+    });
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.cwd).toBe(os.homedir());
   });
 });

@@ -1,16 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { usePaletteStore } from "@/store/paletteStore";
-import { useTerminalStore } from "@/store/terminalStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useRecipeStore } from "@/store/recipeStore";
+import { useCommandHistoryStore } from "@/store/commandHistoryStore";
+import { useNotificationStore } from "@/store/notificationStore";
 import { useShallow } from "zustand/react/shallow";
+import { useEscapeStack } from "@/hooks";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { getDominantAgentState } from "@/components/Worktree/AgentStatusIndicator";
 import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import {
   replaceRecipeVariables,
   detectUnresolvedVariables,
+  getAvailableVariables,
   type RecipeContext,
 } from "@/utils/recipeVariables";
 import { terminalClient } from "@/clients";
@@ -52,6 +57,10 @@ const KEYSTROKE_KEYS: Record<Exclude<KeystrokePreset, "double-escape">, string> 
   "ctrl+c": "ctrl+c",
 };
 
+const DESTRUCTIVE_KEYSTROKES = new Set<KeystrokePreset>(["ctrl+c", "double-escape"]);
+
+const BULK_HISTORY_KEY = "bulk-commands";
+
 interface StatePreset {
   label: string;
   match: (row: WorktreeRow) => boolean;
@@ -65,6 +74,7 @@ const STATE_PRESETS: StatePreset[] = [
   { label: "Waiting", match: (r) => r.dominantState === "waiting" },
   { label: "Idle", match: (r) => r.dominantState === null && !r.disabled },
   { label: "Completed", match: (r) => r.dominantState === "completed" },
+  { label: "Exited", match: (r) => r.dominantState === "exited" },
 ];
 
 function getEligibleTerminals(
@@ -82,13 +92,14 @@ function getEligibleTerminals(
 }
 
 function useWorktreeRows(): WorktreeRow[] {
-  const worktrees = useWorktreeDataStore((s) => s.worktrees);
-  const terminals = useTerminalStore((s) => s.terminals);
+  const worktrees = useWorktreeStore((s) => s.worktrees);
+  const panelsById = usePanelStore((s) => s.panelsById);
+  const panelIds = usePanelStore((s) => s.panelIds);
 
   return useMemo(() => {
     const rows: WorktreeRow[] = [];
+    const terminals = panelIds.map((id) => panelsById[id]).filter(Boolean);
     for (const wt of worktrees.values()) {
-      if (wt.isMainWorktree) continue;
       const eligible = getEligibleTerminals(terminals, wt.id);
       const dominantState = getDominantAgentState(eligible.map((t) => t.agentState));
       rows.push({
@@ -103,7 +114,7 @@ function useWorktreeRows(): WorktreeRow[] {
       });
     }
     return rows;
-  }, [worktrees, terminals]);
+  }, [worktrees, panelsById, panelIds]);
 }
 
 function buildRecipeContext(row: WorktreeRow): RecipeContext {
@@ -138,8 +149,17 @@ function BulkCommandPaletteInner() {
   const [commandText, setCommandText] = useState("");
   const [selectedRecipeId, setSelectedRecipeId] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [pendingDestructive, setPendingDestructive] = useState(false);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [showHistory, setShowHistory] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const doubleEscapeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queueRef = useRef<PQueue | null>(null);
+
+  const availableVars = useMemo(() => getAvailableVariables(), []);
+  const historyEntries = useCommandHistoryStore(
+    useShallow((s) => s.getProjectHistory(BULK_HISTORY_KEY))
+  );
 
   const projectRecipes = useRecipeStore(
     useShallow((s) => s.recipes.filter((r) => r.worktreeId === undefined))
@@ -150,12 +170,21 @@ function BulkCommandPaletteInner() {
       if (doubleEscapeTimerRef.current) {
         clearTimeout(doubleEscapeTimerRef.current);
       }
+      queueRef.current?.clear();
     };
   }, []);
 
+  useEscapeStack(step === "preview", () => setStep("select"));
+  useEscapeStack(pendingDestructive, () => setPendingDestructive(false));
+
   useEffect(() => {
     setStep("select");
+    setPendingDestructive(false);
   }, [mode]);
+
+  useEffect(() => {
+    setPendingDestructive(false);
+  }, [keystrokePreset]);
 
   const enabledRows = useMemo(() => rows.filter((r) => !r.disabled), [rows]);
   const allEnabledSelected =
@@ -164,6 +193,19 @@ function BulkCommandPaletteInner() {
   const selectedRows = useMemo(
     () => rows.filter((r) => selectedIds.has(r.id)),
     [rows, selectedIds]
+  );
+
+  const presetCounts = useMemo(
+    () =>
+      Object.fromEntries(
+        STATE_PRESETS.map((p) => [p.label, rows.filter((r) => !r.disabled && p.match(r)).length])
+      ),
+    [rows]
+  );
+
+  const selectedAgentCount = useMemo(
+    () => selectedRows.reduce((sum, r) => sum + r.agentTerminalCount, 0),
+    [selectedRows]
   );
 
   const toggleWorktree = useCallback((id: string) => {
@@ -211,15 +253,30 @@ function BulkCommandPaletteInner() {
   }, [step, mode, selectedRows, commandText]);
 
   const resolveTargetIds = useCallback((): string[] => {
-    const terminals = useTerminalStore.getState().terminals;
+    const { panelsById: tById, panelIds: tIds } = usePanelStore.getState();
+    const allTerminals = tIds.map((id) => tById[id]).filter(Boolean);
     const ids: string[] = [];
     for (const worktreeId of selectedIds) {
-      for (const t of getEligibleTerminals(terminals, worktreeId)) {
+      for (const t of getEligibleTerminals(allTerminals, worktreeId)) {
         ids.push(t.id);
       }
     }
     return ids;
   }, [selectedIds]);
+
+  const handleInsertVariable = useCallback(
+    (varName: string) => {
+      const input = inputRef.current;
+      const cursor = input?.selectionStart ?? commandText.length;
+      const chipText = `{{${varName}}}`;
+      const newValue = commandText.slice(0, cursor) + chipText + commandText.slice(cursor);
+      const newCursor = cursor + chipText.length;
+      flushSync(() => setCommandText(newValue));
+      input?.focus();
+      input?.setSelectionRange(newCursor, newCursor);
+    },
+    [commandText]
+  );
 
   const handlePreview = useCallback(() => {
     if (mode === "keystroke") return;
@@ -228,20 +285,28 @@ function BulkCommandPaletteInner() {
 
   const handleConfirm = useCallback(async () => {
     setIsSending(true);
+    let totalTargets = 0;
+    let failures = 0;
 
     if (mode === "text") {
-      const terminals = useTerminalStore.getState().terminals;
+      const { panelsById: tById, panelIds: tIds } = usePanelStore.getState();
+      const allTerminals = tIds.map((id) => tById[id]).filter(Boolean);
       const promises: Promise<unknown>[] = [];
       for (const row of selectedRows) {
         const ctx = buildRecipeContext(row);
         const resolved = replaceRecipeVariables(commandText, ctx);
         if (!resolved.trim()) continue;
-        const eligible = getEligibleTerminals(terminals, row.id);
+        const eligible = getEligibleTerminals(allTerminals, row.id);
         for (const t of eligible) {
           promises.push(terminalClient.submit(t.id, resolved));
         }
       }
-      await Promise.allSettled(promises);
+      totalTargets = promises.length;
+      const results = await Promise.allSettled(promises);
+      failures = results.filter((r) => r.status === "rejected").length;
+      if (totalTargets > 0) {
+        useCommandHistoryStore.getState().recordPrompt(BULK_HISTORY_KEY, commandText);
+      }
     } else if (mode === "recipe" && selectedRecipeId) {
       const queue = new PQueue({ concurrency: 2 });
       queueRef.current = queue;
@@ -250,10 +315,25 @@ function BulkCommandPaletteInner() {
           useRecipeStore
             .getState()
             .runRecipeWithResults(selectedRecipeId, row.path, row.id, buildRecipeContext(row))
-            .catch((err) => console.error(`Recipe broadcast failed for ${row.branch}:`, err))
+            .catch((err) => {
+              console.error(`Recipe broadcast failed for ${row.branch}:`, err);
+              throw err;
+            })
       );
-      await queue.addAll(tasks);
+      totalTargets = tasks.length;
+      const results = await Promise.allSettled(tasks.map((t) => queue.add(t)));
+      failures = results.filter((r) => r.status === "rejected").length;
       queueRef.current = null;
+    }
+
+    if (totalTargets > 0) {
+      const toastType = failures > 0 ? "warning" : "success";
+      const failSuffix = failures > 0 ? ` (${failures} failed)` : "";
+      useNotificationStore.getState().addNotification({
+        type: toastType,
+        priority: "low",
+        message: `Sent to ${selectedRows.length} worktree${selectedRows.length !== 1 ? "s" : ""}, ${totalTargets} target${totalTargets !== 1 ? "s" : ""}${failSuffix}`,
+      });
     }
 
     setIsSending(false);
@@ -262,6 +342,11 @@ function BulkCommandPaletteInner() {
 
   const handleSend = useCallback(async () => {
     if (mode === "keystroke") {
+      if (DESTRUCTIVE_KEYSTROKES.has(keystrokePreset) && !pendingDestructive) {
+        setPendingDestructive(true);
+        return;
+      }
+
       const targetIds = resolveTargetIds();
       if (targetIds.length === 0) return;
       setIsSending(true);
@@ -273,18 +358,36 @@ function BulkCommandPaletteInner() {
           const freshTargetIds = resolveTargetIds();
           freshTargetIds.forEach((id) => terminalClient.sendKey(id, "escape"));
           setIsSending(false);
+          useNotificationStore.getState().addNotification({
+            type: "success",
+            priority: "low",
+            message: `Sent ${KEYSTROKE_LABELS[keystrokePreset]} to ${selectedIds.size} worktree${selectedIds.size !== 1 ? "s" : ""}`,
+          });
           closePalette();
         }, 1000);
       } else {
         const key = KEYSTROKE_KEYS[keystrokePreset];
         targetIds.forEach((id) => terminalClient.sendKey(id, key));
         setIsSending(false);
+        useNotificationStore.getState().addNotification({
+          type: "success",
+          priority: "low",
+          message: `Sent ${KEYSTROKE_LABELS[keystrokePreset]} to ${selectedIds.size} worktree${selectedIds.size !== 1 ? "s" : ""}`,
+        });
         closePalette();
       }
     } else {
       handlePreview();
     }
-  }, [mode, keystrokePreset, resolveTargetIds, closePalette, handlePreview]);
+  }, [
+    mode,
+    keystrokePreset,
+    pendingDestructive,
+    selectedIds.size,
+    resolveTargetIds,
+    closePalette,
+    handlePreview,
+  ]);
 
   const canSend = useMemo(() => {
     if (selectedIds.size === 0 || isSending) return false;
@@ -302,8 +405,8 @@ function BulkCommandPaletteInner() {
   const actionLabel = step === "preview" ? "Confirm" : mode === "keystroke" ? "Send" : "Preview";
 
   return (
-    <AppPaletteDialog isOpen onClose={closePalette} ariaLabel="Bulk Command Center">
-      <AppPaletteDialog.Header label="Bulk Command Center">
+    <AppPaletteDialog isOpen onClose={closePalette} ariaLabel="Bulk Operations">
+      <AppPaletteDialog.Header label="Bulk Operations">
         <div className="flex gap-1 mb-1">
           {(["keystroke", "text", "recipe"] as const).map((m) => (
             <button
@@ -371,136 +474,242 @@ function BulkCommandPaletteInner() {
               </>
             )}
           </div>
-        ) : rows.length === 0 ? (
-          <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
-            No non-main worktrees available
-          </div>
         ) : (
           <>
-            <div className="flex items-center gap-1 px-3 py-1.5">
-              <button
-                onClick={toggleAll}
-                className="text-xs text-canopy-text/50 hover:text-canopy-text transition-colors"
-              >
-                {allEnabledSelected ? "Deselect All" : "Select All"}
-              </button>
-              <span className="text-canopy-text/20 mx-1">|</span>
-              {STATE_PRESETS.map((preset) => (
-                <button
-                  key={preset.label}
-                  onClick={() => applyPreset(preset)}
-                  className="px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)] border border-canopy-border text-canopy-text/50 hover:text-canopy-text hover:border-canopy-text/30 transition-colors"
-                >
-                  {preset.label}
-                </button>
-              ))}
+            {/* Action config — above worktree list */}
+            <div className="px-3 py-2 border-b border-canopy-border">
+              {mode === "keystroke" ? (
+                pendingDestructive ? (
+                  <div className="flex items-center gap-2 py-1">
+                    <span className="text-xs text-amber-400 flex-1">
+                      Send {KEYSTROKE_LABELS[keystrokePreset]} to {selectedIds.size} worktree
+                      {selectedIds.size !== 1 ? "s" : ""}?
+                    </span>
+                    <button
+                      onClick={() => {
+                        setPendingDestructive(false);
+                        handleSend();
+                      }}
+                      className="px-2 py-0.5 text-xs rounded-[var(--radius-md)] bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 transition-colors"
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      onClick={() => setPendingDestructive(false)}
+                      className="px-2 py-0.5 text-xs rounded-[var(--radius-md)] text-canopy-text/50 hover:text-canopy-text transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {(Object.keys(KEYSTROKE_LABELS) as KeystrokePreset[]).map((preset) => (
+                      <button
+                        key={preset}
+                        onClick={() => setKeystrokePreset(preset)}
+                        className={`px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors ${
+                          keystrokePreset === preset
+                            ? "border-canopy-accent bg-canopy-accent/10 text-canopy-accent"
+                            : "border-canopy-border text-canopy-text/60 hover:text-canopy-text hover:border-canopy-text/30"
+                        }`}
+                      >
+                        {KEYSTROKE_LABELS[preset]}
+                      </button>
+                    ))}
+                  </div>
+                )
+              ) : mode === "text" ? (
+                <div className="space-y-2">
+                  <div className="relative">
+                    <input
+                      ref={inputRef}
+                      type="text"
+                      value={commandText}
+                      onChange={(e) => {
+                        setCommandText(e.target.value);
+                        setHistoryIndex(-1);
+                        setShowHistory(false);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSend) {
+                          e.preventDefault();
+                          handleConfirm();
+                        } else if (e.key === "Enter" && canSend) {
+                          e.preventDefault();
+                          handleSend();
+                        } else if (e.key === "ArrowUp" && historyEntries.length > 0) {
+                          e.preventDefault();
+                          const next = Math.min(historyIndex + 1, historyEntries.length - 1);
+                          setHistoryIndex(next);
+                          setCommandText(historyEntries[next].prompt);
+                          setShowHistory(false);
+                        } else if (e.key === "ArrowDown" && historyIndex >= 0) {
+                          e.preventDefault();
+                          const next = historyIndex - 1;
+                          setHistoryIndex(next);
+                          setCommandText(next >= 0 ? historyEntries[next].prompt : "");
+                          setShowHistory(false);
+                        }
+                      }}
+                      onFocus={() => {
+                        if (commandText === "" && historyEntries.length > 0) setShowHistory(true);
+                      }}
+                      onBlur={() => setShowHistory(false)}
+                      placeholder="Type a command..."
+                      className="w-full px-3 py-2 text-sm bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-md)] text-canopy-text placeholder:italic placeholder:text-canopy-text/30 focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/20"
+                    />
+                    {showHistory && commandText === "" && (
+                      <div className="absolute left-0 right-0 top-full mt-1 bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-md)] shadow-lg z-10 max-h-40 overflow-y-auto">
+                        {historyEntries.slice(0, 8).map((entry) => (
+                          <button
+                            key={entry.id}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              setCommandText(entry.prompt);
+                              setShowHistory(false);
+                            }}
+                            className="w-full text-left px-3 py-1.5 text-xs text-canopy-text/70 hover:bg-tint/[0.06] truncate"
+                          >
+                            {entry.prompt}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap gap-1">
+                      {availableVars.map((v) => (
+                        <button
+                          key={v.name}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            handleInsertVariable(v.name);
+                          }}
+                          className="px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)] border border-canopy-border text-canopy-text/50 hover:text-canopy-accent hover:border-canopy-accent/40 transition-colors font-mono"
+                        >
+                          {`{{${v.name}}}`}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-canopy-text/30 mt-1">
+                      Click to insert &middot; Variables resolve per worktree
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {projectRecipes.length === 0 ? (
+                    <div className="text-xs text-canopy-text/40 py-1">No project-wide recipes</div>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {projectRecipes.map((recipe) => (
+                        <button
+                          key={recipe.id}
+                          onClick={() => setSelectedRecipeId(recipe.id)}
+                          className={`px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors ${
+                            selectedRecipeId === recipe.id
+                              ? "border-canopy-accent bg-canopy-accent/10 text-canopy-accent"
+                              : "border-canopy-border text-canopy-text/60 hover:text-canopy-text hover:border-canopy-text/30"
+                          }`}
+                        >
+                          {recipe.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-            {rows.map((row) => {
-              const StateIcon = row.dominantState ? STATE_ICONS[row.dominantState] : null;
-              const stateColor = row.dominantState ? STATE_COLORS[row.dominantState] : "";
-              return (
-                <button
-                  key={row.id}
-                  onClick={() => !row.disabled && toggleWorktree(row.id)}
-                  disabled={row.disabled}
-                  className={`w-full text-left px-3 py-2 rounded-[var(--radius-lg)] border transition-colors flex items-center gap-2 ${
-                    row.disabled
-                      ? "opacity-40 cursor-not-allowed border-transparent"
-                      : selectedIds.has(row.id)
-                        ? "border-canopy-accent/40 bg-canopy-accent/10"
-                        : "border-transparent hover:bg-tint/[0.06]"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(row.id)}
-                    disabled={row.disabled}
-                    onChange={() => {}}
-                    className="pointer-events-none shrink-0"
-                    tabIndex={-1}
-                  />
-                  <span className="flex-1 text-sm text-canopy-text truncate">{row.branch}</span>
-                  {StateIcon && <StateIcon className={`w-3.5 h-3.5 shrink-0 ${stateColor}`} />}
-                  <span className="text-xs text-canopy-text/40 shrink-0">
-                    {row.agentTerminalCount} {row.agentTerminalCount === 1 ? "agent" : "agents"}
-                  </span>
-                </button>
-              );
-            })}
+
+            {/* Worktree list */}
+            {rows.length === 0 ? (
+              <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
+                No worktrees available
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-1 px-3 py-1.5">
+                  <button
+                    onClick={toggleAll}
+                    className="text-xs text-canopy-text/50 hover:text-canopy-text transition-colors"
+                  >
+                    {allEnabledSelected ? "Deselect All" : "Select All"}
+                  </button>
+                  <span className="text-canopy-text/20 mx-1">|</span>
+                  {STATE_PRESETS.map((preset) => {
+                    const count = presetCounts[preset.label];
+                    return (
+                      <button
+                        key={preset.label}
+                        onClick={() => applyPreset(preset)}
+                        disabled={count === 0}
+                        className={`px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)] border border-canopy-border transition-colors ${
+                          count === 0
+                            ? "opacity-40 cursor-not-allowed text-canopy-text/50"
+                            : "text-canopy-text/50 hover:text-canopy-text hover:border-canopy-text/30"
+                        }`}
+                      >
+                        {preset.label} ({count})
+                      </button>
+                    );
+                  })}
+                </div>
+                {rows.map((row) => {
+                  const StateIcon = row.dominantState ? STATE_ICONS[row.dominantState] : null;
+                  const stateColor = row.dominantState ? STATE_COLORS[row.dominantState] : "";
+                  return (
+                    <button
+                      key={row.id}
+                      onClick={() => !row.disabled && toggleWorktree(row.id)}
+                      disabled={row.disabled}
+                      className={`w-full text-left px-3 py-2 rounded-[var(--radius-lg)] border transition-colors flex items-center gap-2 ${
+                        row.disabled
+                          ? "opacity-40 cursor-not-allowed border-transparent"
+                          : selectedIds.has(row.id)
+                            ? "border-canopy-accent/40 bg-canopy-accent/10"
+                            : "border-transparent hover:bg-tint/[0.06]"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(row.id)}
+                        disabled={row.disabled}
+                        onChange={() => {}}
+                        className="pointer-events-none shrink-0"
+                        tabIndex={-1}
+                      />
+                      <span className="flex-1 text-sm text-canopy-text truncate">{row.branch}</span>
+                      {StateIcon && <StateIcon className={`w-3.5 h-3.5 shrink-0 ${stateColor}`} />}
+                      <span className="text-xs text-canopy-text/40 shrink-0">
+                        {row.agentTerminalCount} {row.agentTerminalCount === 1 ? "agent" : "agents"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </>
+            )}
           </>
         )}
       </AppPaletteDialog.Body>
 
-      <div className="px-3 py-2 border-t border-canopy-border">
-        {mode === "keystroke" ? (
-          <div className="flex flex-wrap gap-1.5">
-            {(Object.keys(KEYSTROKE_LABELS) as KeystrokePreset[]).map((preset) => (
-              <button
-                key={preset}
-                onClick={() => setKeystrokePreset(preset)}
-                className={`px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors ${
-                  keystrokePreset === preset
-                    ? "border-canopy-accent bg-canopy-accent/10 text-canopy-accent"
-                    : "border-canopy-border text-canopy-text/60 hover:text-canopy-text hover:border-canopy-text/30"
-                }`}
-              >
-                {KEYSTROKE_LABELS[preset]}
-              </button>
-            ))}
-          </div>
-        ) : mode === "text" ? (
-          <div>
-            <input
-              type="text"
-              value={commandText}
-              onChange={(e) => setCommandText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && canSend) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              placeholder="Enter command to send... (supports {{issue_number}}, {{branch_name}}, etc.)"
-              className="w-full px-3 py-2 text-sm bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-md)] text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/20"
-            />
-          </div>
-        ) : (
-          <div className="space-y-1">
-            {projectRecipes.length === 0 ? (
-              <div className="text-xs text-canopy-text/40 py-1">No project-wide recipes</div>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {projectRecipes.map((recipe) => (
-                  <button
-                    key={recipe.id}
-                    onClick={() => setSelectedRecipeId(recipe.id)}
-                    className={`px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors ${
-                      selectedRecipeId === recipe.id
-                        ? "border-canopy-accent bg-canopy-accent/10 text-canopy-accent"
-                        : "border-canopy-border text-canopy-text/60 hover:text-canopy-text hover:border-canopy-text/30"
-                    }`}
-                  >
-                    {recipe.name}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
       <AppPaletteDialog.Footer>
         <div className="flex items-center justify-between w-full">
-          <span className="text-xs text-canopy-text/50">
-            {selectedIds.size} worktree{selectedIds.size !== 1 ? "s" : ""} selected
+          <span className="text-[10px] text-canopy-text/30 hidden sm:inline">
+            ↑↓ Navigate &middot; Space Select &middot; ⌘↵ Send &middot; Esc Back
           </span>
-          <button
-            onClick={step === "preview" ? handleConfirm : handleSend}
-            disabled={!canSend}
-            className="px-3 py-1 text-xs rounded-[var(--radius-md)] bg-canopy-accent text-text-inverse hover:bg-canopy-accent/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {isSending ? "Sending..." : actionLabel}
-          </button>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-canopy-text/50">
+              {selectedIds.size} worktree{selectedIds.size !== 1 ? "s" : ""}, {selectedAgentCount}{" "}
+              agent{selectedAgentCount !== 1 ? "s" : ""}
+            </span>
+            <button
+              onClick={step === "preview" ? handleConfirm : handleSend}
+              disabled={!canSend}
+              className="px-3 py-1 text-xs rounded-[var(--radius-md)] bg-canopy-accent text-text-inverse hover:bg-canopy-accent/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {isSending ? "Sending..." : actionLabel}
+            </button>
+          </div>
         </div>
       </AppPaletteDialog.Footer>
     </AppPaletteDialog>

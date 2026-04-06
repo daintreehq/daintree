@@ -11,9 +11,14 @@ import { isSensitiveEnvKey } from "../../shared/utils/envVars.js";
 import { projectEnvSecureStorage } from "./ProjectEnvSecureStorage.js";
 import { getProjectStateDir, settingsFilePath } from "./projectStorePaths.js";
 import { parseTerminalSettings, parseNotificationOverrides } from "./projectSettingsParsers.js";
+import { Cache } from "../utils/cache.js";
 
 export class ProjectSettingsManager {
   private notificationOverridesCache = new Map<string, Partial<NotificationSettings> | undefined>();
+  private readonly settingsCache = new Cache<string, ProjectSettings>({
+    maxSize: 20,
+    defaultTTL: 30_000,
+  });
 
   constructor(
     private projectsConfigDir: string,
@@ -32,15 +37,23 @@ export class ProjectSettingsManager {
       completedEnabled: overrides.completedEnabled ?? global.completedEnabled,
       waitingEnabled: overrides.waitingEnabled ?? global.waitingEnabled,
       soundEnabled: overrides.soundEnabled ?? global.soundEnabled,
-      soundFile: overrides.soundFile ?? global.soundFile,
+      completedSoundFile: overrides.completedSoundFile ?? global.completedSoundFile,
+      waitingSoundFile: overrides.waitingSoundFile ?? global.waitingSoundFile,
+      escalationSoundFile: overrides.escalationSoundFile ?? global.escalationSoundFile,
       waitingEscalationEnabled:
         overrides.waitingEscalationEnabled ?? global.waitingEscalationEnabled,
       waitingEscalationDelayMs:
         overrides.waitingEscalationDelayMs ?? global.waitingEscalationDelayMs,
+      workingPulseEnabled: overrides.workingPulseEnabled ?? global.workingPulseEnabled,
+      workingPulseSoundFile: overrides.workingPulseSoundFile ?? global.workingPulseSoundFile,
+      uiFeedbackSoundEnabled: global.uiFeedbackSoundEnabled,
     };
   }
 
   async getProjectSettings(projectId: string): Promise<ProjectSettings> {
+    const cached = this.settingsCache.get(projectId);
+    if (cached) return cached;
+
     const filePath = settingsFilePath(this.projectsConfigDir, projectId);
     if (!filePath || !existsSync(filePath)) {
       this.notificationOverridesCache.delete(projectId);
@@ -189,6 +202,7 @@ export class ProjectSettingsManager {
       };
 
       this.notificationOverridesCache.set(projectId, settings.notificationOverrides);
+      this.settingsCache.set(projectId, settings);
 
       return settings;
     } catch (error) {
@@ -206,6 +220,8 @@ export class ProjectSettingsManager {
   }
 
   async saveProjectSettings(projectId: string, settings: ProjectSettings): Promise<void> {
+    this.settingsCache.invalidate(projectId);
+
     const stateDir = getProjectStateDir(this.projectsConfigDir, projectId);
     if (!stateDir) {
       throw new Error(`Invalid project ID: ${projectId}`);
@@ -372,10 +388,12 @@ export class ProjectSettingsManager {
   }
 
   deleteAllEnvForProject(projectId: string): void {
+    this.settingsCache.invalidate(projectId);
     projectEnvSecureStorage.deleteAllForProject(projectId);
   }
 
   migrateEnvForProject(oldId: string, newId: string): void {
+    this.settingsCache.invalidate(oldId);
     projectEnvSecureStorage.migrateAllForProject(oldId, newId);
   }
 }

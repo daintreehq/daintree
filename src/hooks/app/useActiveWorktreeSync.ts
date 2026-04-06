@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef } from "react";
 import { useWorktrees } from "@/hooks";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store";
-import { worktreeClient } from "@/clients";
+import { useHomeDir } from "@/hooks/app/useHomeDir";
 
 export function useActiveWorktreeSync() {
-  const { worktrees } = useWorktrees();
+  const { worktrees, isInitialized } = useWorktrees();
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
   const currentProject = useProjectStore((s) => s.currentProject);
+  const { homeDir } = useHomeDir();
 
   const lastSyncedActiveRef = useRef<{ projectId: string | null; worktreeId: string | null }>({
     projectId: null,
@@ -52,19 +53,24 @@ export function useActiveWorktreeSync() {
     }
 
     lastSyncedActiveRef.current = { projectId, worktreeId: selectedWorktreeId };
-    worktreeClient.setActive(selectedWorktreeId).catch(() => {
-      if (
-        lastSyncedActiveRef.current.projectId === projectId &&
-        lastSyncedActiveRef.current.worktreeId === selectedWorktreeId
-      ) {
-        lastSyncedActiveRef.current = { projectId, worktreeId: null };
-      }
-    });
+    window.electron.worktreePort
+      .request("set-active", { worktreeId: selectedWorktreeId })
+      .catch(() => {
+        if (
+          lastSyncedActiveRef.current.projectId === projectId &&
+          lastSyncedActiveRef.current.worktreeId === selectedWorktreeId
+        ) {
+          lastSyncedActiveRef.current = { projectId, worktreeId: null };
+        }
+      });
   }, [activeWorktreeId, currentProject?.id, worktrees]);
 
   const defaultTerminalCwd = useMemo(
-    () => activeWorktree?.path ?? currentProject?.path ?? "",
-    [activeWorktree, currentProject]
+    () =>
+      isInitialized
+        ? (activeWorktree?.path ?? currentProject?.path ?? homeDir ?? "")
+        : (currentProject?.path ?? homeDir ?? ""),
+    [activeWorktree, currentProject, homeDir, isInitialized]
   );
 
   return { activeWorktree, defaultTerminalCwd };

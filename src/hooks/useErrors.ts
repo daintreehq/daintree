@@ -4,6 +4,14 @@ import { isElectronAvailable } from "./useElectron";
 import { errorsClient } from "@/clients";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { notify } from "@/lib/notify";
+import type { NotificationPriority } from "@/store/notificationStore";
+
+export function getErrorPriority(
+  error: Pick<AppError, "type" | "isTransient">
+): NotificationPriority {
+  if (error.isTransient) return "low";
+  return "high";
+}
 
 let ipcListenerAttached = false;
 export function useErrors() {
@@ -49,7 +57,7 @@ export function useErrors() {
         title: error.source,
         message: error.message,
         correlationId: error.correlationId,
-        priority: "low",
+        priority: getErrorPriority(error),
       });
     });
 
@@ -80,7 +88,7 @@ export function useErrors() {
             title: error.source,
             message: error.message,
             correlationId: error.correlationId,
-            priority: "low",
+            priority: getErrorPriority(error),
           });
         }
       })

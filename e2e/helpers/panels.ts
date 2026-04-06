@@ -17,7 +17,7 @@ export async function clickToolbarButton(
 
   // Try direct click first — Playwright auto-waits for visibility
   try {
-    await button.click({ timeout: 3000 });
+    await button.click({ timeout: 3000, noWaitAfter: true });
     return;
   } catch {
     // Button not clickable — might be in overflow menu
@@ -38,7 +38,7 @@ export async function clickToolbarButton(
   }
 
   // Last resort: try clicking with longer timeout
-  await button.click({ timeout });
+  await button.click({ timeout, noWaitAfter: true });
 }
 
 /**

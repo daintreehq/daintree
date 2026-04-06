@@ -1,3 +1,5 @@
+import { isMac } from "@/lib/platform";
+
 export type KeyScope = "global" | "terminal" | "modal" | "worktreeList" | "portal";
 
 export interface KeybindingConfig {
@@ -59,11 +61,7 @@ export function normalizeKey(key: string): string {
  * Use this function in both the keybinding matcher and the shortcut recorder to ensure consistency.
  */
 export function normalizeKeyForBinding(event: KeyboardEvent): string {
-  // Detect macOS
-  const isMac =
-    typeof navigator !== "undefined" &&
-    navigator.platform &&
-    navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+  const mac = isMac();
 
   // Prefer physical key code for punctuation (handles Option/Alt modifiers)
   if (event.code && CODE_TO_KEY[event.code]) {
@@ -75,7 +73,7 @@ export function normalizeKeyForBinding(event: KeyboardEvent): string {
   // the produced character for non-US layouts
   // event.code for letters is like "KeyA", "KeyB", ..., "KeyP", etc.
   if (
-    isMac &&
+    mac &&
     event.altKey &&
     event.code &&
     event.code.startsWith("Key") &&
@@ -87,7 +85,7 @@ export function normalizeKeyForBinding(event: KeyboardEvent): string {
   // Handle digit keys when Alt is pressed on macOS (Alt+1 produces ¡ instead of 1)
   // event.code for digits is like "Digit0", "Digit1", ..., "Digit9"
   if (
-    isMac &&
+    mac &&
     event.altKey &&
     event.code &&
     event.code.startsWith("Digit") &&

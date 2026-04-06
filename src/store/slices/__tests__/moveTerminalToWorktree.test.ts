@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
-import { MAX_GRID_TERMINALS, type TerminalInstance } from "../terminalRegistrySlice";
+import { MAX_GRID_TERMINALS, type TerminalInstance } from "../panelRegistrySlice";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 vi.mock("@/clients", () => ({
@@ -19,17 +19,25 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-vi.mock("../../persistence/terminalPersistence", () => ({
-  terminalPersistence: {
+vi.mock("../../persistence/panelPersistence", () => ({
+  panelPersistence: {
+    setProjectIdGetter: vi.fn(),
     save: vi.fn(),
     saveTabGroups: vi.fn(),
     load: vi.fn().mockReturnValue([]),
   },
 }));
 
-const { useTerminalStore } = await import("../../terminalStore");
+const { usePanelStore } = await import("../../panelStore");
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
-const { terminalPersistence } = await import("../../persistence/terminalPersistence");
+const { panelPersistence } = await import("../../persistence/panelPersistence");
+
+function setTerminals(terminals: TerminalInstance[]) {
+  usePanelStore.setState({
+    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    panelIds: terminals.map((t) => t.id),
+  });
+}
 
 function createMockTerminal(
   id: string,
@@ -51,9 +59,10 @@ function createMockTerminal(
 
 describe("moveTerminalToWorktree", () => {
   beforeEach(() => {
-    useTerminalStore.getState().reset();
-    useTerminalStore.setState({
-      terminals: [],
+    usePanelStore.getState().reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
@@ -69,15 +78,15 @@ describe("moveTerminalToWorktree", () => {
       createMockTerminal(`target-${i}`, "wt-b", "grid")
     );
 
-    useTerminalStore.setState({ terminals: [source, ...targetGridTerminals] });
+    setTerminals([source, ...targetGridTerminals]);
 
-    useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
+    usePanelStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
-    const moved = useTerminalStore.getState().terminals.find((t) => t.id === "t1");
+    const moved = usePanelStore.getState().panelsById["t1"];
     expect(moved?.worktreeId).toBe("wt-b");
     expect(moved?.location).toBe("grid");
     expect(moved?.isVisible).toBe(true);
-    expect(terminalPersistence.save).toHaveBeenCalledTimes(1);
+    expect(panelPersistence.save).toHaveBeenCalledTimes(1);
     // All terminals stay VISIBLE - we don't background for reliability
     expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
       "t1",
@@ -91,15 +100,15 @@ describe("moveTerminalToWorktree", () => {
       createMockTerminal(`target-${i}`, "wt-b", "grid")
     );
 
-    useTerminalStore.setState({ terminals: [source, ...targetGridTerminals] });
+    setTerminals([source, ...targetGridTerminals]);
 
-    useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
+    usePanelStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
-    const moved = useTerminalStore.getState().terminals.find((t) => t.id === "t1");
+    const moved = usePanelStore.getState().panelsById["t1"];
     expect(moved?.worktreeId).toBe("wt-b");
     expect(moved?.location).toBe("dock");
     expect(moved?.isVisible).toBe(false);
-    expect(terminalPersistence.save).toHaveBeenCalledTimes(1);
+    expect(panelPersistence.save).toHaveBeenCalledTimes(1);
     // Dock terminals get VISIBLE tier (optimizeForDock)
     expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
       "t1",
@@ -109,21 +118,21 @@ describe("moveTerminalToWorktree", () => {
 
   it("does nothing when moving to the same worktree", () => {
     const source = createMockTerminal("t1", "wt-a", "grid");
-    useTerminalStore.setState({ terminals: [source] });
+    setTerminals([source]);
 
-    useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-a");
+    usePanelStore.getState().moveTerminalToWorktree("t1", "wt-a");
 
-    const moved = useTerminalStore.getState().terminals.find((t) => t.id === "t1");
+    const moved = usePanelStore.getState().panelsById["t1"];
     expect(moved?.worktreeId).toBe("wt-a");
-    expect(terminalPersistence.save).not.toHaveBeenCalled();
+    expect(panelPersistence.save).not.toHaveBeenCalled();
     expect(terminalInstanceService.applyRendererPolicy).not.toHaveBeenCalled();
   });
 
   it("applies VISIBLE tier when moving to any worktree", () => {
     const source = createMockTerminal("t1", "wt-a", "dock");
-    useTerminalStore.setState({ terminals: [source] });
+    setTerminals([source]);
 
-    useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
+    usePanelStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
     // All terminals stay VISIBLE - we don't background for reliability
     expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
@@ -145,18 +154,16 @@ describe("moveTerminalToWorktree", () => {
       panelIds: ["t1", "t2", "t3"],
     };
 
-    useTerminalStore.setState({
-      terminals: [t1, t2, t3],
-      tabGroups: new Map([["g1", group]]),
-    });
+    setTerminals([t1, t2, t3]);
+    usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
 
-    useTerminalStore.getState().moveTerminalToWorktree("t1", "wt-b");
+    usePanelStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
-    const state = useTerminalStore.getState();
+    const state = usePanelStore.getState();
 
-    const movedT1 = state.terminals.find((t) => t.id === "t1");
-    const movedT2 = state.terminals.find((t) => t.id === "t2");
-    const movedT3 = state.terminals.find((t) => t.id === "t3");
+    const movedT1 = state.panelsById["t1"];
+    const movedT2 = state.panelsById["t2"];
+    const movedT3 = state.panelsById["t3"];
 
     expect(movedT1?.worktreeId).toBe("wt-b");
     expect(movedT2?.worktreeId).toBe("wt-b");

@@ -2,7 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { useRecipeStore } from "@/store/recipeStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 
 export function registerRecipeActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("recipe.list", () => ({
@@ -50,7 +50,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       const { recipeId, worktreeId } = args as { recipeId: string; worktreeId?: string };
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId ?? undefined;
       const worktree = targetWorktreeId
-        ? useWorktreeDataStore.getState().worktrees.get(targetWorktreeId)
+        ? getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
         : null;
       const worktreePath = worktree?.path ?? ctx.projectPath;
 
@@ -76,17 +76,58 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({
-      worktreeId: z.string(),
+      worktreeId: z.string().optional(),
+      recipeId: z.string().optional(),
       initialTerminals: z.any().optional(),
     }),
     run: async (args: unknown) => {
-      const { worktreeId, initialTerminals } = args as {
-        worktreeId: string;
+      const { worktreeId, recipeId, initialTerminals } = args as {
+        worktreeId?: string;
+        recipeId?: string;
         initialTerminals?: unknown;
       };
       window.dispatchEvent(
-        new CustomEvent("canopy:open-recipe-editor", { detail: { worktreeId, initialTerminals } })
+        new CustomEvent("canopy:open-recipe-editor", {
+          detail: { worktreeId, recipeId, initialTerminals },
+        })
       );
+    },
+  }));
+
+  actions.set("recipe.manager.open", () => ({
+    id: "recipe.manager.open",
+    title: "Manage Recipes",
+    description: "Open the recipe manager to view and manage global and project recipes",
+    category: "recipes",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      window.dispatchEvent(new CustomEvent("canopy:open-recipe-manager"));
+    },
+  }));
+
+  actions.set("recipe.saveToRepo", () => ({
+    id: "recipe.saveToRepo",
+    title: "Save Recipe to Repository",
+    description:
+      "Promote a recipe to in-repo storage (.canopy/recipes/) for git tracking and team sharing",
+    category: "recipes",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    argsSchema: z.object({
+      recipeId: z.string(),
+      deleteOriginal: z.boolean().default(false),
+    }),
+    run: async (args: unknown) => {
+      const { recipeId, deleteOriginal } = args as {
+        recipeId: string;
+        deleteOriginal: boolean;
+      };
+      const store = useRecipeStore.getState();
+      if (!store.currentProjectId) throw new Error("No project open");
+      await store.saveToRepo(recipeId, deleteOriginal);
     },
   }));
 

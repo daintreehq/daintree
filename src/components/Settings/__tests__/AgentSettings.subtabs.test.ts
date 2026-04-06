@@ -9,7 +9,7 @@ const GENERAL_SUBTAB_ID = "general";
  * These tests verify the derivation logic used inside the component.
  */
 describe("AgentSettings subtab derivation logic", () => {
-  const agentIds = ["claude", "gemini", "codex", "opencode"];
+  const agentIds = ["claude", "gemini", "codex", "opencode", "cursor"];
 
   function deriveActiveState(
     activeSubtab: string | null,
@@ -44,6 +44,10 @@ describe("AgentSettings subtab derivation logic", () => {
     const codex = deriveActiveState("codex", agentIds);
     expect(codex.isGeneralActive).toBe(false);
     expect(codex.activeAgentId).toBe("codex");
+
+    const cursor = deriveActiveState("cursor", agentIds);
+    expect(cursor.isGeneralActive).toBe(false);
+    expect(cursor.activeAgentId).toBe("cursor");
   });
 
   it("falls back to General when activeSubtab is an unknown id (prevents blank screen)", () => {

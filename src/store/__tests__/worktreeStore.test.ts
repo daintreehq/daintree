@@ -19,22 +19,31 @@ const {
   subscribeMock: vi.fn(() => vi.fn()),
 }));
 
+type MockTerminal = {
+  id: string;
+  worktreeId?: string;
+  location?: "grid" | "dock" | "trash";
+};
 const terminalStoreState = {
-  terminals: [] as Array<{
-    id: string;
-    worktreeId?: string;
-    location?: "grid" | "dock" | "trash";
-  }>,
+  panelsById: {} as Record<string, MockTerminal>,
+  panelIds: [] as string[],
   activeDockTerminalId: null as string | null,
   focusedId: null as string | null,
   mruList: [] as string[],
   recordMru: recordMruMock,
   setFocused: setFocusedMock,
 };
+function setMockTerminals(terminals: MockTerminal[]) {
+  terminalStoreState.panelsById = Object.fromEntries(terminals.map((t) => [t.id, t]));
+  terminalStoreState.panelIds = terminals.map((t) => t.id);
+}
 
 vi.mock("@/clients", () => ({
   appClient: {
     setState: appSetStateMock,
+  },
+  projectClient: {
+    setTerminals: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -54,8 +63,8 @@ vi.mock("@/store/focusStore", () => ({
   },
 }));
 
-vi.mock("@/store/terminalStore", () => ({
-  useTerminalStore: {
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: {
     getState: vi.fn(() => terminalStoreState),
     subscribe: subscribeMock,
   },
@@ -67,7 +76,8 @@ describe("worktreeStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useWorktreeSelectionStore.getState().reset();
-    terminalStoreState.terminals = [];
+    terminalStoreState.panelsById = {};
+    terminalStoreState.panelIds = [];
     terminalStoreState.activeDockTerminalId = null;
     terminalStoreState.focusedId = null;
     terminalStoreState.mruList = [];
@@ -217,11 +227,11 @@ describe("worktreeStore", () => {
   });
 
   it("applies pending worktree selection only for the still-active worktree", async () => {
-    terminalStoreState.terminals = [
+    setMockTerminals([
       { id: "term-a", worktreeId: "wt-a", location: "grid" },
       { id: "term-b", worktreeId: "wt-b", location: "grid" },
       { id: "dock-global", location: "dock" },
-    ];
+    ]);
     useWorktreeSelectionStore.setState({
       activeWorktreeId: "wt-a",
       pendingWorktreeId: "wt-a",
@@ -242,10 +252,10 @@ describe("worktreeStore", () => {
   });
 
   it("ignores stale renderer policy work from an earlier selection", async () => {
-    terminalStoreState.terminals = [
+    setMockTerminals([
       { id: "term-a", worktreeId: "wt-a", location: "grid" },
       { id: "term-b", worktreeId: "wt-b", location: "grid" },
-    ];
+    ]);
 
     useWorktreeSelectionStore.getState().selectWorktree("wt-a");
     useWorktreeSelectionStore.getState().selectWorktree("wt-b");
@@ -260,11 +270,40 @@ describe("worktreeStore", () => {
     ]);
   });
 
+  it("setActiveWorktree syncs focusedWorktreeId to clear stale focus", () => {
+    useWorktreeSelectionStore.setState({
+      activeWorktreeId: "wt-a",
+      focusedWorktreeId: "wt-b",
+      expandedTerminals: new Set(["t1"]),
+    });
+
+    useWorktreeSelectionStore.getState().setActiveWorktree("wt-a");
+
+    const state = useWorktreeSelectionStore.getState();
+    expect(state.activeWorktreeId).toBe("wt-a");
+    expect(state.focusedWorktreeId).toBe("wt-a");
+    // Same-ID path preserves expandedTerminals
+    expect(state.expandedTerminals.has("t1")).toBe(true);
+  });
+
+  it("setActiveWorktree(null) clears both activeWorktreeId and focusedWorktreeId", () => {
+    useWorktreeSelectionStore.setState({
+      activeWorktreeId: "wt-a",
+      focusedWorktreeId: "wt-a",
+    });
+
+    useWorktreeSelectionStore.getState().setActiveWorktree(null);
+
+    const state = useWorktreeSelectionStore.getState();
+    expect(state.activeWorktreeId).toBeNull();
+    expect(state.focusedWorktreeId).toBeNull();
+  });
+
   it("does not restore stale terminal focus after a newer worktree selection wins", async () => {
-    terminalStoreState.terminals = [
+    setMockTerminals([
       { id: "term-a", worktreeId: "wt-a", location: "grid" },
       { id: "term-b", worktreeId: "wt-b", location: "grid" },
-    ];
+    ]);
     useWorktreeSelectionStore.getState().trackTerminalFocus("wt-a", "term-a");
 
     useWorktreeSelectionStore.getState().selectWorktree("wt-a");

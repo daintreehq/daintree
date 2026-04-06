@@ -285,6 +285,7 @@ const SAFE_STORE_KEYS = [
   "worktreeConfig",
   "notificationSettings",
   "windowState",
+  "windowStates",
   "onboarding",
   "voiceInput",
   "appTheme",

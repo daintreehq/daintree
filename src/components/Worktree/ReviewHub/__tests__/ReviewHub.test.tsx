@@ -59,8 +59,8 @@ vi.mock("@/hooks", () => ({ useOverlayState: vi.fn() }));
 vi.mock("../../FileDiffModal", () => ({ FileDiffModal: () => null }));
 vi.mock("../BaseBranchDiffModal", () => ({ BaseBranchDiffModal: () => null }));
 
-vi.mock("@/store/worktreeDataStore", () => ({
-  useWorktreeDataStore: (selector: (state: { worktrees: Map<string, WorktreeState> }) => unknown) =>
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (state: { worktrees: Map<string, WorktreeState> }) => unknown) =>
     selector({ worktrees: worktreeStoreData.current as Map<string, WorktreeState> }),
 }));
 

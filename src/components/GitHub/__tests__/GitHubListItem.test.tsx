@@ -13,8 +13,8 @@ vi.mock("react-dom", async () => {
   return { ...actual, createPortal: (children: ReactNode) => children };
 });
 
-vi.mock("@/store/worktreeDataStore", () => ({
-  useWorktreeDataStore: vi.fn((selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: vi.fn((selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
     selector({ worktrees: new Map() })
   ),
 }));
@@ -275,7 +275,7 @@ describe("GitHubListItem", () => {
     );
     const option = container.querySelector("[role='option']");
     expect(option?.getAttribute("aria-selected")).toBe("true");
-    expect(option?.className).toContain("bg-canopy-accent/10");
+    expect(option?.className).toContain("bg-muted/80");
   });
 
   it("shows checked checkbox when selected", () => {
@@ -407,10 +407,10 @@ describe("GitHubListItem", () => {
     expect(screen.queryByLabelText("Create worktree")).toBeNull();
   });
 
-  it("does not show create worktree for fork PRs", () => {
+  it("shows create worktree for fork PRs", () => {
     const forkPR: GitHubPR = { ...basePR, isFork: true };
     render(<GitHubListItem item={forkPR} type="pr" onCreateWorktree={vi.fn()} />);
-    expect(screen.queryByLabelText("Create worktree")).toBeNull();
+    expect(screen.getByLabelText("Create worktree")).toBeTruthy();
   });
 
   it("shows comment count for issues with commentCount >= 1", () => {

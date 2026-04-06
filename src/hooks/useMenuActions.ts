@@ -79,13 +79,17 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
         }
 
         const menuToActionMap: Record<string, ActionId> = {
+          "clone-repo": "project.cloneRepo",
           "duplicate-panel": "terminal.duplicate",
           "new-terminal": "terminal.new",
+          "new-window": "app.newWindow",
           "new-worktree": "worktree.createDialog.open",
           "open-settings": "app.settings",
           "toggle-sidebar": "nav.toggleSidebar",
           "open-quick-switcher": "nav.quickSwitcher",
           "open-action-palette": "action.palette.open",
+          "launch-help-agent": "help.launchAgent",
+          "reload-config": "app.reloadConfig",
         };
 
         const actionId = menuToActionMap[action];

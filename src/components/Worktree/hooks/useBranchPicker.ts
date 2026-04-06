@@ -5,9 +5,9 @@ import {
   type BranchOption,
   type BranchPickerRow,
 } from "../branchPickerUtils";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { BranchInfo } from "@/types/electron";
-import type { WorktreeState } from "@shared/types";
+import type { WorktreeSnapshot } from "@shared/types";
 
 export interface UseBranchPickerResult {
   branchPickerOpen: boolean;
@@ -46,15 +46,15 @@ export function useBranchPicker({
 
   const branchOptions = useMemo(() => branches.map(toBranchOption), [branches]);
 
+  const worktreeMap = useWorktreeStore((s) => s.worktrees);
+
   const worktreeByBranch = useMemo(() => {
-    const map = new Map<string, WorktreeState>();
-    const worktrees = useWorktreeDataStore.getState().getWorktreeList();
-    for (const wt of worktrees) {
+    const map = new Map<string, WorktreeSnapshot>();
+    for (const wt of worktreeMap.values()) {
       if (wt.branch) map.set(wt.branch, wt);
     }
     return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- rebuild when branch list refreshes
-  }, [branchOptions]);
+  }, [worktreeMap]);
 
   const branchRows = useMemo(
     () =>

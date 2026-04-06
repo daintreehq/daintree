@@ -1,15 +1,16 @@
 import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo } from "react";
 import { X, FilterX } from "lucide-react";
 import { WorktreeOverviewIcon, CanopyAgentIcon } from "@/components/icons";
+import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
-import type { WorktreeState } from "@/types";
+import type { WorktreeState, WorktreeSnapshot } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
-import { useTerminalStore } from "@/store/terminalStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import {
   matchesFilters,
   sortWorktrees,
@@ -28,9 +29,9 @@ interface OverviewWorktreeCardProps {
   totalWorktreeCount: number;
   variant?: "sidebar" | "grid";
   onSelectWorktree: (worktreeId: string) => void;
-  onCopyTree: (worktree: WorktreeState) => Promise<string | undefined> | void;
-  onOpenEditor: (worktree: WorktreeState) => void;
-  onSaveLayout?: (worktree: WorktreeState) => void;
+  onCopyTree: (worktree: WorktreeSnapshot) => Promise<string | undefined> | void;
+  onOpenEditor: (worktree: WorktreeSnapshot) => void;
+  onSaveLayout?: (worktree: WorktreeSnapshot) => void;
   onLaunchAgent?: (worktreeId: string, agentId: string) => void;
   agentAvailability?: UseAgentLauncherReturn["availability"];
   agentSettings?: UseAgentLauncherReturn["agentSettings"];
@@ -54,7 +55,18 @@ const OverviewWorktreeCard = React.memo(function OverviewWorktreeCard({
   homeDir,
   onClose,
 }: OverviewWorktreeCardProps) {
-  const worktree = useWorktreeDataStore((state) => state.worktrees.get(worktreeId));
+  const worktreeSnap = useWorktreeStore((state) => state.worktrees.get(worktreeId));
+  const worktree = useMemo(
+    () =>
+      worktreeSnap
+        ? ({
+            ...worktreeSnap,
+            worktreeChanges: worktreeSnap.worktreeChanges ?? null,
+            lastActivityTimestamp: worktreeSnap.lastActivityTimestamp ?? null,
+          } as WorktreeState)
+        : undefined,
+    [worktreeSnap]
+  );
 
   const handleSelect = useCallback(() => {
     onSelectWorktree(worktreeId);
@@ -107,13 +119,37 @@ export interface WorktreeOverviewModalProps {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
   onSelectWorktree: (worktreeId: string) => void;
-  onCopyTree: (worktree: WorktreeState) => Promise<string | undefined> | void;
-  onOpenEditor: (worktree: WorktreeState) => void;
-  onSaveLayout?: (worktree: WorktreeState) => void;
+  onCopyTree: (worktree: WorktreeSnapshot) => Promise<string | undefined> | void;
+  onOpenEditor: (worktree: WorktreeSnapshot) => void;
+  onSaveLayout?: (worktree: WorktreeSnapshot) => void;
   onLaunchAgent?: (worktreeId: string, agentId: string) => void;
   agentAvailability?: UseAgentLauncherReturn["availability"];
   agentSettings?: UseAgentLauncherReturn["agentSettings"];
   homeDir?: string;
+}
+
+function EmptyWorktreeState() {
+  const createWorktreeShortcut = useKeybindingDisplay("worktree.createDialog.open");
+
+  return (
+    <div className="flex flex-col items-center justify-center h-full gap-3 text-canopy-text/50">
+      <WorktreeOverviewIcon className="w-8 h-8 text-canopy-text/30" />
+      <p className="text-sm font-medium text-canopy-text/70">No worktrees yet</p>
+      <p className="text-xs text-canopy-text/40">
+        {createWorktreeShortcut ? (
+          <>
+            Press{" "}
+            <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+              {createWorktreeShortcut}
+            </kbd>{" "}
+            to create a worktree.
+          </>
+        ) : (
+          "Create a worktree to get started."
+        )}
+      </p>
+    </div>
+  );
 }
 
 export function WorktreeOverviewModal({
@@ -168,7 +204,8 @@ export function WorktreeOverviewModal({
   const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
 
   // Terminal store for derived metadata
-  const terminals = useTerminalStore(useShallow((state) => state.terminals));
+  const panelsById = usePanelStore(useShallow((state) => state.panelsById));
+  const panelIds = usePanelStore(useShallow((state) => state.panelIds));
 
   // Error store for derived metadata
   // Filter store: hide main worktree preference
@@ -179,22 +216,36 @@ export function WorktreeOverviewModal({
   const derivedMetaMap = useMemo(() => {
     const map = new Map<string, DerivedWorktreeMeta>();
     for (const worktree of worktrees) {
-      const worktreeTerminals = terminals.filter(
-        (t) => t.worktreeId === worktree.id && t.location !== "trash"
-      );
+      let terminalCount = 0;
+      let hasWorkingAgent = false;
+      let hasRunningAgent = false;
+      let hasWaitingAgent = false;
+      let hasCompletedAgent = false;
+      let hasExitedAgent = false;
+      for (const id of panelIds) {
+        const t = panelsById[id];
+        if (!t || t.worktreeId !== worktree.id || t.location === "trash") continue;
+        terminalCount++;
+        if (t.agentState === "working") hasWorkingAgent = true;
+        if (t.agentState === "running") hasRunningAgent = true;
+        if (t.agentState === "waiting") hasWaitingAgent = true;
+        if (t.agentState === "completed") hasCompletedAgent = true;
+        if (t.agentState === "exited") hasExitedAgent = true;
+      }
       map.set(worktree.id, {
-        terminalCount: worktreeTerminals.length,
-        hasWorkingAgent: worktreeTerminals.some((t) => t.agentState === "working"),
-        hasRunningAgent: worktreeTerminals.some((t) => t.agentState === "running"),
-        hasWaitingAgent: worktreeTerminals.some((t) => t.agentState === "waiting"),
-        hasCompletedAgent: worktreeTerminals.some((t) => t.agentState === "completed"),
+        terminalCount,
+        hasWorkingAgent,
+        hasRunningAgent,
+        hasWaitingAgent,
+        hasCompletedAgent,
+        hasExitedAgent,
         hasMergeConflict:
           worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
         chipState: null,
       });
     }
     return map;
-  }, [worktrees, terminals]);
+  }, [worktrees, panelsById, panelIds]);
 
   // Compute aggregate statistics from derivedMetaMap
   const aggregateStats = useMemo(() => {
@@ -248,6 +299,7 @@ export function WorktreeOverviewModal({
         hasRunningAgent: false,
         hasWaitingAgent: false,
         hasCompletedAgent: false,
+        hasExitedAgent: false,
         hasMergeConflict: false,
         chipState: null,
       };
@@ -425,7 +477,7 @@ export function WorktreeOverviewModal({
                       />
                       <span
                         className={cn(
-                          "transition-all",
+                          "transition",
                           hideMainWorktree && "line-through decoration-canopy-text/30"
                         )}
                       >
@@ -482,9 +534,7 @@ export function WorktreeOverviewModal({
           {/* Content */}
           <div className="flex-1 overflow-y-auto p-6">
             {worktrees.length === 0 ? (
-              <div className="flex items-center justify-center h-full text-canopy-text/50">
-                No worktrees available
-              </div>
+              <EmptyWorktreeState />
             ) : filteredWorktrees.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full gap-4 text-canopy-text/50">
                 <FilterX className="w-12 h-12 text-canopy-text/30" />
@@ -524,11 +574,15 @@ export function WorktreeOverviewModal({
                       {section.worktrees.map((worktree: WorktreeState) => (
                         <div
                           key={worktree.id}
+                          style={{
+                            contentVisibility: "auto",
+                            containIntrinsicSize: "auto 240px",
+                          }}
                           className={cn(
                             "rounded-lg overflow-hidden",
                             "border border-divider",
                             "bg-canopy-sidebar/50",
-                            "transition-all duration-200",
+                            "transition duration-200",
                             "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
                             worktree.id === activeWorktreeId &&
                               "border-[var(--color-state-active)]/70 shadow-md"
@@ -567,11 +621,15 @@ export function WorktreeOverviewModal({
                 {filteredWorktrees.map((worktree) => (
                   <div
                     key={worktree.id}
+                    style={{
+                      contentVisibility: "auto",
+                      containIntrinsicSize: "auto 240px",
+                    }}
                     className={cn(
                       "rounded-lg overflow-hidden",
                       "border border-divider",
                       "bg-canopy-sidebar/50",
-                      "transition-all duration-200",
+                      "transition duration-200",
                       "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
                       worktree.id === activeWorktreeId &&
                         "border-[var(--color-state-active)]/70 shadow-md"

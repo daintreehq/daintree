@@ -17,6 +17,7 @@ export interface DerivedWorktreeMeta {
   hasRunningAgent: boolean;
   hasWaitingAgent: boolean;
   hasCompletedAgent: boolean;
+  hasExitedAgent: boolean;
   hasMergeConflict: boolean;
   chipState: ChipState;
 }
@@ -193,6 +194,7 @@ export function matchesFilters(
     if (filters.sessionFilters.has("running") && derived.hasRunningAgent) hasMatch = true;
     if (filters.sessionFilters.has("waiting") && derived.hasWaitingAgent) hasMatch = true;
     if (filters.sessionFilters.has("completed") && derived.hasCompletedAgent) hasMatch = true;
+    if (filters.sessionFilters.has("exited") && derived.hasExitedAgent) hasMatch = true;
 
     if (!hasMatch) return false;
   }

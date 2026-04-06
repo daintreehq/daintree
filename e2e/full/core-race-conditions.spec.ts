@@ -21,7 +21,7 @@ test.describe.serial("Core: Race Conditions from Concurrent IPC", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "race-conditions" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Race Conditions");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Race Conditions");
   });
 
   test.afterAll(async () => {

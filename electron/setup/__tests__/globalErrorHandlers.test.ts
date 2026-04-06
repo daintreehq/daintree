@@ -18,17 +18,7 @@ const storeMock = vi.hoisted(() => ({
   set: vi.fn(),
 }));
 
-const webContentsMock = vi.hoisted(() => ({
-  send: vi.fn(),
-  isDestroyed: vi.fn(() => false),
-}));
-
-const windowMock = vi.hoisted(() => ({
-  isDestroyed: vi.fn(() => false),
-  webContents: webContentsMock,
-}));
-
-const getMainWindowMock = vi.hoisted(() => vi.fn((): typeof windowMock | null => windowMock));
+const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 
 const crashLoopGuardMock = vi.hoisted(() => ({
   shouldRelaunch: vi.fn(() => true),
@@ -50,8 +40,8 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
   getCrashRecoveryService: () => crashRecoveryMock,
 }));
 
-vi.mock("../../window/windowRef.js", () => ({
-  getMainWindow: getMainWindowMock,
+vi.mock("../../ipc/utils.js", () => ({
+  broadcastToRenderer: broadcastToRendererMock,
 }));
 
 vi.mock("../../ipc/channels.js", () => ({
@@ -80,9 +70,6 @@ describe("globalErrorHandlers", () => {
     _resetHandlingFatalForTesting();
 
     // Reset mock return values
-    getMainWindowMock.mockReturnValue(windowMock);
-    windowMock.isDestroyed.mockReturnValue(false);
-    webContentsMock.isDestroyed.mockReturnValue(false);
     storeMock.get.mockReturnValue([]);
 
     // Save existing listeners
@@ -171,11 +158,11 @@ describe("globalErrorHandlers", () => {
       );
     });
 
-    it("sends error notification to renderer", () => {
+    it("sends error notification to renderer via broadcast", () => {
       const error = new Error("test crash");
       uncaughtHandler(error);
 
-      expect(webContentsMock.send).toHaveBeenCalledWith(
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(
         "error:notify",
         expect.objectContaining({
           type: "unknown",
@@ -218,25 +205,12 @@ describe("globalErrorHandlers", () => {
       expect(appMock.exit).toHaveBeenCalledWith(1);
     });
 
-    it("does not throw when window is null", () => {
-      getMainWindowMock.mockReturnValue(null);
+    it("does not throw when broadcast fails", () => {
+      broadcastToRendererMock.mockImplementation(() => {
+        throw new Error("broadcast failed");
+      });
 
       expect(() => uncaughtHandler(new Error("crash"))).not.toThrow();
-      expect(appMock.exit).toHaveBeenCalledWith(1);
-    });
-
-    it("does not throw when window is destroyed", () => {
-      windowMock.isDestroyed.mockReturnValue(true);
-
-      expect(() => uncaughtHandler(new Error("crash"))).not.toThrow();
-      expect(appMock.exit).toHaveBeenCalledWith(1);
-    });
-
-    it("does not send IPC when webContents is destroyed", () => {
-      webContentsMock.isDestroyed.mockReturnValue(true);
-      uncaughtHandler(new Error("crash"));
-
-      expect(webContentsMock.send).not.toHaveBeenCalled();
       expect(appMock.exit).toHaveBeenCalledWith(1);
     });
 
@@ -257,7 +231,7 @@ describe("globalErrorHandlers", () => {
     it("builds AppError with correct message from Error", () => {
       uncaughtHandler(new Error("specific error message"));
 
-      const sentPayload = webContentsMock.send.mock.calls[0]?.[1];
+      const sentPayload = broadcastToRendererMock.mock.calls[0]?.[1];
       expect(sentPayload.message).toContain("specific error message");
       expect(sentPayload.message).toContain("UNCAUGHT_EXCEPTION");
       expect(sentPayload.details).toBeDefined();
@@ -279,7 +253,7 @@ describe("globalErrorHandlers", () => {
     it("sends error notification to renderer with correct payload", () => {
       rejectionHandler(new Error("rejected"));
 
-      const sentPayload = webContentsMock.send.mock.calls[0]?.[1];
+      const sentPayload = broadcastToRendererMock.mock.calls[0]?.[1];
       expect(sentPayload.type).toBe("unknown");
       expect(sentPayload.source).toBe("main-process");
       expect(sentPayload.message).toContain("rejected");
@@ -288,13 +262,55 @@ describe("globalErrorHandlers", () => {
       expect(sentPayload.dismissed).toBe(false);
     });
 
-    it("does NOT call app.exit, app.relaunch, recordCrash, or persist errors", () => {
+    it("does NOT call app.exit or app.relaunch", () => {
       rejectionHandler(new Error("rejected"));
 
       expect(appMock.exit).not.toHaveBeenCalled();
       expect(appMock.relaunch).not.toHaveBeenCalled();
-      expect(crashRecoveryMock.recordCrash).not.toHaveBeenCalled();
-      expect(storeMock.set).not.toHaveBeenCalled();
+    });
+
+    it("calls CrashRecoveryService.recordCrash with the reason", () => {
+      const reason = new Error("rejected");
+      rejectionHandler(reason);
+
+      expect(crashRecoveryMock.recordCrash).toHaveBeenCalledWith(reason);
+    });
+
+    it("persists error to pendingErrors store with UNHANDLED_REJECTION payload", () => {
+      rejectionHandler(new Error("rejected"));
+
+      expect(storeMock.set).toHaveBeenCalledWith(
+        "pendingErrors",
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "unknown",
+            message: expect.stringContaining("rejected"),
+            source: "main-process",
+            isTransient: false,
+            dismissed: false,
+            fromPreviousSession: true,
+            recoveryHint: expect.stringContaining("degraded state"),
+          }),
+        ])
+      );
+    });
+
+    it("persists error when store.get returns undefined", () => {
+      storeMock.get.mockReturnValue(undefined);
+      rejectionHandler(new Error("rejected"));
+
+      expect(storeMock.set).toHaveBeenCalledWith(
+        "pendingErrors",
+        expect.arrayContaining([expect.objectContaining({ fromPreviousSession: true })])
+      );
+    });
+
+    it("does not throw when recordCrash throws", () => {
+      crashRecoveryMock.recordCrash.mockImplementation(() => {
+        throw new Error("record failed");
+      });
+
+      expect(() => rejectionHandler(new Error("rejected"))).not.toThrow();
     });
 
     it("handles non-Error rejection reasons", () => {

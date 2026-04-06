@@ -1,10 +1,5 @@
-import type {
-  AgentState,
-  AgentStateChangeTrigger,
-  AgentId,
-  LegacyAgentType,
-  WaitingReason,
-} from "./agent.js";
+import type { AgentState, AgentStateChangeTrigger, AgentId, WaitingReason } from "./agent.js";
+import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { BrowserHistory } from "./browser.js";
 
 /** Built-in panel kinds */
@@ -20,14 +15,9 @@ export type BuiltInPanelKind = "terminal" | "agent" | "browser" | "notes" | "dev
 export type PanelKind = BuiltInPanelKind | (string & {});
 
 /**
- * @deprecated Use PanelKind instead. Kept for backward compatibility.
- */
-export type TerminalKind = PanelKind;
-
-/**
  * @deprecated Use PanelKind + agentId instead. This is kept for backward compatibility/migrations.
  */
-export type TerminalType = "terminal" | LegacyAgentType;
+export type TerminalType = "terminal" | BuiltInAgentId;
 
 /** Location of a panel instance in the UI */
 export type PanelLocation = "grid" | "dock" | "trash" | "background";
@@ -53,11 +43,6 @@ export interface TabGroup {
   /** Ordered list of panel IDs in this group (sorted by orderInGroup) */
   panelIds: string[];
 }
-
-/**
- * @deprecated Use PanelLocation instead. Kept for backward compatibility.
- */
-export type TerminalLocation = PanelLocation;
 
 /** Dock display mode - always expanded (kept as literal type for compatibility) */
 export type DockMode = "expanded";
@@ -175,11 +160,13 @@ interface BasePanelData {
   /** Display title for the panel tab */
   title: string;
   /** Location in the UI - grid (main view) or dock (minimized) */
-  location: TerminalLocation;
+  location: PanelLocation;
   /** ID of the worktree this panel is associated with */
   worktreeId?: string;
   /** Whether the panel pane is currently visible in the viewport */
   isVisible?: boolean;
+  /** Opaque state bag for extension panels — survives the save/restore round-trip */
+  extensionState?: Record<string, unknown>;
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 
@@ -348,7 +335,7 @@ export function isDevPreviewPanel(
 export interface TerminalInstance {
   id: string;
   worktreeId?: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: AgentId;
   title: string;
@@ -364,12 +351,16 @@ export interface TerminalInstance {
   stateChangeTrigger?: AgentStateChangeTrigger;
   stateChangeConfidence?: number;
   waitingReason?: WaitingReason;
+  /** Extracted session cost in dollars from the last completed agent run */
+  sessionCost?: number;
+  /** Extracted session token count from the last completed agent run */
+  sessionTokens?: number;
   activityHeadline?: string;
   activityStatus?: "working" | "waiting" | "success" | "failure";
   activityType?: "interactive" | "background" | "idle";
   activityTimestamp?: number;
   lastCommand?: string;
-  location: TerminalLocation;
+  location: PanelLocation;
   command?: string;
   isVisible?: boolean;
   restartKey?: number;
@@ -422,6 +413,8 @@ export interface TerminalInstance {
   startedAt?: number;
   /** Exit code from the last process exit */
   exitCode?: number;
+  /** Opaque state bag for extension panels — survives the save/restore round-trip */
+  extensionState?: Record<string, unknown>;
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 

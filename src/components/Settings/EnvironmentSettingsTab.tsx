@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Key, Lock, ShieldAlert, Eye, EyeOff, Trash2, Plus, Save, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { useProjectStore } from "@/store/projectStore";
@@ -187,7 +188,7 @@ export function EnvironmentSettingsTab() {
       <div className="flex flex-col items-center justify-center py-16 text-center">
         <FolderOpen className="w-10 h-10 text-canopy-text/20 mb-3" />
         <p className="text-sm text-canopy-text/60 mb-1">No project open</p>
-        <p className="text-xs text-canopy-text/40 max-w-xs">
+        <p className="text-xs text-canopy-text/40 max-w-xs select-text">
           Environment variables are project-specific. Open a project to configure its environment
           variables.
         </p>
@@ -198,7 +199,7 @@ export function EnvironmentSettingsTab() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
-        <div className="w-5 h-5 border-2 border-canopy-accent/30 border-t-canopy-accent rounded-full animate-spin" />
+        <Spinner size="lg" />
       </div>
     );
   }
@@ -211,7 +212,7 @@ export function EnvironmentSettingsTab() {
       id="environment-variables"
     >
       <div className="space-y-3">
-        <p className="text-xs text-canopy-text/50">
+        <p className="text-xs text-canopy-text/50 select-text">
           Variable names containing KEY, SECRET, TOKEN, or PASSWORD are stored securely using OS
           encryption <Lock className="inline h-3 w-3" />.
         </p>
@@ -277,7 +278,7 @@ export function EnvironmentSettingsTab() {
                       onChange={(e) => updateRow(index, "key", e.target.value)}
                       spellCheck={false}
                       autoCapitalize="none"
-                      className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                      className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
                       placeholder="VARIABLE_NAME"
                       aria-label="Environment variable name"
                     />
@@ -291,7 +292,7 @@ export function EnvironmentSettingsTab() {
                         autoCapitalize="none"
                         autoComplete={isSensitive ? "new-password" : "off"}
                         className={cn(
-                          "w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30",
+                          "w-full bg-canopy-sidebar border border-border-strong rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30",
                           isSensitive && "pr-8"
                         )}
                         placeholder="value"

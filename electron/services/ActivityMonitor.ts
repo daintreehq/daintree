@@ -24,6 +24,7 @@ import type { WaitingReason } from "../../shared/types/agent.js";
 
 export interface ProcessStateValidator {
   hasActiveChildren(): boolean;
+  getDescendantsCpuUsage(): number;
 }
 
 export interface PatternDetector {
@@ -61,6 +62,7 @@ export interface ActivityMonitorOptions {
   promptScanLineCount?: number;
   promptConfidence?: number;
   idleDebounceMs?: number;
+  promptFastPathMinQuietMs?: number;
   inputConfirmMs?: number;
   maxNoPromptIdleMs?: number;
   lineRewriteDetection?: {
@@ -72,12 +74,15 @@ export interface ActivityMonitorOptions {
   workingRecoveryDelayMs?: number;
   pollingMaxBootMs?: number;
   maxWorkingSilenceMs?: number;
+  maxCpuHighEscapeMs?: number;
 }
 
 export interface ActivityStateMetadata {
-  trigger: "input" | "output" | "pattern" | "timeout";
+  trigger: "input" | "output" | "pattern" | "timeout" | "dispose";
   patternConfidence?: number;
   waitingReason?: WaitingReason;
+  sessionCost?: number;
+  sessionTokens?: number;
 }
 
 export class ActivityMonitor {
@@ -85,6 +90,7 @@ export class ActivityMonitor {
   private isDisposed = false;
   private debounceTimer: NodeJS.Timeout | null = null;
   private readonly IDLE_DEBOUNCE_MS: number;
+  private readonly PROMPT_FAST_PATH_MIN_QUIET_MS: number;
   private readonly PROMPT_DEBOUNCE_MS = 500;
   private readonly PROMPT_QUIET_MS = 200;
   private readonly PROMPT_HISTORY_FALLBACK_MS = 3000;
@@ -93,6 +99,12 @@ export class ActivityMonitor {
   private readonly COMPLETION_HOLD_MS = 500;
   private readonly WORKING_INDICATOR_TTL_MS = 5000;
   private readonly MAX_WORKING_SILENCE_MS: number;
+  private readonly MAX_CPU_HIGH_ESCAPE_MS: number;
+  private readonly CPU_HIGH_THRESHOLD = 10;
+  private readonly CPU_LOW_THRESHOLD = 3;
+  private isCpuHigh = false;
+  private cpuHighSince = 0;
+  private lastPatternResultAt = 0;
   private workingHoldUntil = 0;
 
   // Subsystem instances
@@ -150,8 +162,10 @@ export class ActivityMonitor {
     options?: ActivityMonitorOptions
   ) {
     this.IDLE_DEBOUNCE_MS = options?.idleDebounceMs ?? 4000;
+    this.PROMPT_FAST_PATH_MIN_QUIET_MS = options?.promptFastPathMinQuietMs ?? 3000;
     this.POLLING_MAX_BOOT_MS = options?.pollingMaxBootMs ?? 15000;
     this.MAX_WORKING_SILENCE_MS = options?.maxWorkingSilenceMs ?? 180000;
+    this.MAX_CPU_HIGH_ESCAPE_MS = options?.maxCpuHighEscapeMs ?? 60000;
 
     this.processStateValidator = options?.processStateValidator;
 
@@ -282,6 +296,7 @@ export class ActivityMonitor {
         : undefined;
       if (patternResult) {
         this.lastPatternResult = patternResult;
+        this.lastPatternResultAt = now;
       }
       const isWorking = patternResult
         ? patternResult.isWorking
@@ -327,6 +342,7 @@ export class ActivityMonitor {
       this.patternBuf.update(data);
       const patternResult = this.patternDetector.detect(this.patternBuf.getText());
       this.lastPatternResult = patternResult;
+      this.lastPatternResultAt = now;
 
       if (patternResult.isWorking) {
         this.lastWorkingIndicatorTimestamp = now;
@@ -369,6 +385,16 @@ export class ActivityMonitor {
   dispose(): void {
     if (this.isDisposed) return;
     this.isDisposed = true;
+
+    // Emit final idle transition if still busy — ensures renderer never stays stuck in "working"
+    if (this.state === "busy") {
+      this.state = "idle";
+      try {
+        this.onStateChange(this.terminalId, this.spawnedAt, "idle", { trigger: "dispose" });
+      } catch {
+        // Callback failure must not prevent cleanup
+      }
+    }
     this.stopPolling();
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
@@ -384,6 +410,9 @@ export class ActivityMonitor {
     this.bootDetector.reset();
     this.resizeSuppressUntil = 0;
     this.lastPatternResult = undefined;
+    this.lastPatternResultAt = 0;
+    this.isCpuHigh = false;
+    this.cpuHighSince = 0;
     this.workingHoldUntil = 0;
     this.lastDataTimestamp = 0;
     this.lastOutputActivityAt = 0;
@@ -456,6 +485,7 @@ export class ActivityMonitor {
       : undefined;
     if (patternResult) {
       this.lastPatternResult = patternResult;
+      this.lastPatternResultAt = now;
     }
 
     const isWorkingPattern = patternResult
@@ -496,6 +526,9 @@ export class ActivityMonitor {
         return; // Still booting, stay busy
       }
     }
+
+    // Update CPU hysteresis state once per polling cycle
+    this.updateCpuHighState(now);
 
     // Safety timeout: if no PTY output for MAX_WORKING_SILENCE_MS, force idle
     if (this.isWorkingSilenceTimeout(now)) {
@@ -613,7 +646,11 @@ export class ActivityMonitor {
         this.promptDetectorConfig.promptScanLineCount
       );
       if (completionResult.isCompletion) {
-        this.transitionToCompleted(completionResult.confidence);
+        this.transitionToCompleted(
+          completionResult.confidence,
+          completionResult.extractedCost,
+          completionResult.extractedTokens
+        );
         return;
       }
     }
@@ -622,17 +659,17 @@ export class ActivityMonitor {
     // exit busy immediately rather than waiting the full IDLE_DEBOUNCE_MS. This keeps
     // the idle transition snappy after the prompt appears, even when IDLE_DEBOUNCE_MS
     // has been raised to cover LLM API call silence gaps.
-    // Require at least 3 seconds of quiet to avoid premature idle during inter-tool-call
-    // gaps (Claude bursts with 1-3s pauses, Codex has 3-5s gaps). This prevents the
-    // working↔waiting jitter that occurs when brief output pauses trigger idle transitions
-    // that immediately flip back to working (Issue #3606).
-    const PROMPT_FAST_PATH_MIN_QUIET_MS = 3000;
+    // Default: 3s quiet to avoid premature idle during inter-tool-call gaps (Claude
+    // bursts with 1-3s pauses, Codex has 3-5s gaps — Issue #3606). Agents with
+    // deterministic completion markers (e.g. Cursor, 700ms) can use a lower value
+    // via promptFastPathMinQuietMs in AgentDetectionConfig.
     if (
       this.state === "busy" &&
       !this.completionTimer.emitted &&
       shouldPreferPrompt &&
-      quietForMs >= PROMPT_FAST_PATH_MIN_QUIET_MS &&
+      quietForMs >= this.PROMPT_FAST_PATH_MIN_QUIET_MS &&
       now >= this.workingHoldUntil &&
+      !this.isCpuHighAndNotDeadlined(now) &&
       !(this.inputTracker.pendingInputUntil > 0 && now < this.inputTracker.pendingInputUntil)
     ) {
       this.state = "idle";
@@ -660,6 +697,7 @@ export class ActivityMonitor {
       !hasHighOutputActivity &&
       quietForMs >= LEXEME_STALL_MIN_QUIET_MS &&
       now >= this.workingHoldUntil &&
+      !this.isCpuHighAndNotDeadlined(now) &&
       !(this.inputTracker.pendingInputUntil > 0 && now < this.inputTracker.pendingInputUntil)
     ) {
       const candidateLine =
@@ -686,6 +724,7 @@ export class ActivityMonitor {
       isQuietForIdle &&
       now >= this.workingHoldUntil &&
       !hasHighOutputActivity &&
+      !this.isCpuHighAndNotDeadlined(now) &&
       !(this.inputTracker.pendingInputUntil > 0 && now < this.inputTracker.pendingInputUntil)
     ) {
       this.state = "idle";
@@ -725,7 +764,11 @@ export class ActivityMonitor {
     this.workingHoldUntil = Math.max(this.workingHoldUntil, now + this.WORKING_HOLD_MS);
   }
 
-  private transitionToCompleted(confidence: number): void {
+  private transitionToCompleted(
+    confidence: number,
+    sessionCost?: number,
+    sessionTokens?: number
+  ): void {
     this.completionTimer.emit(() => {
       if (this.isDisposed) return;
       // Guard: ignore stale timer if a new busy cycle started or completion was reset
@@ -744,6 +787,8 @@ export class ActivityMonitor {
     this.onStateChange(this.terminalId, this.spawnedAt, "completed", {
       trigger: "pattern",
       patternConfidence: confidence,
+      sessionCost,
+      sessionTokens,
     });
   }
 
@@ -865,7 +910,18 @@ export class ActivityMonitor {
       }
 
       // actuallyBusy === null (no validator) — fall through to pattern/TTL checks
-      if (this.lastPatternResult?.isWorking) {
+      // CPU high prevents idle transition even without a definitive hasActiveChildren answer
+      const now = Date.now();
+      if (this.isCpuHighAndNotDeadlined(now)) {
+        this.resetDebounceTimer();
+        return;
+      }
+
+      // Stale pattern results are expired via the same TTL as working indicators
+      if (
+        this.lastPatternResult?.isWorking &&
+        now - this.lastPatternResultAt < this.WORKING_INDICATOR_TTL_MS
+      ) {
         this.resetDebounceTimer();
         return;
       }
@@ -895,6 +951,8 @@ export class ActivityMonitor {
     if (now - this.lastDataTimestamp < this.MAX_WORKING_SILENCE_MS) return false;
     // Non-polling terminals have no boot phase; polling terminals must exit boot first
     if (this.getVisibleLines && !this.bootDetector.hasExitedBootState) return false;
+    // High CPU prevents premature silence timeout — but only up to the escape deadline
+    if (this.isCpuHighAndNotDeadlined(now)) return false;
     return true;
   }
 
@@ -910,5 +968,41 @@ export class ActivityMonitor {
       }
       return true;
     }
+  }
+
+  private getCpuUsageSafe(): number | null {
+    if (!this.processStateValidator) {
+      return null;
+    }
+    try {
+      return this.processStateValidator.getDescendantsCpuUsage();
+    } catch (error) {
+      if (process.env.CANOPY_VERBOSE) {
+        console.warn("[ActivityMonitor] CPU usage query failed:", error);
+      }
+      return null;
+    }
+  }
+
+  private updateCpuHighState(now: number): void {
+    const cpu = this.getCpuUsageSafe();
+    if (cpu === null) return;
+    if (this.isCpuHigh) {
+      if (cpu < this.CPU_LOW_THRESHOLD) {
+        this.isCpuHigh = false;
+        this.cpuHighSince = 0;
+      }
+    } else {
+      if (cpu >= this.CPU_HIGH_THRESHOLD) {
+        this.isCpuHigh = true;
+        this.cpuHighSince = now;
+      }
+    }
+  }
+
+  private isCpuHighAndNotDeadlined(now: number): boolean {
+    this.updateCpuHighState(now);
+    if (!this.isCpuHigh) return false;
+    return now - this.cpuHighSince < this.MAX_CPU_HIGH_ESCAPE_MS;
   }
 }

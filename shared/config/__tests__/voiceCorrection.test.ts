@@ -49,6 +49,25 @@ describe("CORE_CORRECTION_PROMPT", () => {
   it("is identified as a speech-to-text correction engine", () => {
     expect(CORE_CORRECTION_PROMPT).toContain("speech-to-text correction engine");
   });
+
+  it("instructs LLM to convert standalone paragraph voice commands to newlines", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("new paragraph");
+    expect(CORE_CORRECTION_PROMPT).toContain("next paragraph");
+    expect(CORE_CORRECTION_PROMPT).toContain("start a new paragraph");
+    expect(CORE_CORRECTION_PROMPT).toContain("\\n\\n");
+  });
+
+  it("instructs LLM to convert standalone line break voice commands to newlines", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("new line");
+    expect(CORE_CORRECTION_PROMPT).toContain("next line");
+    expect(CORE_CORRECTION_PROMPT).toContain("line break");
+    expect(CORE_CORRECTION_PROMPT).toContain("\\n");
+  });
+
+  it("scopes voice commands to standalone formatting instructions only", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("standalone");
+    expect(CORE_CORRECTION_PROMPT).toMatch(/not.+part of a.+sentence/i);
+  });
 });
 
 describe("buildCorrectionSystemPrompt", () => {
@@ -140,6 +159,41 @@ describe("buildCorrectionSystemPrompt", () => {
     });
     expect(prompt).toContain("my-app-repo");
   });
+
+  it("extracts directory name from Windows backslash path", () => {
+    const prompt = buildCorrectionSystemPrompt({
+      projectName: "My App",
+      projectPath: "C:\\Users\\dev\\my-repo",
+    });
+    expect(prompt).toContain("my-repo");
+    expect(prompt).not.toContain("C:\\Users\\dev\\my-repo");
+  });
+
+  it("omits Repository line when Windows path directory matches project name", () => {
+    const prompt = buildCorrectionSystemPrompt({
+      projectName: "canopy",
+      projectPath: "C:\\Users\\dev\\canopy",
+    });
+    const projectSection = prompt.split("CURRENT PROJECT:")[1]?.split("\n\n")[0] ?? "";
+    expect(projectSection).not.toContain("Repository:");
+  });
+
+  it("handles trailing separators in project path", () => {
+    const prompt = buildCorrectionSystemPrompt({
+      projectName: "My App",
+      projectPath: "C:\\Users\\dev\\my-repo\\",
+    });
+    expect(prompt).toContain("my-repo");
+    expect(prompt).not.toContain("C:\\Users\\dev\\my-repo\\");
+  });
+
+  it("handles mixed separators in project path", () => {
+    const prompt = buildCorrectionSystemPrompt({
+      projectName: "My App",
+      projectPath: "C:\\Users/dev\\my-repo",
+    });
+    expect(prompt).toContain("my-repo");
+  });
 });
 
 describe("MICRO_CORRECTION_PROMPT", () => {
@@ -160,6 +214,12 @@ describe("MICRO_CORRECTION_PROMPT", () => {
   it("describes adjacent word merging", () => {
     expect(MICRO_CORRECTION_PROMPT).toContain("zoo stand");
     expect(MICRO_CORRECTION_PROMPT).toContain("Zustand");
+  });
+
+  it("does not contain paragraph voice command handling", () => {
+    expect(MICRO_CORRECTION_PROMPT).not.toContain("standalone");
+    expect(MICRO_CORRECTION_PROMPT).not.toContain("next paragraph");
+    expect(MICRO_CORRECTION_PROMPT).not.toContain("line break");
   });
 });
 
@@ -209,5 +269,32 @@ describe("buildMicroCorrectionSystemPrompt", () => {
     });
     const guardrailIdx = prompt.lastIndexOf("Return a JSON object");
     expect(guardrailIdx).toBeGreaterThan(prompt.length - 300);
+  });
+
+  it("extracts directory name from Windows backslash path", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({
+      projectName: "My App",
+      projectPath: "C:\\Users\\dev\\my-repo",
+    });
+    expect(prompt).toContain("my-repo");
+    expect(prompt).not.toContain("C:\\Users\\dev\\my-repo");
+  });
+
+  it("omits Repository line when Windows path directory matches project name", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({
+      projectName: "canopy",
+      projectPath: "C:\\Users\\dev\\canopy",
+    });
+    const projectSection = prompt.split("CURRENT PROJECT:")[1]?.split("\n\n")[0] ?? "";
+    expect(projectSection).not.toContain("Repository:");
+  });
+
+  it("handles trailing separators in project path", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({
+      projectName: "My App",
+      projectPath: "/Users/dev/my-repo/",
+    });
+    expect(prompt).toContain("my-repo");
+    expect(prompt).not.toContain("/Users/dev/my-repo/");
   });
 });

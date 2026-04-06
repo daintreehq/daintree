@@ -44,7 +44,7 @@ function buildState(overrides: Partial<DevPreviewSessionState>): DevPreviewSessi
   };
 }
 
-import { useDevServer } from "../useDevServer";
+import { useDevServer, _resetPersistedEnsureCacheForTests } from "../useDevServer";
 
 describe("useDevServer adversarial races", () => {
   let ensureMock: ReturnType<typeof vi.fn>;
@@ -55,6 +55,7 @@ describe("useDevServer adversarial races", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetPersistedEnsureCacheForTests();
     projectState.currentProject = { id: "project-1" };
 
     ensureMock = vi.fn(async (request: { projectId: string }) =>
@@ -1062,6 +1063,217 @@ describe("useDevServer adversarial races", () => {
     expect(result.current.status).toBe("running");
     expect(result.current.terminalId).toBe("term-project-2");
     expect(result.current.error).toBeNull();
+  });
+
+  it("skips ensure() on remount when session was already ensured with same config", async () => {
+    ensureMock.mockImplementation((request: { projectId: string }) =>
+      Promise.resolve(
+        buildState({
+          panelId: "panel-1",
+          projectId: request.projectId,
+          status: "running",
+          terminalId: "term-1",
+          url: "http://localhost:3000/",
+        })
+      )
+    );
+    getStateMock.mockImplementation((request: { projectId: string }) =>
+      Promise.resolve(
+        buildState({
+          panelId: "panel-1",
+          projectId: request.projectId,
+          status: "running",
+          terminalId: "term-1",
+          url: "http://localhost:3000/",
+        })
+      )
+    );
+
+    const props = {
+      panelId: "panel-1",
+      devCommand: "npm run dev",
+      cwd: "/repo",
+    };
+
+    // First mount: ensure() fires
+    const { unmount, result } = renderHook(() => useDevServer(props));
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+      expect(result.current.status).toBe("running");
+    });
+
+    // Unmount (simulates dock → grid transition)
+    unmount();
+
+    // Remount with identical props: ensure() should NOT fire again
+    const { result: result2 } = renderHook(() => useDevServer(props));
+    await waitFor(() => {
+      expect(result2.current.status).toBe("running");
+      expect(result2.current.url).toBe("http://localhost:3000/");
+    });
+
+    // ensure() was only called once total (from the first mount)
+    expect(ensureMock).toHaveBeenCalledTimes(1);
+    // getState() was called on both mounts
+    expect(getStateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-ensures on remount after stop() was called", async () => {
+    ensureMock.mockImplementation((request: { projectId: string }) =>
+      Promise.resolve(
+        buildState({
+          panelId: "panel-1",
+          projectId: request.projectId,
+          status: "running",
+          terminalId: "term-1",
+          url: "http://localhost:3000/",
+        })
+      )
+    );
+    getStateMock.mockImplementation((request: { projectId: string }) =>
+      Promise.resolve(
+        buildState({
+          panelId: "panel-1",
+          projectId: request.projectId,
+          status: "stopped",
+        })
+      )
+    );
+
+    const props = {
+      panelId: "panel-1",
+      devCommand: "npm run dev",
+      cwd: "/repo",
+    };
+
+    const { unmount, result } = renderHook(() => useDevServer(props));
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+      expect(result.current.status).toBe("running");
+    });
+
+    // Call stop() — invalidates the persisted cache
+    act(() => {
+      result.current.stop();
+    });
+    await waitFor(() => {
+      expect(stopMock).toHaveBeenCalledTimes(1);
+    });
+
+    unmount();
+
+    // Remount: ensure() should fire again because stop() cleared the cache
+    renderHook(() => useDevServer(props));
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("re-ensures on remount after crash via onStateChanged", async () => {
+    let stateChangedCallback: ((payload: { state: DevPreviewSessionState }) => void) | null = null;
+    onStateChangedMock.mockImplementation(
+      (cb: (payload: { state: DevPreviewSessionState }) => void) => {
+        stateChangedCallback = cb;
+        return vi.fn();
+      }
+    );
+
+    ensureMock.mockImplementation((request: { projectId: string }) =>
+      Promise.resolve(
+        buildState({
+          panelId: "panel-1",
+          projectId: request.projectId,
+          status: "running",
+          terminalId: "term-1",
+          url: "http://localhost:3000/",
+        })
+      )
+    );
+    getStateMock.mockImplementation((request: { projectId: string }) =>
+      Promise.resolve(
+        buildState({
+          panelId: "panel-1",
+          projectId: request.projectId,
+          status: "running",
+          terminalId: "term-1",
+          url: "http://localhost:3000/",
+        })
+      )
+    );
+
+    const props = {
+      panelId: "panel-1",
+      devCommand: "npm run dev",
+      cwd: "/repo",
+    };
+
+    const { unmount } = renderHook(() => useDevServer(props));
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+    });
+
+    // Simulate server crash via onStateChanged
+    act(() => {
+      stateChangedCallback?.({
+        state: buildState({
+          panelId: "panel-1",
+          projectId: "project-1",
+          status: "error",
+          error: { type: "unknown", message: "Server crashed" },
+        }),
+      });
+    });
+
+    unmount();
+
+    // Remount: ensure() should fire because crash cleared the cache
+    renderHook(() => useDevServer(props));
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("re-ensures on remount when configKey changes", async () => {
+    ensureMock.mockImplementation((request: { projectId: string }) =>
+      Promise.resolve(
+        buildState({
+          panelId: "panel-1",
+          projectId: request.projectId,
+          status: "running",
+          terminalId: "term-1",
+          url: "http://localhost:3000/",
+        })
+      )
+    );
+
+    const { unmount } = renderHook(() =>
+      useDevServer({
+        panelId: "panel-1",
+        devCommand: "npm run dev",
+        cwd: "/repo",
+      })
+    );
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+    });
+
+    unmount();
+
+    // Remount with different devCommand: ensure() must fire
+    renderHook(() =>
+      useDevServer({
+        panelId: "panel-1",
+        devCommand: "pnpm dev",
+        cwd: "/repo",
+      })
+    );
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(2);
+      expect(ensureMock).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ devCommand: "pnpm dev" })
+      );
+    });
   });
 
   it("only applies the latest queued config after many rapid changes", async () => {

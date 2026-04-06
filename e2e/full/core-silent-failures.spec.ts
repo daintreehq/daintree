@@ -14,7 +14,7 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "silent-failures" });
     ctx = await launchApp({ env: { CANOPY_E2E_FAULT_MODE: "1" } });
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Silent Failures");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Silent Failures");
   });
 
   test.afterEach(async () => {

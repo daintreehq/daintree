@@ -5,6 +5,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
+import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 
 function cloneTerminal(t: RecipeTerminal): RecipeTerminal {
   return { ...t, env: t.env ? { ...t.env } : {} };
@@ -33,6 +34,7 @@ function serializeEditorState(
       title: t.title ?? "",
       command: t.command ?? "",
       initialPrompt: t.initialPrompt ?? "",
+      args: t.args ?? "",
       devCommand: t.devCommand ?? "",
       exitBehavior: normalizeExitBehavior(t),
       env: Object.fromEntries(Object.entries(t.env ?? {}).sort(([a], [b]) => a.localeCompare(b))),
@@ -44,6 +46,7 @@ interface RecipeEditorProps {
   recipe?: TerminalRecipe;
   initialTerminals?: RecipeTerminal[];
   worktreeId?: string;
+  defaultScope?: "global" | "project";
   isOpen: boolean;
   onClose: () => void;
   onSave?: (recipe: TerminalRecipe) => void;
@@ -71,6 +74,7 @@ export function RecipeEditor({
   recipe,
   initialTerminals,
   worktreeId,
+  defaultScope,
   isOpen,
   onClose,
   onSave,
@@ -85,6 +89,7 @@ export function RecipeEditor({
   ]);
   const [showInEmptyState, setShowInEmptyState] = useState(false);
   const [autoAssign, setAutoAssign] = useState<"always" | "never" | "prompt">("always");
+  const [scope, setScope] = useState<"global" | "project">("project");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const recipeNameInputRef = useRef<HTMLInputElement>(null);
@@ -100,6 +105,9 @@ export function RecipeEditor({
       setTerminals(nextTerminals);
       setShowInEmptyState(nextShowInEmptyState);
       setAutoAssign(nextAutoAssign);
+      setScope(
+        isInRepoRecipeId(recipe.id) || recipe.projectId !== undefined ? "project" : "global"
+      );
       initialStateRef.current = serializeEditorState(
         recipe.name,
         nextTerminals,
@@ -112,6 +120,7 @@ export function RecipeEditor({
       setTerminals(nextTerminals);
       setShowInEmptyState(false);
       setAutoAssign("always");
+      setScope(defaultScope ?? "project");
       initialStateRef.current = serializeEditorState("", nextTerminals, false, "always");
     } else {
       const nextTerminals: RecipeTerminal[] = [
@@ -121,10 +130,11 @@ export function RecipeEditor({
       setTerminals(nextTerminals);
       setShowInEmptyState(false);
       setAutoAssign("always");
+      setScope(defaultScope ?? "project");
       initialStateRef.current = serializeEditorState("", nextTerminals, false, "always");
     }
     setError(null);
-  }, [recipe, initialTerminals, isOpen]);
+  }, [recipe, initialTerminals, defaultScope, isOpen]);
 
   const isDirty = useMemo(
     () =>
@@ -196,13 +206,15 @@ export function RecipeEditor({
           autoAssign,
         });
       } else {
-        if (!currentProject?.id) {
+        const isGlobal = scope === "global";
+        if (!isGlobal && !currentProject?.id) {
           throw new Error("No project selected");
         }
+        const targetProjectId = isGlobal ? undefined : currentProject!.id;
         await createRecipe(
-          currentProject.id,
+          targetProjectId,
           recipeName,
-          worktreeId,
+          isGlobal ? undefined : worktreeId,
           terminals,
           showInEmptyState,
           autoAssign
@@ -215,8 +227,8 @@ export function RecipeEditor({
           : {
               id: `recipe-${Date.now()}`,
               name: recipeName,
-              projectId: currentProject!.id,
-              worktreeId,
+              projectId: scope === "global" ? undefined : currentProject!.id,
+              worktreeId: scope === "global" ? undefined : worktreeId,
               terminals,
               createdAt: Date.now(),
             };
@@ -260,6 +272,29 @@ export function RecipeEditor({
         </div>
 
         <div className="mb-4">
+          <label htmlFor="recipe-scope" className="block text-sm font-medium text-canopy-text mb-1">
+            Scope
+          </label>
+          {recipe ? (
+            <div className="px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text text-sm opacity-75">
+              {isInRepoRecipeId(recipe.id) || recipe.projectId !== undefined
+                ? "Project"
+                : "Global (all projects)"}
+            </div>
+          ) : (
+            <select
+              id="recipe-scope"
+              value={scope}
+              onChange={(e) => setScope(e.target.value as "global" | "project")}
+              className="w-full px-3 pr-8 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+            >
+              <option value="project">Project (current project only)</option>
+              <option value="global">Global (all projects)</option>
+            </select>
+          )}
+        </div>
+
+        <div className="mb-4">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               id="show-in-empty-state"
@@ -271,7 +306,10 @@ export function RecipeEditor({
             />
             <span className="text-sm font-medium text-canopy-text">Show in Empty State</span>
           </label>
-          <p id="show-in-empty-state-help" className="text-xs text-text-muted mt-1 ml-6">
+          <p
+            id="show-in-empty-state-help"
+            className="text-xs text-text-muted mt-1 ml-6 select-text"
+          >
             Display this recipe as a primary launcher when the worktree has no active terminals
           </p>
         </div>
@@ -285,13 +323,13 @@ export function RecipeEditor({
             value={autoAssign}
             onChange={(e) => setAutoAssign(e.target.value as "always" | "never" | "prompt")}
             aria-describedby="auto-assign-help"
-            className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+            className="w-full px-3 pr-8 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
           >
             <option value="always">Always assign to me</option>
             <option value="prompt">Ask before assigning</option>
             <option value="never">Never assign</option>
           </select>
-          <p id="auto-assign-help" className="text-xs text-text-muted mt-1">
+          <p id="auto-assign-help" className="text-xs text-text-muted mt-1 select-text">
             Controls whether the linked GitHub issue is automatically assigned to you during quick
             worktree creation
           </p>
@@ -334,18 +372,22 @@ export function RecipeEditor({
                             type: newType,
                             // Clear command when switching between types so the new type uses its default
                             command: newType === prevType ? updated[index].command : "",
-                            // Clear initialPrompt when switching to terminal or dev-preview
+                            // Clear initialPrompt and args when switching to terminal or dev-preview
                             initialPrompt:
                               newType === "terminal" || newType === "dev-preview"
                                 ? ""
                                 : updated[index].initialPrompt,
+                            args:
+                              newType === "terminal" || newType === "dev-preview"
+                                ? ""
+                                : updated[index].args,
                             // Clear devCommand when switching away from dev-preview
                             devCommand: newType !== "dev-preview" ? "" : updated[index].devCommand,
                           };
                           return updated;
                         });
                       }}
-                      className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                      className="w-full px-2 pr-8 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
                     >
                       {TERMINAL_TYPES.map((type) => (
                         <option key={type} value={type}>
@@ -420,7 +462,7 @@ export function RecipeEditor({
                           )
                         }
                         aria-describedby={`terminal-exit-behavior-help-${index}`}
-                        className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                        className="w-full px-2 pr-8 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
                       >
                         <option value="trash">Send to Trash (default)</option>
                         <option value="keep">Keep for Review</option>
@@ -428,7 +470,7 @@ export function RecipeEditor({
                       </select>
                       <p
                         id={`terminal-exit-behavior-help-${index}`}
-                        className="text-xs text-text-muted mt-1"
+                        className="text-xs text-text-muted mt-1 select-text"
                       >
                         Failures always preserve terminal for debugging
                       </p>
@@ -438,6 +480,29 @@ export function RecipeEditor({
 
                 {terminal.type !== "terminal" && terminal.type !== "dev-preview" && (
                   <>
+                    <div className="mt-2">
+                      <label
+                        htmlFor={`terminal-args-${index}`}
+                        className="block text-xs font-medium text-canopy-text mb-1"
+                      >
+                        Arguments (optional)
+                      </label>
+                      <input
+                        id={`terminal-args-${index}`}
+                        type="text"
+                        value={terminal.args || ""}
+                        onChange={(e) => handleTerminalChange(index, "args", e.target.value)}
+                        placeholder="e.g., --model claude-opus-4-5"
+                        aria-describedby={`terminal-args-help-${index}`}
+                        className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                      />
+                      <p
+                        id={`terminal-args-help-${index}`}
+                        className="text-xs text-text-muted mt-1 select-text"
+                      >
+                        Additional CLI arguments passed to the agent at launch
+                      </p>
+                    </div>
                     <div className="mt-2">
                       <label
                         htmlFor={`terminal-initial-prompt-${index}`}
@@ -458,7 +523,7 @@ export function RecipeEditor({
                       />
                       <p
                         id={`terminal-initial-prompt-help-${index}`}
-                        className="text-xs text-text-muted mt-1"
+                        className="text-xs text-text-muted mt-1 select-text"
                       >
                         This prompt will be sent to the agent when it starts. Variables:{" "}
                         <code className="text-canopy-text/70">{"{{issue_number}}"}</code>,{" "}
@@ -485,7 +550,7 @@ export function RecipeEditor({
                           )
                         }
                         aria-describedby={`terminal-agent-exit-behavior-help-${index}`}
-                        className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                        className="w-full px-2 pr-8 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
                       >
                         <option value="keep">Keep for Review (default)</option>
                         <option value="trash">Send to Trash</option>
@@ -493,7 +558,7 @@ export function RecipeEditor({
                       </select>
                       <p
                         id={`terminal-agent-exit-behavior-help-${index}`}
-                        className="text-xs text-text-muted mt-1"
+                        className="text-xs text-text-muted mt-1 select-text"
                       >
                         Failures always preserve terminal for debugging
                       </p>
@@ -521,7 +586,7 @@ export function RecipeEditor({
                       />
                       <p
                         id={`terminal-dev-command-help-${index}`}
-                        className="text-xs text-text-muted mt-1"
+                        className="text-xs text-text-muted mt-1 select-text"
                       >
                         Leave empty to use project default or auto-detect from package.json
                       </p>
@@ -544,7 +609,7 @@ export function RecipeEditor({
                           )
                         }
                         aria-describedby={`terminal-dev-exit-behavior-help-${index}`}
-                        className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                        className="w-full px-2 pr-8 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
                       >
                         <option value="trash">Send to Trash (default)</option>
                         <option value="keep">Keep for Review</option>
@@ -552,7 +617,7 @@ export function RecipeEditor({
                       </select>
                       <p
                         id={`terminal-dev-exit-behavior-help-${index}`}
-                        className="text-xs text-text-muted mt-1"
+                        className="text-xs text-text-muted mt-1 select-text"
                       >
                         Failures always preserve terminal for debugging
                       </p>

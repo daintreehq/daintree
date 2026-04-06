@@ -70,6 +70,10 @@ export class WorktreeMonitor {
   private hasPlanFile: boolean = false;
   private planFilePath: string | undefined;
 
+  // Upstream tracking state
+  private aheadCount: number | undefined;
+  private behindCount: number | undefined;
+
   // Issue/PR state
   private _issueNumber: number | undefined;
   private prNumber: number | undefined;
@@ -99,7 +103,10 @@ export class WorktreeMonitor {
   // Extra state
   private _createdAt: number | undefined;
   private _lifecycleStatus: WorktreeLifecycleStatus | undefined;
-  private _projectScopeId: string | null = null;
+
+  // Poll queue concurrency
+  private _pendingPollPromise: Promise<void> | null = null;
+  private _pollAbortController: AbortController = new AbortController();
 
   // Components
   private pollingStrategy: AdaptivePollingStrategy;
@@ -184,10 +191,6 @@ export class WorktreeMonitor {
     return this._createdAt;
   }
 
-  get projectScopeId(): string | null {
-    return this._projectScopeId;
-  }
-
   get lifecycleStatus(): WorktreeLifecycleStatus | undefined {
     return this._lifecycleStatus;
   }
@@ -227,10 +230,6 @@ export class WorktreeMonitor {
     this.prUrl = undefined;
     this.prState = undefined;
     this.prTitle = undefined;
-  }
-
-  setProjectScopeId(id: string | null): void {
-    this._projectScopeId = id;
   }
 
   setCreatedAt(ms: number | undefined): void {
@@ -274,6 +273,7 @@ export class WorktreeMonitor {
 
     this._isRunning = true;
     this.pollingEnabled = true;
+    this._pollAbortController = new AbortController();
 
     if (this.gitWatchEnabled) {
       this.startWatcher();
@@ -293,6 +293,7 @@ export class WorktreeMonitor {
 
     this._isRunning = true;
     this.pollingEnabled = true;
+    this._pollAbortController = new AbortController();
 
     if (this.gitWatchEnabled) {
       this.startWatcher();
@@ -301,6 +302,8 @@ export class WorktreeMonitor {
 
   stop(): void {
     this._isRunning = false;
+    this._pollAbortController.abort();
+    this._pollAbortController = new AbortController();
     this.clearTimers();
     this.stopWatcher();
   }
@@ -363,6 +366,8 @@ export class WorktreeMonitor {
       lifecycleStatus: this._lifecycleStatus,
       hasPlanFile: this.hasPlanFile || undefined,
       planFilePath: this.planFilePath,
+      aheadCount: this.aheadCount,
+      behindCount: this.behindCount,
     };
 
     return ensureSerializable(snapshot) as WorktreeSnapshot;
@@ -639,15 +644,24 @@ export class WorktreeMonitor {
       }
     };
 
-    try {
-      if (this.pollQueue) {
-        await this.pollQueue.add(() => executePoll());
-      } else {
-        await executePoll();
-      }
-    } catch {
-      // Queue execution failed
-    }
+    if (this._pendingPollPromise) return;
+
+    const runPoll = this.pollQueue
+      ? this.pollQueue.add(() => executePoll(), {
+          signal: this._pollAbortController.signal,
+          priority: this._isCurrent ? 1 : 0,
+        })
+      : executePoll();
+
+    this._pendingPollPromise = runPoll
+      .catch(() => {
+        // Queue abort or execution failure — swallowed intentionally
+      })
+      .finally(() => {
+        this._pendingPollPromise = null;
+      });
+
+    await this._pendingPollPromise;
 
     if (tripped) {
       this.scheduleCircuitBreakerRetry();
@@ -710,6 +724,8 @@ export class WorktreeMonitor {
 
       const noteData = await this.noteReader.read();
 
+      const upstreamCounts = await this.fetchUpstreamCounts();
+
       const detectedPlanFile = PLAN_FILE_CANDIDATES.find((candidate) =>
         existsSync(pathJoin(this.path, candidate))
       );
@@ -722,8 +738,17 @@ export class WorktreeMonitor {
         noteData?.content !== this.aiNote || noteData?.timestamp !== this.aiNoteTimestamp;
       const planChanged =
         nextHasPlanFile !== this.hasPlanFile || nextPlanFilePath !== this.planFilePath;
+      const upstreamChanged =
+        upstreamCounts.ahead !== this.aheadCount || upstreamCounts.behind !== this.behindCount;
 
-      if (!stateChanged && !noteChanged && !branchChanged && !planChanged && !forceRefresh) {
+      if (
+        !stateChanged &&
+        !noteChanged &&
+        !branchChanged &&
+        !planChanged &&
+        !upstreamChanged &&
+        !forceRefresh
+      ) {
         return;
       }
 
@@ -775,6 +800,8 @@ export class WorktreeMonitor {
       this.aiNoteTimestamp = noteData?.timestamp;
       this.hasPlanFile = nextHasPlanFile;
       this.planFilePath = nextPlanFilePath;
+      this.aheadCount = upstreamCounts.ahead;
+      this.behindCount = upstreamCounts.behind;
       this._hasInitialStatus = true;
 
       this.emitUpdate();
@@ -840,6 +867,27 @@ export class WorktreeMonitor {
     }
   }
 
+  private async fetchUpstreamCounts(): Promise<{
+    ahead: number | undefined;
+    behind: number | undefined;
+  }> {
+    if (!this._branch) {
+      return { ahead: undefined, behind: undefined };
+    }
+
+    try {
+      const git = createHardenedGit(this.path, this._pollAbortController.signal);
+      const output = await git.raw(["rev-list", "--left-right", "--count", "HEAD...@{u}"]);
+      const [aheadStr, behindStr] = output.trim().split(/\s+/);
+      return {
+        ahead: parseInt(aheadStr, 10) || 0,
+        behind: parseInt(behindStr, 10) || 0,
+      };
+    } catch {
+      return { ahead: undefined, behind: undefined };
+    }
+  }
+
   private calculateStateHash(changes: WorktreeChanges): string {
     const hashInput = changes.changes
       .map((c) => `${c.path}:${c.status}:${c.insertions ?? 0}:${c.deletions ?? 0}`)
@@ -855,7 +903,7 @@ export class WorktreeMonitor {
     }
 
     try {
-      const git = createHardenedGit(this.path);
+      const git = createHardenedGit(this.path, this._pollAbortController.signal);
       const log = await git.log({ maxCount: 1 });
       const lastCommitMsg = log.latest?.message;
 

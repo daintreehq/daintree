@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Copy, RefreshCw, Loader2 } from "lucide-react";
+import { Copy, RefreshCw } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { agentHelpClient } from "@/clients";
 import { cliAvailabilityClient } from "@/clients";
 import type { AgentHelpResult } from "@shared/types/ipc/agent";
@@ -52,6 +53,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
   }, [agentId]);
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
       if (copyTimeoutRef.current) {
@@ -158,7 +160,9 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
       <div className="flex items-center justify-between">
         <div>
           <h5 className="text-sm font-medium text-canopy-text">Help Output</h5>
-          <p className="text-xs text-canopy-text/50">Available CLI flags for {agentName}</p>
+          <p className="text-xs text-canopy-text/50 select-text">
+            Available CLI flags for {agentName}
+          </p>
         </div>
 
         {isCliAvailable && (
@@ -192,14 +196,14 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
 
       {isLoading && (
         <div className="flex items-center justify-center py-8">
-          <Loader2 size={20} className="animate-spin text-canopy-text/40" />
+          <Spinner size="lg" className="text-canopy-text/40" />
         </div>
       )}
 
       {!isLoading && isCliAvailable === false && (
         <div className="px-4 py-6 rounded-[var(--radius-md)] border border-canopy-border bg-surface text-center space-y-2">
           <p className="text-sm text-canopy-text/60">CLI not found</p>
-          <p className="text-xs text-canopy-text/40">
+          <p className="text-xs text-canopy-text/40 select-text">
             {agentName} is not installed or not in your PATH
           </p>
           {usageUrl && (

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
@@ -422,6 +422,71 @@ describe("RunCommandDetector", () => {
       const taskCommands = commands.filter((cmd) => cmd.id.startsWith("task-"));
 
       expect(taskCommands).toEqual([]);
+    });
+  });
+
+  describe("caching", () => {
+    it("returns cached results on second call without re-reading files", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "package.json"),
+        JSON.stringify({ name: "test", scripts: { dev: "vite" } }),
+        "utf-8"
+      );
+
+      const first = await detector.detect(tempDir);
+      expect(first).toHaveLength(1);
+
+      const readSpy = vi.spyOn(fs, "readFile");
+      const second = await detector.detect(tempDir);
+      expect(second).toEqual(first);
+      expect(readSpy).not.toHaveBeenCalled();
+      readSpy.mockRestore();
+    });
+
+    it("caches independently per project path", async () => {
+      const tempDir2 = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-run-cmd-2-"));
+      try {
+        await fs.writeFile(
+          path.join(tempDir, "package.json"),
+          JSON.stringify({ name: "a", scripts: { dev: "vite" } }),
+          "utf-8"
+        );
+        await fs.writeFile(
+          path.join(tempDir2, "package.json"),
+          JSON.stringify({ name: "b", scripts: { build: "tsc", test: "vitest" } }),
+          "utf-8"
+        );
+
+        const first = await detector.detect(tempDir);
+        const second = await detector.detect(tempDir2);
+        expect(first).toHaveLength(1);
+        expect(second).toHaveLength(2);
+      } finally {
+        await fs.rm(tempDir2, { recursive: true, force: true });
+      }
+    });
+
+    it("re-scans after TTL expires", async () => {
+      vi.useFakeTimers();
+      try {
+        await fs.writeFile(
+          path.join(tempDir, "package.json"),
+          JSON.stringify({ name: "test", scripts: { dev: "vite" } }),
+          "utf-8"
+        );
+
+        const first = await detector.detect(tempDir);
+        expect(first).toHaveLength(1);
+
+        vi.advanceTimersByTime(61_000);
+
+        const readSpy = vi.spyOn(fs, "readFile");
+        await detector.detect(tempDir);
+        expect(readSpy).toHaveBeenCalled();
+        readSpy.mockRestore();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

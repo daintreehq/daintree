@@ -2,13 +2,13 @@ import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 
-const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
+const GITHUB_STATS_PATH = path.resolve(__dirname, "../GitHubStatsToolbarButton.tsx");
 
 describe("Toolbar GitHub dropdown search clearing — issue #3251", () => {
   let source: string;
 
   beforeEach(async () => {
-    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+    source = await fs.readFile(GITHUB_STATS_PATH, "utf-8");
   });
 
   it("imports useGitHubFilterStore", () => {
@@ -85,7 +85,7 @@ describe("Toolbar Suspense skeleton fallbacks — issue #3593", () => {
   let source: string;
 
   beforeEach(async () => {
-    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+    source = await fs.readFile(GITHUB_STATS_PATH, "utf-8");
   });
 
   it("imports skeleton components synchronously (not lazy)", () => {
@@ -133,7 +133,7 @@ describe("Toolbar persistThroughChildOverlays — issue #3556", () => {
   let source: string;
 
   beforeEach(async () => {
-    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+    source = await fs.readFile(GITHUB_STATS_PATH, "utf-8");
   });
 
   it("issues FixedDropdown has persistThroughChildOverlays", () => {

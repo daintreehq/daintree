@@ -1,4 +1,4 @@
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 export interface WorktreeCreationError {
@@ -20,7 +20,7 @@ export function mapCreationError(rawMessage: string, onClose?: () => void): Work
         recovery = {
           label: "Open Worktree",
           onAction: () => {
-            const worktrees = useWorktreeDataStore.getState().getWorktreeList();
+            const worktrees = Array.from(getCurrentViewStore().getState().worktrees.values());
             const wt = worktrees.find((w) => w.path === worktreePath);
             if (wt) {
               useWorktreeSelectionStore.getState().selectWorktree(wt.id);

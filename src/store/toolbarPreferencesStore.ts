@@ -1,6 +1,10 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { ToolbarPreferences, ToolbarButtonId } from "@/../../shared/types/toolbar";
+import type {
+  ToolbarPreferences,
+  ToolbarButtonId,
+  AnyToolbarButtonId,
+} from "@/../../shared/types/toolbar";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
@@ -27,6 +31,7 @@ const DEFAULT_PREFERENCES: ToolbarPreferences = {
   layout: {
     leftButtons: DEFAULT_LEFT_BUTTONS,
     rightButtons: DEFAULT_RIGHT_BUTTONS,
+    hiddenButtons: [],
   },
   launcher: {
     alwaysShowDevServer: false,
@@ -36,8 +41,8 @@ const DEFAULT_PREFERENCES: ToolbarPreferences = {
 
 const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "portal-toggle"];
 
-function sanitizeButtonList(buttons: ToolbarButtonId[]): ToolbarButtonId[] {
-  return buttons.filter((id) => !FIXED_BUTTON_IDS.includes(id));
+function sanitizeButtonList(buttons: AnyToolbarButtonId[]): AnyToolbarButtonId[] {
+  return buttons.filter((id) => !FIXED_BUTTON_IDS.includes(id as ToolbarButtonId));
 }
 
 /**
@@ -46,9 +51,9 @@ function sanitizeButtonList(buttons: ToolbarButtonId[]): ToolbarButtonId[] {
  * New buttons are added at their default position.
  */
 function mergeButtonList(
-  persisted: ToolbarButtonId[] | undefined,
-  defaults: ToolbarButtonId[]
-): ToolbarButtonId[] {
+  persisted: AnyToolbarButtonId[] | undefined,
+  defaults: AnyToolbarButtonId[]
+): AnyToolbarButtonId[] {
   if (!persisted) return defaults;
 
   const persistedSet = new Set(persisted);
@@ -69,15 +74,15 @@ function mergeButtonList(
 }
 
 interface ToolbarPreferencesState extends ToolbarPreferences {
-  setLeftButtons: (buttons: ToolbarButtonId[]) => void;
-  setRightButtons: (buttons: ToolbarButtonId[]) => void;
+  setLeftButtons: (buttons: AnyToolbarButtonId[]) => void;
+  setRightButtons: (buttons: AnyToolbarButtonId[]) => void;
   moveButton: (
-    buttonId: ToolbarButtonId,
+    buttonId: AnyToolbarButtonId,
     from: "left" | "right",
     to: "left" | "right",
     toIndex: number
   ) => void;
-  toggleButtonVisibility: (buttonId: ToolbarButtonId, side: "left" | "right") => void;
+  toggleButtonVisibility: (buttonId: AnyToolbarButtonId, side: "left" | "right") => void;
   setAlwaysShowDevServer: (value: boolean) => void;
   setDefaultSelection: (selection: ToolbarPreferences["launcher"]["defaultSelection"]) => void;
   setDefaultAgent: (agent: ToolbarPreferences["launcher"]["defaultAgent"]) => void;
@@ -116,23 +121,20 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           toList.splice(toIndex, 0, buttonId);
 
           return {
-            layout: { leftButtons, rightButtons },
+            layout: { ...state.layout, leftButtons, rightButtons },
           };
         }),
-      toggleButtonVisibility: (buttonId, side) =>
+      toggleButtonVisibility: (buttonId, _side) =>
         set((state) => {
-          const sideKey = side === "left" ? "leftButtons" : "rightButtons";
-          const buttons = [...state.layout[sideKey]];
-          const index = buttons.indexOf(buttonId);
-
+          const hidden = [...state.layout.hiddenButtons];
+          const index = hidden.indexOf(buttonId);
           if (index === -1) {
-            buttons.push(buttonId);
+            hidden.push(buttonId);
           } else {
-            buttons.splice(index, 1);
+            hidden.splice(index, 1);
           }
-
           return {
-            layout: { ...state.layout, [sideKey]: buttons },
+            layout: { ...state.layout, hiddenButtons: hidden },
           };
         }),
       setAlwaysShowDevServer: (value) =>
@@ -151,9 +153,33 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }),
     {
       name: "canopy-toolbar-preferences",
+      version: 2,
       storage: createSafeJSONStorage(),
-      // defaultAgent has been moved to agentPreferencesStore. Exclude it from
-      // persistence so it is no longer written back to this key.
+      migrate: (persisted, version) => {
+        const state = persisted as Record<string, unknown>;
+        if (version < 1) {
+          const layout = state.layout as
+            | { leftButtons?: string[]; rightButtons?: string[] }
+            | undefined;
+          if (layout?.leftButtons) {
+            layout.leftButtons = layout.leftButtons.filter((id) => id !== "dev-server");
+          }
+          if (layout?.rightButtons) {
+            layout.rightButtons = layout.rightButtons.filter((id) => id !== "dev-server");
+          }
+          const launcher = state.launcher as { defaultSelection?: string } | undefined;
+          if (launcher?.defaultSelection === "dev-server") {
+            launcher.defaultSelection = undefined;
+          }
+        }
+        if (version < 2) {
+          const layout = state.layout as Record<string, unknown> | undefined;
+          if (layout && !Array.isArray(layout.hiddenButtons)) {
+            layout.hiddenButtons = [];
+          }
+        }
+        return state as unknown as ToolbarPreferencesState;
+      },
       partialize: (state) => ({
         layout: state.layout,
         launcher: {
@@ -175,6 +201,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
               persisted.layout?.rightButtons,
               currentState.layout.rightButtons
             ),
+            hiddenButtons: persisted.layout?.hiddenButtons ?? [],
           },
         };
       },

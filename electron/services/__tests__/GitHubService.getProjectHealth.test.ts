@@ -1,14 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mockGetRemoteUrl = vi.fn();
+const mockGetRepositoryRoot = vi.fn();
+const mockListRemotes = vi.fn();
 const mockGraphqlClient = vi.fn();
 
 vi.mock("../GitService.js", () => {
   class MockGitService {
     getRemoteUrl = mockGetRemoteUrl;
+    getRepositoryRoot = mockGetRepositoryRoot;
+    listRemotes = mockListRemotes;
   }
   return { GitService: MockGitService };
 });
+
+vi.mock("../ProjectStore.js", () => ({
+  projectStore: {
+    getProjectByPath: vi.fn().mockResolvedValue(null),
+    getProjectSettings: vi.fn().mockResolvedValue({}),
+  },
+}));
 
 vi.mock("../github/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../github/index.js")>();

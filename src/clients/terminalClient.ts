@@ -10,23 +10,55 @@ import type {
   SpawnResult,
 } from "@shared/types";
 import type { PtyHostToRendererMessage } from "@shared/types/pty-host";
+import { logDebug, logWarn } from "@/utils/logger";
 
 let messagePort: MessagePort | null = null;
 let expectedToken: string | null = null;
 let pendingPort: MessagePort | null = null;
 let pendingToken: string | null = null;
-let messagePortConnected = false;
 
 const dataCallbacks = new Map<string, Set<(data: string | Uint8Array) => void>>();
+const earlyDataBuffer = new Map<string, Array<string | Uint8Array>>();
+const pendingPortAckBytes = new Map<string, number[]>();
+const MAX_EARLY_BUFFER_CHUNKS = 500;
 
 function installPortDataHandler(port: MessagePort): void {
   port.addEventListener("message", (event: MessageEvent) => {
     const msg = event.data as PtyHostToRendererMessage;
     if (msg?.type === "data" && typeof msg.id === "string") {
+      const byteCount = msg.bytes ?? 0;
+
       const cbs = dataCallbacks.get(msg.id);
       if (cbs) {
+        // Live-callback path: defer ACK until xterm write callback fires.
+        // Queue the original byte count so acknowledgePortData() uses the pty-host's
+        // UTF-8 byte count (msg.bytes) rather than JS string.length.
+        let queue = pendingPortAckBytes.get(msg.id);
+        if (!queue) {
+          queue = [];
+          pendingPortAckBytes.set(msg.id, queue);
+        }
+        queue.push(byteCount);
+
         for (const cb of cbs) {
           cb(msg.data);
+        }
+      } else {
+        // Early-buffer path: no xterm write will happen yet, ACK immediately
+        // to keep the PTY host queue draining during startup.
+        try {
+          port.postMessage({ type: "ack", id: msg.id, bytes: byteCount });
+        } catch {
+          // Port closed — ack lost, safety timeout will resume PTY
+        }
+
+        let buf = earlyDataBuffer.get(msg.id);
+        if (!buf) {
+          buf = [];
+          earlyDataBuffer.set(msg.id, buf);
+        }
+        if (buf.length < MAX_EARLY_BUFFER_CHUNKS) {
+          buf.push(msg.data);
         }
       }
     }
@@ -36,13 +68,10 @@ function installPortDataHandler(port: MessagePort): void {
 function activatePort(port: MessagePort): void {
   if (messagePort) messagePort.close();
   messagePort = port;
-  messagePortConnected = true;
   installPortDataHandler(port);
   port.addEventListener("close", () => {
     if (messagePort === port) {
       messagePort = null;
-      messagePortConnected = false;
-      console.log("[TerminalClient] MessagePort closed, falling back to IPC");
     }
   });
   port.start();
@@ -73,7 +102,7 @@ if (typeof window !== "undefined") {
         pendingPort = null;
         pendingToken = null;
         expectedToken = null;
-        console.log("[TerminalClient] MessagePort acquired via postMessage (out-of-order)");
+        logDebug("[TerminalClient] MessagePort acquired via postMessage (out-of-order)");
       }
       return;
     }
@@ -100,7 +129,7 @@ if (typeof window !== "undefined") {
 
       activatePort(event.ports[0]);
       expectedToken = null;
-      console.log("[TerminalClient] MessagePort acquired via postMessage");
+      logDebug("[TerminalClient] MessagePort acquired via postMessage");
     }
   });
 }
@@ -115,9 +144,9 @@ export const terminalClient = {
       try {
         messagePort.postMessage({ type: "write", id, data });
       } catch (error) {
-        console.warn("[TerminalClient] MessagePort write failed, clearing port:", error);
+        logWarn("[TerminalClient] MessagePort write failed, clearing port", { error });
         messagePort = null;
-        messagePortConnected = false;
+
         window.electron.terminal.write(id, data);
       }
     } else {
@@ -146,9 +175,9 @@ export const terminalClient = {
       try {
         messagePort.postMessage({ type: "resize", id, cols, rows });
       } catch (error) {
-        console.warn("[TerminalClient] MessagePort resize failed, clearing port:", error);
+        logWarn("[TerminalClient] MessagePort resize failed, clearing port", { error });
         messagePort = null;
-        messagePortConnected = false;
+
         window.electron.terminal.resize(id, cols, rows);
       }
     } else {
@@ -157,10 +186,20 @@ export const terminalClient = {
   },
 
   kill: (id: string): Promise<void> => {
+    earlyDataBuffer.delete(id);
+    pendingPortAckBytes.delete(id);
     return window.electron.terminal.kill(id);
   },
 
+  gracefulKill: (id: string): Promise<string | null> => {
+    earlyDataBuffer.delete(id);
+    pendingPortAckBytes.delete(id);
+    return window.electron.terminal.gracefulKill(id);
+  },
+
   trash: (id: string): Promise<void> => {
+    earlyDataBuffer.delete(id);
+    pendingPortAckBytes.delete(id);
     return window.electron.terminal.trash(id);
   },
 
@@ -177,9 +216,22 @@ export const terminalClient = {
     }
     cbs.add(callback);
 
-    // IPC fallback: skip dispatch when MessagePort is delivering data
+    // Flush any data that arrived before callbacks were registered
+    const buffered = earlyDataBuffer.get(id);
+    if (buffered) {
+      earlyDataBuffer.delete(id);
+      for (const data of buffered) {
+        callback(data);
+      }
+    }
+
+    // IPC fallback: always dispatch IPC data. The pty-host ensures each data chunk is sent
+    // through exactly ONE visual path (MessagePort, SAB, or IPC) via a `visualWritten` flag,
+    // so there is no double-delivery risk. Previously this path was suppressed when
+    // messagePortConnected was true, but that caused data loss when the pty-host's per-window
+    // project filter routed data through IPC instead of MessagePort (e.g., during project
+    // switch when windowProjectMap hasn't updated yet).
     const ipcCleanup = window.electron.terminal.onData(id, (data: string | Uint8Array) => {
-      if (messagePortConnected) return;
       callback(data);
     });
 
@@ -230,10 +282,33 @@ export const terminalClient = {
   },
 
   /**
-   * Acknowledge processed data bytes to the backend (Flow Control).
+   * Acknowledge processed data bytes to the backend (Flow Control — IPC path).
    */
   acknowledgeData: (id: string, length: number): void => {
     window.electron.terminal.acknowledgeData(id, length);
+  },
+
+  /**
+   * Acknowledge processed data bytes via the MessagePort (Flow Control — port path).
+   * Called from TerminalInstanceService.writeToTerminal() after xterm consumes the chunk.
+   * Uses the original pty-host byte count queued by installPortDataHandler, not the
+   * caller's byte count, to avoid UTF-16 vs UTF-8 length mismatches.
+   * No-op when the queue is empty (data came via IPC or early-buffer flush).
+   */
+  acknowledgePortData: (id: string, _bytes: number): void => {
+    if (!messagePort) return;
+    const queue = pendingPortAckBytes.get(id);
+    if (!queue || queue.length === 0) return;
+    const bytes = queue.shift()!;
+    // Clean up empty queue to prevent unbounded map growth
+    if (queue.length === 0) {
+      pendingPortAckBytes.delete(id);
+    }
+    try {
+      messagePort.postMessage({ type: "ack", id, bytes });
+    } catch {
+      // Port closed — ack lost, safety timeout will resume PTY
+    }
   },
 
   /**
@@ -273,8 +348,8 @@ export const terminalClient = {
    * Get serialized terminal states in a single round-trip.
    * Returns a map keyed by terminal ID with null for missing states.
    */
-  getSerializedStates: (terminalIds: string[]): Promise<Record<string, string | null>> => {
-    return window.electron.terminal.getSerializedStates(terminalIds);
+  getSerializedStates: (panelIds: string[]): Promise<Record<string, string | null>> => {
+    return window.electron.terminal.getSerializedStates(panelIds);
   },
 
   /**

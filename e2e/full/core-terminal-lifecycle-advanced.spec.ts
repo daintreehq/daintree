@@ -38,7 +38,7 @@ test.describe.serial("Core: Terminal Trash & Restore", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "trash-restore" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Trash Restore Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Trash Restore Test");
 
     const worktreeCards = ctx.window.locator("[data-worktree-branch]");
     await expect(worktreeCards.first()).toBeVisible({ timeout: T_LONG });

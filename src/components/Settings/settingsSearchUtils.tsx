@@ -1,5 +1,5 @@
 import Fuse, { type Expression, type IFuseOptions } from "fuse.js";
-import type { SettingsTab } from "./SettingsDialog";
+import type { SettingsTab, SettingsScope } from "./SettingsDialog";
 import type { SettingsSearchEntry } from "./settingsSearchIndex";
 
 export type SettingsSearchResult = SettingsSearchEntry;
@@ -55,6 +55,7 @@ export function parseQuery(raw: string): ParsedQuery {
 
 export interface FilterSettingsOptions {
   modifiedTabs?: ReadonlySet<SettingsTab>;
+  scope?: SettingsScope;
 }
 
 export function filterSettings(
@@ -66,14 +67,17 @@ export function filterSettings(
 
   if (!cleanQuery && !filterModified) return [];
 
+  const scopeFilter = options?.scope;
+  const scopedIndex = scopeFilter ? index.filter((entry) => entry.scope === scopeFilter) : index;
+
   // @modified only — return all entries in modified tabs
   if (!cleanQuery && filterModified) {
     const modifiedTabs = options?.modifiedTabs;
     if (!modifiedTabs || modifiedTabs.size === 0) return [];
-    return index.filter((entry) => modifiedTabs.has(entry.tab));
+    return scopedIndex.filter((entry) => modifiedTabs.has(entry.tab));
   }
 
-  const fuse = getFuse(index);
+  const fuse = getFuse(scopedIndex);
 
   // Always use structured $and query; escape operator prefixes so user input
   // like "!font" isn't interpreted as a Fuse NOT operator

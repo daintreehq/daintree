@@ -49,8 +49,10 @@ function isMissedDay(cells: HeatCell[], index: number): boolean {
 }
 
 function getHeatCellBackground(level: HeatCell["level"]): string {
+  const baseColor = "var(--pulse-heat-color, var(--color-state-working))";
+
   if (level === 4) {
-    return "var(--color-state-working)";
+    return baseColor;
   }
 
   const opacityVar =
@@ -60,7 +62,7 @@ function getHeatCellBackground(level: HeatCell["level"]): string {
         ? "var(--pulse-heat-medium-opacity, 0.35)"
         : "var(--pulse-heat-low-opacity, 0.18)";
 
-  return `color-mix(in oklab, var(--color-state-working) calc(${opacityVar} * 100%), transparent)`;
+  return `color-mix(in oklab, ${baseColor} calc(${opacityVar} * 100%), transparent)`;
 }
 
 function getCellStyle(cell: RenderCell): CSSProperties {

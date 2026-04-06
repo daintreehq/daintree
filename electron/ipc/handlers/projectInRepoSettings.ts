@@ -109,6 +109,13 @@ export function registerProjectInRepoSettingsHandlers(_deps: HandlerDependencies
       color: project.color,
     });
     await projectStore.writeInRepoSettings(project.path, settings);
+
+    // Sync existing project recipes to .canopy/recipes/
+    const recipes = await projectStore.getRecipes(projectId);
+    for (const recipe of recipes) {
+      await projectStore.writeInRepoRecipe(project.path, recipe);
+    }
+
     return projectStore.updateProject(projectId, {
       inRepoSettings: true,
       canopyConfigPresent: true,

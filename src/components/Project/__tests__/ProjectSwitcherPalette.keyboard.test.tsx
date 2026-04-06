@@ -90,8 +90,20 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: () => null,
 }));
 
-vi.mock("./ProjectActionRow", () => ({
-  ProjectActionRow: () => null,
+vi.mock("@/components/ui/context-menu", () => ({
+  ContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuContent: () => null,
+  ContextMenuItem: () => null,
+  ContextMenuSeparator: () => null,
+}));
+
+vi.mock("@/hooks/useModifierKeys", () => ({
+  useModifierKeys: () => ({ meta: false, alt: false }),
+}));
+
+vi.mock("@/utils/timeAgo", () => ({
+  formatTimeAgo: () => "2h ago",
 }));
 
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
@@ -110,9 +122,14 @@ function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProj
     isBackground: false,
     isMissing: false,
     isPinned: false,
+    frecencyScore: 3.0,
     processCount: 0,
     activeAgentCount: 0,
     waitingAgentCount: 0,
+    displayPath:
+      (overrides.path ?? "/tmp/test").replace(/\\/g, "/").split("/").filter(Boolean).pop() ??
+      overrides.path ??
+      "/tmp/test",
     ...overrides,
   };
 }
@@ -132,9 +149,6 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     onSelect: vi.fn(),
     onClose: vi.fn(),
     mode: "modal" as const,
-    onOpenProjectSettings: vi.fn(),
-    onAddProject: vi.fn(),
-    onCreateFolder: vi.fn(),
   };
 
   beforeEach(() => {
@@ -173,27 +187,30 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     expect(defaultProps.onSelectPrevious).toHaveBeenCalledTimes(1);
   });
 
-  it("row action buttons have tabIndex={-1}", () => {
+  it("no inline action buttons are rendered in list items", () => {
     render(
       <ProjectSwitcherPalette
         {...defaultProps}
         onTogglePinProject={vi.fn()}
         onCloseProject={vi.fn()}
         onStopProject={vi.fn()}
+        onLocateProject={vi.fn()}
       />
     );
-    const pinButtons = screen.getAllByLabelText(/pin project/i);
-    for (const btn of pinButtons) {
-      expect(btn.getAttribute("tabindex")).toBe("-1");
-    }
-    const closeButtons = screen.getAllByLabelText("Close project");
-    for (const btn of closeButtons) {
-      expect(btn.getAttribute("tabindex")).toBe("-1");
-    }
+    expect(screen.queryByLabelText("Close project")).toBeNull();
+    expect(screen.queryByLabelText("Stop project")).toBeNull();
+    expect(screen.queryByLabelText("Locate project folder")).toBeNull();
+    expect(screen.queryByLabelText("Remove project")).toBeNull();
   });
 
   it("Tab from last footer button wraps focus to the input (focus trap)", () => {
-    render(<ProjectSwitcherPalette {...defaultProps} />);
+    const propsWithButtons = {
+      ...defaultProps,
+      onOpenProjectSettings: vi.fn(),
+      onAddProject: vi.fn(),
+      onCreateFolder: vi.fn(),
+    };
+    render(<ProjectSwitcherPalette {...propsWithButtons} />);
 
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog).toBeTruthy();
@@ -212,7 +229,13 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
   });
 
   it("Shift+Tab from input wraps focus to last footer button (focus trap)", () => {
-    render(<ProjectSwitcherPalette {...defaultProps} />);
+    const propsWithButtons = {
+      ...defaultProps,
+      onOpenProjectSettings: vi.fn(),
+      onAddProject: vi.fn(),
+      onCreateFolder: vi.fn(),
+    };
+    render(<ProjectSwitcherPalette {...propsWithButtons} />);
 
     const dialog = document.querySelector('[role="dialog"]');
     const focusable = dialog!.querySelectorAll<HTMLElement>(
@@ -227,13 +250,11 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     expect(document.activeElement).toBe(focusable[focusable.length - 1]);
   });
 
-  it("displays condensed footer with keyboard shortcut help", () => {
+  it("displays condensed footer with switch hint in modal mode", () => {
     render(<ProjectSwitcherPalette {...defaultProps} />);
     const footer = screen.getByTestId("palette-footer");
     expect(footer.textContent).toContain("Switch");
-    expect(screen.getByLabelText("Keyboard shortcuts")).toBeTruthy();
-    expect(footer.textContent).toContain("Tab");
-    expect(footer.textContent).toContain("to navigate");
-    expect(footer.textContent).toContain("to close");
+    expect(footer.textContent).not.toContain("Remove");
+    expect(footer.textContent).not.toContain("Right-click for more");
   });
 });

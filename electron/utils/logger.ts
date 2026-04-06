@@ -9,7 +9,6 @@ import {
   unlinkSync,
 } from "fs";
 import { join } from "path";
-import type { BrowserWindow } from "electron";
 import { logBuffer, type LogEntry } from "../services/LogBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 
@@ -143,19 +142,37 @@ export function isVerboseLogging(): boolean {
   return verboseLogging;
 }
 
-let mainWindow: BrowserWindow | null = null;
-
 const LOG_THROTTLE_MS = 16;
 let lastLogTime = 0;
 let pendingLogs: LogEntry[] = [];
 let throttleTimeout: NodeJS.Timeout | null = null;
 
-export function setLoggerWindow(window: BrowserWindow | null): void {
-  mainWindow = window;
+type BroadcastFn = (channel: string, ...args: unknown[]) => void;
+type HasWindowFn = () => boolean;
+
+let registeredBroadcast: BroadcastFn | null = null;
+let registeredHasWindow: HasWindowFn | null = null;
+
+/**
+ * Register renderer broadcast functions. Called by the main process only —
+ * utility processes (pty-host, workspace-host) never call this, so they
+ * never pull in BrowserWindow or ipc/utils via the bundler.
+ */
+export function registerLoggerTransport(broadcast: BroadcastFn, hasWindow: HasWindowFn): void {
+  registeredBroadcast = broadcast;
+  registeredHasWindow = hasWindow;
+}
+
+function getBroadcast(): BroadcastFn | null {
+  return registeredBroadcast;
+}
+
+function hasAnyWindow(): boolean {
+  return registeredHasWindow ? registeredHasWindow() : false;
 }
 
 function sendLogToRenderer(entry: LogEntry): void {
-  if (!mainWindow || mainWindow.isDestroyed()) {
+  if (!hasAnyWindow()) {
     return;
   }
 
@@ -175,7 +192,7 @@ function flushLogs(): void {
     throttleTimeout = null;
   }
 
-  if (pendingLogs.length === 0 || !mainWindow || mainWindow.isDestroyed()) {
+  if (pendingLogs.length === 0 || !hasAnyWindow()) {
     pendingLogs = [];
     return;
   }
@@ -183,14 +200,14 @@ function flushLogs(): void {
   const MAX_LOGS_PER_FLUSH = 60;
   const logsToSend = pendingLogs.slice(0, MAX_LOGS_PER_FLUSH);
 
-  const webContents = mainWindow.webContents;
-  if (webContents.isDestroyed()) {
+  const broadcast = getBroadcast();
+  if (!broadcast) {
     pendingLogs = [];
     return;
   }
 
   try {
-    webContents.send(CHANNELS.LOGS_BATCH, logsToSend);
+    broadcast(CHANNELS.LOGS_BATCH, logsToSend);
   } catch {
     pendingLogs = [];
     return;

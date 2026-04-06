@@ -13,11 +13,12 @@ export type AgentEvent =
 
 const VALID_TRANSITIONS: Record<AgentState, AgentState[]> = {
   idle: ["working", "running"],
-  working: ["waiting", "completed"],
+  working: ["waiting", "completed", "exited"],
   running: ["idle"], // Shell process state - managed by TerminalProcess, not this state machine
-  waiting: ["working", "completed"],
+  waiting: ["working", "completed", "exited"],
   directing: [], // Renderer-only state, never produced by main process
-  completed: ["working", "waiting"],
+  completed: ["working", "waiting", "exited"],
+  exited: [], // Terminal state - process is gone, no transitions out
 };
 
 export function isValidTransition(from: AgentState, to: AgentState): boolean {
@@ -72,8 +73,8 @@ export function nextAgentState(current: AgentState, event: AgentEvent): AgentSta
       break;
 
     case "exit":
-      if (current === "working" || current === "waiting" || current === "completed") {
-        return "completed";
+      if (current !== "idle" && current !== "exited") {
+        return "exited";
       }
       break;
   }

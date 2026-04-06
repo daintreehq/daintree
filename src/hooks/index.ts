@@ -36,6 +36,7 @@ export { keybindingService } from "../services/KeybindingService";
 export type { KeyScope, KeybindingConfig } from "../services/KeybindingService";
 
 export { useProjectSettings } from "./useProjectSettings";
+export { useProjectSettingsForm } from "./useProjectSettingsForm";
 export {
   useProjectBranding,
   invalidateBrandingCache,
@@ -43,6 +44,8 @@ export {
 } from "./useProjectBranding";
 
 export { useWaitingTerminalIds, useBackgroundPanelStats } from "./useTerminalSelectors";
+
+export { useWorktreeColorMap } from "./useWorktreeColorMap";
 
 export { useOverlayState } from "./useOverlayState";
 
@@ -67,8 +70,6 @@ export type { UseWorktreeActionsOptions, WorktreeActions } from "./useWorktreeAc
 export { useMenuActions } from "./useMenuActions";
 export type { UseMenuActionsOptions } from "./useMenuActions";
 
-export { useNativeContextMenu } from "./useNativeContextMenu";
-
 export { useHorizontalScrollControls } from "./useHorizontalScrollControls";
 export type { UseHorizontalScrollControlsReturn } from "./useHorizontalScrollControls";
 
@@ -82,7 +83,7 @@ export type { ActionPaletteItem, UseActionPaletteReturn } from "./useActionPalet
 
 export { useDoubleShift } from "./useDoubleShift";
 
-export { useUpdateListener } from "./useUpdateListener";
+export { useMainProcessToastListener } from "./useMainProcessToastListener";
 
 export { useAnimatedPresence } from "./useAnimatedPresence";
 export type { UseAnimatedPresenceOptions, UseAnimatedPresenceReturn } from "./useAnimatedPresence";

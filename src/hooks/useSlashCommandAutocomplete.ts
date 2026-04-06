@@ -3,18 +3,13 @@ import type { AutocompleteItem } from "@/components/Terminal/AutocompleteMenu";
 import { slashCommandsClient } from "@/clients";
 import { rankSlashCommands } from "@/lib/slashCommandMatch";
 
-import {
-  CLAUDE_BUILTIN_SLASH_COMMANDS,
-  CODEX_BUILTIN_SLASH_COMMANDS,
-  GEMINI_BUILTIN_SLASH_COMMANDS,
-  type LegacyAgentType,
-  type SlashCommand,
-} from "@shared/types";
+import { getBuiltinSlashCommands, type SlashCommand } from "@shared/types";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 
 export interface UseSlashCommandAutocompleteArgs {
   query: string;
   enabled: boolean;
-  agentId?: LegacyAgentType;
+  agentId?: BuiltInAgentId;
   projectPath?: string;
 }
 
@@ -30,12 +25,10 @@ export function useSlashCommandAutocomplete({
   const requestIdRef = useRef(0);
   const [isLoading, setIsLoading] = useState(false);
 
-  const initial = useMemo((): SlashCommand[] => {
-    if (agentId === "claude") return CLAUDE_BUILTIN_SLASH_COMMANDS;
-    if (agentId === "gemini") return GEMINI_BUILTIN_SLASH_COMMANDS;
-    if (agentId === "codex") return CODEX_BUILTIN_SLASH_COMMANDS;
-    return [];
-  }, [agentId]);
+  const initial = useMemo(
+    (): SlashCommand[] => (agentId ? getBuiltinSlashCommands(agentId) : []),
+    [agentId]
+  );
 
   const [commands, setCommands] = useState<SlashCommand[]>(initial);
 
@@ -57,10 +50,7 @@ export function useSlashCommandAutocomplete({
       })
       .catch(() => {
         if (requestIdRef.current !== requestId) return;
-        if (agentId === "claude") setCommands(CLAUDE_BUILTIN_SLASH_COMMANDS);
-        else if (agentId === "gemini") setCommands(GEMINI_BUILTIN_SLASH_COMMANDS);
-        else if (agentId === "codex") setCommands(CODEX_BUILTIN_SLASH_COMMANDS);
-        else setCommands([]);
+        setCommands(agentId ? getBuiltinSlashCommands(agentId) : []);
       })
       .finally(() => {
         if (requestIdRef.current !== requestId) return;

@@ -24,7 +24,7 @@ export function registerAppHandlers(deps: HandlerDependencies): () => void {
     registerLogsHandlers(),
     registerEventInspectorHandlers(deps),
     registerTerminalConfigHandlers(deps),
-    registerAppThemeHandlers(),
+    registerAppThemeHandlers(deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow),
     registerCrashRecoveryHandlers(),
     registerGpuHandlers(),
   ];

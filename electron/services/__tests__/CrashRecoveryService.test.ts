@@ -400,6 +400,8 @@ describe("CrashRecoveryService", () => {
       storeMock.get.mockImplementation((key: string) => {
         if (key === "appState") return { sidebarWidth: 400, terminals: [] };
         if (key === "windowState") return { width: 1200, height: 800, isMaximized: false };
+        if (key === "windowStates")
+          return { "/home/user/project-a": { width: 1200, height: 800, isMaximized: false } };
         return { autoRestoreOnCrash: false };
       });
 
@@ -413,6 +415,7 @@ describe("CrashRecoveryService", () => {
       expect(typeof snapshot.capturedAt).toBe("number");
       expect(snapshot.appState).toBeDefined();
       expect(snapshot.windowState).toBeDefined();
+      expect(snapshot.windowStates).toBeDefined();
       expect(snapshot.projects).toBeUndefined();
     });
 

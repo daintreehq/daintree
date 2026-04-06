@@ -120,7 +120,7 @@ describe("terminalClient MessagePort data routing", () => {
     });
 
     // Simulate pty-host sending data over the port
-    port.postMessage({ type: "data", id: "term-1", data: "hello world" });
+    port.postMessage({ type: "data", id: "term-1", data: "hello world", bytes: 11 });
 
     // MessageChannel is async — use a small delay
     return new Promise<void>((resolve) => {
@@ -131,7 +131,7 @@ describe("terminalClient MessagePort data routing", () => {
     });
   });
 
-  it("suppresses IPC data when MessagePort is connected", () => {
+  it("delivers IPC data even when MessagePort is connected (pty-host ensures single path via visualWritten)", () => {
     acquirePort();
     const received: string[] = [];
 
@@ -144,8 +144,11 @@ describe("terminalClient MessagePort data routing", () => {
     expect(handler).toBeDefined();
     handler!.cb("ipc-data");
 
-    // IPC data should be suppressed
-    expect(received).toEqual([]);
+    // IPC data is delivered because pty-host ensures each chunk is sent through exactly
+    // ONE visual path (MessagePort, SAB, or IPC) via a visualWritten flag, preventing double delivery.
+    // Previously IPC was suppressed here, but that caused data loss during project switch when
+    // the pty-host routed through IPC instead of MessagePort due to windowProjectMap latency.
+    expect(received).toEqual(["ipc-data"]);
   });
 
   it("delivers IPC data when no MessagePort is connected", () => {
@@ -178,6 +181,141 @@ describe("terminalClient MessagePort data routing", () => {
     expect(handler).toBeUndefined();
   });
 
+  it("buffers early MessagePort data and flushes on onData registration", () => {
+    const port = acquirePort();
+
+    // Send data BEFORE any onData callback is registered
+    port.postMessage({ type: "data", id: "term-early", data: "chunk-1", bytes: 7 });
+    port.postMessage({ type: "data", id: "term-early", data: "chunk-2", bytes: 7 });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        // Now register a callback — buffered data should flush immediately
+        const received: string[] = [];
+        terminalClient.onData("term-early", (data) => {
+          received.push(typeof data === "string" ? data : new TextDecoder().decode(data));
+        });
+
+        expect(received).toEqual(["chunk-1", "chunk-2"]);
+        resolve();
+      }, 50);
+    });
+  });
+
+  it("does NOT send immediate ack when live callbacks are registered", () => {
+    const port = acquirePort();
+
+    terminalClient.onData("term-1", () => {});
+
+    port.postMessage({ type: "data", id: "term-1", data: "hello", bytes: 42 });
+
+    return new Promise<void>((resolve) => {
+      const acks: Record<string, unknown>[] = [];
+      port.addEventListener("message", (event: MessageEvent) => {
+        const msg = event.data as Record<string, unknown>;
+        if (msg?.type === "ack" && msg.id === "term-1") {
+          acks.push(msg);
+        }
+      });
+      port.start();
+
+      // Wait and verify no ack arrived — ACK is deferred to xterm write callback
+      setTimeout(() => {
+        expect(acks).toEqual([]);
+        resolve();
+      }, 100);
+    });
+  });
+
+  it("sends immediate ack for early-buffered data (no callbacks registered)", () => {
+    const port = acquirePort();
+
+    // No onData registered — data goes to early buffer with immediate ACK
+    port.postMessage({ type: "data", id: "term-early", data: "hello", bytes: 42 });
+
+    return new Promise<void>((resolve) => {
+      port.addEventListener("message", (event: MessageEvent) => {
+        const msg = event.data as Record<string, unknown>;
+        if (msg?.type === "ack" && msg.id === "term-early") {
+          expect(msg.bytes).toBe(42);
+          resolve();
+        }
+      });
+      port.start();
+    });
+  });
+
+  it("falls back to 0 bytes for early-buffered ack when msg.bytes is missing", () => {
+    const port = acquirePort();
+
+    // No onData registered — early buffer path
+    port.postMessage({ type: "data", id: "term-early", data: "hello" } as unknown);
+
+    return new Promise<void>((resolve) => {
+      port.addEventListener("message", (event: MessageEvent) => {
+        const msg = event.data as Record<string, unknown>;
+        if (msg?.type === "ack" && msg.id === "term-early") {
+          expect(msg.bytes).toBe(0);
+          resolve();
+        }
+      });
+      port.start();
+    });
+  });
+
+  it("acknowledgePortData sends deferred ack with original msg.bytes", () => {
+    const port = acquirePort();
+
+    // Register callback so data goes through the live path (queues byte count)
+    terminalClient.onData("term-1", () => {});
+
+    // Send data with bytes: 42 (original pty-host UTF-8 byte count)
+    port.postMessage({ type: "data", id: "term-1", data: "hello", bytes: 42 });
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        // Now call acknowledgePortData — it should use the queued 42, not the passed 999
+        terminalClient.acknowledgePortData("term-1", 999);
+
+        port.addEventListener("message", (event: MessageEvent) => {
+          const msg = event.data as Record<string, unknown>;
+          if (msg?.type === "ack" && msg.id === "term-1") {
+            expect(msg.bytes).toBe(42);
+            resolve();
+          }
+        });
+        port.start();
+      }, 50);
+    });
+  });
+
+  it("acknowledgePortData is a no-op when no port is connected", () => {
+    // No port acquired — should not throw
+    expect(() => terminalClient.acknowledgePortData("term-1", 42)).not.toThrow();
+  });
+
+  it("acknowledgePortData is a no-op when byte queue is empty (IPC or early-flush data)", () => {
+    const port = acquirePort();
+
+    // Call acknowledgePortData without any prior port data dispatch (simulates
+    // IPC data or early-buffer flush reaching writeToTerminal)
+    terminalClient.acknowledgePortData("term-1", 100);
+
+    return new Promise<void>((resolve) => {
+      const acks: Record<string, unknown>[] = [];
+      port.addEventListener("message", (event: MessageEvent) => {
+        const msg = event.data as Record<string, unknown>;
+        if (msg?.type === "ack") acks.push(msg);
+      });
+      port.start();
+
+      setTimeout(() => {
+        expect(acks).toEqual([]);
+        resolve();
+      }, 100);
+    });
+  });
+
   it("dispatches to correct terminal only", () => {
     const port = acquirePort();
     const received1: string[] = [];
@@ -186,7 +324,7 @@ describe("terminalClient MessagePort data routing", () => {
     terminalClient.onData("term-1", (d) => received1.push(d as string));
     terminalClient.onData("term-2", (d) => received2.push(d as string));
 
-    port.postMessage({ type: "data", id: "term-2", data: "for-term-2" });
+    port.postMessage({ type: "data", id: "term-2", data: "for-term-2", bytes: 10 });
 
     return new Promise<void>((resolve) => {
       setTimeout(() => {

@@ -247,11 +247,9 @@ export class ActionService {
       const state = shortcutHintStore.getState();
       if (!state.hydrated) return;
 
+      state.incrementCount(actionId);
       const displayCombo = keybindingService.getDisplayCombo(actionId);
-      const shown = state.show(actionId, displayCombo);
-      if (shown) {
-        state.incrementCount(actionId);
-      }
+      state.show(actionId, displayCombo);
     } catch {
       // never break dispatch flow
     }

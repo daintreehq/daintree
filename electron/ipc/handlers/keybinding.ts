@@ -4,9 +4,9 @@ import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import type { KeyAction } from "../../../shared/types/keymap.js";
-import { KEY_ACTION_VALUES } from "../../../shared/types/keymap.js";
 import { exportProfile, importProfile } from "../../utils/keybindingProfileIO.js";
 import type { ImportResult } from "../../utils/keybindingProfileIO.js";
+import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 
 function getValidatedOverrides(): Record<string, string[]> {
   const raw = store.get("keybindingOverrides.overrides");
@@ -78,15 +78,19 @@ export function registerKeybindingHandlers(_deps: HandlerDependencies): () => vo
   ipcMain.handle(CHANNELS.KEYBINDING_RESET_ALL, handleResetAll);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.KEYBINDING_RESET_ALL));
 
-  const handleExportProfile = async (): Promise<boolean> => {
+  const handleExportProfile = async (_event: Electron.IpcMainInvokeEvent): Promise<boolean> => {
     const overrides = getValidatedOverrides();
     const json = exportProfile(overrides);
-
-    const { filePath, canceled } = await dialog.showSaveDialog({
+    const parentWindow = getWindowForWebContents(_event.sender);
+    const saveOpts: Electron.SaveDialogOptions = {
       title: "Export Keyboard Shortcuts",
       defaultPath: "canopy-keybindings.json",
       filters: [{ name: "Keybinding Profile", extensions: ["json"] }],
-    });
+    };
+
+    const { filePath, canceled } = parentWindow
+      ? await dialog.showSaveDialog(parentWindow, saveOpts)
+      : await dialog.showSaveDialog(saveOpts);
 
     if (canceled || !filePath) return false;
 
@@ -96,19 +100,25 @@ export function registerKeybindingHandlers(_deps: HandlerDependencies): () => vo
   ipcMain.handle(CHANNELS.KEYBINDING_EXPORT_PROFILE, handleExportProfile);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.KEYBINDING_EXPORT_PROFILE));
 
-  const handleImportProfile = async (): Promise<ImportResult> => {
-    const { filePaths, canceled } = await dialog.showOpenDialog({
+  const handleImportProfile = async (
+    _event: Electron.IpcMainInvokeEvent
+  ): Promise<ImportResult> => {
+    const parentWindow = getWindowForWebContents(_event.sender);
+    const openOpts: Electron.OpenDialogOptions = {
       title: "Import Keyboard Shortcuts",
       filters: [{ name: "Keybinding Profile", extensions: ["json"] }],
       properties: ["openFile"],
-    });
+    };
+    const { filePaths, canceled } = parentWindow
+      ? await dialog.showOpenDialog(parentWindow, openOpts)
+      : await dialog.showOpenDialog(openOpts);
 
     if (canceled || filePaths.length === 0) {
       return { ok: false, overrides: {}, applied: 0, skipped: 0, errors: ["Cancelled"] };
     }
 
     const json = await fs.readFile(filePaths[0], "utf-8");
-    const result = importProfile(json, KEY_ACTION_VALUES);
+    const result = importProfile(json);
 
     if (result.ok) {
       const existing = getValidatedOverrides();

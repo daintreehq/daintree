@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 
 /**
  * Freezes a webview's JS execution via CDP when the panel is in the dock
@@ -7,8 +7,8 @@ import { useTerminalStore } from "@/store";
  * becomes visible (dock popover opened or restored to grid).
  *
  * Uses `Page.setWebLifecycleState` via the main process CDP debugger because
- * `webContents.setBackgroundThrottling` is overridden by the parent window's
- * `disable-renderer-backgrounding` app switch flag.
+ * it provides a full JS lifecycle freeze — stronger than the timer/frame
+ * throttling that `webContents.setBackgroundThrottling` applies.
  */
 export function useWebviewThrottle(
   panelId: string,
@@ -16,7 +16,7 @@ export function useWebviewThrottle(
   webviewElement: Electron.WebviewTag | null,
   isWebviewReady: boolean
 ): void {
-  const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
+  const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
   const freezeTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {

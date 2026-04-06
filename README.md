@@ -4,7 +4,7 @@
 
 Canopy is a desktop environment where multiple AI agents work side by side — isolated, observable, and under your control. Instead of juggling terminal windows and manually wiring context between tools, Canopy gives your agents a stable place to run while you focus on reviewing their work.
 
-It works with any CLI agent — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex](https://github.com/openai/codex), [OpenCode](https://github.com/anomalyco/opencode) — and stays out of the way.
+It works with any CLI agent — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex](https://github.com/openai/codex), [OpenCode](https://github.com/anomalyco/opencode), [Cursor Agent](https://docs.cursor.com/agent) — and stays out of the way.
 
 ---
 
@@ -37,11 +37,27 @@ Inject codebase context into any agent's terminal with a single click. Built on 
 
 ### Multi-Panel Environment
 
-Drag-and-drop panel grid with dock and trash. Panels can be terminals, agent sessions, browser previews, or notes. The layout persists across sessions, and inactive projects auto-hibernate to keep things responsive.
+Drag-and-drop panel grid with dock and trash. Panels can be terminals, agent sessions, browser previews, dev server previews, or notes. The layout persists across sessions, and inactive projects auto-hibernate to keep things responsive.
+
+### Recipes
+
+Configurable multi-terminal launch presets. Define a recipe with any combination of agents, terminals, and dev previews — then launch them all at once. Recipes support variable substitution (issue number, branch name, worktree path) and can be scoped to a project or shared globally.
+
+### MCP Server
+
+Canopy exposes all of its actions as tools via the [Model Context Protocol](https://modelcontextprotocol.io/). Any MCP-compatible agent can discover and invoke Canopy actions — creating worktrees, spawning terminals, injecting context, or running git operations — without leaving their session.
 
 ### GitHub Integration
 
 Automatic PR and issue detection from branch names. Repository statistics, commit history, and secure token-based authentication — all built in.
+
+### Themes
+
+15 built-in themes with dark and light modes. The theme system supports palette-based color derivation, semantic tokens, terminal color mapping, and color-vision accessibility modes.
+
+### Resource Profiles
+
+Adaptive performance management with three profiles — Performance, Balanced, and Efficiency — that adjust polling intervals, WebGL context limits, and memory pressure thresholds based on system state.
 
 ---
 
@@ -86,6 +102,7 @@ npm install -g @anthropic-ai/claude-code    # Claude Code
 npm install -g @google/gemini-cli           # Gemini CLI
 npm install -g @openai/codex                # Codex CLI
 npm install -g opencode-ai@latest           # OpenCode
+npm install -g @anthropic-ai/cursor-agent   # Cursor Agent
 ```
 
 ---
@@ -99,12 +116,12 @@ Main Process (electron/)            Renderer (src/)
 ├── PTY Management                  ├── React 19 + TypeScript
 ├── Git Operations                  ├── Zustand State Management
 ├── IPC Handlers                    ├── xterm.js Terminal Grid
-└── Utility Processes               └── Action System
+└── Utility Processes               └── Action System (264 actions)
      ├── PTY Host (SharedRingBuffer)
      └── Workspace Host (Worktree Monitor)
 ```
 
-- **Main Process** — Native operations (PTY, filesystem, git) exposed through a typed IPC bridge with 41 namespaces.
+- **Main Process** — Native operations (PTY, filesystem, git) exposed through a typed IPC bridge with 56 namespaces.
 - **Renderer** — React 19 UI with Vite HMR. Zustand stores with atomic selectors for performance across many simultaneous panels.
 - **Utility Processes** — Isolated PTY Host with lock-free SharedRingBuffer flow control, and Workspace Host for continuous worktree monitoring.
 
@@ -112,14 +129,17 @@ Main Process (electron/)            Renderer (src/)
 
 | Layer       | Technology                            |
 | ----------- | ------------------------------------- |
-| Runtime     | Electron 40                           |
+| Runtime     | Electron 41                           |
 | UI          | React 19, TypeScript, Tailwind CSS v4 |
-| Build       | Vite 6                                |
+| Build       | Vite 8                                |
 | State       | Zustand v5                            |
-| Terminal    | @xterm/xterm 6.0, node-pty 1.1        |
-| Git         | simple-git 3.32                       |
+| Terminal    | @xterm/xterm 6.0, node-pty 1.2        |
+| Git         | simple-git 3.33                       |
+| Database    | better-sqlite3, Drizzle ORM           |
 | Drag & Drop | dnd-kit                               |
-| Validation  | Zod                                   |
+| Validation  | Zod v4                                |
+| AI/MCP      | @modelcontextprotocol/sdk, OpenAI SDK |
+| Testing     | Vitest, Playwright                    |
 
 ---
 
@@ -139,9 +159,9 @@ npm run rebuild      # Rebuild native modules
 ```bash
 npm run build        # Production build
 npm run package      # Package for current platform
-npm run package:mac  # macOS
-npm run package:win  # Windows
-npm run package:linux
+npm run package:mac  # macOS (DMG, ZIP — arm64, x64, universal)
+npm run package:win  # Windows (NSIS, portable)
+npm run package:linux # Linux (AppImage, deb)
 ```
 
 ---
@@ -149,24 +169,37 @@ npm run package:linux
 ## Project Structure
 
 ```
-canopy-electron/
+canopy/
 ├── electron/                # Main process
 │   ├── main.ts              # Entry point
-│   ├── preload.cts          # IPC bridge (contextBridge)
-│   ├── ipc/handlers/        # Domain-specific IPC handlers
-│   └── services/            # PTY, workspace, GitHub services
+│   ├── preload.cts          # IPC bridge (contextBridge, 56 namespaces)
+│   ├── pty-host.ts          # Isolated PTY host process
+│   ├── workspace-host.ts    # Worktree monitoring process
+│   ├── ipc/handlers/        # ~61 IPC handler files
+│   └── services/            # ~90 backend services
 │
 ├── src/                     # Renderer (React)
-│   ├── components/          # UI components
-│   ├── store/               # Zustand stores and slices
-│   ├── services/actions/    # Action system (21 definition files)
-│   ├── hooks/               # React hooks
+│   ├── components/          # 39 component directories
+│   ├── store/               # 61 Zustand stores
+│   ├── services/actions/    # 28 action definition files
+│   ├── hooks/               # 87 React hooks
+│   ├── panels/              # Panel kind modules (5 types)
 │   └── clients/             # IPC client wrappers
 │
 ├── shared/                  # Types and config (main + renderer)
-│   ├── types/               # Domain, action, keymap types
-│   └── config/              # Panel and agent registries
+│   ├── types/               # 35 type files + 21 IPC type files
+│   ├── config/              # Panel, agent, and feature registries
+│   └── theme/               # 15 built-in themes, token system
 │
+├── e2e/                     # Playwright E2E tests
+│   ├── core/                # 13 tests — gates releases
+│   ├── full/                # 61 tests — nightly
+│   ├── online/              # 2 tests — agent integration
+│   └── nightly/             # Memory leak detection
+│
+├── demo/                    # Demo recording (Stage DSL + scenes)
+├── scripts/                 # Build, dev, and perf scripts
+├── help/                    # Embedded help documentation
 └── docs/                    # Architecture and development docs
 ```
 
@@ -176,8 +209,11 @@ canopy-electron/
 
 - [Architecture](docs/architecture/) — System design, IPC patterns, terminal lifecycle
 - [Development Guide](docs/development.md) — Setup, debugging, contribution workflow
+- [Theme System](docs/themes/theme-system.md) — Theme pipeline, tokens, and runtime
 - [E2E Testing](docs/e2e-testing.md) — Playwright testing setup and patterns
 - [Feature Curation](docs/feature-curation.md) — How we evaluate new features
+- [Sound Design](docs/sound-design.md) — Audio and notification guidelines
+- [Release Process](docs/release.md) — Versioning and release workflow
 
 ---
 

@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { TerminalInstance } from "@/store";
-import type { AddTerminalOptions } from "@/store/slices/terminalRegistry/types";
+import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
+import type {
+  BrowserPanelOptions,
+  NotesPanelOptions,
+  DevPreviewPanelOptions,
+} from "@shared/types/addPanelOptions";
 
 vi.mock("@/clients", () => ({
   agentSettingsClient: {
@@ -40,11 +45,89 @@ function makePanel(overrides: Partial<TerminalInstance> = {}): TerminalInstance 
   } as TerminalInstance;
 }
 
+describe("buildPanelSnapshotOptions", () => {
+  let buildPanelSnapshotOptions: (panel: TerminalInstance) => AddPanelOptions;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const mod = await import("../panelDuplicationService");
+    buildPanelSnapshotOptions = mod.buildPanelSnapshotOptions;
+  });
+
+  it("copies base fields for a plain terminal", () => {
+    const panel = makePanel({
+      command: "bash",
+      worktreeId: "wt-1",
+      exitBehavior: "keep",
+      isInputLocked: true,
+      agentModelId: "opus",
+      agentLaunchFlags: ["--flag"],
+    });
+
+    const result = buildPanelSnapshotOptions(panel);
+
+    expect(result).toMatchObject({
+      kind: "terminal",
+      type: "terminal",
+      cwd: "/home/user",
+      worktreeId: "wt-1",
+      exitBehavior: "keep",
+      isInputLocked: true,
+      agentModelId: "opus",
+      command: "bash",
+    });
+    // agentLaunchFlags should be a new array (deep copy)
+    expect(result.agentLaunchFlags).toEqual(["--flag"]);
+    expect(result.agentLaunchFlags).not.toBe(panel.agentLaunchFlags);
+  });
+
+  it("does not include title in the snapshot", () => {
+    const panel = makePanel({ title: "My Terminal" });
+    const result = buildPanelSnapshotOptions(panel);
+    expect(result.title).toBeUndefined();
+  });
+
+  it("does not include location in the snapshot", () => {
+    const panel = makePanel({ location: "dock" });
+    const result = buildPanelSnapshotOptions(panel);
+    expect(result.location).toBeUndefined();
+  });
+
+  it("includes kind-specific fields for browser panels", () => {
+    const panel = makePanel({
+      kind: "browser",
+      browserUrl: "https://example.com",
+      browserConsoleOpen: true,
+    });
+    const result = buildPanelSnapshotOptions(panel) as BrowserPanelOptions;
+    expect(result.browserUrl).toBe("https://example.com");
+    expect(result.browserConsoleOpen).toBe(true);
+  });
+
+  it("copies agent fields for agent panels", () => {
+    const panel = makePanel({
+      agentId: "claude",
+      agentModelId: "opus",
+      agentLaunchFlags: ["--verbose"],
+    });
+    const result = buildPanelSnapshotOptions(panel);
+    expect(result.agentId).toBe("claude");
+    expect(result.agentModelId).toBe("opus");
+    expect(result.agentLaunchFlags).toEqual(["--verbose"]);
+  });
+
+  it("handles undefined agentLaunchFlags", () => {
+    const panel = makePanel({ agentLaunchFlags: undefined });
+    const result = buildPanelSnapshotOptions(panel);
+    expect(result.agentLaunchFlags).toBeUndefined();
+  });
+});
+
 describe("panelDuplicationService", () => {
   let buildPanelDuplicateOptions: (
     panel: TerminalInstance,
     location: "grid" | "dock"
-  ) => Promise<AddTerminalOptions>;
+  ) => Promise<AddPanelOptions>;
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -118,11 +201,11 @@ describe("panelDuplicationService", () => {
 
   it("includes browserUrl for browser panels", async () => {
     const panel = makePanel({ kind: "browser", browserUrl: "https://example.com" });
-    const result = await buildPanelDuplicateOptions(panel, "grid");
+    const result = (await buildPanelDuplicateOptions(panel, "grid")) as BrowserPanelOptions;
 
     expect(result.browserUrl).toBe("https://example.com");
-    expect(result.notePath).toBeUndefined();
-    expect(result.devCommand).toBeUndefined();
+    expect((result as unknown as Record<string, unknown>).notePath).toBeUndefined();
+    expect((result as unknown as Record<string, unknown>).devCommand).toBeUndefined();
   });
 
   it("includes notes fields for notes panels", async () => {
@@ -133,7 +216,7 @@ describe("panelDuplicationService", () => {
       scope: "worktree",
     } as Partial<TerminalInstance>);
 
-    const result = await buildPanelDuplicateOptions(panel, "dock");
+    const result = (await buildPanelDuplicateOptions(panel, "dock")) as NotesPanelOptions;
 
     expect(result.notePath).toBe("/notes/readme.md");
     expect(result.noteId).toBe("note-123");
@@ -149,7 +232,7 @@ describe("panelDuplicationService", () => {
       devPreviewConsoleOpen: true,
     } as Partial<TerminalInstance>);
 
-    const result = await buildPanelDuplicateOptions(panel, "grid");
+    const result = (await buildPanelDuplicateOptions(panel, "grid")) as DevPreviewPanelOptions;
 
     expect(result.devCommand).toBe("npm run dev");
     expect(result.browserUrl).toBe("http://localhost:3000");

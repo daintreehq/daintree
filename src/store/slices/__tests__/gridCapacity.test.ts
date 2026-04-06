@@ -4,7 +4,10 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { MAX_GRID_TERMINALS } from "../terminalRegistrySlice";
+import { initBuiltInPanelKinds } from "@/panels/registry";
+import { MAX_GRID_TERMINALS } from "../panelRegistrySlice";
+
+initBuiltInPanelKinds();
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -29,14 +32,27 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-vi.mock("../../persistence/terminalPersistence", () => ({
-  terminalPersistence: {
+vi.mock("../../persistence/panelPersistence", () => ({
+  panelPersistence: {
+    setProjectIdGetter: vi.fn(),
     save: vi.fn(),
     load: vi.fn().mockReturnValue([]),
   },
 }));
 
-const { useTerminalStore } = await import("../../terminalStore");
+const { usePanelStore } = await import("../../panelStore");
+
+function setTerminals(terminals: any[]) {
+  usePanelStore.setState({
+    panelsById: Object.fromEntries(terminals.map((t: any) => [t.id, t])),
+    panelIds: terminals.map((t: any) => t.id),
+  });
+}
+
+function getTerminals() {
+  const s = usePanelStore.getState();
+  return s.panelIds.map((id) => s.panelsById[id]);
+}
 
 function createMockTerminal(id: string, location: "grid" | "dock" | "trash" = "grid"): any {
   return {
@@ -60,9 +76,10 @@ function createDockedTerminals(count: number): any[] {
 
 describe("Grid Capacity Enforcement", () => {
   beforeEach(() => {
-    useTerminalStore.getState().reset();
-    useTerminalStore.setState({
-      terminals: [],
+    usePanelStore.getState().reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
@@ -78,7 +95,7 @@ describe("Grid Capacity Enforcement", () => {
 
   describe("dev-preview state", () => {
     it("preserves dev server fields when adding a dev-preview panel", async () => {
-      await useTerminalStore.getState().addTerminal({
+      await usePanelStore.getState().addPanel({
         kind: "dev-preview",
         requestedId: "dev-preview-1",
         title: "Dev Preview",
@@ -90,7 +107,7 @@ describe("Grid Capacity Enforcement", () => {
         devServerTerminalId: "dev-preview-pty-1",
       });
 
-      const panel = useTerminalStore.getState().getTerminal("dev-preview-1");
+      const panel = usePanelStore.getState().getTerminal("dev-preview-1");
 
       expect(panel?.kind).toBe("dev-preview");
       expect(panel?.devServerStatus).toBe("running");
@@ -105,32 +122,30 @@ describe("Grid Capacity Enforcement", () => {
       const gridTerminals = createGridTerminals(14);
       const dockedTerminal = createMockTerminal("docked-1", "dock");
 
-      useTerminalStore.setState({
-        terminals: [...gridTerminals, dockedTerminal],
-      });
+      setTerminals([...gridTerminals, dockedTerminal]);
 
-      useTerminalStore.getState().moveTerminalToGrid("docked-1");
+      const result = usePanelStore.getState().moveTerminalToGrid("docked-1");
 
-      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === "docked-1");
+      const terminal = usePanelStore.getState().panelsById["docked-1"];
+      expect(result).toBe(true);
       expect(terminal?.location).toBe("grid");
+      expect(terminal?.isVisible).toBe(true);
+      expect(terminal?.runtimeStatus).toBe("running");
     });
 
     it("should move terminal to grid when exactly at capacity minus one", () => {
       const gridTerminals = createGridTerminals(15);
       const dockedTerminal = createMockTerminal("docked-1", "dock");
 
-      useTerminalStore.setState({
-        terminals: [...gridTerminals, dockedTerminal],
-      });
+      setTerminals([...gridTerminals, dockedTerminal]);
 
-      useTerminalStore.getState().moveTerminalToGrid("docked-1");
+      const result = usePanelStore.getState().moveTerminalToGrid("docked-1");
 
-      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === "docked-1");
+      const terminal = usePanelStore.getState().panelsById["docked-1"];
+      expect(result).toBe(true);
       expect(terminal?.location).toBe("grid");
 
-      const gridCount = useTerminalStore
-        .getState()
-        .terminals.filter((t) => t.location === "grid").length;
+      const gridCount = getTerminals().filter((t) => t.location === "grid").length;
       expect(gridCount).toBe(16);
     });
 
@@ -138,31 +153,26 @@ describe("Grid Capacity Enforcement", () => {
       const gridTerminals = createGridTerminals(16);
       const dockedTerminal = createMockTerminal("docked-1", "dock");
 
-      useTerminalStore.setState({
-        terminals: [...gridTerminals, dockedTerminal],
-      });
+      setTerminals([...gridTerminals, dockedTerminal]);
 
-      useTerminalStore.getState().moveTerminalToGrid("docked-1");
+      const result = usePanelStore.getState().moveTerminalToGrid("docked-1");
 
-      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === "docked-1");
+      const terminal = usePanelStore.getState().panelsById["docked-1"];
+      expect(result).toBe(false);
       expect(terminal?.location).toBe("dock");
 
-      const gridCount = useTerminalStore
-        .getState()
-        .terminals.filter((t) => t.location === "grid").length;
+      const gridCount = getTerminals().filter((t) => t.location === "grid").length;
       expect(gridCount).toBe(16);
     });
 
     it("should NOT move terminal if already in grid", () => {
       const gridTerminal = createMockTerminal("grid-1", "grid");
 
-      useTerminalStore.setState({
-        terminals: [gridTerminal],
-      });
+      setTerminals([gridTerminal]);
 
-      useTerminalStore.getState().moveTerminalToGrid("grid-1");
+      usePanelStore.getState().moveTerminalToGrid("grid-1");
 
-      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === "grid-1");
+      const terminal = usePanelStore.getState().panelsById["grid-1"];
       expect(terminal?.location).toBe("grid");
     });
   });
@@ -172,18 +182,12 @@ describe("Grid Capacity Enforcement", () => {
       const gridTerminals = createGridTerminals(10);
       const dockedTerminals = createDockedTerminals(4);
 
-      useTerminalStore.setState({
-        terminals: [...gridTerminals, ...dockedTerminals],
-      });
+      setTerminals([...gridTerminals, ...dockedTerminals]);
 
-      useTerminalStore.getState().bulkMoveToGrid();
+      usePanelStore.getState().bulkMoveToGrid();
 
-      const gridCount = useTerminalStore
-        .getState()
-        .terminals.filter((t) => t.location === "grid").length;
-      const dockCount = useTerminalStore
-        .getState()
-        .terminals.filter((t) => t.location === "dock").length;
+      const gridCount = getTerminals().filter((t) => t.location === "grid").length;
+      const dockCount = getTerminals().filter((t) => t.location === "dock").length;
 
       expect(gridCount).toBe(14);
       expect(dockCount).toBe(0);
@@ -193,18 +197,12 @@ describe("Grid Capacity Enforcement", () => {
       const gridTerminals = createGridTerminals(14);
       const dockedTerminals = createDockedTerminals(5);
 
-      useTerminalStore.setState({
-        terminals: [...gridTerminals, ...dockedTerminals],
-      });
+      setTerminals([...gridTerminals, ...dockedTerminals]);
 
-      useTerminalStore.getState().bulkMoveToGrid();
+      usePanelStore.getState().bulkMoveToGrid();
 
-      const gridCount = useTerminalStore
-        .getState()
-        .terminals.filter((t) => t.location === "grid").length;
-      const dockCount = useTerminalStore
-        .getState()
-        .terminals.filter((t) => t.location === "dock").length;
+      const gridCount = getTerminals().filter((t) => t.location === "grid").length;
+      const dockCount = getTerminals().filter((t) => t.location === "dock").length;
 
       expect(gridCount).toBe(16);
       expect(dockCount).toBe(3);
@@ -214,18 +212,12 @@ describe("Grid Capacity Enforcement", () => {
       const gridTerminals = createGridTerminals(16);
       const dockedTerminals = createDockedTerminals(3);
 
-      useTerminalStore.setState({
-        terminals: [...gridTerminals, ...dockedTerminals],
-      });
+      setTerminals([...gridTerminals, ...dockedTerminals]);
 
-      useTerminalStore.getState().bulkMoveToGrid();
+      usePanelStore.getState().bulkMoveToGrid();
 
-      const gridCount = useTerminalStore
-        .getState()
-        .terminals.filter((t) => t.location === "grid").length;
-      const dockCount = useTerminalStore
-        .getState()
-        .terminals.filter((t) => t.location === "dock").length;
+      const gridCount = getTerminals().filter((t) => t.location === "grid").length;
+      const dockCount = getTerminals().filter((t) => t.location === "dock").length;
 
       expect(gridCount).toBe(16);
       expect(dockCount).toBe(3);
@@ -235,19 +227,13 @@ describe("Grid Capacity Enforcement", () => {
       const gridTerminals = createGridTerminals(15);
       const dockedTerminals = createDockedTerminals(3);
 
-      useTerminalStore.setState({
-        terminals: [...gridTerminals, ...dockedTerminals],
-      });
+      setTerminals([...gridTerminals, ...dockedTerminals]);
 
-      useTerminalStore.getState().bulkMoveToGrid();
+      usePanelStore.getState().bulkMoveToGrid();
 
-      const movedTerminal = useTerminalStore.getState().terminals.find((t) => t.id === "dock-0");
-      const remainingTerminal1 = useTerminalStore
-        .getState()
-        .terminals.find((t) => t.id === "dock-1");
-      const remainingTerminal2 = useTerminalStore
-        .getState()
-        .terminals.find((t) => t.id === "dock-2");
+      const movedTerminal = usePanelStore.getState().panelsById["dock-0"];
+      const remainingTerminal1 = usePanelStore.getState().panelsById["dock-1"];
+      const remainingTerminal2 = usePanelStore.getState().panelsById["dock-2"];
 
       expect(movedTerminal?.location).toBe("grid");
       expect(remainingTerminal1?.location).toBe("dock");
@@ -258,55 +244,45 @@ describe("Grid Capacity Enforcement", () => {
       const gridTerminals = createGridTerminals(10);
       const dockedTerminals = createDockedTerminals(2);
 
-      useTerminalStore.setState({
-        terminals: [...gridTerminals, ...dockedTerminals],
-        focusedId: "grid-0",
-      });
+      setTerminals([...gridTerminals, ...dockedTerminals]);
+      usePanelStore.setState({ focusedId: "grid-0" });
 
-      useTerminalStore.getState().bulkMoveToGrid();
+      usePanelStore.getState().bulkMoveToGrid();
 
-      const { focusedId } = useTerminalStore.getState();
+      const { focusedId } = usePanelStore.getState();
       expect(focusedId).toBe("grid-0");
     });
 
     it("should do nothing when no docked terminals", () => {
       const gridTerminals = createGridTerminals(10);
 
-      useTerminalStore.setState({
-        terminals: gridTerminals,
-      });
+      setTerminals(gridTerminals);
 
-      useTerminalStore.getState().bulkMoveToGrid();
+      usePanelStore.getState().bulkMoveToGrid();
 
-      const gridCount = useTerminalStore
-        .getState()
-        .terminals.filter((t) => t.location === "grid").length;
+      const gridCount = getTerminals().filter((t) => t.location === "grid").length;
       expect(gridCount).toBe(10);
     });
   });
 
   describe("Edge cases", () => {
     it("should handle empty terminal list", () => {
-      useTerminalStore.setState({ terminals: [] });
+      setTerminals([]);
 
-      useTerminalStore.getState().bulkMoveToGrid();
+      usePanelStore.getState().bulkMoveToGrid();
 
-      expect(useTerminalStore.getState().terminals).toHaveLength(0);
+      expect(getTerminals()).toHaveLength(0);
     });
 
     it("should handle exactly fitting capacity", () => {
       const gridTerminals = createGridTerminals(12);
       const dockedTerminals = createDockedTerminals(4);
 
-      useTerminalStore.setState({
-        terminals: [...gridTerminals, ...dockedTerminals],
-      });
+      setTerminals([...gridTerminals, ...dockedTerminals]);
 
-      useTerminalStore.getState().bulkMoveToGrid();
+      usePanelStore.getState().bulkMoveToGrid();
 
-      const gridCount = useTerminalStore
-        .getState()
-        .terminals.filter((t) => t.location === "grid").length;
+      const gridCount = getTerminals().filter((t) => t.location === "grid").length;
       expect(gridCount).toBe(16);
     });
 
@@ -319,18 +295,16 @@ describe("Grid Capacity Enforcement", () => {
       undefinedTerminals.forEach((t) => (t.location = undefined));
       const dockedTerminal = createMockTerminal("docked-1", "dock");
 
-      useTerminalStore.setState({
-        terminals: [...gridTerminals, ...undefinedTerminals, dockedTerminal],
-      });
+      setTerminals([...gridTerminals, ...undefinedTerminals, dockedTerminal]);
 
-      useTerminalStore.getState().moveTerminalToGrid("docked-1");
+      usePanelStore.getState().moveTerminalToGrid("docked-1");
 
-      const terminal = useTerminalStore.getState().terminals.find((t) => t.id === "docked-1");
+      const terminal = usePanelStore.getState().panelsById["docked-1"];
       expect(terminal?.location).toBe("dock");
 
-      const gridAndUndefinedCount = useTerminalStore
-        .getState()
-        .terminals.filter((t) => t.location === "grid" || t.location === undefined).length;
+      const gridAndUndefinedCount = getTerminals().filter(
+        (t) => t.location === "grid" || t.location === undefined
+      ).length;
       expect(gridAndUndefinedCount).toBe(16);
     });
 
@@ -338,14 +312,12 @@ describe("Grid Capacity Enforcement", () => {
       const gridTerminals = createGridTerminals(16);
       const dockedTerminal = createMockTerminal("docked-1", "dock");
 
-      useTerminalStore.setState({
-        terminals: [...gridTerminals, dockedTerminal],
-        focusedId: "grid-0",
-      });
+      setTerminals([...gridTerminals, dockedTerminal]);
+      usePanelStore.setState({ focusedId: "grid-0" });
 
-      useTerminalStore.getState().moveTerminalToGrid("docked-1");
+      usePanelStore.getState().moveTerminalToGrid("docked-1");
 
-      const { focusedId } = useTerminalStore.getState();
+      const { focusedId } = usePanelStore.getState();
       expect(focusedId).toBe("grid-0");
     });
 
@@ -353,15 +325,86 @@ describe("Grid Capacity Enforcement", () => {
       const gridTerminals = createGridTerminals(15);
       const dockedTerminal = createMockTerminal("docked-1", "dock");
 
-      useTerminalStore.setState({
-        terminals: [...gridTerminals, dockedTerminal],
-        focusedId: "grid-0",
-      });
+      setTerminals([...gridTerminals, dockedTerminal]);
+      usePanelStore.setState({ focusedId: "grid-0" });
 
-      useTerminalStore.getState().moveTerminalToGrid("docked-1");
+      usePanelStore.getState().moveTerminalToGrid("docked-1");
 
-      const { focusedId } = useTerminalStore.getState();
+      const { focusedId } = usePanelStore.getState();
       expect(focusedId).toBe("docked-1");
+    });
+  });
+
+  describe("getGridCount", () => {
+    it("should return 0 when no terminals", () => {
+      setTerminals([]);
+      expect(usePanelStore.getState().getGridCount()).toBe(0);
+    });
+
+    it("should count grid-location terminals", () => {
+      setTerminals(createGridTerminals(5));
+      expect(usePanelStore.getState().getGridCount()).toBe(5);
+    });
+
+    it("should count undefined-location terminals as grid", () => {
+      const terminals = createGridTerminals(3);
+      terminals.forEach((t) => (t.location = undefined));
+      setTerminals(terminals);
+      expect(usePanelStore.getState().getGridCount()).toBe(3);
+    });
+
+    it("should count mixed grid + undefined but not dock or trash", () => {
+      const grid = createGridTerminals(4);
+      const undefinedLoc = [createMockTerminal("u-1", "grid"), createMockTerminal("u-2", "grid")];
+      undefinedLoc.forEach((t) => (t.location = undefined));
+      const dock = createDockedTerminals(3);
+      const trash = [createMockTerminal("trash-1", "trash")];
+
+      setTerminals([...grid, ...undefinedLoc, ...dock, ...trash]);
+      expect(usePanelStore.getState().getGridCount()).toBe(6);
+    });
+  });
+
+  describe("hasGridFocus with undefined location", () => {
+    it("should preserve focus when focused terminal has undefined location (bulkMoveToGrid)", () => {
+      const focusedTerminal = createMockTerminal("focused-1", "grid");
+      focusedTerminal.location = undefined;
+      const dockedTerminals = createDockedTerminals(2);
+
+      setTerminals([focusedTerminal, ...dockedTerminals]);
+      usePanelStore.setState({ focusedId: "focused-1" });
+
+      usePanelStore.getState().bulkMoveToGrid();
+
+      expect(usePanelStore.getState().focusedId).toBe("focused-1");
+    });
+
+    it("should not treat null focused terminal as having grid focus (bulkMoveToGrid)", () => {
+      const dockedTerminals = createDockedTerminals(2);
+
+      setTerminals(dockedTerminals);
+      usePanelStore.setState({ focusedId: null });
+
+      usePanelStore.getState().bulkMoveToGrid();
+
+      // Focus should not be forcibly set to null — moved terminals get focus via moveTerminalToGrid
+      const { focusedId } = usePanelStore.getState();
+      expect(focusedId).not.toBe(null);
+    });
+
+    it("should preserve focus when focused terminal has undefined location (bulkMoveToGridByWorktree)", () => {
+      const focusedTerminal = createMockTerminal("focused-1", "grid");
+      focusedTerminal.location = undefined;
+      focusedTerminal.worktreeId = "wt-1";
+      const dockedTerminal = createMockTerminal("dock-1", "dock");
+      dockedTerminal.worktreeId = "wt-1";
+
+      setTerminals([focusedTerminal, dockedTerminal]);
+      usePanelStore.setState({ focusedId: "focused-1" });
+
+      usePanelStore.getState().bulkMoveToGridByWorktree("wt-1");
+
+      expect(usePanelStore.getState().focusedId).toBe("focused-1");
     });
   });
 });

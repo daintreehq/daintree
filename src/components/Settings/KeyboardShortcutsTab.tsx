@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { isMac } from "@/lib/platform";
 import { Search, X, RotateCcw, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -65,10 +66,10 @@ function KeyRecorder({ onCapture, onCancel, excludeActionId }: KeyRecorderProps)
       e.stopPropagation();
 
       const parts: string[] = [];
-      const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+      const mac = isMac();
 
-      if (isMac && e.metaKey) parts.push("Cmd");
-      if (!isMac && e.ctrlKey) parts.push("Cmd");
+      if (mac && e.metaKey) parts.push("Cmd");
+      if (!mac && e.ctrlKey) parts.push("Cmd");
       if (e.shiftKey) parts.push("Shift");
       if (e.altKey) parts.push("Alt");
 
@@ -415,7 +416,7 @@ export function KeyboardShortcutsTab() {
         <div
           className={cn(
             "flex items-center gap-1.5 px-2 py-1.5 flex-1 min-w-0 rounded-[var(--radius-md)]",
-            "bg-canopy-bg border border-canopy-border",
+            "bg-canopy-bg border border-border-strong",
             "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
           )}
         >

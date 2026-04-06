@@ -1,4 +1,20 @@
-import type { Project } from "../project.js";
+import type { Project, TerminalSnapshot } from "../project.js";
+import type { TabGroup } from "../panel.js";
+import type { HydrateResult } from "./app.js";
+
+/**
+ * Outgoing state passed alongside project switch/reopen IPC calls.
+ * The main process applies this to the outgoing project's persisted state
+ * before `saveOutgoingProjectWorktreeState` runs, eliminating the race
+ * between the renderer's saves and the switch's read-modify-write.
+ */
+export interface ProjectSwitchOutgoingState {
+  terminals?: TerminalSnapshot[];
+  terminalSizes?: Record<string, { cols: number; rows: number }>;
+  draftInputs?: Record<string, string>;
+  tabGroups?: TabGroup[];
+  activeWorktreeId?: string;
+}
 
 /** Payload for project:on-switch event with cancellation token */
 export interface ProjectSwitchPayload {
@@ -8,6 +24,8 @@ export interface ProjectSwitchPayload {
   switchId: string;
   /** If the workspace host failed to load worktrees (e.g. non-git directory) */
   worktreeLoadError?: string;
+  /** Pre-built hydration data to skip the redundant APP_HYDRATE IPC round-trip */
+  hydrateResult?: HydrateResult;
 }
 
 /** Result from project:close operation */
@@ -44,3 +62,13 @@ export interface BulkProjectStatsEntry extends ProjectStats {
 
 /** Bulk project stats response keyed by project ID */
 export type BulkProjectStats = Record<string, BulkProjectStatsEntry>;
+
+/** Minimal per-project status entry for push-based updates */
+export interface ProjectStatusEntry {
+  activeAgentCount: number;
+  waitingAgentCount: number;
+  processCount: number;
+}
+
+/** Project status map pushed from main process, keyed by project ID */
+export type ProjectStatusMap = Record<string, ProjectStatusEntry>;

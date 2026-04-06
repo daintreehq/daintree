@@ -1,4 +1,5 @@
 import { appClient, terminalClient, worktreeClient, projectClient, systemClient } from "@/clients";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { suppressMruRecording } from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
@@ -6,24 +7,29 @@ import { notify } from "@/lib/notify";
 import type {
   TerminalType,
   AgentState,
-  TerminalKind,
+  PanelKind,
   TerminalReconnectError,
   TabGroup,
 } from "@/types";
 import { keybindingService } from "@/services/KeybindingService";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { isTerminalWarmInProjectSwitchCache } from "@/services/projectSwitchRendererCache";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
-import { markRendererPerformance, withRendererSpan } from "@/utils/performance";
+import {
+  markRendererPerformance,
+  withRendererSpan,
+  isRendererPerfCaptureEnabled,
+  RENDERER_T0,
+} from "@/utils/performance";
 import { isCanopyEnvEnabled } from "@/utils/env";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import {
   type TerminalRestoreTask,
   splitSnapshotRestoreTasks,
-  scheduleDeferredSnapshotRestore,
+  scheduleBackgroundFetchAndRestore,
+  registerLazyScrollRestore,
   runInBatches,
   RESTORE_SPAWN_BATCH_SIZE,
   RESTORE_SPAWN_BATCH_DELAY_MS,
@@ -32,13 +38,13 @@ import { normalizeAndApplyScrollback } from "./scrollbackConfig";
 import { reconnectWithTimeout } from "./reconnectManager";
 import {
   inferKind,
+  resolveAgentId,
   buildArgsForBackendTerminal,
   buildArgsForReconnectedFallback,
   buildArgsForRespawn,
   buildArgsForNonPtyRecreation,
   buildArgsForOrphanedTerminal,
 } from "./statePatcher";
-const RESTORE_CONCURRENCY = 8;
 const CLIPBOARD_DIR_NAME = "canopy-clipboard";
 const VERBOSE_HYDRATION_LOGGING = isCanopyEnvEnabled("CANOPY_VERBOSE");
 
@@ -63,78 +69,46 @@ async function ensureHydrationBootstrap(): Promise<void> {
   await hydrationBootstrapPromise;
 }
 
-async function restoreTerminalSnapshots(
+function scheduleScrollbackRestore(
   tasks: TerminalRestoreTask[],
   isCurrent: () => boolean,
-  switchId?: string
-): Promise<void> {
-  if (tasks.length === 0) {
-    return;
-  }
+  mode: "background" | "lazy"
+): void {
+  for (const task of tasks) {
+    const managed = terminalInstanceService.get(task.terminalId);
+    if (!managed || managed.scrollbackRestoreState !== "none") continue;
 
-  let serializedStateBatch: Record<string, string | null> | null = null;
-  try {
-    serializedStateBatch = await withRendererSpan(
-      PERF_MARKS.HYDRATE_GET_SERIALIZED_STATES,
-      () => terminalClient.getSerializedStates(tasks.map((task) => task.terminalId)),
-      { switchId: switchId ?? null }
-    );
-  } catch (batchError) {
-    logWarn("Batch serialized state fetch failed; falling back to per-terminal requests", {
-      error: batchError,
-    });
-  }
+    managed.scrollbackRestoreState = "pending";
 
-  let nextIndex = 0;
-  const workerCount = Math.min(RESTORE_CONCURRENCY, tasks.length);
+    const doRestore = async () => {
+      if (!isCurrent()) return;
+      const current = terminalInstanceService.get(task.terminalId);
+      if (!current || current !== managed) return;
+      if (managed.scrollbackRestoreState !== "pending") return;
 
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (true) {
-        if (!isCurrent()) return;
-
-        const currentIndex = nextIndex;
-        if (currentIndex >= tasks.length) {
-          return;
-        }
-        nextIndex += 1;
-
-        const task = tasks[currentIndex];
-        try {
-          if (serializedStateBatch) {
-            const hasSerializedState = Object.prototype.hasOwnProperty.call(
-              serializedStateBatch,
-              task.terminalId
-            );
-
-            if (hasSerializedState) {
-              const serializedState = serializedStateBatch[task.terminalId];
-              const restored = await terminalInstanceService.restoreFetchedState(
-                task.terminalId,
-                serializedState
-              );
-              if (!restored && serializedState === null) {
-                await terminalInstanceService.fetchAndRestore(task.terminalId);
-              }
-            } else {
-              await terminalInstanceService.fetchAndRestore(task.terminalId);
-            }
-          } else {
-            await terminalInstanceService.fetchAndRestore(task.terminalId);
-          }
-        } catch (snapshotError) {
-          logWarn(`Serialized state restore failed for ${task.label}`, {
-            error: snapshotError,
-          });
-        }
+      managed.scrollbackRestoreState = "in-progress";
+      try {
+        await terminalInstanceService.fetchAndRestore(task.terminalId);
+        managed.scrollbackRestoreState = "done";
+      } catch (error) {
+        managed.scrollbackRestoreState = "none";
+        logWarn(`Scrollback restore failed for ${task.label}`, { error });
       }
-    })
-  );
+    };
+
+    if (mode === "lazy" && managed.hostElement) {
+      const disposable = registerLazyScrollRestore(managed, doRestore);
+      managed.scrollbackRestoreDisposable = disposable;
+      managed.listeners.push(() => disposable.dispose());
+    } else {
+      scheduleBackgroundFetchAndRestore(doRestore);
+    }
+  }
 }
 
 export interface HydrationOptions {
-  addTerminal: (options: {
-    kind?: TerminalKind;
+  addPanel: (options: {
+    kind?: PanelKind;
     type?: TerminalType;
     agentId?: string;
     title?: string;
@@ -166,6 +140,7 @@ export interface HydrationOptions {
     agentSessionId?: string;
     agentLaunchFlags?: string[];
     agentModelId?: string;
+    extensionState?: Record<string, unknown>;
     restore?: boolean;
     bypassLimits?: boolean;
   }) => Promise<string>;
@@ -186,9 +161,10 @@ export interface HydrationOptions {
 export async function hydrateAppState(
   options: HydrationOptions,
   _switchId?: string,
-  isCurrent?: () => boolean
+  isCurrent?: () => boolean,
+  prefetchedHydrateResult?: import("@shared/types/ipc/app").HydrateResult
 ): Promise<void> {
-  const { addTerminal, setActiveWorktree, loadRecipes, openDiagnosticsDock } = options;
+  const { addPanel, setActiveWorktree, loadRecipes, openDiagnosticsDock } = options;
   const hydrationStartedAt = Date.now();
   let panelRestoreStartedAt: number | null = null;
   let panelRestoreCount = 0;
@@ -212,11 +188,15 @@ export async function hydrateAppState(
     });
     if (!checkCurrent()) return;
 
-    // Batch fetch initial state
+    // Use pre-fetched hydration data from the project switch payload when available,
+    // eliminating a ~50-150ms IPC round-trip. Fall back to the IPC pull model for
+    // initial app load or when the switch payload didn't include hydration data.
     const [hydrateResult, tmpDir] = await Promise.all([
-      withRendererSpan(PERF_MARKS.HYDRATE_APP_CLIENT, () => appClient.hydrate(), {
-        switchId: _switchId ?? null,
-      }),
+      prefetchedHydrateResult
+        ? Promise.resolve(prefetchedHydrateResult)
+        : withRendererSpan(PERF_MARKS.HYDRATE_APP_CLIENT, () => appClient.hydrate(), {
+            switchId: _switchId ?? null,
+          }),
       systemClient.getTmpDir().catch(() => ""),
     ]);
     const {
@@ -301,11 +281,36 @@ export async function hydrateAppState(
           })
       : Promise.resolve(emptyTerminalSizes);
 
+    const emptyDraftInputs: Record<string, string> = {};
+    const draftInputsPromise: Promise<Record<string, string>> = currentProjectId
+      ? projectClient
+          .getDraftInputs(currentProjectId)
+          .then((drafts) => drafts ?? emptyDraftInputs)
+          .catch((error) => {
+            logWarn("Failed to prefetch draft inputs", { error });
+            return emptyDraftInputs;
+          })
+      : Promise.resolve(emptyDraftInputs);
+
     const recipeLoadPromise = currentProjectId
       ? loadRecipes(currentProjectId).catch((error) => {
           logWarn("Failed to load recipes", { error });
         })
       : null;
+
+    // Restore hybrid input bar draft inputs BEFORE terminal panels are created,
+    // so HybridInputBar components pick up drafts from the store at mount time.
+    if (currentProjectId) {
+      try {
+        const draftInputs = await draftInputsPromise;
+        if (!checkCurrent()) return;
+        if (Object.keys(draftInputs).length > 0) {
+          useTerminalInputStore.getState().restoreProjectDraftInputs(currentProjectId, draftInputs);
+        }
+      } catch (error) {
+        logWarn("Failed to restore draft inputs", { error });
+      }
+    }
 
     if (currentProjectId) {
       try {
@@ -339,6 +344,8 @@ export async function hydrateAppState(
         const terminalSizes = await terminalSizesPromise;
         if (!checkCurrent()) return;
 
+        const activeWorktreeId = appState.activeWorktreeId ?? null;
+
         // Restore all panels in saved order (mix of PTY reconnects and non-PTY recreations)
         if (appState.terminals && appState.terminals.length > 0) {
           panelRestoreStartedAt = Date.now();
@@ -351,7 +358,6 @@ export async function hydrateAppState(
           // Collect panel restore tasks with priority for staggered spawning.
           // Priority 0 = active worktree panels (restore first for instant interactivity)
           // Priority 1 = all other panels (staggered in batches)
-          const activeWorktreeId = appState.activeWorktreeId ?? null;
 
           interface PanelRestoreTaskEntry {
             priority: number;
@@ -390,6 +396,17 @@ export async function hydrateAppState(
               isPty: taskIsPty,
               execute: async () => {
                 if (backendTerminal) {
+                  // Skip dead agent backend terminals — they create phantom idle panels
+                  const isDeadAgentBackend =
+                    backendTerminal.hasPty === false &&
+                    (backendTerminal.kind === "agent" ||
+                      resolveAgentId(backendTerminal.agentId, backendTerminal.type) !== undefined);
+                  if (isDeadAgentBackend) {
+                    logHydrationInfo(`Skipping dead agent backend terminal: ${backendTerminal.id}`);
+                    backendTerminalMap.delete(saved.id);
+                    return;
+                  }
+
                   logHydrationInfo(`Reconnecting to terminal: ${saved.id}`);
 
                   const args = buildArgsForBackendTerminal(
@@ -397,6 +414,10 @@ export async function hydrateAppState(
                     saved,
                     projectRoot || ""
                   );
+                  // Assign to active worktree if terminal has no worktreeId
+                  if (!args.worktreeId && activeWorktreeId) {
+                    args.worktreeId = activeWorktreeId;
+                  }
                   const location = args.location as "grid" | "dock";
 
                   logHydrationInfo(`[HYDRATION] Adding terminal from backend:`, {
@@ -408,7 +429,7 @@ export async function hydrateAppState(
                     title: backendTerminal.title,
                   });
 
-                  const restoredTerminalId = await addTerminal(args);
+                  const restoredTerminalId = await addPanel(args);
                   restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
                   if (backendTerminal.activityTier) {
@@ -435,20 +456,12 @@ export async function hydrateAppState(
                     }
                   }
 
-                  const shouldSkipSnapshotRestore =
-                    Boolean(_switchId) &&
-                    Boolean(currentProjectId) &&
-                    isTerminalWarmInProjectSwitchCache(currentProjectId, backendTerminal.id) &&
-                    Boolean(terminalInstanceService.get(backendTerminal.id));
-
-                  if (!shouldSkipSnapshotRestore) {
-                    restoreTasks.push({
-                      terminalId: restoredTerminalId,
-                      label: saved.id,
-                      worktreeId: backendTerminal.worktreeId,
-                      location,
-                    });
-                  }
+                  restoreTasks.push({
+                    terminalId: restoredTerminalId,
+                    label: saved.id,
+                    worktreeId: backendTerminal.worktreeId,
+                    location,
+                  });
 
                   backendTerminalMap.delete(saved.id);
                 } else {
@@ -473,7 +486,7 @@ export async function hydrateAppState(
                         saved,
                         projectRoot || ""
                       );
-                      const restoredTerminalId = await addTerminal(reconnectArgs);
+                      const restoredTerminalId = await addPanel(reconnectArgs);
                       restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
                       if (reconnectedTerminal.activityTier) {
@@ -500,21 +513,30 @@ export async function hydrateAppState(
                         }
                       }
 
-                      const shouldSkipSnapshotRestore =
-                        Boolean(_switchId) &&
-                        Boolean(currentProjectId) &&
-                        isTerminalWarmInProjectSwitchCache(currentProjectId, restoredTerminalId) &&
-                        Boolean(terminalInstanceService.get(restoredTerminalId));
-
-                      if (!shouldSkipSnapshotRestore) {
-                        restoreTasks.push({
-                          terminalId: restoredTerminalId,
-                          label: saved.id,
-                          worktreeId: reconnectedTerminal.worktreeId ?? saved.worktreeId,
-                          location,
-                        });
-                      }
+                      restoreTasks.push({
+                        terminalId: restoredTerminalId,
+                        label: saved.id,
+                        worktreeId: reconnectedTerminal.worktreeId ?? saved.worktreeId,
+                        location,
+                      });
                     } else {
+                      // During a live project switch (_switchId defined), don't respawn agent
+                      // panels that no longer exist in the backend — they are phantoms.
+                      // On cold app restart (_switchId undefined), not_found simply means the
+                      // PTY process was killed on quit and needs to be respawned.
+                      const isAgentKind =
+                        kind === "agent" || resolveAgentId(saved.agentId, saved.type) !== undefined;
+                      if (
+                        isAgentKind &&
+                        reconnectOutcome.status === "not_found" &&
+                        _switchId !== undefined
+                      ) {
+                        logHydrationInfo(
+                          `Skipping phantom agent during project switch: ${saved.id}`
+                        );
+                        return;
+                      }
+
                       const respawnArgs = buildArgsForRespawn(
                         saved,
                         kind,
@@ -523,6 +545,11 @@ export async function hydrateAppState(
                         reconnectTimedOut,
                         clipboardDirectory
                       );
+
+                      // Assign to active worktree if the saved terminal has no worktreeId
+                      if (!respawnArgs.worktreeId && activeWorktreeId) {
+                        respawnArgs.worktreeId = activeWorktreeId;
+                      }
 
                       logHydrationInfo(
                         `Respawning PTY panel: ${saved.id} (${respawnArgs.kind === "agent" ? "agent" : "terminal"})`
@@ -538,7 +565,7 @@ export async function hydrateAppState(
                         title: saved.title,
                       });
 
-                      const restoredTerminalId = await addTerminal(respawnArgs);
+                      const restoredTerminalId = await addPanel(respawnArgs);
                       restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
                       if (terminalSizes && typeof terminalSizes === "object") {
@@ -561,7 +588,7 @@ export async function hydrateAppState(
                     }
                   } else {
                     logHydrationInfo(`Recreating ${kind} panel: ${saved.id}`);
-                    const nonPtyId = await addTerminal(
+                    const nonPtyId = await addPanel(
                       buildArgsForNonPtyRecreation(saved, kind, projectRoot || "")
                     );
                     restoredIdsByIndex.set(capturedIndex, nonPtyId);
@@ -640,14 +667,13 @@ export async function hydrateAppState(
 
         // Restore any orphaned backend terminals not in saved state (append at end).
         // When no panels were saved (brand-new project), skip the startup "default"
-        // terminal — its projectId may have been backfilled by TerminalRegistry's
-        // lastKnownProjectId fallback, incorrectly attributing it to the new project.
+        // terminal — it belongs to the previous project's bootstrap sequence, not this one.
         // In safe mode, skip orphan reconnection entirely to ensure a clean slate.
         const hasSavedPanels = appState.terminals && appState.terminals.length > 0;
         const orphanedTerminals = hydrateResult.safeMode
           ? []
           : Array.from(backendTerminalMap.values()).filter(
-              (t) => !(t.id === "default" && !hasSavedPanels)
+              (t) => !(t.id.startsWith("default-") && !hasSavedPanels) && t.hasPty !== false
             );
         if (orphanedTerminals.length > 0) {
           logHydrationInfo(
@@ -663,7 +689,12 @@ export async function hydrateAppState(
                 logHydrationInfo(`Reconnecting to orphaned terminal: ${terminal.id}`);
 
                 const orphanArgs = buildArgsForOrphanedTerminal(terminal, projectRoot || "");
-                const restoredTerminalId = await addTerminal(orphanArgs);
+                // Assign orphaned terminals to the active worktree if they have none,
+                // so they appear in the grid filter (which matches on worktreeId).
+                if (!orphanArgs.worktreeId && activeWorktreeId) {
+                  orphanArgs.worktreeId = activeWorktreeId;
+                }
+                const restoredTerminalId = await addPanel(orphanArgs);
 
                 if (terminal.activityTier) {
                   terminalInstanceService.initializeBackendTier(
@@ -689,20 +720,12 @@ export async function hydrateAppState(
                   }
                 }
 
-                const shouldSkipSnapshotRestore =
-                  Boolean(_switchId) &&
-                  Boolean(currentProjectId) &&
-                  isTerminalWarmInProjectSwitchCache(currentProjectId, terminal.id) &&
-                  Boolean(terminalInstanceService.get(terminal.id));
-
-                if (!shouldSkipSnapshotRestore) {
-                  restoreTasks.push({
-                    terminalId: restoredTerminalId,
-                    label: terminal.id,
-                    worktreeId: terminal.worktreeId,
-                    location: "grid",
-                  });
-                }
+                restoreTasks.push({
+                  terminalId: restoredTerminalId,
+                  label: terminal.id,
+                  worktreeId: terminal.worktreeId,
+                  location: "grid",
+                });
               } catch (error) {
                 logWarn(`Failed to reconnect to orphaned terminal ${terminal.id}`, { error });
               }
@@ -716,29 +739,25 @@ export async function hydrateAppState(
           shouldDeferSnapshotRestore
         );
 
-        await withRendererSpan(
-          PERF_MARKS.HYDRATE_RESTORE_SNAPSHOTS_CRITICAL,
-          () => restoreTerminalSnapshots(criticalTasks, checkCurrent, _switchId ?? undefined),
-          { switchId: _switchId ?? null, criticalCount: criticalTasks.length }
-        );
-        if (!checkCurrent()) return;
+        // Schedule critical scrollback restores at background priority —
+        // no blocking IPC fetch on the critical path. The overlay can dismiss
+        // immediately and scrollback fills in asynchronously.
+        if (criticalTasks.length > 0) {
+          markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_SNAPSHOTS_CRITICAL, {
+            switchId: _switchId ?? null,
+            criticalCount: criticalTasks.length,
+          });
+          scheduleScrollbackRestore(criticalTasks, checkCurrent, "background");
+        }
 
+        // Deferred terminals restore lazily on first scroll interaction
         if (deferredTasks.length > 0) {
           markRendererPerformance("hydrate_restore_snapshots_deferred_scheduled", {
             deferredSnapshotCount: deferredTasks.length,
             switchId: _switchId ?? null,
           });
 
-          scheduleDeferredSnapshotRestore(async () => {
-            if (!checkCurrent()) return;
-            await restoreTerminalSnapshots(deferredTasks, checkCurrent, _switchId ?? undefined);
-            if (!checkCurrent()) return;
-
-            markRendererPerformance("hydrate_restore_snapshots_deferred_complete", {
-              deferredSnapshotCount: deferredTasks.length,
-              switchId: _switchId ?? null,
-            });
-          });
+          scheduleScrollbackRestore(deferredTasks, checkCurrent, "lazy");
         }
 
         if (panelRestoreStartedAt !== null) {
@@ -797,7 +816,7 @@ export async function hydrateAppState(
     // Cleanup orphaned terminals after terminal hydration completes
     // This must run after terminals are restored to ensure we're checking the full terminal list
     try {
-      const { cleanupOrphanedTerminals } = await import("@/store/worktreeDataStore");
+      const { cleanupOrphanedTerminals } = await import("@/store/createWorktreeStore");
       cleanupOrphanedTerminals();
     } catch (error) {
       logWarn("Failed to cleanup orphaned terminals", { error });
@@ -836,13 +855,9 @@ export async function hydrateAppState(
     // If no worktrees exist, we don't set any active worktree (handled gracefully)
 
     // Recipe load starts earlier to overlap with hydration work.
-    // During project switch we don't block switch completion on recipes.
+    // Recipes are non-critical for first paint; fire-and-forget on both initial load and project switch.
     if (recipeLoadPromise) {
-      if (_switchId) {
-        void recipeLoadPromise;
-      } else {
-        await recipeLoadPromise;
-      }
+      void recipeLoadPromise;
     }
 
     if (appState.developerMode?.enabled && appState.developerMode.autoOpenDiagnostics) {
@@ -884,5 +899,15 @@ export async function hydrateAppState(
       panelCount: panelRestoreCount,
       tabGroupCount: tabGroupRestoreCount,
     });
+
+    if (isRendererPerfCaptureEnabled() && window.electron?.perf) {
+      const marks = window.__CANOPY_PERF_MARKS__ ?? [];
+      window.electron.perf.flushMarks({
+        marks,
+        rendererTimeOrigin: performance.timeOrigin,
+        rendererT0: RENDERER_T0,
+      });
+      window.__CANOPY_PERF_MARKS__ = [];
+    }
   }
 }

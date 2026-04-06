@@ -1,6 +1,6 @@
-import { SquareTerminal, Globe, Leaf, Monitor } from "lucide-react";
+import { SquareTerminal, Globe, Monitor, StickyNote } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { TerminalType, TerminalKind } from "@/types";
+import type { TerminalType, PanelKind } from "@/types";
 import type { ComponentType } from "react";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import {
@@ -51,7 +51,7 @@ const PROCESS_ICON_MAP: Record<string, ComponentType<{ className?: string; size?
 
 export interface TerminalIconProps {
   type?: TerminalType;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   agentId?: string;
   detectedProcessId?: string;
   className?: string;
@@ -78,7 +78,9 @@ export function TerminalIcon({
 
   // Notes panes get a sticky note icon
   if (kind === "notes") {
-    return <Leaf {...finalProps} className={cn(finalProps.className, "text-status-warning")} />;
+    return (
+      <StickyNote {...finalProps} className={cn(finalProps.className, "text-status-warning")} />
+    );
   }
 
   // Dev preview panes get a monitor icon

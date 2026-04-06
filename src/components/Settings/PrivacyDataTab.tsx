@@ -167,7 +167,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                 type="button"
                 onClick={() => void handleTelemetryChange(option.level)}
                 className={cn(
-                  "w-full text-left p-4 rounded-[var(--radius-lg)] border transition-all",
+                  "w-full text-left p-4 rounded-[var(--radius-lg)] border transition-colors",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
                   telemetryLevel === option.level
                     ? "border-canopy-accent/40 bg-canopy-accent/5"
@@ -189,13 +189,15 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   </div>
                   <div>
                     <div className="text-sm font-medium text-canopy-text">{option.title}</div>
-                    <div className="text-xs text-canopy-text/50 mt-0.5">{option.description}</div>
+                    <div className="text-xs text-canopy-text/50 mt-0.5 select-text">
+                      {option.description}
+                    </div>
                   </div>
                 </div>
               </button>
             ))}
           </div>
-          <p className="text-xs text-canopy-text/40 mt-2">
+          <p className="text-xs text-canopy-text/40 mt-2 select-text">
             Changes to telemetry level take effect on next app restart.
           </p>
         </SettingsSection>
@@ -236,7 +238,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   type="button"
                   onClick={() => void handleRetentionChange(option.value)}
                   className={cn(
-                    "px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-all",
+                    "px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-colors",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
                     logRetentionDays === option.value
                       ? "bg-canopy-accent/10 text-canopy-accent border border-canopy-accent/30"
@@ -247,7 +249,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                 </button>
               ))}
             </div>
-            <p className="text-xs text-canopy-text/40 mt-2">
+            <p className="text-xs text-canopy-text/40 mt-2 select-text">
               Log pruning happens at startup. Changing this setting takes effect on next launch.
             </p>
           </SettingsSection>

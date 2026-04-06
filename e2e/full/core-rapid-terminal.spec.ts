@@ -58,7 +58,12 @@ test.describe.serial("Core: Rapid Terminal Create/Destroy Cycles", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "rapid-terminal" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Rapid Terminal Test");
+    ctx.window = await openAndOnboardProject(
+      ctx.app,
+      ctx.window,
+      fixtureDir,
+      "Rapid Terminal Test"
+    );
   });
 
   test.afterAll(async () => {

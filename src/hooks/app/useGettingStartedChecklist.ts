@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isElectronAvailable } from "../useElectron";
 import { useProjectStore } from "@/store/projectStore";
-import { useTerminalStore } from "@/store/terminalStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { usePanelStore } from "@/store/panelStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { notify } from "@/lib/notify";
 import type { ChecklistState, ChecklistItemId } from "@shared/types/ipc/maps";
 
@@ -14,9 +14,8 @@ export interface GettingStartedChecklistState {
   dismiss: () => void;
   toggleCollapse: () => void;
   notifyOnboardingComplete: () => void;
+  markItem: (item: ChecklistItemId) => void;
 }
-
-let observerInitialized = false;
 
 function reconcileCurrentState(
   markItem: (item: ChecklistItemId) => void,
@@ -30,46 +29,15 @@ function reconcileCurrentState(
   }
   if (
     !cl.items.launchedAgent &&
-    useTerminalStore.getState().terminals.some((t) => t.kind === "agent")
+    usePanelStore
+      .getState()
+      .panelIds.some((id) => usePanelStore.getState().panelsById[id]?.kind === "agent")
   ) {
     markItem("launchedAgent");
   }
-  if (!cl.items.createdWorktree && useWorktreeDataStore.getState().worktrees.size > 1) {
+  if (!cl.items.createdWorktree && getCurrentViewStore().getState().worktrees.size > 1) {
     markItem("createdWorktree");
   }
-}
-
-function initChecklistObserver(
-  markItem: (item: ChecklistItemId) => void,
-  getChecklist: () => ChecklistState | null
-) {
-  if (observerInitialized) return;
-  observerInitialized = true;
-
-  useProjectStore.subscribe((state) => {
-    const cl = getChecklist();
-    if (!cl || cl.dismissed || cl.items.openedProject) return;
-    if (state.currentProject !== null) {
-      markItem("openedProject");
-    }
-  });
-
-  useTerminalStore.subscribe((state) => {
-    const cl = getChecklist();
-    if (!cl || cl.dismissed || cl.items.launchedAgent) return;
-    const hasAgent = state.terminals.some((t) => t.kind === "agent");
-    if (hasAgent) {
-      markItem("launchedAgent");
-    }
-  });
-
-  useWorktreeDataStore.subscribe((state) => {
-    const cl = getChecklist();
-    if (!cl || cl.dismissed || cl.items.createdWorktree) return;
-    if (state.worktrees.size > 1) {
-      markItem("createdWorktree");
-    }
-  });
 }
 
 export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStartedChecklistState {
@@ -143,10 +111,39 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
   // Set up Zustand subscriptions for auto-completion + reconcile current state
   useEffect(() => {
     if (!isElectronAvailable() || !isStateLoaded) return;
-    initChecklistObserver(markItem, () => checklistRef.current);
-    // Reconcile after hydration settles (checklist may still be null here,
-    // but the subscriptions will catch changes going forward)
-    reconcileCurrentState(markItem, () => checklistRef.current);
+
+    const getChecklist = () => checklistRef.current;
+    const viewStore = getCurrentViewStore();
+
+    const unsubs = [
+      useProjectStore.subscribe((state) => {
+        const cl = getChecklist();
+        if (!cl || cl.dismissed || cl.items.openedProject) return;
+        if (state.currentProject !== null) {
+          markItem("openedProject");
+        }
+      }),
+      usePanelStore.subscribe((state) => {
+        const cl = getChecklist();
+        if (!cl || cl.dismissed || cl.items.launchedAgent) return;
+        if (state.panelIds.some((id) => state.panelsById[id]?.kind === "agent")) {
+          markItem("launchedAgent");
+        }
+      }),
+      viewStore.subscribe((state) => {
+        const cl = getChecklist();
+        if (!cl || cl.dismissed || cl.items.createdWorktree) return;
+        if (state.worktrees.size > 1) {
+          markItem("createdWorktree");
+        }
+      }),
+    ];
+
+    reconcileCurrentState(markItem, getChecklist);
+
+    return () => {
+      for (const unsub of unsubs) unsub();
+    };
   }, [isStateLoaded, markItem]);
 
   // Listen for Help > Getting Started menu action
@@ -200,5 +197,6 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     dismiss,
     toggleCollapse,
     notifyOnboardingComplete,
+    markItem,
   };
 }

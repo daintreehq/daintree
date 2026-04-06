@@ -478,7 +478,7 @@ export function AutomationTab({
               type="text"
               value={terminalShell}
               onChange={(e) => onTerminalShellChange(e.target.value)}
-              className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-text-muted"
+              className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition placeholder:text-text-muted"
               placeholder="/bin/zsh"
               spellCheck={false}
               autoComplete="off"
@@ -498,7 +498,7 @@ export function AutomationTab({
               type="text"
               value={terminalShellArgs}
               onChange={(e) => onTerminalShellArgsChange(e.target.value)}
-              className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-text-muted"
+              className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition placeholder:text-text-muted"
               placeholder="-l"
               spellCheck={false}
               autoComplete="off"
@@ -517,7 +517,7 @@ export function AutomationTab({
               type="text"
               value={terminalDefaultCwd}
               onChange={(e) => onTerminalDefaultCwdChange(e.target.value)}
-              className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-text-muted"
+              className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition placeholder:text-text-muted"
               placeholder="/path/to/working/directory"
               spellCheck={false}
               autoComplete="off"
@@ -541,7 +541,7 @@ export function AutomationTab({
               max={SCROLLBACK_MAX}
               value={terminalScrollback}
               onChange={(e) => onTerminalScrollbackChange(e.target.value)}
-              className="w-28 bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-text-muted"
+              className="w-28 bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition placeholder:text-text-muted"
               placeholder="1000"
             />
             {terminalScrollback.trim() &&

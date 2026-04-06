@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { IFuseOptions } from "fuse.js";
 import { getPanelKindIds, getPanelKindConfig } from "@shared/config/panelKindRegistry";
-import { hasPanelComponent } from "@/registry/panelComponentRegistry";
+import { getPanelKindDefinition } from "@/registry";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { keybindingService } from "@/services/KeybindingService";
-import { actionService } from "@/services/ActionService";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import type { KeyAction } from "@shared/types/keymap";
+import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 
 export interface PanelKindOption {
   id: string;
@@ -15,7 +18,10 @@ export interface PanelKindOption {
   iconId: string;
   color: string;
   description?: string;
-  category: "agent" | "tool";
+  searchAliases?: string[];
+  category: "agent" | "tool" | "resume";
+  installed?: boolean;
+  resumeSession?: AgentSessionRecord;
 }
 
 export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> & {
@@ -25,18 +31,31 @@ export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> 
 
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
+const STALE_THRESHOLD_MS = 5 * 60 * 1000;
+
 const AGENT_LAUNCH_ACTIONS: Record<string, KeyAction> = Object.fromEntries(
   BUILT_IN_AGENT_IDS.map((id) => [id, `agent.${id}` as KeyAction])
 );
 
-function filterPanelKinds(items: PanelKindOption[], query: string): PanelKindOption[] {
-  if (!query.trim()) return items;
-  const lowerQuery = query.toLowerCase();
-  return items.filter(
-    (opt) =>
-      opt.name.toLowerCase().includes(lowerQuery) ||
-      (opt.description && opt.description.toLowerCase().includes(lowerQuery))
-  );
+const PANEL_FUSE_OPTIONS: IFuseOptions<PanelKindOption> = {
+  keys: [
+    { name: "name", weight: 2 },
+    { name: "searchAliases", weight: 1.5 },
+    { name: "description", weight: 1 },
+  ],
+  threshold: 0.4,
+  includeScore: true,
+};
+
+function prettifyModelId(modelId: string): string {
+  let name = modelId;
+  const slashIdx = name.lastIndexOf("/");
+  if (slashIdx >= 0) name = name.slice(slashIdx + 1);
+  name = name
+    .replace(/^claude-/, "")
+    .replace(/-/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return name;
 }
 
 export const MORE_AGENTS_PANEL_ID = "more-agents";
@@ -44,22 +63,30 @@ export const MORE_AGENTS_PANEL_ID = "more-agents";
 export function usePanelPalette(): UsePanelPaletteReturn {
   const userRegistry = useUserAgentRegistryStore((state) => state.registry);
   const agentSettings = useAgentSettingsStore((state) => state.settings);
+  const availability = useCliAvailabilityStore((state) => state.availability);
+  const isAvailabilityInitialized = useCliAvailabilityStore((state) => state.isInitialized);
   const [keybindingVersion, setKeybindingVersion] = useState(0);
+  const [resumeSessions, setResumeSessions] = useState<AgentSessionRecord[]>([]);
 
   useEffect(() => {
     return keybindingService.subscribe(() => setKeybindingVersion((v) => v + 1));
   }, []);
 
-  const availableKinds = useMemo<PanelKindOption[]>(() => {
-    const allKindIds = getPanelKindIds();
+  useEffect(() => {
+    window.electron?.agentSessionHistory
+      ?.list()
+      .then(setResumeSessions)
+      .catch(() => {});
+  }, []);
 
-    const panelKinds = allKindIds
+  const availableKinds = useMemo<PanelKindOption[]>(() => {
+    const panelKinds = getPanelKindIds()
       .filter((kindId) => {
         if (kindId === "agent") return false;
         const config = getPanelKindConfig(kindId);
         if (!config) return false;
         if (config.showInPalette === false) return false;
-        if (!hasPanelComponent(kindId)) return false;
+        if (!getPanelKindDefinition(kindId)) return false;
         return true;
       })
       .map((kindId) => {
@@ -70,6 +97,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
           iconId: config.iconId,
           color: config.color,
           description: config.shortcut,
+          searchAliases: config.searchAliases,
           category: "tool" as const,
         };
       });
@@ -93,6 +121,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
           color: agentConfig.color,
           description: displayCombo || agentConfig.shortcut || agentConfig.tooltip,
           category: "agent" as const,
+          installed: isAvailabilityInitialized ? (availability[agentId] ?? false) : undefined,
         };
       })
       .filter((agent): agent is PanelKindOption => agent !== null);
@@ -111,32 +140,74 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       }
     }
 
+    const resumeOptions: PanelKindOption[] = resumeSessions.slice(0, 5).map((session) => {
+      const agentConfig = getEffectiveAgentConfig(session.agentId);
+      const timeAgo = formatTimeAgo(session.savedAt);
+      const modelPart = session.agentModelId ? prettifyModelId(session.agentModelId) : null;
+      const description = modelPart ? `${modelPart} · ${timeAgo}` : timeAgo;
+      return {
+        id: `resume:${session.sessionId}`,
+        name: `Resume ${agentConfig?.name ?? session.agentId}`,
+        iconId: agentConfig?.iconId ?? "terminal",
+        color: agentConfig?.color ?? "var(--color-canopy-text)",
+        description,
+        category: "resume" as const,
+        resumeSession: session,
+      };
+    });
+
     return [
       ...agentDedup.values(),
       {
         id: MORE_AGENTS_PANEL_ID,
         name: "More agents...",
-        iconId: "settings",
+        iconId: "sparkles",
         color: "var(--color-canopy-text)",
-        description: "Configure which agents appear in this menu",
+        description: "Set up additional AI agents",
         category: "agent" as const,
       },
       ...toolDedup.values(),
+      ...resumeOptions,
     ];
-  }, [userRegistry, keybindingVersion, agentSettings]);
+  }, [
+    userRegistry,
+    keybindingVersion,
+    agentSettings,
+    resumeSessions,
+    availability,
+    isAvailabilityInitialized,
+  ]);
 
-  const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<PanelKindOption>({
-    items: availableKinds,
-    filterFn: filterPanelKinds,
-    maxResults: 20,
-    paletteId: "panel",
-  });
+  const { results, selectedIndex, close, isOpen, matchesById, ...paletteRest } =
+    useSearchablePalette<PanelKindOption>({
+      items: availableKinds,
+      fuseOptions: PANEL_FUSE_OPTIONS,
+      includeMatches: true,
+      maxResults: 20,
+      paletteId: "panel",
+    });
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const { lastCheckedAt, refresh, isInitialized, initialize } =
+      useCliAvailabilityStore.getState();
+    if (!isInitialized) {
+      void initialize();
+      return;
+    }
+    const isStale = !lastCheckedAt || Date.now() - lastCheckedAt > STALE_THRESHOLD_MS;
+    if (isStale) void refresh().catch(() => {});
+  }, [isOpen]);
 
   const handleSelect = useCallback(
     (option: PanelKindOption): PanelKindOption | null => {
-      if (option.id === MORE_AGENTS_PANEL_ID) {
+      if (option.id === MORE_AGENTS_PANEL_ID || option.installed === false) {
         close();
-        void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
+        window.dispatchEvent(
+          new CustomEvent("canopy:open-agent-setup-wizard", {
+            detail: { returnToPanelPalette: true },
+          })
+        );
         return null;
       }
       close();
@@ -150,10 +221,14 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     const selected = results[selectedIndex];
     if (!selected) return null;
 
-    if (selected.id === MORE_AGENTS_PANEL_ID) {
+    if (selected.id === MORE_AGENTS_PANEL_ID || selected.installed === false) {
       close();
-      void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
-      return selected;
+      window.dispatchEvent(
+        new CustomEvent("canopy:open-agent-setup-wizard", {
+          detail: { returnToPanelPalette: true },
+        })
+      );
+      return null;
     }
     close();
     return selected;
@@ -163,6 +238,8 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     results,
     selectedIndex,
     close,
+    isOpen,
+    matchesById,
     ...paletteRest,
     handleSelect,
     confirmSelection,

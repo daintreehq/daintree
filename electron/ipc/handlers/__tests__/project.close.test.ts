@@ -17,6 +17,9 @@ vi.mock("electron", () => ({
   app: {
     getPath: vi.fn().mockReturnValue(os.tmpdir()),
   },
+  BrowserWindow: {
+    getAllWindows: () => [],
+  },
 }));
 
 const projectStoreMock = vi.hoisted(() => ({
@@ -31,6 +34,12 @@ const projectStoreMock = vi.hoisted(() => ({
 
 vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
+}));
+
+vi.mock("../../../services/ProjectSwitchService.js", () => ({
+  ProjectSwitchService: class MockProjectSwitchService {
+    onSwitch = vi.fn();
+  },
 }));
 
 import { ipcMain } from "electron";
@@ -133,6 +142,112 @@ describe("project:close handler", () => {
         killTerminals: false,
       })
     ).rejects.toThrow("Cannot close the active project");
+  });
+
+  it("backgrounds a non-active project and calls pauseProject", async () => {
+    projectStoreMock.getCurrentProjectId.mockReturnValue("project-active");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "project-bg",
+      name: "Background Project",
+      status: "active",
+      path: "/test/project-bg",
+    } as any);
+
+    const ptyClient = {
+      getProjectStats: vi.fn(async () => ({
+        terminalCount: 1,
+        processIds: [333],
+        terminalTypes: { terminal: 1 },
+      })),
+      killByProject: vi.fn(async () => 0),
+      onProjectSwitch: vi.fn(),
+      setActiveProject: vi.fn(),
+    };
+
+    const worktreeService = {
+      pauseProject: vi.fn(),
+      resumeProject: vi.fn(),
+      loadProject: vi.fn(),
+      attachDirectPort: vi.fn(),
+    };
+
+    const deps = {
+      mainWindow: {} as unknown,
+      ptyClient,
+      worktreeService,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const closeCall = calls.find((c) => c[0] === CHANNELS.PROJECT_CLOSE);
+    const handler = closeCall?.[1] as unknown as (
+      event: unknown,
+      projectId: string,
+      options?: { killTerminals?: boolean }
+    ) => Promise<{ success: boolean; terminalsKilled: number; processesKilled: number }>;
+
+    const result = await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-bg", {
+      killTerminals: false,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.terminalsKilled).toBe(0);
+    expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("project-bg", "background");
+    expect(worktreeService.pauseProject).toHaveBeenCalledWith("/test/project-bg");
+  });
+
+  it("does NOT call pauseProject when killing terminals", async () => {
+    projectStoreMock.getCurrentProjectId.mockReturnValue("project-active");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "project-active",
+      name: "Active Project",
+      status: "active",
+      path: "/test/project-active",
+    } as any);
+    projectStoreMock.clearProjectState.mockResolvedValue(undefined);
+
+    const ptyClient = {
+      getProjectStats: vi.fn(async () => ({
+        terminalCount: 1,
+        processIds: [444],
+        terminalTypes: { terminal: 1 },
+      })),
+      killByProject: vi.fn(async () => 1),
+      onProjectSwitch: vi.fn(),
+      setActiveProject: vi.fn(),
+    };
+
+    const worktreeService = {
+      pauseProject: vi.fn(),
+      resumeProject: vi.fn(),
+      loadProject: vi.fn(),
+      attachDirectPort: vi.fn(),
+    };
+
+    const deps = {
+      mainWindow: {} as unknown,
+      ptyClient,
+      worktreeService,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const closeCall = calls.find((c) => c[0] === CHANNELS.PROJECT_CLOSE);
+    const handler = closeCall?.[1] as unknown as (
+      event: unknown,
+      projectId: string,
+      options?: { killTerminals?: boolean }
+    ) => Promise<{ success: boolean }>;
+
+    await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-active", {
+      killTerminals: true,
+    });
+
+    expect(worktreeService.pauseProject).not.toHaveBeenCalled();
   });
 
   // Note: IPC sender validation is enforced globally via monkey-patch in main.ts,

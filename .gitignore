@@ -52,6 +52,12 @@ keys/
 .env.*
 !.env.example
 
+# Performance capture output
+perf-metrics.ndjson
+
+# Demo recording output
+demo-output/
+
 # Cache
 .cache/
 *.tsbuildinfo
@@ -82,4 +88,5 @@ reports/
 
 # Planning docs (private)
 planning/
+.planning/
 .tmp

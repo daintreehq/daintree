@@ -10,10 +10,6 @@ const ipcMainMock = vi.hoisted(() => ({
   removeHandler: vi.fn(),
 }));
 
-const dialogMock = vi.hoisted(() => ({
-  showMessageBox: vi.fn().mockResolvedValue({ response: 1 }),
-}));
-
 const windowMock = vi.hoisted(() => ({
   isDestroyed: vi.fn(() => false),
   webContents: {
@@ -22,14 +18,23 @@ const windowMock = vi.hoisted(() => ({
   },
 }));
 
+const broadcastMock = vi.hoisted(() => vi.fn());
+
 const autoUpdaterMock = vi.hoisted(() => ({
   autoDownload: false,
   autoInstallOnAppQuit: false,
+  allowDowngrade: false,
   on: vi.fn(),
   off: vi.fn(),
   checkForUpdatesAndNotify: vi.fn(),
   checkForUpdates: vi.fn(),
   quitAndInstall: vi.fn(),
+  setFeedURL: vi.fn(),
+}));
+
+const storeMock = vi.hoisted(() => ({
+  get: vi.fn((): string | undefined => undefined),
+  set: vi.fn(),
 }));
 
 const cleanupOnExitMock = vi.hoisted(() => vi.fn());
@@ -48,7 +53,11 @@ vi.mock("../CrashRecoveryService.js", () => ({
 vi.mock("electron", () => ({
   app: appMock,
   ipcMain: ipcMainMock,
-  dialog: dialogMock,
+  BrowserWindow: { getAllWindows: () => [windowMock] },
+}));
+
+vi.mock("../../ipc/utils.js", () => ({
+  broadcastToRenderer: broadcastMock,
 }));
 
 vi.mock("electron-updater", () => ({
@@ -56,7 +65,10 @@ vi.mock("electron-updater", () => ({
   autoUpdater: autoUpdaterMock,
 }));
 
-import type { BrowserWindow } from "electron";
+vi.mock("../../store.js", () => ({
+  store: storeMock,
+}));
+
 import { autoUpdaterService } from "../AutoUpdaterService.js";
 import { CHANNELS } from "../../ipc/channels.js";
 
@@ -83,7 +95,6 @@ describe("AutoUpdaterService", () => {
     fsMock.readFileSync.mockReturnValue("");
     autoUpdaterMock.checkForUpdatesAndNotify.mockResolvedValue(undefined);
     autoUpdaterMock.checkForUpdates.mockResolvedValue(undefined);
-    dialogMock.showMessageBox.mockResolvedValue({ response: 1 });
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -108,9 +119,7 @@ describe("AutoUpdaterService", () => {
       throw new Error("sync initial failure");
     });
 
-    expect(() =>
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow)
-    ).not.toThrow();
+    expect(() => autoUpdaterService.initialize()).not.toThrow();
   });
 
   it("does not crash on synchronous throw during periodic checks", () => {
@@ -123,13 +132,13 @@ describe("AutoUpdaterService", () => {
       throw new Error("sync periodic failure");
     });
 
-    autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+    autoUpdaterService.initialize();
 
     expect(() => vi.advanceTimersByTime(CHECK_INTERVAL_MS + 1)).not.toThrow();
   });
 
   it("detaches every registered listener on dispose", () => {
-    autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+    autoUpdaterService.initialize();
     autoUpdaterService.dispose();
 
     const expectedEvents = [
@@ -151,14 +160,10 @@ describe("AutoUpdaterService", () => {
       throw new Error("listener registration failed");
     });
 
-    expect(() =>
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow)
-    ).not.toThrow();
+    expect(() => autoUpdaterService.initialize()).not.toThrow();
 
     (autoUpdaterMock.on as Mock).mockClear();
-    expect(() =>
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow)
-    ).not.toThrow();
+    expect(() => autoUpdaterService.initialize()).not.toThrow();
     expect((autoUpdaterMock.on as Mock).mock.calls.length).toBeGreaterThan(0);
   });
 
@@ -168,7 +173,7 @@ describe("AutoUpdaterService", () => {
     let availableHandler: (info: { version: string }) => void;
 
     beforeEach(() => {
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+      autoUpdaterService.initialize();
 
       notAvailableHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
         (args) => args[0] === "update-not-available"
@@ -199,14 +204,12 @@ describe("AutoUpdaterService", () => {
       expect(() => autoUpdaterService.checkForUpdatesManually()).not.toThrow();
     });
 
-    it("shows up-to-date dialog on update-not-available for manual checks", async () => {
+    it("sends in-app toast on update-not-available for manual checks", () => {
       autoUpdaterService.checkForUpdatesManually();
       notAvailableHandler({});
 
-      await Promise.resolve();
-
-      expect(dialogMock.showMessageBox).toHaveBeenCalledWith(
-        expect.anything(),
+      expect(broadcastMock).toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
         expect.objectContaining({
           type: "info",
           title: "No Updates Available",
@@ -214,74 +217,50 @@ describe("AutoUpdaterService", () => {
       );
     });
 
-    it("does not show dialog on update-not-available for automatic checks", async () => {
-      // Do NOT call checkForUpdatesManually — simulate an automatic check
+    it("does not send toast on update-not-available for automatic checks", () => {
       notAvailableHandler({});
 
-      await Promise.resolve();
-
-      expect(dialogMock.showMessageBox).not.toHaveBeenCalled();
+      expect(broadcastMock).not.toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
+        expect.anything()
+      );
     });
 
-    it("shows error dialog with retry on error event for manual checks", async () => {
-      dialogMock.showMessageBox.mockResolvedValue({ response: 1 }); // Cancel
-
+    it("sends error toast with retry action on error event for manual checks", () => {
       autoUpdaterService.checkForUpdatesManually();
       errorHandler(new Error("network error"));
 
-      await Promise.resolve();
-
-      expect(dialogMock.showMessageBox).toHaveBeenCalledWith(
-        expect.anything(),
+      expect(broadcastMock).toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
         expect.objectContaining({
           type: "error",
           title: "Update Failed",
-          buttons: ["Retry", "Cancel"],
+          action: expect.objectContaining({
+            label: "Retry",
+            ipcChannel: CHANNELS.UPDATE_CHECK_FOR_UPDATES,
+          }),
         })
       );
-      // No renderer IPC — the native dialog is sufficient for manual errors
-      expect(windowMock.webContents.send).not.toHaveBeenCalledWith(
-        "update:error",
-        expect.anything()
-      );
     });
 
-    it("does not show error dialog for automatic check errors", async () => {
-      // Automatic check error — no manual flag
+    it("does not send error toast for automatic check errors", () => {
       errorHandler(new Error("network error"));
 
-      await Promise.resolve();
-
-      expect(dialogMock.showMessageBox).not.toHaveBeenCalled();
-      expect(windowMock.webContents.send).not.toHaveBeenCalledWith(
-        "update:error",
+      expect(broadcastMock).not.toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
         expect.anything()
       );
     });
 
-    it("retries when user clicks Retry in error dialog", async () => {
-      dialogMock.showMessageBox.mockResolvedValue({ response: 0 }); // Retry
-
+    it("resets isManualCheck flag when update-available fires", () => {
       autoUpdaterService.checkForUpdatesManually();
-      errorHandler(new Error("transient error"));
-
-      await Promise.resolve();
-
-      // checkForUpdates should have been called twice: once for the initial manual check,
-      // once more after clicking Retry
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(2);
-    });
-
-    it("resets isManualCheck flag when update-available fires", async () => {
-      autoUpdaterService.checkForUpdatesManually();
-      // Simulate update-available clearing the flag
       availableHandler({ version: "2.0.0" });
-      // Then a subsequent automatic not-available should NOT show dialog
       notAvailableHandler({});
 
-      await Promise.resolve();
-
-      expect(dialogMock.showMessageBox).not.toHaveBeenCalled();
+      expect(broadcastMock).not.toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
+        expect.anything()
+      );
     });
   });
 
@@ -290,7 +269,7 @@ describe("AutoUpdaterService", () => {
     let downloadedHandler: (info: { version: string }) => void;
 
     beforeEach(() => {
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+      autoUpdaterService.initialize();
 
       quitAndInstallHandler = (ipcMainMock.handle as Mock).mock.calls.find(
         (args) => args[0] === CHANNELS.UPDATE_QUIT_AND_INSTALL
@@ -336,7 +315,7 @@ describe("AutoUpdaterService", () => {
     it("skips initialization on Linux without APPIMAGE and without package-type marker", () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+      autoUpdaterService.initialize();
 
       expect(autoUpdaterMock.on).not.toHaveBeenCalled();
       expect(autoUpdaterMock.checkForUpdatesAndNotify).not.toHaveBeenCalled();
@@ -350,7 +329,7 @@ describe("AutoUpdaterService", () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       process.env.APPIMAGE = "/path/to/app.AppImage";
 
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+      autoUpdaterService.initialize();
 
       expect(autoUpdaterMock.on).toHaveBeenCalled();
       expect(autoUpdaterMock.checkForUpdatesAndNotify).toHaveBeenCalledTimes(1);
@@ -361,7 +340,7 @@ describe("AutoUpdaterService", () => {
       fsMock.existsSync.mockReturnValue(true);
       fsMock.readFileSync.mockReturnValue("deb");
 
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+      autoUpdaterService.initialize();
 
       expect(autoUpdaterMock.on).toHaveBeenCalled();
       expect(autoUpdaterMock.checkForUpdatesAndNotify).toHaveBeenCalledTimes(1);
@@ -372,7 +351,7 @@ describe("AutoUpdaterService", () => {
       fsMock.existsSync.mockReturnValue(true);
       fsMock.readFileSync.mockReturnValue("  \n  ");
 
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+      autoUpdaterService.initialize();
 
       expect(autoUpdaterMock.on).not.toHaveBeenCalled();
     });
@@ -384,7 +363,7 @@ describe("AutoUpdaterService", () => {
         throw new Error("EACCES");
       });
 
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+      autoUpdaterService.initialize();
 
       expect(autoUpdaterMock.on).not.toHaveBeenCalled();
     });
@@ -392,24 +371,28 @@ describe("AutoUpdaterService", () => {
     it("does not schedule periodic checks on blocked Linux init", () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+      autoUpdaterService.initialize();
       vi.advanceTimersByTime(CHECK_INTERVAL_MS * 2);
 
       expect(autoUpdaterMock.checkForUpdatesAndNotify).not.toHaveBeenCalled();
     });
 
-    it("does not register IPC handlers on blocked Linux init", () => {
+    it("registers only channel-preference IPC handlers on blocked Linux init", () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+      autoUpdaterService.initialize();
 
-      expect(ipcMainMock.handle).not.toHaveBeenCalled();
+      const registeredChannels = (ipcMainMock.handle as Mock).mock.calls.map((args) => args[0]);
+      expect(registeredChannels).toContain(CHANNELS.UPDATE_GET_CHANNEL);
+      expect(registeredChannels).toContain(CHANNELS.UPDATE_SET_CHANNEL);
+      expect(registeredChannels).not.toContain(CHANNELS.UPDATE_QUIT_AND_INSTALL);
+      expect(registeredChannels).not.toContain(CHANNELS.UPDATE_CHECK_FOR_UPDATES);
     });
 
     it("probes the correct package-type path", () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+      autoUpdaterService.initialize();
 
       expect(fsMock.existsSync).toHaveBeenCalledWith(expect.stringContaining("package-type"));
     });
@@ -418,7 +401,7 @@ describe("AutoUpdaterService", () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       process.env.APPIMAGE = "/path/to/app.AppImage";
 
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+      autoUpdaterService.initialize();
 
       expect(fsMock.existsSync).not.toHaveBeenCalled();
     });
@@ -426,10 +409,174 @@ describe("AutoUpdaterService", () => {
     it("does not affect non-Linux platforms", () => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
 
-      autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
+      autoUpdaterService.initialize();
 
       expect(autoUpdaterMock.on).toHaveBeenCalled();
       expect(autoUpdaterMock.checkForUpdatesAndNotify).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("dev mode (app.isPackaged = false)", () => {
+    beforeEach(() => {
+      appMock.isPackaged = false;
+    });
+
+    it("registers GET and SET channel handlers", () => {
+      autoUpdaterService.initialize();
+
+      const registeredChannels = (ipcMainMock.handle as Mock).mock.calls.map((args) => args[0]);
+      expect(registeredChannels).toContain(CHANNELS.UPDATE_GET_CHANNEL);
+      expect(registeredChannels).toContain(CHANNELS.UPDATE_SET_CHANNEL);
+    });
+
+    it("does not register updater-action handlers or attach event listeners", () => {
+      autoUpdaterService.initialize();
+
+      const registeredChannels = (ipcMainMock.handle as Mock).mock.calls.map((args) => args[0]);
+      expect(registeredChannels).not.toContain(CHANNELS.UPDATE_QUIT_AND_INSTALL);
+      expect(registeredChannels).not.toContain(CHANNELS.UPDATE_CHECK_FOR_UPDATES);
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+      expect(autoUpdaterMock.checkForUpdatesAndNotify).not.toHaveBeenCalled();
+    });
+
+    it("SET_CHANNEL persists to store but skips setFeedURL", () => {
+      autoUpdaterService.initialize();
+
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1];
+
+      const result = setChannelHandler(null, "nightly");
+      expect(result).toBe("nightly");
+      expect(storeMock.set).toHaveBeenCalledWith("updateChannel", "nightly");
+      expect(autoUpdaterMock.setFeedURL).not.toHaveBeenCalled();
+    });
+
+    it("does not double-register handlers on repeated initialize() calls", () => {
+      autoUpdaterService.initialize();
+      autoUpdaterService.initialize();
+
+      const getChannelCalls = (ipcMainMock.handle as Mock).mock.calls.filter(
+        (args) => args[0] === CHANNELS.UPDATE_GET_CHANNEL
+      );
+      expect(getChannelCalls).toHaveLength(1);
+    });
+  });
+
+  describe("Windows portable guard", () => {
+    it("registers only channel-preference IPC handlers on Windows portable", () => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      process.env.PORTABLE_EXECUTABLE_FILE = "C:\\portable\\canopy.exe";
+
+      autoUpdaterService.initialize();
+
+      const registeredChannels = (ipcMainMock.handle as Mock).mock.calls.map((args) => args[0]);
+      expect(registeredChannels).toContain(CHANNELS.UPDATE_GET_CHANNEL);
+      expect(registeredChannels).toContain(CHANNELS.UPDATE_SET_CHANNEL);
+      expect(registeredChannels).not.toContain(CHANNELS.UPDATE_QUIT_AND_INSTALL);
+      expect(registeredChannels).not.toContain(CHANNELS.UPDATE_CHECK_FOR_UPDATES);
+    });
+  });
+
+  describe("update channel", () => {
+    it("reads channel from store and calls setFeedURL with stable URL when no stored channel", () => {
+      storeMock.get.mockReturnValue(undefined);
+      autoUpdaterService.initialize();
+
+      expect(autoUpdaterMock.setFeedURL).toHaveBeenCalledWith({
+        provider: "generic",
+        url: "https://updates.canopyide.com/releases/",
+        channel: "latest",
+      });
+      expect(autoUpdaterMock.allowDowngrade).toBe(true);
+    });
+
+    it("uses nightly URL when stored channel is nightly", () => {
+      storeMock.get.mockReturnValue("nightly");
+      autoUpdaterService.initialize();
+
+      expect(autoUpdaterMock.setFeedURL).toHaveBeenCalledWith({
+        provider: "generic",
+        url: "https://updates.canopyide.com/nightly/",
+        channel: "nightly",
+      });
+    });
+
+    it("calls setFeedURL before initial update check", () => {
+      autoUpdaterService.initialize();
+
+      const setFeedOrder = autoUpdaterMock.setFeedURL.mock.invocationCallOrder[0];
+      const checkOrder = autoUpdaterMock.checkForUpdatesAndNotify.mock.invocationCallOrder[0];
+      expect(setFeedOrder).toBeLessThan(checkOrder);
+    });
+
+    it("IPC UPDATE_GET_CHANNEL returns persisted channel", () => {
+      autoUpdaterService.initialize();
+
+      const getChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_GET_CHANNEL
+      )![1];
+
+      storeMock.get.mockReturnValue("nightly");
+      expect(getChannelHandler()).toBe("nightly");
+    });
+
+    it("IPC UPDATE_SET_CHANNEL persists new channel and reconfigures feed", () => {
+      autoUpdaterService.initialize();
+      autoUpdaterMock.setFeedURL.mockClear();
+
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1];
+
+      const result = setChannelHandler(null, "nightly");
+      expect(result).toBe("nightly");
+      expect(storeMock.set).toHaveBeenCalledWith("updateChannel", "nightly");
+      expect(autoUpdaterMock.setFeedURL).toHaveBeenCalledWith({
+        provider: "generic",
+        url: "https://updates.canopyide.com/nightly/",
+        channel: "nightly",
+      });
+    });
+
+    it("IPC UPDATE_SET_CHANNEL coerces unknown value to stable", () => {
+      autoUpdaterService.initialize();
+
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1];
+
+      expect(setChannelHandler(null, "bogus")).toBe("stable");
+      expect(storeMock.set).toHaveBeenCalledWith("updateChannel", "stable");
+    });
+
+    it("UPDATE_SET_CHANNEL clears updateDownloaded flag", () => {
+      autoUpdaterService.initialize();
+
+      const downloadedHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-downloaded"
+      )![1];
+      downloadedHandler({ version: "2.0.0" });
+
+      const setChannelHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+      )![1];
+      setChannelHandler(null, "nightly");
+
+      const quitHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_QUIT_AND_INSTALL
+      )![1];
+      quitHandler();
+
+      expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
+    });
+
+    it("dispose removes UPDATE_GET_CHANNEL and UPDATE_SET_CHANNEL handlers", () => {
+      autoUpdaterService.initialize();
+      autoUpdaterService.dispose();
+
+      expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.UPDATE_GET_CHANNEL);
+      expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.UPDATE_SET_CHANNEL);
     });
   });
 });

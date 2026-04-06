@@ -9,19 +9,19 @@ import {
   RefreshCw,
   CheckSquare,
   Square,
-  Loader2,
   AlertTriangle,
   GitBranch,
   GitPullRequest,
   FileIcon,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { FileStageRow } from "./FileStageRow";
 import { CommitPanel } from "./CommitPanel";
 import { FileDiffModal } from "../FileDiffModal";
 import { BaseBranchDiffModal } from "./BaseBranchDiffModal";
 import { Button } from "@/components/ui/button";
 import { debounce } from "@/utils/debounce";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useShallow } from "zustand/react/shallow";
 import { githubClient } from "@/clients/githubClient";
 
@@ -77,12 +77,12 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
   const savedScrollTop = useRef(0);
   const debouncedBgRefreshRef = useRef<ReturnType<typeof debounce> | null>(null);
 
-  const mainBranch = useWorktreeDataStore(
+  const mainBranch = useWorktreeStore(
     (state) =>
       Array.from(state.worktrees.values()).find((wt) => wt.isMainWorktree)?.branch ?? "main"
   );
 
-  const worktreePR = useWorktreeDataStore(
+  const worktreePR = useWorktreeStore(
     useShallow((state) => {
       for (const wt of state.worktrees.values()) {
         if (wt.path === worktreePath) {
@@ -566,7 +566,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
               /* Base-branch diff panel */
               baseBranchLoading ? (
                 <div className="flex items-center justify-center py-12">
-                  <Loader2 className="w-5 h-5 text-canopy-text/40 animate-spin" />
+                  <Spinner size="lg" className="text-canopy-text/40" />
                 </div>
               ) : baseBranchError ? (
                 <div className="p-4 text-xs text-status-error">
@@ -614,11 +614,14 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                           </span>
                           <FileIcon className="w-3 h-3 shrink-0 text-canopy-text/40" />
                           <span className="text-canopy-text/80 truncate min-w-0" title={file.path}>
-                            {file.path.split("/").pop()}
+                            {file.path.split(/[/\\]/).filter(Boolean).pop()}
                           </span>
                           <span className="text-canopy-text/30 truncate min-w-0 text-[10px] ml-auto pl-2">
-                            {file.path.includes("/")
-                              ? file.path.substring(0, file.path.lastIndexOf("/"))
+                            {/[/\\]/.test(file.path)
+                              ? file.path.substring(
+                                  0,
+                                  Math.max(file.path.lastIndexOf("/"), file.path.lastIndexOf("\\"))
+                                )
                               : ""}
                           </span>
                         </button>
@@ -632,7 +635,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
               <>
                 {loading && !status ? (
                   <div className="flex items-center justify-center py-12">
-                    <Loader2 className="w-5 h-5 text-canopy-text/40 animate-spin" />
+                    <Spinner size="lg" className="text-canopy-text/40" />
                   </div>
                 ) : loadError ? (
                   <div className="p-4 text-xs text-status-error">

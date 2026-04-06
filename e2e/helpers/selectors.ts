@@ -30,7 +30,7 @@ export const SEL = {
   settings: {
     heading: 'h2:has-text("Settings")',
     closeButton: '[aria-label="Close settings"]',
-    navSidebar: ".w-48",
+    navSidebar: ".settings-sidebar",
     projectPulseToggle: '[aria-label="Project Pulse Toggle"]',
     performanceModeToggle: '[aria-label="Performance Mode Toggle"]',
     fontFamilySelect: 'select[aria-label="Terminal font family"]',
@@ -173,8 +173,7 @@ export const SEL = {
     openFolder: 'button:has-text("Open Folder")',
   },
   firstRun: {
-    themeTitle: 'text="Choose your theme"',
-    telemetryDialog: 'role=dialog[name="Help improve Canopy"]',
+    welcomeTitle: 'role=dialog >> text="Welcome to Canopy"',
     agentTitle: 'text="Choose your AI agents"',
     agentSetupTitle: 'text="Agent Setup"',
   },
@@ -214,9 +213,9 @@ export const SEL = {
     suspectBadge: (id: string) => `[data-testid="suspect-badge-${id}"]`,
   },
   projectSettings: {
-    heading: 'h2:has-text("Project Settings")',
+    heading: 'h2:has-text("Settings")',
     closeButton: '[aria-label="Close settings"]',
-    recipesTab: '.w-48 button:has-text("Recipes")',
+    recipesTab: '.settings-sidebar button:has-text("Recipes")',
     addRecipeButton: 'button:has-text("Add Recipe")',
     editRecipeButton: (name: string) => `[aria-label="Edit recipe ${name}"]`,
     deleteRecipeButton: (name: string) => `[aria-label="Delete recipe ${name}"]`,

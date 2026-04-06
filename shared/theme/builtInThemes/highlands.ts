@@ -24,9 +24,9 @@ export const theme: BuiltInThemeSource = {
     },
     border: "#3C3742",
     accent: "#9B86AE",
-    accentSecondary: "#758C73",
+    accentSecondary: "#C48A4A",
     status: {
-      success: "#758C73",
+      success: "#84B882",
       warning: "#A88554",
       danger: "#AB6B63",
       info: "#848C96",
@@ -69,6 +69,8 @@ export const theme: BuiltInThemeSource = {
     },
     strategy: {
       shadowStyle: "atmospheric",
+      materialBlur: 12,
+      materialSaturation: 115,
     },
   },
   tokens: {
@@ -76,7 +78,7 @@ export const theme: BuiltInThemeSource = {
     "border-subtle": "rgba(195,185,210,0.06)",
     "chrome-noise-texture":
       "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23noise)' opacity='0.015'/%3E%3C/svg%3E\")",
-    "focus-ring": "rgba(175,160,195,0.22)",
+    "focus-ring": "rgba(155,134,174,0.38)",
     "scrim-medium": "rgba(10,8,14,0.48)",
     "scrim-soft": "rgba(10,8,14,0.22)",
     "scrim-strong": "rgba(10,8,14,0.62)",
@@ -103,12 +105,12 @@ export const theme: BuiltInThemeSource = {
     "pulse-range-bg": "#201D24",
     "pulse-ring-offset": "#2C2831",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #3E3845 25%, #4A4552 50%, #3E3845 75%)",
-    "settings-nav-active-bg": "rgba(195,185,210,0.05)",
+    "settings-nav-active-bg": "rgba(155,134,174,0.12)",
     "settings-nav-hover-bg": "rgba(195,185,210,0.05)",
     "settings-search-bg": "rgba(19,17,20,0.60)",
     "settings-sidebar-bg": "rgba(23,21,25,0.60)",
     "sidebar-action-hover-bg": "rgba(195,185,210,0.05)",
-    "sidebar-active-bg": "rgba(195,185,210,0.04)",
+    "sidebar-active-bg": "rgba(155,134,174,0.09)",
     "sidebar-active-shadow":
       "inset 0 1px 0 rgba(220,215,230,0.05), inset 0 0 0 1px rgba(195,185,210,0.06)",
     "toolbar-agent-hover-bg": "rgba(195,185,210,0.06)",

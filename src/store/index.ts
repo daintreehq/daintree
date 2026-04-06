@@ -1,20 +1,11 @@
-export { useTerminalStore, isAgentReady, getTerminalRefreshTier } from "./terminalStore";
-export type { TerminalInstance, AddTerminalOptions, QueuedCommand } from "./terminalStore";
+export { usePanelStore, isAgentReady, getTerminalRefreshTier } from "./panelStore";
+export type { TerminalInstance, AddPanelOptions, QueuedCommand } from "./panelStore";
 export type { CrashType } from "@shared/types/pty-host";
-export { MAX_GRID_TERMINALS } from "./slices/terminalRegistrySlice";
-
-// Panel aliases for new code (gradual migration from terminal naming)
-export { useTerminalStore as usePanelStore } from "./terminalStore";
-export type { TerminalInstance as PanelInstance } from "./terminalStore";
-export type { AddTerminalOptions as AddPanelOptions } from "./terminalStore";
-
+export { MAX_GRID_TERMINALS } from "./slices/panelRegistrySlice";
 export { useWorktreeSelectionStore } from "./worktreeStore";
 
-export {
-  useWorktreeDataStore,
-  cleanupWorktreeDataStore,
-  forceReinitializeWorktreeDataStore,
-} from "./worktreeDataStore";
+export { getCurrentViewStore, cleanupOrphanedTerminals } from "./createWorktreeStore";
+export type { WorktreeViewStoreApi } from "./createWorktreeStore";
 
 export { useLogsStore, filterLogs } from "./logsStore";
 
@@ -34,9 +25,6 @@ export { useNotificationStore } from "./notificationStore";
 export type { Notification, NotificationType } from "./notificationStore";
 
 export { useNotificationSettingsStore } from "./notificationSettingsStore";
-
-export { useUpdateStore } from "./updateStore";
-export type { UpdateStatus } from "./updateStore";
 
 export { useDiagnosticsStore } from "./diagnosticsStore";
 export type { DiagnosticsTab } from "./diagnosticsStore";
@@ -59,6 +47,13 @@ export { useTerminalColorSchemeStore } from "./terminalColorSchemeStore";
 export { useTerminalInputStore } from "./terminalInputStore";
 
 export { usePortalStore } from "./portalStore";
+
+export { useHelpPanelStore } from "./helpPanelStore";
+export {
+  HELP_PANEL_MIN_WIDTH,
+  HELP_PANEL_MAX_WIDTH,
+  HELP_PANEL_DEFAULT_WIDTH,
+} from "./helpPanelStore";
 
 export { useUIStore } from "./uiStore";
 

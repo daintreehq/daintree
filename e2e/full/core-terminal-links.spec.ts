@@ -28,7 +28,7 @@ test.describe.serial("Core: Terminal Links", () => {
 
     const fixture = createFixtureRepo({ name: "terminal-links-test" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixture, "Terminal Links Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, "Terminal Links Test");
   });
 
   test.afterAll(async () => {

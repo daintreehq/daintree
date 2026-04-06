@@ -53,7 +53,9 @@ export class TerminalWakeManager {
           return true;
         }
 
-        if (!state) return false;
+        if (!state) {
+          return false;
+        }
 
         if (state.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
           await this.deps.restoreFromSerializedIncremental(id, state);

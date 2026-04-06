@@ -60,6 +60,7 @@ function XtermAdapterComponent({
   const rafIdRef = useRef<number | null>(null);
   const resizeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingFitRef = useRef(false);
+  const initialFitDoneRef = useRef(false);
 
   // Store the latest getRefreshTier in a ref to prevent stale closures.
   // This ensures the service always calls the current version of the callback.
@@ -196,6 +197,7 @@ function XtermAdapterComponent({
     });
     if (dims) {
       prevDimensionsRef.current = dims;
+      initialFitDoneRef.current = true;
     }
   }, [terminalId]);
 
@@ -213,10 +215,12 @@ function XtermAdapterComponent({
     );
 
     const wasDetachedForSwitch = managed.isDetached === true;
+    const hasSavedTargetDims = !!(managed.targetCols && managed.targetRows);
     managed.isAttaching = true;
     terminalInstanceService.setInputLocked(terminalId, !!isInputLocked);
 
     terminalInstanceService.attach(terminalId, container);
+    const attachGen = terminalInstanceService.getAttachGeneration(terminalId);
     // Force visibility immediately on mount - don't wait for IntersectionObserver.
     // This prevents data from being dropped during the brief window before the observer fires.
     terminalInstanceService.setVisible(terminalId, true);
@@ -372,11 +376,15 @@ function XtermAdapterComponent({
       onExit?.(code);
     });
 
-    if (!wasDetachedForSwitch) {
+    if (!wasDetachedForSwitch || !hasSavedTargetDims) {
       performFit();
     }
 
-    if (restoreOnAttach && !wasDetachedForSwitch && !hasVisibleBufferContent()) {
+    if (
+      restoreOnAttach &&
+      !(wasDetachedForSwitch && hasSavedTargetDims) &&
+      !hasVisibleBufferContent()
+    ) {
       void terminalInstanceService.fetchAndRestore(terminalId).then((restored) => {
         if (restored) {
           requestAnimationFrame(() => performFit());
@@ -387,7 +395,9 @@ function XtermAdapterComponent({
     onReady?.();
 
     return () => {
-      terminalInstanceService.setVisible(terminalId, false);
+      // Pass the captured generation so stale dock→grid unmount cleanup
+      // doesn't background a terminal that has already been re-attached elsewhere.
+      terminalInstanceService.setVisible(terminalId, false, attachGen);
 
       // Flush pending resizes before unmount
       terminalInstanceService.flushResize(terminalId);
@@ -400,6 +410,7 @@ function XtermAdapterComponent({
       }
 
       prevDimensionsRef.current = null;
+      initialFitDoneRef.current = false;
     };
   }, [
     terminalId,
@@ -434,8 +445,11 @@ function XtermAdapterComponent({
     }
   }, [terminalId, stableRefreshTierProvider, currentTier]);
 
-  // Refit terminal when window becomes visible again after being hidden
-  useEffect(() => {
+  // Refit terminal when window becomes visible again after being hidden.
+  // useLayoutEffect ensures the listener is registered synchronously before
+  // paint, closing a race on Windows where the hidden→visible transition fires
+  // before a useEffect listener would be attached (see #4913).
+  useLayoutEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible" && pendingFitRef.current) {
         pendingFitRef.current = false;
@@ -443,6 +457,14 @@ function XtermAdapterComponent({
       }
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    // Defense-in-depth: if the hidden→visible transition already fired before
+    // this listener was registered, recover immediately.
+    if (pendingFitRef.current && document.visibilityState === "visible") {
+      pendingFitRef.current = false;
+      performFit();
+    }
+
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [performFit]);
 
@@ -461,6 +483,39 @@ function XtermAdapterComponent({
     if (!container) return;
 
     const resizeObserver = new ResizeObserver((entries) => {
+      // On the first non-zero observation, bypass the debounce and fit
+      // synchronously. This prevents blank panels on Linux where the
+      // compositor commits layout after the initial rAF-based retry in
+      // performFit — the 50ms debounce would delay the fit past first paint.
+      if (!initialFitDoneRef.current) {
+        for (const entry of entries) {
+          const instance = terminalInstanceService.get(terminalId);
+          if (instance?.isAttaching) continue;
+
+          const rect = entry.contentRect;
+          if (rect.width >= MIN_CONTAINER_SIZE && rect.height >= MIN_CONTAINER_SIZE) {
+            const dims = terminalInstanceService.resize(terminalId, rect.width, rect.height, {
+              immediate: true,
+            });
+            if (dims) {
+              prevDimensionsRef.current = dims;
+              initialFitDoneRef.current = true;
+              pendingFitRef.current = false;
+              // Cancel any pending debounce/rAF from earlier zero-dim observations
+              if (resizeDebounceRef.current !== null) {
+                clearTimeout(resizeDebounceRef.current);
+                resizeDebounceRef.current = null;
+              }
+              if (rafIdRef.current !== null) {
+                cancelAnimationFrame(rafIdRef.current);
+                rafIdRef.current = null;
+              }
+              return;
+            }
+          }
+        }
+      }
+
       // xterm.js v6's DomScrollableElement triggers layout mutations that can
       // re-enter the ResizeObserver synchronously. Debounce with a short delay
       // to let the DOM settle, then sync with the paint cycle via rAF.
@@ -497,7 +552,7 @@ function XtermAdapterComponent({
       }
       resizeObserver.disconnect();
     };
-  }, [handleResizeEntry]);
+  }, [handleResizeEntry, terminalId]);
 
   return (
     <div

@@ -1,13 +1,11 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import Fuse, { type IFuseOptions } from "fuse.js";
-import { useShallow } from "zustand/shallow";
+import { rankProjectMatches } from "@/lib/projectSwitcherSearch";
 import { useProjectStore } from "@/store/projectStore";
+import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { usePaletteStore } from "@/store/paletteStore";
-import { useProjectGroupsStore, type ProjectGroup } from "@/store/projectGroupsStore";
 import { notify } from "@/lib/notify";
-import type { Project, BulkProjectStatsEntry } from "@shared/types";
+import type { Project } from "@shared/types";
 import { projectClient } from "@/clients";
-import { buildSwitcherSections } from "@/components/Project/projectGrouping";
 
 export type ProjectSwitcherMode = "modal" | "dropdown";
 
@@ -23,9 +21,11 @@ export interface SearchableProject {
   isBackground: boolean;
   isMissing: boolean;
   isPinned: boolean;
+  frecencyScore: number;
   activeAgentCount: number;
   waitingAgentCount: number;
   processCount: number;
+  displayPath: string;
 }
 
 export interface UseProjectSwitcherPaletteReturn {
@@ -43,6 +43,7 @@ export interface UseProjectSwitcherPaletteReturn {
   selectProject: (project: SearchableProject) => void;
   confirmSelection: () => void;
   addProject: () => Promise<void>;
+  cloneRepo: () => void;
   stopProject: (projectId: string) => Promise<void>;
   removeProject: (projectId: string) => Promise<void>;
   locateProject: (projectId: string) => Promise<void>;
@@ -56,27 +57,9 @@ export interface UseProjectSwitcherPaletteReturn {
   confirmRemoveProject: () => Promise<void>;
   isRemovingProject: boolean;
   backgroundWaitingCount: number;
-  groups: ProjectGroup[];
-  createGroup: (name: string) => string;
-  assignProjectToGroup: (projectId: string, groupId: string) => void;
-  removeProjectFromGroup: (projectId: string) => void;
-  renameGroup: (groupId: string, name: string) => void;
-  deleteGroup: (groupId: string) => void;
-  moveGroupUp: (groupId: string) => void;
-  moveGroupDown: (groupId: string) => void;
 }
 
-const FUSE_OPTIONS: IFuseOptions<SearchableProject> = {
-  keys: [
-    { name: "name", weight: 2 },
-    { name: "path", weight: 1 },
-  ],
-  threshold: 0.4,
-  includeScore: true,
-};
-
 const MAX_RESULTS = 15;
-const DEBOUNCE_MS = 150;
 
 export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const modalIsOpen = usePaletteStore((state) => state.activePaletteId === "project-switcher");
@@ -85,17 +68,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const isOpen = mode === "modal" ? modalIsOpen : dropdownIsOpen;
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [bulkStats, setBulkStats] = useState<Map<string, BulkProjectStatsEntry>>(new Map());
   const [stopConfirmProjectId, setStopConfirmProjectId] = useState<string | null>(null);
   const [isStoppingProject, setIsStoppingProject] = useState(false);
   const [removeConfirmProject, setRemoveConfirmProject] = useState<SearchableProject | null>(null);
   const [isRemovingProject, setIsRemovingProject] = useState(false);
   const selectedProjectIdRef = useRef<string | null>(null);
-  const lastFetchRef = useRef(0);
-  const lastFetchIdsRef = useRef<string>("");
-
-  const groups = useProjectGroupsStore(useShallow((state) => state.groups));
 
   const projects = useProjectStore((state) => state.projects);
   const currentProject = useProjectStore((state) => state.currentProject);
@@ -107,101 +84,16 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const closeActiveProject = useProjectStore((state) => state.closeActiveProject);
   const removeProject = useProjectStore((state) => state.removeProject);
   const locateProjectFn = useProjectStore((state) => state.locateProject);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-    }
-
-    debounceRef.current = setTimeout(() => {
-      setDebouncedQuery(query);
-    }, DEBOUNCE_MS);
-
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-    };
-  }, [query]);
-
-  const fetchStats = useCallback(
-    async (force = false) => {
-      if (projects.length === 0) return;
-
-      try {
-        const currentProjects = projects;
-        const projectIds = currentProjects.map((project) => project.id).join("|");
-        const now = Date.now();
-
-        if (!force) {
-          if (now - lastFetchRef.current < 5000 && projectIds === lastFetchIdsRef.current) {
-            return;
-          }
-        }
-
-        lastFetchRef.current = now;
-        lastFetchIdsRef.current = projectIds;
-
-        const ids = currentProjects.map((p) => p.id);
-        const result = await projectClient.getBulkStats(ids);
-
-        const newStats = new Map<string, BulkProjectStatsEntry>();
-        for (const [id, entry] of Object.entries(result)) {
-          newStats.set(id, entry);
-        }
-        setBulkStats(newStats);
-      } catch (error) {
-        console.error("[ProjectSwitcherPalette] Failed to fetch project stats:", error);
-      }
-    },
-    [projects]
-  );
+  const projectStats = useProjectStatsStore((state) => state.stats);
 
   useEffect(() => {
     if (!isOpen) return;
-
-    let cancelled = false;
-
-    const runFetch = async () => {
-      try {
-        await loadProjects();
-        if (cancelled) return;
-        await fetchStats(true);
-      } catch (error) {
-        if (!cancelled) {
-          console.error("[ProjectSwitcherPalette] Failed to load projects:", error);
-        }
-      }
-    };
-
-    void runFetch();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, loadProjects, fetchStats]);
-
-  useEffect(() => {
-    if (isOpen && projects.length > 0) {
-      void fetchStats();
-    }
-  }, [isOpen, projects, fetchStats]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    if (projects.length <= 1) return;
-
-    const id = setInterval(() => {
-      void fetchStats();
-    }, 10_000);
-
-    return () => clearInterval(id);
-  }, [isOpen, projects.length, fetchStats]);
+    void loadProjects();
+  }, [isOpen, loadProjects]);
 
   const searchableProjects = useMemo<SearchableProject[]>(() => {
     return projects.map((p) => {
-      const stats = bulkStats.get(p.id);
+      const stats = projectStats[p.id];
       const isActive = p.id === currentProject?.id;
       const isMissing = p.status === "missing";
       const hasProcesses = (stats?.processCount ?? 0) > 0;
@@ -219,12 +111,14 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         isBackground,
         isMissing,
         isPinned: p.pinned ?? false,
+        frecencyScore: p.frecencyScore ?? 3.0,
         activeAgentCount: stats?.activeAgentCount ?? 0,
         waitingAgentCount: stats?.waitingAgentCount ?? 0,
         processCount: stats?.processCount ?? 0,
+        displayPath: p.path.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? p.path,
       };
     });
-  }, [projects, bulkStats, currentProject?.id]);
+  }, [projects, projectStats, currentProject?.id]);
 
   const backgroundWaitingCount = useMemo(
     () =>
@@ -243,40 +137,13 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     });
   }, [searchableProjects]);
 
-  const fuse = useMemo(() => {
-    return new Fuse(sortedProjects, FUSE_OPTIONS);
-  }, [sortedProjects]);
-
   const results = useMemo<SearchableProject[]>(() => {
-    if (!debouncedQuery.trim()) {
-      // Ensure pinned projects are always visible when browsing
-      const pinned = sortedProjects.filter((p) => p.isPinned);
-      const rest = sortedProjects.filter((p) => !p.isPinned);
-      const combined = [...pinned, ...rest];
-      // Deduplicate while preserving order (pinned first, then rest by recency)
-      const seen = new Set<string>();
-      const deduped: SearchableProject[] = [];
-      for (const p of combined) {
-        if (!seen.has(p.id)) {
-          seen.add(p.id);
-          deduped.push(p);
-        }
-      }
-      const truncated = deduped.slice(0, MAX_RESULTS);
-
-      // When groups exist, reorder results to match visual section order
-      // so keyboard navigation (selectedIndex) aligns with rendered order
-      if (groups.length > 0) {
-        const sections = buildSwitcherSections(truncated, groups);
-        return sections.flatMap((s) => s.items);
-      }
-
-      return truncated;
+    if (!query.trim()) {
+      return sortedProjects.slice(0, MAX_RESULTS);
     }
 
-    const fuseResults = fuse.search(debouncedQuery);
-    return fuseResults.slice(0, MAX_RESULTS).map((r) => r.item);
-  }, [debouncedQuery, sortedProjects, fuse, groups]);
+    return rankProjectMatches(query, sortedProjects).slice(0, MAX_RESULTS);
+  }, [query, sortedProjects]);
 
   useEffect(() => {
     if (results.length === 0) {
@@ -304,11 +171,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   }, [results, selectedIndex]);
 
   useEffect(() => {
-    if (debouncedQuery) {
+    if (query) {
       selectedProjectIdRef.current = null;
       setSelectedIndex(0);
     }
-  }, [debouncedQuery]);
+  }, [query]);
 
   useEffect(() => {
     if (!removeConfirmProject) return;
@@ -327,10 +194,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         setDropdownIsOpen(true);
       }
       setQuery("");
-      setSelectedIndex(sortedProjects.length >= 2 ? 1 : 0);
-      setDebouncedQuery("");
+      selectedProjectIdRef.current = null;
+      setSelectedIndex(searchableProjects.length >= 2 ? 1 : 0);
     },
-    [sortedProjects.length]
+    [searchableProjects.length]
   );
 
   const close = useCallback(() => {
@@ -341,7 +208,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
     setQuery("");
     setSelectedIndex(0);
-    setDebouncedQuery("");
   }, [mode]);
 
   const toggle = useCallback(
@@ -351,11 +217,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         setSelectedIndex((prev) => {
           if (results.length <= 1) return prev;
           const next = prev + 1;
-          if (next >= results.length) {
-            const firstNonActive = results.findIndex((p) => !p.isActive);
-            return firstNonActive >= 0 ? firstNonActive : 0;
-          }
-          return next;
+          return next >= results.length ? 0 : next;
         });
       } else {
         open(nextMode);
@@ -420,6 +282,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     await addProjectFn();
   }, [close, addProjectFn]);
 
+  const cloneRepo = useCallback(() => {
+    close();
+    useProjectStore.getState().openCloneRepoDialog();
+  }, [close]);
+
   const locateProject = useCallback(
     async (projectId: string) => {
       await locateProjectFn(projectId);
@@ -460,21 +327,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
     try {
       await closeProject(stopConfirmProjectId, { killTerminals: true });
-
-      setBulkStats((prev) => {
-        const next = new Map(prev);
-        next.set(stopConfirmProjectId, {
-          processCount: 0,
-          terminalCount: 0,
-          estimatedMemoryMB: 0,
-          terminalTypes: {},
-          processIds: [],
-          activeAgentCount: 0,
-          waitingAgentCount: 0,
-        });
-        return next;
-      });
-
       setStopConfirmProjectId(null);
     } catch (error) {
       notify({
@@ -526,34 +378,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
   }, [removeConfirmProject, isRemovingProject, closeActiveProject, removeProject]);
 
-  const createGroup = useCallback((name: string) => {
-    return useProjectGroupsStore.getState().createGroup(name);
-  }, []);
-
-  const assignProjectToGroup = useCallback((projectId: string, groupId: string) => {
-    useProjectGroupsStore.getState().addProjectToGroup(groupId, projectId);
-  }, []);
-
-  const removeProjectFromGroupCb = useCallback((projectId: string) => {
-    useProjectGroupsStore.getState().removeProjectFromAllGroups(projectId);
-  }, []);
-
-  const renameGroupCb = useCallback((groupId: string, name: string) => {
-    useProjectGroupsStore.getState().renameGroup(groupId, name);
-  }, []);
-
-  const deleteGroupCb = useCallback((groupId: string) => {
-    useProjectGroupsStore.getState().deleteGroup(groupId);
-  }, []);
-
-  const moveGroupUpCb = useCallback((groupId: string) => {
-    useProjectGroupsStore.getState().moveGroupUp(groupId);
-  }, []);
-
-  const moveGroupDownCb = useCallback((groupId: string) => {
-    useProjectGroupsStore.getState().moveGroupDown(groupId);
-  }, []);
-
   return {
     isOpen,
     mode,
@@ -569,6 +393,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     selectProject,
     confirmSelection,
     addProject,
+    cloneRepo,
     stopProject,
     removeProject: removeProjectFromList,
     locateProject,
@@ -582,13 +407,5 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     confirmRemoveProject,
     isRemovingProject,
     backgroundWaitingCount,
-    groups,
-    createGroup,
-    assignProjectToGroup,
-    removeProjectFromGroup: removeProjectFromGroupCb,
-    renameGroup: renameGroupCb,
-    deleteGroup: deleteGroupCb,
-    moveGroupUp: moveGroupUpCb,
-    moveGroupDown: moveGroupDownCb,
   };
 }

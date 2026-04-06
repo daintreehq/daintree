@@ -73,7 +73,7 @@ export function SortableGridPlaceholder() {
       style={style}
       {...attributes}
       {...listeners}
-      className="h-full"
+      className="h-full contain-layout contain-style"
       data-placeholder-id={GRID_PLACEHOLDER_ID}
     >
       <GridPlaceholder />

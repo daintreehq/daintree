@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { SEL } from "../helpers/selectors";
-import { T_SHORT, T_MEDIUM } from "../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
@@ -66,17 +66,32 @@ test.describe.serial("Core: Diagnostics & Notifications", () => {
       const eventsPanel = window.locator(SEL.diagnostics.panel("events"));
       await expect(eventsPanel).toBeVisible({ timeout: T_SHORT });
 
-      // Verify the EventBuffer has captured events from app startup
+      // Poll for events — emit a test event on each poll iteration so that
+      // even if the EventBuffer hasn't started yet, it will capture at least
+      // one event once it does start.
       await expect
         .poll(
-          () =>
-            window.evaluate(async () => {
-              type W = { electron: { eventInspector: { getEvents: () => Promise<unknown[]> } } };
-              return (window as unknown as W).electron.eventInspector
-                .getEvents()
-                .then((e) => e.length);
-            }),
-          { timeout: T_MEDIUM }
+          async () => {
+            await window
+              .evaluate(async () => {
+                type W = {
+                  electron: { events: { emit: (t: string, p: unknown) => Promise<void> } };
+                };
+                await (window as unknown as W).electron.events.emit("action:dispatched", {
+                  actionId: "e2e.diagnosticsTest",
+                  source: "user",
+                  timestamp: Date.now(),
+                  context: {},
+                });
+              })
+              .catch(() => {});
+
+            type W = { electron: { eventInspector: { getEvents: () => Promise<unknown[]> } } };
+            return window.evaluate(async () =>
+              (window as unknown as W).electron.eventInspector.getEvents().then((e) => e.length)
+            );
+          },
+          { timeout: T_LONG }
         )
         .toBeGreaterThanOrEqual(1);
 

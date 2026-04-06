@@ -29,12 +29,6 @@ vi.mock("../resetStores", () => ({
   resetAllStoresForProjectSwitch: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../worktreeDataStore", () => ({
-  forceReinitializeWorktreeDataStore: vi.fn(),
-  prePopulateWorktreeSnapshot: vi.fn(),
-  snapshotProjectWorktrees: vi.fn(),
-}));
-
 vi.mock("../worktreeStore", () => ({
   useWorktreeSelectionStore: {
     getState: () => ({
@@ -43,8 +37,8 @@ vi.mock("../worktreeStore", () => ({
   },
 }));
 
-vi.mock("../terminalStore", () => ({
-  useTerminalStore: {
+vi.mock("../panelStore", () => ({
+  usePanelStore: {
     getState: () => ({
       terminals: [],
     }),
@@ -63,14 +57,14 @@ vi.mock("../projectSettingsStore", () => ({
 }));
 
 vi.mock("../slices", () => ({
-  flushTerminalPersistence: vi.fn(),
+  flushPanelPersistence: vi.fn(),
 }));
 
-vi.mock("../persistence/terminalPersistence", () => ({
-  terminalPersistence: {
+vi.mock("../persistence/panelPersistence", () => ({
+  panelPersistence: {
     setProjectIdGetter: vi.fn(),
   },
-  terminalToSnapshot: vi.fn(),
+  panelToSnapshot: vi.fn(),
 }));
 
 vi.mock("@/lib/notify", () => ({

@@ -17,6 +17,9 @@ vi.mock("electron", () => ({
   app: {
     getPath: vi.fn().mockReturnValue(os.tmpdir()),
   },
+  BrowserWindow: {
+    getAllWindows: () => [],
+  },
 }));
 
 const projectStoreMock = vi.hoisted(() => ({
@@ -27,6 +30,12 @@ const projectStoreMock = vi.hoisted(() => ({
 
 vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
+}));
+
+vi.mock("../../../services/ProjectSwitchService.js", () => ({
+  ProjectSwitchService: class MockProjectSwitchService {
+    onSwitch = vi.fn();
+  },
 }));
 
 import { ipcMain } from "electron";

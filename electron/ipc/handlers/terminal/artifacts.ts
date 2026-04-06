@@ -3,13 +3,14 @@
  */
 
 import { ipcMain, dialog } from "electron";
+import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import os from "os";
 import path from "path";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 
 export function registerArtifactHandlers(deps: HandlerDependencies): () => void {
-  const { mainWindow } = deps;
+  const mainWindow = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
   const handlers: Array<() => void> = [];
 
   const handleArtifactSaveToFile = async (
@@ -50,13 +51,16 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
         }
       }
 
-      const result = await dialog.showSaveDialog(mainWindow, {
+      const dialogOpts = {
         title: "Save Artifact",
         defaultPath: suggestedFilename
           ? path.join(safeCwd, path.basename(suggestedFilename))
           : path.join(safeCwd, "artifact.txt"),
-        properties: ["createDirectory", "showOverwriteConfirmation"],
-      });
+        properties: ["createDirectory" as const, "showOverwriteConfirmation" as const],
+      };
+      const result = mainWindow
+        ? await dialog.showSaveDialog(mainWindow, dialogOpts)
+        : await dialog.showSaveDialog(dialogOpts);
 
       if (result.canceled || !result.filePath) {
         return null;
@@ -79,7 +83,7 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.ARTIFACT_SAVE_TO_FILE));
 
   const handleArtifactApplyPatch = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     options: unknown
   ): Promise<{ success: boolean; error?: string; modifiedFiles?: string[] }> => {
     try {
@@ -124,7 +128,8 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
         }
 
         if (deps.worktreeService) {
-          const states = await deps.worktreeService.getAllStatesAsync();
+          const senderWindowPatch = getWindowForWebContents(event.sender);
+          const states = await deps.worktreeService.getAllStatesAsync(senderWindowPatch?.id);
           const isValidWorktree = states.some(
             (wt: { path: string }) => path.resolve(wt.path) === resolvedCwd
           );

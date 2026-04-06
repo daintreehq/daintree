@@ -7,9 +7,14 @@ const mockReaddirSync = vi.fn();
 const mockMkdirSync = vi.fn();
 const mockCopyFileSync = vi.fn();
 const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+const originalDlopen = process.dlopen;
 
 afterAll(() => {
   consoleSpy.mockRestore();
+  warnSpy.mockRestore();
+  process.dlopen = originalDlopen;
 });
 
 function createContext(platform: string, appOutDir: string, appName = "Canopy") {
@@ -26,6 +31,14 @@ describe("afterPack", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     consoleSpy.mockImplementation(() => {});
+    warnSpy.mockImplementation(() => {});
+
+    // Default: simulate Electron-ABI binary (correct) — dlopen throws ABI mismatch
+    process.dlopen = (() => {
+      throw new Error(
+        "was compiled against a different Node.js version using NODE_MODULE_VERSION 131"
+      );
+    }) as typeof process.dlopen;
 
     const originalRequire = Module.prototype.require;
 
@@ -113,6 +126,7 @@ describe("afterPack", () => {
       mockExistsSync
         .mockReturnValueOnce(true) // node-pty dir
         .mockReturnValueOnce(true) // pty.node
+        .mockReturnValueOnce(false) // Assets.car (macOS icon injection)
         .mockReturnValueOnce(false); // better-sqlite3 dir
 
       await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
@@ -124,6 +138,7 @@ describe("afterPack", () => {
       mockExistsSync
         .mockReturnValueOnce(true) // node-pty dir
         .mockReturnValueOnce(true) // pty.node
+        .mockReturnValueOnce(false) // Assets.car (macOS icon injection)
         .mockReturnValueOnce(true) // better-sqlite3 dir
         .mockReturnValueOnce(false); // better_sqlite3.node
 
@@ -265,6 +280,105 @@ describe("afterPack", () => {
       await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
         /native binary not found/
       );
+    });
+  });
+
+  describe("better-sqlite3 ABI validation", () => {
+    it("should fail when better_sqlite3.node loads under Node (Node-ABI binary)", async () => {
+      mockExistsSync.mockReturnValue(true);
+      process.dlopen = (() => {
+        // Successfully loads — means binary is Node ABI (wrong for Electron)
+      }) as typeof process.dlopen;
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /compiled for Node\.js ABI/
+      );
+    });
+
+    it("should pass when dlopen throws NODE_MODULE_VERSION mismatch (Electron-ABI binary)", async () => {
+      mockExistsSync.mockReturnValue(true);
+      process.dlopen = (() => {
+        throw new Error(
+          "was compiled against a different Node.js version using NODE_MODULE_VERSION 131"
+        );
+      }) as typeof process.dlopen;
+
+      await afterPack(createContext("linux", "/build/linux"));
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)"
+      );
+    });
+
+    it("should pass when dlopen throws invalid ELF header", async () => {
+      mockExistsSync.mockReturnValue(true);
+      process.dlopen = (() => {
+        throw new Error("invalid ELF header");
+      }) as typeof process.dlopen;
+
+      await afterPack(createContext("linux", "/build/linux"));
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)"
+      );
+    });
+
+    it("should pass when dlopen throws not a valid Win32 application", async () => {
+      mockExistsSync.mockReturnValue(true);
+      process.dlopen = (() => {
+        throw new Error("not a valid Win32 application");
+      }) as typeof process.dlopen;
+
+      await afterPack(createContext("win32", "/build/win"));
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)"
+      );
+    });
+
+    it("should warn when dlopen throws a non-Error object", async () => {
+      mockExistsSync.mockReturnValue(true);
+      process.dlopen = (() => {
+        throw "unexpected string error";
+      }) as typeof process.dlopen;
+
+      await afterPack(createContext("linux", "/build/linux"));
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ABI probe inconclusive"));
+    });
+
+    it("should warn but continue on inconclusive probe (e.g. missing DLL)", async () => {
+      mockExistsSync.mockReturnValue(true);
+      process.dlopen = (() => {
+        throw new Error("The specified module could not be found");
+      }) as typeof process.dlopen;
+
+      await afterPack(createContext("win32", "/build/win"));
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ABI probe inconclusive"));
+    });
+
+    it("should run ABI validation on all platforms", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const dlopenCalls: string[] = [];
+      process.dlopen = ((_mod: any, path: string) => {
+        dlopenCalls.push(path);
+        throw new Error("NODE_MODULE_VERSION mismatch");
+      }) as typeof process.dlopen;
+
+      for (const platform of ["darwin", "win32", "linux"]) {
+        dlopenCalls.length = 0;
+        await afterPack(
+          createContext(
+            platform,
+            platform === "darwin"
+              ? "/build/mac"
+              : `/build/${platform === "win32" ? "win" : "linux"}`
+          )
+        );
+        expect(dlopenCalls.length).toBe(1);
+        expect(dlopenCalls[0]).toContain("better_sqlite3.node");
+      }
     });
   });
 

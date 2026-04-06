@@ -1,25 +1,22 @@
-import type { TerminalKind, TerminalType, AgentState } from "@/types";
+import type { PanelKind, TerminalType, AgentState } from "@/types";
 import type { BrowserHistory } from "@shared/types/browser";
 import type { PanelExitBehavior } from "@shared/types/panel";
+import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
 import { generateAgentCommand, buildResumeCommand } from "@shared/types";
 import { logWarn } from "@/utils/logger";
+import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
+import { getDeserializer } from "@/config/panelKindSerialisers";
 
-export interface AddTerminalArgs {
-  kind?: TerminalKind;
-  type?: TerminalType;
-  agentId?: string;
-  title?: string;
+/**
+ * Args for building addPanel options from hydration data.
+ * Uses AddPanelOptionsBase (flat) rather than the discriminated union because
+ * hydration builders construct args dynamically based on saved state,
+ * mixing fields from different panel kinds.
+ */
+export interface AddTerminalArgs extends AddPanelOptionsBase {
   cwd: string;
-  worktreeId?: string;
   location?: "grid" | "dock";
-  command?: string;
-  agentState?: AgentState;
-  lastStateChange?: number;
-  existingId?: string;
-  requestedId?: string;
-  skipCommandExecution?: boolean;
-  isInputLocked?: boolean;
   browserUrl?: string;
   browserHistory?: BrowserHistory;
   browserZoom?: number;
@@ -34,17 +31,11 @@ export interface AddTerminalArgs {
   devServerError?: { type: string; message: string } | null;
   devServerTerminalId?: string | null;
   devPreviewConsoleOpen?: boolean;
-  exitBehavior?: PanelExitBehavior;
-  agentSessionId?: string;
-  agentLaunchFlags?: string[];
-  agentModelId?: string;
-  restore?: boolean;
-  bypassLimits?: boolean;
 }
 
 export interface SavedTerminalData {
   id: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: string;
   title?: string;
@@ -67,11 +58,12 @@ export interface SavedTerminalData {
   agentSessionId?: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  extensionState?: Record<string, unknown>;
 }
 
 interface BackendTerminalData {
   id: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: string;
   title?: string;
@@ -87,7 +79,7 @@ interface BackendTerminalData {
 
 interface ReconnectedTerminalData {
   id?: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: string;
   title?: string;
@@ -107,7 +99,7 @@ interface AgentSettingsData {
 
 export function inferAgentIdFromTitle(
   title: string | undefined,
-  kind: TerminalKind | undefined,
+  kind: PanelKind | undefined,
   existingAgentId: string | undefined,
   terminalId: string,
   logContext: string
@@ -140,14 +132,7 @@ export function resolveAgentId(
   return undefined;
 }
 
-export function inferKind(saved: SavedTerminalData): TerminalKind {
-  if (saved.kind) return saved.kind;
-  if (saved.browserUrl !== undefined) return "browser";
-  if (saved.notePath !== undefined || saved.noteId !== undefined) return "notes";
-  if (saved.title === "Assistant" || saved.title?.startsWith("Assistant")) return "assistant";
-  if (!saved.cwd && !saved.command) return "assistant";
-  return "terminal";
-}
+export const inferKind: (saved: SavedTerminalData) => PanelKind = inferKindShared;
 
 export function buildArgsForBackendTerminal(
   backendTerminal: BackendTerminalData,
@@ -188,6 +173,7 @@ export function buildArgsForBackendTerminal(
     agentSessionId: backendTerminal.agentSessionId ?? saved.agentSessionId,
     agentLaunchFlags: backendTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
     agentModelId: backendTerminal.agentModelId ?? saved.agentModelId,
+    extensionState: saved.extensionState,
   };
 }
 
@@ -237,12 +223,13 @@ export function buildArgsForReconnectedFallback(
     agentSessionId: reconnectedTerminal.agentSessionId ?? saved.agentSessionId,
     agentLaunchFlags: reconnectedTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
     agentModelId: reconnectedTerminal.agentModelId ?? saved.agentModelId,
+    extensionState: saved.extensionState,
   };
 }
 
 export function buildArgsForRespawn(
   saved: SavedTerminalData,
-  kind: TerminalKind,
+  kind: PanelKind,
   projectRoot: string,
   agentSettings: AgentSettingsData | undefined,
   reconnectTimedOut: boolean,
@@ -309,39 +296,34 @@ export function buildArgsForRespawn(
     exitBehavior: isAgentPanel ? undefined : saved.exitBehavior,
     agentLaunchFlags: saved.agentLaunchFlags,
     agentModelId: saved.agentModelId,
+    extensionState: saved.extensionState,
     restore: true,
   };
 }
 
 export function buildArgsForNonPtyRecreation(
   saved: SavedTerminalData,
-  kind: TerminalKind,
+  kind: PanelKind,
   projectRoot: string
 ): AddTerminalArgs {
   const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
-  const devCommandCandidate = kind === "dev-preview" ? saved.devCommand?.trim() : undefined;
-  const devCommand =
-    kind === "dev-preview" ? devCommandCandidate || saved.command?.trim() || undefined : undefined;
-
-  return {
+  const base: AddTerminalArgs = {
     kind,
     title: saved.title,
     cwd: saved.cwd || projectRoot || "",
     worktreeId: saved.worktreeId,
     location,
     requestedId: saved.id,
-    browserUrl: saved.browserUrl,
-    browserHistory: saved.browserHistory,
-    browserZoom: saved.browserZoom,
-    browserConsoleOpen: kind === "browser" ? saved.browserConsoleOpen : undefined,
-    notePath: saved.notePath,
-    noteId: saved.noteId,
-    scope: saved.scope as "worktree" | "project" | undefined,
-    createdAt: saved.createdAt,
-    devCommand,
-    devPreviewConsoleOpen: kind === "dev-preview" ? saved.devPreviewConsoleOpen : undefined,
     exitBehavior: saved.exitBehavior,
+    extensionState: saved.extensionState,
   };
+
+  const deserializer = getDeserializer(kind);
+  if (deserializer) {
+    return { ...base, ...deserializer(saved) };
+  }
+
+  return base;
 }
 
 export function buildArgsForOrphanedTerminal(

@@ -338,7 +338,7 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+B",
     scope: "global",
     priority: 0,
-    description: "Open bulk command center",
+    description: "Open Bulk Operations",
     category: "Terminal",
   },
   // Directional terminal navigation (Ghostty-style: Cmd+Option+Arrow)
@@ -670,6 +670,22 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     priority: 0,
     description: "Open keyboard shortcuts reference",
     category: "Help",
+  },
+  {
+    actionId: "help.launchAgent",
+    combo: "Cmd+Shift+H",
+    scope: "global",
+    priority: 0,
+    description: "Launch help agent",
+    category: "Help",
+  },
+  {
+    actionId: "app.newWindow",
+    combo: "Cmd+Shift+Alt+N",
+    scope: "global",
+    priority: 0,
+    description: "Open a new window",
+    category: "System",
   },
   {
     actionId: "app.settings",

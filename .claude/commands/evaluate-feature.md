@@ -21,7 +21,7 @@ $ARGUMENTS
 
 ### What Canopy IS
 
-**Canopy is Mission Control for AI Coding Agents.**
+**Canopy is the Orchestration Layer for AI Coding Agents.**
 
 It is the orchestration layer where you _direct_ agent work, monitor agent fleets, and intervene when agents need help. It exists to bridge the gap between human intent, codebase context, and agent execution.
 
@@ -142,7 +142,7 @@ If the feature **already exists completely**, stop here and report that.
 2. Does this integrate with terminals, worktrees, agent state, or context injection?
 3. Does this reduce cognitive load when managing complex multi-agent development?
 4. Is this complex enough to warrant tooling (vs. a shell alias or existing tool)?
-5. Does this fit the "command center" mental model?
+5. Does this fit the orchestration/habitat mental model?
 
 ### The Green Light Test (Must satisfy AT LEAST 2)
 
@@ -178,11 +178,11 @@ Canopy **explicitly rejects** features that:
 - Features better handled by external tools (VS Code, SourceTree, Postman)
 - Features that only benefit single-agent, single-worktree workflows (too simple for Canopy)
 
-### The Workshop vs Mission Control Question
+### The Workshop vs Orchestration Layer Question
 
 Ask yourself:
 
-> _"Does this feature belong in the Workshop (VS Code) or Mission Control (Canopy)?"_
+> _"Does this feature belong in the Workshop (VS Code) or the Orchestration Layer (Canopy)?"_
 
 If the answer is **Workshop**, we don't build the feature. At most, we build a **button that opens the Workshop** to the right place (like the existing "Open in Editor" integration).
 
@@ -203,7 +203,7 @@ Features at the "Manual" level rarely belong in Canopy. Features at "Reactive" o
 
 ```
 MISSION ALIGNMENT
-├─ Workshop or Mission Control?: [Workshop → REJECT / Mission Control → Continue]
+├─ Workshop or Orchestration Layer?: [Workshop → REJECT / Orchestration Layer → Continue]
 ├─ Cost of Attention: [Reduces load / Increases load → REJECT]
 ├─ Automation Level: [Manual/Assisted/Reactive/Autonomous]
 │
@@ -421,7 +421,7 @@ For **REJECT**:
 
 - Passes Green Light test (score ≥ 2)
 - Passes Red Light test (no triggers)
-- Belongs in Mission Control, not Workshop
+- Belongs in the Orchestration Layer, not Workshop
 - Reduces cognitive load (Cost of Attention test)
 - At "Assisted" automation level or higher
 - Natural architectural fit
@@ -446,7 +446,7 @@ For **REJECT**:
 
 - Fails Green Light test (score < 2)
 - Triggers any Red Light
-- Belongs in Workshop (VS Code), not Mission Control
+- Belongs in Workshop (VS Code), not the Orchestration Layer
 - Increases cognitive load
 - Better solved by external tools
 - Shell alias territory

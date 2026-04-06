@@ -99,6 +99,13 @@ export interface IssueDetectedPayload {
   issueTitle: string;
 }
 
+/** Git remote with parsed GitHub repo info */
+export interface RemoteInfo {
+  name: string;
+  fetchUrl: string;
+  parsedRepo: { owner: string; repo: string } | null;
+}
+
 /** Issue not found payload - emitted when GitHub confirms issue doesn't exist on current repo */
 export interface IssueNotFoundPayload {
   worktreeId: string;

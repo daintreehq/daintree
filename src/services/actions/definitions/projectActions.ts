@@ -207,6 +207,19 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     },
   }));
 
+  actions.set("project.cloneRepo", () => ({
+    id: "project.cloneRepo",
+    title: "Clone Repository",
+    description: "Clone a Git repository from a URL",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      useProjectStore.getState().openCloneRepoDialog();
+    },
+  }));
+
   actions.set("project.settings.open", () => ({
     id: "project.settings.open",
     title: "Open Project Settings",
@@ -216,7 +229,11 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      window.dispatchEvent(new CustomEvent("canopy:open-project-settings"));
+      window.dispatchEvent(
+        new CustomEvent("canopy:open-settings-tab", {
+          detail: { tab: "project:general" },
+        })
+      );
     },
   }));
 }

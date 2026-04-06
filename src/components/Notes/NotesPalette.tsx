@@ -1,13 +1,14 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Button } from "@/components/ui/button";
 import { createTooltipWithShortcut } from "@/lib/platform";
 import { keybindingService } from "@/services/KeybindingService";
 import { useOverlayState } from "@/hooks";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useNotesStore } from "@/store/notesStore";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { NoteListItem } from "@/clients/notesClient";
 import CodeMirror from "@uiw/react-codemirror";
@@ -22,7 +23,6 @@ import {
   ExternalLink,
   X,
   AlertTriangle,
-  Leaf,
   ChevronDown,
   PenLine,
   Eye,
@@ -30,6 +30,7 @@ import {
   Tag,
 } from "lucide-react";
 import { MarkdownPreview } from "./MarkdownPreview";
+import { StickyNote } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -67,6 +68,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   const {
     notes,
     isLoading,
+    isInitialized,
     initialize,
     createNote,
     deleteNote,
@@ -74,7 +76,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     lastSelectedNoteId,
     setLastSelectedNoteId,
   } = useNotesStore();
-  const { addTerminal } = useTerminalStore();
+  const { addPanel } = usePanelStore();
   const { activeWorktreeId } = useWorktreeSelectionStore();
 
   const search = useNoteSearch({ isOpen, notes, refresh });
@@ -109,7 +111,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       if (!selectedNote || isOpeningPanel) return;
       setIsOpeningPanel(true);
       try {
-        await addTerminal({
+        await addPanel({
           kind: "notes",
           title: getNoteDisplayTitle(selectedNote),
           cwd: "",
@@ -126,7 +128,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
         setIsOpeningPanel(false);
       }
     },
-    [selectedNote, isOpeningPanel, addTerminal, activeWorktreeId, onClose]
+    [selectedNote, isOpeningPanel, addPanel, activeWorktreeId, onClose]
   );
 
   const actions = useNoteActions({
@@ -134,6 +136,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     notes,
     visibleNotes: search.visibleNotes,
     isLoading,
+    isInitialized,
     isSearching: search.isSearching,
     lastSelectedNoteId,
     setLastSelectedNoteId,
@@ -339,7 +342,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                   )}
                 </div>
 
-                <div ref={listRef} role="listbox" className="flex-1 overflow-y-auto">
+                <ScrollShadow className="flex-1" ref={listRef} role="listbox">
                   {isLoading || search.isSearching ? (
                     <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
                       Loading...
@@ -377,7 +380,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                       />
                     ))
                   )}
-                </div>
+                </ScrollShadow>
               </div>
 
               {/* Content area */}
@@ -575,7 +578,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                   </>
                 ) : (
                   <div className="flex-1 flex flex-col items-center justify-center text-canopy-text/30">
-                    <Leaf size={32} className="mb-3" />
+                    <StickyNote width={32} height={32} className="mb-3" />
                     <p className="text-sm">Select a note to view</p>
                     <p className="text-xs mt-2">
                       or press{" "}

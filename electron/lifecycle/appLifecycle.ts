@@ -29,6 +29,7 @@ export function extractCliPath(argv: string[]): string | null {
 
 export interface AppLifecycleOptions {
   onCreateWindow: () => void | Promise<void>;
+  onCreateWindowForPath?: (cliPath: string) => void | Promise<void>;
   getMainWindow: () => BrowserWindow | null;
   getCliAvailabilityService: () => CliAvailabilityService | null;
   windowRegistry?: WindowRegistry;
@@ -55,16 +56,16 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
   process.on("SIGINT", signalHandler);
 
   app.on("second-instance", (_event, commandLine, _workingDirectory) => {
-    console.log("[MAIN] Second instance detected, focusing main window");
+    console.log("[MAIN] Second instance detected");
     const mainWindow = opts.windowRegistry?.getPrimary()?.browserWindow ?? opts.getMainWindow();
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
     const cliPath = extractCliPath(commandLine);
+
     if (cliPath) {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        console.log("[MAIN] Opening CLI path from second instance:", cliPath);
+      if (mainWindow && !mainWindow.isDestroyed() && opts.onCreateWindowForPath) {
+        console.log("[MAIN] Creating new window for CLI path:", cliPath);
+        opts.onCreateWindowForPath(cliPath);
+      } else if (mainWindow && !mainWindow.isDestroyed()) {
+        console.log("[MAIN] Opening CLI path in existing window:", cliPath);
         handleDirectoryOpen(
           cliPath,
           mainWindow,
@@ -74,6 +75,9 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
         pendingCliPath = cliPath;
         console.log("[MAIN] Queuing CLI path for when window is ready:", cliPath);
       }
+    } else if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
     }
   });
 

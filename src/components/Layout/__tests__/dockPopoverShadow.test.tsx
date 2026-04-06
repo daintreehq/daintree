@@ -81,7 +81,7 @@ describe("Dock Popover Visual Layer - Issue #2316", () => {
       expect(content).toContain("handleDockInteractOutside");
     });
 
-    it("should not block Escape key in DockedTerminalItem", async () => {
+    it("should not unconditionally block Escape key in DockedTerminalItem", async () => {
       const fs = await import("fs/promises");
       const path = await import("path");
 
@@ -89,9 +89,11 @@ describe("Dock Popover Visual Layer - Issue #2316", () => {
       const content = await fs.readFile(filePath, "utf-8");
 
       expect(content).not.toContain("onEscapeKeyDown={(e) => e.preventDefault()}");
+      expect(content).toContain("onEscapeKeyDown");
+      expect(content).toContain("handleDockEscapeKeyDown");
     });
 
-    it("should not block Escape key in DockedTabGroup", async () => {
+    it("should not unconditionally block Escape key in DockedTabGroup", async () => {
       const fs = await import("fs/promises");
       const path = await import("path");
 
@@ -99,6 +101,31 @@ describe("Dock Popover Visual Layer - Issue #2316", () => {
       const content = await fs.readFile(filePath, "utf-8");
 
       expect(content).not.toContain("onEscapeKeyDown={(e) => e.preventDefault()}");
+      expect(content).toContain("onEscapeKeyDown");
+      expect(content).toContain("handleDockEscapeKeyDown");
+    });
+  });
+
+  describe("Conditional Escape Key Guard - Issue #4572", () => {
+    it("should export handleDockEscapeKeyDown from dockPopoverGuard", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+
+      const filePath = path.resolve(__dirname, "../dockPopoverGuard.ts");
+      const content = await fs.readFile(filePath, "utf-8");
+
+      expect(content).toContain("export function handleDockEscapeKeyDown");
+    });
+
+    it("handleDockEscapeKeyDown should conditionally call preventDefault based on portalContainer containment", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+
+      const filePath = path.resolve(__dirname, "../dockPopoverGuard.ts");
+      const content = await fs.readFile(filePath, "utf-8");
+
+      expect(content).toContain("portalContainer?.contains(document.activeElement)");
+      expect(content).toContain("event.preventDefault()");
     });
   });
 });

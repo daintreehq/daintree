@@ -21,6 +21,10 @@ export function registerNotesActions(actions: ActionRegistry, _callbacks: Action
         content: z.string().optional().describe("Initial note content (markdown)"),
         scope: z.enum(["worktree", "project"]).optional().describe("Note scope (default: project)"),
         worktreeId: z.string().optional().describe("Worktree ID (required if scope is worktree)"),
+        openPanel: z
+          .boolean()
+          .optional()
+          .describe("If true, open the created note in a notes panel (only works with title)"),
       })
       .optional(),
     run: async (args: unknown) => {
@@ -29,8 +33,15 @@ export function registerNotesActions(actions: ActionRegistry, _callbacks: Action
         content,
         scope: noteScope,
         worktreeId,
+        openPanel,
       } = (args as
-        | { title?: string; content?: string; scope?: "worktree" | "project"; worktreeId?: string }
+        | {
+            title?: string;
+            content?: string;
+            scope?: "worktree" | "project";
+            worktreeId?: string;
+            openPanel?: boolean;
+          }
         | undefined) ?? {};
 
       if (!title) {
@@ -41,6 +52,20 @@ export function registerNotesActions(actions: ActionRegistry, _callbacks: Action
       const note = await notesClient.create(title, noteScope ?? "project", worktreeId);
       if (content) {
         await notesClient.write(note.path, content, note.metadata);
+      }
+      if (openPanel) {
+        const { usePanelStore } = await import("@/store/panelStore");
+        const resolvedScope = noteScope ?? "project";
+        await usePanelStore.getState().addPanel({
+          kind: "notes",
+          title: note.metadata.title,
+          notePath: note.path,
+          noteId: note.metadata.id,
+          scope: resolvedScope,
+          worktreeId,
+          createdAt: note.metadata.createdAt,
+          location: "grid",
+        });
       }
       return { path: note.path, title: note.metadata.title, id: note.metadata.id };
     },

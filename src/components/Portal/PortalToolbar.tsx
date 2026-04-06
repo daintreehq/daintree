@@ -1,5 +1,4 @@
-import { memo, useCallback, useMemo } from "react";
-import type React from "react";
+import { memo } from "react";
 import { ArrowLeft, ArrowRight, RotateCw, X, Plus, ExternalLink, Link2 } from "lucide-react";
 import {
   DndContext,
@@ -23,8 +22,14 @@ import { createTooltipWithShortcut } from "@/lib/platform";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { usePortalStore } from "@/store/portalStore";
 import { PortalIcon } from "./PortalIcon";
-import { useNativeContextMenu, useKeybindingDisplay } from "@/hooks";
-import type { MenuItemOption } from "@/types";
+import { useKeybindingDisplay } from "@/hooks";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 
 const noopTabAction = (_tabId: string) => {};
 
@@ -55,7 +60,6 @@ const SortableTab = memo(function SortableTab({
   tabCount: number;
   tabIndex: number;
 }) {
-  const { showMenu } = useNativeContextMenu();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: tab.id,
     transition: {
@@ -74,118 +78,85 @@ const SortableTab = memo(function SortableTab({
   const hasTabsToRight = tabIndex < tabCount - 1;
   const hasOtherTabs = tabCount > 1;
 
-  const template = useMemo((): MenuItemOption[] => {
-    return [
-      { id: "duplicate", label: "Duplicate", enabled: hasUrl },
-      { id: "reload", label: "Reload", enabled: hasUrl },
-      { type: "separator" },
-      { id: "copy-url", label: "Copy URL", enabled: hasUrl },
-      { id: "open-external", label: "Open in Browser", enabled: hasUrl },
-      { type: "separator" },
-      { id: "close", label: "Close" },
-      { id: "close-others", label: "Close Others", enabled: hasOtherTabs },
-      { id: "close-to-right", label: "Close to Right", enabled: hasTabsToRight },
-    ];
-  }, [hasOtherTabs, hasTabsToRight, hasUrl]);
-
-  const handleContextMenu = useCallback(
-    async (event: React.MouseEvent) => {
-      if (isDragging) return;
-
-      const actionId = await showMenu(event, template);
-      if (!actionId) return;
-
-      switch (actionId) {
-        case "duplicate":
-          onDuplicate(tab.id);
-          break;
-        case "reload":
-          onReload(tab.id);
-          break;
-        case "copy-url":
-          onCopyUrl(tab.id);
-          break;
-        case "open-external":
-          onOpenExternal(tab.id);
-          break;
-        case "close":
-          onClose(tab.id);
-          break;
-        case "close-others":
-          onCloseOthers(tab.id);
-          break;
-        case "close-to-right":
-          onCloseToRight(tab.id);
-          break;
-      }
-    },
-    [
-      isDragging,
-      onClose,
-      onCloseOthers,
-      onCloseToRight,
-      onCopyUrl,
-      onDuplicate,
-      onOpenExternal,
-      onReload,
-      showMenu,
-      tab.id,
-      template,
-    ]
-  );
-
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      {...attributes}
-      {...listeners}
-      role="tab"
-      aria-selected={isActive}
-      aria-label={tab.title}
-      tabIndex={isActive ? 0 : -1}
-      onClick={() => onClick(tab.id)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onClick(tab.id);
-        }
-      }}
-      onContextMenu={handleContextMenu}
-      className={cn(
-        "group relative flex items-center gap-2 px-3 py-1.5 text-xs font-medium cursor-pointer select-none transition-all",
-        "rounded-full border shadow-[var(--theme-shadow-ambient)]",
-        "min-w-[80px] max-w-[200px]",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
-        isActive
-          ? "bg-tint/[0.08] text-canopy-text border-canopy-accent/40 ring-1 ring-inset ring-canopy-accent/30"
-          : "bg-overlay-subtle text-canopy-text/70 border-divider hover:bg-overlay-medium hover:text-canopy-text",
-        isDragging && "opacity-80 scale-105 shadow-[var(--theme-shadow-floating)] cursor-grabbing"
-      )}
-    >
-      {tab.icon && (
-        <div className="flex-shrink-0">
-          <PortalIcon icon={tab.icon} size="tab" url={tab.url ?? undefined} />
+    <ContextMenu modal={false}>
+      <ContextMenuTrigger asChild disabled={isDragging}>
+        <div
+          ref={setNodeRef}
+          style={style}
+          {...attributes}
+          {...listeners}
+          role="tab"
+          aria-selected={isActive}
+          aria-label={tab.title}
+          tabIndex={isActive ? 0 : -1}
+          onClick={() => onClick(tab.id)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onClick(tab.id);
+            }
+          }}
+          className={cn(
+            "group relative flex items-center gap-2 px-3 py-1.5 text-xs font-medium cursor-pointer select-none transition",
+            "rounded-full border shadow-[var(--theme-shadow-ambient)]",
+            "min-w-[80px] max-w-[200px]",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+            isActive
+              ? "bg-tint/[0.08] text-canopy-text border-canopy-accent/40 ring-1 ring-inset ring-canopy-accent/30"
+              : "bg-overlay-subtle text-canopy-text/70 border-divider hover:bg-overlay-medium hover:text-canopy-text",
+            isDragging &&
+              "opacity-80 scale-105 shadow-[var(--theme-shadow-floating)] cursor-grabbing"
+          )}
+        >
+          {tab.icon && (
+            <div className="flex-shrink-0">
+              <PortalIcon icon={tab.icon} size="tab" url={tab.url ?? undefined} />
+            </div>
+          )}
+          <span className="truncate max-w-[120px]">{tab.title}</span>
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose(tab.id);
+            }}
+            aria-label={`Close ${tab.title}`}
+            className={cn(
+              "p-0.5 rounded-full transition-colors ml-1",
+              isActive
+                ? "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/[0.06]"
+                : "text-canopy-text/40 hover:text-canopy-text hover:bg-tint/[0.06] opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            )}
+          >
+            <X className="w-3 h-3" />
+          </button>
         </div>
-      )}
-      <span className="truncate max-w-[120px]">{tab.title}</span>
-      <button
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose(tab.id);
-        }}
-        aria-label={`Close ${tab.title}`}
-        className={cn(
-          "p-0.5 rounded-full transition-colors ml-1",
-          isActive
-            ? "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/[0.06]"
-            : "text-canopy-text/40 hover:text-canopy-text hover:bg-tint/[0.06] opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-        )}
-      >
-        <X className="w-3 h-3" />
-      </button>
-    </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem disabled={!hasUrl} onSelect={() => onDuplicate(tab.id)}>
+          Duplicate
+        </ContextMenuItem>
+        <ContextMenuItem disabled={!hasUrl} onSelect={() => onReload(tab.id)}>
+          Reload
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem disabled={!hasUrl} onSelect={() => onCopyUrl(tab.id)}>
+          Copy URL
+        </ContextMenuItem>
+        <ContextMenuItem disabled={!hasUrl} onSelect={() => onOpenExternal(tab.id)}>
+          Open in Browser
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => onClose(tab.id)}>Close</ContextMenuItem>
+        <ContextMenuItem disabled={!hasOtherTabs} onSelect={() => onCloseOthers(tab.id)}>
+          Close Others
+        </ContextMenuItem>
+        <ContextMenuItem disabled={!hasTabsToRight} onSelect={() => onCloseToRight(tab.id)}>
+          Close to Right
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 });
 
@@ -418,7 +389,7 @@ export function PortalToolbar({
                           defaultNewTabUrl,
                         });
                       }}
-                      className="flex items-center justify-center w-8 h-[26px] rounded-full bg-overlay-subtle hover:bg-overlay-soft text-canopy-text/70 hover:text-canopy-text border border-divider transition-all"
+                      className="flex items-center justify-center w-8 h-[26px] rounded-full bg-overlay-subtle hover:bg-overlay-soft text-canopy-text/70 hover:text-canopy-text border border-divider transition"
                       aria-label="New Tab"
                       aria-haspopup="menu"
                     >

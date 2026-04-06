@@ -15,7 +15,12 @@ test.describe.serial("Core: External Git Detection", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "external-git-detection" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "External Git Detection");
+    ctx.window = await openAndOnboardProject(
+      ctx.app,
+      ctx.window,
+      fixtureDir,
+      "External Git Detection"
+    );
   });
 
   test.afterAll(async () => {

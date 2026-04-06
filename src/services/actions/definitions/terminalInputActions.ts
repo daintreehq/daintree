@@ -1,8 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
-import type { ActionId } from "@shared/types/actions";
 import { openPanelContextMenu } from "@/lib/panelContextMenu";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 export function registerTerminalInputActions(
   actions: ActionRegistry,
@@ -24,6 +23,84 @@ export function registerTerminalInputActions(
     },
   }));
 
+  actions.set("terminal.copy", () => ({
+    id: "terminal.copy",
+    title: "Copy Selection",
+    description: "Copy the current terminal selection to clipboard",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+    run: async (args: unknown) => {
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      const state = usePanelStore.getState();
+      const targetId = terminalId ?? state.focusedId;
+      if (!targetId) return;
+      const { terminalInstanceService } =
+        await import("@/services/terminal/TerminalInstanceService");
+      const managed = terminalInstanceService.get(targetId);
+      if (managed?.terminal) {
+        const selection = managed.terminal.getSelection();
+        if (selection) {
+          await navigator.clipboard.writeText(selection);
+        }
+      }
+    },
+  }));
+
+  actions.set("terminal.paste", () => ({
+    id: "terminal.paste",
+    title: "Paste",
+    description: "Paste clipboard content into the terminal",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+    run: async (args: unknown) => {
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      const state = usePanelStore.getState();
+      const targetId = terminalId ?? state.focusedId;
+      if (!targetId) return;
+      const terminal = state.panelsById[targetId];
+      if (terminal?.isInputLocked) return;
+      const { terminalInstanceService } =
+        await import("@/services/terminal/TerminalInstanceService");
+      const managed = terminalInstanceService.get(targetId);
+      if (!managed || managed.isInputLocked) return;
+      try {
+        const text = await navigator.clipboard.readText();
+        if (!text) return;
+        const { terminalClient } = await import("@/clients");
+        const { formatWithBracketedPaste } = await import("@shared/utils/terminalInputProtocol");
+        if (managed.terminal.modes.bracketedPasteMode) {
+          terminalClient.write(targetId, formatWithBracketedPaste(text));
+        } else {
+          terminalClient.write(targetId, text.replace(/\r?\n/g, "\r"));
+        }
+        terminalInstanceService.notifyUserInput(targetId);
+      } catch {
+        // Clipboard API may be denied
+      }
+    },
+  }));
+
+  actions.set("terminal.copyLink", () => ({
+    id: "terminal.copyLink",
+    title: "Copy Link Address",
+    description: "Copy a URL to the clipboard",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ url: z.string() }),
+    run: async (args: unknown) => {
+      const { url } = args as { url: string };
+      await navigator.clipboard.writeText(url);
+    },
+  }));
+
   actions.set("terminal.contextMenu", () => ({
     id: "terminal.contextMenu",
     title: "Open Context Menu",
@@ -35,7 +112,7 @@ export function registerTerminalInputActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = (args ?? {}) as { terminalId?: string };
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
         openPanelContextMenu(targetId);
@@ -44,7 +121,7 @@ export function registerTerminalInputActions(
   }));
 
   actions.set("terminal.stashInput", () => ({
-    id: "terminal.stashInput" as ActionId,
+    id: "terminal.stashInput",
     title: "Stash Input",
     description: "Park the current hybrid input draft to a temporary stash slot",
     category: "terminal",
@@ -53,14 +130,14 @@ export function registerTerminalInputActions(
     scope: "renderer",
     run: async () => {
       const { triggerStashInput } = await import("@/store/terminalInputStore");
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = state.focusedId;
       if (targetId) triggerStashInput(targetId);
     },
   }));
 
   actions.set("terminal.popStash", () => ({
-    id: "terminal.popStash" as ActionId,
+    id: "terminal.popStash",
     title: "Restore Stashed Input",
     description: "Restore the previously stashed hybrid input draft",
     category: "terminal",
@@ -69,15 +146,15 @@ export function registerTerminalInputActions(
     scope: "renderer",
     run: async () => {
       const { triggerPopStash } = await import("@/store/terminalInputStore");
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = state.focusedId;
       if (targetId) triggerPopStash(targetId);
     },
   }));
 
   actions.set("terminal.bulkCommand", () => ({
-    id: "terminal.bulkCommand" as ActionId,
-    title: "Bulk Command Center",
+    id: "terminal.bulkCommand",
+    title: "Bulk Operations",
     description: "Send keystrokes or commands to multiple agent terminals",
     category: "terminal",
     kind: "command",
@@ -91,7 +168,7 @@ export function registerTerminalInputActions(
   }));
 
   actions.set("terminal.sendToAgent", () => ({
-    id: "terminal.sendToAgent" as ActionId,
+    id: "terminal.sendToAgent",
     title: "Send to Agent",
     description: "Send terminal selection to another agent or terminal panel",
     category: "terminal",
@@ -101,11 +178,11 @@ export function registerTerminalInputActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = (args ?? {}) as { terminalId?: string };
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const sourceId = terminalId ?? state.focusedId;
       if (!sourceId) return;
 
-      const terminal = state.terminals.find((t) => t.id === sourceId);
+      const terminal = state.panelsById[sourceId];
       if (!terminal) return;
       if (terminal.kind && !panelKindHasPty(terminal.kind)) return;
 

@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type React from "react";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import type { AgentState } from "@/types";
-import type { TerminalInstance } from "@/store/terminalStore";
+import type { TerminalInstance } from "@/store/panelStore";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { cn } from "@/lib/utils";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";

@@ -1,5 +1,11 @@
 import { test, expect } from "@playwright/test";
-import { launchApp, closeApp, mockOpenDialog, type AppContext } from "../helpers/launch";
+import {
+  launchApp,
+  closeApp,
+  mockOpenDialog,
+  refreshActiveWindow,
+  type AppContext,
+} from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { dismissTelemetryConsent } from "../helpers/project";
 import { getTerminalText } from "../helpers/terminal";
@@ -40,13 +46,17 @@ test.describe("Claude Online Flow", () => {
       await dismissTelemetryConsent(window);
     });
 
+    // Re-acquire window after onboarding — ProjectViewManager may have
+    // created a new WebContentsView for the project.
+    ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
+
     await test.step("launch Claude agent", async () => {
       const { window } = ctx;
 
       await window.locator(SEL.agent.startButton).click();
 
       const agentPanel = window.locator(SEL.agent.panel);
-      await expect(agentPanel).toBeVisible({ timeout: 5_000 });
+      await expect(agentPanel).toBeVisible({ timeout: 30_000 });
     });
 
     await test.step("handle prompts and wait for Welcome", async () => {

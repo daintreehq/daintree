@@ -9,15 +9,18 @@ import type { AgentVersionService } from "../services/AgentVersionService.js";
 import type { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
 import type { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
+import type { ProjectViewManager } from "../window/ProjectViewManager.js";
+import type { WorktreePortBroker } from "../services/WorktreePortBroker.js";
 
 export interface IpcContext {
   event: Electron.IpcMainInvokeEvent;
   webContentsId: number;
   senderWindow: BrowserWindow | null;
+  projectId: string | null;
 }
 
 export interface HandlerDependencies {
-  mainWindow: BrowserWindow;
+  mainWindow?: BrowserWindow;
   ptyClient?: PtyClient;
   worktreeService?: WorkspaceClient;
   eventBuffer?: EventBuffer;
@@ -29,4 +32,6 @@ export interface HandlerDependencies {
   projectSwitchService?: ProjectSwitchService;
   isDemoMode?: boolean;
   windowRegistry?: WindowRegistry;
+  projectViewManager?: ProjectViewManager;
+  worktreePortBroker?: WorktreePortBroker;
 }

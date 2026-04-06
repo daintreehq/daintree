@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { launchApp, closeApp, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, refreshActiveWindow, type AppContext } from "../helpers/launch";
 import { createFixtureRepo, createMultiProjectFixture } from "../helpers/fixtures";
 import type { MultiProjectFixture } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
@@ -30,7 +30,24 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
     });
 
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixture, "Cross Boundary");
+
+    // Disable two-pane split mode: the test spawns 2 terminals in the
+    // feature worktree, which triggers a race condition where the split
+    // layout momentarily activates and crashes the Electron process.
+    await ctx.window.evaluate(() => {
+      localStorage.setItem(
+        "canopy-two-pane-split",
+        JSON.stringify({
+          state: {
+            config: { enabled: false, defaultRatio: 0.5, preferPreview: false },
+            ratioByWorktreeId: {},
+          },
+          version: 1,
+        })
+      );
+    });
+
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, "Cross Boundary");
   });
 
   test.afterAll(async () => {
@@ -127,6 +144,9 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
   });
 
   test("overview modal opens and shows worktree cards", async () => {
+    // Re-acquire the active window — worktree switches in the preceding
+    // test may have changed the active WebContentsView.
+    ctx.window = await refreshActiveWindow(ctx.app);
     const { window } = ctx;
 
     await window.keyboard.press(`${mod}+Shift+O`);
@@ -143,19 +163,50 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
   test("search filtering narrows displayed worktrees in overview", async () => {
     const { window } = ctx;
     const modal = window.locator(SEL.worktree.overviewModal);
+
+    // Ensure the modal is still open from the previous test
+    await expect(modal).toBeVisible({ timeout: T_MEDIUM });
+
+    // Ensure main worktree is visible (it may be hidden by a toggle)
+    const showMainBtn = modal.locator('[aria-label="Show main worktree"]');
+    if (await showMainBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await showMainBtn.click();
+      await window.waitForTimeout(T_SETTLE);
+    }
+    // Clear any active filters
+    const clearBtn = modal.locator('[aria-label="Clear all filters"]');
+    if (await clearBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await clearBtn.click();
+      await window.waitForTimeout(T_SETTLE);
+    }
+
     const cards = modal.locator("[data-worktree-branch]");
+
+    // Wait for all cards to be rendered
+    await expect.poll(() => cards.count(), { timeout: T_LONG }).toBeGreaterThanOrEqual(2);
 
     const initialCount = await cards.count();
     expect(initialCount).toBeGreaterThanOrEqual(2);
 
     // Open filter popover and search
-    await modal.locator(SEL.worktree.filterButton).click();
+    const filterBtn = modal.locator(SEL.worktree.filterButton);
+    await expect(filterBtn).toBeVisible({ timeout: T_MEDIUM });
+    await filterBtn.click();
     const popover = window.locator(SEL.worktree.filterPopover);
-    await expect(popover).toBeVisible({ timeout: T_SHORT });
 
+    // Retry click if popover didn't open (can happen due to focus/z-index race)
+    if (!(await popover.isVisible({ timeout: 2000 }).catch(() => false))) {
+      await filterBtn.click();
+    }
+    await expect(popover).toBeVisible({ timeout: T_MEDIUM });
+
+    // Wait for popover to stabilize before interacting with the search input
+    await window.waitForTimeout(T_SETTLE);
     const searchInput = popover.locator('[aria-label="Search worktrees"]');
+    await expect(searchInput).toBeVisible({ timeout: T_MEDIUM });
 
     // Search for feature branch — should narrow to 1 card
+    await searchInput.click();
     await searchInput.fill("feature/test-branch");
     await window.waitForTimeout(T_SETTLE);
 
@@ -166,16 +217,16 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
       })
       .toBeLessThan(initialCount);
 
-    // Clear search
-    await popover.locator('[aria-label="Clear search"]').click();
+    // Clear search by emptying the input
+    await searchInput.clear();
     await window.waitForTimeout(T_SETTLE);
 
     await expect
       .poll(() => cards.count(), { timeout: T_MEDIUM })
       .toBeGreaterThanOrEqual(initialCount);
 
-    // Close popover and modal
-    await modal.locator(SEL.worktree.filterButton).click();
+    // Close popover by clicking filter button again, then close modal
+    await filterBtn.click();
     await expect(popover).not.toBeVisible({ timeout: T_SHORT });
 
     await modal.locator(SEL.worktree.overviewClose).click();
@@ -196,7 +247,7 @@ test.describe.serial("Core: Worktree Selection Persists Across Project Switch", 
     );
 
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixture.repoA, "Project A");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture.repoA, "Project A");
   });
 
   test.afterAll(async () => {
@@ -267,7 +318,7 @@ test.describe.serial("Core: Worktree Creation Resilience", () => {
     const fixture = createFixtureRepo({ name: "creation-resilience" });
 
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixture, "Creation Resilience");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, "Creation Resilience");
   });
 
   test.afterAll(async () => {

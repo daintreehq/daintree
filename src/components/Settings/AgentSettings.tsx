@@ -17,6 +17,7 @@ import { RotateCcw, ExternalLink, RefreshCw, Copy, Check } from "lucide-react";
 import { CanopyAgentIcon } from "@/components/icons";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { SettingsSelect } from "./SettingsSelect";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { AgentHelpOutput } from "./AgentHelpOutput";
@@ -79,6 +80,7 @@ export function AgentSettings({
   }, [settings, isCliInitialized, isCliLoading, cliAvailability]);
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
       if (copyTimeoutRef.current) {
@@ -208,7 +210,7 @@ export function AgentSettings({
         <div className="flex items-center justify-between">
           <div>
             <h4 className="text-sm font-medium mb-1">CLI Agents</h4>
-            <p className="text-xs text-canopy-text/50">
+            <p className="text-xs text-canopy-text/50 select-text">
               Configure global agent preferences and per-agent settings
             </p>
           </div>
@@ -239,7 +241,7 @@ export function AgentSettings({
           >
             <div className="pb-3 border-b border-canopy-border">
               <h4 className="text-sm font-medium text-canopy-text">Global Agent Settings</h4>
-              <p className="text-xs text-canopy-text/50 mt-0.5">
+              <p className="text-xs text-canopy-text/50 mt-0.5 select-text">
                 Settings that apply across all agents
               </p>
             </div>
@@ -251,7 +253,7 @@ export function AgentSettings({
                 onChange={(e) =>
                   setDefaultAgent(e.target.value ? (e.target.value as DefaultAgentId) : undefined)
                 }
-                className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
               >
                 <option value="">None (first available)</option>
                 {agentOptions.map((agent) => (
@@ -260,10 +262,10 @@ export function AgentSettings({
                   </option>
                 ))}
               </select>
-              <p className="text-xs text-canopy-text/40">
-                Agent used for automated workflows ("What's Next?", onboarding, project
-                explanations). Distinct from the Portal "Default New Tab Agent" which controls the
-                browser panel opened by the + button.
+              <p className="text-xs text-canopy-text/40 select-text">
+                Agent used for the help dock button (⌘⇧H) and automated workflows ("What's Next?",
+                onboarding, project explanations). Distinct from the Portal "Default New Tab Agent"
+                which controls the browser panel opened by the + button.
               </p>
             </div>
           </div>
@@ -280,7 +282,7 @@ export function AgentSettings({
                   <h4 className="text-sm font-medium text-canopy-text">
                     {activeAgent.name} Settings
                   </h4>
-                  <p className="text-xs text-canopy-text/50">
+                  <p className="text-xs text-canopy-text/50 select-text">
                     Configure how {activeAgent.name.toLowerCase()} runs in terminals
                   </p>
                 </div>
@@ -416,16 +418,56 @@ export function AgentSettings({
               </div>
             )}
 
+            {/* Assistant Model Picker - only for agents with multiple models */}
+            {(() => {
+              const agentCfg = getAgentConfig(activeAgent.id);
+              if (!agentCfg?.models || agentCfg.models.length <= 1) return null;
+              return (
+                <div id="agents-assistant-model">
+                  <SettingsSelect
+                    label="Assistant Model"
+                    description="Model used when this agent is launched from the help panel or assistant shortcut"
+                    value={(activeEntry.assistantModelId as string) ?? ""}
+                    onChange={(e) => {
+                      void (async () => {
+                        await updateAgent(activeAgent.id, {
+                          assistantModelId: e.target.value || undefined,
+                        });
+                        onSettingsChange?.();
+                      })();
+                    }}
+                    isModified={!!activeEntry.assistantModelId}
+                    onReset={() => {
+                      void (async () => {
+                        await updateAgent(activeAgent.id, { assistantModelId: undefined });
+                        onSettingsChange?.();
+                      })();
+                    }}
+                    resetAriaLabel={`Reset ${activeAgent.name} assistant model to default`}
+                  >
+                    <option value="">Default (fast model)</option>
+                    {agentCfg.models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </SettingsSelect>
+                </div>
+              );
+            })()}
+
             {/* Custom Arguments */}
             <div id="agents-custom-args" className="space-y-2 pt-2 border-t border-canopy-border">
               <label className="text-sm font-medium text-canopy-text">Custom Arguments</label>
               <input
-                className="w-full rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-text-muted"
+                className="w-full rounded-[var(--radius-md)] border border-border-strong bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-text-muted"
                 value={activeEntry.customFlags ?? ""}
                 onChange={(e) => updateAgent(activeAgent.id, { customFlags: e.target.value })}
                 placeholder="--verbose --max-tokens=4096"
               />
-              <p className="text-xs text-canopy-text/40">Extra CLI flags appended when launching</p>
+              <p className="text-xs text-canopy-text/40 select-text">
+                Extra CLI flags appended when launching
+              </p>
             </div>
 
             {/* Help Output */}
@@ -463,7 +505,7 @@ export function AgentSettings({
                   <div className="flex items-center justify-between">
                     <div>
                       <h5 className="text-sm font-medium text-canopy-text">Installation</h5>
-                      <p className="text-xs text-canopy-text/50">
+                      <p className="text-xs text-canopy-text/50 select-text">
                         {activeAgent.name} CLI not found
                       </p>
                     </div>
@@ -572,7 +614,7 @@ export function AgentSettings({
                         )}
 
                       <div className="px-3 py-2 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border/50">
-                        <p className="text-xs text-canopy-text/40">
+                        <p className="text-xs text-canopy-text/40 select-text">
                           ⚠️ Review commands before running them in your terminal
                         </p>
                       </div>

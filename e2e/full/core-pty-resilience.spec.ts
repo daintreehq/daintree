@@ -27,7 +27,12 @@ test.describe.serial("Core: PTY Resilience", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "pty-resilience" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "PTY Resilience Test");
+    ctx.window = await openAndOnboardProject(
+      ctx.app,
+      ctx.window,
+      fixtureDir,
+      "PTY Resilience Test"
+    );
   });
 
   test.afterAll(async () => {

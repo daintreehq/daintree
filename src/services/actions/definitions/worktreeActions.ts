@@ -2,7 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionContext, ActionId } from "@shared/types/actions";
 import { copyTreeClient, githubClient, systemClient, worktreeClient } from "@/clients";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 
@@ -52,7 +52,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         return null;
       }
 
-      const worktree = useWorktreeDataStore.getState().worktrees.get(activeWorktreeId);
+      const worktree = getCurrentViewStore().getState().worktrees.get(activeWorktreeId);
       if (!worktree) {
         return null;
       }
@@ -84,7 +84,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     run: async () => {
       window.dispatchEvent(new CustomEvent("canopy:refresh-sidebar"));
       await Promise.allSettled([
-        useWorktreeDataStore.getState().refresh(),
+        window.electron.worktreePort.request("refresh"),
         worktreeClient.refreshPullRequests(),
       ]);
     },
@@ -649,7 +649,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
 
-      const worktree = useWorktreeDataStore.getState().worktrees.get(targetWorktreeId);
+      const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
       if (!worktree) return;
 
       await systemClient.openPath(worktree.path);
@@ -669,7 +669,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       const { worktreeId } = (args ?? {}) as { worktreeId?: string };
       const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
-      const worktree = useWorktreeDataStore.getState().worktrees.get(targetWorktreeId);
+      const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
       if (!worktree) return;
       await systemClient.openPath(worktree.path);
     },
@@ -688,7 +688,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       const { worktreeId } = (args ?? {}) as { worktreeId?: string };
       const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
-      const worktree = useWorktreeDataStore.getState().worktrees.get(targetWorktreeId);
+      const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
       if (!worktree?.issueNumber) return;
       await githubClient.openIssue(worktree.path, worktree.issueNumber);
     },
@@ -707,7 +707,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       const { worktreeId } = (args ?? {}) as { worktreeId?: string };
       const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
-      const worktree = useWorktreeDataStore.getState().worktrees.get(targetWorktreeId);
+      const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
       if (!worktree?.prUrl) return;
       await githubClient.openPR(worktree.prUrl);
     },
@@ -727,7 +727,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
 
-      const worktree = useWorktreeDataStore.getState().worktrees.get(targetWorktreeId);
+      const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
       if (!worktree?.prUrl) return;
 
       try {
@@ -755,7 +755,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     isEnabled: (ctx: ActionContext) => {
       const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!worktreeId) return false;
-      const worktree = useWorktreeDataStore.getState().worktrees.get(worktreeId);
+      const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
       return typeof worktree?.prUrl === "string" && worktree.prUrl.trim().length > 0;
     },
   }));
@@ -790,7 +790,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
 
-      const worktree = useWorktreeDataStore.getState().worktrees.get(targetWorktreeId);
+      const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
       if (!worktree?.issueNumber) return;
 
       const issueUrl = await githubClient.getIssueUrl(worktree.path, worktree.issueNumber);
@@ -810,7 +810,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     isEnabled: (ctx: ActionContext) => {
       const worktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
       if (!worktreeId) return false;
-      const worktree = useWorktreeDataStore.getState().worktrees.get(worktreeId);
+      const worktree = getCurrentViewStore().getState().worktrees.get(worktreeId);
       return typeof worktree?.issueNumber === "number" && worktree.issueNumber > 0;
     },
   }));

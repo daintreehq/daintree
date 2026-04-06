@@ -6,7 +6,7 @@ import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 
 const AVAILABLE_SOUNDS: { file: string; label: string }[] = [
-  { file: "chime.wav", label: "Chime (default)" },
+  { file: "chime.wav", label: "Chime" },
   { file: "ping.wav", label: "Ping" },
   { file: "complete.wav", label: "Complete" },
   { file: "waiting.wav", label: "Waiting" },
@@ -51,8 +51,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
     [overrides, onChange]
   );
 
-  const handlePreview = () => {
-    const soundFile = overrides.soundFile ?? globalSettings?.soundFile ?? "chime.wav";
+  const handlePreview = (soundFile: string) => {
     window.electron?.notification?.playSound(soundFile).catch(() => {});
   };
 
@@ -189,7 +188,12 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
             onToggleOverride={(on) => {
               if (on) setOverride("soundEnabled", globalSettings.soundEnabled);
               else {
-                clearOverrides("soundEnabled", "soundFile");
+                clearOverrides(
+                  "soundEnabled",
+                  "completedSoundFile",
+                  "waitingSoundFile",
+                  "escalationSoundFile"
+                );
               }
             }}
           >
@@ -203,38 +207,55 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
             />
           </OverrideRow>
 
-          {(effective("soundEnabled") as boolean) && (
-            <OverrideRow
-              label="Sound file"
-              isOverridden={overrides.soundFile !== undefined}
-              onToggleOverride={(on) => {
-                if (on) setOverride("soundFile", globalSettings.soundFile);
-                else clearOverrides("soundFile");
-              }}
-            >
-              <div className="flex items-center gap-2">
-                <select
-                  value={effective("soundFile") as string}
-                  onChange={(e) => setOverride("soundFile", e.target.value)}
-                  className="flex-1 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
-                >
-                  {AVAILABLE_SOUNDS.map(({ file, label }) => (
-                    <option key={file} value={file}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={handlePreview}
-                  title="Preview sound"
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text hover:bg-tint/[0.06] transition-colors"
-                >
-                  <Play className="h-3.5 w-3.5" />
-                  Preview
-                </button>
-              </div>
-            </OverrideRow>
-          )}
+          {(effective("soundEnabled") as boolean) &&
+            (
+              [
+                {
+                  label: "Completed sound",
+                  field: "completedSoundFile" as const,
+                },
+                {
+                  label: "Waiting sound",
+                  field: "waitingSoundFile" as const,
+                },
+                {
+                  label: "Escalation sound",
+                  field: "escalationSoundFile" as const,
+                },
+              ] as const
+            ).map(({ label, field }) => (
+              <OverrideRow
+                key={field}
+                label={label}
+                isOverridden={overrides[field] !== undefined}
+                onToggleOverride={(on) => {
+                  if (on) setOverride(field, globalSettings[field]);
+                  else clearOverrides(field);
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  <select
+                    value={effective(field) as string}
+                    onChange={(e) => setOverride(field, e.target.value)}
+                    className="flex-1 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                  >
+                    {AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => (
+                      <option key={file} value={file}>
+                        {soundLabel}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => handlePreview(effective(field) as string)}
+                    title={`Preview ${label.toLowerCase()}`}
+                    className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text hover:bg-tint/[0.06] transition-colors"
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                    Preview
+                  </button>
+                </div>
+              </OverrideRow>
+            ))}
         </div>
       </SettingsSection>
     </div>

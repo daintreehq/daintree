@@ -1,5 +1,5 @@
 /**
- * Configuration runtime values for Canopy Command Center
+ * Configuration runtime values for Canopy
  *
  * Type definitions are imported from @shared/types.
  * This file contains only the DEFAULT_CONFIG constant.

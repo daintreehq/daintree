@@ -1,13 +1,15 @@
-import type { ProjectSettings } from "../types/index.js";
+import type { ProjectSettings, TerminalRecipe } from "../types/index.js";
 import type { RunCommand, CopyTreeSettings } from "../../shared/types/project.js";
 import path from "path";
 import fs from "fs/promises";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { UTF8_BOM } from "./projectStorePaths.js";
+import { safeRecipeFilename } from "../utils/recipeFilename.js";
 
 const MAX_PROJECT_NAME_LENGTH = 100;
 const CANOPY_PROJECT_JSON = ".canopy/project.json";
 const CANOPY_SETTINGS_JSON = ".canopy/settings.json";
+const CANOPY_RECIPES_DIR = ".canopy/recipes";
 
 export class ProjectIdentityFiles {
   async readInRepoProjectIdentity(
@@ -181,6 +183,117 @@ export class ProjectIdentityFiles {
         );
         throw retryError;
       }
+    }
+  }
+
+  async writeInRepoRecipe(projectPath: string, recipe: TerminalRecipe): Promise<void> {
+    await this.assertCanopyDirNotSymlink(projectPath);
+    const recipesDir = path.join(projectPath, CANOPY_RECIPES_DIR);
+
+    // Also guard the recipes subdirectory against symlink attacks
+    try {
+      const stat = await fs.lstat(recipesDir);
+      if (stat.isSymbolicLink()) {
+        throw new Error(
+          `.canopy/recipes/ in ${projectPath} is a symbolic link — refusing to write`
+        );
+      }
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    }
+
+    const filename = safeRecipeFilename(recipe.name);
+    const filePath = path.join(recipesDir, filename);
+
+    // Strip fields that shouldn't be shared: projectId, worktreeId, source, and env values
+    const { projectId: _, worktreeId: _w, ...shareable } = recipe;
+    const sanitizedTerminals = shareable.terminals.map((t) => {
+      if (!t.env || Object.keys(t.env).length === 0) return t;
+      const redactedEnv: Record<string, string> = {};
+      for (const key of Object.keys(t.env)) {
+        redactedEnv[key] = "";
+      }
+      return { ...t, env: redactedEnv };
+    });
+    const payload = { ...shareable, terminals: sanitizedTerminals };
+
+    const attemptWrite = async (ensureDir: boolean): Promise<void> => {
+      if (ensureDir) {
+        await fs.mkdir(recipesDir, { recursive: true });
+      }
+      await resilientAtomicWriteFile(filePath, JSON.stringify(payload, null, 2), "utf-8");
+    };
+
+    try {
+      await attemptWrite(false);
+    } catch (error) {
+      const isEnoent = error instanceof Error && "code" in error && error.code === "ENOENT";
+      if (!isEnoent) throw error;
+      await attemptWrite(true);
+    }
+  }
+
+  async readInRepoRecipes(projectPath: string): Promise<TerminalRecipe[]> {
+    const recipesDir = path.join(projectPath, CANOPY_RECIPES_DIR);
+    let entries;
+    try {
+      entries = await fs.readdir(recipesDir, { withFileTypes: true });
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+      throw error;
+    }
+
+    const recipes: TerminalRecipe[] = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      try {
+        const content = await fs.readFile(path.join(recipesDir, entry.name), "utf-8");
+        const parsed = JSON.parse(content);
+        if (
+          typeof parsed !== "object" ||
+          parsed === null ||
+          typeof parsed.name !== "string" ||
+          !Array.isArray(parsed.terminals)
+        ) {
+          continue;
+        }
+        // Assign a stable ID based on filename so it's consistent across loads
+        if (!parsed.id) {
+          parsed.id = `inrepo-${entry.name.replace(/\.json$/, "")}`;
+        }
+        if (typeof parsed.createdAt !== "number") {
+          parsed.createdAt = 0;
+        }
+        recipes.push(parsed as TerminalRecipe);
+      } catch {
+        console.warn(`[ProjectIdentityFiles] Skipping malformed recipe file: ${entry.name}`);
+      }
+    }
+    return recipes;
+  }
+
+  async deleteInRepoRecipe(projectPath: string, recipeName: string): Promise<void> {
+    await this.assertCanopyDirNotSymlink(projectPath);
+    const recipesDir = path.join(projectPath, CANOPY_RECIPES_DIR);
+
+    try {
+      const stat = await fs.lstat(recipesDir);
+      if (stat.isSymbolicLink()) {
+        throw new Error(
+          `.canopy/recipes/ in ${projectPath} is a symbolic link — refusing to delete`
+        );
+      }
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    }
+
+    const filename = safeRecipeFilename(recipeName);
+    const filePath = path.join(recipesDir, filename);
+    try {
+      await fs.unlink(filePath);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+      throw error;
     }
   }
 }

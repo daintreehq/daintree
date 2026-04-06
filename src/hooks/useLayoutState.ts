@@ -4,6 +4,7 @@ import {
   useFocusStore,
   useDiagnosticsStore,
   usePortalStore,
+  useHelpPanelStore,
   useErrorStore,
   usePerformanceModeStore,
   type PanelState,
@@ -22,6 +23,10 @@ export interface LayoutState {
   portalOpen: boolean;
   portalWidth: number;
   togglePortal: () => void;
+
+  helpPanelOpen: boolean;
+  helpPanelWidth: number;
+  toggleHelpPanel: () => void;
 
   performanceMode: boolean;
   errorCount: number;
@@ -53,6 +58,14 @@ export function useLayoutState(): LayoutState {
     }))
   );
 
+  const helpPanelState = useHelpPanelStore(
+    useShallow((state) => ({
+      helpPanelOpen: state.isOpen,
+      helpPanelWidth: state.width,
+      toggleHelpPanel: state.toggle,
+    }))
+  );
+
   const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
 
   const errorCount = useErrorStore(
@@ -64,9 +77,10 @@ export function useLayoutState(): LayoutState {
       ...focusState,
       ...diagnosticsState,
       ...portalState,
+      ...helpPanelState,
       performanceMode,
       errorCount,
     }),
-    [focusState, diagnosticsState, portalState, performanceMode, errorCount]
+    [focusState, diagnosticsState, portalState, helpPanelState, performanceMode, errorCount]
   );
 }

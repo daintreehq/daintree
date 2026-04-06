@@ -16,3 +16,6 @@ if [ -f "$SANDBOX" ]; then
   chown root:root "$SANDBOX"
   chmod 4755 "$SANDBOX"
 fi
+
+# Symlink canopy-app binary into PATH for CLI discovery
+ln -sf /opt/Canopy/canopy-app /usr/bin/canopy-app

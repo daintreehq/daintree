@@ -1,5 +1,4 @@
 import { useCallback } from "react";
-import { cn } from "@/lib/utils";
 import {
   BUILT_IN_SCHEMES,
   DEFAULT_SCHEME_ID,
@@ -9,38 +8,46 @@ import {
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
+import { ThemeSelector } from "./ThemeSelector";
 
 function SchemePreview({ scheme }: { scheme: TerminalColorScheme }) {
-  const colors = scheme.colors;
-  const swatchColors = [
-    colors.black,
-    colors.red,
-    colors.green,
-    colors.yellow,
-    colors.blue,
-    colors.magenta,
-    colors.cyan,
-    colors.white,
-    colors.brightBlack,
-    colors.brightRed,
-    colors.brightGreen,
-    colors.brightYellow,
-    colors.brightBlue,
-    colors.brightMagenta,
-    colors.brightCyan,
-    colors.brightWhite,
-  ];
+  const c = scheme.colors;
+  const fg = c.foreground ?? "#ccc";
 
   return (
-    <div className="rounded p-1.5" style={{ backgroundColor: colors.background ?? "#000" }}>
-      <div className="grid grid-cols-8 gap-0.5">
-        {swatchColors.map((color, i) => (
-          <div
-            key={i}
-            className="w-3 h-3 rounded-sm"
-            style={{ backgroundColor: color ?? "#888" }}
-          />
-        ))}
+    <div
+      className="rounded overflow-hidden"
+      style={{
+        backgroundColor: c.background ?? "#000",
+        padding: "6px 8px",
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        fontSize: "9px",
+        lineHeight: "1.4",
+        whiteSpace: "nowrap",
+        WebkitFontSmoothing: "antialiased",
+      }}
+    >
+      <div>
+        <span style={{ color: c.green ?? fg }}>$ </span>
+        <span style={{ color: fg }}>ls src/</span>
+      </div>
+      <div>
+        <span style={{ color: c.cyan ?? fg }}>components/</span>
+        <span style={{ color: fg }}> </span>
+        <span style={{ color: c.cyan ?? fg }}>utils/</span>
+        <span style={{ color: fg }}> index.ts</span>
+      </div>
+      <div>
+        <span style={{ color: c.green ?? fg }}>$ </span>
+        <span style={{ color: fg }}>git status</span>
+      </div>
+      <div>
+        <span style={{ color: c.brightBlack ?? fg }}>modified: </span>
+        <span style={{ color: c.yellow ?? fg }}>main.ts</span>
+      </div>
+      <div>
+        <span style={{ color: c.green ?? fg }}>✓ </span>
+        <span style={{ color: fg }}>3 tests passed</span>
       </div>
     </div>
   );
@@ -103,31 +110,26 @@ export function ColorSchemePicker() {
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2">
-        {allSchemes.map((scheme) => {
+      <ThemeSelector<TerminalColorScheme>
+        items={allSchemes}
+        selectedId={selectedSchemeId}
+        onSelect={handleSelect}
+        renderPreview={(scheme) => (
+          <SchemePreview scheme={resolveSchemeForPreview(scheme, appThemeId)} />
+        )}
+        renderMeta={(scheme) => {
           const resolved = resolveSchemeForPreview(scheme, appThemeId);
           return (
-            <button
-              key={scheme.id}
-              onClick={() => handleSelect(scheme.id)}
-              className={cn(
-                "flex flex-col gap-1.5 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
-                selectedSchemeId === scheme.id
-                  ? "border-canopy-accent bg-canopy-accent/10"
-                  : "border-canopy-border bg-canopy-bg hover:border-canopy-text/30"
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-canopy-text truncate">{scheme.name}</span>
+              {resolved.type === "light" && (
+                <span className="text-[10px] text-canopy-text/50 shrink-0">light</span>
               )}
-            >
-              <SchemePreview scheme={resolved} />
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-canopy-text truncate">{scheme.name}</span>
-                {resolved.type === "light" && (
-                  <span className="text-[10px] text-canopy-text/50 shrink-0">light</span>
-                )}
-              </div>
-            </button>
+            </div>
           );
-        })}
-      </div>
+        }}
+        getName={(s) => s.name}
+      />
       <button
         onClick={handleImport}
         className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"

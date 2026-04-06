@@ -567,6 +567,7 @@ describe("projectSettingsDirty", () => {
         "none",
         "",
         undefined,
+        undefined,
         "",
         undefined,
         undefined
@@ -585,9 +586,174 @@ describe("projectSettingsDirty", () => {
         "none",
         "",
         undefined,
+        undefined,
         "",
         undefined,
         { completedEnabled: true }
+      );
+
+      expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(false);
+    });
+
+    it("should detect changed color", () => {
+      const snapshotA = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        undefined,
+        "",
+        undefined,
+        undefined,
+        "#ff5500"
+      );
+      const snapshotB = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        undefined,
+        "",
+        undefined,
+        undefined,
+        "#0055ff"
+      );
+
+      expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(false);
+    });
+
+    it("should treat undefined and undefined color as equal", () => {
+      const snapshotA = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        undefined,
+        "",
+        undefined,
+        undefined,
+        undefined
+      );
+      const snapshotB = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        undefined,
+        "",
+        undefined,
+        undefined,
+        undefined
+      );
+
+      expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(true);
+    });
+
+    it("should detect change from undefined to defined color", () => {
+      const snapshotA = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {}
+      );
+      const snapshotB = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        undefined,
+        "",
+        undefined,
+        undefined,
+        "#ff0000"
+      );
+
+      expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(false);
+    });
+
+    it("should detect changed githubRemote", () => {
+      const snapshotA = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        undefined
+      );
+      const snapshotB = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        "upstream"
       );
 
       expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(false);
@@ -608,6 +774,7 @@ describe("projectSettingsDirty", () => {
         "none",
         "",
         undefined,
+        undefined,
         "",
         undefined,
         undefined
@@ -625,6 +792,7 @@ describe("projectSettingsDirty", () => {
         {},
         "none",
         "",
+        undefined,
         undefined,
         "",
         undefined,

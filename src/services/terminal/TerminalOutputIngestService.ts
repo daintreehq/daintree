@@ -1,13 +1,11 @@
-import { terminalClient } from "@/clients";
-import type {
-  WorkerInboundMessage,
-  WorkerOutboundMessage,
-} from "@shared/types/terminal-output-worker-messages";
+import type { WorkerInboundMessage } from "@shared/types/terminal-output-worker-messages";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
+import { logDebug } from "@/utils/logger";
 
 const RENDERER_HIGH_WATERMARK_BYTES = 128 * 1024;
 const RENDERER_LOW_WATERMARK_BYTES = 32 * 1024;
+const COALESCE_BATCH_CAP_BYTES = 256 * 1024;
 const IPC_LOOKBACK_CHARS = 32;
 const INK_ERASE_LINE_PATTERN = "\x1b[2K\x1b[1A";
 
@@ -36,59 +34,18 @@ export class TerminalOutputIngestService {
   }
 
   private async initializeImpl(): Promise<void> {
-    try {
-      const { visualBuffers, signalBuffer } = await terminalClient.getSharedBuffers();
-      if (visualBuffers.length > 0 && signalBuffer) {
-        this.sabAvailable = true;
-        this.worker = new Worker(
-          new URL("../../workers/terminalOutput.worker.ts", import.meta.url),
-          { type: "module" }
-        );
-
-        this.worker.onmessage = (event: MessageEvent<WorkerOutboundMessage>) => {
-          const message = event.data;
-          if (message.type === "OUTPUT_BATCH") {
-            for (const batch of message.batches) {
-              this.markTerminalDataReceived(batch.id, batch.data);
-              this.enqueueChunk(batch.id, batch.data);
-            }
-          }
-        };
-
-        this.worker.onerror = (error) => {
-          console.error("[TerminalOutputIngestService] Worker error:", error);
-          this.pollingActive = false;
-          this.sabAvailable = false;
-          this.worker?.terminate();
-          this.worker = null;
-          this.initializePromise = null;
-        };
-
-        const initMessage: WorkerInboundMessage = {
-          type: "INIT_BUFFER",
-          buffers: visualBuffers,
-          signalBuffer,
-        };
-        this.worker.postMessage(initMessage);
-        this.pollingActive = true;
-        console.log(
-          `[TerminalOutputIngestService] Worker-based SAB ingestion enabled (${visualBuffers.length} shards)`
-        );
-      } else {
-        console.log("[TerminalOutputIngestService] SharedArrayBuffer unavailable, using IPC");
-        this.sabAvailable = false;
-        this.pollingActive = false;
-        this.worker = null;
-        this.initializePromise = null;
-      }
-    } catch (error) {
-      console.warn("[TerminalOutputIngestService] Failed to initialize SharedArrayBuffer:", error);
-      this.sabAvailable = false;
-      this.pollingActive = false;
-      this.worker?.terminate();
-      this.worker = null;
-      this.initializePromise = null;
-    }
+    // SAB worker is intentionally disabled. SharedArrayBuffer ring buffers use a single shared
+    // read pointer (single-consumer design), but per-project WebContentsViews each create their
+    // own worker polling the same buffers. This causes a race where one view's worker consumes
+    // data meant for another view, silently dropping terminal output.
+    //
+    // MessagePort is now the primary data path (like VS Code). It routes data per-window with
+    // project filtering, ensuring each view receives only its own terminals' output.
+    // Data flows: pty-host → MessagePort → terminalClient.onData → bufferData → writeToTerminal.
+    logDebug("[TerminalOutputIngestService] Using MessagePort data path (SAB worker disabled)");
+    this.sabAvailable = false;
+    this.pollingActive = false;
+    this.worker = null;
   }
 
   public isEnabled(): boolean {
@@ -234,9 +191,23 @@ export class TerminalOutputIngestService {
 
     const allStrings = queue.chunks.every((c) => typeof c === "string");
     if (allStrings) {
-      const merged = (queue.chunks as string[]).join("");
-      queue.chunks.length = 0;
-      queue.queuedBytes = 0;
+      if (queue.queuedBytes <= COALESCE_BATCH_CAP_BYTES) {
+        const merged = (queue.chunks as string[]).join("");
+        queue.chunks.length = 0;
+        queue.queuedBytes = 0;
+        return merged;
+      }
+      let taken = 0;
+      let i = 0;
+      do {
+        taken += (queue.chunks[i] as string).length;
+        i++;
+      } while (
+        i < queue.chunks.length &&
+        taken + (queue.chunks[i] as string).length <= COALESCE_BATCH_CAP_BYTES
+      );
+      const merged = (queue.chunks.splice(0, i) as string[]).join("");
+      queue.queuedBytes -= merged.length;
       return merged;
     }
 

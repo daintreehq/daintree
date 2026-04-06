@@ -5,7 +5,7 @@ import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { usePortalStore } from "@/store/portalStore";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 
 export function registerPanelActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   // Query action: list all panels with metadata
@@ -28,8 +28,8 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
         worktreeId?: string;
         location?: "grid" | "dock" | "trash" | "background";
       };
-      const state = useTerminalStore.getState();
-      let panels = state.terminals;
+      const state = usePanelStore.getState();
+      let panels = state.panelIds.map((id) => state.panelsById[id]).filter(Boolean);
 
       if (worktreeId) {
         panels = panels.filter((p) => p.worktreeId === worktreeId);
@@ -81,8 +81,9 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     }),
     run: async (args: unknown) => {
       const { panelId } = args as { panelId: string };
-      const terminalState = useTerminalStore.getState();
-      const panel = terminalState.terminals.find((t) => t.id === panelId && t.location !== "trash");
+      const terminalState = usePanelStore.getState();
+      const found = terminalState.panelsById[panelId];
+      const panel = found && found.location !== "trash" ? found : undefined;
       if (!panel) {
         throw new Error("Terminal panel no longer exists");
       }

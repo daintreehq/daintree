@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import {
   DndContext,
   closestCenter,
@@ -21,7 +21,6 @@ import {
   Globe,
   Monitor,
   AlertTriangle,
-  Leaf,
   Settings,
   AlertCircle,
   Bell,
@@ -29,6 +28,7 @@ import {
   LayoutGrid,
   Rocket,
   RotateCcw,
+  StickyNote,
 } from "lucide-react";
 import {
   ClaudeIcon,
@@ -39,14 +39,16 @@ import {
   CopyTreeIcon,
 } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
-import type { ToolbarButtonId } from "@/../../shared/types/toolbar";
+import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
+import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
+import { McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 
 type ButtonMetadata = { label: string; icon: React.ReactNode; description: string };
 
-const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
+const BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, ButtonMetadata>> = {
   "agent-setup": {
     label: "Agent Setup",
     icon: <CanopyAgentIcon className="h-4 w-4" />,
@@ -83,9 +85,9 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
     description: "Open browser panel",
   },
   "dev-server": {
-    label: "Dev Server",
+    label: "Dev Preview",
     icon: <Monitor className="h-4 w-4" />,
-    description: "Start development server",
+    description: "Open dev preview panel",
   },
   "panel-palette": {
     label: "Panel Palette",
@@ -109,7 +111,7 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
   },
   notes: {
     label: "Notes",
-    icon: <Leaf className="h-4 w-4" />,
+    icon: <StickyNote className="h-4 w-4" />,
     description: "Open notes palette",
   },
   "copy-tree": {
@@ -130,21 +132,28 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
 };
 
 interface SortableButtonItemProps {
-  buttonId: ToolbarButtonId;
+  buttonId: AnyToolbarButtonId;
   isVisible: boolean;
-  onToggle: (buttonId: ToolbarButtonId) => void;
+  onToggle: (buttonId: AnyToolbarButtonId) => void;
+  allMetadata: Partial<Record<AnyToolbarButtonId, ButtonMetadata>>;
 }
 
-function SortableButtonItem({ buttonId, isVisible, onToggle }: SortableButtonItemProps) {
-  const metadata = BUTTON_METADATA[buttonId];
+function SortableButtonItem({
+  buttonId,
+  isVisible,
+  onToggle,
+  allMetadata,
+}: SortableButtonItemProps) {
+  const metadata = allMetadata[buttonId];
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: buttonId,
+    disabled: !isVisible,
   });
 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : 1,
+    opacity: isDragging ? 0.5 : isVisible ? 1 : 0.5,
   };
 
   if (!metadata) return null;
@@ -155,14 +164,19 @@ function SortableButtonItem({ buttonId, isVisible, onToggle }: SortableButtonIte
       style={style}
       className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30"
     >
-      <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing">
-        <GripVertical className="h-4 w-4 text-canopy-text/50" />
+      <div
+        {...(isVisible ? { ...attributes, ...listeners } : {})}
+        className={cn(isVisible ? "cursor-grab active:cursor-grabbing" : "cursor-default")}
+      >
+        <GripVertical
+          className={cn("h-4 w-4", isVisible ? "text-canopy-text/50" : "text-canopy-text/20")}
+        />
       </div>
       <div className="flex items-center gap-2 flex-1">
         <div className="text-canopy-text">{metadata.icon}</div>
         <div className="flex-1">
           <div className="text-sm font-medium text-canopy-text">{metadata.label}</div>
-          <div className="text-xs text-canopy-text/50">{metadata.description}</div>
+          <div className="text-xs text-canopy-text/50 select-text">{metadata.description}</div>
         </div>
       </div>
       <input
@@ -170,7 +184,7 @@ function SortableButtonItem({ buttonId, isVisible, onToggle }: SortableButtonIte
         checked={isVisible}
         onChange={() => onToggle(buttonId)}
         aria-label={`Toggle ${metadata.label} visibility`}
-        className="w-4 h-4 rounded border-canopy-border bg-canopy-bg text-canopy-accent focus:ring-canopy-accent focus:ring-2"
+        className="w-4 h-4 rounded border-border-strong bg-canopy-bg text-canopy-accent focus:ring-canopy-accent focus:ring-2"
       />
     </div>
   );
@@ -195,19 +209,36 @@ export function ToolbarSettingsTab() {
     })
   );
 
+  const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
+
+  const allMetadata = useMemo(() => {
+    const pluginMeta: Record<string, ButtonMetadata> = {};
+    for (const id of pluginButtonIds) {
+      const config = pluginConfigs.get(id);
+      if (config) {
+        pluginMeta[id] = {
+          label: config.label,
+          icon: <McpServerIcon className="h-4 w-4" />,
+          description: `Plugin button (${config.pluginId})`,
+        };
+      }
+    }
+    return { ...BUTTON_METADATA, ...pluginMeta };
+  }, [pluginButtonIds, pluginConfigs]);
+
   const handleLeftDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
       if (!over || active.id === over.id) return;
 
-      const oldIndex = layout.leftButtons.indexOf(active.id as ToolbarButtonId);
-      const newIndex = layout.leftButtons.indexOf(over.id as ToolbarButtonId);
+      const oldIndex = layout.leftButtons.indexOf(active.id as AnyToolbarButtonId);
+      const newIndex = layout.leftButtons.indexOf(over.id as AnyToolbarButtonId);
 
       if (oldIndex === -1 || newIndex === -1) return;
 
       const newButtons = [...layout.leftButtons];
       newButtons.splice(oldIndex, 1);
-      newButtons.splice(newIndex, 0, active.id as ToolbarButtonId);
+      newButtons.splice(newIndex, 0, active.id as AnyToolbarButtonId);
 
       setLeftButtons(newButtons);
     },
@@ -219,14 +250,14 @@ export function ToolbarSettingsTab() {
       const { active, over } = event;
       if (!over || active.id === over.id) return;
 
-      const oldIndex = layout.rightButtons.indexOf(active.id as ToolbarButtonId);
-      const newIndex = layout.rightButtons.indexOf(over.id as ToolbarButtonId);
+      const oldIndex = layout.rightButtons.indexOf(active.id as AnyToolbarButtonId);
+      const newIndex = layout.rightButtons.indexOf(over.id as AnyToolbarButtonId);
 
       if (oldIndex === -1 || newIndex === -1) return;
 
       const newButtons = [...layout.rightButtons];
       newButtons.splice(oldIndex, 1);
-      newButtons.splice(newIndex, 0, active.id as ToolbarButtonId);
+      newButtons.splice(newIndex, 0, active.id as AnyToolbarButtonId);
 
       setRightButtons(newButtons);
     },
@@ -234,14 +265,14 @@ export function ToolbarSettingsTab() {
   );
 
   const handleToggleLeft = useCallback(
-    (buttonId: ToolbarButtonId) => {
+    (buttonId: AnyToolbarButtonId) => {
       toggleButtonVisibility(buttonId, "left");
     },
     [toggleButtonVisibility]
   );
 
   const handleToggleRight = useCallback(
-    (buttonId: ToolbarButtonId) => {
+    (buttonId: AnyToolbarButtonId) => {
       toggleButtonVisibility(buttonId, "right");
     },
     [toggleButtonVisibility]
@@ -252,7 +283,7 @@ export function ToolbarSettingsTab() {
       <SettingsSection
         icon={LayoutGrid}
         title="Left Side Buttons"
-        description={`Drag to reorder, uncheck to hide. ${layout.leftButtons.length} buttons configured.`}
+        description={`Drag to reorder, uncheck to hide. ${layout.leftButtons.filter((id) => !layout.hiddenButtons.includes(id)).length} of ${layout.leftButtons.length} visible.`}
       >
         <DndContext
           sensors={sensors}
@@ -265,8 +296,9 @@ export function ToolbarSettingsTab() {
                 <SortableButtonItem
                   key={buttonId}
                   buttonId={buttonId}
-                  isVisible={layout.leftButtons.includes(buttonId)}
+                  isVisible={!layout.hiddenButtons.includes(buttonId)}
                   onToggle={handleToggleLeft}
+                  allMetadata={allMetadata}
                 />
               ))}
             </div>
@@ -277,7 +309,7 @@ export function ToolbarSettingsTab() {
       <SettingsSection
         icon={LayoutGrid}
         title="Right Side Buttons"
-        description={`Drag to reorder, uncheck to hide. ${layout.rightButtons.length} buttons configured.`}
+        description={`Drag to reorder, uncheck to hide. ${layout.rightButtons.filter((id) => !layout.hiddenButtons.includes(id)).length} of ${layout.rightButtons.length} visible.`}
       >
         <DndContext
           sensors={sensors}
@@ -290,8 +322,9 @@ export function ToolbarSettingsTab() {
                 <SortableButtonItem
                   key={buttonId}
                   buttonId={buttonId}
-                  isVisible={layout.rightButtons.includes(buttonId)}
+                  isVisible={!layout.hiddenButtons.includes(buttonId)}
                   onToggle={handleToggleRight}
+                  allMetadata={allMetadata}
                 />
               ))}
             </div>
@@ -323,7 +356,7 @@ export function ToolbarSettingsTab() {
                   e.target.value ? (e.target.value as typeof launcher.defaultSelection) : undefined
                 )
               }
-              className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+              className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
             >
               <option value="">None (first available)</option>
               <option value="terminal">Terminal</option>
@@ -332,9 +365,9 @@ export function ToolbarSettingsTab() {
               <option value="codex">Codex</option>
               <option value="opencode">OpenCode</option>
               <option value="browser">Browser</option>
-              <option value="dev-server">Dev Server</option>
+              <option value="dev-server">Dev Preview</option>
             </select>
-            <p className="text-xs text-canopy-text/40">
+            <p className="text-xs text-canopy-text/40 select-text">
               Default option to highlight when opening the launcher palette
             </p>
           </div>

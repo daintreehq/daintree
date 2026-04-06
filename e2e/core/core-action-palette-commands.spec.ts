@@ -16,7 +16,7 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "palettes-test", withMultipleFiles: true });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Palette Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Palette Test");
   });
 
   test.afterAll(async () => {
@@ -81,11 +81,15 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
       const initialDescendant = await searchInput.getAttribute("aria-activedescendant");
 
       await searchInput.press("ArrowDown");
-      await window.waitForTimeout(T_SETTLE);
+
+      // Poll until the selection changes — the React state update from
+      // selectNext may take a render cycle to flush to the DOM.
+      await expect
+        .poll(() => searchInput.getAttribute("aria-activedescendant"), { timeout: T_MEDIUM })
+        .not.toBe(initialDescendant);
 
       const newDescendant = await searchInput.getAttribute("aria-activedescendant");
       expect(newDescendant).toBeTruthy();
-      expect(newDescendant).not.toBe(initialDescendant);
       expect(newDescendant).toMatch(/^action-option-/);
     });
 

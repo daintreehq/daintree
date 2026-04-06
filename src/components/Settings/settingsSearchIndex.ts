@@ -1,4 +1,4 @@
-import type { SettingsTab } from "./SettingsDialog";
+import type { SettingsTab, SettingsScope } from "./SettingsDialog";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 
@@ -6,6 +6,7 @@ export interface SettingsSearchEntry {
   id: string;
   tab: SettingsTab;
   tabLabel: string;
+  scope: SettingsScope;
   /** Optional subtab id to activate when navigating to this result. */
   subtab?: string;
   /** Human-readable subtab label used in search breadcrumbs and haystack. */
@@ -14,6 +15,13 @@ export interface SettingsSearchEntry {
   title: string;
   description: string;
   keywords?: string[];
+  /** When set, indicates this setting is only visible when a parent setting is enabled. */
+  requiresEnabled?: {
+    /** id of the gate entry in the search index (e.g. "mcp-server-enable") */
+    settingId: string;
+    /** Human-readable label shown in warnings (e.g. "MCP Server") */
+    label: string;
+  };
 }
 
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
@@ -22,6 +30,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "tab-nav-general",
     tab: "general",
+    scope: "global",
     tabLabel: "General",
     section: "Settings Navigation",
     title: "General",
@@ -31,6 +40,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "tab-nav-keyboard",
     tab: "keyboard",
+    scope: "global",
     tabLabel: "Keyboard Shortcuts",
     section: "Settings Navigation",
     title: "Keyboard Shortcuts",
@@ -40,6 +50,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "tab-nav-terminalAppearance",
     tab: "terminalAppearance",
+    scope: "global",
     tabLabel: "Appearance",
     section: "Settings Navigation",
     title: "Appearance",
@@ -49,6 +60,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "tab-nav-notifications",
     tab: "notifications",
+    scope: "global",
     tabLabel: "Notifications",
     section: "Settings Navigation",
     title: "Notifications",
@@ -58,6 +70,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "tab-nav-terminal",
     tab: "terminal",
+    scope: "global",
     tabLabel: "Panel Grid",
     section: "Settings Navigation",
     title: "Panel Grid",
@@ -67,6 +80,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "tab-nav-worktree",
     tab: "worktree",
+    scope: "global",
     tabLabel: "Worktree Paths",
     section: "Settings Navigation",
     title: "Worktree Paths",
@@ -76,6 +90,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "tab-nav-toolbar",
     tab: "toolbar",
+    scope: "global",
     tabLabel: "Toolbar Customization",
     section: "Settings Navigation",
     title: "Toolbar Customization",
@@ -85,6 +100,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "tab-nav-agents",
     tab: "agents",
+    scope: "global",
     tabLabel: "CLI Agents",
     section: "Settings Navigation",
     title: "CLI Agents",
@@ -100,6 +116,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "tab-nav-github",
     tab: "github",
+    scope: "global",
     tabLabel: "GitHub Integration",
     section: "Settings Navigation",
     title: "GitHub Integration",
@@ -107,26 +124,29 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ["integrations", "github", "token", "authentication"],
   },
   {
-    id: "tab-nav-editor",
-    tab: "editor",
-    tabLabel: "Editor Integration",
+    id: "tab-nav-integrations",
+    tab: "integrations",
+    scope: "global",
+    tabLabel: "Integrations",
     section: "Settings Navigation",
-    title: "Editor Integration",
-    description: "Configure external code editor for file opening",
-    keywords: ["integrations", "editor", "vscode", "cursor", "ide"],
+    title: "Integrations",
+    description: "External editor, image viewer, and other tool integrations",
+    keywords: ["integrations", "editor", "vscode", "cursor", "ide", "image", "viewer", "photo"],
   },
   {
-    id: "tab-nav-imageViewer",
-    tab: "imageViewer",
-    tabLabel: "Image Viewer",
+    id: "tab-nav-voice",
+    tab: "voice",
+    scope: "global",
+    tabLabel: "Voice Input",
     section: "Settings Navigation",
-    title: "Image Viewer",
-    description: "Configure image viewer application",
-    keywords: ["integrations", "image", "viewer", "photo", "picture"],
+    title: "Voice Input",
+    description: "Speech-to-text transcription and AI text correction settings",
+    keywords: ["voice", "microphone", "speech", "dictation", "deepgram", "openai", "transcription"],
   },
   {
     id: "tab-nav-portal",
     tab: "portal",
+    scope: "global",
     tabLabel: "Portal Links",
     section: "Settings Navigation",
     title: "Portal Links",
@@ -136,6 +156,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "tab-nav-mcp",
     tab: "mcp",
+    scope: "global",
     tabLabel: "MCP Server",
     section: "Settings Navigation",
     title: "MCP Server",
@@ -143,17 +164,9 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ["integrations", "mcp", "server", "automation", "api"],
   },
   {
-    id: "tab-nav-voice",
-    tab: "voice",
-    tabLabel: "Voice Input",
-    section: "Settings Navigation",
-    title: "Voice Input",
-    description: "Speech-to-text transcription and AI text correction",
-    keywords: ["input", "voice", "microphone", "speech", "dictation", "mic"],
-  },
-  {
     id: "tab-nav-environment",
     tab: "environment",
+    scope: "global",
     tabLabel: "Environment Variables",
     section: "Settings Navigation",
     title: "Environment Variables",
@@ -163,6 +176,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "tab-nav-privacy",
     tab: "privacy",
+    scope: "global",
     tabLabel: "Privacy & Data",
     section: "Settings Navigation",
     title: "Privacy & Data",
@@ -172,6 +186,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "tab-nav-troubleshooting",
     tab: "troubleshooting",
+    scope: "global",
     tabLabel: "Troubleshooting",
     section: "Settings Navigation",
     title: "Troubleshooting",
@@ -185,6 +200,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "general-about",
     tab: "general",
+    scope: "global",
     tabLabel: "General",
     subtab: "overview",
     subtabLabel: "Overview",
@@ -196,17 +212,31 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "general-system-status",
     tab: "general",
+    scope: "global",
     tabLabel: "General",
     subtab: "overview",
     subtabLabel: "Overview",
     section: "System Status",
     title: "System Status",
-    description: "CLI agent availability — Claude, Gemini, Codex, OpenCode status",
+    description: "CLI agent availability — Claude, Gemini, Codex, OpenCode, Cursor status",
     keywords: ["agents", "cli", "available", "status", "check", "ready"],
+  },
+  {
+    id: "general-update-channel",
+    tab: "general",
+    scope: "global",
+    tabLabel: "General",
+    subtab: "overview",
+    subtabLabel: "Overview",
+    section: "Update Channel",
+    title: "Update Channel",
+    description: "Switch between stable and nightly update channels",
+    keywords: ["update", "channel", "stable", "nightly", "releases"],
   },
   {
     id: "general-hibernation",
     tab: "general",
+    scope: "global",
     tabLabel: "General",
     subtab: "hibernation",
     subtabLabel: "Hibernation",
@@ -219,6 +249,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "general-hibernation-threshold",
     tab: "general",
+    scope: "global",
     tabLabel: "General",
     subtab: "hibernation",
     subtabLabel: "Hibernation",
@@ -230,6 +261,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "general-project-pulse",
     tab: "general",
+    scope: "global",
     tabLabel: "General",
     subtab: "display",
     subtabLabel: "Display",
@@ -241,6 +273,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "general-developer-tools",
     tab: "general",
+    scope: "global",
     tabLabel: "General",
     subtab: "display",
     subtabLabel: "Display",
@@ -252,6 +285,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "general-grid-agent-highlights",
     tab: "general",
+    scope: "global",
     tabLabel: "General",
     subtab: "display",
     subtabLabel: "Display",
@@ -263,6 +297,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "general-dock-agent-highlights",
     tab: "general",
+    scope: "global",
     tabLabel: "General",
     subtab: "display",
     subtabLabel: "Display",
@@ -276,6 +311,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "keyboard-shortcuts",
     tab: "keyboard",
+    scope: "global",
     tabLabel: "Keyboard Shortcuts",
     section: "Keyboard Shortcuts",
     title: "Keyboard Shortcuts",
@@ -286,6 +322,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "keyboard-profiles",
     tab: "keyboard",
+    scope: "global",
     tabLabel: "Keyboard Shortcuts",
     section: "Keyboard Shortcuts",
     title: "Shortcut Profiles",
@@ -295,6 +332,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "keyboard-reset",
     tab: "keyboard",
+    scope: "global",
     tabLabel: "Keyboard Shortcuts",
     section: "Keyboard Shortcuts",
     title: "Reset All Shortcuts",
@@ -306,6 +344,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-performance-mode",
     tab: "terminal",
+    scope: "global",
     tabLabel: "Panel Grid",
     subtab: "performance",
     subtabLabel: "Performance",
@@ -318,6 +357,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-panel-limits",
     tab: "terminal",
+    scope: "global",
     tabLabel: "Panel Grid",
     subtab: "performance",
     subtabLabel: "Performance",
@@ -340,6 +380,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-panel-warnings-toggle",
     tab: "terminal",
+    scope: "global",
     tabLabel: "Panel Grid",
     subtab: "performance",
     subtabLabel: "Performance",
@@ -352,6 +393,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-hybrid-input",
     tab: "terminal",
+    scope: "global",
     tabLabel: "Panel Grid",
     subtab: "input",
     subtabLabel: "Input",
@@ -363,6 +405,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-hybrid-autofocus",
     tab: "terminal",
+    scope: "global",
     tabLabel: "Panel Grid",
     subtab: "input",
     subtabLabel: "Input",
@@ -374,6 +417,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-two-pane-split",
     tab: "terminal",
+    scope: "global",
     tabLabel: "Panel Grid",
     subtab: "layout",
     subtabLabel: "Layout",
@@ -385,6 +429,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-scrollback",
     tab: "terminal",
+    scope: "global",
     tabLabel: "Panel Grid",
     subtab: "scrollback",
     subtabLabel: "Scrollback",
@@ -397,6 +442,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-grid-layout",
     tab: "terminal",
+    scope: "global",
     tabLabel: "Panel Grid",
     subtab: "layout",
     subtabLabel: "Layout",
@@ -409,6 +455,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-screen-reader",
     tab: "terminal",
+    scope: "global",
     tabLabel: "Panel Grid",
     subtab: "accessibility",
     subtabLabel: "Accessibility",
@@ -432,6 +479,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "appearance-theme",
     tab: "terminalAppearance",
+    scope: "global",
     tabLabel: "Appearance",
     subtab: "app",
     subtabLabel: "App",
@@ -443,6 +491,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "appearance-color-vision",
     tab: "terminalAppearance",
+    scope: "global",
     tabLabel: "Appearance",
     subtab: "app",
     subtabLabel: "App",
@@ -462,8 +511,21 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     ],
   },
   {
+    id: "appearance-dock-density",
+    tab: "terminalAppearance",
+    scope: "global",
+    tabLabel: "Appearance",
+    subtab: "app",
+    subtabLabel: "App",
+    section: "Dock Density",
+    title: "Dock Density",
+    description: "Control dock bar height: compact, normal, or comfortable",
+    keywords: ["dock", "density", "compact", "comfortable", "height", "size", "spacing"],
+  },
+  {
     id: "appearance-color-scheme",
     tab: "terminalAppearance",
+    scope: "global",
     tabLabel: "Appearance",
     subtab: "terminal",
     subtabLabel: "Terminal",
@@ -475,6 +537,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "appearance-font-size",
     tab: "terminalAppearance",
+    scope: "global",
     tabLabel: "Appearance",
     subtab: "terminal",
     subtabLabel: "Terminal",
@@ -486,6 +549,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "appearance-font-family",
     tab: "terminalAppearance",
+    scope: "global",
     tabLabel: "Appearance",
     subtab: "terminal",
     subtabLabel: "Terminal",
@@ -499,6 +563,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "worktree-path-pattern",
     tab: "worktree",
+    scope: "global",
     tabLabel: "Worktree Paths",
     section: "Worktree Path Pattern",
     title: "Worktree Path Pattern",
@@ -511,13 +576,14 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "agents-default-agent",
     tab: "agents",
+    scope: "global",
     tabLabel: "CLI Agents",
     subtab: "general",
     subtabLabel: "General",
     section: "Global Agent Settings",
     title: "Default Agent",
     description:
-      'Agent used for automated workflows ("What\'s Next?", onboarding, project explanations). Distinct from the Portal "Default New Tab Agent".',
+      'Agent used for the help dock button (\u2318\u21e7H) and automated workflows ("What\'s Next?", onboarding, project explanations). Distinct from the Portal "Default New Tab Agent".',
     keywords: [
       "default",
       "agent",
@@ -525,6 +591,10 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
       "automated",
       "whats next",
       "onboarding",
+      "help",
+      "dock",
+      "launch",
+      "keyboard shortcut",
       ...BUILT_IN_AGENT_IDS,
     ],
   },
@@ -533,6 +603,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "agents-enable",
     tab: "agents",
+    scope: "global",
     tabLabel: "CLI Agents",
     subtab: "claude",
     subtabLabel: "Claude",
@@ -544,6 +615,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "agents-skip-permissions",
     tab: "agents",
+    scope: "global",
     tabLabel: "CLI Agents",
     subtab: "claude",
     subtabLabel: "Claude",
@@ -555,6 +627,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "agents-inline-mode",
     tab: "agents",
+    scope: "global",
     tabLabel: "CLI Agents",
     subtab: "claude",
     subtabLabel: "Claude",
@@ -566,6 +639,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "agents-clipboard",
     tab: "agents",
+    scope: "global",
     tabLabel: "CLI Agents",
     subtab: "gemini",
     subtabLabel: "Gemini",
@@ -577,6 +651,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "agents-custom-args",
     tab: "agents",
+    scope: "global",
     tabLabel: "CLI Agents",
     subtab: "claude",
     subtabLabel: "Claude",
@@ -588,6 +663,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "agents-installation",
     tab: "agents",
+    scope: "global",
     tabLabel: "CLI Agents",
     subtab: "claude",
     subtabLabel: "Claude",
@@ -601,6 +677,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "github-token",
     tab: "github",
+    scope: "global",
     tabLabel: "GitHub Integration",
     section: "Personal Access Token",
     title: "GitHub Personal Access Token",
@@ -612,6 +689,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "portal-default-agent",
     tab: "portal",
+    scope: "global",
     tabLabel: "Portal Links",
     section: "Default New Tab Agent",
     title: "Default New Tab Agent",
@@ -621,6 +699,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "portal-default-links",
     tab: "portal",
+    scope: "global",
     tabLabel: "Portal Links",
     section: "Default Links",
     title: "Default Links",
@@ -630,6 +709,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "portal-custom-links",
     tab: "portal",
+    scope: "global",
     tabLabel: "Portal Links",
     section: "Custom Links",
     title: "Custom Links",
@@ -641,6 +721,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "toolbar-left-buttons",
     tab: "toolbar",
+    scope: "global",
     tabLabel: "Toolbar Customization",
     section: "Left Side Buttons",
     title: "Left Toolbar Buttons",
@@ -650,6 +731,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "toolbar-right-buttons",
     tab: "toolbar",
+    scope: "global",
     tabLabel: "Toolbar Customization",
     section: "Right Side Buttons",
     title: "Right Toolbar Buttons",
@@ -659,6 +741,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "toolbar-launcher",
     tab: "toolbar",
+    scope: "global",
     tabLabel: "Toolbar Customization",
     section: "Launcher Palette",
     title: "Launcher Palette Settings",
@@ -669,6 +752,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "toolbar-reset",
     tab: "toolbar",
+    scope: "global",
     tabLabel: "Toolbar Customization",
     section: "Toolbar Customization",
     title: "Reset Toolbar to Defaults",
@@ -680,6 +764,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "notifications-completed",
     tab: "notifications",
+    scope: "global",
     tabLabel: "Notifications",
     section: "Agent Notifications",
     title: "Agent Completed Notification",
@@ -689,6 +774,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "notifications-waiting",
     tab: "notifications",
+    scope: "global",
     tabLabel: "Notifications",
     section: "Agent Notifications",
     title: "Agent Waiting for Input",
@@ -698,6 +784,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "notifications-sound",
     tab: "notifications",
+    scope: "global",
     tabLabel: "Notifications",
     section: "Sound",
     title: "Notification Sound",
@@ -709,8 +796,9 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   // Editor Integration
   {
     id: "editor-external",
-    tab: "editor",
-    tabLabel: "Editor Integration",
+    tab: "integrations",
+    scope: "global",
+    tabLabel: "Integrations",
     section: "External Editor",
     title: "External Editor",
     description:
@@ -733,8 +821,9 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   // Image Viewer
   {
     id: "image-viewer",
-    tab: "imageViewer",
-    tabLabel: "Image Viewer",
+    tab: "integrations",
+    scope: "global",
+    tabLabel: "Integrations",
     section: "Image Viewer",
     title: "Image Viewer",
     description:
@@ -759,6 +848,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "voice-enable",
     tab: "voice",
+    scope: "global",
     tabLabel: "Voice Input",
     section: "Speech-to-Text",
     title: "Voice Input Enable",
@@ -768,89 +858,108 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "voice-deepgram-key",
     tab: "voice",
+    scope: "global",
     tabLabel: "Voice Input",
     section: "Speech-to-Text",
     title: "Deepgram API Key",
     description: "Configure your Deepgram API key for speech recognition",
     keywords: ["deepgram", "api", "key", "speech-to-text", "stt", "nova"],
+    requiresEnabled: { settingId: "voice-enable", label: "Voice Input" },
   },
   {
     id: "voice-language",
     tab: "voice",
+    scope: "global",
     tabLabel: "Voice Input",
     section: "Speech-to-Text",
     title: "Transcription Language",
     description: "Select the language for speech transcription",
     keywords: ["language", "locale", "english", "multilingual", "transcription"],
+    requiresEnabled: { settingId: "voice-enable", label: "Voice Input" },
   },
   {
     id: "voice-transcription-model",
     tab: "voice",
+    scope: "global",
     tabLabel: "Voice Input",
     section: "Speech-to-Text",
     title: "Transcription Model",
     description: "Choose the Deepgram model for transcription accuracy",
     keywords: ["nova-3", "nova-2", "model", "deepgram", "accuracy", "transcription"],
+    requiresEnabled: { settingId: "voice-enable", label: "Voice Input" },
   },
   {
     id: "voice-paragraph-breaks",
     tab: "voice",
+    scope: "global",
     tabLabel: "Voice Input",
     section: "Speech-to-Text",
     title: "Paragraph Breaks",
     description: "Insert paragraph breaks via spoken commands",
     keywords: ["paragraph", "break", "enter", "formatting", "spoken"],
+    requiresEnabled: { settingId: "voice-enable", label: "Voice Input" },
   },
   {
     id: "voice-custom-dictionary",
     tab: "voice",
+    scope: "global",
     tabLabel: "Voice Input",
     section: "Speech-to-Text",
     title: "Custom Dictionary",
     description: "Add domain-specific terms to improve recognition accuracy",
     keywords: ["dictionary", "terms", "domain", "vocabulary", "recognition", "custom"],
+    requiresEnabled: { settingId: "voice-enable", label: "Voice Input" },
   },
   {
     id: "voice-ai-correction-enable",
     tab: "voice",
+    scope: "global",
     tabLabel: "Voice Input",
     section: "AI Text Correction",
     title: "AI Text Correction",
     description: "Enable AI-powered post-processing to clean up transcribed text",
     keywords: ["correction", "ai", "cleanup", "post-process", "filler"],
+    requiresEnabled: { settingId: "voice-enable", label: "Voice Input" },
   },
   {
     id: "voice-openai-key",
     tab: "voice",
+    scope: "global",
     tabLabel: "Voice Input",
     section: "AI Text Correction",
     title: "OpenAI API Key",
     description: "Configure your OpenAI API key for AI text correction",
     keywords: ["openai", "api", "key", "correction", "gpt"],
+    requiresEnabled: { settingId: "voice-ai-correction-enable", label: "AI Text Correction" },
   },
   {
     id: "voice-correction-model",
     tab: "voice",
+    scope: "global",
     tabLabel: "Voice Input",
     section: "AI Text Correction",
     title: "Correction Model",
     description: "Choose the OpenAI model used for text correction",
     keywords: ["gpt", "model", "correction", "openai"],
+    requiresEnabled: { settingId: "voice-ai-correction-enable", label: "AI Text Correction" },
   },
   {
     id: "voice-custom-instructions",
     tab: "voice",
+    scope: "global",
     tabLabel: "Voice Input",
     section: "AI Text Correction",
     title: "Custom Instructions",
     description: "Add project-specific rules for AI text correction",
     keywords: ["instructions", "prompt", "rules", "custom", "project-specific"],
+    requiresEnabled: { settingId: "voice-ai-correction-enable", label: "AI Text Correction" },
   },
 
   // Privacy & Data
   {
     id: "privacy-telemetry-level",
     tab: "privacy",
+    scope: "global",
     tabLabel: "Privacy & Data",
     subtab: "telemetry",
     subtabLabel: "Telemetry",
@@ -862,6 +971,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "privacy-log-retention",
     tab: "privacy",
+    scope: "global",
     tabLabel: "Privacy & Data",
     subtab: "storage",
     subtabLabel: "Data & Storage",
@@ -873,6 +983,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "privacy-data-folder",
     tab: "privacy",
+    scope: "global",
     tabLabel: "Privacy & Data",
     subtab: "storage",
     subtabLabel: "Data & Storage",
@@ -884,6 +995,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "privacy-clear-cache",
     tab: "privacy",
+    scope: "global",
     tabLabel: "Privacy & Data",
     subtab: "storage",
     subtabLabel: "Data & Storage",
@@ -895,6 +1007,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "privacy-reset-data",
     tab: "privacy",
+    scope: "global",
     tabLabel: "Privacy & Data",
     subtab: "storage",
     subtabLabel: "Data & Storage",
@@ -909,6 +1022,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "troubleshooting-gpu-acceleration",
     tab: "troubleshooting",
+    scope: "global",
     tabLabel: "Troubleshooting",
     section: "Hardware Acceleration",
     title: "Hardware Acceleration",
@@ -928,6 +1042,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "troubleshooting-health",
     tab: "troubleshooting",
+    scope: "global",
     tabLabel: "Troubleshooting",
     section: "System Health Check",
     title: "System Health Check",
@@ -937,6 +1052,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "troubleshooting-logs",
     tab: "troubleshooting",
+    scope: "global",
     tabLabel: "Troubleshooting",
     section: "Application Logs",
     title: "Application Logs",
@@ -946,6 +1062,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "troubleshooting-crash",
     tab: "privacy",
+    scope: "global",
     tabLabel: "Privacy & Data",
     subtab: "telemetry",
     subtabLabel: "Telemetry",
@@ -957,6 +1074,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "troubleshooting-devmode",
     tab: "troubleshooting",
+    scope: "global",
     tabLabel: "Troubleshooting",
     section: "Developer Mode",
     title: "Developer Mode",
@@ -975,6 +1093,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "troubleshooting-auto-diagnostics",
     tab: "troubleshooting",
+    scope: "global",
     tabLabel: "Troubleshooting",
     section: "Developer Mode",
     title: "Auto-Open Diagnostics Dock",
@@ -984,6 +1103,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "troubleshooting-focus-events",
     tab: "troubleshooting",
+    scope: "global",
     tabLabel: "Troubleshooting",
     section: "Developer Mode",
     title: "Focus Events Tab",
@@ -993,6 +1113,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "troubleshooting-verbose-logging",
     tab: "troubleshooting",
+    scope: "global",
     tabLabel: "Troubleshooting",
     section: "Developer Mode",
     title: "Enable Verbose Logging",
@@ -1004,6 +1125,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-preview-layout",
     tab: "terminal",
+    scope: "global",
     tabLabel: "Panel Grid",
     subtab: "layout",
     subtabLabel: "Layout",
@@ -1016,6 +1138,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-default-ratio",
     tab: "terminal",
+    scope: "global",
     tabLabel: "Panel Grid",
     subtab: "layout",
     subtabLabel: "Layout",
@@ -1027,6 +1150,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-reset-ratios",
     tab: "terminal",
+    scope: "global",
     tabLabel: "Panel Grid",
     subtab: "layout",
     subtabLabel: "Layout",
@@ -1040,6 +1164,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "mcp-server-enable",
     tab: "mcp",
+    scope: "global",
     tabLabel: "MCP Server",
     section: "MCP Server",
     title: "Enable MCP Server",
@@ -1050,38 +1175,45 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "mcp-server-config",
     tab: "mcp",
+    scope: "global",
     tabLabel: "MCP Server",
     section: "Connection",
     title: "Copy MCP Config",
     description:
       "Copy the MCP server config snippet (JSON) to paste into your MCP client configuration",
     keywords: ["mcp", "config", "copy", "snippet", "json", "client", "cursor", "claude"],
+    requiresEnabled: { settingId: "mcp-server-enable", label: "MCP Server" },
   },
   {
     id: "mcp-server-port",
     tab: "mcp",
+    scope: "global",
     tabLabel: "MCP Server",
     section: "Port",
     title: "Server Port",
     description:
       "Set a fixed port for the MCP server or leave empty for automatic ephemeral port assignment",
     keywords: ["mcp", "port", "fixed", "ephemeral", "network", "bind"],
+    requiresEnabled: { settingId: "mcp-server-enable", label: "MCP Server" },
   },
   {
     id: "mcp-server-auth",
     tab: "mcp",
+    scope: "global",
     tabLabel: "MCP Server",
     section: "Authentication",
     title: "API Key Authentication",
     description:
       "Generate a bearer token to secure MCP connections. Clients must include the token in the Authorization header.",
     keywords: ["mcp", "api", "key", "auth", "token", "bearer", "security", "password"],
+    requiresEnabled: { settingId: "mcp-server-enable", label: "MCP Server" },
   },
 
   // Environment Variables
   {
     id: "environment-variables",
     tab: "environment",
+    scope: "global",
     tabLabel: "Environment Variables",
     section: "Environment Variables",
     title: "Project Environment Variables",
@@ -1102,5 +1234,177 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
       "encryption",
       "dotenv",
     ],
+  },
+
+  // ── Project settings entries ──
+  {
+    id: "tab-nav-project:general",
+    tab: "project:general",
+    scope: "project",
+    tabLabel: "General",
+    section: "Settings Navigation",
+    title: "General",
+    description: "Project name, emoji, color, icon, and dev server configuration",
+    keywords: ["project", "name", "emoji", "color", "icon", "dev server"],
+  },
+  {
+    id: "project-name",
+    tab: "project:general",
+    scope: "project",
+    tabLabel: "General",
+    section: "Project Identity",
+    title: "Project Name",
+    description: "Display name for the project",
+    keywords: ["name", "title", "label"],
+  },
+  {
+    id: "project-dev-server",
+    tab: "project:general",
+    scope: "project",
+    tabLabel: "General",
+    section: "Dev Server",
+    title: "Dev Server Command",
+    description: "Command to start the development server for live preview",
+    keywords: ["dev", "server", "preview", "start", "command"],
+  },
+  {
+    id: "project-in-repo-settings",
+    tab: "project:general",
+    scope: "project",
+    tabLabel: "General",
+    section: "In-Repo Settings",
+    title: "In-Repo Settings",
+    description: "Store project settings in the repository for team sharing",
+    keywords: ["repo", "repository", "shared", "team", "canopy.json"],
+  },
+  {
+    id: "tab-nav-project:context",
+    tab: "project:context",
+    scope: "project",
+    tabLabel: "Context",
+    section: "Settings Navigation",
+    title: "Context",
+    description: "Excluded paths, copy tree settings, and environment variables",
+    keywords: ["project", "context", "exclude", "paths", "env", "copy tree"],
+  },
+  {
+    id: "project-excluded-paths",
+    tab: "project:context",
+    scope: "project",
+    tabLabel: "Context",
+    section: "Excluded Paths",
+    title: "Excluded Paths",
+    description: "Paths to exclude from context tree and file operations",
+    keywords: ["exclude", "ignore", "paths", "gitignore", "filter"],
+  },
+  {
+    id: "project-copy-tree",
+    tab: "project:context",
+    scope: "project",
+    tabLabel: "Context",
+    section: "Copy Tree",
+    title: "Copy Tree Settings",
+    description: "Configure context size limits, file size limits, and include/exclude patterns",
+    keywords: ["copy", "tree", "context", "size", "limit", "include", "exclude"],
+  },
+  {
+    id: "project-env-vars",
+    tab: "project:context",
+    scope: "project",
+    tabLabel: "Context",
+    section: "Environment Variables",
+    title: "Environment Variables",
+    description: "Project-specific environment variables injected into terminals",
+    keywords: ["env", "environment", "variables", "secrets", "inject"],
+  },
+  {
+    id: "tab-nav-project:automation",
+    tab: "project:automation",
+    scope: "project",
+    tabLabel: "Worktree Setup",
+    section: "Settings Navigation",
+    title: "Worktree Setup",
+    description: "Configure worktree paths, run commands, branch prefix, and terminal defaults",
+    keywords: ["project", "automation", "run", "commands", "worktree", "terminal", "branch"],
+  },
+  {
+    id: "project-run-commands",
+    tab: "project:automation",
+    scope: "project",
+    tabLabel: "Worktree Setup",
+    section: "Run Commands",
+    title: "Run Commands",
+    description: "Named commands to run in worktree terminals on creation",
+    keywords: ["run", "commands", "startup", "init", "worktree"],
+  },
+  {
+    id: "project-branch-prefix",
+    tab: "project:automation",
+    scope: "project",
+    tabLabel: "Worktree Setup",
+    section: "Branch Prefix",
+    title: "Branch Prefix",
+    description: "Automatic prefix for new branch names (none, username, or custom)",
+    keywords: ["branch", "prefix", "username", "git", "naming"],
+  },
+  {
+    id: "project-terminal-settings",
+    tab: "project:automation",
+    scope: "project",
+    tabLabel: "Worktree Setup",
+    section: "Terminal Settings",
+    title: "Terminal Settings",
+    description: "Project-specific shell, shell args, working directory, and scrollback",
+    keywords: ["terminal", "shell", "bash", "zsh", "scrollback", "cwd"],
+  },
+  {
+    id: "tab-nav-project:recipes",
+    tab: "project:recipes",
+    scope: "project",
+    tabLabel: "Recipes",
+    section: "Settings Navigation",
+    title: "Recipes",
+    description: "Manage terminal recipes for the project",
+    keywords: ["project", "recipes", "template", "terminal"],
+  },
+  {
+    id: "tab-nav-project:commands",
+    tab: "project:commands",
+    scope: "project",
+    tabLabel: "Commands",
+    section: "Settings Navigation",
+    title: "Commands",
+    description: "Project-specific command overrides",
+    keywords: ["project", "commands", "overrides", "alias"],
+  },
+  {
+    id: "tab-nav-project:notifications",
+    tab: "project:notifications",
+    scope: "project",
+    tabLabel: "Notifications",
+    section: "Settings Navigation",
+    title: "Notifications",
+    description: "Project-specific notification overrides",
+    keywords: ["project", "notifications", "alerts", "sounds", "overrides"],
+  },
+  {
+    id: "tab-nav-project:github",
+    tab: "project:github",
+    scope: "project",
+    tabLabel: "GitHub",
+    section: "Settings Navigation",
+    title: "GitHub",
+    description: "Per-project GitHub remote configuration for issues, PRs, and pulse data",
+    keywords: ["project", "github", "remote", "origin", "repository", "pull requests", "issues"],
+  },
+  {
+    id: "project-github-remote",
+    tab: "project:github",
+    scope: "project",
+    tabLabel: "GitHub",
+    section: "GitHub Remote",
+    title: "GitHub Remote",
+    description: "Select which git remote to use for GitHub integration",
+    keywords: ["github", "remote", "origin", "git", "repository", "fetch", "push"],
   },
 ];

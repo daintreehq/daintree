@@ -28,6 +28,15 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
   }),
 }));
 
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+);
+
 function Dispatcher() {
   useGlobalEscapeDispatcher();
   return null;

@@ -17,7 +17,7 @@ test.describe.serial("Core: SAB Fallback (IPC-only terminal output)", () => {
     ctx = await launchApp({
       extraArgs: ["--disable-features=SharedArrayBuffer"],
     });
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "SAB Fallback Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "SAB Fallback Test");
   });
 
   test.afterAll(async () => {

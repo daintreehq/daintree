@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import { existsSync } from "fs";
 import { load } from "js-yaml";
 import type { RunCommand } from "../types/index.js";
+import { Cache } from "../utils/cache.js";
 
 const RESERVED_SCRIPT_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const SAFE_SCRIPT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_./-]*$/;
@@ -15,7 +16,15 @@ function isSafeScriptName(name: string): boolean {
 }
 
 export class RunCommandDetector {
+  private readonly cache = new Cache<string, RunCommand[]>({
+    maxSize: 50,
+    defaultTTL: 60_000,
+  });
+
   async detect(projectPath: string): Promise<RunCommand[]> {
+    const cached = this.cache.get(projectPath);
+    if (cached) return cached;
+
     const results = await Promise.all([
       this.detectNpm(projectPath),
       this.detectMakefile(projectPath),
@@ -25,7 +34,9 @@ export class RunCommandDetector {
       this.detectComposer(projectPath),
     ]);
 
-    return results.flat();
+    const commands = results.flat();
+    this.cache.set(projectPath, commands);
+    return commands;
   }
 
   private async detectNpm(root: string): Promise<RunCommand[]> {

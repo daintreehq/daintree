@@ -26,6 +26,9 @@ const MIME_TYPES: Record<string, string> = {
   ".ttf": "font/ttf",
   ".eot": "application/vnd.ms-fontobject",
   ".wasm": "application/wasm",
+  ".wav": "audio/wav",
+  ".mp3": "audio/mpeg",
+  ".ogg": "audio/ogg",
 };
 
 export function getMimeType(filePath: string): string {

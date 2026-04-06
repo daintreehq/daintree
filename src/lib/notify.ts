@@ -12,6 +12,12 @@ import {
 } from "@/store/slices/notificationHistorySlice";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 
+export interface ComboOptions {
+  key: string;
+  tiers: readonly string[];
+  windowMs?: number;
+}
+
 export interface CoalesceOptions {
   key: string;
   windowMs?: number;
@@ -43,8 +49,12 @@ export interface NotifyPayload {
   correlationId?: string;
   /** When set, rapidly fired notifications with the same key coalesce into a single updating toast */
   coalesce?: CoalesceOptions;
+  /** When set, rapid repeats of the same combo key escalate the toast message through tiers */
+  combo?: ComboOptions;
   /** When false, the history entry exists but does not increment the unread badge. Defaults to true. */
   countable?: boolean;
+  /** When true, the notification bypasses the startup quiet period gate */
+  urgent?: boolean;
 }
 
 interface CoalesceEntry {
@@ -57,6 +67,31 @@ const _activeCoalesced = new Map<string, CoalesceEntry>();
 
 export function _resetCoalesceMap(): void {
   _activeCoalesced.clear();
+}
+
+interface ComboEntry {
+  count: number;
+  lastAt: number;
+}
+
+const _comboCounts = new Map<string, ComboEntry>();
+
+export function _resetComboMap(): void {
+  _comboCounts.clear();
+}
+
+let _quietUntil = 0;
+
+export function setStartupQuietPeriod(durationMs: number): void {
+  _quietUntil = Date.now() + durationMs;
+}
+
+export function getQuietPeriodRemaining(): number {
+  return Math.max(0, _quietUntil - Date.now());
+}
+
+export function _setQuietUntil(ts: number): void {
+  _quietUntil = ts;
 }
 
 /**
@@ -97,6 +132,7 @@ export function notify(payload: NotifyPayload): string {
     }));
 
   const notificationsEnabled = useNotificationSettingsStore.getState().enabled;
+  const isQuiet = !payload.urgent && Date.now() < _quietUntil;
 
   if (placement === "grid-bar") {
     const entryId = historyMessage
@@ -105,12 +141,12 @@ export function notify(payload: NotifyPayload): string {
           title,
           message: historyMessage,
           correlationId,
-          seenAsToast: true,
+          seenAsToast: !isQuiet,
           countable: payload.countable,
           actions: historyActions.length > 0 ? historyActions : undefined,
         })
       : undefined;
-    if (!notificationsEnabled) return "";
+    if (!notificationsEnabled || isQuiet) return "";
     return useNotificationStore.getState().addNotification({
       ...payload,
       priority,
@@ -129,19 +165,39 @@ export function notify(payload: NotifyPayload): string {
         title,
         message: historyMessage,
         correlationId,
-        seenAsToast: notificationsEnabled && shouldToast,
+        seenAsToast: !isQuiet && notificationsEnabled && shouldToast,
         countable: payload.countable,
         actions: historyActions.length > 0 ? historyActions : undefined,
       })
     : undefined;
 
-  if (!notificationsEnabled) return "";
+  if (!notificationsEnabled || isQuiet) return "";
 
   if (shouldNative && historyMessage && typeof window !== "undefined") {
     window.electron?.notification?.showNative?.({
       title: title ?? "Canopy",
       body: historyMessage,
     });
+  }
+
+  if (shouldToast && payload.combo) {
+    const { combo } = payload;
+    const windowMs = combo.windowMs ?? 2000;
+    const now = Date.now();
+    const entry = _comboCounts.get(combo.key);
+
+    let count: number;
+    if (entry && now - entry.lastAt <= windowMs) {
+      count = entry.count + 1;
+    } else {
+      count = 1;
+    }
+    _comboCounts.set(combo.key, { count, lastAt: now });
+
+    const tierIndex = Math.min(count - 1, combo.tiers.length - 1);
+    const comboMessage = combo.tiers[tierIndex];
+
+    payload = { ...payload, message: comboMessage };
   }
 
   if (shouldToast && payload.coalesce) {

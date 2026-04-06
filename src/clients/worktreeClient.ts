@@ -45,6 +45,10 @@ export const worktreeClient = {
     return window.electron.worktree.listBranches(rootPath);
   },
 
+  fetchPRBranch: (rootPath: string, prNumber: number, headRefName: string): Promise<void> => {
+    return window.electron.worktree.fetchPRBranch(rootPath, prNumber, headRefName);
+  },
+
   getRecentBranches: (rootPath: string): Promise<string[]> => {
     return window.electron.worktree.getRecentBranches(rootPath);
   },

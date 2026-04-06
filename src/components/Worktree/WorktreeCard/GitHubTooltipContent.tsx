@@ -1,6 +1,7 @@
 import { memo } from "react";
 import type { IssueTooltipData, PRTooltipData } from "@shared/types/github";
-import { Loader2, User, Users, Calendar } from "lucide-react";
+import { User, Users, Calendar } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 
 function formatDate(dateString: string): string {
@@ -19,7 +20,7 @@ interface TooltipLoadingProps {
 export const TooltipLoading = memo(function TooltipLoading({ type }: TooltipLoadingProps) {
   return (
     <div className="flex items-center gap-2 text-canopy-text/70 py-1">
-      <Loader2 className="w-3 h-3 animate-spin" />
+      <Spinner size="xs" />
       <span className="text-xs">Loading {type} details...</span>
     </div>
   );

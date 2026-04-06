@@ -5,7 +5,7 @@ import type { HibernationProjectHibernatedPayload } from "../../shared/types/ipc
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 import { logInfo, logError } from "../utils/logger.js";
-import { getMainWindow } from "../window/windowRef.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { writeHibernatedMarker } from "./pty/terminalSessionPersistence.js";
 
@@ -19,7 +19,7 @@ const DEFAULT_CONFIG: HibernationConfig = {
   inactiveThresholdHours: 24,
 };
 
-const MEMORY_PRESSURE_INACTIVE_MS = 30 * 60 * 1000;
+const DEFAULT_MEMORY_PRESSURE_INACTIVE_MS = 30 * 60 * 1000;
 const GIT_SENTINEL_NAMES = new Set([
   "index.lock",
   "MERGE_HEAD",
@@ -58,6 +58,11 @@ export class HibernationService {
   private initialCheckTimer: NodeJS.Timeout | null = null;
   private readonly CHECK_INTERVAL_MS = 60 * 60 * 1000; // Every hour
   private readonly hibernationCallbacks: Array<(projectId: string) => void | Promise<void>> = [];
+  private memoryPressureInactiveMs = DEFAULT_MEMORY_PRESSURE_INACTIVE_MS;
+
+  setMemoryPressureThresholdMs(ms: number): void {
+    this.memoryPressureInactiveMs = ms;
+  }
 
   onProjectHibernated(callback: (projectId: string) => void | Promise<void>): () => void {
     this.hibernationCallbacks.push(callback);
@@ -280,7 +285,7 @@ export class HibernationService {
       if (!project.lastOpened) continue;
 
       const inactiveDuration = now - project.lastOpened;
-      if (inactiveDuration < MEMORY_PRESSURE_INACTIVE_MS) continue;
+      if (inactiveDuration < this.memoryPressureInactiveMs) continue;
 
       const projectTerminals = allTerminals.filter((t) => t.projectId === project.id);
       if (projectTerminals.length === 0) continue;
@@ -290,7 +295,7 @@ export class HibernationService {
       );
       if (hasActiveAgent) continue;
 
-      if (await this.hasActiveGitOperation(project.path, MEMORY_PRESSURE_INACTIVE_MS)) {
+      if (await this.hasActiveGitOperation(project.path, this.memoryPressureInactiveMs)) {
         logInfo("memory-pressure-hibernate-skip-git-operation", {
           project: project.name,
           projectId: project.id,
@@ -339,20 +344,17 @@ export class HibernationService {
     await Promise.allSettled(this.hibernationCallbacks.map((cb) => Promise.resolve(cb(projectId))));
 
     // Emit event to renderer
-    const win = getMainWindow();
-    if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
-      const payload: HibernationProjectHibernatedPayload = {
-        projectId,
-        projectName,
-        reason,
-        terminalsKilled,
-        timestamp: Date.now(),
-      };
-      try {
-        win.webContents.send(CHANNELS.HIBERNATION_PROJECT_HIBERNATED, payload);
-      } catch {
-        // Window may be closing
-      }
+    const payload: HibernationProjectHibernatedPayload = {
+      projectId,
+      projectName,
+      reason,
+      terminalsKilled,
+      timestamp: Date.now(),
+    };
+    try {
+      broadcastToRenderer(CHANNELS.HIBERNATION_PROJECT_HIBERNATED, payload);
+    } catch {
+      // Window may be closing
     }
 
     return terminalsKilled;

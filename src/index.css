@@ -620,6 +620,13 @@ code.hljs {
   --dock-item-height: 1.75rem;
 }
 
+/* Comfortable density mode for dock - increased padding and heights */
+[data-dock-density="comfortable"] {
+  --dock-padding-y: 0.5rem;
+  --dock-gap: 0.5rem;
+  --dock-item-height: 2.25rem;
+}
+
 .dark {
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
@@ -726,12 +733,6 @@ code.hljs {
     display: none;
   }
 
-  /* Re-enable text selection in CodeMirror editor content */
-  .cm-editor .cm-content {
-    -webkit-user-select: text;
-    user-select: text;
-  }
-
   /* Consistent monospace font stack */
   code,
   kbd,
@@ -743,8 +744,6 @@ code.hljs {
 
   /* Canopy prose theme - customized typography for dark theme */
   .prose-canopy {
-    -webkit-user-select: text;
-    user-select: text;
     --tw-prose-body: var(--color-canopy-text);
     --tw-prose-headings: var(--color-text-primary);
     --tw-prose-lead: color-mix(in oklab, var(--color-canopy-text) 80%, transparent);
@@ -912,8 +911,6 @@ body,
   height: 100%;
   width: 100%;
   overflow: hidden;
-  -webkit-user-select: none;
-  user-select: none;
 }
 
 /* Activity light pulse animation for very recent activity */
@@ -1072,6 +1069,23 @@ body,
   will-change: transform;
 }
 
+/* Diagnostics badge state transition flash - one-shot, no looping */
+@keyframes diagnostics-state-flash {
+  0% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.3;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-diagnostics-flash {
+  animation: diagnostics-state-flash 0.4s ease-out 1;
+}
+
 /* Activity blip animation - for new activity signals */
 @keyframes activity-blip {
   0% {
@@ -1114,6 +1128,24 @@ body,
   will-change: transform, opacity;
 }
 
+/* All-clear flash: subtle full-screen overlay when all agents complete */
+@keyframes all-clear-flash {
+  0% {
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.12;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.animate-all-clear-flash {
+  animation: all-clear-flash 450ms ease-out forwards;
+  will-change: opacity;
+}
+
 /* Respect user's motion preferences */
 @media (prefers-reduced-motion: reduce) {
   .animate-activity-pulse,
@@ -1125,7 +1157,9 @@ body,
   .status-working,
   .animate-badge-bump,
   .animate-activity-blip,
-  .animate-trash-pulse {
+  .animate-trash-pulse,
+  .animate-all-clear-flash,
+  .animate-diagnostics-flash {
     animation: none;
     opacity: 1;
     transform: none;
@@ -1135,6 +1169,15 @@ body,
   /* Disable focus ring transitions for reduced motion */
   *:focus-visible {
     transition: none !important;
+  }
+
+  /* Disable window-unfocused transitions for reduced motion */
+  .animate-activity-pulse,
+  .animate-agent-pulse,
+  .animate-breathe,
+  .status-working,
+  .panel-state-working {
+    transition: none;
   }
 
   /* Disable button scale transforms for reduced motion */
@@ -1227,6 +1270,24 @@ body,
     animation: none;
     border-color: color-mix(in oklab, var(--color-activity-working) 35%, transparent);
   }
+}
+
+/* Per-worktree color identity — left-edge stripe on grid panels */
+.panel-worktree-identity {
+  position: relative;
+}
+
+.panel-worktree-identity::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: var(--panel-state-edge-inset-block);
+  bottom: var(--panel-state-edge-inset-block);
+  width: 3px;
+  border-radius: 0 var(--panel-state-edge-radius) var(--panel-state-edge-radius) 0;
+  background-color: var(--worktree-color);
+  z-index: 1;
+  pointer-events: none;
 }
 
 /* Backwards compatibility for older selection class */
@@ -1585,8 +1646,6 @@ body[data-performance-mode="true"] .github-status-error {
   padding: 0 12px;
   white-space: pre;
   overflow-x: auto;
-  -webkit-user-select: text;
-  user-select: text;
 }
 
 /* Added lines - Tokyo Night green */

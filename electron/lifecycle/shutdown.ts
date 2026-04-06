@@ -9,7 +9,7 @@ import {
 } from "../services/AgentAvailabilityStore.js";
 import { disposePowerSaveBlockerService } from "../services/PowerSaveBlockerService.js";
 import { disposeAgentRouter } from "../services/AgentRouter.js";
-import { disposeWorkflowEngine } from "../services/WorkflowEngine.js";
+
 import { disposeTaskOrchestrator } from "../services/TaskOrchestrator.js";
 import { disposePtyClient } from "../services/PtyClient.js";
 import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
@@ -37,7 +37,6 @@ export interface ShutdownDeps {
   setStopAppMetricsMonitor: (v: (() => void) | null) => void;
   getStopDiskSpaceMonitor: () => (() => void) | null;
   setStopDiskSpaceMonitor: (v: (() => void) | null) => void;
-  getMainWindow: () => Electron.BrowserWindow | null;
   windowRegistry?: import("../window/WindowRegistry.js").WindowRegistry;
 }
 
@@ -52,7 +51,8 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
       return;
     }
 
-    const canShowDialog = !isSignalShutdown() && deps.getMainWindow() != null;
+    const canShowDialog =
+      !isSignalShutdown() && deps.windowRegistry?.getPrimary()?.browserWindow != null;
 
     if (isConfirmingQuit) {
       event.preventDefault();
@@ -67,7 +67,8 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         isConfirmingQuit = true;
         let confirmed = false;
         try {
-          confirmed = await showQuitWarning(activeCount, dialog.showMessageBox);
+          const primaryWindow = deps.windowRegistry?.getPrimary()?.browserWindow ?? null;
+          confirmed = await showQuitWarning(activeCount, dialog.showMessageBox, primaryWindow);
         } catch (error) {
           console.error("[MAIN] Error showing quit warning:", error);
         } finally {
@@ -139,8 +140,6 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
             disposeAgentRouter();
             disposePowerSaveBlockerService();
             disposeAgentAvailabilityStore();
-            disposeWorkflowEngine();
-
             if (ptyClient) {
               ptyClient.dispose();
               deps.setPtyClient(null);

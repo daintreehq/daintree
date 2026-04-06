@@ -18,7 +18,7 @@ import { cn, getBaseTitle } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import {
   useTerminalInputStore,
-  useTerminalStore,
+  usePanelStore,
   usePortalStore,
   useFocusStore,
   type TerminalInstance,
@@ -41,7 +41,7 @@ import {
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import type { TabGroup } from "@/types";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
-import { handleDockInteractOutside } from "./dockPopoverGuard";
+import { handleDockInteractOutside, handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { usePreferencesStore } from "@/store";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -51,23 +51,23 @@ interface DockedTabGroupProps {
 }
 
 export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
-  const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
-  const openDockTerminal = useTerminalStore((s) => s.openDockTerminal);
-  const closeDockTerminal = useTerminalStore((s) => s.closeDockTerminal);
-  const moveTerminalToGrid = useTerminalStore((s) => s.moveTerminalToGrid);
-  const backendStatus = useTerminalStore((s) => s.backendStatus);
-  const setActiveTab = useTerminalStore((s) => s.setActiveTab);
-  const setFocused = useTerminalStore((s) => s.setFocused);
-  const trashTerminal = useTerminalStore((s) => s.trashTerminal);
-  const updateTitle = useTerminalStore((s) => s.updateTitle);
+  const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
+  const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
+  const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
+  const moveTerminalToGrid = usePanelStore((s) => s.moveTerminalToGrid);
+  const backendStatus = usePanelStore((s) => s.backendStatus);
+  const setActiveTab = usePanelStore((s) => s.setActiveTab);
+  const setFocused = usePanelStore((s) => s.setFocused);
+  const trashPanel = usePanelStore((s) => s.trashPanel);
+  const updateTitle = usePanelStore((s) => s.updateTitle);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
-  const reorderPanelsInGroup = useTerminalStore((s) => s.reorderPanelsInGroup);
-  const addTerminal = useTerminalStore((s) => s.addTerminal);
-  const addPanelToGroup = useTerminalStore((s) => s.addPanelToGroup);
+  const reorderPanelsInGroup = usePanelStore((s) => s.reorderPanelsInGroup);
+  const addPanel = usePanelStore((s) => s.addPanel);
+  const addPanelToGroup = usePanelStore((s) => s.addPanelToGroup);
 
   // Subscribe to registry's active tab for this group
-  const storedActiveTabId = useTerminalStore(
+  const storedActiveTabId = usePanelStore(
     (state) => state.tabGroups.get(group.id)?.activeTabId ?? null
   );
 
@@ -237,9 +237,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         }
       }
       // Trash the terminal (store auto-removes from group)
-      trashTerminal(tabId);
+      trashPanel(tabId);
     },
-    [activeTabId, panels, group.id, setActiveTab, setFocused, trashTerminal]
+    [activeTabId, panels, group.id, setActiveTab, setFocused, trashPanel]
   );
 
   // Sensors for tab drag-and-drop (require small distance to differentiate from clicks)
@@ -328,7 +328,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
     try {
       const options = await buildPanelDuplicateOptions(activePanel, "dock");
-      const newPanelId = await addTerminal(options);
+      const newPanelId = await addPanel(options);
       if (!newPanelId) return;
 
       addPanelToGroup(group.id, newPanelId);
@@ -341,7 +341,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   }, [
     activePanel,
     group.id,
-    addTerminal,
+    addPanel,
     addPanelToGroup,
     setActiveTab,
     setFocused,
@@ -376,7 +376,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         <PopoverTrigger asChild>
           <button
             className={cn(
-              "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition-all duration-150 max-w-[280px]",
+              "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
               "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-canopy-text/70",
               "hover:text-canopy-text hover:bg-[var(--dock-item-bg-hover)]",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
@@ -392,6 +392,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (e.detail >= 2) return;
               if (isOpen) {
                 closeDockTerminal();
               } else {
@@ -401,8 +402,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             onDoubleClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              moveTerminalToGrid(activePanel.id);
-              closeDockTerminal();
+              const moved = moveTerminalToGrid(activePanel.id);
+              if (moved) closeDockTerminal();
             }}
             aria-label={`${activePanel.title} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
           >
@@ -476,6 +477,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         sideOffset={10}
         collisionPadding={collisionPadding}
         onInteractOutside={(e) => handleDockInteractOutside(e, portalContainer)}
+        onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainer)}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           const focusTarget = getTerminalFocusTarget({

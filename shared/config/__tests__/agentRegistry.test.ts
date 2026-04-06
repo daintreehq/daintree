@@ -11,6 +11,7 @@ import {
   isUserDefinedAgent,
   getAgentModelConfig,
   getAgentDisplayTitle,
+  ASSISTANT_FAST_MODELS,
   type AgentConfig,
 } from "../agentRegistry.js";
 import {
@@ -441,6 +442,7 @@ describe("model configuration", () => {
     expect(config!.models!.length).toBeGreaterThanOrEqual(1);
     const modelIds = config!.models!.map((m) => m.id);
     expect(modelIds).toContain("gpt-5.4");
+    expect(modelIds).toContain("gpt-5.3-codex-spark");
   });
 
   it("each model has id, name, and shortLabel", () => {
@@ -710,6 +712,53 @@ describe("cursor detection patterns", () => {
       const patterns = compileAgentPatterns("cursor", "fallbackPatterns");
       expect(patterns.some((p) => p.test("⬢ Processing"))).toBe(true);
     });
+  });
+});
+
+describe("cursor install metadata", () => {
+  it("has Windows install block with correct PowerShell command", () => {
+    const config = getAgentConfig("cursor");
+    const windows = config?.install?.byOs?.windows;
+    expect(windows).toBeDefined();
+    expect(windows).toHaveLength(1);
+    expect(windows![0].label).toBe("PowerShell");
+    expect(windows![0].commands).toEqual(["irm 'https://cursor.com/install?win32=true' | iex"]);
+  });
+
+  it("has install blocks for all three platforms", () => {
+    const config = getAgentConfig("cursor");
+    for (const os of ["macos", "linux", "windows"] as const) {
+      expect(config?.install?.byOs?.[os]).toBeDefined();
+      expect(config?.install?.byOs?.[os]!.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("all built-in agents have Windows or generic install", () => {
+  it.each(["claude", "gemini", "codex", "opencode", "cursor"])(
+    "%s has windows or generic install block",
+    (agentId) => {
+      const config = getAgentConfig(agentId);
+      const hasWindows = (config?.install?.byOs?.windows?.length ?? 0) > 0;
+      const hasGeneric = (config?.install?.byOs?.generic?.length ?? 0) > 0;
+      expect(hasWindows || hasGeneric).toBe(true);
+    }
+  );
+});
+
+describe("ASSISTANT_FAST_MODELS", () => {
+  it("has entries for claude, gemini, and codex", () => {
+    expect(ASSISTANT_FAST_MODELS).toHaveProperty("claude");
+    expect(ASSISTANT_FAST_MODELS).toHaveProperty("gemini");
+    expect(ASSISTANT_FAST_MODELS).toHaveProperty("codex");
+  });
+
+  it("each fast model ID exists in the agent's models array", () => {
+    for (const [agentId, modelId] of Object.entries(ASSISTANT_FAST_MODELS)) {
+      const config = getAgentConfig(agentId);
+      const modelIds = config?.models?.map((m) => m.id) ?? [];
+      expect(modelIds).toContain(modelId);
+    }
   });
 });
 

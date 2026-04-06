@@ -57,7 +57,7 @@ type DevServerState = {
 
 const {
   terminalStoreState,
-  useTerminalStoreMock,
+  usePanelStoreMock,
   useProjectStoreMock,
   useProjectSettingsStoreMock,
   devServerStateRef,
@@ -71,7 +71,7 @@ const {
     setBrowserZoom: vi.fn(),
     setDevPreviewConsoleOpen: vi.fn(),
   };
-  const useTerminalStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
+  const usePanelStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
     selector(terminalStoreState)
   );
 
@@ -118,7 +118,7 @@ const {
 
   return {
     terminalStoreState,
-    useTerminalStoreMock,
+    usePanelStoreMock,
     useProjectStoreMock,
     useProjectSettingsStoreMock,
     devServerStateRef,
@@ -128,7 +128,7 @@ const {
 });
 
 vi.mock("@/store", () => ({
-  useTerminalStore: useTerminalStoreMock,
+  usePanelStore: usePanelStoreMock,
 }));
 
 vi.mock("@/store/projectStore", () => ({
@@ -258,6 +258,12 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       },
       window: {
         onDestroyHiddenWebviews: vi.fn(() => vi.fn()),
+      },
+      webview: {
+        registerPanel: vi.fn(() => Promise.resolve()),
+        onDialogRequest: vi.fn(() => vi.fn()),
+        onFindShortcut: vi.fn(() => vi.fn()),
+        onNavigationBlocked: vi.fn(() => vi.fn()),
       },
     };
   });
@@ -678,5 +684,121 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       (call: unknown[]) => typeof call[0] === "string" && call[0].includes("scrollTo")
     );
     expect(scrollToCalls).toHaveLength(0);
+  });
+
+  it("clears stale browserUrl when panel becomes unconfigured after settings load", async () => {
+    // Start with settings loading (isUnconfigured = false during load)
+    useProjectSettingsStoreMock.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (selector: (state: any) => unknown) =>
+        selector({
+          projectId: "project-1",
+          settings: {
+            devServerCommand: "",
+            environmentVariables: {},
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: [],
+          isLoading: true,
+          error: null,
+        })
+    );
+    terminalStoreState.getTerminal.mockImplementation(() => ({
+      id: "dev-preview-panel-1",
+      browserHistory: {
+        past: ["http://localhost:3000/old"],
+        present: "http://localhost:3000/stale",
+        future: [],
+      },
+      browserZoom: 1.0,
+      devPreviewConsoleOpen: false,
+      devCommand: "",
+    }));
+    devServerStateRef.current = {
+      ...devServerStateRef.current,
+      status: "stopped",
+      url: null,
+    };
+
+    const { rerender } = render(<DevPreviewPane {...baseProps} />);
+
+    // Now settings finish loading — isUnconfigured becomes true
+    useProjectSettingsStoreMock.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (selector: (state: any) => unknown) =>
+        selector({
+          projectId: "project-1",
+          settings: {
+            devServerCommand: "",
+            environmentVariables: {},
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: [],
+          isLoading: false,
+          error: null,
+        })
+    );
+    rerender(<DevPreviewPane {...baseProps} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(terminalStoreState.setBrowserUrl).toHaveBeenCalledWith("dev-preview-panel-1", "");
+  });
+
+  it("shows retry-exhausted error overlay after MAX_RETRIES connection failures", async () => {
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    // Fire 6 failures (MAX_RETRIES = 5, so the 6th triggers the error)
+    for (let i = 0; i < 6; i++) {
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -102,
+          errorDescription: "ERR_CONNECTION_REFUSED",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/",
+        });
+      });
+      if (i < 5) {
+        act(() => {
+          vi.advanceTimersByTime(Math.min(500 * 2 ** i, 8000));
+        });
+      }
+    }
+
+    expect(container.textContent).toContain("Dev Server Unreachable");
+    expect(container.textContent).toContain("Unable to connect to dev server");
+  });
+
+  it("clears retry-exhausted error on hard restart", async () => {
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    // Exhaust retries
+    for (let i = 0; i < 6; i++) {
+      act(() => {
+        emitWebviewEvent(webview, "did-fail-load", {
+          errorCode: -102,
+          errorDescription: "ERR_CONNECTION_REFUSED",
+          isMainFrame: true,
+          validatedURL: "http://localhost:5173/",
+        });
+      });
+      if (i < 5) {
+        act(() => {
+          vi.advanceTimersByTime(Math.min(500 * 2 ** i, 8000));
+        });
+      }
+    }
+
+    expect(container.textContent).toContain("Dev Server Unreachable");
+
+    fireEvent.click(screen.getByTestId("hard-restart"));
+
+    expect(container.textContent).not.toContain("Dev Server Unreachable");
   });
 });

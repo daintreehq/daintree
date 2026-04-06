@@ -45,6 +45,18 @@ export const systemClient = {
     return window.electron.system.healthCheck(agentIds);
   },
 
+  getHealthCheckSpecs: (
+    agentIds?: string[]
+  ): ReturnType<typeof window.electron.system.getHealthCheckSpecs> => {
+    return window.electron.system.getHealthCheckSpecs(agentIds);
+  },
+
+  checkTool: (
+    spec: Parameters<typeof window.electron.system.checkTool>[0]
+  ): ReturnType<typeof window.electron.system.checkTool> => {
+    return window.electron.system.checkTool(spec);
+  },
+
   downloadDiagnostics: (): Promise<boolean> => {
     return window.electron.system.downloadDiagnostics();
   },
@@ -55,6 +67,18 @@ export const systemClient = {
 
   getHardwareInfo: (): ReturnType<typeof window.electron.system.getHardwareInfo> => {
     return window.electron.system.getHardwareInfo();
+  },
+
+  getProcessMetrics: (): ReturnType<typeof window.electron.system.getProcessMetrics> => {
+    return window.electron.system.getProcessMetrics();
+  },
+
+  getHeapStats: (): ReturnType<typeof window.electron.system.getHeapStats> => {
+    return window.electron.system.getHeapStats();
+  },
+
+  getDiagnosticsInfo: (): ReturnType<typeof window.electron.system.getDiagnosticsInfo> => {
+    return window.electron.system.getDiagnosticsInfo();
   },
 
   onWake: (

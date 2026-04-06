@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Glob(**)",
+      "Grep(**)",
+      "LS(**)",
+      "WebFetch",
+      "mcp__canopy-docs__*",
+      "Bash(gh issue list*)",
+      "Bash(gh issue view*)",
+      "Bash(gh issue search*)",
+      "Bash(gh search issues*)"
+    ],
+    "deny": ["Write(**)", "Edit(**)", "MultiEdit(**)", "Bash(**)"]
+  }
+}

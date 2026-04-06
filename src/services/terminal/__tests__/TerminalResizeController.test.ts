@@ -796,5 +796,68 @@ describe("TerminalResizeController", () => {
         managed.terminal.rows
       );
     });
+
+    it("returns null without mutating cache when proposeDimensions returns undefined", () => {
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions.mockReturnValue(undefined);
+
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+
+      const result = controller.resize("term-1", 1200, 900);
+
+      expect(result).toBeNull();
+      expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(managed.lastWidth).toBe(800);
+      expect(managed.lastHeight).toBe(600);
+    });
+
+    it("does not suppress later resize after proposeDimensions initially returns undefined", () => {
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions.mockReturnValue(undefined);
+
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+
+      // First call: proposeDimensions undefined → null, cache unchanged
+      const result1 = controller.resize("term-1", 1200, 900);
+      expect(result1).toBeNull();
+      expect(managed.lastWidth).toBe(800);
+      expect(managed.lastHeight).toBe(600);
+
+      // Second call: proposeDimensions now returns valid result
+      managed.fitAddon.proposeDimensions.mockReturnValue({ cols: 120, rows: 45 });
+      const result2 = controller.resize("term-1", 1200, 900);
+
+      // Should NOT be suppressed by dedup guard since lastWidth was never updated
+      expect(result2).not.toBeNull();
+      expect(managed.fitAddon.fit).toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledWith(
+        "term-1",
+        managed.terminal.cols,
+        managed.terminal.rows
+      );
+    });
+
+    it("returns null when proposeDimensions returns degenerate 1x1", () => {
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions.mockReturnValue({ cols: 1, rows: 1 });
+
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+
+      const result = controller.resize("term-1", 1200, 900);
+
+      expect(result).toBeNull();
+      expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+    });
   });
 });

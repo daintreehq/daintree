@@ -109,7 +109,7 @@ function InlineStatusBannerComponent({
         hasDescription
           ? "flex flex-col gap-2 px-3 py-2 shrink-0"
           : "flex items-center justify-between gap-3 px-3 py-2 shrink-0",
-        shouldAnimate && "transition-all duration-150",
+        shouldAnimate && "transition duration-150",
         shouldAnimate && (isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2"),
         className
       )}

@@ -1,6 +1,6 @@
 import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
 import { EditorSelection } from "@codemirror/state";
-import type { LegacyAgentType } from "@shared/types";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
@@ -44,7 +44,7 @@ interface UseTokenResolutionParams {
   setSelectionContext: Dispatch<SetStateAction<AtSelectionContext | null>>;
   terminalId: string;
   cwd: string;
-  agentId?: LegacyAgentType;
+  agentId?: BuiltInAgentId;
 }
 
 export function useTokenResolution({

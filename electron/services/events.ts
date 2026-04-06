@@ -187,6 +187,12 @@ export const EVENT_META: Record<keyof CanopyEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "Agent state changed (idle, working, completed, etc.)",
   },
+  "agent:all-clear": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "All concurrent agents finished — workspace fully quiet",
+  },
   "agent:detected": {
     category: "agent",
     requiresContext: false,
@@ -314,38 +320,6 @@ export const EVENT_META: Record<keyof CanopyEventMap, EventMetadata> = {
     requiresContext: true,
     requiresTimestamp: true,
     description: "Task failed",
-  },
-
-  // Workflow events
-  "workflow:started": {
-    category: "task",
-    requiresContext: false,
-    requiresTimestamp: true,
-    description: "Workflow execution started",
-  },
-  "workflow:completed": {
-    category: "task",
-    requiresContext: false,
-    requiresTimestamp: true,
-    description: "Workflow execution completed successfully",
-  },
-  "workflow:failed": {
-    category: "task",
-    requiresContext: false,
-    requiresTimestamp: true,
-    description: "Workflow execution failed",
-  },
-  "workflow:approval-requested": {
-    category: "task",
-    requiresContext: false,
-    requiresTimestamp: true,
-    description: "Workflow approval requested from user",
-  },
-  "workflow:approval-cleared": {
-    category: "task",
-    requiresContext: false,
-    requiresTimestamp: true,
-    description: "Workflow approval cleared (resolved, cancelled, or timed out)",
   },
 };
 
@@ -530,7 +504,17 @@ export type CanopyEventMap = {
     trigger: AgentStateChangeTrigger;
     confidence: number;
     waitingReason?: import("../../shared/types/agent.js").WaitingReason;
+    sessionCost?: number;
+    sessionTokens?: number;
   }>;
+
+  /**
+   * Emitted when all concurrent agents finish and the workspace becomes fully quiet.
+   * Requires ≥2 agents to have been concurrently active in the session.
+   */
+  "agent:all-clear": {
+    timestamp: number;
+  };
 
   /**
    * Emitted when an agent CLI is detected running in a terminal.
@@ -759,59 +743,6 @@ export type CanopyEventMap = {
     worktreeId?: string;
     error: string;
   }>;
-
-  // Workflow Lifecycle Events
-
-  /**
-   * Emitted when a workflow execution starts.
-   */
-  "workflow:started": {
-    runId: string;
-    workflowId: string;
-    workflowVersion: string;
-    timestamp: number;
-  };
-
-  /**
-   * Emitted when a workflow execution completes successfully.
-   */
-  "workflow:completed": {
-    runId: string;
-    workflowId: string;
-    workflowVersion: string;
-    duration: number;
-    timestamp: number;
-  };
-
-  /**
-   * Emitted when a workflow execution fails.
-   */
-  "workflow:failed": {
-    runId: string;
-    workflowId: string;
-    workflowVersion: string;
-    error: string;
-    timestamp: number;
-  };
-
-  "workflow:approval-requested": {
-    runId: string;
-    nodeId: string;
-    workflowId: string;
-    workflowName: string;
-    prompt: string;
-    requestedAt: number;
-    timeoutMs?: number;
-    timeoutAt?: number;
-    timestamp: number;
-  };
-
-  "workflow:approval-cleared": {
-    runId: string;
-    nodeId: string;
-    reason: "resolved" | "cancelled" | "timeout";
-    timestamp: number;
-  };
 };
 
 /**
@@ -855,6 +786,7 @@ export const ALL_EVENT_TYPES: Array<keyof CanopyEventMap> = [
   "sys:issue:not-found",
   "agent:spawned",
   "agent:state-changed",
+  "agent:all-clear",
   "agent:detected",
   "agent:exited",
   "agent:output",
@@ -875,11 +807,6 @@ export const ALL_EVENT_TYPES: Array<keyof CanopyEventMap> = [
   "task:state-changed",
   "task:completed",
   "task:failed",
-  "workflow:started",
-  "workflow:completed",
-  "workflow:failed",
-  "workflow:approval-requested",
-  "workflow:approval-cleared",
 ];
 
 export class TypedEventBus {

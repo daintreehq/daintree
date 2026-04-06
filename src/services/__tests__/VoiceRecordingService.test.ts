@@ -41,11 +41,15 @@ vi.mock("@/store/voiceRecordingStore", () => {
   };
 });
 
-vi.mock("@/store/terminalStore", () => {
-  const state = { terminals: [] as unknown[], focusedId: null as string | null };
+vi.mock("@/store/panelStore", () => {
+  const state = {
+    panelsById: {} as Record<string, unknown>,
+    panelIds: [] as string[],
+    focusedId: null as string | null,
+  };
   const getState = () => state;
   const subscribe = vi.fn(() => () => {});
-  return { useTerminalStore: Object.assign(getState, { getState, subscribe }), __state: state };
+  return { usePanelStore: Object.assign(getState, { getState, subscribe }), __state: state };
 });
 
 vi.mock("@/store/terminalInputStore", () => {
@@ -65,10 +69,11 @@ vi.mock("@/store/projectStore", () => {
   return { useProjectStore: Object.assign(getState, { getState }) };
 });
 
-vi.mock("@/store/worktreeDataStore", () => {
-  const getState = () => ({ worktrees: new Map() });
-  return { useWorktreeDataStore: Object.assign(getState, { getState }) };
-});
+vi.mock("@/store/createWorktreeStore", () => ({
+  getCurrentViewStore: () => ({
+    getState: () => ({ worktrees: new Map() }),
+  }),
+}));
 
 vi.mock("@/store/worktreeStore", () => {
   const getState = () => ({ activeWorktreeId: null, selectWorktree: vi.fn() });
@@ -93,6 +98,7 @@ function buildElectronStub() {
       onCorrectionQueued: vi.fn(() => () => {}),
       onCorrectionReplace: vi.fn(() => () => {}),
       onParagraphBoundary: vi.fn(() => () => {}),
+      onFileTokenResolved: vi.fn(() => () => {}),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
       getSettings: vi.fn().mockResolvedValue({
@@ -316,12 +322,14 @@ describe("VoiceRecordingService — background recording", () => {
 
   it("stops recording when the active panel is moved to trash (panel-close regression)", async () => {
     // Capture the terminalStore subscribe callback so we can trigger it.
-    let storeCallback: ((state: { terminals: unknown[] }) => void) | null = null;
-    const { useTerminalStore } = (await import("@/store/terminalStore")) as unknown as {
-      useTerminalStore: { subscribe: ReturnType<typeof vi.fn> };
+    let storeCallback:
+      | ((state: { panelsById: Record<string, unknown>; panelIds: string[] }) => void)
+      | null = null;
+    const { usePanelStore } = (await import("@/store/panelStore")) as unknown as {
+      usePanelStore: { subscribe: ReturnType<typeof vi.fn> };
     };
-    (useTerminalStore.subscribe as ReturnType<typeof vi.fn>).mockImplementation(
-      (cb: (state: { terminals: unknown[] }) => void) => {
+    (usePanelStore.subscribe as ReturnType<typeof vi.fn>).mockImplementation(
+      (cb: (state: { panelsById: Record<string, unknown>; panelIds: string[] }) => void) => {
         storeCallback = cb;
         return () => {};
       }
@@ -340,7 +348,7 @@ describe("VoiceRecordingService — background recording", () => {
 
     // Simulate the panel being removed from the terminal list.
     expect(storeCallback).not.toBeNull();
-    storeCallback!({ terminals: [] });
+    storeCallback!({ panelsById: {}, panelIds: [] });
 
     expect(stopSpy).toHaveBeenCalledWith(
       "Dictation stopped because its panel was closed.",
