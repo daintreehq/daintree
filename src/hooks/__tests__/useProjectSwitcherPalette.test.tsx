@@ -200,7 +200,7 @@ describe("useProjectSwitcherPalette", () => {
       },
     ];
 
-    it("defaults to index 0 (most recent non-active) when 2+ projects exist", async () => {
+    it("defaults to index 1 (active project at index 0) when 2+ projects exist", async () => {
       projectState.projects = multipleProjects;
       projectState.currentProject = { id: "project-1" };
       getBulkStatsMock.mockResolvedValue(emptyBulkStats(multipleProjects.map((p) => p.id)));
@@ -215,9 +215,11 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.results).toHaveLength(3);
       });
 
-      expect(result.current.selectedIndex).toBe(0);
-      expect(result.current.results[0].id).toBe("project-2");
-      expect(result.current.results[2].id).toBe("project-1");
+      expect(result.current.selectedIndex).toBe(1);
+      expect(result.current.results[0].id).toBe("project-1");
+      expect(result.current.results[0].isActive).toBe(true);
+      expect(result.current.results[1].id).toBe("project-2");
+      expect(result.current.results[2].id).toBe("project-3");
     });
 
     it("defaults to index 0 when only 1 project exists", async () => {
@@ -256,7 +258,7 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.selectedIndex).toBe(0);
     });
 
-    it("defaults to index 0 with exactly 2 projects (non-active first)", async () => {
+    it("defaults to index 1 with exactly 2 projects (active first)", async () => {
       projectState.projects = [multipleProjects[0], multipleProjects[1]];
       projectState.currentProject = { id: "project-1" };
       getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1", "project-2"]));
@@ -271,9 +273,54 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.results).toHaveLength(2);
       });
 
-      expect(result.current.selectedIndex).toBe(0);
-      expect(result.current.results[0].id).toBe("project-2");
-      expect(result.current.results[1].id).toBe("project-1");
+      expect(result.current.selectedIndex).toBe(1);
+      expect(result.current.results[0].id).toBe("project-1");
+      expect(result.current.results[1].id).toBe("project-2");
+    });
+
+    it("sorts by lastOpened, ignoring frecencyScore", async () => {
+      const projectsWithMismatchedScores = [
+        {
+          id: "project-a",
+          name: "High Frecency",
+          path: "/repo/a",
+          emoji: "🌲",
+          color: "#00aa00",
+          lastOpened: 100,
+          frecencyScore: 50.0,
+          status: "active" as const,
+        },
+        {
+          id: "project-b",
+          name: "Low Frecency",
+          path: "/repo/b",
+          emoji: "🌿",
+          color: "#00bb00",
+          lastOpened: 300,
+          frecencyScore: 1.0,
+          status: "active" as const,
+        },
+      ];
+
+      projectState.projects = projectsWithMismatchedScores;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(
+        emptyBulkStats(projectsWithMismatchedScores.map((p) => p.id))
+      );
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+
+      // project-b has lower frecency but higher lastOpened — should come first
+      expect(result.current.results[0].id).toBe("project-b");
+      expect(result.current.results[1].id).toBe("project-a");
     });
   });
 
@@ -582,7 +629,7 @@ describe("useProjectSwitcherPalette", () => {
 
       await waitFor(() => {
         expect(result.current.results).toHaveLength(3);
-        expect(result.current.selectedIndex).toBe(0);
+        expect(result.current.selectedIndex).toBe(1);
       });
 
       expect(result.current.isOpen).toBe(true);
@@ -592,10 +639,10 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       expect(result.current.isOpen).toBe(true);
-      expect(result.current.selectedIndex).toBe(1);
+      expect(result.current.selectedIndex).toBe(2);
     });
 
-    it("wraps to first non-active at end of list", async () => {
+    it("wraps to index 0 at end of list", async () => {
       projectState.projects = threeProjects;
       projectState.currentProject = { id: "project-1" };
       getBulkStatsMock.mockResolvedValue(emptyBulkStats(threeProjects.map((p) => p.id)));
@@ -608,13 +655,8 @@ describe("useProjectSwitcherPalette", () => {
 
       await waitFor(() => {
         expect(result.current.results).toHaveLength(3);
-        expect(result.current.selectedIndex).toBe(0);
+        expect(result.current.selectedIndex).toBe(1);
       });
-
-      await act(async () => {
-        result.current.toggle();
-      });
-      expect(result.current.selectedIndex).toBe(1);
 
       await act(async () => {
         result.current.toggle();
@@ -651,7 +693,7 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.selectedIndex).toBe(0);
     });
 
-    it("wraps to first non-active project when cycling through all", async () => {
+    it("cycles through all projects in MRU order", async () => {
       const projectsWithActiveNotFirst = [
         {
           id: "project-1",
@@ -701,15 +743,14 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.results).toHaveLength(3);
       });
 
-      // Non-active projects come first, active last
-      expect(result.current.results[0].isActive).toBe(false);
-      expect(result.current.selectedIndex).toBe(0);
-
-      await act(async () => {
-        result.current.toggle();
-      });
+      // MRU order: active (project-2, lastOpened:300) first, then by lastOpened
+      expect(result.current.results[0].id).toBe("project-2");
+      expect(result.current.results[0].isActive).toBe(true);
+      expect(result.current.results[1].id).toBe("project-3");
+      expect(result.current.results[2].id).toBe("project-1");
       expect(result.current.selectedIndex).toBe(1);
 
+      // Toggle cycle: 1 → 2 → 0 → 1
       await act(async () => {
         result.current.toggle();
       });
@@ -718,9 +759,12 @@ describe("useProjectSwitcherPalette", () => {
       await act(async () => {
         result.current.toggle();
       });
+      expect(result.current.selectedIndex).toBe(0);
 
-      const firstNonActive = result.current.results.findIndex((p) => !p.isActive);
-      expect(result.current.selectedIndex).toBe(firstNonActive);
+      await act(async () => {
+        result.current.toggle();
+      });
+      expect(result.current.selectedIndex).toBe(1);
     });
   });
 });

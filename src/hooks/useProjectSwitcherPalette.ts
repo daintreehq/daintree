@@ -130,9 +130,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const sortedProjects = useMemo<SearchableProject[]>(() => {
     return [...searchableProjects].sort((a, b) => {
-      if (a.frecencyScore !== b.frecencyScore) {
-        return b.frecencyScore - a.frecencyScore;
-      }
       if (a.lastOpened !== b.lastOpened) {
         return b.lastOpened - a.lastOpened;
       }
@@ -142,12 +139,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const results = useMemo<SearchableProject[]>(() => {
     if (!query.trim()) {
-      // Order: non-active by frecency/recency first, then active last.
-      // This puts the most recently used other project at index 0 for quick toggle.
-      const nonActive = sortedProjects.filter((p) => !p.isActive);
-      const active = sortedProjects.filter((p) => p.isActive);
-      const ordered = [...nonActive.slice(0, MAX_RESULTS - active.length), ...active];
-      return ordered.slice(0, MAX_RESULTS);
+      return sortedProjects.slice(0, MAX_RESULTS);
     }
 
     return rankProjectMatches(query, sortedProjects).slice(0, MAX_RESULTS);
@@ -193,17 +185,20 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
   }, [removeConfirmProject, searchableProjects]);
 
-  const open = useCallback((nextMode: ProjectSwitcherMode = "modal") => {
-    setMode(nextMode);
-    if (nextMode === "modal") {
-      usePaletteStore.getState().openPalette("project-switcher");
-    } else {
-      setDropdownIsOpen(true);
-    }
-    setQuery("");
-    selectedProjectIdRef.current = null;
-    setSelectedIndex(0);
-  }, []);
+  const open = useCallback(
+    (nextMode: ProjectSwitcherMode = "modal") => {
+      setMode(nextMode);
+      if (nextMode === "modal") {
+        usePaletteStore.getState().openPalette("project-switcher");
+      } else {
+        setDropdownIsOpen(true);
+      }
+      setQuery("");
+      selectedProjectIdRef.current = null;
+      setSelectedIndex(searchableProjects.length >= 2 ? 1 : 0);
+    },
+    [searchableProjects.length]
+  );
 
   const close = useCallback(() => {
     if (mode === "modal") {
@@ -222,11 +217,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         setSelectedIndex((prev) => {
           if (results.length <= 1) return prev;
           const next = prev + 1;
-          if (next >= results.length) {
-            const firstNonActive = results.findIndex((p) => !p.isActive);
-            return firstNonActive >= 0 ? firstNonActive : 0;
-          }
-          return next;
+          return next >= results.length ? 0 : next;
         });
       } else {
         open(nextMode);
