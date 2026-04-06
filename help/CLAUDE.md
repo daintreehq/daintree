@@ -82,3 +82,5 @@ The `canopy-docs` MCP server is your only documentation source — use it for al
 - **`list_pages`** — List all indexed documentation pages. Use to discover available content or browse by section.
 - **`get_site_structure`** — Returns the hierarchical page tree. Use to understand how documentation is organized.
 - **`get_related_pages`** — Find pages related to a given page by URL. Use to suggest further reading.
+
+**URL construction:** MCP tools return page paths (e.g., `/docs/getting-started`). Always prepend `https://canopyide.com` to form the full URL before linking — never present bare paths to users.
