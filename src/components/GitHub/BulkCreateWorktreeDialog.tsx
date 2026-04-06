@@ -1,6 +1,14 @@
 import { useCallback, useReducer, useRef, useMemo, useEffect, useLayoutEffect } from "react";
 import PQueue from "p-queue";
-import { Check, AlertTriangle, UserPlus, Play, ChevronsUpDown, RotateCcw } from "lucide-react";
+import {
+  Check,
+  AlertTriangle,
+  UserPlus,
+  Play,
+  ChevronsUpDown,
+  RotateCcw,
+  Copy,
+} from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { WorktreeIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -19,7 +27,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useTerminalStore } from "@/store/terminalStore";
-import { useRecipePicker } from "@/components/Worktree/hooks/useRecipePicker";
+import { useRecipePicker, CLONE_LAYOUT_ID } from "@/components/Worktree/hooks/useRecipePicker";
 import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNewWorktreeProjectSettings";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 
@@ -461,6 +469,7 @@ export function BulkCreateWorktreeDialog({
         resolvedBranch?: string;
         spawnedTerminalIds: string[];
         failedTerminalIndices: number[];
+        cloneComplete?: boolean;
       }
     >()
   );
@@ -480,6 +489,12 @@ export function BulkCreateWorktreeDialog({
       if (!rootPath) return;
 
       const tracking = batchTrackingRef.current;
+
+      const sourceWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+      const cloneTerminals =
+        selectedRecipeId === CLONE_LAYOUT_ID && sourceWorktreeId
+          ? useRecipeStore.getState().generateRecipeFromActiveTerminals(sourceWorktreeId)
+          : null;
 
       const queue = new PQueue({
         concurrency: QUEUE_CONCURRENCY,
@@ -653,8 +668,47 @@ export function BulkCreateWorktreeDialog({
                 });
               }
 
-              // Step 2: Recipe execution (skip if no recipe)
-              if (selectedRecipeId && worktreePath && worktreeId) {
+              // Step 2: Clone layout or run recipe
+              const currentItem = tracking.get(itemNumber);
+              if (cloneTerminals && worktreePath && worktreeId && !currentItem?.cloneComplete) {
+                dispatchProgress({
+                  type: "ITEM_TERMINALS_SPAWNING",
+                  issueNumber: itemNumber,
+                });
+                try {
+                  for (const t of cloneTerminals) {
+                    await useTerminalStore.getState().addTerminal({
+                      kind:
+                        t.type === "dev-preview"
+                          ? "dev-preview"
+                          : t.type === "terminal"
+                            ? "terminal"
+                            : "agent",
+                      agentId:
+                        t.type !== "terminal" && t.type !== "dev-preview" ? t.type : undefined,
+                      title: t.title,
+                      cwd: worktreePath,
+                      worktreeId,
+                      exitBehavior: t.exitBehavior,
+                    });
+                  }
+                  const updatedTracked = tracking.get(itemNumber);
+                  if (updatedTracked) updatedTracked.cloneComplete = true;
+                } catch {
+                  // Clone is best-effort; worktree was created
+                }
+                dispatchProgress({
+                  type: "ITEM_TERMINALS_RESULT",
+                  issueNumber: itemNumber,
+                  spawnedTerminalIds: [],
+                  failedTerminalIndices: [],
+                });
+              } else if (
+                selectedRecipeId &&
+                selectedRecipeId !== CLONE_LAYOUT_ID &&
+                worktreePath &&
+                worktreeId
+              ) {
                 const currentTracked = tracking.get(itemNumber);
                 const failedIndices = currentTracked?.failedTerminalIndices;
                 const shouldRetryTerminals =
@@ -1026,112 +1080,142 @@ export function BulkCreateWorktreeDialog({
               </div>
             )}
 
-            {/* Recipe picker */}
-            {globalRecipes.length > 0 && (
-              <div className="space-y-2">
-                <label
-                  htmlFor="bulk-recipe-selector"
-                  className="block text-sm font-medium text-canopy-text"
+            {/* Starting Layout picker */}
+            <div className="space-y-2">
+              <label
+                htmlFor="bulk-recipe-selector"
+                className="block text-sm font-medium text-canopy-text"
+              >
+                Starting Layout
+              </label>
+              <Popover open={recipePickerOpen} onOpenChange={setRecipePickerOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    id="bulk-recipe-selector"
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={recipePickerOpen}
+                    aria-haspopup="listbox"
+                    aria-controls="bulk-recipe-list"
+                    className="w-full justify-between bg-canopy-bg border-canopy-border text-canopy-text hover:bg-canopy-bg hover:text-canopy-text"
+                  >
+                    <span className="flex items-center gap-2 truncate">
+                      {selectedRecipeId === CLONE_LAYOUT_ID ? (
+                        <>
+                          <Copy className="shrink-0 text-canopy-accent" />
+                          <span>Clone current layout</span>
+                        </>
+                      ) : selectedRecipe ? (
+                        <>
+                          <Play className="shrink-0 text-canopy-accent" />
+                          <span>{selectedRecipe.name}</span>
+                          <span className="text-xs text-canopy-text/50">
+                            ({selectedRecipe.terminals.length} terminal
+                            {selectedRecipe.terminals.length !== 1 ? "s" : ""})
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="shrink-0 text-canopy-accent" />
+                          <span className="text-canopy-text/60">Empty</span>
+                        </>
+                      )}
+                    </span>
+                    <ChevronsUpDown className="opacity-50 shrink-0" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  className="w-[400px] p-0"
+                  align="start"
+                  onEscapeKeyDown={(e) => e.stopPropagation()}
                 >
-                  Run Recipe (Optional)
-                </label>
-                <Popover open={recipePickerOpen} onOpenChange={setRecipePickerOpen}>
-                  <PopoverTrigger asChild>
-                    <Button
-                      id="bulk-recipe-selector"
-                      variant="outline"
-                      role="combobox"
-                      aria-expanded={recipePickerOpen}
-                      aria-haspopup="listbox"
-                      aria-controls="bulk-recipe-list"
-                      className="w-full justify-between bg-canopy-bg border-canopy-border text-canopy-text hover:bg-canopy-bg hover:text-canopy-text"
-                    >
-                      <span className="flex items-center gap-2 truncate">
-                        <Play className="shrink-0 text-canopy-accent" />
-                        {selectedRecipe ? (
-                          <>
-                            <span>{selectedRecipe.name}</span>
-                            <span className="text-xs text-canopy-text/50">
-                              ({selectedRecipe.terminals.length} terminal
-                              {selectedRecipe.terminals.length !== 1 ? "s" : ""})
-                            </span>
-                          </>
-                        ) : (
-                          <span className="text-canopy-text/60">No recipe</span>
-                        )}
-                      </span>
-                      <ChevronsUpDown className="opacity-50 shrink-0" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent
-                    className="w-[400px] p-0"
-                    align="start"
-                    onEscapeKeyDown={(e) => e.stopPropagation()}
+                  <div
+                    id="bulk-recipe-list"
+                    role="listbox"
+                    className="max-h-[300px] overflow-y-auto p-1"
                   >
                     <div
-                      id="bulk-recipe-list"
-                      role="listbox"
-                      className="max-h-[300px] overflow-y-auto p-1"
+                      role="option"
+                      aria-selected={selectedRecipeId === CLONE_LAYOUT_ID}
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleRecipeSelect(CLONE_LAYOUT_ID);
+                        }
+                      }}
+                      onClick={() => handleRecipeSelect(CLONE_LAYOUT_ID)}
+                      className={cn(
+                        "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
+                        selectedRecipeId === CLONE_LAYOUT_ID && "bg-canopy-border"
+                      )}
                     >
+                      <div className="flex items-center gap-2">
+                        <Copy className="h-3.5 w-3.5 text-canopy-text/50" />
+                        <span>Clone current layout</span>
+                      </div>
+                      {selectedRecipeId === CLONE_LAYOUT_ID && (
+                        <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
+                      )}
+                    </div>
+                    <div
+                      role="option"
+                      aria-selected={selectedRecipeId === null}
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleRecipeSelectNone();
+                        }
+                      }}
+                      onClick={handleRecipeSelectNone}
+                      className={cn(
+                        "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
+                        selectedRecipeId === null && "bg-canopy-border"
+                      )}
+                    >
+                      <span className="text-canopy-text/60">Empty</span>
+                      {selectedRecipeId === null && (
+                        <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
+                      )}
+                    </div>
+                    {globalRecipes.map((recipe) => (
                       <div
+                        key={recipe.id}
                         role="option"
-                        aria-selected={selectedRecipeId === null}
+                        aria-selected={recipe.id === selectedRecipeId}
                         tabIndex={0}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
-                            handleRecipeSelectNone();
+                            handleRecipeSelect(recipe.id);
                           }
                         }}
-                        onClick={handleRecipeSelectNone}
+                        onClick={() => handleRecipeSelect(recipe.id)}
                         className={cn(
                           "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                          selectedRecipeId === null && "bg-canopy-border"
+                          recipe.id === selectedRecipeId && "bg-canopy-border"
                         )}
                       >
-                        <span className="text-canopy-text/60">No recipe</span>
-                        {selectedRecipeId === null && (
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="truncate">{recipe.name}</span>
+                          <span className="text-xs text-canopy-text/50 shrink-0">
+                            {recipe.terminals.length} terminal
+                            {recipe.terminals.length !== 1 ? "s" : ""}
+                          </span>
+                          {recipe.id === defaultRecipeId && (
+                            <span className="text-xs text-canopy-accent shrink-0">(default)</span>
+                          )}
+                        </div>
+                        {recipe.id === selectedRecipeId && (
                           <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
                         )}
                       </div>
-                      {globalRecipes.map((recipe) => (
-                        <div
-                          key={recipe.id}
-                          role="option"
-                          aria-selected={recipe.id === selectedRecipeId}
-                          tabIndex={0}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              handleRecipeSelect(recipe.id);
-                            }
-                          }}
-                          onClick={() => handleRecipeSelect(recipe.id)}
-                          className={cn(
-                            "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                            recipe.id === selectedRecipeId && "bg-canopy-border"
-                          )}
-                        >
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="truncate">{recipe.name}</span>
-                            <span className="text-xs text-canopy-text/50 shrink-0">
-                              {recipe.terminals.length} terminal
-                              {recipe.terminals.length !== 1 ? "s" : ""}
-                            </span>
-                            {recipe.id === defaultRecipeId && (
-                              <span className="text-xs text-canopy-accent shrink-0">(default)</span>
-                            )}
-                          </div>
-                          {recipe.id === selectedRecipeId && (
-                            <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </PopoverContent>
-                </Popover>
-              </div>
-            )}
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            </div>
 
             {/* Worktree list */}
             <div className="space-y-2">
