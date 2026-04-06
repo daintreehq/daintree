@@ -490,22 +490,32 @@ export function NewWorktreeDialog({
           useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
 
           if (selectedRecipeId === CLONE_LAYOUT_ID && sourceWorktreeId) {
-            const terminals = useRecipeStore
-              .getState()
-              .generateRecipeFromActiveTerminals(sourceWorktreeId);
-            for (const t of terminals) {
-              await useTerminalStore.getState().addTerminal({
-                kind:
-                  t.type === "dev-preview"
-                    ? "dev-preview"
-                    : t.type === "terminal"
-                      ? "terminal"
-                      : "agent",
-                agentId: t.type !== "terminal" && t.type !== "dev-preview" ? t.type : undefined,
-                title: t.title,
-                cwd: worktreePath.trim(),
-                worktreeId,
-                exitBehavior: t.exitBehavior,
+            try {
+              const terminals = useRecipeStore
+                .getState()
+                .generateRecipeFromActiveTerminals(sourceWorktreeId);
+              for (const t of terminals) {
+                await useTerminalStore.getState().addTerminal({
+                  kind:
+                    t.type === "dev-preview"
+                      ? "dev-preview"
+                      : t.type === "terminal"
+                        ? "terminal"
+                        : "agent",
+                  agentId: t.type !== "terminal" && t.type !== "dev-preview" ? t.type : undefined,
+                  title: t.title,
+                  cwd: worktreePath.trim(),
+                  worktreeId,
+                  exitBehavior: t.exitBehavior,
+                });
+              }
+            } catch (cloneErr) {
+              const message =
+                cloneErr instanceof Error ? cloneErr.message : "Failed to clone layout";
+              notify({
+                type: "warning",
+                title: "Could not clone layout",
+                message: `${message} — worktree was created successfully`,
               });
             }
           } else if (selectedRecipe) {
@@ -660,22 +670,32 @@ export function NewWorktreeDialog({
         }
 
         if (selectedRecipeId === CLONE_LAYOUT_ID && sourceWorktreeId) {
-          const terminals = useRecipeStore
-            .getState()
-            .generateRecipeFromActiveTerminals(sourceWorktreeId);
-          for (const t of terminals) {
-            await useTerminalStore.getState().addTerminal({
-              kind:
-                t.type === "dev-preview"
-                  ? "dev-preview"
-                  : t.type === "terminal"
-                    ? "terminal"
-                    : "agent",
-              agentId: t.type !== "terminal" && t.type !== "dev-preview" ? t.type : undefined,
-              title: t.title,
-              cwd: worktreePath.trim(),
-              worktreeId,
-              exitBehavior: t.exitBehavior,
+          try {
+            const terminals = useRecipeStore
+              .getState()
+              .generateRecipeFromActiveTerminals(sourceWorktreeId);
+            for (const t of terminals) {
+              await useTerminalStore.getState().addTerminal({
+                kind:
+                  t.type === "dev-preview"
+                    ? "dev-preview"
+                    : t.type === "terminal"
+                      ? "terminal"
+                      : "agent",
+                agentId: t.type !== "terminal" && t.type !== "dev-preview" ? t.type : undefined,
+                title: t.title,
+                cwd: worktreePath.trim(),
+                worktreeId,
+                exitBehavior: t.exitBehavior,
+              });
+            }
+          } catch (cloneErr) {
+            const message =
+              cloneErr instanceof Error ? cloneErr.message : "Failed to clone layout";
+            notify({
+              type: "warning",
+              title: "Could not clone layout",
+              message: `${message} — worktree was created successfully`,
             });
           }
         } else if (selectedRecipe) {

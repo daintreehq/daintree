@@ -31,6 +31,7 @@ vi.mock("@/store/recipeStore", () => ({
     getState: () => ({
       runRecipeWithResults: mockRunRecipeWithResults,
       getRecipeById: () => null,
+      generateRecipeFromActiveTerminals: () => [],
     }),
   }),
 }));
@@ -104,6 +105,7 @@ const mockSelectWorktree = vi.fn();
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: {
     getState: () => ({
+      activeWorktreeId: "source-wt",
       setPendingWorktree: mockSetPendingWorktree,
       selectWorktree: mockSelectWorktree,
     }),
@@ -116,6 +118,7 @@ vi.mock("@/store/terminalStore", () => ({
     getState: () => ({
       terminalsById: Object.fromEntries(mockTerminals.map((t) => [t.id, t])),
       terminalIds: mockTerminals.map((t) => t.id),
+      addTerminal: vi.fn().mockResolvedValue("clone-terminal-id"),
     }),
   },
 }));

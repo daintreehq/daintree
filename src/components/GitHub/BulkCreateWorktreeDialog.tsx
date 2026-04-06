@@ -461,6 +461,7 @@ export function BulkCreateWorktreeDialog({
         resolvedBranch?: string;
         spawnedTerminalIds: string[];
         failedTerminalIndices: number[];
+        cloneComplete?: boolean;
       }
     >()
   );
@@ -660,26 +661,33 @@ export function BulkCreateWorktreeDialog({
               }
 
               // Step 2: Clone layout or run recipe
-              if (cloneTerminals && worktreePath && worktreeId) {
+              const currentItem = tracking.get(itemNumber);
+              if (cloneTerminals && worktreePath && worktreeId && !currentItem?.cloneComplete) {
                 dispatchProgress({
                   type: "ITEM_TERMINALS_SPAWNING",
                   issueNumber: itemNumber,
                 });
-                for (const t of cloneTerminals) {
-                  await useTerminalStore.getState().addTerminal({
-                    kind:
-                      t.type === "dev-preview"
-                        ? "dev-preview"
-                        : t.type === "terminal"
-                          ? "terminal"
-                          : "agent",
-                    agentId:
-                      t.type !== "terminal" && t.type !== "dev-preview" ? t.type : undefined,
-                    title: t.title,
-                    cwd: worktreePath,
-                    worktreeId,
-                    exitBehavior: t.exitBehavior,
-                  });
+                try {
+                  for (const t of cloneTerminals) {
+                    await useTerminalStore.getState().addTerminal({
+                      kind:
+                        t.type === "dev-preview"
+                          ? "dev-preview"
+                          : t.type === "terminal"
+                            ? "terminal"
+                            : "agent",
+                      agentId:
+                        t.type !== "terminal" && t.type !== "dev-preview" ? t.type : undefined,
+                      title: t.title,
+                      cwd: worktreePath,
+                      worktreeId,
+                      exitBehavior: t.exitBehavior,
+                    });
+                  }
+                  const updatedTracked = tracking.get(itemNumber);
+                  if (updatedTracked) updatedTracked.cloneComplete = true;
+                } catch {
+                  // Clone is best-effort; worktree was created
                 }
                 dispatchProgress({
                   type: "ITEM_TERMINALS_RESULT",
