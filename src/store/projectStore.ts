@@ -11,10 +11,8 @@ import { terminalPersistence } from "./persistence/terminalPersistence";
 import { useTerminalInputStore } from "./terminalInputStore";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
 
-function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState | undefined {
+function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   const draftInputs = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
-  const hasDrafts = Object.keys(draftInputs).length > 0;
-  if (!hasDrafts) return undefined;
   return { draftInputs };
 }
 
