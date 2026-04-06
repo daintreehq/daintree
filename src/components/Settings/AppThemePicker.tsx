@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ChevronDown, Monitor, Shuffle } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Monitor, Palette, Shuffle } from "lucide-react";
 import { ThemeSelector } from "./ThemeSelector";
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
-import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { AppDialog } from "@/components/ui/AppDialog";
 import { APP_THEME_PREVIEW_KEYS, getAppThemeWarnings } from "@shared/theme";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -141,8 +141,6 @@ export function AppThemePicker() {
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
 
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoGenRef = useRef(0);
   const shuffleQueueRef = useRef<string[]>([]);
@@ -291,23 +289,6 @@ export function AppThemePicker() {
     }
   }, [selectedScheme]);
 
-  useEscapeStack(open, () => setOpen(false));
-
-  useEffect(() => {
-    if (!open) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        triggerRef.current?.contains(e.target as Node) ||
-        listRef.current?.contains(e.target as Node)
-      ) {
-        return;
-      }
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [open]);
-
   const selectedWarnings = warningsByScheme.get(selectedScheme.id) ?? [];
 
   return (
@@ -367,114 +348,103 @@ export function AppThemePicker() {
         </div>
       )}
 
-      <div className="flex items-start gap-1.5">
-        <div className="relative flex-1 min-w-0">
-          <button
-            ref={triggerRef}
-            aria-haspopup="listbox"
-            aria-expanded={open}
-            aria-controls="theme-listbox"
-            onClick={() => setOpen((v) => !v)}
-            onBlur={(e) => {
-              if (!listRef.current?.contains(e.relatedTarget as Node)) {
-                setOpen(false);
-              }
-            }}
-            className={cn(
-              "w-full flex items-center gap-3 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
-              "border-canopy-border bg-canopy-bg hover:border-canopy-text/30",
-              open && "border-canopy-accent"
-            )}
-          >
-            <div className="relative shrink-0">
-              <HeroImage scheme={selectedScheme} size={96} />
-              {selectedScheme.heroVideo && (
-                <video
-                  ref={videoRef}
-                  muted
-                  playsInline
-                  preload="none"
-                  className="absolute inset-0 w-full h-full rounded-lg object-cover transition-opacity duration-500"
-                  style={{ opacity: 0 }}
-                />
-              )}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <span className="text-sm font-medium text-canopy-text truncate">
-                  {selectedScheme.name}
-                </span>
-                {selectedWarnings.length > 0 && (
-                  <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] text-status-warning shrink-0">
-                    <AlertTriangle className="h-2.5 w-2.5" />
-                    {selectedWarnings.length}
-                  </span>
-                )}
-              </div>
-              {selectedScheme.location && (
-                <span className="text-xs text-canopy-text/50 truncate block">
-                  {selectedScheme.location}
-                </span>
-              )}
-              <div className="mt-1.5">
-                <PaletteStrip scheme={selectedScheme} />
-              </div>
-            </div>
-            <ChevronDown
-              className={cn(
-                "h-4 w-4 shrink-0 text-canopy-text/40 transition-transform",
-                open && "rotate-180"
-              )}
+      <button
+        type="button"
+        data-testid="theme-picker-trigger"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen(true)}
+        className={cn(
+          "w-full flex items-center gap-3 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
+          "border-canopy-border bg-canopy-bg hover:border-canopy-text/30"
+        )}
+      >
+        <div className="relative shrink-0">
+          <HeroImage scheme={selectedScheme} size={96} />
+          {selectedScheme.heroVideo && (
+            <video
+              ref={videoRef}
+              muted
+              playsInline
+              preload="none"
+              className="absolute inset-0 w-full h-full rounded-lg object-cover transition-opacity duration-500"
+              style={{ opacity: 0 }}
             />
-          </button>
-
-          {open && (
-            <div
-              ref={listRef}
-              onMouseDown={(e) => e.preventDefault()}
-              className="absolute z-50 left-0 right-0 mt-1 max-h-[280px] overflow-y-auto rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg shadow-[var(--theme-shadow-floating)]"
-            >
-              <ThemeSelector<AppColorScheme>
-                groups={[
-                  ...(darkSchemes.length > 0 ? [{ label: "Dark", items: darkSchemes }] : []),
-                  ...(lightSchemes.length > 0 ? [{ label: "Light", items: lightSchemes }] : []),
-                ]}
-                selectedId={selectedSchemeId}
-                onSelect={handleSelect}
-                renderPreview={(scheme) => <HeroImage scheme={scheme} size={60} />}
-                renderMeta={(scheme) => {
-                  const warnings = warningsByScheme.get(scheme.id) ?? [];
-                  return (
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-medium text-canopy-text truncate">
-                          {scheme.name}
-                        </span>
-                        {warnings.length > 0 && (
-                          <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] text-status-warning shrink-0">
-                            <AlertTriangle className="h-2.5 w-2.5" />
-                            {warnings.length}
-                          </span>
-                        )}
-                      </div>
-                      {scheme.location && (
-                        <span className="text-[11px] text-canopy-text/50 truncate block">
-                          {scheme.location}
-                        </span>
-                      )}
-                      <div className="mt-1">
-                        <PaletteStrip scheme={scheme} />
-                      </div>
-                    </div>
-                  );
-                }}
-                getName={(s) => s.name}
-                id="theme-listbox"
-              />
-            </div>
           )}
         </div>
-      </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="text-sm font-medium text-canopy-text truncate">
+              {selectedScheme.name}
+            </span>
+            {selectedWarnings.length > 0 && (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] text-status-warning shrink-0">
+                <AlertTriangle className="h-2.5 w-2.5" />
+                {selectedWarnings.length}
+              </span>
+            )}
+          </div>
+          {selectedScheme.location && (
+            <span className="text-xs text-canopy-text/50 truncate block">
+              {selectedScheme.location}
+            </span>
+          )}
+          <div className="mt-1.5">
+            <PaletteStrip scheme={selectedScheme} />
+          </div>
+        </div>
+      </button>
+
+      <AppDialog
+        isOpen={open}
+        onClose={() => setOpen(false)}
+        size="xl"
+        data-testid="theme-picker-dialog"
+      >
+        <AppDialog.Header>
+          <AppDialog.Title icon={<Palette className="h-5 w-5" />}>Choose a theme</AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+        <AppDialog.BodyScroll>
+          <ThemeSelector<AppColorScheme>
+            groups={[
+              ...(darkSchemes.length > 0 ? [{ label: "Dark", items: darkSchemes }] : []),
+              ...(lightSchemes.length > 0 ? [{ label: "Light", items: lightSchemes }] : []),
+            ]}
+            selectedId={selectedSchemeId}
+            onSelect={handleSelect}
+            columns={3}
+            renderPreview={(scheme) => <HeroImage scheme={scheme} size={130} />}
+            renderMeta={(scheme) => {
+              const warnings = warningsByScheme.get(scheme.id) ?? [];
+              return (
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-medium text-canopy-text truncate">
+                      {scheme.name}
+                    </span>
+                    {warnings.length > 0 && (
+                      <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] text-status-warning shrink-0">
+                        <AlertTriangle className="h-2.5 w-2.5" />
+                        {warnings.length}
+                      </span>
+                    )}
+                  </div>
+                  {scheme.location && (
+                    <span className="text-[11px] text-canopy-text/50 truncate block">
+                      {scheme.location}
+                    </span>
+                  )}
+                  <div className="mt-1">
+                    <PaletteStrip scheme={scheme} />
+                  </div>
+                </div>
+              );
+            }}
+            getName={(s) => s.name}
+          />
+        </AppDialog.BodyScroll>
+      </AppDialog>
 
       <div className="flex items-center gap-3">
         <button

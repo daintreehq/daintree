@@ -71,7 +71,7 @@ test.describe.serial("Core: Settings Pages Load", () => {
 
     // App subtab (default) should show the theme picker trigger
     const settingsPanel = window.locator('[role="dialog"]');
-    await expect(settingsPanel.locator('[aria-haspopup="listbox"]')).toBeVisible({
+    await expect(settingsPanel.locator('[data-testid="theme-picker-trigger"]')).toBeVisible({
       timeout: T_SHORT,
     });
 

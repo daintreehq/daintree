@@ -31,12 +31,14 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
       timeout: T_SHORT,
     });
 
-    // "App" subtab is the default — click the theme picker trigger to open the list
+    // "App" subtab is the default — click the theme picker trigger to open the modal
     const settingsPanel = window.locator('[role="dialog"]');
-    const themeTrigger = settingsPanel.locator('[aria-controls="theme-listbox"]');
+    const themeTrigger = settingsPanel.locator('[data-testid="theme-picker-trigger"]');
     await expect(themeTrigger).toBeVisible({ timeout: T_SHORT });
     await themeTrigger.click();
-    const themeListbox = settingsPanel.locator('[role="listbox"][aria-label="Theme list"]');
+    const themeDialog = window.locator('[data-testid="theme-picker-dialog"]');
+    await expect(themeDialog).toBeVisible({ timeout: T_SHORT });
+    const themeListbox = themeDialog.locator('[role="listbox"][aria-label="Theme list"]');
     await expect(themeListbox).toBeVisible({ timeout: T_SHORT });
 
     // Select a different theme option from the list
@@ -58,8 +60,8 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     }
 
     await targetOption.click();
-    // Picker closes on selection — verify trigger now shows the selected theme name
-    await expect(themeListbox).not.toBeVisible({ timeout: T_SHORT });
+    // Theme modal closes on selection — verify trigger now shows the selected theme name
+    await expect(themeDialog).not.toBeVisible({ timeout: T_SHORT });
     if (targetName) {
       await expect(themeTrigger).toContainText(targetName, { timeout: T_SHORT });
     }

@@ -67,6 +67,19 @@ vi.mock("@/hooks/useEscapeStack", () => ({
   useEscapeStack: vi.fn(),
 }));
 
+vi.mock("@/hooks/useAnimatedPresence", () => ({
+  useAnimatedPresence: vi.fn(() => ({ isVisible: false, shouldRender: false })),
+}));
+
+vi.mock("@/hooks", () => ({
+  useOverlayState: vi.fn(),
+  useEscapeStack: vi.fn(),
+}));
+
+vi.mock("@/store", () => ({
+  usePortalStore: vi.fn(() => ({ isOpen: false, width: 0 })),
+}));
+
 import { AppThemePicker } from "../AppThemePicker";
 
 describe("AppThemePicker shuffle button", () => {
