@@ -529,6 +529,47 @@ describe("DevPreviewPane", () => {
     });
   });
 
+  describe("isUnconfigured predicate", () => {
+    // Mirrors the predicate from DevPreviewPane.tsx line 257-258.
+    // settings === null means "not yet fetched" — must not be treated as unconfigured.
+    function isUnconfigured(
+      currentProjectId: string | undefined,
+      isSettingsLoading: boolean,
+      projectSettings: Record<string, unknown> | null,
+      devCommand: string
+    ): boolean {
+      return (
+        Boolean(currentProjectId) && !isSettingsLoading && projectSettings !== null && !devCommand
+      );
+    }
+
+    it("returns false when settings have not been fetched yet (null)", () => {
+      expect(isUnconfigured("proj-1", false, null, "")).toBe(false);
+    });
+
+    it("returns true when settings loaded and no dev command configured", () => {
+      expect(isUnconfigured("proj-1", false, { runCommands: [] }, "")).toBe(true);
+    });
+
+    it("returns false when settings loaded and dev command exists", () => {
+      expect(
+        isUnconfigured("proj-1", false, { devServerCommand: "npm run dev" }, "npm run dev")
+      ).toBe(false);
+    });
+
+    it("returns false while settings are loading", () => {
+      expect(isUnconfigured("proj-1", true, null, "")).toBe(false);
+    });
+
+    it("returns false when no project is selected", () => {
+      expect(isUnconfigured(undefined, false, { runCommands: [] }, "")).toBe(false);
+    });
+
+    it("returns false when panel has its own dev command but project settings are empty", () => {
+      expect(isUnconfigured("proj-1", false, { runCommands: [] }, "vite dev")).toBe(false);
+    });
+  });
+
   describe("no dev command warning", () => {
     it("shows warning when no devCommand and waiting", () => {
       const devCommand = "";

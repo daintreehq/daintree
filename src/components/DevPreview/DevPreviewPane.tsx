@@ -254,7 +254,8 @@ export function DevPreviewPane({
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
-  const isUnconfigured = Boolean(currentProjectId) && !isSettingsLoading && !devCommand;
+  const isUnconfigured =
+    Boolean(currentProjectId) && !isSettingsLoading && projectSettings !== null && !devCommand;
 
   useEffect(() => {
     if (!isUnconfigured) return;
