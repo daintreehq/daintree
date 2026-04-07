@@ -223,6 +223,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (e.detail >= 2) return;
               if (isOpen) {
                 closeDockTerminal();
               } else {
