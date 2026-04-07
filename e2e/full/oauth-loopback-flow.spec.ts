@@ -450,8 +450,8 @@ test.describe.serial("E2E: OAuth Loopback Flow in Dev Preview", () => {
       })
     );
 
-    // Launch Canopy
-    ctx = await launchApp();
+    // Launch Canopy — always disable GPU to prevent black-screen hangs on macOS
+    ctx = await launchApp({ extraArgs: ["--disable-gpu", "--disable-software-rasterizer"] });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, "OAuth E2E");
   });
 

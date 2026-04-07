@@ -651,11 +651,12 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
 
       await wc.debugger.sendCommand("Page.enable");
 
-      // Enable Fetch interception for all HTTP/HTTPS requests (token endpoints)
+      // Enable Fetch interception for Fetch/XHR only — token endpoints always use
+      // fetch() or XMLHttpRequest, so we skip Document/Script/Image/Font interception
       await wc.debugger.sendCommand("Fetch.enable", {
         patterns: [
-          { urlPattern: "https://*", requestStage: "Request" },
-          { urlPattern: "http://*", requestStage: "Request" },
+          { urlPattern: "*", resourceType: "Fetch", requestStage: "Request" },
+          { urlPattern: "*", resourceType: "XHR", requestStage: "Request" },
         ],
       });
       fetchEnabled = true;
@@ -664,6 +665,8 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         const callbackOrigin = new URL(callbackUrl).origin;
         const restoreScript = `
           (() => {
+            if (window.__canopyOAuthRestored) return;
+            window.__canopyOAuthRestored = true;
             const expectedOrigin = ${JSON.stringify(callbackOrigin)};
             const entries = ${JSON.stringify(sessionStorageSnapshot)};
             try {
