@@ -67,7 +67,7 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   return {
     terminals,
     draftInputs,
-    ...(tabGroupArray.length > 0 && { tabGroups: tabGroupArray }),
+    tabGroups: tabGroupArray,
   };
 }
 

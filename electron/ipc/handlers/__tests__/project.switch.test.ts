@@ -402,4 +402,61 @@ describe("project:switch outgoing tabGroups pre-apply (#5001)", () => {
     >;
     expect(savedState).not.toHaveProperty("tabGroups");
   });
+
+  it("clears stale tabGroups when outgoingState sends empty array", async () => {
+    const mockView = {
+      webContents: { id: 100, isDestroyed: () => false },
+    };
+
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: false }),
+      getProjectIdForWebContents: vi.fn(),
+    };
+
+    mockGetWindowForWebContents.mockReturnValue(null);
+
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New Project",
+      path: "/projects/new",
+    });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+    // Simulate existing state with stale tab groups
+    projectStoreMock.getProjectState.mockResolvedValue({
+      projectId: "proj-old",
+      sidebarWidth: 350,
+      terminals: [],
+      tabGroups: [{ id: "stale-g1", location: "grid", activeTabId: "x", panelIds: ["x", "y"] }],
+    });
+    projectStoreMock.saveProjectState.mockResolvedValue(undefined);
+
+    const deps = {
+      mainWindow: { id: 1 } as unknown,
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+
+    const handler = handleMap.get(CHANNELS.PROJECT_SWITCH);
+    const fakeEvent = { sender: { id: 99 } };
+    const outgoingState = {
+      terminals: [],
+      tabGroups: [],
+      draftInputs: {},
+    };
+
+    await handler!(fakeEvent, "proj-new", outgoingState);
+
+    const savedState = projectStoreMock.saveProjectState.mock.calls[0]?.[1] as Record<
+      string,
+      unknown
+    >;
+    expect(savedState.tabGroups).toEqual([]);
+  });
 });

@@ -278,7 +278,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
     ]);
   });
 
-  it("omits tabGroups key when no multi-panel groups exist", async () => {
+  it("sends empty tabGroups array to clear stale groups when none exist", async () => {
     const { setTerminalStoreGetter } = await import("../projectStore");
     setTerminalStoreGetter(() => ({
       terminalsById: {} as Record<string, never>,
@@ -293,7 +293,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
     await Promise.resolve();
 
     const outgoing = projectClientMock.switch.mock.calls[0][1];
-    expect(outgoing).not.toHaveProperty("tabGroups");
+    expect(outgoing.tabGroups).toEqual([]);
   });
 
   it("includes terminals in reopen outgoing state", async () => {
