@@ -204,6 +204,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
         ...(validSizes !== undefined && { terminalSizes: validSizes }),
         ...(validDrafts !== undefined && { draftInputs: validDrafts }),
         ...(validTabGroups !== undefined && { tabGroups: validTabGroups }),
+        activeWorktreeId: outgoingState.activeWorktreeId,
       });
     }
 
@@ -493,6 +494,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
         ...(validSizes !== undefined && { terminalSizes: validSizes }),
         ...(validDrafts !== undefined && { draftInputs: validDrafts }),
         ...(validTabGroups !== undefined && { tabGroups: validTabGroups }),
+        activeWorktreeId: outgoingState.activeWorktreeId,
       });
     }
 

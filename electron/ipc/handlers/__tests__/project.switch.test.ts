@@ -295,6 +295,170 @@ describe("project:switch multi-window PVM routing", () => {
   });
 });
 
+describe("project:switch activeWorktreeId pre-apply (#5000)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("persists activeWorktreeId from outgoingState on project switch", async () => {
+    const mockView = {
+      webContents: { id: 100, isDestroyed: () => false },
+    };
+
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: false }),
+      getProjectIdForWebContents: vi.fn(),
+    };
+
+    mockGetWindowForWebContents.mockReturnValue(null);
+
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New Project",
+      path: "/projects/new",
+    });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+    projectStoreMock.getProjectState.mockResolvedValue(null);
+    projectStoreMock.saveProjectState.mockResolvedValue(undefined);
+
+    const deps = {
+      mainWindow: { id: 1 } as unknown,
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+
+    const handler = handleMap.get(CHANNELS.PROJECT_SWITCH);
+    const fakeEvent = { sender: { id: 99 } };
+    const outgoingState = {
+      draftInputs: {},
+      activeWorktreeId: "wt-feature",
+    };
+
+    await handler!(fakeEvent, "proj-new", outgoingState);
+
+    expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith(
+      "proj-old",
+      expect.objectContaining({ activeWorktreeId: "wt-feature" })
+    );
+  });
+
+  it("clears stale activeWorktreeId when outgoingState sends undefined", async () => {
+    const mockView = {
+      webContents: { id: 100, isDestroyed: () => false },
+    };
+
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: false }),
+      getProjectIdForWebContents: vi.fn(),
+    };
+
+    mockGetWindowForWebContents.mockReturnValue(null);
+
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New Project",
+      path: "/projects/new",
+    });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+    projectStoreMock.getProjectState.mockResolvedValue({
+      projectId: "proj-old",
+      sidebarWidth: 350,
+      terminals: [],
+      activeWorktreeId: "wt-stale",
+    });
+    projectStoreMock.saveProjectState.mockResolvedValue(undefined);
+
+    const deps = {
+      mainWindow: { id: 1 } as unknown,
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+
+    const handler = handleMap.get(CHANNELS.PROJECT_SWITCH);
+    const fakeEvent = { sender: { id: 99 } };
+    const outgoingState = {
+      draftInputs: {},
+      activeWorktreeId: undefined,
+    };
+
+    await handler!(fakeEvent, "proj-new", outgoingState);
+
+    const savedState = projectStoreMock.saveProjectState.mock.calls[0]?.[1] as Record<
+      string,
+      unknown
+    >;
+    expect(savedState.activeWorktreeId).toBeUndefined();
+  });
+
+  it("persists activeWorktreeId from outgoingState on project reopen", async () => {
+    const mockView = {
+      webContents: { id: 200, isDestroyed: () => false },
+    };
+
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: false }),
+    };
+
+    const fakeWindow2 = { id: 2, isDestroyed: () => false };
+    mockGetWindowForWebContents.mockReturnValue(fakeWindow2);
+
+    const ctx = makeWindowContext(2, 20, { projectViewManager: pvm as never });
+    const registry = makeWindowRegistry([ctx]);
+
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-reopen",
+      name: "Reopen Project",
+      path: "/projects/reopen",
+      status: "background",
+    });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+    projectStoreMock.getProjectState.mockResolvedValue(null);
+    projectStoreMock.saveProjectState.mockResolvedValue(undefined);
+
+    const deps = {
+      mainWindow: { id: 1 } as unknown,
+      windowRegistry: registry,
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+
+    registerProjectCrudHandlers(deps);
+
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+
+    const handler = handleMap.get(CHANNELS.PROJECT_REOPEN);
+    const fakeEvent = { sender: { id: 20 } };
+    const outgoingState = {
+      draftInputs: {},
+      activeWorktreeId: "wt-reopen",
+    };
+
+    await handler!(fakeEvent, "proj-reopen", outgoingState);
+
+    expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith(
+      "proj-old",
+      expect.objectContaining({ activeWorktreeId: "wt-reopen" })
+    );
+  });
+});
+
 describe("project:switch outgoing tabGroups pre-apply (#5001)", () => {
   beforeEach(() => {
     vi.clearAllMocks();

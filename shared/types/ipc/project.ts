@@ -3,16 +3,17 @@ import type { TabGroup } from "../panel.js";
 import type { HydrateResult } from "./app.js";
 
 /**
- * Outgoing terminal state passed alongside project switch/reopen IPC calls.
+ * Outgoing state passed alongside project switch/reopen IPC calls.
  * The main process applies this to the outgoing project's persisted state
  * before `saveOutgoingProjectWorktreeState` runs, eliminating the race
- * between the renderer's terminal saves and the switch's read-modify-write.
+ * between the renderer's saves and the switch's read-modify-write.
  */
 export interface ProjectSwitchOutgoingState {
   terminals?: TerminalSnapshot[];
   terminalSizes?: Record<string, { cols: number; rows: number }>;
   draftInputs?: Record<string, string>;
   tabGroups?: TabGroup[];
+  activeWorktreeId?: string;
 }
 
 /** Payload for project:on-switch event with cancellation token */

@@ -29,10 +29,11 @@ vi.mock("../resetStores", () => ({
   resetAllStoresForProjectSwitch: vi.fn().mockResolvedValue(undefined),
 }));
 
+let mockActiveWorktreeId: string | null = null;
 vi.mock("../worktreeStore", () => ({
   useWorktreeSelectionStore: {
     getState: () => ({
-      activeWorktreeId: null,
+      activeWorktreeId: mockActiveWorktreeId,
     }),
   },
 }));
@@ -107,6 +108,7 @@ const projectB = {
 };
 
 beforeEach(() => {
+  mockActiveWorktreeId = null;
   vi.resetModules();
   vi.clearAllMocks();
 });
@@ -131,7 +133,10 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
     await useProjectStore.getState().switchProject(projectB.id);
     await Promise.resolve();
 
-    expect(projectClientMock.switch).toHaveBeenCalledWith(projectB.id, { draftInputs: {} });
+    expect(projectClientMock.switch).toHaveBeenCalledWith(
+      projectB.id,
+      expect.objectContaining({ draftInputs: {} })
+    );
   });
 
   it("sends empty draftInputs when drafts were cleared before reopen", async () => {
@@ -146,7 +151,10 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
     await useProjectStore.getState().reopenProject(projectB.id);
     await Promise.resolve();
 
-    expect(projectClientMock.reopen).toHaveBeenCalledWith(projectB.id, { draftInputs: {} });
+    expect(projectClientMock.reopen).toHaveBeenCalledWith(
+      projectB.id,
+      expect.objectContaining({ draftInputs: {} })
+    );
   });
 
   it("sends non-empty draftInputs when drafts exist", async () => {
@@ -160,9 +168,10 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
     await useProjectStore.getState().switchProject(projectB.id);
     await Promise.resolve();
 
-    expect(projectClientMock.switch).toHaveBeenCalledWith(projectB.id, {
-      draftInputs: { "terminal-1": "hello world" },
-    });
+    expect(projectClientMock.switch).toHaveBeenCalledWith(
+      projectB.id,
+      expect.objectContaining({ draftInputs: { "terminal-1": "hello world" } })
+    );
   });
 
   it("sends undefined outgoingState when no current project", async () => {
@@ -313,5 +322,65 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
 
     const outgoing = projectClientMock.reopen.mock.calls[0][1];
     expect(outgoing.terminals).toEqual([{ id: "b-1", kind: "browser" }]);
+  });
+});
+
+describe("buildOutgoingState worktree selection (#5000)", () => {
+  it("includes non-root activeWorktreeId in switchProject outgoing state", async () => {
+    mockActiveWorktreeId = "wt-feature";
+
+    const { useProjectStore, setWorktreeSelectionStoreGetter } = await import("../projectStore");
+    setWorktreeSelectionStoreGetter(() => ({ activeWorktreeId: mockActiveWorktreeId }));
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.activeWorktreeId).toBe("wt-feature");
+  });
+
+  it("includes non-root activeWorktreeId in reopenProject outgoing state", async () => {
+    mockActiveWorktreeId = "wt-feature";
+
+    const { useProjectStore, setWorktreeSelectionStoreGetter } = await import("../projectStore");
+    setWorktreeSelectionStoreGetter(() => ({ activeWorktreeId: mockActiveWorktreeId }));
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().reopenProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.reopen.mock.calls[0][1];
+    expect(outgoing.activeWorktreeId).toBe("wt-feature");
+  });
+
+  it("converts null activeWorktreeId to undefined in outgoing state", async () => {
+    mockActiveWorktreeId = null;
+
+    const { useProjectStore, setWorktreeSelectionStoreGetter } = await import("../projectStore");
+    setWorktreeSelectionStoreGetter(() => ({ activeWorktreeId: mockActiveWorktreeId }));
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.activeWorktreeId).toBeUndefined();
+    expect("activeWorktreeId" in outgoing).toBe(true);
+  });
+
+  it("includes activeWorktreeId even when terminal store getter is null (early return)", async () => {
+    mockActiveWorktreeId = "wt-early";
+
+    // Don't call setTerminalStoreGetter — forces the early return path
+    const { useProjectStore, setWorktreeSelectionStoreGetter } = await import("../projectStore");
+    setWorktreeSelectionStoreGetter(() => ({ activeWorktreeId: mockActiveWorktreeId }));
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.activeWorktreeId).toBe("wt-early");
   });
 });

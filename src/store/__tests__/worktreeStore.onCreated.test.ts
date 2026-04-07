@@ -32,6 +32,7 @@ vi.mock("@shared/perf/marks", () => ({
 
 vi.mock("@/clients", () => ({
   appClient: { setState: vi.fn().mockResolvedValue(undefined) },
+  projectClient: { setTerminals: vi.fn().mockResolvedValue(undefined) },
 }));
 
 vi.mock("@/store/terminalStore", () => ({
