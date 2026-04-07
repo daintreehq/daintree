@@ -9,6 +9,7 @@ import { useUrlHistoryStore } from "./urlHistoryStore";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { terminalPersistence, terminalToSnapshot } from "./persistence/terminalPersistence";
 import { useTerminalInputStore } from "./terminalInputStore";
+import { useWorktreeSelectionStore } from "./worktreeStore";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
 import type { TerminalInstance, TabGroup } from "@shared/types";
@@ -45,6 +46,7 @@ export function setTerminalStoreGetter(
 
 function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   const draftInputs = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
+  const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId ?? undefined;
 
   // Synchronously snapshot terminal state from the Zustand store before the
   // renderer gets detached.  This captures browser/dev-preview panel state
@@ -52,7 +54,7 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   // flushed yet.  Uses the same filter as TerminalPersistence.save().
   const terminalState = _getTerminalStoreState?.();
   if (!terminalState) {
-    return { draftInputs };
+    return { draftInputs, activeWorktreeId };
   }
 
   const { terminalsById, terminalIds, tabGroups } = terminalState;
@@ -68,6 +70,7 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
     terminals,
     draftInputs,
     tabGroups: tabGroupArray,
+    activeWorktreeId,
   };
 }
 
