@@ -19,6 +19,7 @@ export function registerTerminalSpawnActions(
     run: async () => {
       const addTerminal = useTerminalStore.getState().addTerminal;
       const terminalId = await addTerminal({
+        kind: "terminal",
         type: "terminal",
         cwd: callbacks.getDefaultCwd(),
         location: "grid",
@@ -68,6 +69,7 @@ export function registerTerminalSpawnActions(
           });
         } else {
           await state.addTerminal({
+            kind: "terminal",
             type: "terminal",
             cwd: callbacks.getDefaultCwd(),
             location: "grid",

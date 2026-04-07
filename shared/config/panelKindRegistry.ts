@@ -1,5 +1,6 @@
 import type { PanelKind, BuiltInPanelKind, TerminalInstance } from "../types/panel.js";
 import type { TerminalSnapshot } from "../types/project.js";
+import type { AddPanelOptions } from "../types/addPanelOptions.js";
 import { getAgentConfig } from "./agentRegistry.js";
 import { PANEL_KIND_BRAND_COLORS } from "../theme/index.js";
 
@@ -36,6 +37,13 @@ export interface PanelKindConfig {
   searchAliases?: string[];
   /** Serialize kind-specific fields from a panel instance into a snapshot fragment */
   serialize?: (panel: TerminalInstance) => Partial<TerminalSnapshot>;
+  /**
+   * Factory that returns kind-specific fields for a new panel instance.
+   * Common fields (id, title, location, worktreeId, isVisible, runtimeStatus, extensionState)
+   * are injected by addTerminal — this only returns the kind-specific diff.
+   * Optional: unregistered/extension kinds fall back to getExtensionFallbackDefaults.
+   */
+  createDefaults?: (options: AddPanelOptions) => Partial<TerminalInstance>;
 }
 
 function serializePtyPanel(t: TerminalInstance): Partial<TerminalSnapshot> {
@@ -71,6 +79,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     keepAliveOnProjectSwitch: true,
     showInPalette: false, // Has dedicated spawn action
     serialize: serializePtyPanel,
+    createDefaults: () => ({}), // PTY fields handled by addTerminal's spawn path
   },
   agent: {
     id: "agent",
@@ -83,6 +92,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     keepAliveOnProjectSwitch: true,
     showInPalette: false, // Has dedicated spawn action
     serialize: serializePtyPanel,
+    createDefaults: () => ({}), // PTY fields handled by addTerminal's spawn path
   },
   browser: {
     id: "browser",
@@ -101,6 +111,17 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
       ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
       ...(t.browserConsoleOpen !== undefined && { browserConsoleOpen: t.browserConsoleOpen }),
     }),
+    createDefaults: (options) => ({
+      browserUrl:
+        ("browserUrl" in options ? options.browserUrl : undefined) || "http://localhost:3000",
+      browserHistory: "browserHistory" in options ? options.browserHistory : undefined,
+      browserZoom: "browserZoom" in options ? options.browserZoom : undefined,
+      browserConsoleOpen: "browserConsoleOpen" in options ? options.browserConsoleOpen : undefined,
+      type: "terminal" as const,
+      cwd: "",
+      cols: 80,
+      rows: 24,
+    }),
   },
   notes: {
     id: "notes",
@@ -118,6 +139,16 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
       ...(t.noteId != null && { noteId: t.noteId }),
       ...(t.scope != null && { scope: t.scope }),
       ...(t.createdAt !== undefined && { createdAt: t.createdAt }),
+    }),
+    createDefaults: (options) => ({
+      notePath: ("notePath" in options ? options.notePath : undefined) ?? "",
+      noteId: ("noteId" in options ? options.noteId : undefined) ?? "",
+      scope: ("scope" in options ? options.scope : undefined) ?? "project",
+      createdAt: ("createdAt" in options ? options.createdAt : undefined) ?? Date.now(),
+      type: "terminal" as const,
+      cwd: "",
+      cols: 80,
+      rows: 24,
     }),
   },
   "dev-preview": {
@@ -145,8 +176,39 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
       ...(t.createdAt !== undefined && { createdAt: t.createdAt }),
       ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
     }),
+    createDefaults: (options) => ({
+      cwd: ("cwd" in options ? options.cwd : undefined) ?? "",
+      devCommand: "devCommand" in options ? options.devCommand : undefined,
+      browserUrl: "browserUrl" in options ? options.browserUrl : undefined,
+      browserHistory: "browserHistory" in options ? options.browserHistory : undefined,
+      browserZoom: "browserZoom" in options ? options.browserZoom : undefined,
+      devServerStatus: "devServerStatus" in options ? options.devServerStatus : undefined,
+      devServerUrl: ("devServerUrl" in options ? options.devServerUrl : undefined) ?? undefined,
+      devServerError:
+        ("devServerError" in options ? options.devServerError : undefined) ?? undefined,
+      devServerTerminalId:
+        ("devServerTerminalId" in options ? options.devServerTerminalId : undefined) ?? undefined,
+      devPreviewConsoleOpen:
+        "devPreviewConsoleOpen" in options ? options.devPreviewConsoleOpen : undefined,
+      exitBehavior: "exitBehavior" in options ? options.exitBehavior : undefined,
+      type: "terminal" as const,
+      cols: 80,
+      rows: 24,
+    }),
   },
 };
+
+/**
+ * Default fields for extension panel kinds that don't provide a createDefaults factory.
+ */
+export function getExtensionFallbackDefaults(): Partial<TerminalInstance> {
+  return {
+    type: "terminal" as const,
+    cwd: "",
+    cols: 80,
+    rows: 24,
+  };
+}
 
 /**
  * Register a new panel kind configuration.

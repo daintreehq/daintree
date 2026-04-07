@@ -54,6 +54,18 @@ export type {
 // Panel type guards and enums (value exports)
 export { isBuiltInPanelKind, isPtyPanelKind, TerminalRefreshTier } from "./panel.js";
 
+// Panel creation options (discriminated union)
+export type {
+  AddPanelOptionsBase,
+  TerminalPanelOptions,
+  AgentPanelOptions,
+  BrowserPanelOptions,
+  NotesPanelOptions,
+  DevPreviewPanelOptions,
+  ExtensionPanelOptions,
+  AddPanelOptions,
+} from "./addPanelOptions.js";
+
 // Browser types
 export type { BrowserHistory } from "./browser.js";
 
