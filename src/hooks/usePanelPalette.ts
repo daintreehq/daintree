@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { IFuseOptions } from "fuse.js";
-import { getPanelKindIds, getPanelKindConfig } from "@shared/config/panelKindRegistry";
-import { hasPanelComponent } from "@/registry/panelComponentRegistry";
+import { getPanelKindDefinitions } from "@/registry";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -80,29 +79,21 @@ export function usePanelPalette(): UsePanelPaletteReturn {
   }, []);
 
   const availableKinds = useMemo<PanelKindOption[]>(() => {
-    const allKindIds = getPanelKindIds();
-
-    const panelKinds = allKindIds
-      .filter((kindId) => {
-        if (kindId === "agent") return false;
-        const config = getPanelKindConfig(kindId);
-        if (!config) return false;
-        if (config.showInPalette === false) return false;
-        if (!hasPanelComponent(kindId)) return false;
+    const panelKinds = getPanelKindDefinitions()
+      .filter((def) => {
+        if (def.id === "agent") return false;
+        if (def.showInPalette === false) return false;
         return true;
       })
-      .map((kindId) => {
-        const config = getPanelKindConfig(kindId)!;
-        return {
-          id: kindId,
-          name: config.name,
-          iconId: config.iconId,
-          color: config.color,
-          description: config.shortcut,
-          searchAliases: config.searchAliases,
-          category: "tool" as const,
-        };
-      });
+      .map((def) => ({
+        id: def.id,
+        name: def.name,
+        iconId: def.iconId,
+        color: def.color,
+        description: def.shortcut,
+        searchAliases: def.searchAliases,
+        category: "tool" as const,
+      }));
 
     const isAgentHidden = (agentId: string): boolean => {
       if (!agentSettings?.agents) return false;

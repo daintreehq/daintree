@@ -1,18 +1,14 @@
 /**
- * Panel Component Registry
+ * Unified Panel Kind Registry
  *
- * Enables extensible panel types by providing a registry for panel components.
- * Built-in kinds (terminal, agent, browser) are registered at startup.
- * Extensions can register custom panel types at runtime.
+ * Single registry combining panel metadata and components.
+ * Built-in kinds are populated at module load time.
+ * Extensions can register custom panel types at runtime via registerPanelKindDefinition.
  */
 export {
-  registerPanelComponent,
-  getPanelComponent,
-  hasPanelComponent,
-  getRegisteredPanelKinds,
-  renderPanelComponent,
+  getPanelKindDefinition,
+  getPanelKindDefinitions,
+  registerPanelKindDefinition,
+  type PanelKindDefinition,
   type PanelComponentProps,
-  type PanelComponentRegistration,
-} from "./panelComponentRegistry";
-
-export { registerBuiltInPanelComponents } from "./builtInPanelRegistrations";
+} from "./panelKindRegistry";

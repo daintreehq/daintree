@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo } from "react";
 import { useTerminalStore, type TerminalInstance } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { getPanelComponent, type PanelComponentProps } from "@/registry";
+import { getPanelKindDefinition, type PanelComponentProps } from "@/registry";
 import { ContentPanel, triggerPanelTransition } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { usePanelLifecycle } from "@/hooks/usePanelLifecycle";
@@ -172,7 +172,7 @@ export const GridPanel = React.memo(function GridPanel({
   }, [moveTerminalToDock, terminal.id]);
 
   const kind = terminal.kind ?? "terminal";
-  const registration = getPanelComponent(kind);
+  const definition = getPanelKindDefinition(kind);
 
   const panelProps: PanelComponentProps = useMemo(
     () =>
@@ -221,7 +221,7 @@ export const GridPanel = React.memo(function GridPanel({
     ]
   );
 
-  if (!registration) {
+  if (!definition) {
     console.warn(`[GridPanel] No component registered for kind: ${kind}`);
     return (
       <ContentPanel
@@ -258,7 +258,7 @@ export const GridPanel = React.memo(function GridPanel({
     );
   }
 
-  const PanelComponent = registration.component;
+  const PanelComponent = definition.component;
   const componentName = PanelComponent.displayName || PanelComponent.name || `Panel(${kind})`;
 
   return (

@@ -4,16 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MORE_AGENTS_PANEL_ID } from "../usePanelPalette";
 
 const {
-  getPanelKindIdsMock,
-  getPanelKindConfigMock,
-  hasPanelComponentMock,
+  getPanelKindDefinitionsMock,
   getEffectiveAgentIdsMock,
   getEffectiveAgentConfigMock,
   cliAvailabilityState,
 } = vi.hoisted(() => ({
-  getPanelKindIdsMock: vi.fn(),
-  getPanelKindConfigMock: vi.fn(),
-  hasPanelComponentMock: vi.fn(),
+  getPanelKindDefinitionsMock: vi.fn(),
   getEffectiveAgentIdsMock: vi.fn(),
   getEffectiveAgentConfigMock: vi.fn(),
   cliAvailabilityState: {
@@ -28,13 +24,8 @@ const {
   },
 }));
 
-vi.mock("@shared/config/panelKindRegistry", () => ({
-  getPanelKindIds: getPanelKindIdsMock,
-  getPanelKindConfig: getPanelKindConfigMock,
-}));
-
-vi.mock("@/registry/panelComponentRegistry", () => ({
-  hasPanelComponent: hasPanelComponentMock,
+vi.mock("@/registry", () => ({
+  getPanelKindDefinitions: getPanelKindDefinitionsMock,
 }));
 
 vi.mock("@shared/config/agentRegistry", () => ({
@@ -84,19 +75,20 @@ describe("usePanelPalette", () => {
       vi.spyOn(window.electron!.agentSessionHistory!, "list").mockResolvedValue([]);
     }
 
-    getPanelKindIdsMock.mockReturnValue(["browser"]);
-    getPanelKindConfigMock.mockImplementation((id: string) =>
-      id === "browser"
-        ? {
-            name: "Browser",
-            iconId: "browser",
-            color: "#aaa",
-            showInPalette: true,
-            shortcut: "Cmd+B",
-          }
-        : null
-    );
-    hasPanelComponentMock.mockReturnValue(true);
+    getPanelKindDefinitionsMock.mockReturnValue([
+      {
+        id: "browser",
+        name: "Browser",
+        iconId: "browser",
+        color: "#aaa",
+        showInPalette: true,
+        shortcut: "Cmd+B",
+        hasPty: false,
+        canRestart: false,
+        canConvert: false,
+        component: () => null,
+      },
+    ]);
     cliAvailabilityState.availability = { claude: true, gemini: false };
     cliAvailabilityState.isInitialized = true;
     cliAvailabilityState.lastCheckedAt = Date.now();
@@ -203,7 +195,7 @@ describe("usePanelPalette", () => {
   });
 
   it("works when no tool panel kinds exist", () => {
-    getPanelKindIdsMock.mockReturnValue([]);
+    getPanelKindDefinitionsMock.mockReturnValue([]);
 
     const { result } = renderHook(() => usePanelPalette());
 
