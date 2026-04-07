@@ -337,7 +337,7 @@ function TerminalPaneComponent({
 
     observer.observe(containerRef.current);
     return () => observer.disconnect();
-  }, [id, updateVisibility]);
+  }, [id, restartKey, updateVisibility]);
 
   // Separate unmount cleanup — only update store visibility.
   // The service-level setVisible(false) is handled by XtermAdapter's own
