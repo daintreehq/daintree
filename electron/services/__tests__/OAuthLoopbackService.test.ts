@@ -179,6 +179,33 @@ describe("OAuthLoopbackService", () => {
       expect(resultUrl.searchParams.get("error_description")).toBe("User cancelled");
     });
 
+    it("escapes HTML in error_description to prevent XSS", async () => {
+      const authUrl =
+        "https://auth.example.com/authorize?client_id=abc&response_type=code&redirect_uri=http://localhost:3000/auth/callback";
+
+      const loopbackPromise = startOAuthLoopback(authUrl, "test-panel");
+
+      await vi.waitFor(() => {
+        expect(shell.openExternal).toHaveBeenCalledTimes(1);
+      });
+
+      const rewrittenUrl = (shell.openExternal as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as string;
+      const newRedirectUri = new URL(rewrittenUrl).searchParams.get("redirect_uri")!;
+
+      const xssPayload = `<script>alert(1)</script><img onerror=alert(1) src=x>`;
+      const errorCallback = `${newRedirectUri}?error=xss&error_description=${encodeURIComponent(xssPayload)}`;
+      const response = await fetchUrl(errorCallback);
+
+      expect(response.status).toBe(200);
+      expect(response.body).not.toContain("<script>");
+      expect(response.body).not.toContain("<img");
+      expect(response.body).toContain("&lt;script&gt;");
+      expect(response.body).toContain("&lt;img");
+
+      await loopbackPromise;
+    });
+
     it("returns 404 for non-callback paths", async () => {
       const authUrl =
         "https://auth.example.com/authorize?client_id=abc&response_type=code&redirect_uri=http://localhost:3000/auth/callback";

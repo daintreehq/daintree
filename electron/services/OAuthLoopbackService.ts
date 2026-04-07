@@ -13,6 +13,15 @@ export { looksLikeOAuthUrl } from "../../shared/utils/urlUtils.js";
 const CALLBACK_PATH = "/oauth/callback";
 const TIMEOUT_MS = 300_000; // 5 minutes
 
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 interface LoopbackSession {
   server: Server;
   timeout: NodeJS.Timeout;
@@ -85,8 +94,10 @@ export function startOAuthLoopback(
 
       // Respond to the system browser
       const title = hasError ? "Authentication Failed" : "Authentication Complete";
+      const rawDetail =
+        callbackParams.get("error_description") || callbackParams.get("error") || "unknown error";
       const message = hasError
-        ? `Authentication was not completed: ${callbackParams.get("error_description") || callbackParams.get("error")}`
+        ? `Authentication was not completed: ${escapeHtml(rawDetail)}`
         : "You can close this tab and return to Canopy.";
 
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
