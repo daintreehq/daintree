@@ -104,7 +104,6 @@ export function registerPanelKindDefinition(definition: PanelKindDefinition): vo
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function registerPanelKindDefinition(kindId: string, component: ComponentType<any>): void;
 export function registerPanelKindDefinition(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   definitionOrKindId: PanelKindDefinition | string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   component?: ComponentType<any>
