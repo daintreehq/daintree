@@ -1,5 +1,12 @@
-/** Agent lifecycle state: idle | working | running | waiting | directing | completed */
-export type AgentState = "idle" | "working" | "running" | "waiting" | "directing" | "completed";
+/** Agent lifecycle state: idle | working | running | waiting | directing | completed | exited */
+export type AgentState =
+  | "idle"
+  | "working"
+  | "running"
+  | "waiting"
+  | "directing"
+  | "completed"
+  | "exited";
 
 /** Classification of why an agent is in the "waiting" state */
 export type WaitingReason = "prompt" | "question";

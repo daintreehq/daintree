@@ -3,7 +3,14 @@ import { BUILT_IN_TERMINAL_TYPES } from "../../shared/config/agentIds.js";
 
 export const TerminalTypeSchema = z.enum(BUILT_IN_TERMINAL_TYPES);
 
-export const AgentStateSchema = z.enum(["idle", "working", "running", "waiting", "completed"]);
+export const AgentStateSchema = z.enum([
+  "idle",
+  "working",
+  "running",
+  "waiting",
+  "completed",
+  "exited",
+]);
 
 // @see shared/types/events.ts for the TypeScript interface definition.
 export const EventContextSchema = z.object({

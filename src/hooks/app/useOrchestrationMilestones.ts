@@ -44,7 +44,10 @@ const TOAST_STAGGER = 5500;
 
 function checkAgentCompleted(): boolean {
   const { terminalsById, terminalIds } = useTerminalStore.getState();
-  return terminalIds.some((id) => terminalsById[id]?.agentState === "completed");
+  return terminalIds.some((id) => {
+    const state = terminalsById[id]?.agentState;
+    return state === "completed" || state === "exited";
+  });
 }
 
 function checkConcurrentAgents(): boolean {
@@ -148,12 +151,14 @@ export function useOrchestrationMilestones(isStateLoaded: boolean): void {
         unsubs.push(
           useTerminalStore.subscribe((state, prev) => {
             if (!shown["first-agent-completed"]) {
-              const had = prev.terminalIds.some(
-                (id) => prev.terminalsById[id]?.agentState === "completed"
-              );
-              const has = state.terminalIds.some(
-                (id) => state.terminalsById[id]?.agentState === "completed"
-              );
+              const had = prev.terminalIds.some((id) => {
+                const s = prev.terminalsById[id]?.agentState;
+                return s === "completed" || s === "exited";
+              });
+              const has = state.terminalIds.some((id) => {
+                const s = state.terminalsById[id]?.agentState;
+                return s === "completed" || s === "exited";
+              });
               if (!had && has) showToast("first-agent-completed");
             }
 

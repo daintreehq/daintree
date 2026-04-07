@@ -499,7 +499,11 @@ events.on("agent:state-changed", (payload) => {
       sessionTokens: payload.sessionTokens,
     });
 
-    if (payload.state === "waiting" || payload.state === "completed") {
+    if (
+      payload.state === "waiting" ||
+      payload.state === "completed" ||
+      payload.state === "exited"
+    ) {
       ptyManager.flushAgentSnapshot(payload.terminalId);
     }
   }

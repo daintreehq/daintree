@@ -139,7 +139,11 @@ class AgentNotificationService {
 
     // Cancel any pending completion timer for this agent when it leaves "completed"
     // (must run even when master toggle is off to prevent stale timers)
-    if (previousState === "completed" && state !== "completed") {
+    if (
+      (previousState === "completed" || previousState === "exited") &&
+      state !== "completed" &&
+      state !== "exited"
+    ) {
       const timer = this.completionTimers.get(key);
       if (timer) {
         clearTimeout(timer);
@@ -190,7 +194,7 @@ class AgentNotificationService {
     const isWatched = terminalId !== undefined && this.watchedTerminals.has(terminalId);
     if (!isWatched) return;
 
-    if (state === "completed" && settings.completedEnabled) {
+    if ((state === "completed" || state === "exited") && settings.completedEnabled) {
       this.scheduleCompletionNotification(key, worktreeId, terminalId, agentId);
     } else if (
       state === "waiting" &&

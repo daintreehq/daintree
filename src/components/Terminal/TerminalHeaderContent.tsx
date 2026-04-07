@@ -137,8 +137,8 @@ function TerminalHeaderContentComponent({
       return null;
     }
 
-    // Show completed chip only when there's a cost to display
-    if (agentState === "completed" && sessionCost == null) {
+    // Show completed/exited chip only when there's a cost to display
+    if ((agentState === "completed" || agentState === "exited") && sessionCost == null) {
       return null;
     }
 
@@ -156,9 +156,11 @@ function TerminalHeaderContentComponent({
             ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-status-info/40"
             : agentState === "completed"
               ? "bg-[color-mix(in_oklab,var(--color-status-success)_15%,transparent)] border-status-success/40"
-              : agentState === "waiting" && waitingReason === "prompt"
-                ? "bg-[color-mix(in_oklab,var(--color-status-warning)_15%,transparent)] border-status-warning/40"
-                : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
+              : agentState === "exited"
+                ? "bg-overlay-soft border-divider"
+                : agentState === "waiting" && waitingReason === "prompt"
+                  ? "bg-[color-mix(in_oklab,var(--color-status-warning)_15%,transparent)] border-status-warning/40"
+                  : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
 
     const headline = activity?.headline?.trim() || `Agent ${agentState}`;
     const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
@@ -195,7 +197,7 @@ function TerminalHeaderContentComponent({
                   />
                 )}
               </div>
-              {agentState === "completed" && sessionCost != null && (
+              {(agentState === "completed" || agentState === "exited") && sessionCost != null && (
                 <span
                   className="text-[11px] text-canopy-text/50 font-mono shrink-0"
                   style={{ fontVariantNumeric: "tabular-nums" }}

@@ -271,7 +271,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   const pingTerminal = useTerminalStore((state) => state.pingTerminal);
   const openDockTerminal = useTerminalStore((state) => state.openDockTerminal);
   const getCountByWorktree = useTerminalStore((state) => state.getCountByWorktree);
-  const completedCount = terminalCounts.byState.completed;
+  const completedCount = terminalCounts.byState.completed + terminalCounts.byState.exited;
   const totalTerminalCount = terminalCounts.total;
   const allTerminalCount = getCountByWorktree(worktree.id);
   const gridCount = worktreeTerminals.filter(

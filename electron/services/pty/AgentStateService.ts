@@ -180,8 +180,12 @@ export class AgentStateService {
       trigger: inferredTrigger,
       confidence: inferredConfidence,
       ...(newState === "waiting" && waitingReason ? { waitingReason } : {}),
-      ...(newState === "completed" && sessionCost != null ? { sessionCost } : {}),
-      ...(newState === "completed" && sessionTokens != null ? { sessionTokens } : {}),
+      ...((newState === "completed" || newState === "exited") && sessionCost != null
+        ? { sessionCost }
+        : {}),
+      ...((newState === "completed" || newState === "exited") && sessionTokens != null
+        ? { sessionTokens }
+        : {}),
     };
 
     const validatedStateChange = AgentStateChangedSchema.safeParse(stateChangePayload);

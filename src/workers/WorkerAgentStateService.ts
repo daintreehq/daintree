@@ -61,11 +61,8 @@ function nextAgentState(current: AgentState, event: AgentEvent): AgentState {
       break;
 
     case "exit":
-      if (current === "working" || current === "waiting") {
-        return "completed";
-      }
-      if (current === "completed") {
-        return "completed";
+      if (current !== "idle" && current !== "exited") {
+        return "exited";
       }
       break;
   }

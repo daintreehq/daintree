@@ -8,9 +8,28 @@ export function fireWatchNotification(
   agentState: string
 ): void {
   const label = panelTitle || panelId;
-  const isWaiting = agentState === "waiting";
 
-  if (isWaiting) {
+  if (agentState === "exited") {
+    notify({
+      type: "info",
+      priority: "high",
+      title: "Process exited",
+      message: `${label} process has exited`,
+      duration: 5000,
+      correlationId: panelId,
+      action: {
+        label: "Go to terminal",
+        onClick: () => {
+          useTerminalStore.getState().setFocused(panelId, true);
+        },
+        actionId: "panel.focus",
+        actionArgs: { panelId },
+      },
+    });
+    return;
+  }
+
+  if (agentState === "waiting") {
     notify({
       type: "warning",
       priority: "high",

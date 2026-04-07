@@ -43,7 +43,9 @@ export class TerminalHibernationManager {
     if (
       !managed ||
       managed.isHibernated ||
-      (managed.kind === "agent" && managed.canonicalAgentState !== "completed")
+      (managed.kind === "agent" &&
+        managed.canonicalAgentState !== "completed" &&
+        managed.canonicalAgentState !== "exited")
     )
       return;
 

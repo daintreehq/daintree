@@ -28,7 +28,7 @@ export type AgentStateChangeTrigger =
   | "title";
 
 /** Agent state */
-export type AgentState = "idle" | "working" | "running" | "waiting" | "completed";
+export type AgentState = "idle" | "working" | "running" | "waiting" | "completed" | "exited";
 
 /** Payload for agent state change events */
 export interface AgentStateChangePayload {
@@ -52,9 +52,9 @@ export interface AgentStateChangePayload {
   confidence: number;
   /** Why the agent is waiting (only present when state is "waiting") */
   waitingReason?: WaitingReason;
-  /** Extracted session cost in dollars (only present when state is "completed") */
+  /** Extracted session cost in dollars (only present when state is "completed" or "exited") */
   sessionCost?: number;
-  /** Extracted session token count (only present when state is "completed" and legacy format is used) */
+  /** Extracted session token count (only present when state is "completed" or "exited" and legacy format is used) */
   sessionTokens?: number;
 }
 

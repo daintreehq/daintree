@@ -669,13 +669,13 @@ export const createCorePanelActions = (
             stateChangeConfidence: confidence,
             waitingReason: agentState === "waiting" ? waitingReason : undefined,
             sessionCost:
-              agentState === "completed" && sessionCost != null
+              (agentState === "completed" || agentState === "exited") && sessionCost != null
                 ? sessionCost
                 : agentState === "working"
                   ? undefined
                   : terminal.sessionCost,
             sessionTokens:
-              agentState === "completed" && sessionTokens != null
+              (agentState === "completed" || agentState === "exited") && sessionTokens != null
                 ? sessionTokens
                 : agentState === "working"
                   ? undefined

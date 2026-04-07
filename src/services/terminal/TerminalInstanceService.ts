@@ -144,7 +144,9 @@ class TerminalInstanceService {
         // Hibernation timer management
         if (
           tier === TerminalRefreshTier.BACKGROUND &&
-          (managed.kind !== "agent" || managed.canonicalAgentState === "completed")
+          (managed.kind !== "agent" ||
+            managed.canonicalAgentState === "completed" ||
+            managed.canonicalAgentState === "exited")
         ) {
           if (!managed.hibernationTimer && !managed.isHibernated) {
             managed.hibernationTimer = setTimeout(() => {
@@ -1561,7 +1563,12 @@ class TerminalInstanceService {
     for (const managed of this.instances.values()) {
       if (managed.isHibernated) continue;
       if (managed.isFocused) continue;
-      if (managed.kind === "agent" && managed.canonicalAgentState !== "completed") continue;
+      if (
+        managed.kind === "agent" &&
+        managed.canonicalAgentState !== "completed" &&
+        managed.canonicalAgentState !== "exited"
+      )
+        continue;
       reduceScrollback(managed, targetLines);
     }
   }

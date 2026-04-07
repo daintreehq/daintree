@@ -343,7 +343,11 @@ export function registerTerminalLifecycleActions(
         state.unwatchPanel(targetId);
       } else {
         const terminal = state.terminalsById[targetId];
-        if (terminal?.agentState === "completed" || terminal?.agentState === "waiting") {
+        if (
+          terminal?.agentState === "completed" ||
+          terminal?.agentState === "waiting" ||
+          terminal?.agentState === "exited"
+        ) {
           const { fireWatchNotification } = await import("@/lib/watchNotification");
           fireWatchNotification(targetId, terminal.title ?? targetId, terminal.agentState);
         } else {

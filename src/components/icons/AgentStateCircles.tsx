@@ -95,6 +95,23 @@ export function PromptCircle({ className, ...props }: CircleProps) {
   );
 }
 
+export function ExitedCircle({ className, ...props }: CircleProps) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" className={className} {...props}>
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" />
+      <line
+        x1="5"
+        y1="8"
+        x2="11"
+        y2="8"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 export function QuestionCircle({ className, ...props }: CircleProps) {
   return (
     <svg viewBox="0 0 16 16" fill="none" className={className} {...props}>

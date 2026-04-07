@@ -95,7 +95,9 @@ export function registerWorktreeSessionActions(
       const { worktreeId } = args as { worktreeId?: string };
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
-      useTerminalStore.getState().bulkCloseByWorktree(targetWorktreeId, "completed");
+      const store = useTerminalStore.getState();
+      store.bulkCloseByWorktree(targetWorktreeId, "completed");
+      store.bulkCloseByWorktree(targetWorktreeId, "exited");
     },
   }));
 

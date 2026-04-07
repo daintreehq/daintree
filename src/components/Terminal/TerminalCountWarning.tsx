@@ -19,7 +19,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
         const t = state.terminalsById[id];
         if (t && t.location !== "trash") {
           active++;
-          if (t.agentState === "completed") completed++;
+          if (t.agentState === "completed" || t.agentState === "exited") completed++;
         }
       }
       return { activeCount: active, completedCount: completed };
@@ -86,7 +86,11 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       const { terminalsById, terminalIds } = useTerminalStore.getState();
       for (const id of terminalIds) {
         const t = terminalsById[id];
-        if (t && t.agentState === "completed" && t.location !== "trash") {
+        if (
+          t &&
+          (t.agentState === "completed" || t.agentState === "exited") &&
+          t.location !== "trash"
+        ) {
           useTerminalStore.getState().trashTerminal(t.id);
         }
       }

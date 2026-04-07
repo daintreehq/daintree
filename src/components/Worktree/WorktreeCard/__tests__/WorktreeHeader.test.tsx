@@ -659,6 +659,7 @@ const allZeroStates = {
   directing: 0,
   idle: 0,
   completed: 0,
+  exited: 0,
 } as const;
 
 describe("WorktreeHeader collapsed session indicators", () => {

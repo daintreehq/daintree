@@ -59,7 +59,9 @@ export function useWatchedPanelNotifications(): void {
         const previousState = prevAgentStates.get(panelId);
 
         if (
-          (currentState === "completed" || currentState === "waiting") &&
+          (currentState === "completed" ||
+            currentState === "waiting" ||
+            currentState === "exited") &&
           currentState !== previousState
         ) {
           const terminal = terminalsById[panelId];

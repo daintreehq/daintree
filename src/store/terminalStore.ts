@@ -61,7 +61,8 @@ export function getTerminalRefreshTier(
   // Completed agents drop to BACKGROUND so they can be hibernated to free memory.
   if (
     isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId) &&
-    terminal.agentState !== "completed"
+    terminal.agentState !== "completed" &&
+    terminal.agentState !== "exited"
   ) {
     return TerminalRefreshTierEnum.VISIBLE;
   }

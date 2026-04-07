@@ -278,7 +278,11 @@ function PanelHeaderComponent({
   const handleWatchToggle = useCallback(() => {
     if (isWatched) {
       unwatchPanel(id);
-    } else if (terminal?.agentState === "completed" || terminal?.agentState === "waiting") {
+    } else if (
+      terminal?.agentState === "completed" ||
+      terminal?.agentState === "waiting" ||
+      terminal?.agentState === "exited"
+    ) {
       fireWatchNotification(id, terminal.title ?? id, terminal.agentState);
     } else {
       watchPanel(id);

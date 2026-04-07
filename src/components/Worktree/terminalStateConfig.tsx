@@ -5,6 +5,7 @@ import {
   SpinnerCircle,
   HollowCircle,
   InteractingCircle,
+  ExitedCircle,
   PromptCircle,
   QuestionCircle,
 } from "@/components/icons/AgentStateCircles";
@@ -16,6 +17,7 @@ export const STATE_ICONS: Record<AgentState, React.ComponentType<{ className?: s
   directing: InteractingCircle,
   idle: Circle,
   completed: CheckCircle2,
+  exited: ExitedCircle,
 };
 
 export const STATE_COLORS: Record<AgentState, string> = {
@@ -25,6 +27,7 @@ export const STATE_COLORS: Record<AgentState, string> = {
   directing: "text-category-blue",
   idle: "text-canopy-text/40",
   completed: "text-status-success",
+  exited: "text-canopy-text/40",
 };
 
 export const STATE_LABELS: Record<AgentState, string> = {
@@ -34,6 +37,7 @@ export const STATE_LABELS: Record<AgentState, string> = {
   waiting: "waiting",
   directing: "directing",
   completed: "done",
+  exited: "exited",
 };
 
 export const STATE_PRIORITY: AgentState[] = [
@@ -42,6 +46,7 @@ export const STATE_PRIORITY: AgentState[] = [
   "waiting",
   "running",
   "completed",
+  "exited",
   "idle",
 ];
 
@@ -52,6 +57,7 @@ export const STATE_SORT_PRIORITY: Record<AgentState, number> = {
   running: 3,
   idle: 4,
   completed: 5,
+  exited: 6,
 };
 
 export function getEffectiveStateIcon(

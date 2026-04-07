@@ -221,6 +221,7 @@ export function WorktreeOverviewModal({
       let hasRunningAgent = false;
       let hasWaitingAgent = false;
       let hasCompletedAgent = false;
+      let hasExitedAgent = false;
       for (const id of terminalIds) {
         const t = terminalsById[id];
         if (!t || t.worktreeId !== worktree.id || t.location === "trash") continue;
@@ -229,6 +230,7 @@ export function WorktreeOverviewModal({
         if (t.agentState === "running") hasRunningAgent = true;
         if (t.agentState === "waiting") hasWaitingAgent = true;
         if (t.agentState === "completed") hasCompletedAgent = true;
+        if (t.agentState === "exited") hasExitedAgent = true;
       }
       map.set(worktree.id, {
         terminalCount,
@@ -236,6 +238,7 @@ export function WorktreeOverviewModal({
         hasRunningAgent,
         hasWaitingAgent,
         hasCompletedAgent,
+        hasExitedAgent,
         hasMergeConflict:
           worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
         chipState: null,
@@ -296,6 +299,7 @@ export function WorktreeOverviewModal({
         hasRunningAgent: false,
         hasWaitingAgent: false,
         hasCompletedAgent: false,
+        hasExitedAgent: false,
         hasMergeConflict: false,
         chipState: null,
       };

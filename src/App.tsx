@@ -560,6 +560,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       let hasRunningAgent = false;
       let hasWaitingAgent = false;
       let hasCompletedAgent = false;
+      let hasExitedAgent = false;
 
       for (const id of terminalIds) {
         const t = terminalsById[id];
@@ -572,6 +573,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           waitingTerminalCount++;
         }
         if (t.agentState === "completed") hasCompletedAgent = true;
+        if (t.agentState === "exited") hasExitedAgent = true;
       }
 
       // chipState logic mirrors useWorktreeStatus.ts — keep in sync
@@ -604,6 +606,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         hasRunningAgent,
         hasWaitingAgent,
         hasCompletedAgent,
+        hasExitedAgent,
         hasMergeConflict:
           worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
         chipState,
@@ -675,6 +678,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         hasRunningAgent: false,
         hasWaitingAgent: false,
         hasCompletedAgent: false,
+        hasExitedAgent: false,
         hasMergeConflict: false,
         chipState: null,
       };

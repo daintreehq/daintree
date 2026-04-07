@@ -42,6 +42,7 @@ const createEmptyMeta = (): DerivedWorktreeMeta => ({
   hasRunningAgent: false,
   hasWaitingAgent: false,
   hasCompletedAgent: false,
+  hasExitedAgent: false,
   hasMergeConflict: false,
   chipState: null,
 });

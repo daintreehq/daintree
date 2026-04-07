@@ -69,7 +69,7 @@ describe("AgentStateService", () => {
     expect(terminal.agentState).toBe("idle");
   });
 
-  it("transitions working → completed on crash-signal exit (no failed state)", () => {
+  it("transitions working → exited on crash-signal exit (no failed state)", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ agentState: "working" });
 
@@ -77,17 +77,17 @@ describe("AgentStateService", () => {
     const changed = service.updateAgentState(terminal, { type: "exit", code: 139 });
 
     expect(changed).toBe(true);
-    expect(terminal.agentState).toBe("completed");
+    expect(terminal.agentState).toBe("exited");
   });
 
-  it("transitions working → completed on routine exit", () => {
+  it("transitions working → exited on routine exit", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ agentState: "working" });
 
     const changed = service.updateAgentState(terminal, { type: "exit", code: 0 });
 
     expect(changed).toBe(true);
-    expect(terminal.agentState).toBe("completed");
+    expect(terminal.agentState).toBe("exited");
   });
 
   it("error event is a no-op and does not change state", () => {

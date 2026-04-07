@@ -74,6 +74,7 @@ const STATE_PRESETS: StatePreset[] = [
   { label: "Waiting", match: (r) => r.dominantState === "waiting" },
   { label: "Idle", match: (r) => r.dominantState === null && !r.disabled },
   { label: "Completed", match: (r) => r.dominantState === "completed" },
+  { label: "Exited", match: (r) => r.dominantState === "exited" },
 ];
 
 function getEligibleTerminals(

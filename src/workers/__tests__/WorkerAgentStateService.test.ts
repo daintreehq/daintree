@@ -84,42 +84,43 @@ describe("WorkerAgentStateService", () => {
     });
 
     describe("exit event", () => {
-      it("should transition working → completed on exit code 0", () => {
-        expect(calcState("working", { type: "exit", code: 0 })).toBe("completed");
+      it("should transition working → exited on exit code 0", () => {
+        expect(calcState("working", { type: "exit", code: 0 })).toBe("exited");
       });
 
-      it("should transition working → completed on non-zero exit code", () => {
-        expect(calcState("working", { type: "exit", code: 1 })).toBe("completed");
+      it("should transition working → exited on non-zero exit code", () => {
+        expect(calcState("working", { type: "exit", code: 1 })).toBe("exited");
       });
 
-      it("should transition waiting → completed on exit code 0", () => {
-        expect(calcState("waiting", { type: "exit", code: 0 })).toBe("completed");
+      it("should transition waiting → exited on exit code 0", () => {
+        expect(calcState("waiting", { type: "exit", code: 0 })).toBe("exited");
       });
 
-      it("should transition waiting → completed on non-zero exit code", () => {
-        expect(calcState("waiting", { type: "exit", code: 1 })).toBe("completed");
+      it("should transition waiting → exited on non-zero exit code", () => {
+        expect(calcState("waiting", { type: "exit", code: 1 })).toBe("exited");
       });
 
-      it("should stay completed on non-zero exit from completed", () => {
-        expect(calcState("completed", { type: "exit", code: 1 })).toBe("completed");
+      it("should transition completed → exited on exit", () => {
+        expect(calcState("completed", { type: "exit", code: 1 })).toBe("exited");
       });
 
-      it("should return null (no-op) on zero exit from completed", () => {
-        const state = createTerminalState("t1", "agent1");
-        state.agentState = "completed";
-        const result = calculateStateChange(state, { type: "exit", code: 0 });
-        expect(result).toBeNull();
+      it("should transition completed → exited on zero exit", () => {
+        expect(calcState("completed", { type: "exit", code: 0 })).toBe("exited");
       });
 
-      it("should not transition from other states on exit", () => {
+      it("should not transition from idle on exit", () => {
         expect(calcState("idle", { type: "exit", code: 0 })).toBe("idle");
+      });
+
+      it("should not transition from exited on exit (terminal state)", () => {
+        expect(calcState("exited", { type: "exit", code: 0 })).toBe("exited");
       });
     });
 
     describe("error event", () => {
       it("should not change state on error (error events are no-ops)", () => {
         const event: AgentEvent = { type: "error", error: "Something went wrong" };
-        const states: AgentState[] = ["idle", "working", "waiting", "completed"];
+        const states: AgentState[] = ["idle", "working", "waiting", "completed", "exited"];
 
         for (const state of states) {
           expect(calcState(state, event)).toBe(state);
@@ -196,12 +197,13 @@ describe("WorkerAgentStateService", () => {
       expect(r.trigger).toBe("activity");
     });
 
-    it("should return null on non-zero exit from completed (no state change)", () => {
+    it("should return exited on exit from completed", () => {
       const state = createTerminalState("t1", "agent1");
       state.agentState = "completed";
       const result = calculateStateChange(state, { type: "exit", code: 1 });
 
-      expect(result).toBeNull();
+      expect(result).not.toBeNull();
+      expect(result!.state).toBe("exited");
     });
   });
 
