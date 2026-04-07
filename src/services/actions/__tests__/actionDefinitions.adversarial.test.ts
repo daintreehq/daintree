@@ -221,6 +221,7 @@ vi.mock("../../../store/persistence/terminalPersistence", () => ({
     save: vi.fn(),
     load: vi.fn().mockReturnValue([]),
     saveTabGroups: vi.fn(),
+    setProjectIdGetter: vi.fn(),
   },
 }));
 
