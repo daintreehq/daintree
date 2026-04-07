@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { IFuseOptions } from "fuse.js";
 import { getPanelKindIds, getPanelKindConfig } from "@shared/config/panelKindRegistry";
-import { hasPanelComponent } from "@/registry/panelComponentRegistry";
+import { getPanelKindDefinition } from "@/registry";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -80,15 +80,13 @@ export function usePanelPalette(): UsePanelPaletteReturn {
   }, []);
 
   const availableKinds = useMemo<PanelKindOption[]>(() => {
-    const allKindIds = getPanelKindIds();
-
-    const panelKinds = allKindIds
+    const panelKinds = getPanelKindIds()
       .filter((kindId) => {
         if (kindId === "agent") return false;
         const config = getPanelKindConfig(kindId);
         if (!config) return false;
         if (config.showInPalette === false) return false;
-        if (!hasPanelComponent(kindId)) return false;
+        if (!getPanelKindDefinition(kindId)) return false;
         return true;
       })
       .map((kindId) => {

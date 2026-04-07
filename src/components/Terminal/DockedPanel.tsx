@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { useTerminalStore, type TerminalInstance } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { getPanelComponent, type PanelComponentProps } from "@/registry";
+import { getPanelKindDefinition, type PanelComponentProps } from "@/registry";
 import { ContentPanel, triggerPanelTransition } from "@/components/Panel";
 import { usePanelLifecycle } from "@/hooks/usePanelLifecycle";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
@@ -63,7 +63,7 @@ export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelP
   const isFocused = focusedId === terminal.id;
 
   const kind = terminal.kind ?? "terminal";
-  const registration = getPanelComponent(kind);
+  const definition = getPanelKindDefinition(kind);
 
   const panelProps: PanelComponentProps = useMemo(
     () =>
@@ -94,7 +94,7 @@ export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelP
     ]
   );
 
-  if (!registration) {
+  if (!definition) {
     console.warn(`[DockedPanel] No component registered for kind: ${kind}`);
     return (
       <ContentPanel
@@ -122,7 +122,7 @@ export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelP
     );
   }
 
-  const PanelComponent = registration.component;
+  const PanelComponent = definition.component;
   const componentName = PanelComponent.displayName || PanelComponent.name || `Panel(${kind})`;
 
   return (

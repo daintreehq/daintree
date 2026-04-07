@@ -163,10 +163,6 @@ import { useMacroFocusStore } from "./store/macroFocusStore";
 import { useSafeModeStore } from "./store/safeModeStore";
 import type { RecipeTerminal } from "./types";
 import { systemClient } from "@/clients";
-import { registerBuiltInPanelComponents } from "./registry";
-
-// Register built-in panel components before any renders
-registerBuiltInPanelComponents();
 import { useWorktreeFilterStore } from "./store/worktreeFilterStore";
 import {
   matchesFilters,

@@ -6,14 +6,14 @@ import { MORE_AGENTS_PANEL_ID } from "../usePanelPalette";
 const {
   getPanelKindIdsMock,
   getPanelKindConfigMock,
-  hasPanelComponentMock,
+  getPanelKindDefinitionMock,
   getEffectiveAgentIdsMock,
   getEffectiveAgentConfigMock,
   cliAvailabilityState,
 } = vi.hoisted(() => ({
   getPanelKindIdsMock: vi.fn(),
   getPanelKindConfigMock: vi.fn(),
-  hasPanelComponentMock: vi.fn(),
+  getPanelKindDefinitionMock: vi.fn(),
   getEffectiveAgentIdsMock: vi.fn(),
   getEffectiveAgentConfigMock: vi.fn(),
   cliAvailabilityState: {
@@ -33,8 +33,8 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
   getPanelKindConfig: getPanelKindConfigMock,
 }));
 
-vi.mock("@/registry/panelComponentRegistry", () => ({
-  hasPanelComponent: hasPanelComponentMock,
+vi.mock("@/registry", () => ({
+  getPanelKindDefinition: getPanelKindDefinitionMock,
 }));
 
 vi.mock("@shared/config/agentRegistry", () => ({
@@ -85,18 +85,28 @@ describe("usePanelPalette", () => {
     }
 
     getPanelKindIdsMock.mockReturnValue(["browser"]);
-    getPanelKindConfigMock.mockImplementation((id: string) =>
-      id === "browser"
-        ? {
-            name: "Browser",
-            iconId: "browser",
-            color: "#aaa",
-            showInPalette: true,
-            shortcut: "Cmd+B",
-          }
-        : null
-    );
-    hasPanelComponentMock.mockReturnValue(true);
+    getPanelKindConfigMock.mockImplementation((kind: string) => {
+      if (kind === "browser") {
+        return {
+          id: "browser",
+          name: "Browser",
+          iconId: "browser",
+          color: "#aaa",
+          showInPalette: true,
+          shortcut: "Cmd+B",
+          hasPty: false,
+          canRestart: false,
+          canConvert: false,
+        };
+      }
+      return undefined;
+    });
+    getPanelKindDefinitionMock.mockImplementation((kind: string) => {
+      if (kind === "browser") {
+        return { id: "browser", component: () => null };
+      }
+      return undefined;
+    });
     cliAvailabilityState.availability = { claude: true, gemini: false };
     cliAvailabilityState.isInitialized = true;
     cliAvailabilityState.lastCheckedAt = Date.now();
