@@ -394,6 +394,8 @@ export interface ElectronAPI {
         hydrateResult?: import("./app.js").HydrateResult;
       }) => void
     ): () => void;
+    onUpdated(callback: (project: Project) => void): () => void;
+    onRemoved(callback: (projectId: string) => void): () => void;
     getSettings(projectId: string): Promise<ProjectSettings>;
     saveSettings(projectId: string, settings: ProjectSettings): Promise<void>;
     detectRunners(projectId: string): Promise<RunCommand[]>;

@@ -184,6 +184,8 @@ export const CHANNELS = {
   PROJECT_ADD: "project:add",
   PROJECT_REMOVE: "project:remove",
   PROJECT_UPDATE: "project:update",
+  PROJECT_UPDATED: "project:updated",
+  PROJECT_REMOVED: "project:removed",
   PROJECT_SWITCH: "project:switch",
   PROJECT_OPEN_DIALOG: "project:open-dialog",
   PROJECT_ON_SWITCH: "project:on-switch",

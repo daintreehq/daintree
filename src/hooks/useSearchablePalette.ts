@@ -40,6 +40,8 @@ export interface UseSearchablePaletteReturn<T> {
 
 const DEFAULT_MAX_RESULTS = 20;
 
+const defaultGetItemId = <T>(item: T): string => (item as Record<string, unknown>).id as string;
+
 export function useSearchablePalette<T>(
   options: UseSearchablePaletteOptions<T>
 ): UseSearchablePaletteReturn<T> {
@@ -52,7 +54,7 @@ export function useSearchablePalette<T>(
     resetOnResultsChange = true,
     paletteId,
     includeMatches = false,
-    getItemId = (item: T) => (item as Record<string, unknown>).id as string,
+    getItemId = defaultGetItemId,
   } = options;
 
   const storeIsOpen = usePaletteStore(

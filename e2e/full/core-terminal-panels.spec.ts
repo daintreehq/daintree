@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openProject, dismissTelemetryConsent } from "../helpers/project";
+import { refreshActiveWindow } from "../helpers/launch";
 import { waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
 import {
   getFirstGridPanel,
@@ -47,6 +48,11 @@ test.describe.serial("Core: Terminal & Panels", () => {
       await expect(heading).not.toBeVisible({ timeout: T_MEDIUM });
 
       await dismissTelemetryConsent(window);
+
+      // Re-acquire the active page: the project view is its own
+      // WebContentsView created during onboarding, so the original
+      // ctx.window points at the now-stale welcome view.
+      ctx.window = await refreshActiveWindow(ctx.app, window);
     });
 
     test("worktree dashboard appears with at least one card", async () => {

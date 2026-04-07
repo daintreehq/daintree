@@ -598,6 +598,8 @@ const CHANNELS = {
   PROJECT_ADD: "project:add",
   PROJECT_REMOVE: "project:remove",
   PROJECT_UPDATE: "project:update",
+  PROJECT_UPDATED: "project:updated",
+  PROJECT_REMOVED: "project:removed",
   PROJECT_SWITCH: "project:switch",
   PROJECT_OPEN_DIALOG: "project:open-dialog",
   PROJECT_ON_SWITCH: "project:on-switch",
@@ -1517,6 +1519,12 @@ const api: ElectronAPI = {
         hydrateResult?: import("../shared/types/ipc/app.js").HydrateResult;
       }) => void
     ) => _typedOn(CHANNELS.PROJECT_ON_SWITCH, callback),
+
+    onUpdated: (callback: (project: Project) => void) =>
+      _typedOn(CHANNELS.PROJECT_UPDATED, callback),
+
+    onRemoved: (callback: (projectId: string) => void) =>
+      _typedOn(CHANNELS.PROJECT_REMOVED, callback),
 
     getSettings: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_GET_SETTINGS, projectId),
 

@@ -116,15 +116,36 @@ export function getAppView(win: BrowserWindow): WebContentsView | null {
  * Get all registered app view webContents (for broadcasting).
  */
 export function getAllAppWebContents(): WebContents[] {
+  const seen = new Set<number>();
   const result: WebContents[] = [];
+
+  // Active app view per window — typically the currently-visible project view.
   for (const [winId, view] of windowToAppView) {
     if (!view.webContents.isDestroyed()) {
-      result.push(view.webContents);
+      if (!seen.has(view.webContents.id)) {
+        seen.add(view.webContents.id);
+        result.push(view.webContents);
+      }
     } else {
       windowToAppView.delete(winId);
     }
   }
-  // Fallback: if no app views registered, return all BrowserWindow webContents
+
+  // Also include any cached project views (rendered but currently inactive)
+  // so cross-renderer broadcasts (project added/updated/removed, etc.) reach
+  // every renderer that has cached project state, not just the visible one.
+  for (const [wcId, _projectId] of viewToProject) {
+    if (seen.has(wcId)) continue;
+    const wc = webContentsModule.fromId(wcId);
+    if (wc && !wc.isDestroyed()) {
+      seen.add(wcId);
+      result.push(wc);
+    } else {
+      viewToProject.delete(wcId);
+    }
+  }
+
+  // Fallback: if nothing is registered, return all BrowserWindow webContents
   if (result.length === 0) {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {

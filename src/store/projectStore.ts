@@ -541,3 +541,35 @@ export const useProjectStore = create<ProjectState>()(
 
 // Break circular dependency by injecting project ID getter
 panelPersistence.setProjectIdGetter(() => useProjectStore.getState().currentProject?.id);
+
+// Keep this renderer's cached project state in sync when another renderer
+// (e.g., the welcome view where the onboarding wizard ran) adds, updates,
+// or removes a project. Each project view runs its own zustand store, so
+// without these subscriptions a stale view will keep showing old project
+// names or miss newly-added projects entirely.
+if (typeof window !== "undefined" && window.electron?.project) {
+  const projectApi = window.electron.project;
+  if (projectApi.onUpdated) {
+    projectApi.onUpdated((updated) => {
+      if (!updated || typeof updated !== "object") return;
+      useProjectStore.setState((state) => {
+        const exists = state.projects.some((p) => p.id === updated.id);
+        const projects = exists
+          ? state.projects.map((p) => (p.id === updated.id ? updated : p))
+          : [...state.projects, updated];
+        const currentProject =
+          state.currentProject?.id === updated.id ? updated : state.currentProject;
+        return { projects, currentProject };
+      });
+    });
+  }
+  if (projectApi.onRemoved) {
+    projectApi.onRemoved((projectId) => {
+      useProjectStore.setState((state) => {
+        const projects = state.projects.filter((p) => p.id !== projectId);
+        const currentProject = state.currentProject?.id === projectId ? null : state.currentProject;
+        return { projects, currentProject };
+      });
+    });
+  }
+}

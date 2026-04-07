@@ -4,7 +4,7 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import {
   addAndSwitchToProject,
-  selectExistingProject,
+  selectExistingProjectAndRefresh,
   spawnTerminalAndVerify,
 } from "../helpers/workflows";
 import { getGridPanelCount } from "../helpers/panels";
@@ -48,21 +48,19 @@ test.describe.serial("Core: Project Lifecycle", () => {
   });
 
   test("switch between projects with panel isolation", async () => {
-    const { window } = ctx;
-
     // Switch to Project A and spawn a terminal
-    await selectExistingProject(window, PROJECT_A);
-    await spawnTerminalAndVerify(window);
-    expect(await getGridPanelCount(window)).toBe(1);
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
+    await spawnTerminalAndVerify(ctx.window);
+    expect(await getGridPanelCount(ctx.window)).toBe(1);
 
     // Switch to Project B — should have 0 panels
-    await selectExistingProject(window, PROJECT_B);
-    await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(0);
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_B);
+    await expect.poll(() => getGridPanelCount(ctx.window), { timeout: T_LONG }).toBe(0);
 
     // Switch back to Project A — at least 1 panel should be restored
-    await selectExistingProject(window, PROJECT_A);
+    ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
     await expect
-      .poll(() => getGridPanelCount(window), { timeout: T_LONG })
+      .poll(() => getGridPanelCount(ctx.window), { timeout: T_LONG })
       .toBeGreaterThanOrEqual(1);
   });
 

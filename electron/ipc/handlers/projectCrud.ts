@@ -97,7 +97,10 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     if (!path.isAbsolute(projectPath)) {
       throw new Error("Project path must be absolute");
     }
-    return await projectStore.addProject(projectPath);
+    const project = await projectStore.addProject(projectPath);
+    // Notify all renderers so the project list stays in sync across views.
+    broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
+    return project;
   };
   ipcMain.handle(CHANNELS.PROJECT_ADD, handleProjectAdd);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_ADD));
@@ -114,6 +117,8 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     }
 
     await projectStore.removeProject(projectId);
+    // Notify all renderers so the project list stays in sync across views.
+    broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
   };
   ipcMain.handle(CHANNELS.PROJECT_REMOVE, handleProjectRemove);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_REMOVE));
@@ -137,6 +142,10 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       ...safeUpdates
     } = updates;
     const updated = projectStore.updateProject(projectId, safeUpdates);
+    // Notify all renderers so other project views (e.g., a newly-created
+    // project view while the onboarding wizard is still running in the
+    // originating welcome view) refresh their cached project data.
+    broadcastToRenderer(CHANNELS.PROJECT_UPDATED, updated);
     if (
       updated.inRepoSettings &&
       (updates.name !== undefined || updates.emoji !== undefined || "color" in updates)

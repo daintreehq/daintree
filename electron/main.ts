@@ -168,7 +168,14 @@ if (!gotTheLock) {
       dirname: __dirname,
       onRecreateWindow: () => createWindow(initialProjectPath),
       windowRegistry,
-      cachedProjectViews: store.get("terminalConfig")?.cachedProjectViews,
+      cachedProjectViews:
+        store.get("terminalConfig")?.cachedProjectViews ??
+        // E2E tests add and switch projects rapidly. Keeping more than one
+        // cached view alive is required so the wizard rendered in the
+        // originating project view survives a switch into a freshly added
+        // project view. Increase the cache only when the e2e harness flag is
+        // set so production behavior is unchanged.
+        (process.env.CANOPY_E2E_MODE ? 4 : undefined),
       onViewEvicted: (wcId) => {
         getWorkspaceClientRef()?.removeDirectPort(wcId);
         getWorktreePortBrokerRef()?.closePortsForView(wcId);
