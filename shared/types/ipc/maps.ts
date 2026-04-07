@@ -1828,6 +1828,8 @@ export interface IpcEventMap {
   // Project events
   "project:on-switch": ProjectSwitchPayload;
   "project:stats-updated": ProjectStatusMap;
+  "project:updated": Project;
+  "project:removed": string;
 
   // System events
   "system:wake": SystemWakePayload;
