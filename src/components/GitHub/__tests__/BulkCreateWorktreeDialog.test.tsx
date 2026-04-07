@@ -113,12 +113,12 @@ vi.mock("@/store/worktreeStore", () => ({
 }));
 
 let mockTerminals: Array<{ id: string; exitCode?: number }> = [];
-vi.mock("@/store/terminalStore", () => ({
-  useTerminalStore: {
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: {
     getState: () => ({
-      terminalsById: Object.fromEntries(mockTerminals.map((t) => [t.id, t])),
-      terminalIds: mockTerminals.map((t) => t.id),
-      addTerminal: vi.fn().mockResolvedValue("clone-terminal-id"),
+      panelsById: Object.fromEntries(mockTerminals.map((t) => [t.id, t])),
+      panelIds: mockTerminals.map((t) => t.id),
+      addPanel: vi.fn().mockResolvedValue("clone-terminal-id"),
     }),
   },
 }));

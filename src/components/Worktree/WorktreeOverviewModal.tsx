@@ -9,7 +9,7 @@ import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
 import type { WorktreeState, WorktreeSnapshot } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import {
   matchesFilters,
@@ -204,8 +204,8 @@ export function WorktreeOverviewModal({
   const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
 
   // Terminal store for derived metadata
-  const terminalsById = useTerminalStore(useShallow((state) => state.terminalsById));
-  const terminalIds = useTerminalStore(useShallow((state) => state.terminalIds));
+  const panelsById = usePanelStore(useShallow((state) => state.panelsById));
+  const panelIds = usePanelStore(useShallow((state) => state.panelIds));
 
   // Error store for derived metadata
   // Filter store: hide main worktree preference
@@ -222,8 +222,8 @@ export function WorktreeOverviewModal({
       let hasWaitingAgent = false;
       let hasCompletedAgent = false;
       let hasExitedAgent = false;
-      for (const id of terminalIds) {
-        const t = terminalsById[id];
+      for (const id of panelIds) {
+        const t = panelsById[id];
         if (!t || t.worktreeId !== worktree.id || t.location === "trash") continue;
         terminalCount++;
         if (t.agentState === "working") hasWorkingAgent = true;
@@ -245,7 +245,7 @@ export function WorktreeOverviewModal({
       });
     }
     return map;
-  }, [worktrees, terminalsById, terminalIds]);
+  }, [worktrees, panelsById, panelIds]);
 
   // Compute aggregate statistics from derivedMetaMap
   const aggregateStats = useMemo(() => {

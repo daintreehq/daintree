@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { AgentState } from "@shared/types/agent";
@@ -31,9 +31,9 @@ export function useAccessibilityAnnouncements() {
   const previousStatesRef = useRef<Map<string, TerminalStateSnapshot>>(new Map());
   const debounceTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
-  const focusedId = useTerminalStore((s) => s.focusedId);
-  const terminalsById = useTerminalStore(useShallow((s) => s.terminalsById));
-  const terminalIds = useTerminalStore(useShallow((s) => s.terminalIds));
+  const focusedId = usePanelStore((s) => s.focusedId);
+  const panelsById = usePanelStore(useShallow((s) => s.panelsById));
+  const panelIds = usePanelStore(useShallow((s) => s.panelIds));
 
   // Panel focus announcements
   useEffect(() => {
@@ -44,7 +44,7 @@ export function useAccessibilityAnnouncements() {
 
     if (!focusedId) return;
 
-    const terminal = terminalsById[focusedId];
+    const terminal = panelsById[focusedId];
     if (!terminal) return;
 
     useAnnouncerStore.getState().announce(`${terminal.title} panel focused`);
@@ -55,8 +55,8 @@ export function useAccessibilityAnnouncements() {
     const prevStates = previousStatesRef.current;
     const newStates = new Map<string, TerminalStateSnapshot>();
 
-    for (const id of terminalIds) {
-      const terminal = terminalsById[id];
+    for (const id of panelIds) {
+      const terminal = panelsById[id];
       if (!terminal) continue;
       if (!terminal.agentState) continue;
 
@@ -100,7 +100,7 @@ export function useAccessibilityAnnouncements() {
     }
 
     previousStatesRef.current = newStates;
-  }, [terminalsById, terminalIds]);
+  }, [panelsById, panelIds]);
 
   // Cleanup debounce timers on unmount
   useEffect(() => {

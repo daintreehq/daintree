@@ -35,8 +35,8 @@ vi.mock("@/clients", () => ({
   projectClient: { setTerminals: vi.fn().mockResolvedValue(undefined) },
 }));
 
-vi.mock("@/store/terminalStore", () => ({
-  useTerminalStore: {
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: {
     getState: vi.fn(() => ({
       terminals: [],
       activeDockTerminalId: null,

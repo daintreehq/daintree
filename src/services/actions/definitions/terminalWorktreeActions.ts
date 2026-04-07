@@ -1,6 +1,6 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 export function registerTerminalWorktreeActions(
   actions: ActionRegistry,
@@ -10,7 +10,7 @@ export function registerTerminalWorktreeActions(
     const { focusedTerminalId } = ctx;
     if (!focusedTerminalId) return null;
 
-    const terminal = useTerminalStore.getState().terminalsById[focusedTerminalId];
+    const terminal = usePanelStore.getState().panelsById[focusedTerminalId];
     if (!terminal?.worktreeId) return null;
 
     const worktree = getCurrentViewStore().getState().worktrees.get(terminal.worktreeId);
@@ -32,7 +32,7 @@ export function registerTerminalWorktreeActions(
     },
     disabledReason: (ctx: ActionContext) => {
       if (!ctx.focusedTerminalId) return "No focused terminal";
-      const terminal = useTerminalStore.getState().terminalsById[ctx.focusedTerminalId!];
+      const terminal = usePanelStore.getState().panelsById[ctx.focusedTerminalId!];
       if (!terminal) return "Focused terminal no longer exists";
       if (!terminal.worktreeId) return "Terminal has no associated worktree";
       const worktree = getCurrentViewStore().getState().worktrees.get(terminal.worktreeId);
@@ -69,7 +69,7 @@ export function registerTerminalWorktreeActions(
     },
     disabledReason: (ctx: ActionContext) => {
       if (!ctx.focusedTerminalId) return "No focused terminal";
-      const terminal = useTerminalStore.getState().terminalsById[ctx.focusedTerminalId!];
+      const terminal = usePanelStore.getState().panelsById[ctx.focusedTerminalId!];
       if (!terminal) return "Focused terminal no longer exists";
       if (!terminal.worktreeId) return "Terminal has no associated worktree";
       const worktree = getCurrentViewStore().getState().worktrees.get(terminal.worktreeId);
@@ -107,7 +107,7 @@ export function registerTerminalWorktreeActions(
     },
     disabledReason: (ctx: ActionContext) => {
       if (!ctx.focusedTerminalId) return "No focused terminal";
-      const terminal = useTerminalStore.getState().terminalsById[ctx.focusedTerminalId!];
+      const terminal = usePanelStore.getState().panelsById[ctx.focusedTerminalId!];
       if (!terminal) return "Focused terminal no longer exists";
       if (!terminal.worktreeId) return "Terminal has no associated worktree";
       const worktree = getCurrentViewStore().getState().worktrees.get(terminal.worktreeId);

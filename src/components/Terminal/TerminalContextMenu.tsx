@@ -3,7 +3,7 @@ import { isMac } from "@/lib/platform";
 import type React from "react";
 import type { Terminal as XTermTerminal } from "@xterm/xterm";
 import { type PanelLocation, type TerminalType } from "@/types";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { AGENT_IDS, getAgentConfig } from "@/config/agents";
@@ -137,9 +137,9 @@ export function TerminalContextMenu({
   children,
   forceLocation,
 }: TerminalContextMenuProps) {
-  const terminal = useTerminalStore(useShallow((state) => state.terminalsById[terminalId]));
-  const maximizeTarget = useTerminalStore((s) => s.maximizeTarget);
-  const getPanelGroup = useTerminalStore((s) => s.getPanelGroup);
+  const terminal = usePanelStore(useShallow((state) => state.panelsById[terminalId]));
+  const maximizeTarget = usePanelStore((s) => s.maximizeTarget);
+  const getPanelGroup = usePanelStore((s) => s.getPanelGroup);
 
   const isMaximized = useMemo(() => {
     if (!maximizeTarget) return false;
@@ -153,7 +153,7 @@ export function TerminalContextMenu({
 
   const { worktrees } = useWorktrees();
 
-  const isWatched = useTerminalStore((state) => state.watchedPanels.has(terminalId));
+  const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
 
   const [hasSelection, setHasSelection] = useState(false);
   const [selectionText, setSelectionText] = useState("");

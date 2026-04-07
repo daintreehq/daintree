@@ -76,7 +76,7 @@ interface WorktreeSelectionState {
 }
 
 type ClientsModule = typeof import("@/clients");
-type TerminalStoreModule = typeof import("@/store/terminalStore");
+type TerminalStoreModule = typeof import("@/store/panelStore");
 
 let clientsModulePromise: Promise<ClientsModule> | null = null;
 let terminalStoreModulePromise: Promise<TerminalStoreModule> | null = null;
@@ -166,12 +166,12 @@ function loadClientsModule(): Promise<ClientsModule> {
 function loadTerminalStoreModule(): Promise<TerminalStoreModule> {
   if (!terminalStoreModulePromise) {
     const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
-    markRendererPerformance("dynamic_import_start", { module: "@/store/terminalStore" });
-    terminalStoreModulePromise = import("@/store/terminalStore")
+    markRendererPerformance("dynamic_import_start", { module: "@/store/panelStore" });
+    terminalStoreModulePromise = import("@/store/panelStore")
       .then((module) => {
         const now = typeof performance !== "undefined" ? performance.now() : Date.now();
         markRendererPerformance("dynamic_import_end", {
-          module: "@/store/terminalStore",
+          module: "@/store/panelStore",
           durationMs: Number((now - startedAt).toFixed(3)),
           ok: true,
         });
@@ -180,7 +180,7 @@ function loadTerminalStoreModule(): Promise<TerminalStoreModule> {
       .catch((error) => {
         const now = typeof performance !== "undefined" ? performance.now() : Date.now();
         markRendererPerformance("dynamic_import_end", {
-          module: "@/store/terminalStore",
+          module: "@/store/panelStore",
           durationMs: Number((now - startedAt).toFixed(3)),
           ok: false,
           error: error instanceof Error ? error.message : String(error),
@@ -311,9 +311,9 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     // Record worktree MRU on explicit selection (suppressed during hydration)
     if (!mruRecordingSuppressed) {
       void loadTerminalStoreModule()
-        .then(({ useTerminalStore }) => {
-          useTerminalStore.getState().recordMru(`worktree:${id}`);
-          persistMruList(useTerminalStore.getState().mruList);
+        .then(({ usePanelStore }) => {
+          usePanelStore.getState().recordMru(`worktree:${id}`);
+          persistMruList(usePanelStore.getState().mruList);
         })
         .catch(() => {});
     }
@@ -330,17 +330,17 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     const lastFocusedTerminalId = get().lastFocusedTerminalByWorktree.get(id);
     if (lastFocusedTerminalId) {
       void loadTerminalStoreModule()
-        .then(({ useTerminalStore }) => {
+        .then(({ usePanelStore }) => {
           // Check generation to ensure we're not applying stale focus from a previous switch
           if (get()._policyGeneration !== generation) return;
           // Verify the worktree hasn't changed
           if (get().activeWorktreeId !== id) return;
 
-          const terminal = useTerminalStore.getState().terminalsById[lastFocusedTerminalId];
+          const terminal = usePanelStore.getState().panelsById[lastFocusedTerminalId];
 
           // Validate terminal still exists, belongs to this worktree, and isn't in trash
           if (terminal && terminal.worktreeId === id && terminal.location !== "trash") {
-            useTerminalStore.getState().setFocused(lastFocusedTerminalId);
+            usePanelStore.getState().setFocused(lastFocusedTerminalId);
           }
         })
         .catch((error) => {
@@ -548,17 +548,17 @@ function applyWorktreeTerminalPolicy(
   // They remain alive in the backend headless model and will be restored on wake.
   // Terminals in the active worktree must be activated to resume streaming.
   void loadTerminalStoreModule()
-    .then(({ useTerminalStore }) => {
+    .then(({ usePanelStore }) => {
       // Check generation to ensure we're not applying a stale policy from a previous switch
       if (get()._policyGeneration !== generation) return;
       // Double check that the active worktree hasn't changed underneath us
       if ((get().activeWorktreeId ?? null) !== (targetWorktreeId ?? null)) return;
 
-      const { terminalsById, terminalIds } = useTerminalStore.getState();
-      const activeDockTerminalId = useTerminalStore.getState().activeDockTerminalId;
+      const { panelsById, panelIds } = usePanelStore.getState();
+      const activeDockTerminalId = usePanelStore.getState().activeDockTerminalId;
 
-      for (const id of terminalIds) {
-        const terminal = terminalsById[id];
+      for (const id of panelIds) {
+        const terminal = panelsById[id];
         if (!terminal) continue;
         const isInActiveWorktree = (terminal.worktreeId ?? null) === (targetWorktreeId ?? null);
 

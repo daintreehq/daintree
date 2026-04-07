@@ -54,8 +54,8 @@ vi.mock("../worktreeStore", () => ({
 }));
 
 vi.mock("../slices", () => ({
-  flushTerminalPersistence: vi.fn(),
-  createTerminalRegistrySlice: vi.fn(() => () => ({})),
+  flushPanelPersistence: vi.fn(),
+  createPanelRegistrySlice: vi.fn(() => () => ({})),
   createTerminalFocusSlice: vi.fn(() => () => ({})),
   createTerminalCommandQueueSlice: vi.fn(() => () => ({})),
   createTerminalMruSlice: vi.fn(() => () => ({})),

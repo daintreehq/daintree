@@ -6,7 +6,7 @@ import { cn, getBaseTitle } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import {
   useTerminalInputStore,
-  useTerminalStore,
+  usePanelStore,
   usePortalStore,
   useFocusStore,
   type TerminalInstance,
@@ -31,11 +31,11 @@ interface DockedTerminalItemProps {
 }
 
 export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
-  const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
-  const openDockTerminal = useTerminalStore((s) => s.openDockTerminal);
-  const closeDockTerminal = useTerminalStore((s) => s.closeDockTerminal);
-  const moveTerminalToGrid = useTerminalStore((s) => s.moveTerminalToGrid);
-  const backendStatus = useTerminalStore((s) => s.backendStatus);
+  const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
+  const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
+  const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
+  const moveTerminalToGrid = usePanelStore((s) => s.moveTerminalToGrid);
+  const backendStatus = usePanelStore((s) => s.backendStatus);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
 

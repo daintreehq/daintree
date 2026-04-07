@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTerminalStore, type AddTerminalOptions } from "@/store/terminalStore";
+import { usePanelStore, type AddPanelOptions } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -16,7 +16,7 @@ import { normalizeAgentSelection } from "@/store/agentSettingsStore";
 const CLIPBOARD_DIR_NAME = "canopy-clipboard";
 
 export interface LaunchAgentOptions {
-  location?: AddTerminalOptions["location"];
+  location?: AddPanelOptions["location"];
   cwd?: string;
   worktreeId?: string;
   prompt?: string;
@@ -33,7 +33,7 @@ export interface UseAgentLauncherReturn {
 }
 
 export function useAgentLauncher(): UseAgentLauncherReturn {
-  const addTerminal = useTerminalStore((state) => state.addTerminal);
+  const addPanel = usePanelStore((state) => state.addPanel);
   const { worktreeMap, isInitialized } = useWorktrees();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const currentProject = useProjectStore((state) => state.currentProject);
@@ -105,7 +105,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       // Handle browser pane specially
       if (agentId === "browser") {
         try {
-          const terminalId = await addTerminal({
+          const terminalId = await addPanel({
             kind: "browser",
             cwd,
             worktreeId: targetWorktreeId || undefined,
@@ -121,7 +121,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       // Handle dev-preview pane specially
       if (agentId === "dev-preview") {
         try {
-          const terminalId = await addTerminal({
+          const terminalId = await addPanel({
             kind: "dev-preview",
             title: "Dev Server",
             cwd,
@@ -175,7 +175,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           ? getAgentDisplayTitle(agentId, launchOptions.modelId)
           : (agentConfig?.name ?? "Terminal");
 
-      const options: AddTerminalOptions = {
+      const options: AddPanelOptions = {
         kind: isAgent ? "agent" : "terminal",
         type: isAgent ? (agentId as any) : "terminal",
         agentId: isAgent ? agentId : undefined,
@@ -189,22 +189,14 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       };
 
       try {
-        const terminalId = await addTerminal(options);
+        const terminalId = await addPanel(options);
         return terminalId;
       } catch (error) {
         console.error(`Failed to launch ${agentId} agent:`, error);
         return null;
       }
     },
-    [
-      activeWorktreeId,
-      worktreeMap,
-      isInitialized,
-      addTerminal,
-      currentProject,
-      agentSettings,
-      homeDir,
-    ]
+    [activeWorktreeId, worktreeMap, isInitialized, addPanel, currentProject, agentSettings, homeDir]
   );
 
   return {

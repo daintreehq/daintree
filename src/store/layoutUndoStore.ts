@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { useTerminalStore } from "./terminalStore";
+import { usePanelStore } from "./panelStore";
 import { useLayoutConfigStore } from "./layoutConfigStore";
 import type { TabGroup, TerminalInstance } from "@shared/types";
 
@@ -31,10 +31,10 @@ interface LayoutUndoState {
 }
 
 function captureCurrentLayout(): LayoutSnapshot {
-  const state = useTerminalStore.getState();
+  const state = usePanelStore.getState();
   return {
-    terminals: state.terminalIds
-      .map((id) => state.terminalsById[id])
+    terminals: state.panelIds
+      .map((id) => state.panelsById[id])
       .filter((t) => t && t.location !== "trash")
       .map((t) => ({
         id: t.id,
@@ -126,14 +126,14 @@ function clampToGridCapacity(
 }
 
 function applySnapshot(snapshot: LayoutSnapshot): boolean {
-  const state = useTerminalStore.getState();
-  const { terminalsById, terminalIds } = state;
+  const state = usePanelStore.getState();
+  const { panelsById, panelIds } = state;
 
   const snapshotIds = new Set(snapshot.terminals.map((t) => t.id));
 
   // Check all snapshot terminals still exist
   for (const id of snapshotIds) {
-    if (!terminalsById[id]) {
+    if (!panelsById[id]) {
       return false;
     }
   }
@@ -141,8 +141,8 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
   // Build combined entry list: snapshot entries first, then post-snapshot terminals.
   // Post-snapshot terminals go at the end so they're overflowed first by capacity clamping.
   const postSnapshotEntries: TerminalLayoutEntry[] = [];
-  for (const tid of terminalIds) {
-    const t = terminalsById[tid];
+  for (const tid of panelIds) {
+    const t = panelsById[tid];
     if (t && !snapshotIds.has(t.id) && t.location !== "trash") {
       postSnapshotEntries.push({ id: t.id, location: t.location, worktreeId: t.worktreeId });
     }
@@ -159,7 +159,7 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
   const newTerminalsById: Record<string, TerminalInstance> = {};
   const newTerminalIds: string[] = [];
   for (const entry of clampedEntries) {
-    const current = terminalsById[entry.id];
+    const current = panelsById[entry.id];
     if (!current) continue;
     const restored: TerminalInstance = { ...current, location: entry.location };
     if (entry.worktreeId !== undefined) {
@@ -171,9 +171,9 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     newTerminalIds.push(entry.id);
   }
 
-  useTerminalStore.setState({
-    terminalsById: newTerminalsById,
-    terminalIds: newTerminalIds,
+  usePanelStore.setState({
+    panelsById: newTerminalsById,
+    panelIds: newTerminalIds,
     tabGroups: structuredClone(clampedTabGroups),
     focusedId: snapshot.focusedId,
     maximizedId: snapshot.maximizedId,

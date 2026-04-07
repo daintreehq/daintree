@@ -1,5 +1,5 @@
 /**
- * useTerminalStoreBootstrap - Bootstraps terminal store listeners.
+ * usePanelStoreBootstrap - Bootstraps terminal store listeners.
  *
  * Wraps setupTerminalStoreListeners for cleaner hook usage.
  * Cross-store coordination (focus tracking, removal cleanup) is handled
@@ -7,7 +7,7 @@
  */
 
 import { useEffect } from "react";
-import { setupTerminalStoreListeners } from "../../store/terminalStore";
+import { setupTerminalStoreListeners } from "../../store/panelStore";
 import { setupProjectStatsListeners } from "../../store/projectStatsStore";
 import { useCachedProjectViewsStore } from "../../store/cachedProjectViewsStore";
 import { useResourceMonitoringStore } from "../../store/resourceMonitoringStore";
@@ -18,7 +18,7 @@ import {
   DEFAULT_AUTO_RESTART_THRESHOLD_MB,
 } from "../../store/memoryLeakConfigStore";
 
-export function useTerminalStoreBootstrap() {
+export function usePanelStoreBootstrap() {
   const leakDetectionEnabled = useMemoryLeakConfigStore((s) => s.enabled);
   const autoRestartThresholdMb = useMemoryLeakConfigStore((s) => s.autoRestartThresholdMb);
 

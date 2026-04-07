@@ -1,6 +1,6 @@
 import PQueue from "p-queue";
 import type { StateCreator } from "zustand";
-import type { TerminalInstance } from "./terminalRegistrySlice";
+import type { TerminalInstance } from "./panelRegistrySlice";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import type { AgentState } from "@/types";
 import { isAgentTerminal } from "../../utils/terminalType";
@@ -34,9 +34,9 @@ export interface TerminalBulkActionsSlice {
 
 export const createTerminalBulkActionsSlice = (
   getTerminals: () => TerminalInstance[],
-  removeTerminal: (id: string) => void,
+  removePanel: (id: string) => void,
   restartTerminal: (id: string) => Promise<void>,
-  trashTerminal: (id: string) => void,
+  trashPanel: (id: string) => void,
   moveTerminalToDock: (id: string) => void,
   moveTerminalToGrid: (id: string) => void,
   getFocusedId: () => string | null,
@@ -63,7 +63,7 @@ export const createTerminalBulkActionsSlice = (
       const stateArray = Array.isArray(states) ? states : [states];
       const terminals = getTerminals();
       const toRemove = terminals.filter((t) => t.agentState && stateArray.includes(t.agentState));
-      toRemove.forEach((t) => removeTerminal(t.id));
+      toRemove.forEach((t) => removePanel(t.id));
     },
 
     bulkCloseByWorktree: (worktreeId, state) => {
@@ -71,18 +71,18 @@ export const createTerminalBulkActionsSlice = (
       const toRemove = terminals.filter(
         (t) => t.worktreeId === worktreeId && (!state || t.agentState === state)
       );
-      toRemove.forEach((t) => removeTerminal(t.id));
+      toRemove.forEach((t) => removePanel(t.id));
     },
 
     bulkCloseAll: () => {
       const terminals = getTerminals();
-      terminals.forEach((t) => removeTerminal(t.id));
+      terminals.forEach((t) => removePanel(t.id));
     },
 
     bulkTrashAll: () => {
       const terminals = getTerminals();
       const activeTerminals = terminals.filter((t) => t.location !== "trash");
-      activeTerminals.forEach((t) => trashTerminal(t.id));
+      activeTerminals.forEach((t) => trashPanel(t.id));
     },
 
     bulkRestartAll: async () => {
@@ -157,7 +157,7 @@ export const createTerminalBulkActionsSlice = (
       const activeTerminals = terminals.filter(
         (t) => t.worktreeId === worktreeId && t.location !== "trash"
       );
-      activeTerminals.forEach((t) => trashTerminal(t.id));
+      activeTerminals.forEach((t) => trashPanel(t.id));
     },
 
     bulkRestartPreflightCheckByWorktree: async (worktreeId) => {

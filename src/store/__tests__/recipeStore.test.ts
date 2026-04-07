@@ -57,11 +57,11 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-vi.mock("../terminalStore", () => ({
-  useTerminalStore: {
+vi.mock("../panelStore", () => ({
+  usePanelStore: {
     getState: vi.fn(() => ({
       terminals: [],
-      addTerminal: addTerminalMock,
+      addPanel: addTerminalMock,
     })),
   },
 }));

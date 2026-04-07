@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import type { TerminalInstance } from "./terminalRegistrySlice";
+import type { TerminalInstance } from "./panelRegistrySlice";
 import type { AgentState } from "@/types";
 import { terminalClient } from "@/clients";
 

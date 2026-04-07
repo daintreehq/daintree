@@ -26,7 +26,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useRecipePicker, CLONE_LAYOUT_ID } from "@/components/Worktree/hooks/useRecipePicker";
 import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNewWorktreeProjectSettings";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
@@ -677,7 +677,7 @@ export function BulkCreateWorktreeDialog({
                 });
                 try {
                   for (const t of cloneTerminals) {
-                    await useTerminalStore.getState().addTerminal({
+                    await usePanelStore.getState().addPanel({
                       kind:
                         t.type === "dev-preview"
                           ? "dev-preview"
@@ -825,7 +825,7 @@ export function BulkCreateWorktreeDialog({
         await delay(VERIFICATION_SETTLE_MS);
         if (runIdRef.current !== currentRunId) return;
 
-        const { terminalsById } = useTerminalStore.getState();
+        const { panelsById } = usePanelStore.getState();
 
         for (const [itemNumber, tracked] of tracking) {
           if (!currentRunItems.has(itemNumber)) continue;
@@ -833,7 +833,7 @@ export function BulkCreateWorktreeDialog({
           if (tracked.failedTerminalIndices.length > 0) continue;
 
           const crashedCount = tracked.spawnedTerminalIds.filter((tid) => {
-            const t = terminalsById[tid];
+            const t = panelsById[tid];
             return t && t.exitCode !== undefined && t.exitCode !== 0;
           }).length;
 

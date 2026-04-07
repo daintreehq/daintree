@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { usePaletteStore } from "@/store/paletteStore";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
@@ -93,12 +93,12 @@ function getEligibleTerminals(
 
 function useWorktreeRows(): WorktreeRow[] {
   const worktrees = useWorktreeStore((s) => s.worktrees);
-  const terminalsById = useTerminalStore((s) => s.terminalsById);
-  const terminalIds = useTerminalStore((s) => s.terminalIds);
+  const panelsById = usePanelStore((s) => s.panelsById);
+  const panelIds = usePanelStore((s) => s.panelIds);
 
   return useMemo(() => {
     const rows: WorktreeRow[] = [];
-    const terminals = terminalIds.map((id) => terminalsById[id]).filter(Boolean);
+    const terminals = panelIds.map((id) => panelsById[id]).filter(Boolean);
     for (const wt of worktrees.values()) {
       const eligible = getEligibleTerminals(terminals, wt.id);
       const dominantState = getDominantAgentState(eligible.map((t) => t.agentState));
@@ -114,7 +114,7 @@ function useWorktreeRows(): WorktreeRow[] {
       });
     }
     return rows;
-  }, [worktrees, terminalsById, terminalIds]);
+  }, [worktrees, panelsById, panelIds]);
 }
 
 function buildRecipeContext(row: WorktreeRow): RecipeContext {
@@ -253,7 +253,7 @@ function BulkCommandPaletteInner() {
   }, [step, mode, selectedRows, commandText]);
 
   const resolveTargetIds = useCallback((): string[] => {
-    const { terminalsById: tById, terminalIds: tIds } = useTerminalStore.getState();
+    const { panelsById: tById, panelIds: tIds } = usePanelStore.getState();
     const allTerminals = tIds.map((id) => tById[id]).filter(Boolean);
     const ids: string[] = [];
     for (const worktreeId of selectedIds) {
@@ -289,7 +289,7 @@ function BulkCommandPaletteInner() {
     let failures = 0;
 
     if (mode === "text") {
-      const { terminalsById: tById, terminalIds: tIds } = useTerminalStore.getState();
+      const { panelsById: tById, panelIds: tIds } = usePanelStore.getState();
       const allTerminals = tIds.map((id) => tById[id]).filter(Boolean);
       const promises: Promise<unknown>[] = [];
       for (const row of selectedRows) {

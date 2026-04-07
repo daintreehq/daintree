@@ -30,33 +30,33 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-const { useTerminalStore } = await import("../../store/terminalStore");
+const { usePanelStore } = await import("../../store/panelStore");
 import type { TerminalInstance } from "@shared/types";
-import type { AddTerminalOptions } from "../../store/terminalStore";
+import type { AddPanelOptions } from "../../store/panelStore";
 type MockTerminal = Partial<TerminalInstance> & { id: string };
 
 function setTerminals(terminals: MockTerminal[]) {
-  useTerminalStore.setState({
-    terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])) as Record<
+  usePanelStore.setState({
+    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])) as Record<
       string,
       TerminalInstance
     >,
-    terminalIds: terminals.map((t) => t.id),
+    panelIds: terminals.map((t) => t.id),
   });
 }
 
 function getTerminals() {
-  const state = useTerminalStore.getState();
-  return state.terminalIds.map((id: string) => state.terminalsById[id]);
+  const state = usePanelStore.getState();
+  return state.panelIds.map((id: string) => state.panelsById[id]);
 }
 
 describe("Terminal Store Integration", () => {
   beforeEach(() => {
-    const { reset } = useTerminalStore.getState();
+    const { reset } = usePanelStore.getState();
     reset();
-    useTerminalStore.setState({
-      terminalsById: {},
-      terminalIds: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
@@ -64,9 +64,9 @@ describe("Terminal Store Integration", () => {
   });
 
   afterEach(() => {
-    useTerminalStore.setState({
-      terminalsById: {},
-      terminalIds: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
@@ -76,10 +76,10 @@ describe("Terminal Store Integration", () => {
   describe("Terminal Addition", () => {
     it("should add terminal to store", async () => {
       const mockAddTerminal = vi.fn().mockResolvedValue("test-id-1");
-      useTerminalStore.setState({
-        addTerminal: mockAddTerminal as unknown as ReturnType<
-          typeof useTerminalStore.getState
-        >["addTerminal"],
+      usePanelStore.setState({
+        addPanel: mockAddTerminal as unknown as ReturnType<
+          typeof usePanelStore.getState
+        >["addPanel"],
       });
 
       await mockAddTerminal({
@@ -95,10 +95,10 @@ describe("Terminal Store Integration", () => {
 
     it("should add terminal with worktree ID", async () => {
       const mockAddTerminal = vi.fn().mockResolvedValue("test-id-2");
-      useTerminalStore.setState({
-        addTerminal: mockAddTerminal as unknown as ReturnType<
-          typeof useTerminalStore.getState
-        >["addTerminal"],
+      usePanelStore.setState({
+        addPanel: mockAddTerminal as unknown as ReturnType<
+          typeof usePanelStore.getState
+        >["addPanel"],
       });
 
       await mockAddTerminal({
@@ -120,52 +120,52 @@ describe("Terminal Store Integration", () => {
     it("should set focus to newly added grid terminal", async () => {
       const mockAddTerminal = vi.fn().mockResolvedValue("test-id-3");
 
-      useTerminalStore.setState({
-        addTerminal: (async (options: AddTerminalOptions) => {
+      usePanelStore.setState({
+        addPanel: (async (options: AddPanelOptions) => {
           const id = await mockAddTerminal(options);
           if (!options.location || options.location === "grid") {
-            useTerminalStore.setState({ focusedId: id });
+            usePanelStore.setState({ focusedId: id });
           }
           return id;
-        }) as unknown as ReturnType<typeof useTerminalStore.getState>["addTerminal"],
+        }) as unknown as ReturnType<typeof usePanelStore.getState>["addPanel"],
       });
 
-      await useTerminalStore.getState().addTerminal({
+      await usePanelStore.getState().addPanel({
         id: "test-id-3",
         type: "terminal",
         cwd: "/test",
         cols: 80,
         rows: 24,
         location: "grid",
-      } as AddTerminalOptions);
+      } as AddPanelOptions);
 
-      const { focusedId } = useTerminalStore.getState();
+      const { focusedId } = usePanelStore.getState();
       expect(focusedId).toBe("test-id-3");
     });
 
     it("should not focus dock terminal", async () => {
       const mockAddTerminal = vi.fn().mockResolvedValue("test-id-4");
 
-      useTerminalStore.setState({
-        addTerminal: (async (options: AddTerminalOptions) => {
+      usePanelStore.setState({
+        addPanel: (async (options: AddPanelOptions) => {
           const id = await mockAddTerminal(options);
           if (!options.location || options.location === "grid") {
-            useTerminalStore.setState({ focusedId: id });
+            usePanelStore.setState({ focusedId: id });
           }
           return id;
-        }) as unknown as ReturnType<typeof useTerminalStore.getState>["addTerminal"],
+        }) as unknown as ReturnType<typeof usePanelStore.getState>["addPanel"],
       });
 
-      await useTerminalStore.getState().addTerminal({
+      await usePanelStore.getState().addPanel({
         id: "test-id-4",
         type: "terminal",
         cwd: "/test",
         cols: 80,
         rows: 24,
         location: "dock",
-      } as AddTerminalOptions);
+      } as AddPanelOptions);
 
-      const { focusedId } = useTerminalStore.getState();
+      const { focusedId } = usePanelStore.getState();
       expect(focusedId).not.toBe("test-id-4");
     });
   });
@@ -192,20 +192,20 @@ describe("Terminal Store Integration", () => {
           location: "grid",
         },
       ]);
-      useTerminalStore.setState({ focusedId: "term-1" });
+      usePanelStore.setState({ focusedId: "term-1" });
     });
 
     it("should move terminal to dock", () => {
       const mockMoveToDock = vi.fn((id: string) => {
-        const state = useTerminalStore.getState();
-        const terminals = state.terminalIds.map((tid: string) => {
-          const t = state.terminalsById[tid];
+        const state = usePanelStore.getState();
+        const terminals = state.panelIds.map((tid: string) => {
+          const t = state.panelsById[tid];
           return t.id === id ? { ...t, location: "dock" as const } : t;
         });
 
         const updates: Record<string, unknown> = {
-          terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
-          terminalIds: terminals.map((t) => t.id),
+          panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+          panelIds: terminals.map((t) => t.id),
         };
 
         if (state.focusedId === id) {
@@ -213,14 +213,14 @@ describe("Terminal Store Integration", () => {
           updates.focusedId = gridTerminals[0]?.id ?? null;
         }
 
-        useTerminalStore.setState(updates);
+        usePanelStore.setState(updates);
       });
 
-      useTerminalStore.setState({ moveTerminalToDock: mockMoveToDock });
+      usePanelStore.setState({ moveTerminalToDock: mockMoveToDock });
       mockMoveToDock("term-1");
 
       const terminals = getTerminals();
-      const { focusedId } = useTerminalStore.getState();
+      const { focusedId } = usePanelStore.getState();
       expect(terminals.find((t: TerminalInstance) => t.id === "term-1")?.location).toBe("dock");
       expect(focusedId).toBe("term-2");
     });
@@ -239,24 +239,24 @@ describe("Terminal Store Integration", () => {
       ]);
 
       const mockMoveToGrid = vi.fn((id: string) => {
-        const state = useTerminalStore.getState();
-        const terminals = state.terminalIds.map((tid: string) => {
-          const t = state.terminalsById[tid];
+        const state = usePanelStore.getState();
+        const terminals = state.panelIds.map((tid: string) => {
+          const t = state.panelsById[tid];
           return t.id === id ? { ...t, location: "grid" as const } : t;
         });
-        useTerminalStore.setState({
-          terminalsById: Object.fromEntries(terminals.map((t: TerminalInstance) => [t.id, t])),
-          terminalIds: terminals.map((t: TerminalInstance) => t.id),
+        usePanelStore.setState({
+          panelsById: Object.fromEntries(terminals.map((t: TerminalInstance) => [t.id, t])),
+          panelIds: terminals.map((t: TerminalInstance) => t.id),
           focusedId: id,
         });
         return true;
       });
 
-      useTerminalStore.setState({ moveTerminalToGrid: mockMoveToGrid });
+      usePanelStore.setState({ moveTerminalToGrid: mockMoveToGrid });
       mockMoveToGrid("term-1");
 
       const terminals = getTerminals();
-      const { focusedId } = useTerminalStore.getState();
+      const { focusedId } = usePanelStore.getState();
       expect(terminals.find((t: TerminalInstance) => t.id === "term-1")?.location).toBe("grid");
       expect(focusedId).toBe("term-1");
     });
@@ -284,20 +284,20 @@ describe("Terminal Store Integration", () => {
           location: "grid",
         },
       ]);
-      useTerminalStore.setState({ focusedId: "term-1" });
+      usePanelStore.setState({ focusedId: "term-1" });
     });
 
     it("should move terminal to trash", () => {
       const mockTrash = vi.fn((id: string) => {
-        const state = useTerminalStore.getState();
-        const terminals = state.terminalIds.map((tid: string) => {
-          const t = state.terminalsById[tid];
+        const state = usePanelStore.getState();
+        const terminals = state.panelIds.map((tid: string) => {
+          const t = state.panelsById[tid];
           return t.id === id ? { ...t, location: "trash" as const } : t;
         });
 
         const updates: Record<string, unknown> = {
-          terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
-          terminalIds: terminals.map((t) => t.id),
+          panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+          panelIds: terminals.map((t) => t.id),
         };
 
         if (state.focusedId === id) {
@@ -305,14 +305,14 @@ describe("Terminal Store Integration", () => {
           updates.focusedId = gridTerminals[0]?.id ?? null;
         }
 
-        useTerminalStore.setState(updates);
+        usePanelStore.setState(updates);
       });
 
-      useTerminalStore.setState({ trashTerminal: mockTrash });
+      usePanelStore.setState({ trashPanel: mockTrash });
       mockTrash("term-1");
 
       const terminals = getTerminals();
-      const { focusedId } = useTerminalStore.getState();
+      const { focusedId } = usePanelStore.getState();
       expect(terminals.find((t: TerminalInstance) => t.id === "term-1")?.location).toBe("trash");
       expect(focusedId).toBe("term-2");
     });
@@ -331,23 +331,23 @@ describe("Terminal Store Integration", () => {
       ]);
 
       const mockRestore = vi.fn((id: string) => {
-        const state = useTerminalStore.getState();
-        const terminals = state.terminalIds.map((tid: string) => {
-          const t = state.terminalsById[tid];
+        const state = usePanelStore.getState();
+        const terminals = state.panelIds.map((tid: string) => {
+          const t = state.panelsById[tid];
           return t.id === id ? { ...t, location: "grid" as const } : t;
         });
-        useTerminalStore.setState({
-          terminalsById: Object.fromEntries(terminals.map((t: TerminalInstance) => [t.id, t])),
-          terminalIds: terminals.map((t: TerminalInstance) => t.id),
+        usePanelStore.setState({
+          panelsById: Object.fromEntries(terminals.map((t: TerminalInstance) => [t.id, t])),
+          panelIds: terminals.map((t: TerminalInstance) => t.id),
           focusedId: id,
         });
       });
 
-      useTerminalStore.setState({ restoreTerminal: mockRestore });
+      usePanelStore.setState({ restoreTerminal: mockRestore });
       mockRestore("term-1");
 
       const terminals = getTerminals();
-      const { focusedId } = useTerminalStore.getState();
+      const { focusedId } = usePanelStore.getState();
       expect(terminals.find((t: TerminalInstance) => t.id === "term-1")?.location).toBe("grid");
       expect(focusedId).toBe("term-1");
     });
@@ -364,21 +364,21 @@ describe("Terminal Store Integration", () => {
           location: "grid",
         },
       ]);
-      useTerminalStore.setState({
+      usePanelStore.setState({
         focusedId: "term-1",
         maximizedId: "term-1",
       });
 
       const mockTrash = vi.fn((id: string) => {
-        const state = useTerminalStore.getState();
-        const terminals = state.terminalIds.map((tid: string) => {
-          const t = state.terminalsById[tid];
+        const state = usePanelStore.getState();
+        const terminals = state.panelIds.map((tid: string) => {
+          const t = state.panelsById[tid];
           return t.id === id ? { ...t, location: "trash" as const } : t;
         });
 
         const updates: Record<string, unknown> = {
-          terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
-          terminalIds: terminals.map((t) => t.id),
+          panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+          panelIds: terminals.map((t) => t.id),
         };
 
         if (state.focusedId === id) {
@@ -390,13 +390,13 @@ describe("Terminal Store Integration", () => {
           updates.maximizedId = null;
         }
 
-        useTerminalStore.setState(updates);
+        usePanelStore.setState(updates);
       });
 
-      useTerminalStore.setState({ trashTerminal: mockTrash });
+      usePanelStore.setState({ trashPanel: mockTrash });
       mockTrash("term-1");
 
-      const { maximizedId } = useTerminalStore.getState();
+      const { maximizedId } = usePanelStore.getState();
       expect(maximizedId).toBeNull();
     });
   });
@@ -418,17 +418,17 @@ describe("Terminal Store Integration", () => {
     });
 
     it("should update agent state", () => {
-      const state = useTerminalStore.getState();
-      const terminal = state.terminalsById["term-1"];
+      const state = usePanelStore.getState();
+      const terminal = state.panelsById["term-1"];
 
-      useTerminalStore.setState({
-        terminalsById: {
-          ...state.terminalsById,
+      usePanelStore.setState({
+        panelsById: {
+          ...state.panelsById,
           "term-1": { ...terminal, agentState: "working" as const },
         },
       });
 
-      const updated = useTerminalStore.getState().terminalsById["term-1"];
+      const updated = usePanelStore.getState().panelsById["term-1"];
       expect(updated?.agentState).toBe("working");
     });
 
@@ -441,32 +441,32 @@ describe("Terminal Store Integration", () => {
       ];
 
       states.forEach((agentState) => {
-        const curState = useTerminalStore.getState();
-        const terminal = curState.terminalsById["term-1"];
-        useTerminalStore.setState({
-          terminalsById: {
-            ...curState.terminalsById,
+        const curState = usePanelStore.getState();
+        const terminal = curState.panelsById["term-1"];
+        usePanelStore.setState({
+          panelsById: {
+            ...curState.panelsById,
             "term-1": { ...terminal, agentState },
           },
         });
       });
 
-      const final = useTerminalStore.getState().terminalsById["term-1"];
+      const final = usePanelStore.getState().panelsById["term-1"];
       expect(final?.agentState).toBe("completed");
     });
 
     it("should handle completed state", () => {
-      const state = useTerminalStore.getState();
-      const terminal = state.terminalsById["term-1"];
+      const state = usePanelStore.getState();
+      const terminal = state.panelsById["term-1"];
 
-      useTerminalStore.setState({
-        terminalsById: {
-          ...state.terminalsById,
+      usePanelStore.setState({
+        panelsById: {
+          ...state.panelsById,
           "term-1": { ...terminal, agentState: "completed" as const },
         },
       });
 
-      const updated = useTerminalStore.getState().terminalsById["term-1"];
+      const updated = usePanelStore.getState().panelsById["term-1"];
       expect(updated?.agentState).toBe("completed");
     });
   });
@@ -493,30 +493,30 @@ describe("Terminal Store Integration", () => {
           location: "grid",
         },
       ]);
-      useTerminalStore.setState({ focusedId: null });
+      usePanelStore.setState({ focusedId: null });
     });
 
     it("should set focused terminal", () => {
-      useTerminalStore.setState({ focusedId: "term-1" });
+      usePanelStore.setState({ focusedId: "term-1" });
 
-      const { focusedId } = useTerminalStore.getState();
+      const { focusedId } = usePanelStore.getState();
       expect(focusedId).toBe("term-1");
     });
 
     it("should change focused terminal", () => {
-      useTerminalStore.setState({ focusedId: "term-1" });
-      expect(useTerminalStore.getState().focusedId).toBe("term-1");
+      usePanelStore.setState({ focusedId: "term-1" });
+      expect(usePanelStore.getState().focusedId).toBe("term-1");
 
-      useTerminalStore.setState({ focusedId: "term-2" });
-      expect(useTerminalStore.getState().focusedId).toBe("term-2");
+      usePanelStore.setState({ focusedId: "term-2" });
+      expect(usePanelStore.getState().focusedId).toBe("term-2");
     });
 
     it("should clear focus", () => {
-      useTerminalStore.setState({ focusedId: "term-1" });
-      expect(useTerminalStore.getState().focusedId).toBe("term-1");
+      usePanelStore.setState({ focusedId: "term-1" });
+      expect(usePanelStore.getState().focusedId).toBe("term-1");
 
-      useTerminalStore.setState({ focusedId: null });
-      expect(useTerminalStore.getState().focusedId).toBeNull();
+      usePanelStore.setState({ focusedId: null });
+      expect(usePanelStore.getState().focusedId).toBeNull();
     });
   });
 
@@ -536,7 +536,7 @@ describe("Terminal Store Integration", () => {
         },
       ]);
 
-      const terminal = useTerminalStore.getState().terminalsById["term-1"];
+      const terminal = usePanelStore.getState().panelsById["term-1"];
       expect(terminal.type).toBe("claude");
       expect(terminal.title).toBe("Claude Agent");
       expect(terminal.worktreeId).toBe("worktree-1");
@@ -568,7 +568,7 @@ describe("Terminal Store Integration", () => {
         },
       ]);
 
-      const terminal = useTerminalStore.getState().terminalsById["term-1"];
+      const terminal = usePanelStore.getState().panelsById["term-1"];
       expect(terminal.title).toBe("Updated Title");
       expect(terminal.cols).toBe(100);
       expect(terminal.rows).toBe(30);

@@ -70,10 +70,10 @@ vi.mock("zustand/react/shallow", () => ({
 }));
 
 vi.mock("@/store", () => ({
-  useTerminalStore: (selector: (s: Record<string, unknown>) => unknown) =>
+  usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({
-      terminalsById: { [mockTerminal.id as string]: mockTerminal },
-      terminalIds: [mockTerminal.id],
+      panelsById: { [mockTerminal.id as string]: mockTerminal },
+      panelIds: [mockTerminal.id],
     }),
 }));
 

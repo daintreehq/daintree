@@ -41,15 +41,15 @@ vi.mock("@/store/voiceRecordingStore", () => {
   };
 });
 
-vi.mock("@/store/terminalStore", () => {
+vi.mock("@/store/panelStore", () => {
   const state = {
-    terminalsById: {} as Record<string, unknown>,
-    terminalIds: [] as string[],
+    panelsById: {} as Record<string, unknown>,
+    panelIds: [] as string[],
     focusedId: null as string | null,
   };
   const getState = () => state;
   const subscribe = vi.fn(() => () => {});
-  return { useTerminalStore: Object.assign(getState, { getState, subscribe }), __state: state };
+  return { usePanelStore: Object.assign(getState, { getState, subscribe }), __state: state };
 });
 
 vi.mock("@/store/terminalInputStore", () => {
@@ -323,13 +323,13 @@ describe("VoiceRecordingService — background recording", () => {
   it("stops recording when the active panel is moved to trash (panel-close regression)", async () => {
     // Capture the terminalStore subscribe callback so we can trigger it.
     let storeCallback:
-      | ((state: { terminalsById: Record<string, unknown>; terminalIds: string[] }) => void)
+      | ((state: { panelsById: Record<string, unknown>; panelIds: string[] }) => void)
       | null = null;
-    const { useTerminalStore } = (await import("@/store/terminalStore")) as unknown as {
-      useTerminalStore: { subscribe: ReturnType<typeof vi.fn> };
+    const { usePanelStore } = (await import("@/store/panelStore")) as unknown as {
+      usePanelStore: { subscribe: ReturnType<typeof vi.fn> };
     };
-    (useTerminalStore.subscribe as ReturnType<typeof vi.fn>).mockImplementation(
-      (cb: (state: { terminalsById: Record<string, unknown>; terminalIds: string[] }) => void) => {
+    (usePanelStore.subscribe as ReturnType<typeof vi.fn>).mockImplementation(
+      (cb: (state: { panelsById: Record<string, unknown>; panelIds: string[] }) => void) => {
         storeCallback = cb;
         return () => {};
       }
@@ -348,7 +348,7 @@ describe("VoiceRecordingService — background recording", () => {
 
     // Simulate the panel being removed from the terminal list.
     expect(storeCallback).not.toBeNull();
-    storeCallback!({ terminalsById: {}, terminalIds: [] });
+    storeCallback!({ panelsById: {}, panelIds: [] });
 
     expect(stopSpy).toHaveBeenCalledWith(
       "Dictation stopped because its panel was closed.",

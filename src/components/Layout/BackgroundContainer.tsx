@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useTerminalStore, type TerminalInstance } from "@/store";
+import { usePanelStore, type TerminalInstance } from "@/store";
 import type { TrashedTerminalGroupMetadata } from "@/store/slices";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useBackgroundedTerminals } from "@/hooks/useTerminalSelectors";
@@ -31,9 +31,9 @@ type BackgroundDisplayItem = BackgroundDisplaySingle | BackgroundDisplayGroup;
 export function BackgroundContainer({ compact = false }: BackgroundContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const terminals = useBackgroundedTerminals();
-  const backgroundedTerminals = useTerminalStore((state) => state.backgroundedTerminals);
+  const backgroundedTerminals = usePanelStore((state) => state.backgroundedTerminals);
   const { restoreBackgroundTerminal, restoreBackgroundGroup, activateTerminal, pingTerminal } =
-    useTerminalStore(
+    usePanelStore(
       useShallow((state) => ({
         restoreBackgroundTerminal: state.restoreBackgroundTerminal,
         restoreBackgroundGroup: state.restoreBackgroundGroup,

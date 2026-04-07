@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useEffect } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { useShallow } from "zustand/react/shallow";
-import { useTerminalStore, type TerminalInstance } from "@/store";
+import { usePanelStore, type TerminalInstance } from "@/store";
 import { useWorktrees } from "./useWorktrees";
 import { useWorktreeSelectionStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
@@ -51,11 +51,11 @@ const MAX_RESULTS = 20;
 const MRU_BOOST_FACTOR = 0.05;
 
 export function useQuickSwitcher(): UseQuickSwitcherReturn {
-  const terminalIds = useTerminalStore(useShallow((state) => state.terminalIds));
-  const terminalsById = useTerminalStore(useShallow((state) => state.terminalsById));
-  const setFocused = useTerminalStore((state) => state.setFocused);
-  const mruList = useTerminalStore(useShallow((state) => state.mruList));
-  const pruneMru = useTerminalStore((state) => state.pruneMru);
+  const panelIds = usePanelStore(useShallow((state) => state.panelIds));
+  const panelsById = usePanelStore(useShallow((state) => state.panelsById));
+  const setFocused = usePanelStore((state) => state.setFocused);
+  const mruList = usePanelStore(useShallow((state) => state.mruList));
+  const pruneMru = usePanelStore((state) => state.pruneMru);
 
   const { worktrees, worktreeMap } = useWorktrees();
   const { selectWorktree } = useWorktreeSelectionStore(
@@ -68,8 +68,8 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     const result: QuickSwitcherItem[] = [];
 
     // Add terminals
-    for (const id of terminalIds) {
-      const t = terminalsById[id];
+    for (const id of panelIds) {
+      const t = panelsById[id];
       if (!t) continue;
       if (t.location === "trash") continue;
       if (t.hasPty === false) continue;
@@ -105,7 +105,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     }
 
     return result;
-  }, [terminalIds, terminalsById, worktrees, worktreeMap]);
+  }, [panelIds, panelsById, worktrees, worktreeMap]);
 
   // Prune stale MRU entries when item set or MRU list changes (e.g. after hydration)
   useEffect(() => {
@@ -165,8 +165,8 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     paletteId: "quick-switcher",
   });
 
-  const restoreBackgroundTerminal = useTerminalStore((state) => state.restoreBackgroundTerminal);
-  const activateTerminal = useTerminalStore((state) => state.activateTerminal);
+  const restoreBackgroundTerminal = usePanelStore((state) => state.restoreBackgroundTerminal);
+  const activateTerminal = usePanelStore((state) => state.activateTerminal);
 
   const selectItem = useCallback(
     (item: QuickSwitcherItem) => {
@@ -179,7 +179,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
           selectWorktree(item.worktreeId);
         }
         // Restore backgrounded panels before focusing
-        const terminal = useTerminalStore.getState().terminalsById[terminalId];
+        const terminal = usePanelStore.getState().panelsById[terminalId];
         if (terminal?.location === "background") {
           restoreBackgroundTerminal(terminalId);
           activateTerminal(terminalId);

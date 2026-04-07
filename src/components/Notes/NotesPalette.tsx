@@ -8,7 +8,7 @@ import { keybindingService } from "@/services/KeybindingService";
 import { useOverlayState } from "@/hooks";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useNotesStore } from "@/store/notesStore";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { NoteListItem } from "@/clients/notesClient";
 import CodeMirror from "@uiw/react-codemirror";
@@ -76,7 +76,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     lastSelectedNoteId,
     setLastSelectedNoteId,
   } = useNotesStore();
-  const { addTerminal } = useTerminalStore();
+  const { addPanel } = usePanelStore();
   const { activeWorktreeId } = useWorktreeSelectionStore();
 
   const search = useNoteSearch({ isOpen, notes, refresh });
@@ -111,7 +111,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       if (!selectedNote || isOpeningPanel) return;
       setIsOpeningPanel(true);
       try {
-        await addTerminal({
+        await addPanel({
           kind: "notes",
           title: getNoteDisplayTitle(selectedNote),
           cwd: "",
@@ -128,7 +128,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
         setIsOpeningPanel(false);
       }
     },
-    [selectedNote, isOpeningPanel, addTerminal, activeWorktreeId, onClose]
+    [selectedNote, isOpeningPanel, addPanel, activeWorktreeId, onClose]
   );
 
   const actions = useNoteActions({

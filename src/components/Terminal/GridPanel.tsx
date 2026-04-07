@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo } from "react";
-import { useTerminalStore, type TerminalInstance } from "@/store";
+import { usePanelStore, type TerminalInstance } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { getPanelKindDefinition, type PanelComponentProps } from "@/registry";
 import { ContentPanel, triggerPanelTransition } from "@/components/Panel";
@@ -127,9 +127,9 @@ export const GridPanel = React.memo(function GridPanel({
   onAddTab,
   onTabReorder,
 }: GridPanelProps) {
-  const toggleMaximize = useTerminalStore((state) => state.toggleMaximize);
-  const getPanelGroup = useTerminalStore((state) => state.getPanelGroup);
-  const moveTerminalToDock = useTerminalStore((state) => state.moveTerminalToDock);
+  const toggleMaximize = usePanelStore((state) => state.toggleMaximize);
+  const getPanelGroup = usePanelStore((state) => state.getPanelGroup);
+  const moveTerminalToDock = usePanelStore((state) => state.moveTerminalToDock);
 
   const lifecycle = usePanelLifecycle();
   const { handleFocus, handleClose, handleTitleChange } = usePanelHandlers({

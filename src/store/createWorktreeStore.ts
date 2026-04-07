@@ -1,6 +1,6 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { WorktreeSnapshot } from "@shared/types";
-import { useTerminalStore } from "./terminalStore";
+import { usePanelStore } from "./panelStore";
 import { logDebug } from "@/utils/logger";
 
 let _currentViewStore: WorktreeViewStoreApi | null = null;
@@ -108,9 +108,9 @@ export function cleanupOrphanedTerminals(): void {
     }
   }
 
-  const terminalStore = useTerminalStore.getState();
-  const orphanedTerminals = terminalStore.terminalIds
-    .map((id) => terminalStore.terminalsById[id])
+  const terminalStore = usePanelStore.getState();
+  const orphanedTerminals = terminalStore.panelIds
+    .map((id) => terminalStore.panelsById[id])
     .filter((t) => {
       if (!t) return false;
       const worktreeId = typeof t.worktreeId === "string" ? t.worktreeId.trim() : "";
@@ -121,7 +121,7 @@ export function cleanupOrphanedTerminals(): void {
     logDebug("[WorktreeStore] Removing orphaned terminals from deleted worktrees", {
       count: orphanedTerminals.length,
     });
-    orphanedTerminals.forEach((terminal) => terminalStore.removeTerminal(terminal.id));
+    orphanedTerminals.forEach((terminal) => terminalStore.removePanel(terminal.id));
   }
 }
 

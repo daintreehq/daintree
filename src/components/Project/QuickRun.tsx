@@ -12,7 +12,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { cn } from "@/lib/utils";
@@ -74,7 +74,7 @@ function normalizeCommand(cmd: string): string {
 export function QuickRun({ projectId }: QuickRunProps) {
   const { allDetectedRunners, settings, promoteToSaved, removeFromSaved } =
     useProjectSettings(projectId);
-  const addTerminal = useTerminalStore((state) => state.addTerminal);
+  const addPanel = usePanelStore((state) => state.addPanel);
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const { worktreeMap } = useWorktrees();
 
@@ -308,7 +308,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
       setFocusedSuggestionIndex(-1);
 
       const terminalType = detectTerminalTypeFromCommand(cmd);
-      await addTerminal({
+      await addPanel({
         type: terminalType,
         title: cmd,
         cwd: cwd,

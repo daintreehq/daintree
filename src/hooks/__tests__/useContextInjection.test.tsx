@@ -12,10 +12,10 @@ const { addErrorMock, removeErrorMock, isAvailableMock, cancelMock, onProgressMo
   })
 );
 
-const { terminalState, useTerminalStoreMock } = vi.hoisted(() => {
+const { terminalState, usePanelStoreMock } = vi.hoisted(() => {
   const terminalState = {
     focusedId: "term-1",
-    terminalsById: {
+    panelsById: {
       "term-1": {
         id: "term-1",
         worktreeId: "wt-1",
@@ -23,22 +23,22 @@ const { terminalState, useTerminalStoreMock } = vi.hoisted(() => {
         agentState: "idle",
       },
     } as Record<string, { id: string; worktreeId: string; agentId: undefined; agentState: string }>,
-    terminalIds: ["term-1"],
+    panelIds: ["term-1"],
   };
 
   const storeFn = vi.fn((selector: (state: typeof terminalState) => unknown) =>
     selector(terminalState)
   );
-  const useTerminalStoreMock = Object.assign(storeFn, {
+  const usePanelStoreMock = Object.assign(storeFn, {
     subscribe: vi.fn(() => () => {}),
     getState: () => terminalState,
   });
 
-  return { terminalState, useTerminalStoreMock };
+  return { terminalState, usePanelStoreMock };
 });
 
-vi.mock("@/store/terminalStore", () => ({
-  useTerminalStore: useTerminalStoreMock,
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: usePanelStoreMock,
 }));
 
 vi.mock("@/store/errorStore", () => ({
@@ -65,7 +65,7 @@ describe("useContextInjection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalState.focusedId = "term-1";
-    terminalState.terminalsById = {
+    terminalState.panelsById = {
       "term-1": {
         id: "term-1",
         worktreeId: "wt-1",
@@ -73,7 +73,7 @@ describe("useContextInjection", () => {
         agentState: "idle",
       },
     };
-    terminalState.terminalIds = ["term-1"];
+    terminalState.panelIds = ["term-1"];
   });
 
   it("does not throw if cancel API returns non-promise", async () => {

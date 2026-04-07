@@ -1,5 +1,5 @@
 import { useShallow } from "zustand/react/shallow";
-import { useTerminalStore, useWorktreeSelectionStore, useDockStore } from "@/store";
+import { usePanelStore, useWorktreeSelectionStore, useDockStore } from "@/store";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
 import { isAgentTerminal } from "@/utils/terminalType";
@@ -28,10 +28,10 @@ export function useDockRenderState(): DockRenderState & {
     }))
   );
 
-  const dockTerminals = useTerminalStore(
+  const dockTerminals = usePanelStore(
     useShallow((state) =>
-      state.terminalIds
-        .map((id) => state.terminalsById[id])
+      state.panelIds
+        .map((id) => state.panelsById[id])
         .filter(
           (t) =>
             t &&
@@ -42,16 +42,16 @@ export function useDockRenderState(): DockRenderState & {
     )
   );
 
-  const trashedCount = useTerminalStore(useShallow((state) => state.trashedTerminals.size));
+  const trashedCount = usePanelStore(useShallow((state) => state.trashedTerminals.size));
 
   const { waitingCount } = useTerminalNotificationCounts();
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
 
-  const shouldFadeForInput = useTerminalStore(
+  const shouldFadeForInput = usePanelStore(
     useShallow((state) => {
       if (!hybridInputEnabled) return false;
-      const focusedTerminal = state.focusedId ? state.terminalsById[state.focusedId] : undefined;
+      const focusedTerminal = state.focusedId ? state.panelsById[state.focusedId] : undefined;
       if (!focusedTerminal) return false;
       return isAgentTerminal(focusedTerminal.kind ?? focusedTerminal.type, focusedTerminal.agentId);
     })

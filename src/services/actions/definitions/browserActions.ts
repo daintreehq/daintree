@@ -1,7 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { systemClient } from "@/clients";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 
 export function registerBrowserActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("browser.reload", () => ({
@@ -15,7 +15,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (targetId) {
         window.dispatchEvent(
           new CustomEvent("canopy:reload-browser", { detail: { id: targetId } })
@@ -35,7 +35,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     argsSchema: z.object({ url: z.string(), terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { url, terminalId } = args as { url: string; terminalId?: string };
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
       window.dispatchEvent(
         new CustomEvent("canopy:browser-navigate", { detail: { id: targetId, url } })
@@ -54,7 +54,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
       window.dispatchEvent(new CustomEvent("canopy:browser-back", { detail: { id: targetId } }));
     },
@@ -71,7 +71,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
       window.dispatchEvent(new CustomEvent("canopy:browser-forward", { detail: { id: targetId } }));
     },
@@ -90,10 +90,9 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       .optional(),
     run: async (args: unknown) => {
       const { terminalId, url } = (args as { terminalId?: string; url?: string } | undefined) ?? {};
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId ?? undefined;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId ?? undefined;
       const derivedUrl =
-        url ??
-        (targetId ? useTerminalStore.getState().terminalsById[targetId]?.browserUrl : undefined);
+        url ?? (targetId ? usePanelStore.getState().panelsById[targetId]?.browserUrl : undefined);
 
       if (!derivedUrl) {
         throw new Error("No browser URL available to open externally");
@@ -116,10 +115,9 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       .optional(),
     run: async (args: unknown) => {
       const { terminalId, url } = (args as { terminalId?: string; url?: string } | undefined) ?? {};
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId ?? undefined;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId ?? undefined;
       const derivedUrl =
-        url ??
-        (targetId ? useTerminalStore.getState().terminalsById[targetId]?.browserUrl : undefined);
+        url ?? (targetId ? usePanelStore.getState().panelsById[targetId]?.browserUrl : undefined);
 
       if (!derivedUrl) {
         throw new Error("No browser URL available to copy");
@@ -143,7 +141,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     }),
     run: async (args: unknown) => {
       const { terminalId, zoomFactor } = args as { terminalId?: string; zoomFactor: number };
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
       window.dispatchEvent(
         new CustomEvent("canopy:browser-set-zoom", { detail: { id: targetId, zoomFactor } })
@@ -162,7 +160,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
       window.dispatchEvent(
         new CustomEvent("canopy:browser-capture-screenshot", { detail: { id: targetId } })
@@ -181,7 +179,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
       window.dispatchEvent(
         new CustomEvent("canopy:browser-toggle-console", { detail: { id: targetId } })
@@ -200,7 +198,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
       window.dispatchEvent(
         new CustomEvent("canopy:browser-clear-console", { detail: { id: targetId } })
@@ -219,7 +217,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
       window.dispatchEvent(
         new CustomEvent("canopy:browser-toggle-devtools", { detail: { id: targetId } })

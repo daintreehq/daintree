@@ -25,8 +25,8 @@ type MockTerminal = {
   location?: "grid" | "dock" | "trash";
 };
 const terminalStoreState = {
-  terminalsById: {} as Record<string, MockTerminal>,
-  terminalIds: [] as string[],
+  panelsById: {} as Record<string, MockTerminal>,
+  panelIds: [] as string[],
   activeDockTerminalId: null as string | null,
   focusedId: null as string | null,
   mruList: [] as string[],
@@ -34,8 +34,8 @@ const terminalStoreState = {
   setFocused: setFocusedMock,
 };
 function setMockTerminals(terminals: MockTerminal[]) {
-  terminalStoreState.terminalsById = Object.fromEntries(terminals.map((t) => [t.id, t]));
-  terminalStoreState.terminalIds = terminals.map((t) => t.id);
+  terminalStoreState.panelsById = Object.fromEntries(terminals.map((t) => [t.id, t]));
+  terminalStoreState.panelIds = terminals.map((t) => t.id);
 }
 
 vi.mock("@/clients", () => ({
@@ -63,8 +63,8 @@ vi.mock("@/store/focusStore", () => ({
   },
 }));
 
-vi.mock("@/store/terminalStore", () => ({
-  useTerminalStore: {
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: {
     getState: vi.fn(() => terminalStoreState),
     subscribe: subscribeMock,
   },
@@ -76,8 +76,8 @@ describe("worktreeStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useWorktreeSelectionStore.getState().reset();
-    terminalStoreState.terminalsById = {};
-    terminalStoreState.terminalIds = [];
+    terminalStoreState.panelsById = {};
+    terminalStoreState.panelIds = [];
     terminalStoreState.activeDockTerminalId = null;
     terminalStoreState.focusedId = null;
     terminalStoreState.mruList = [];

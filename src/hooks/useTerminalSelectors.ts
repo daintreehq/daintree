@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
+import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
 
@@ -67,7 +67,7 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
 } {
   const worktreeIds = useWorktreeIds();
 
-  return useTerminalStore(
+  return usePanelStore(
     useShallow((state) => {
       if (blurTime === null) {
         return { waitingCount: 0 };
@@ -75,8 +75,8 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
 
       let waitingCount = 0;
 
-      for (const id of state.terminalIds) {
-        const terminal = state.terminalsById[id];
+      for (const id of state.panelIds) {
+        const terminal = state.panelsById[id];
         if (!terminal) continue;
         if (!isTerminalVisible(terminal, state.isInTrash, worktreeIds)) continue;
 
@@ -97,19 +97,19 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
 
 export function useWaitingTerminals(): TerminalInstance[] {
   const worktreeIds = useWorktreeIds();
-  const terminalIds = useTerminalStore((state) => state.terminalIds);
-  const terminalsById = useTerminalStore((state) => state.terminalsById);
-  const isInTrash = useTerminalStore((state) => state.isInTrash);
+  const panelIds = usePanelStore((state) => state.panelIds);
+  const panelsById = usePanelStore((state) => state.panelsById);
+  const isInTrash = usePanelStore((state) => state.isInTrash);
 
   return useMemo(
     () =>
-      terminalIds
-        .map((id) => terminalsById[id])
+      panelIds
+        .map((id) => panelsById[id])
         .filter(
           (t): t is TerminalInstance =>
             !!t && t.agentState === "waiting" && isTerminalVisible(t, isInTrash, worktreeIds)
         ),
-    [terminalIds, terminalsById, isInTrash, worktreeIds]
+    [panelIds, panelsById, isInTrash, worktreeIds]
   );
 }
 
@@ -120,18 +120,18 @@ export function useWaitingTerminalIds(): string[] {
 
 export function useBackgroundedTerminals(): TerminalInstance[] {
   const worktreeIds = useWorktreeIds();
-  const terminalIds = useTerminalStore((state) => state.terminalIds);
-  const terminalsById = useTerminalStore((state) => state.terminalsById);
+  const panelIds = usePanelStore((state) => state.panelIds);
+  const panelsById = usePanelStore((state) => state.panelsById);
 
   return useMemo(
     () =>
-      terminalIds
-        .map((id) => terminalsById[id])
+      panelIds
+        .map((id) => panelsById[id])
         .filter(
           (t): t is TerminalInstance =>
             !!t && t.location === "background" && !isTerminalOrphaned(t, worktreeIds)
         ),
-    [terminalIds, terminalsById, worktreeIds]
+    [panelIds, panelsById, worktreeIds]
   );
 }
 
@@ -156,12 +156,12 @@ export function useBackgroundPanelStats(excludeId: string): {
   activeCount: number;
   workingCount: number;
 } {
-  return useTerminalStore(
+  return usePanelStore(
     useShallow((state) => {
       let active = 0;
       let working = 0;
-      for (const id of state.terminalIds) {
-        const t = state.terminalsById[id];
+      for (const id of state.panelIds) {
+        const t = state.panelsById[id];
         if (!t) continue;
         if (t.id !== excludeId && (t.location === "grid" || t.location === undefined)) {
           active++;

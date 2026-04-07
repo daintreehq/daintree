@@ -2,7 +2,7 @@
  * Regression test for issue where trashing a terminal left it visible in the grid.
  *
  * Root cause: the `tabGroups` useMemo in ContentGrid (and ContentDock) only depended on
- * `storeTerminalIds`, which does NOT change when a terminal is trashed — only `terminalsById`
+ * `storeTerminalIds`, which does NOT change when a terminal is trashed — only `panelsById`
  * and `trashedTerminals` change. This meant the memo stayed stale and the trashed terminal
  * remained rendered.
  *
@@ -24,7 +24,7 @@ describe("ContentGrid tabGroups memo includes trashedTerminals dep (trash-visibi
 
   it("destructures trashedTerminals from the useShallow selector", async () => {
     const content = await readFile(GRID_PATH, "utf-8");
-    expect(content).toMatch(/const\s*\{[^}]*trashedTerminals[^}]*\}\s*=\s*useTerminalStore/s);
+    expect(content).toMatch(/const\s*\{[^}]*trashedTerminals[^}]*\}\s*=\s*usePanelStore/s);
   });
 
   it("includes trashedTerminals in the tabGroups memo dependency array", async () => {

@@ -1,7 +1,7 @@
 import { systemClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { isLocalhostUrl, normalizeBrowserUrl } from "@/components/Browser/browserUtils";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { isMac } from "@/lib/platform";
 
 export class TerminalLinkHandler {
@@ -12,8 +12,8 @@ export class TerminalLinkHandler {
     const normalized = normalizeBrowserUrl(url);
 
     if (isModifierPressed && normalized.url && isLocalhostUrl(normalized.url)) {
-      const store = useTerminalStore.getState();
-      const currentTerminal = store.terminalsById[terminalId];
+      const store = usePanelStore.getState();
+      const currentTerminal = store.panelsById[terminalId];
 
       if (!currentTerminal) {
         this.openExternal(url);
@@ -22,15 +22,15 @@ export class TerminalLinkHandler {
 
       const targetWorktreeId = currentTerminal.worktreeId ?? null;
 
-      const existingBrowser = store.terminalIds
-        .map((id) => store.terminalsById[id])
+      const existingBrowser = store.panelIds
+        .map((id) => store.panelsById[id])
         .find((t) => t && t.kind === "browser" && (t.worktreeId ?? null) === targetWorktreeId);
 
       if (existingBrowser) {
         store.setBrowserUrl(existingBrowser.id, normalized.url);
         store.activateTerminal(existingBrowser.id);
       } else {
-        void store.addTerminal({
+        void store.addPanel({
           kind: "browser",
           browserUrl: normalized.url,
           worktreeId: targetWorktreeId ?? undefined,

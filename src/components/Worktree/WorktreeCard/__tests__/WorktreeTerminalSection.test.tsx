@@ -8,7 +8,7 @@ import {
   WorktreeTerminalSection,
   type WorktreeTerminalSectionProps,
 } from "../WorktreeTerminalSection";
-import type { TerminalInstance } from "@/store/terminalStore";
+import type { TerminalInstance } from "@/store/panelStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 vi.mock("react-dom", async () => {

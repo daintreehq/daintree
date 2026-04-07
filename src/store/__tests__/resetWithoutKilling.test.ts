@@ -43,30 +43,30 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-const { useTerminalStore } = await import("../terminalStore");
+const { usePanelStore } = await import("../panelStore");
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 const { terminalClient } = await import("@/clients");
 
 type MockTerminal = Partial<TerminalInstance> & { id: string };
 
 function setTerminals(terminals: MockTerminal[]) {
-  useTerminalStore.setState({
-    terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])) as Record<
+  usePanelStore.setState({
+    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])) as Record<
       string,
       TerminalInstance
     >,
-    terminalIds: terminals.map((t) => t.id),
+    panelIds: terminals.map((t) => t.id),
   });
 }
 
 describe("resetWithoutKilling", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
-    const { reset } = useTerminalStore.getState();
+    const { reset } = usePanelStore.getState();
     await reset();
-    useTerminalStore.setState({
-      terminalsById: {},
-      terminalIds: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -135,18 +135,18 @@ describe("resetWithoutKilling", () => {
         location: "dock",
       },
     ]);
-    useTerminalStore.setState({
+    usePanelStore.setState({
       tabGroups: new Map([
         ["group-1", group1],
         ["group-2", group2],
       ]),
     });
 
-    expect(useTerminalStore.getState().tabGroups.size).toBe(2);
+    expect(usePanelStore.getState().tabGroups.size).toBe(2);
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
-    const state = useTerminalStore.getState();
+    const state = usePanelStore.getState();
     expect(state.tabGroups.size).toBe(0);
   });
 
@@ -171,14 +171,14 @@ describe("resetWithoutKilling", () => {
         location: "grid",
       },
     ]);
-    useTerminalStore.setState({ tabGroups: new Map() });
+    usePanelStore.setState({ tabGroups: new Map() });
 
-    expect(useTerminalStore.getState().terminalIds.length).toBe(2);
+    expect(usePanelStore.getState().panelIds.length).toBe(2);
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
-    const state = useTerminalStore.getState();
-    expect(state.terminalIds.length).toBe(0);
+    const state = usePanelStore.getState();
+    expect(state.panelIds.length).toBe(0);
   });
 
   it("should NOT kill backend processes", async () => {
@@ -202,9 +202,9 @@ describe("resetWithoutKilling", () => {
         location: "grid",
       },
     ]);
-    useTerminalStore.setState({ tabGroups: new Map() });
+    usePanelStore.setState({ tabGroups: new Map() });
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
     // Should NOT call terminalClient.kill for any terminal
     expect(terminalClient.kill).not.toHaveBeenCalled();
@@ -231,9 +231,9 @@ describe("resetWithoutKilling", () => {
         location: "grid",
       },
     ]);
-    useTerminalStore.setState({ tabGroups: new Map() });
+    usePanelStore.setState({ tabGroups: new Map() });
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
     // Should detach xterm.js instances (keep alive) instead of destroying
     expect(terminalInstanceService.detachForProjectSwitch).toHaveBeenCalledWith("term-1");
@@ -262,9 +262,9 @@ describe("resetWithoutKilling", () => {
         location: "grid",
       },
     ]);
-    useTerminalStore.setState({ tabGroups: new Map() });
+    usePanelStore.setState({ tabGroups: new Map() });
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
     expect(terminalInstanceService.suppressResizesDuringProjectSwitch).toHaveBeenCalledWith(
       ["term-1", "term-2"],
@@ -293,9 +293,9 @@ describe("resetWithoutKilling", () => {
         location: "grid",
       },
     ]);
-    useTerminalStore.setState({ tabGroups: new Map() });
+    usePanelStore.setState({ tabGroups: new Map() });
 
-    await useTerminalStore.getState().resetWithoutKilling({
+    await usePanelStore.getState().resetWithoutKilling({
       preserveTerminalIds: new Set(["term-keep"]),
     });
 
@@ -306,9 +306,9 @@ describe("resetWithoutKilling", () => {
   });
 
   it("should clear trashedTerminals", async () => {
-    useTerminalStore.setState({
-      terminalsById: {},
-      terminalIds: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map([
         [
@@ -330,11 +330,11 @@ describe("resetWithoutKilling", () => {
       ]),
     });
 
-    expect(useTerminalStore.getState().trashedTerminals.size).toBe(2);
+    expect(usePanelStore.getState().trashedTerminals.size).toBe(2);
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
-    const state = useTerminalStore.getState();
+    const state = usePanelStore.getState();
     expect(state.trashedTerminals.size).toBe(0);
   });
 
@@ -350,16 +350,16 @@ describe("resetWithoutKilling", () => {
         location: "grid",
       },
     ]);
-    useTerminalStore.setState({
+    usePanelStore.setState({
       tabGroups: new Map(),
       focusedId: "term-1",
       maximizedId: "term-1",
       activeDockTerminalId: "term-2",
     });
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
-    const state = useTerminalStore.getState();
+    const state = usePanelStore.getState();
     expect(state.focusedId).toBeNull();
     expect(state.maximizedId).toBeNull();
     expect(state.activeDockTerminalId).toBeNull();
@@ -377,7 +377,7 @@ describe("resetWithoutKilling", () => {
         location: "grid",
       },
     ]);
-    useTerminalStore.setState({
+    usePanelStore.setState({
       tabGroups: new Map(),
       commandQueue: [
         {
@@ -399,9 +399,9 @@ describe("resetWithoutKilling", () => {
       ],
     });
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
-    const state = useTerminalStore.getState();
+    const state = usePanelStore.getState();
     expect(state.commandQueue.length).toBe(0);
   });
 
@@ -442,7 +442,7 @@ describe("resetWithoutKilling", () => {
         location: "dock",
       },
     ]);
-    useTerminalStore.setState({
+    usePanelStore.setState({
       tabGroups: new Map([["group-1", group]]),
       trashedTerminals: new Map([
         [
@@ -469,13 +469,13 @@ describe("resetWithoutKilling", () => {
       ],
     });
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
-    const state = useTerminalStore.getState();
+    const state = usePanelStore.getState();
 
     // All state should be reset
-    expect(state.terminalIds).toEqual([]);
-    expect(Object.keys(state.terminalsById)).toEqual([]);
+    expect(state.panelIds).toEqual([]);
+    expect(Object.keys(state.panelsById)).toEqual([]);
     expect(state.tabGroups.size).toBe(0);
     expect(state.trashedTerminals.size).toBe(0);
     expect(state.focusedId).toBeNull();
@@ -496,7 +496,7 @@ describe("resetWithoutKilling", () => {
         location: "grid",
       },
     ]);
-    useTerminalStore.setState({
+    usePanelStore.setState({
       tabGroups: new Map(),
       pingedId: "term-1",
       preMaximizeLayout: {
@@ -508,9 +508,9 @@ describe("resetWithoutKilling", () => {
       lastCrashType: "OUT_OF_MEMORY" as const,
     });
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
-    const state = useTerminalStore.getState();
+    const state = usePanelStore.getState();
     expect(state.pingedId).toBeNull();
     expect(state.preMaximizeLayout).toBeNull();
     expect(state.backendStatus).toBe("connected");

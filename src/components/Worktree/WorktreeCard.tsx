@@ -8,12 +8,7 @@ import { useDroppable } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { useIsWorktreeSortDragging } from "../DragDrop/DndProvider";
 import { GripVertical } from "lucide-react";
-import {
-  useErrorStore,
-  useTerminalStore,
-  type RetryAction,
-  type TerminalInstance,
-} from "../../store";
+import { useErrorStore, usePanelStore, type RetryAction, type TerminalInstance } from "../../store";
 import { useRecipeStore } from "../../store/recipeStore";
 import { useWorktreeSelectionStore } from "../../store/worktreeStore";
 import { useWorktreeFilterStore } from "../../store/worktreeFilterStore";
@@ -267,10 +262,10 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   const { counts: terminalCounts, terminals: worktreeTerminals } = useWorktreeTerminals(
     worktree.id
   );
-  const setFocused = useTerminalStore((state) => state.setFocused);
-  const pingTerminal = useTerminalStore((state) => state.pingTerminal);
-  const openDockTerminal = useTerminalStore((state) => state.openDockTerminal);
-  const getCountByWorktree = useTerminalStore((state) => state.getCountByWorktree);
+  const setFocused = usePanelStore((state) => state.setFocused);
+  const pingTerminal = usePanelStore((state) => state.pingTerminal);
+  const openDockTerminal = usePanelStore((state) => state.openDockTerminal);
+  const getCountByWorktree = usePanelStore((state) => state.getCountByWorktree);
   const completedCount = terminalCounts.byState.completed + terminalCounts.byState.exited;
   const totalTerminalCount = terminalCounts.total;
   const allTerminalCount = getCountByWorktree(worktree.id);

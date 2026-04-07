@@ -45,9 +45,9 @@ vi.mock("@/clients/systemClient", () => ({
 }));
 
 const mockAddTerminal = vi.fn().mockResolvedValue("new-terminal-id");
-vi.mock("@/store/terminalStore", () => ({
-  useTerminalStore: Object.assign(() => ({}), {
-    getState: () => ({ addTerminal: mockAddTerminal }),
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: Object.assign(() => ({}), {
+    getState: () => ({ addPanel: mockAddTerminal }),
   }),
 }));
 

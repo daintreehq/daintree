@@ -348,8 +348,8 @@ export const terminalClient = {
    * Get serialized terminal states in a single round-trip.
    * Returns a map keyed by terminal ID with null for missing states.
    */
-  getSerializedStates: (terminalIds: string[]): Promise<Record<string, string | null>> => {
-    return window.electron.terminal.getSerializedStates(terminalIds);
+  getSerializedStates: (panelIds: string[]): Promise<Record<string, string | null>> => {
+    return window.electron.terminal.getSerializedStates(panelIds);
   },
 
   /**
@@ -408,12 +408,12 @@ export const terminalClient = {
   },
 
   onReduceScrollback: (
-    callback: (data: { terminalIds: string[]; targetLines: number }) => void
+    callback: (data: { panelIds: string[]; targetLines: number }) => void
   ): (() => void) => {
     return window.electron.terminal.onReduceScrollback(callback);
   },
 
-  onRestoreScrollback: (callback: (data: { terminalIds: string[] }) => void): (() => void) => {
+  onRestoreScrollback: (callback: (data: { panelIds: string[] }) => void): (() => void) => {
     return window.electron.terminal.onRestoreScrollback(callback);
   },
 

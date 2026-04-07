@@ -5,7 +5,7 @@ import {
   type LaunchOption,
 } from "@/components/TerminalPalette/launchOptions";
 import type { LaunchAgentOptions } from "./useAgentLauncher";
-import { useWorktreeSelectionStore, useTerminalStore } from "@/store";
+import { useWorktreeSelectionStore, usePanelStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import type { WorktreeState } from "@/types";
@@ -41,7 +41,7 @@ export function useNewTerminalPalette({
 }: UseNewTerminalPaletteProps): UseNewTerminalPaletteReturn {
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const currentProject = useProjectStore((state) => state.currentProject);
-  const addTerminal = useTerminalStore((state) => state.addTerminal);
+  const addPanel = usePanelStore((state) => state.addPanel);
   const agentSettings = useAgentSettingsStore((state) => state.settings);
 
   const options = useMemo(() => {
@@ -86,7 +86,7 @@ export function useNewTerminalPalette({
 
       try {
         if (option.kind === "browser") {
-          await addTerminal({
+          await addPanel({
             kind: "browser",
             cwd,
             worktreeId: targetWorktreeId || undefined,
@@ -106,7 +106,7 @@ export function useNewTerminalPalette({
         console.error(`Failed to launch ${option.type} terminal:`, error);
       }
     },
-    [activeWorktreeId, worktreeMap, currentProject, launchAgent, addTerminal, close]
+    [activeWorktreeId, worktreeMap, currentProject, launchAgent, addPanel, close]
   );
 
   const confirmSelection = useCallback(() => {

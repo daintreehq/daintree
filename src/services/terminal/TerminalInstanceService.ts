@@ -451,21 +451,21 @@ class TerminalInstanceService {
 
   private layoutTransitionTimer: number | undefined;
 
-  suppressResizesDuringLayoutTransition(terminalIds: string[], durationMs: number): void {
-    if (terminalIds.length === 0) return;
+  suppressResizesDuringLayoutTransition(panelIds: string[], durationMs: number): void {
+    if (panelIds.length === 0) return;
 
     if (this.layoutTransitionTimer !== undefined) {
       clearTimeout(this.layoutTransitionTimer);
     }
 
     const safetyTtl = durationMs + 100;
-    for (const id of terminalIds) {
+    for (const id of panelIds) {
       this.resizeController.lockResize(id, true, safetyTtl);
     }
 
     this.layoutTransitionTimer = window.setTimeout(() => {
       this.layoutTransitionTimer = undefined;
-      for (const id of terminalIds) {
+      for (const id of panelIds) {
         if (!this.instances.has(id)) continue;
         this.resizeController.lockResize(id, false);
         this.resizeController.fit(id);
@@ -473,8 +473,8 @@ class TerminalInstanceService {
     }, durationMs);
   }
 
-  suppressResizesDuringProjectSwitch(terminalIds: string[], durationMs: number): void {
-    terminalIds.forEach((id) => {
+  suppressResizesDuringProjectSwitch(panelIds: string[], durationMs: number): void {
+    panelIds.forEach((id) => {
       const instance = this.instances.get(id);
       if (!instance) return;
 

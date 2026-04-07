@@ -68,15 +68,15 @@ vi.mock("@/store/terminalInputStore", () => {
   return { useTerminalInputStore: Object.assign(getState, { getState }) };
 });
 
-vi.mock("@/store/terminalStore", () => {
+vi.mock("@/store/panelStore", () => {
   const state = {
-    terminalsById: {} as Record<string, unknown>,
-    terminalIds: [] as string[],
+    panelsById: {} as Record<string, unknown>,
+    panelIds: [] as string[],
     focusedId: null,
   };
   const getState = () => state;
   const subscribe = vi.fn(() => () => {});
-  return { useTerminalStore: Object.assign(getState, { getState, subscribe }) };
+  return { usePanelStore: Object.assign(getState, { getState, subscribe }) };
 });
 
 vi.mock("@/store/projectStore", () => {

@@ -1,6 +1,6 @@
 import type { AgentState } from "@/types";
 import type { ManagedTerminal } from "./types";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { logError } from "@/utils/logger";
 
 export interface AgentStateControllerDeps {
@@ -74,7 +74,7 @@ export class TerminalAgentStateController {
       if (managed.agentState !== "directing") {
         managed.agentState = "directing";
         this.notifySubscribers(managed, "directing");
-        useTerminalStore.getState().updateAgentState(id, "directing");
+        usePanelStore.getState().updateAgentState(id, "directing");
       }
 
       const existingTimer = this.directingTimers.get(id);
@@ -111,7 +111,7 @@ export class TerminalAgentStateController {
 
     managed.agentState = "working";
     this.notifySubscribers(managed, "working");
-    useTerminalStore.getState().updateAgentState(id, "working");
+    usePanelStore.getState().updateAgentState(id, "working");
   }
 
   clearDirectingState(id: string): void {
@@ -129,7 +129,7 @@ export class TerminalAgentStateController {
     managed.agentState = revertState;
 
     this.notifySubscribers(managed, revertState);
-    useTerminalStore.getState().updateAgentState(id, revertState);
+    usePanelStore.getState().updateAgentState(id, revertState);
   }
 
   destroy(id: string): void {

@@ -18,7 +18,7 @@ import { cn, getBaseTitle } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import {
   useTerminalInputStore,
-  useTerminalStore,
+  usePanelStore,
   usePortalStore,
   useFocusStore,
   type TerminalInstance,
@@ -51,23 +51,23 @@ interface DockedTabGroupProps {
 }
 
 export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
-  const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
-  const openDockTerminal = useTerminalStore((s) => s.openDockTerminal);
-  const closeDockTerminal = useTerminalStore((s) => s.closeDockTerminal);
-  const moveTerminalToGrid = useTerminalStore((s) => s.moveTerminalToGrid);
-  const backendStatus = useTerminalStore((s) => s.backendStatus);
-  const setActiveTab = useTerminalStore((s) => s.setActiveTab);
-  const setFocused = useTerminalStore((s) => s.setFocused);
-  const trashTerminal = useTerminalStore((s) => s.trashTerminal);
-  const updateTitle = useTerminalStore((s) => s.updateTitle);
+  const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
+  const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
+  const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
+  const moveTerminalToGrid = usePanelStore((s) => s.moveTerminalToGrid);
+  const backendStatus = usePanelStore((s) => s.backendStatus);
+  const setActiveTab = usePanelStore((s) => s.setActiveTab);
+  const setFocused = usePanelStore((s) => s.setFocused);
+  const trashPanel = usePanelStore((s) => s.trashPanel);
+  const updateTitle = usePanelStore((s) => s.updateTitle);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
-  const reorderPanelsInGroup = useTerminalStore((s) => s.reorderPanelsInGroup);
-  const addTerminal = useTerminalStore((s) => s.addTerminal);
-  const addPanelToGroup = useTerminalStore((s) => s.addPanelToGroup);
+  const reorderPanelsInGroup = usePanelStore((s) => s.reorderPanelsInGroup);
+  const addPanel = usePanelStore((s) => s.addPanel);
+  const addPanelToGroup = usePanelStore((s) => s.addPanelToGroup);
 
   // Subscribe to registry's active tab for this group
-  const storedActiveTabId = useTerminalStore(
+  const storedActiveTabId = usePanelStore(
     (state) => state.tabGroups.get(group.id)?.activeTabId ?? null
   );
 
@@ -237,9 +237,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         }
       }
       // Trash the terminal (store auto-removes from group)
-      trashTerminal(tabId);
+      trashPanel(tabId);
     },
-    [activeTabId, panels, group.id, setActiveTab, setFocused, trashTerminal]
+    [activeTabId, panels, group.id, setActiveTab, setFocused, trashPanel]
   );
 
   // Sensors for tab drag-and-drop (require small distance to differentiate from clicks)
@@ -328,7 +328,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
     try {
       const options = await buildPanelDuplicateOptions(activePanel, "dock");
-      const newPanelId = await addTerminal(options);
+      const newPanelId = await addPanel(options);
       if (!newPanelId) return;
 
       addPanelToGroup(group.id, newPanelId);
@@ -341,7 +341,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   }, [
     activePanel,
     group.id,
-    addTerminal,
+    addPanel,
     addPanelToGroup,
     setActiveTab,
     setFocused,

@@ -1,7 +1,7 @@
 export { useAppHydration } from "./useAppHydration";
 export { useProjectSwitchRehydration } from "./useProjectSwitchRehydration";
 export { useShortcutHints } from "./useShortcutHints";
-export { useTerminalStoreBootstrap } from "./useTerminalStoreBootstrap";
+export { usePanelStoreBootstrap } from "./usePanelStoreBootstrap";
 export { useSemanticWorkerLifecycle } from "./useSemanticWorkerLifecycle";
 export { useSystemWakeHandler } from "./useSystemWakeHandler";
 export { useCloudSyncWarning } from "./useCloudSyncWarning";

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { TerminalInstance } from "../../terminalStore";
+import type { TerminalInstance } from "../../panelStore";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -26,20 +26,20 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-vi.mock("../../persistence/terminalPersistence", () => ({
-  terminalPersistence: {
+vi.mock("../../persistence/panelPersistence", () => ({
+  panelPersistence: {
     setProjectIdGetter: vi.fn(),
     save: vi.fn(),
     load: vi.fn().mockReturnValue([]),
   },
 }));
 
-const { useTerminalStore } = await import("../../terminalStore");
+const { usePanelStore } = await import("../../panelStore");
 
 function setTerminals(terminals: TerminalInstance[]) {
-  useTerminalStore.setState({
-    terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
-    terminalIds: terminals.map((t) => t.id),
+  usePanelStore.setState({
+    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    panelIds: terminals.map((t) => t.id),
   });
 }
 
@@ -62,10 +62,10 @@ function createMockTerminal(
 
 describe("Worktree-scoped bulk actions", () => {
   beforeEach(() => {
-    useTerminalStore.getState().reset();
-    useTerminalStore.setState({
-      terminalsById: {},
-      terminalIds: [],
+    usePanelStore.getState().reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
@@ -80,12 +80,12 @@ describe("Worktree-scoped bulk actions", () => {
       createMockTerminal("wt2-grid-1", "wt2", "grid"),
     ]);
 
-    useTerminalStore.getState().bulkMoveToDockByWorktree("wt1");
+    usePanelStore.getState().bulkMoveToDockByWorktree("wt1");
 
-    const state = useTerminalStore.getState();
-    expect(state.terminalsById["wt1-grid-1"]?.location).toBe("dock");
-    expect(state.terminalsById["wt1-dock-1"]?.location).toBe("dock");
-    expect(state.terminalsById["wt2-grid-1"]?.location).toBe("grid");
+    const state = usePanelStore.getState();
+    expect(state.panelsById["wt1-grid-1"]?.location).toBe("dock");
+    expect(state.panelsById["wt1-dock-1"]?.location).toBe("dock");
+    expect(state.panelsById["wt2-grid-1"]?.location).toBe("grid");
   });
 
   it("bulkMoveToGridByWorktree respects grid capacity and only moves that worktree's docked terminals", () => {
@@ -99,12 +99,12 @@ describe("Worktree-scoped bulk actions", () => {
 
     setTerminals([...otherGrid, ...docked]);
 
-    useTerminalStore.getState().bulkMoveToGridByWorktree("wt1");
+    usePanelStore.getState().bulkMoveToGridByWorktree("wt1");
 
-    const state = useTerminalStore.getState();
-    const moved0 = state.terminalsById["wt1-dock-0"];
-    const moved1 = state.terminalsById["wt1-dock-1"];
-    const allTerminals = state.terminalIds.map((id) => state.terminalsById[id]);
+    const state = usePanelStore.getState();
+    const moved0 = state.panelsById["wt1-dock-0"];
+    const moved1 = state.panelsById["wt1-dock-1"];
+    const allTerminals = state.panelIds.map((id) => state.panelsById[id]);
     const gridCount = allTerminals.filter((t) => t.location === "grid").length;
     const dockCountWt1 = allTerminals.filter(
       (t) => t.worktreeId === "wt1" && t.location === "dock"
@@ -121,11 +121,11 @@ describe("Worktree-scoped bulk actions", () => {
       createMockTerminal("wt2-grid-0", "wt2", "grid"),
       createMockTerminal("wt1-dock-0", "wt1", "dock"),
     ]);
-    useTerminalStore.setState({ focusedId: "wt2-grid-0" });
+    usePanelStore.setState({ focusedId: "wt2-grid-0" });
 
-    useTerminalStore.getState().bulkMoveToGridByWorktree("wt1");
+    usePanelStore.getState().bulkMoveToGridByWorktree("wt1");
 
-    const { focusedId } = useTerminalStore.getState();
+    const { focusedId } = usePanelStore.getState();
     expect(focusedId).toBe("wt2-grid-0");
   });
 
@@ -136,11 +136,11 @@ describe("Worktree-scoped bulk actions", () => {
       createMockTerminal("wt2-grid-0", "wt2", "grid"),
     ]);
 
-    useTerminalStore.getState().bulkTrashByWorktree("wt1");
+    usePanelStore.getState().bulkTrashByWorktree("wt1");
 
-    const state = useTerminalStore.getState();
-    expect(state.terminalsById["wt1-grid-0"]?.location).toBe("trash");
-    expect(state.terminalsById["wt1-trash-0"]?.location).toBe("trash");
-    expect(state.terminalsById["wt2-grid-0"]?.location).toBe("grid");
+    const state = usePanelStore.getState();
+    expect(state.panelsById["wt1-grid-0"]?.location).toBe("trash");
+    expect(state.panelsById["wt1-trash-0"]?.location).toBe("trash");
+    expect(state.panelsById["wt2-grid-0"]?.location).toBe("grid");
   });
 });

@@ -57,7 +57,7 @@ type DevServerState = {
 
 const {
   terminalStoreState,
-  useTerminalStoreMock,
+  usePanelStoreMock,
   useProjectStoreMock,
   useProjectSettingsStoreMock,
   devServerStateRef,
@@ -71,7 +71,7 @@ const {
     setBrowserZoom: vi.fn(),
     setDevPreviewConsoleOpen: vi.fn(),
   };
-  const useTerminalStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
+  const usePanelStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
     selector(terminalStoreState)
   );
 
@@ -118,7 +118,7 @@ const {
 
   return {
     terminalStoreState,
-    useTerminalStoreMock,
+    usePanelStoreMock,
     useProjectStoreMock,
     useProjectSettingsStoreMock,
     devServerStateRef,
@@ -128,7 +128,7 @@ const {
 });
 
 vi.mock("@/store", () => ({
-  useTerminalStore: useTerminalStoreMock,
+  usePanelStore: usePanelStoreMock,
 }));
 
 vi.mock("@/store/projectStore", () => ({

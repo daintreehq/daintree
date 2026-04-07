@@ -5,10 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const setLifecycleStateMock = vi.fn(() => Promise.resolve());
 
 vi.mock("@/store", () => ({
-  useTerminalStore: vi.fn(),
+  usePanelStore: vi.fn(),
 }));
 
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 import { useWebviewThrottle } from "../useWebviewThrottle";
 
 function makeWebviewEl(webContentsId = 1) {
@@ -34,7 +34,7 @@ describe("useWebviewThrottle", () => {
 
   function mockStore(activeDockTerminalId: string | null) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    vi.mocked(useTerminalStore).mockImplementation((selector: (s: any) => unknown) =>
+    vi.mocked(usePanelStore).mockImplementation((selector: (s: any) => unknown) =>
       selector({ activeDockTerminalId })
     );
   }

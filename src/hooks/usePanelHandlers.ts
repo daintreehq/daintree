@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 import { getTerminalAnimationDuration } from "@/lib/animationUtils";
 import type { PanelLifecycle } from "./usePanelLifecycle";
 
@@ -20,10 +20,10 @@ export function usePanelHandlers({
   lifecycle,
   onAfterClose,
 }: UsePanelHandlersConfig): PanelHandlers {
-  const setFocused = useTerminalStore((state) => state.setFocused);
-  const trashPanelGroup = useTerminalStore((state) => state.trashPanelGroup);
-  const removeTerminal = useTerminalStore((state) => state.removeTerminal);
-  const updateTitle = useTerminalStore((state) => state.updateTitle);
+  const setFocused = usePanelStore((state) => state.setFocused);
+  const trashPanelGroup = usePanelStore((state) => state.trashPanelGroup);
+  const removePanel = usePanelStore((state) => state.removePanel);
+  const updateTitle = usePanelStore((state) => state.updateTitle);
 
   const handleFocus = useCallback(() => {
     setFocused(terminalId);
@@ -32,7 +32,7 @@ export function usePanelHandlers({
   const handleClose = useCallback(
     (force?: boolean) => {
       if (force) {
-        removeTerminal(terminalId);
+        removePanel(terminalId);
         onAfterClose?.();
       } else {
         const duration = getTerminalAnimationDuration();
@@ -51,7 +51,7 @@ export function usePanelHandlers({
         }, duration);
       }
     },
-    [removeTerminal, trashPanelGroup, terminalId, onAfterClose, lifecycle]
+    [removePanel, trashPanelGroup, terminalId, onAfterClose, lifecycle]
   );
 
   const handleTitleChange = useCallback(

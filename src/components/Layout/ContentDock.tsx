@@ -6,7 +6,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  useTerminalStore,
+  usePanelStore,
   useProjectStore,
   useWorktreeSelectionStore,
   type TerminalInstance,
@@ -55,12 +55,12 @@ interface ContentDockProps {
 export function ContentDock({ density = "normal" }: ContentDockProps) {
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
-  const trashedTerminals = useTerminalStore(useShallow((state) => state.trashedTerminals));
-  const terminalsById = useTerminalStore(useShallow((state) => state.terminalsById));
-  const storeTerminalIds = useTerminalStore(useShallow((state) => state.terminalIds));
-  const getTabGroups = useTerminalStore((state) => state.getTabGroups);
-  const getTabGroupPanels = useTerminalStore((state) => state.getTabGroupPanels);
-  const openDockTerminal = useTerminalStore((state) => state.openDockTerminal);
+  const trashedTerminals = usePanelStore(useShallow((state) => state.trashedTerminals));
+  const panelsById = usePanelStore(useShallow((state) => state.panelsById));
+  const storeTerminalIds = usePanelStore(useShallow((state) => state.panelIds));
+  const getTabGroups = usePanelStore((state) => state.getTabGroups);
+  const getTabGroupPanels = usePanelStore((state) => state.getTabGroupPanels);
+  const openDockTerminal = usePanelStore((state) => state.openDockTerminal);
   const currentProject = useProjectStore((s) => s.currentProject);
   const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
 
@@ -69,12 +69,12 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     const groups = getTabGroups("dock", activeWorktreeId ?? undefined);
     if (!helpTerminalId) return groups;
     return groups.filter((g) => !(g.panelIds.length === 1 && g.panelIds[0] === helpTerminalId));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeTerminalIds/terminalsById/trashedTerminals are intentional trigger deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeTerminalIds/panelsById/trashedTerminals are intentional trigger deps
   }, [
     getTabGroups,
     activeWorktreeId,
     storeTerminalIds,
-    terminalsById,
+    panelsById,
     trashedTerminals,
     helpTerminalId,
   ]);
@@ -126,7 +126,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
   const trashedItems = Array.from(trashedTerminals.values())
     .map((trashed) => ({
-      terminal: terminalsById[trashed.id],
+      terminal: panelsById[trashed.id],
       trashedInfo: trashed,
     }))
     .filter((item) => item.terminal !== undefined) as {
@@ -135,7 +135,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   }[];
 
   // Tab group IDs for SortableContext
-  const terminalIds = useMemo(() => {
+  const panelIds = useMemo(() => {
     if (tabGroups.length === 0) {
       return [DOCK_PLACEHOLDER_ID];
     }
@@ -196,7 +196,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             >
               <SortableContext
                 id="dock-container"
-                items={terminalIds}
+                items={panelIds}
                 strategy={horizontalListSortingStrategy}
               >
                 <div className="flex items-center gap-[var(--dock-gap)] min-w-[100px] min-h-[calc(var(--dock-item-height)-4px)]">

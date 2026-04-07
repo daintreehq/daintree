@@ -216,8 +216,8 @@ vi.mock("@/services/ActionService", () => ({
   actionService: mocks.actionService,
 }));
 
-vi.mock("../../../store/persistence/terminalPersistence", () => ({
-  terminalPersistence: {
+vi.mock("../../../store/persistence/panelPersistence", () => ({
+  panelPersistence: {
     save: vi.fn(),
     load: vi.fn().mockReturnValue([]),
     saveTabGroups: vi.fn(),
@@ -239,7 +239,7 @@ function registerTerminalActions(actions: ActionRegistry, callbacks: ActionCallb
 }
 const { registerPanelActions } = await import("../definitions/panelActions");
 const { registerWorktreeActions } = await import("../definitions/worktreeActions");
-const { useTerminalStore } = await import("../../../store/terminalStore");
+const { usePanelStore } = await import("../../../store/panelStore");
 const { usePortalStore } = await import("../../../store/portalStore");
 const { useWorktreeSelectionStore } = await import("../../../store/worktreeStore");
 const worktreeViewStore = mocks.worktreeViewStore;
@@ -308,9 +308,9 @@ function createTerminal(overrides: Record<string, unknown> = {}): TerminalInstan
 beforeEach(() => {
   vi.clearAllMocks();
 
-  useTerminalStore.setState({
-    terminalsById: {},
-    terminalIds: [],
+  usePanelStore.setState({
+    panelsById: {},
+    panelIds: [],
     trashedTerminals: new Map(),
     tabGroups: new Map(),
     focusedId: null,
@@ -357,27 +357,27 @@ describe("terminal action hardening", () => {
       sendCommand.run({ terminalId: "missing", command: "ls" }, {} as never)
     ).rejects.toThrow("Terminal not found");
 
-    useTerminalStore.setState({
-      terminalsById: { trash: createTerminal({ id: "trash", location: "trash" }) },
-      terminalIds: ["trash"],
+    usePanelStore.setState({
+      panelsById: { trash: createTerminal({ id: "trash", location: "trash" }) },
+      panelIds: ["trash"],
     });
     await expect(
       sendCommand.run({ terminalId: "trash", command: "ls" }, {} as never)
     ).rejects.toThrow("Cannot send commands to trashed terminals");
 
-    useTerminalStore.setState({
-      terminalsById: {
+    usePanelStore.setState({
+      panelsById: {
         browser: createTerminal({ id: "browser", kind: "browser", type: "browser" }),
       },
-      terminalIds: ["browser"],
+      panelIds: ["browser"],
     });
     await expect(
       sendCommand.run({ terminalId: "browser", command: "ls" }, {} as never)
     ).rejects.toThrow('Terminal kind "browser" does not support command execution');
 
-    useTerminalStore.setState({
-      terminalsById: { "n-opty": createTerminal({ id: "n-opty", hasPty: false }) },
-      terminalIds: ["n-opty"],
+    usePanelStore.setState({
+      panelsById: { "n-opty": createTerminal({ id: "n-opty", hasPty: false }) },
+      panelIds: ["n-opty"],
     });
     await expect(
       sendCommand.run({ terminalId: "n-opty", command: "ls" }, {} as never)
@@ -388,9 +388,9 @@ describe("terminal action hardening", () => {
     const actions = buildRegistry(registerTerminalActions);
     const sendCommand = actions.get("terminal.sendCommand")!();
 
-    useTerminalStore.setState({
-      terminalsById: { "term-ok": createTerminal({ id: "term-ok" }) },
-      terminalIds: ["term-ok"],
+    usePanelStore.setState({
+      panelsById: { "term-ok": createTerminal({ id: "term-ok" }) },
+      panelIds: ["term-ok"],
     });
 
     const result = await sendCommand.run(
@@ -410,17 +410,17 @@ describe("terminal action hardening", () => {
     const actions = buildRegistry(registerTerminalActions);
     const moveToDock = actions.get("terminal.moveToDock")!();
 
-    useTerminalStore.setState({
-      terminalsById: { existing: createTerminal({ id: "existing" }) },
-      terminalIds: ["existing"],
+    usePanelStore.setState({
+      panelsById: { existing: createTerminal({ id: "existing" }) },
+      panelIds: ["existing"],
       focusedId: "existing",
       activeDockTerminalId: null,
     });
 
     await moveToDock.run({ terminalId: "missing" }, {} as never);
 
-    expect(useTerminalStore.getState().focusedId).toBe("existing");
-    expect(useTerminalStore.getState().activeDockTerminalId).toBeNull();
+    expect(usePanelStore.getState().focusedId).toBe("existing");
+    expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
     expect(mocks.terminalInstanceService.wake).not.toHaveBeenCalled();
   });
 
@@ -428,29 +428,29 @@ describe("terminal action hardening", () => {
     const actions = buildRegistry(registerTerminalActions);
     const moveToWorktree = actions.get("terminal.moveToWorktree")!();
 
-    useTerminalStore.setState({
-      terminalsById: { "term-a": createTerminal({ id: "term-a", worktreeId: "wt-1" }) },
-      terminalIds: ["term-a"],
+    usePanelStore.setState({
+      panelsById: { "term-a": createTerminal({ id: "term-a", worktreeId: "wt-1" }) },
+      panelIds: ["term-a"],
       focusedId: "term-a",
     });
 
     await moveToWorktree.run({ terminalId: "missing", worktreeId: "wt-2" }, {} as never);
-    expect(useTerminalStore.getState().focusedId).toBe("term-a");
+    expect(usePanelStore.getState().focusedId).toBe("term-a");
 
     await moveToWorktree.run({ terminalId: "term-a", worktreeId: "wt-1" }, {} as never);
-    expect(useTerminalStore.getState().focusedId).toBe("term-a");
+    expect(usePanelStore.getState().focusedId).toBe("term-a");
   });
 
   it("does not quit the app when closing the last remaining non-trashed terminal", async () => {
     const actions = buildRegistry(registerTerminalActions);
     const closeTerminal = actions.get("terminal.close")!();
 
-    useTerminalStore.setState({
-      terminalsById: {
+    usePanelStore.setState({
+      panelsById: {
         "term-1": createTerminal({ id: "term-1", location: "grid" }),
         "term-2": createTerminal({ id: "term-2", location: "trash" }),
       },
-      terminalIds: ["term-1", "term-2"],
+      panelIds: ["term-1", "term-2"],
       focusedId: "term-1",
     });
 
@@ -461,10 +461,10 @@ describe("terminal action hardening", () => {
   it("duplicates trashed terminals back into the grid with a copied title", async () => {
     const actions = buildRegistry(registerTerminalActions);
     const duplicate = actions.get("terminal.duplicate")!();
-    const addTerminal = vi.fn().mockResolvedValue("copy-id");
+    const addPanel = vi.fn().mockResolvedValue("copy-id");
 
-    useTerminalStore.setState({
-      terminalsById: {
+    usePanelStore.setState({
+      panelsById: {
         "term-trash": createTerminal({
           id: "term-trash",
           location: "trash",
@@ -473,13 +473,13 @@ describe("terminal action hardening", () => {
           isInputLocked: true,
         }),
       },
-      terminalIds: ["term-trash"],
-      addTerminal,
+      panelIds: ["term-trash"],
+      addPanel,
     } as never);
 
     await duplicate.run({ terminalId: "term-trash" }, {} as never);
 
-    expect(addTerminal).toHaveBeenCalledWith(
+    expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         location: "grid",
         title: "Broken Session (copy)",
@@ -492,18 +492,18 @@ describe("terminal action hardening", () => {
   it("duplicates focused panel when called with undefined args (keybinding path)", async () => {
     const actions = buildRegistry(registerTerminalActions);
     const duplicate = actions.get("terminal.duplicate")!();
-    const addTerminal = vi.fn().mockResolvedValue("copy-id");
+    const addPanel = vi.fn().mockResolvedValue("copy-id");
 
-    useTerminalStore.setState({
-      terminalsById: { "term-a": createTerminal({ id: "term-a", title: "My Shell" }) },
-      terminalIds: ["term-a"],
+    usePanelStore.setState({
+      panelsById: { "term-a": createTerminal({ id: "term-a", title: "My Shell" }) },
+      panelIds: ["term-a"],
       focusedId: "term-a",
-      addTerminal,
+      addPanel,
     } as never);
 
     await duplicate.run(undefined, {} as never);
 
-    expect(addTerminal).toHaveBeenCalledWith(
+    expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "terminal",
         title: "My Shell (copy)",
@@ -514,21 +514,21 @@ describe("terminal action hardening", () => {
   it("duplicates the lone non-trashed panel when focusedId is null", async () => {
     const actions = buildRegistry(registerTerminalActions);
     const duplicate = actions.get("terminal.duplicate")!();
-    const addTerminal = vi.fn().mockResolvedValue("copy-id");
+    const addPanel = vi.fn().mockResolvedValue("copy-id");
 
-    useTerminalStore.setState({
-      terminalsById: {
+    usePanelStore.setState({
+      panelsById: {
         "term-only": createTerminal({ id: "term-only", title: "Lonely" }),
         "term-trash": createTerminal({ id: "term-trash", location: "trash" }),
       },
-      terminalIds: ["term-only", "term-trash"],
+      panelIds: ["term-only", "term-trash"],
       focusedId: null,
-      addTerminal,
+      addPanel,
     } as never);
 
     await duplicate.run(undefined, {} as never);
 
-    expect(addTerminal).toHaveBeenCalledWith(
+    expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Lonely (copy)",
       })
@@ -538,19 +538,19 @@ describe("terminal action hardening", () => {
   it("falls back to creating a new terminal when no panels exist and no snapshot", async () => {
     const actions = buildRegistry(registerTerminalActions);
     const duplicate = actions.get("terminal.duplicate")!();
-    const addTerminal = vi.fn().mockResolvedValue("new-id");
+    const addPanel = vi.fn().mockResolvedValue("new-id");
 
-    useTerminalStore.setState({
-      terminalsById: {},
-      terminalIds: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       focusedId: null,
       lastClosedConfig: null,
-      addTerminal,
+      addPanel,
     } as never);
 
     await duplicate.run(undefined, {} as never);
 
-    expect(addTerminal).toHaveBeenCalledWith(
+    expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "terminal",
         cwd: "/repo",
@@ -562,11 +562,11 @@ describe("terminal action hardening", () => {
   it("uses lastClosedConfig snapshot when no panels exist", async () => {
     const actions = buildRegistry(registerTerminalActions);
     const duplicate = actions.get("terminal.duplicate")!();
-    const addTerminal = vi.fn().mockResolvedValue("new-id");
+    const addPanel = vi.fn().mockResolvedValue("new-id");
 
-    useTerminalStore.setState({
-      terminalsById: {},
-      terminalIds: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       focusedId: null,
       lastClosedConfig: {
         kind: "terminal",
@@ -578,12 +578,12 @@ describe("terminal action hardening", () => {
         agentModelId: "opus",
         agentLaunchFlags: ["--verbose"],
       },
-      addTerminal,
+      addPanel,
     } as never);
 
     await duplicate.run(undefined, {} as never);
 
-    expect(addTerminal).toHaveBeenCalledWith(
+    expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "claude",
         cwd: "/projects/app",
@@ -600,23 +600,23 @@ describe("terminal action hardening", () => {
       getActiveWorktreeId: () => "active-wt",
     });
     const duplicate = actions.get("terminal.duplicate")!();
-    const addTerminal = vi.fn().mockResolvedValue("new-id");
+    const addPanel = vi.fn().mockResolvedValue("new-id");
 
-    useTerminalStore.setState({
-      terminalsById: {},
-      terminalIds: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       focusedId: null,
       lastClosedConfig: {
         kind: "terminal",
         type: "terminal",
         cwd: "/home/user",
       },
-      addTerminal,
+      addPanel,
     } as never);
 
     await duplicate.run(undefined, {} as never);
 
-    expect(addTerminal).toHaveBeenCalledWith(
+    expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         location: "grid",
         worktreeId: "active-wt",
@@ -627,21 +627,21 @@ describe("terminal action hardening", () => {
   it("does nothing when multiple panels exist but none is focused", async () => {
     const actions = buildRegistry(registerTerminalActions);
     const duplicate = actions.get("terminal.duplicate")!();
-    const addTerminal = vi.fn().mockResolvedValue("copy-id");
+    const addPanel = vi.fn().mockResolvedValue("copy-id");
 
-    useTerminalStore.setState({
-      terminalsById: {
+    usePanelStore.setState({
+      panelsById: {
         "term-a": createTerminal({ id: "term-a" }),
         "term-b": createTerminal({ id: "term-b" }),
       },
-      terminalIds: ["term-a", "term-b"],
+      panelIds: ["term-a", "term-b"],
       focusedId: null,
-      addTerminal,
+      addPanel,
     } as never);
 
     await duplicate.run(undefined, {} as never);
 
-    expect(addTerminal).not.toHaveBeenCalled();
+    expect(addPanel).not.toHaveBeenCalled();
   });
 });
 
@@ -722,9 +722,9 @@ describe("panel action hardening", () => {
 
   it("throws for focus requests targeting trashed or missing panels", async () => {
     const activateTerminal = vi.fn();
-    useTerminalStore.setState({
-      terminalsById: { trashed: createTerminal({ id: "trashed", location: "trash" }) },
-      terminalIds: ["trashed"],
+    usePanelStore.setState({
+      panelsById: { trashed: createTerminal({ id: "trashed", location: "trash" }) },
+      panelIds: ["trashed"],
       activateTerminal,
     } as never);
 

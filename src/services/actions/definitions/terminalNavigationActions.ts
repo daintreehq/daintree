@@ -1,7 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionId } from "@shared/types/actions";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 export function registerTerminalNavigationActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -15,7 +15,7 @@ export function registerTerminalNavigationActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      useTerminalStore.getState().focusNext();
+      usePanelStore.getState().focusNext();
     },
   }));
 
@@ -28,7 +28,7 @@ export function registerTerminalNavigationActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      useTerminalStore.getState().focusPrevious();
+      usePanelStore.getState().focusPrevious();
     },
   }));
 
@@ -43,7 +43,7 @@ export function registerTerminalNavigationActions(
     run: async () => {
       const nav = callbacks.getGridNavigation();
       if (nav.getCurrentLocation() === "grid") {
-        useTerminalStore.getState().focusDirection("up", nav.findNearest);
+        usePanelStore.getState().focusDirection("up", nav.findNearest);
       }
     },
   }));
@@ -59,7 +59,7 @@ export function registerTerminalNavigationActions(
     run: async () => {
       const nav = callbacks.getGridNavigation();
       if (nav.getCurrentLocation() === "grid") {
-        useTerminalStore.getState().focusDirection("down", nav.findNearest);
+        usePanelStore.getState().focusDirection("down", nav.findNearest);
       }
     },
   }));
@@ -76,9 +76,9 @@ export function registerTerminalNavigationActions(
       const nav = callbacks.getGridNavigation();
       const location = nav.getCurrentLocation();
       if (location === "grid") {
-        useTerminalStore.getState().focusDirection("left", nav.findNearest);
+        usePanelStore.getState().focusDirection("left", nav.findNearest);
       } else if (location === "dock") {
-        useTerminalStore.getState().focusDockDirection("left", nav.findDockByIndex);
+        usePanelStore.getState().focusDockDirection("left", nav.findDockByIndex);
       }
     },
   }));
@@ -95,9 +95,9 @@ export function registerTerminalNavigationActions(
       const nav = callbacks.getGridNavigation();
       const location = nav.getCurrentLocation();
       if (location === "grid") {
-        useTerminalStore.getState().focusDirection("right", nav.findNearest);
+        usePanelStore.getState().focusDirection("right", nav.findNearest);
       } else if (location === "dock") {
-        useTerminalStore.getState().focusDockDirection("right", nav.findDockByIndex);
+        usePanelStore.getState().focusDockDirection("right", nav.findDockByIndex);
       }
     },
   }));
@@ -115,7 +115,7 @@ export function registerTerminalNavigationActions(
     run: async (args: unknown) => {
       const { index } = args as { index: number };
       const nav = callbacks.getGridNavigation();
-      useTerminalStore.getState().focusByIndex(index, nav.findByIndex);
+      usePanelStore.getState().focusByIndex(index, nav.findByIndex);
     },
   }));
 
@@ -132,7 +132,7 @@ export function registerTerminalNavigationActions(
       scope: "renderer",
       run: async () => {
         const nav = callbacks.getGridNavigation();
-        useTerminalStore.getState().focusByIndex(index, nav.findByIndex);
+        usePanelStore.getState().focusByIndex(index, nav.findByIndex);
       },
     }));
   }
@@ -146,10 +146,10 @@ export function registerTerminalNavigationActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
-      const dockTerminals = state.terminalIds
-        .map((id) => state.terminalsById[id])
+      const dockTerminals = state.panelIds
+        .map((id) => state.panelsById[id])
         .filter(
           (t) =>
             t &&
@@ -180,7 +180,7 @@ export function registerTerminalNavigationActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const focusedId = useTerminalStore.getState().focusedId;
+      const focusedId = usePanelStore.getState().focusedId;
       if (!focusedId) return;
       const { terminalInstanceService } =
         await import("@/services/terminal/TerminalInstanceService");
@@ -190,7 +190,7 @@ export function registerTerminalNavigationActions(
 
   // Tab navigation within tabbed panels
   const navigateTab = (direction: "next" | "previous") => {
-    const state = useTerminalStore.getState();
+    const state = usePanelStore.getState();
     const focusedId = state.focusedId;
     if (!focusedId) return;
 

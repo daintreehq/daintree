@@ -189,7 +189,7 @@ export function TwoPaneSplitLayout({
   const rightWidth =
     containerWidth > 0 ? containerWidth * (1 - clampedRatio) - DIVIDER_WIDTH_PX / 2 : "50%";
 
-  const terminalIds = useMemo(() => terminals.map((t) => t.id), [terminals]);
+  const panelIds = useMemo(() => terminals.map((t) => t.id), [terminals]);
 
   // Track previous drag state to detect drag end
   const wasDraggingRef = useRef(false);
@@ -221,7 +221,7 @@ export function TwoPaneSplitLayout({
     <>
       <SortableContext
         id="grid-container"
-        items={terminalIds}
+        items={panelIds}
         strategy={horizontalListSortingStrategy}
       >
         <div

@@ -1,6 +1,6 @@
 import { create, type StateCreator } from "zustand";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
-import { useTerminalStore, type TerminalInstance } from "./terminalStore";
+import { usePanelStore, type TerminalInstance } from "./panelStore";
 import { projectClient, agentSettingsClient, systemClient, globalRecipesClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
@@ -465,7 +465,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         console.warn("Failed to update lastUsedAt for recipe:", error);
       });
 
-    const terminalStore = useTerminalStore.getState();
+    const terminalStore = usePanelStore.getState();
 
     const indicesToSpawn = terminalIndices ?? recipe.terminals.map((_, i) => i);
 
@@ -500,7 +500,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       try {
         // Handle dev-preview terminals
         if (terminal.type === "dev-preview") {
-          const terminalId = await terminalStore.addTerminal({
+          const terminalId = await terminalStore.addPanel({
             kind: "dev-preview",
             title: terminal.title || "Dev Server",
             cwd: worktreePath,
@@ -540,7 +540,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           });
         }
 
-        const terminalId = await terminalStore.addTerminal({
+        const terminalId = await terminalStore.addPanel({
           kind: isAgent ? "agent" : "terminal",
           agentId: isAgent ? terminal.type : undefined,
           title: terminal.title,
@@ -740,10 +740,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   },
 
   generateRecipeFromActiveTerminals: (worktreeId) => {
-    const terminalStore = useTerminalStore.getState();
+    const terminalStore = usePanelStore.getState();
 
-    const activeTerminals = terminalStore.terminalIds
-      .map((id) => terminalStore.terminalsById[id])
+    const activeTerminals = terminalStore.panelIds
+      .map((id) => terminalStore.panelsById[id])
       .filter((t) => t && t.location !== "trash" && t.worktreeId === worktreeId);
 
     const terminalsToCapture = activeTerminals.slice(0, MAX_TERMINALS_PER_RECIPE);

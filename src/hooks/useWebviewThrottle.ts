@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 
 /**
  * Freezes a webview's JS execution via CDP when the panel is in the dock
@@ -16,7 +16,7 @@ export function useWebviewThrottle(
   webviewElement: Electron.WebviewTag | null,
   isWebviewReady: boolean
 ): void {
-  const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
+  const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
   const freezeTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
