@@ -104,12 +104,12 @@ export function AgentStatusIndicator({ state, className }: AgentStatusIndicatorP
 }
 
 const STATE_PRIORITY: Record<AgentState, number> = {
-  working: 6,
-  directing: 5,
-  running: 4,
-  completed: 3,
-  waiting: 2,
-  exited: 1,
+  working: 7,
+  directing: 6,
+  running: 5,
+  completed: 4,
+  waiting: 3,
+  exited: 2,
   idle: 1,
 };
 

@@ -201,7 +201,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   // Use shortened title without command summary for dock items
   const displayTitle = getBaseTitle(terminal.title);
   // Only show icon for non-idle, non-completed states (reduce noise)
-  const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
+  const showStateIcon =
+    agentState && agentState !== "idle" && agentState !== "completed" && agentState !== "exited";
   const StateIcon = showStateIcon
     ? getEffectiveStateIcon(agentState, terminal.waitingReason)
     : null;
