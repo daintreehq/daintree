@@ -189,7 +189,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
       browserUrl: "https://example.com",
     };
     setTerminalStoreGetter(() => ({
-      terminalsById: { "browser-1": browserPanel } as Record<string, never>,
+      terminalsById: { "browser-1": browserPanel } as never,
       terminalIds: ["browser-1"],
       tabGroups: new Map(),
     }));
@@ -213,7 +213,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
       location: "grid",
     };
     setTerminalStoreGetter(() => ({
-      terminalsById: { "dev-1": devPreview } as Record<string, never>,
+      terminalsById: { "dev-1": devPreview } as never,
       terminalIds: ["dev-1"],
       tabGroups: new Map(),
     }));
@@ -236,7 +236,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
       "t-assistant": { id: "t-assistant", kind: "assistant", location: "grid" },
       "smoke-test-1": { id: "smoke-test-1", kind: "terminal", location: "grid" },
       "t-keep": { id: "t-keep", kind: "browser", location: "grid" },
-    } as Record<string, never>;
+    } as never;
     setTerminalStoreGetter(() => ({
       terminalsById: panels,
       terminalIds: Object.keys(panels),
@@ -261,7 +261,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
       ["g2", { id: "g2", location: "grid" as const, activeTabId: "c", panelIds: ["c"] }],
     ]);
     setTerminalStoreGetter(() => ({
-      terminalsById: {} as Record<string, never>,
+      terminalsById: {} as never,
       terminalIds: [],
       tabGroups,
     }));
@@ -281,7 +281,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
   it("sends empty tabGroups array to clear stale groups when none exist", async () => {
     const { setTerminalStoreGetter } = await import("../projectStore");
     setTerminalStoreGetter(() => ({
-      terminalsById: {} as Record<string, never>,
+      terminalsById: {} as never,
       terminalIds: [],
       tabGroups: new Map(),
     }));
@@ -300,7 +300,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
     const { setTerminalStoreGetter } = await import("../projectStore");
     const panel = { id: "b-1", kind: "browser", location: "grid" };
     setTerminalStoreGetter(() => ({
-      terminalsById: { "b-1": panel } as Record<string, never>,
+      terminalsById: { "b-1": panel } as never,
       terminalIds: ["b-1"],
       tabGroups: new Map(),
     }));
