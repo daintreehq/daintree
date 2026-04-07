@@ -7,13 +7,68 @@ import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
 import { useUrlHistoryStore } from "./urlHistoryStore";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
-import { terminalPersistence } from "./persistence/terminalPersistence";
+import { terminalPersistence, terminalToSnapshot } from "./persistence/terminalPersistence";
 import { useTerminalInputStore } from "./terminalInputStore";
+import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
+import type { TerminalInstance, TabGroup } from "@shared/types";
+
+function shouldPersistTerminal(t: TerminalInstance): boolean {
+  return (
+    t.location !== "trash" &&
+    t.location !== "background" &&
+    t.kind !== "assistant" &&
+    !isSmokeTestTerminalId(t.id)
+  );
+}
+
+// Lazy reference to useTerminalStore to break circular dependency.
+// Injected at module-init time from terminalStore.ts (same pattern as
+// terminalPersistence.setProjectIdGetter).
+let _getTerminalStoreState:
+  | (() => {
+      terminalsById: Record<string, TerminalInstance>;
+      terminalIds: string[];
+      tabGroups: Map<string, TabGroup>;
+    })
+  | null = null;
+
+export function setTerminalStoreGetter(
+  getter: () => {
+    terminalsById: Record<string, TerminalInstance>;
+    terminalIds: string[];
+    tabGroups: Map<string, TabGroup>;
+  }
+): void {
+  _getTerminalStoreState = getter;
+}
 
 function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   const draftInputs = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
-  return { draftInputs };
+
+  // Synchronously snapshot terminal state from the Zustand store before the
+  // renderer gets detached.  This captures browser/dev-preview panel state
+  // that would otherwise be lost because the debounced persistence hasn't
+  // flushed yet.  Uses the same filter as TerminalPersistence.save().
+  const terminalState = _getTerminalStoreState?.();
+  if (!terminalState) {
+    return { draftInputs };
+  }
+
+  const { terminalsById, terminalIds, tabGroups } = terminalState;
+
+  const terminals = terminalIds
+    .map((id) => terminalsById[id])
+    .filter((t): t is TerminalInstance => t != null && shouldPersistTerminal(t))
+    .map(terminalToSnapshot);
+
+  const tabGroupArray = Array.from(tabGroups.values()).filter((g) => g.panelIds.length > 1);
+
+  return {
+    terminals,
+    draftInputs,
+    ...(tabGroupArray.length > 0 && { tabGroups: tabGroupArray }),
+  };
 }
 
 interface ProjectState {

@@ -41,6 +41,9 @@ vi.mock("../terminalStore", () => ({
   useTerminalStore: {
     getState: () => ({
       terminals: [],
+      terminalsById: {},
+      terminalIds: [],
+      tabGroups: new Map(),
     }),
   },
 }));
@@ -64,7 +67,10 @@ vi.mock("../persistence/terminalPersistence", () => ({
   terminalPersistence: {
     setProjectIdGetter: vi.fn(),
   },
-  terminalToSnapshot: vi.fn(),
+  terminalToSnapshot: vi.fn((t: { id: string; kind: string }) => ({
+    id: t.id,
+    kind: t.kind,
+  })),
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -73,6 +79,10 @@ vi.mock("@/lib/notify", () => ({
 
 vi.mock("@/utils/errorContext", () => ({
   logErrorWithContext: vi.fn(),
+}));
+
+vi.mock("@shared/utils/smokeTestTerminals", () => ({
+  isSmokeTestTerminalId: vi.fn((id: string) => id.startsWith("smoke-test-")),
 }));
 
 vi.mock("@/services/projectSwitchRendererCache", () => ({
@@ -165,5 +175,143 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
     await Promise.resolve();
 
     expect(projectClientMock.switch).toHaveBeenCalledWith(projectB.id, undefined);
+  });
+});
+
+describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
+  it("includes browser panel snapshots in outgoing terminals", async () => {
+    const { setTerminalStoreGetter } = await import("../projectStore");
+    const browserPanel = {
+      id: "browser-1",
+      kind: "browser",
+      title: "Browser",
+      location: "grid",
+      browserUrl: "https://example.com",
+    };
+    setTerminalStoreGetter(() => ({
+      terminalsById: { "browser-1": browserPanel } as Record<string, never>,
+      terminalIds: ["browser-1"],
+      tabGroups: new Map(),
+    }));
+
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.terminals).toEqual([{ id: "browser-1", kind: "browser" }]);
+  });
+
+  it("includes dev-preview panel snapshots in outgoing terminals", async () => {
+    const { setTerminalStoreGetter } = await import("../projectStore");
+    const devPreview = {
+      id: "dev-1",
+      kind: "dev-preview",
+      title: "Dev Preview",
+      location: "grid",
+    };
+    setTerminalStoreGetter(() => ({
+      terminalsById: { "dev-1": devPreview } as Record<string, never>,
+      terminalIds: ["dev-1"],
+      tabGroups: new Map(),
+    }));
+
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.terminals).toEqual([{ id: "dev-1", kind: "dev-preview" }]);
+  });
+
+  it("excludes trash, background, assistant, and smoke-test panels", async () => {
+    const { setTerminalStoreGetter } = await import("../projectStore");
+    const panels = {
+      "t-trash": { id: "t-trash", kind: "terminal", location: "trash" },
+      "t-bg": { id: "t-bg", kind: "terminal", location: "background" },
+      "t-assistant": { id: "t-assistant", kind: "assistant", location: "grid" },
+      "smoke-test-1": { id: "smoke-test-1", kind: "terminal", location: "grid" },
+      "t-keep": { id: "t-keep", kind: "browser", location: "grid" },
+    } as Record<string, never>;
+    setTerminalStoreGetter(() => ({
+      terminalsById: panels,
+      terminalIds: Object.keys(panels),
+      tabGroups: new Map(),
+    }));
+
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.terminals).toHaveLength(1);
+    expect(outgoing.terminals[0].id).toBe("t-keep");
+  });
+
+  it("includes multi-panel tab groups, excludes single-panel groups", async () => {
+    const { setTerminalStoreGetter } = await import("../projectStore");
+    const tabGroups = new Map([
+      ["g1", { id: "g1", location: "grid" as const, activeTabId: "a", panelIds: ["a", "b"] }],
+      ["g2", { id: "g2", location: "grid" as const, activeTabId: "c", panelIds: ["c"] }],
+    ]);
+    setTerminalStoreGetter(() => ({
+      terminalsById: {} as Record<string, never>,
+      terminalIds: [],
+      tabGroups,
+    }));
+
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing.tabGroups).toEqual([
+      { id: "g1", location: "grid", activeTabId: "a", panelIds: ["a", "b"] },
+    ]);
+  });
+
+  it("omits tabGroups key when no multi-panel groups exist", async () => {
+    const { setTerminalStoreGetter } = await import("../projectStore");
+    setTerminalStoreGetter(() => ({
+      terminalsById: {} as Record<string, never>,
+      terminalIds: [],
+      tabGroups: new Map(),
+    }));
+
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    expect(outgoing).not.toHaveProperty("tabGroups");
+  });
+
+  it("includes terminals in reopen outgoing state", async () => {
+    const { setTerminalStoreGetter } = await import("../projectStore");
+    const panel = { id: "b-1", kind: "browser", location: "grid" };
+    setTerminalStoreGetter(() => ({
+      terminalsById: { "b-1": panel } as Record<string, never>,
+      terminalIds: ["b-1"],
+      tabGroups: new Map(),
+    }));
+
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().reopenProject(projectB.id);
+    await Promise.resolve();
+
+    const outgoing = projectClientMock.reopen.mock.calls[0][1];
+    expect(outgoing.terminals).toEqual([{ id: "b-1", kind: "browser" }]);
   });
 });

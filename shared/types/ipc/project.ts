@@ -1,4 +1,5 @@
 import type { Project, TerminalSnapshot } from "../project.js";
+import type { TabGroup } from "../panel.js";
 import type { HydrateResult } from "./app.js";
 
 /**
@@ -11,6 +12,7 @@ export interface ProjectSwitchOutgoingState {
   terminals?: TerminalSnapshot[];
   terminalSizes?: Record<string, { cols: number; rows: number }>;
   draftInputs?: Record<string, string>;
+  tabGroups?: TabGroup[];
 }
 
 /** Payload for project:on-switch event with cancellation token */

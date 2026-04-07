@@ -33,6 +33,7 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logWarn, logError } from "@/utils/logger";
 import { clearTerminalRestartGuard } from "./restartExitSuppression";
 import { buildPanelSnapshotOptions } from "@/services/terminal/panelDuplicationService";
+import { setTerminalStoreGetter } from "./projectStore";
 
 export type { TerminalInstance, AddTerminalOptions, QueuedCommand, CrashType };
 export { isAgentReady };
@@ -519,6 +520,13 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       });
     },
   };
+});
+
+// Break circular dependency: inject terminal store getter into projectStore
+// so buildOutgoingState() can synchronously snapshot terminal state.
+setTerminalStoreGetter(() => {
+  const s = useTerminalStore.getState();
+  return { terminalsById: s.terminalsById, terminalIds: s.terminalIds, tabGroups: s.tabGroups };
 });
 
 export {
