@@ -38,6 +38,125 @@ export function _resetScrollCacheForTests(): void {
   scrollCache.clear();
 }
 
+import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
+
+type SessionStorageEntry = [string, string];
+
+async function captureWebviewSessionStorage(
+  webviewElement: Electron.WebviewTag | null
+): Promise<SessionStorageEntry[]> {
+  if (!webviewElement) return [];
+
+  try {
+    const snapshot = await webviewElement.executeJavaScript(
+      `(() => {
+        try {
+          return Object.entries(sessionStorage).filter(
+            (entry) =>
+              Array.isArray(entry) &&
+              entry.length === 2 &&
+              typeof entry[0] === "string" &&
+              typeof entry[1] === "string"
+          );
+        } catch {
+          return [];
+        }
+      })()`
+    );
+
+    if (!Array.isArray(snapshot)) return [];
+    return snapshot.filter(
+      (entry): entry is SessionStorageEntry =>
+        Array.isArray(entry) &&
+        entry.length === 2 &&
+        typeof entry[0] === "string" &&
+        typeof entry[1] === "string"
+    );
+  } catch {
+    return [];
+  }
+}
+
+function BlockedNavBanner({
+  blockedNav,
+  panelId,
+  webviewElement,
+  onDismiss,
+}: {
+  blockedNav: {
+    url: string;
+    canOpenExternal: boolean;
+    sessionStorageSnapshot: SessionStorageEntry[];
+  };
+  panelId: string;
+  webviewElement: Electron.WebviewTag | null;
+  onDismiss: () => void;
+}) {
+  const isOAuth = looksLikeOAuthUrl(blockedNav.url);
+  const hostname = (() => {
+    try {
+      return new URL(blockedNav.url).hostname;
+    } catch {
+      return blockedNav.url;
+    }
+  })();
+
+  return (
+    <div className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-canopy-text/80">
+      <ExternalLink className="h-3.5 w-3.5 shrink-0 text-status-warning" />
+      <span className="truncate flex-1">Navigation to external site blocked: {hostname}</span>
+      {isOAuth ? (
+        <button
+          type="button"
+          onClick={async () => {
+            const url = blockedNav.url;
+            onDismiss();
+            // Get webContentsId for CDP interception of the token exchange
+            let wcId: number | undefined;
+            try {
+              wcId = (
+                webviewElement as unknown as { getWebContentsId(): number }
+              )?.getWebContentsId();
+            } catch {
+              /* webview not ready */
+            }
+            if (wcId != null) {
+              await window.electron.webview.startOAuthLoopback(
+                url,
+                panelId,
+                wcId,
+                blockedNav.sessionStorageSnapshot
+              );
+            }
+          }}
+          className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-canopy-text/90 transition-colors"
+        >
+          Sign in via Browser
+        </button>
+      ) : blockedNav.canOpenExternal ? (
+        <button
+          type="button"
+          onClick={() => {
+            void window.electron.system.openExternal(blockedNav.url);
+            onDismiss();
+          }}
+          className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-canopy-text/90 transition-colors"
+        >
+          Open in External Browser
+        </button>
+      ) : null}
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="shrink-0 text-canopy-text/40 hover:text-canopy-text/70 transition-colors"
+        aria-label="Dismiss"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
 export interface DevPreviewPaneProps extends BasePanelProps {
   cwd: string;
   worktreeId?: string;
@@ -110,6 +229,7 @@ export function DevPreviewPane({
   const [blockedNav, setBlockedNav] = useState<{
     url: string;
     canOpenExternal: boolean;
+    sessionStorageSnapshot: SessionStorageEntry[];
   } | null>(null);
   const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastSetUrlRef = useRef<string>("");
@@ -601,12 +721,21 @@ export function DevPreviewPane({
   useEffect(() => {
     const cleanup = window.electron.webview.onNavigationBlocked((data) => {
       if (data.panelId !== id) return;
+      const sessionStorageSnapshotPromise = looksLikeOAuthUrl(data.url)
+        ? captureWebviewSessionStorage(webviewElement)
+        : Promise.resolve<SessionStorageEntry[]>([]);
       if (blockedNavTimerRef.current) {
         clearTimeout(blockedNavTimerRef.current);
       }
       blockedNavTimerRef.current = setTimeout(() => {
-        setBlockedNav({ url: data.url, canOpenExternal: data.canOpenExternal });
-        blockedNavTimerRef.current = null;
+        void sessionStorageSnapshotPromise.then((sessionStorageSnapshot) => {
+          setBlockedNav({
+            url: data.url,
+            canOpenExternal: data.canOpenExternal,
+            sessionStorageSnapshot,
+          });
+          blockedNavTimerRef.current = null;
+        });
       }, 150);
     });
     return () => {
@@ -616,7 +745,7 @@ export function DevPreviewPane({
         blockedNavTimerRef.current = null;
       }
     };
-  }, [id]);
+  }, [id, webviewElement]);
 
   // Auto-dismiss blocked navigation notification after 10 seconds
   useEffect(() => {
@@ -782,37 +911,12 @@ export function DevPreviewPane({
                 </div>
               )}
               {blockedNav && (
-                <div className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-canopy-text/80">
-                  <ExternalLink className="h-3.5 w-3.5 shrink-0 text-status-warning" />
-                  <span className="truncate flex-1">
-                    Navigation to external site blocked:{" "}
-                    {(() => {
-                      try {
-                        return new URL(blockedNav.url).hostname;
-                      } catch {
-                        return blockedNav.url;
-                      }
-                    })()}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void window.electron.system.openExternal(blockedNav.url);
-                      setBlockedNav(null);
-                    }}
-                    className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-canopy-text/90 transition-colors"
-                  >
-                    Open in External Browser
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBlockedNav(null)}
-                    className="shrink-0 text-canopy-text/40 hover:text-canopy-text/70 transition-colors"
-                    aria-label="Dismiss"
-                  >
-                    ×
-                  </button>
-                </div>
+                <BlockedNavBanner
+                  blockedNav={blockedNav}
+                  panelId={id}
+                  webviewElement={webviewElement}
+                  onDismiss={() => setBlockedNav(null)}
+                />
               )}
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
               {findInPage.isOpen && <FindBar find={findInPage} />}

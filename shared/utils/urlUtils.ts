@@ -123,3 +123,18 @@ export function extractLocalhostUrls(text: string): string[] {
 
   return [...new Set(normalized)];
 }
+
+export function looksLikeOAuthUrl(url: string): boolean {
+  try {
+    const params = new URL(url).searchParams;
+    const hasClientId = params.has("client_id");
+    const hasResponseType = params.has("response_type");
+    const hasRedirectUri = params.has("redirect_uri");
+    const hasCodeChallenge = params.has("code_challenge");
+    return (
+      hasClientId && (hasResponseType || hasRedirectUri) && (hasResponseType || hasCodeChallenge)
+    );
+  } catch {
+    return false;
+  }
+}

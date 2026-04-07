@@ -6,6 +6,7 @@ interface MockWebContents {
   getType: () => string;
   setWindowOpenHandler: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
+  executeJavaScript: ReturnType<typeof vi.fn>;
   id: number;
 }
 
@@ -75,6 +76,7 @@ vi.mock("../../services/WebviewDialogService.js", () => ({
   getWebviewDialogService: vi.fn(() => ({
     registerDialog: vi.fn(),
     getPanelId: vi.fn(() => "panel-browser-1"),
+    storeOAuthSessionStorage: vi.fn(),
   })),
 }));
 
@@ -104,6 +106,7 @@ function createMockWebContents(type: "webview" | "window" | "browserView"): Mock
       handlers.push(handler);
       eventHandlers.set(event, handlers);
     }),
+    executeJavaScript: vi.fn().mockResolvedValue([]),
     id: Math.floor(Math.random() * 1000),
     // expose for testing
     _eventHandlers: eventHandlers,
@@ -368,6 +371,39 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
   });
 
   describe("navigation-blocked IPC routing", () => {
+    it("captures OAuth sessionStorage before offering the loopback flow", async () => {
+      const storeOAuthSessionStorage = vi.fn();
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-42"),
+        storeOAuthSessionStorage,
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      contents.executeJavaScript.mockResolvedValue([
+        ["kc_code_verifier", "verifier-123"],
+        ["kc_state", "state-123"],
+      ]);
+      simulateWebContentsCreated(contents);
+
+      const handler = getEventHandlers(contents, "will-navigate")[0];
+      const event = { preventDefault: vi.fn() };
+      handler(
+        event,
+        "https://oauth.provider.com/authorize?client_id=test&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fauth%2Fcallback&code_challenge=abc123"
+      );
+
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(storeOAuthSessionStorage).toHaveBeenCalledTimes(1);
+      expect(storeOAuthSessionStorage).toHaveBeenCalledWith("panel-42", expect.any(Promise));
+      await expect(storeOAuthSessionStorage.mock.calls[0][1]).resolves.toEqual([
+        ["kc_code_verifier", "verifier-123"],
+        ["kc_state", "state-123"],
+      ]);
+      expect(contents.executeJavaScript).toHaveBeenCalledTimes(1);
+    });
+
     it("sends navigation-blocked to parent when will-navigate blocks a non-localhost URL", () => {
       const mockSend = vi.fn();
       mockFromWebContents.mockReturnValue({

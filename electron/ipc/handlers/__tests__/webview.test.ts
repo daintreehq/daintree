@@ -17,6 +17,7 @@ const debuggerMock = vi.hoisted(() => ({
 const mockWebContents = vi.hoisted(() => ({
   isDestroyed: vi.fn(() => false),
   debugger: debuggerMock,
+  executeJavaScript: vi.fn().mockResolvedValue([]),
   hostWebContents: null as unknown,
 }));
 
@@ -29,16 +30,22 @@ const browserWindowMock = vi.hoisted(() => ({
   fromWebContents: vi.fn((): unknown => null),
 }));
 
+const appMock = vi.hoisted(() => ({
+  on: vi.fn(),
+}));
+
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   webContents: webContentsMock,
   BrowserWindow: browserWindowMock,
+  app: appMock,
 }));
 
 const mockDialogService = vi.hoisted(() => ({
   registerPanel: vi.fn(),
   resolveDialog: vi.fn(),
   getPanelId: vi.fn<(id: number) => string | undefined>(() => "test-panel"),
+  consumeOAuthSessionStorage: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../../../services/WebviewDialogService.js", () => ({

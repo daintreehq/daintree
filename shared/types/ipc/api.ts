@@ -813,6 +813,13 @@ export interface ElectronAPI {
     onNavigationBlocked(
       callback: (payload: { panelId: string; url: string; canOpenExternal: boolean }) => void
     ): () => void;
+    /** Start OAuth loopback flow: system browser for IdP, ephemeral server for callback, CDP for token exchange */
+    startOAuthLoopback(
+      authUrl: string,
+      panelId: string,
+      webContentsId: number,
+      sessionStorageSnapshot?: Array<[string, string]>
+    ): Promise<{ success: boolean; error?: string } | null>;
     /** Start CDP console capture for a webview panel */
     startConsoleCapture(webContentsId: number, paneId: string): Promise<void>;
     /** Stop CDP console capture for a webview panel */

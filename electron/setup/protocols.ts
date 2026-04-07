@@ -12,6 +12,7 @@ import {
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { isLocalhostUrl, isSafeNavigationUrl } from "../../shared/utils/urlUtils.js";
 import { getWebviewDialogService } from "../services/WebviewDialogService.js";
+import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
 
 // Track which sessions have had protocols registered to avoid double-registration
@@ -189,6 +190,53 @@ export function setupWebviewCSP(): void {
 
   // Monitor for dynamic dev-preview partitions
   app.on("web-contents-created", (_event, contents) => {
+    const notifyBlockedNavigation = (url: string) => {
+      const dialogService = getWebviewDialogService();
+      const panelId = dialogService.getPanelId(contents.id);
+      if (!panelId) return;
+
+      const isDevPreview = contents.session !== browserSession;
+      if (
+        isDevPreview &&
+        looksLikeOAuthUrl(url) &&
+        "executeJavaScript" in contents &&
+        typeof dialogService.storeOAuthSessionStorage === "function"
+      ) {
+        dialogService.storeOAuthSessionStorage(
+          panelId,
+          contents
+            .executeJavaScript(
+              `(() => {
+                try {
+                  return Object.entries(sessionStorage).filter(
+                    (entry) =>
+                      Array.isArray(entry) &&
+                      entry.length === 2 &&
+                      typeof entry[0] === "string" &&
+                      typeof entry[1] === "string"
+                  );
+                } catch {
+                  return [];
+                }
+              })()`
+            )
+            .catch((error: unknown) => {
+              console.warn("[MAIN] Failed to capture OAuth sessionStorage snapshot:", error);
+              return [];
+            })
+        );
+      }
+
+      const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
+      if (parentWindow && !parentWindow.isDestroyed()) {
+        getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, {
+          panelId,
+          url,
+          canOpenExternal: canOpenExternalUrl(url),
+        });
+      }
+    };
+
     contents.on("will-attach-webview", (_event, _webPreferences, params) => {
       const partition = params.partition;
       if (partition && isDevPreviewPartition(partition)) {
@@ -199,6 +247,16 @@ export function setupWebviewCSP(): void {
     // Route target="_blank" links and window.open() from webview guests to the system browser
     if (contents.getType() === "webview") {
       contents.setWindowOpenHandler(({ url }) => {
+        // If this is an OAuth URL from a dev-preview webview, route it through
+        // the blocked-nav banner so the user can use "Sign in via Browser" (loopback flow).
+        // Without this, window.open() OAuth popups bypass the banner and go straight
+        // to the system browser, losing the PKCE sessionStorage state.
+        const isDevPreview = contents.session !== browserSession;
+        if (url && isDevPreview && looksLikeOAuthUrl(url)) {
+          notifyBlockedNavigation(url);
+          return { action: "deny" };
+        }
+
         if (url && canOpenExternalUrl(url)) {
           void openExternalUrl(url).catch((error) => {
             console.error("[MAIN] Failed to open webview external URL:", error);
@@ -225,18 +283,7 @@ export function setupWebviewCSP(): void {
           const label = isBrowserPanel ? "unsafe" : "non-localhost";
           console.warn(`[MAIN] Blocked webview navigation to ${label} URL: ${navigationUrl}`);
           event.preventDefault();
-
-          const panelId = getWebviewDialogService().getPanelId(contents.id);
-          if (panelId) {
-            const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
-            if (parentWindow && !parentWindow.isDestroyed()) {
-              getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, {
-                panelId,
-                url: navigationUrl,
-                canOpenExternal: canOpenExternalUrl(navigationUrl),
-              });
-            }
-          }
+          notifyBlockedNavigation(navigationUrl);
         }
       });
 
@@ -251,18 +298,7 @@ export function setupWebviewCSP(): void {
           const label = isBrowserPanel ? "unsafe" : "non-localhost";
           console.warn(`[MAIN] Blocked webview redirect to ${label} URL: ${redirectUrl}`);
           event.preventDefault();
-
-          const panelId = getWebviewDialogService().getPanelId(contents.id);
-          if (panelId) {
-            const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
-            if (parentWindow && !parentWindow.isDestroyed()) {
-              getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, {
-                panelId,
-                url: redirectUrl,
-                canOpenExternal: canOpenExternalUrl(redirectUrl),
-              });
-            }
-          }
+          notifyBlockedNavigation(redirectUrl);
         }
       });
 
