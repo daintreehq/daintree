@@ -107,7 +107,7 @@ function scheduleScrollbackRestore(
 }
 
 export interface HydrationOptions {
-  addTerminal: (options: {
+  addPanel: (options: {
     kind?: PanelKind;
     type?: TerminalType;
     agentId?: string;
@@ -164,7 +164,7 @@ export async function hydrateAppState(
   isCurrent?: () => boolean,
   prefetchedHydrateResult?: import("@shared/types/ipc/app").HydrateResult
 ): Promise<void> {
-  const { addTerminal, setActiveWorktree, loadRecipes, openDiagnosticsDock } = options;
+  const { addPanel, setActiveWorktree, loadRecipes, openDiagnosticsDock } = options;
   const hydrationStartedAt = Date.now();
   let panelRestoreStartedAt: number | null = null;
   let panelRestoreCount = 0;
@@ -429,7 +429,7 @@ export async function hydrateAppState(
                     title: backendTerminal.title,
                   });
 
-                  const restoredTerminalId = await addTerminal(args);
+                  const restoredTerminalId = await addPanel(args);
                   restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
                   if (backendTerminal.activityTier) {
@@ -486,7 +486,7 @@ export async function hydrateAppState(
                         saved,
                         projectRoot || ""
                       );
-                      const restoredTerminalId = await addTerminal(reconnectArgs);
+                      const restoredTerminalId = await addPanel(reconnectArgs);
                       restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
                       if (reconnectedTerminal.activityTier) {
@@ -565,7 +565,7 @@ export async function hydrateAppState(
                         title: saved.title,
                       });
 
-                      const restoredTerminalId = await addTerminal(respawnArgs);
+                      const restoredTerminalId = await addPanel(respawnArgs);
                       restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
                       if (terminalSizes && typeof terminalSizes === "object") {
@@ -588,7 +588,7 @@ export async function hydrateAppState(
                     }
                   } else {
                     logHydrationInfo(`Recreating ${kind} panel: ${saved.id}`);
-                    const nonPtyId = await addTerminal(
+                    const nonPtyId = await addPanel(
                       buildArgsForNonPtyRecreation(saved, kind, projectRoot || "")
                     );
                     restoredIdsByIndex.set(capturedIndex, nonPtyId);
@@ -694,7 +694,7 @@ export async function hydrateAppState(
                 if (!orphanArgs.worktreeId && activeWorktreeId) {
                   orphanArgs.worktreeId = activeWorktreeId;
                 }
-                const restoredTerminalId = await addTerminal(orphanArgs);
+                const restoredTerminalId = await addPanel(orphanArgs);
 
                 if (terminal.activityTier) {
                   terminalInstanceService.initializeBackendTier(

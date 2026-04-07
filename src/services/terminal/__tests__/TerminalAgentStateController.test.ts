@@ -4,8 +4,8 @@ import { TerminalAgentStateController } from "../TerminalAgentStateController";
 import type { ManagedTerminal } from "../types";
 
 const mockUpdateAgentState = vi.fn();
-vi.mock("@/store/terminalStore", () => ({
-  useTerminalStore: {
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: {
     getState: () => ({
       updateAgentState: mockUpdateAgentState,
     }),

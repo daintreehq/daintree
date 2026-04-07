@@ -2,13 +2,13 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { useTerminalStoreMock, useWorktreeStoreMock } = vi.hoisted(() => ({
-  useTerminalStoreMock: vi.fn(),
+const { usePanelStoreMock, useWorktreeStoreMock } = vi.hoisted(() => ({
+  usePanelStoreMock: vi.fn(),
   useWorktreeStoreMock: vi.fn(),
 }));
 
-vi.mock("@/store/terminalStore", () => ({
-  useTerminalStore: useTerminalStoreMock,
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: usePanelStoreMock,
 }));
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
@@ -43,15 +43,15 @@ function setupTerminals(
   }>
 ) {
   const state = {
-    terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
-    terminalIds: terminals.map((t) => t.id),
+    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    panelIds: terminals.map((t) => t.id),
     isInTrash: isInTrashFn,
   };
-  useTerminalStoreMock.mockImplementation(
+  usePanelStoreMock.mockImplementation(
     (
       selector: (state: {
-        terminalsById: Record<string, (typeof terminals)[0]>;
-        terminalIds: string[];
+        panelsById: Record<string, (typeof terminals)[0]>;
+        panelIds: string[];
         isInTrash: (id: string) => boolean;
       }) => unknown
     ) => selector(state)
@@ -73,15 +73,15 @@ function setupBoth(
     (selector: (state: { worktrees: typeof wtMap }) => unknown) => selector({ worktrees: wtMap })
   );
   const state = {
-    terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
-    terminalIds: terminals.map((t) => t.id),
+    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    panelIds: terminals.map((t) => t.id),
     isInTrash: isInTrashFn,
   };
-  useTerminalStoreMock.mockImplementation(
+  usePanelStoreMock.mockImplementation(
     (
       selector: (state: {
-        terminalsById: Record<string, (typeof terminals)[0]>;
-        terminalIds: string[];
+        panelsById: Record<string, (typeof terminals)[0]>;
+        panelIds: string[];
         isInTrash: (id: string) => boolean;
       }) => unknown
     ) => selector(state)

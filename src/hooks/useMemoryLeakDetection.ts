@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { notify } from "@/lib/notify";
 import { isElectronAvailable } from "@/hooks/useElectron";
 import { DEFAULT_AUTO_RESTART_THRESHOLD_MB } from "@/store/memoryLeakConfigStore";
@@ -142,7 +142,7 @@ export function useMemoryLeakDetection(
         if (shouldAlert) {
           leakState.lastAlertAt = now;
 
-          const terminal = useTerminalStore.getState().terminalsById[id];
+          const terminal = usePanelStore.getState().panelsById[id];
           const terminalTitle = terminal?.title ?? id;
           const slope = computeSlope(leakState.memHistory);
 
@@ -160,7 +160,7 @@ export function useMemoryLeakDetection(
                 actionId: "terminal.restart" as const,
                 actionArgs: { terminalId: id },
                 onClick: () => {
-                  useTerminalStore.getState().restartTerminal(id);
+                  usePanelStore.getState().restartTerminal(id);
                 },
               },
               {
@@ -188,10 +188,10 @@ export function useMemoryLeakDetection(
           leakState.sampleCount >= STARTUP_SKIP_SAMPLES &&
           !leakState.dismissed
         ) {
-          const terminal = useTerminalStore.getState().terminalsById[id];
+          const terminal = usePanelStore.getState().panelsById[id];
           if (terminal && terminal.agentState !== "waiting" && !terminal.isInputLocked) {
             leakState.dismissed = true;
-            useTerminalStore.getState().restartTerminal(id);
+            usePanelStore.getState().restartTerminal(id);
             notify({
               type: "info",
               priority: "high",

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { hydrateAppState, type HydrationOptions } from "../../utils/stateHydration";
 import { isElectronAvailable } from "../useElectron";
 import { setStartupQuietPeriod } from "@/lib/notify";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useDiagnosticsStore, useFocusStore, useActionMruStore } from "@/store";
@@ -11,11 +11,11 @@ export function useAppHydration(enabled = true) {
   const [isStateLoaded, setIsStateLoaded] = useState(false);
   const hasRestoredState = useRef(false);
 
-  const addTerminal = useTerminalStore((s) => s.addTerminal);
-  const setReconnectError = useTerminalStore((s) => s.setReconnectError);
-  const hydrateTabGroups = useTerminalStore((s) => s.hydrateTabGroups);
-  const restoreTerminalOrder = useTerminalStore((s) => s.restoreTerminalOrder);
-  const hydrateMru = useTerminalStore((s) => s.hydrateMru);
+  const addPanel = usePanelStore((s) => s.addPanel);
+  const setReconnectError = usePanelStore((s) => s.setReconnectError);
+  const hydrateTabGroups = usePanelStore((s) => s.hydrateTabGroups);
+  const restoreTerminalOrder = usePanelStore((s) => s.restoreTerminalOrder);
+  const hydrateMru = usePanelStore((s) => s.hydrateMru);
   const setActiveWorktree = useWorktreeSelectionStore((s) => s.setActiveWorktree);
   const loadRecipes = useRecipeStore((s) => s.loadRecipes);
   const openDiagnosticsDock = useDiagnosticsStore((s) => s.openDock);
@@ -32,10 +32,10 @@ export function useAppHydration(enabled = true) {
     const restoreState = async () => {
       try {
         await hydrateAppState({
-          addTerminal: ((opts: Record<string, unknown>) =>
-            addTerminal({ ...opts, bypassLimits: true } as Parameters<
-              typeof addTerminal
-            >[0])) as HydrationOptions["addTerminal"],
+          addPanel: ((opts: Record<string, unknown>) =>
+            addPanel({ ...opts, bypassLimits: true } as Parameters<
+              typeof addPanel
+            >[0])) as HydrationOptions["addPanel"],
           setActiveWorktree,
           loadRecipes,
           openDiagnosticsDock,
@@ -57,7 +57,7 @@ export function useAppHydration(enabled = true) {
     restoreState();
   }, [
     enabled,
-    addTerminal,
+    addPanel,
     setActiveWorktree,
     loadRecipes,
     openDiagnosticsDock,

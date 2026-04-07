@@ -1,5 +1,5 @@
 import { notify } from "@/lib/notify";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useUIStore } from "@/store/uiStore";
 
 export function fireWatchNotification(
@@ -20,7 +20,7 @@ export function fireWatchNotification(
       action: {
         label: "Go to terminal",
         onClick: () => {
-          useTerminalStore.getState().setFocused(panelId, true);
+          usePanelStore.getState().setFocused(panelId, true);
         },
         actionId: "panel.focus",
         actionArgs: { panelId },
@@ -40,7 +40,7 @@ export function fireWatchNotification(
       action: {
         label: "Go to terminal",
         onClick: () => {
-          useTerminalStore.getState().setFocused(panelId, true);
+          usePanelStore.getState().setFocused(panelId, true);
         },
         actionId: "panel.focus",
         actionArgs: { panelId },
@@ -59,7 +59,7 @@ export function fireWatchNotification(
     action: {
       label: "Go to terminal",
       onClick: () => {
-        useTerminalStore.getState().setFocused(panelId, true);
+        usePanelStore.getState().setFocused(panelId, true);
       },
       actionId: "panel.focus",
       actionArgs: { panelId },

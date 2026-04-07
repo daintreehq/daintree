@@ -36,7 +36,7 @@ import { CommandPickerHost } from "@/components/Commands";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
-import { useTerminalStore, useVoiceRecordingStore } from "@/store";
+import { usePanelStore, useVoiceRecordingStore } from "@/store";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { Archive, Loader2 } from "lucide-react";
@@ -166,7 +166,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
     const stashEditorState = useTerminalInputStore((s) => s.stashEditorState);
     const popStashedEditorState = useTerminalInputStore((s) => s.popStashedEditorState);
-    const isFocusedTerminal = useTerminalStore((s) => s.focusedId === terminalId);
+    const isFocusedTerminal = usePanelStore((s) => s.focusedId === terminalId);
     const hasStash = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
       return s.stashedEditorStates.has(key);
@@ -205,8 +205,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const voiceStatus = useVoiceRecordingStore((s) => s.status);
     const activeVoicePanelId = useVoiceRecordingStore((s) => s.activeTarget?.panelId ?? null);
     const voiceDraftRevision = useTerminalInputStore((s) => s.voiceDraftRevision);
-    const panelWorktreeId = useTerminalStore(
-      useCallback((s) => s.terminalsById[terminalId]?.worktreeId, [terminalId])
+    const panelWorktreeId = usePanelStore(
+      useCallback((s) => s.panelsById[terminalId]?.worktreeId, [terminalId])
     );
     const panelWorktree = useWorktreeStore((s) =>
       panelWorktreeId ? s.worktrees.get(panelWorktreeId) : undefined

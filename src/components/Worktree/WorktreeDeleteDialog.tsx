@@ -4,7 +4,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { WorktreeIcon } from "@/components/icons";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 import { actionService } from "@/services/ActionService";
 import type { WorktreeState } from "@/types";
 
@@ -27,7 +27,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const armedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { counts: terminalCounts } = useWorktreeTerminals(worktree.id);
-  const bulkCloseByWorktree = useTerminalStore((state) => state.bulkCloseByWorktree);
+  const bulkCloseByWorktree = usePanelStore((state) => state.bulkCloseByWorktree);
 
   const changes = worktree.worktreeChanges?.changes ?? [];
   const hasTrackedChanges = changes.some((c) => c.status !== "untracked" && c.status !== "ignored");

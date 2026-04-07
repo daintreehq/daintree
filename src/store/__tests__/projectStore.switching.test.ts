@@ -38,12 +38,12 @@ vi.mock("../worktreeStore", () => ({
   },
 }));
 
-vi.mock("../terminalStore", () => ({
-  useTerminalStore: {
+vi.mock("../panelStore", () => ({
+  usePanelStore: {
     getState: () => ({
       terminals: [],
-      terminalsById: {},
-      terminalIds: [],
+      panelsById: {},
+      panelIds: [],
       tabGroups: new Map(),
     }),
   },
@@ -61,14 +61,14 @@ vi.mock("../projectSettingsStore", () => ({
 }));
 
 vi.mock("../slices", () => ({
-  flushTerminalPersistence: vi.fn(),
+  flushPanelPersistence: vi.fn(),
 }));
 
-vi.mock("../persistence/terminalPersistence", () => ({
-  terminalPersistence: {
+vi.mock("../persistence/panelPersistence", () => ({
+  panelPersistence: {
     setProjectIdGetter: vi.fn(),
   },
-  terminalToSnapshot: vi.fn((t: { id: string; kind: string }) => ({
+  panelToSnapshot: vi.fn((t: { id: string; kind: string }) => ({
     id: t.id,
     kind: t.kind,
   })),
@@ -189,7 +189,7 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
 
 describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
   it("includes browser panel snapshots in outgoing terminals", async () => {
-    const { setTerminalStoreGetter } = await import("../projectStore");
+    const { setPanelStoreGetter } = await import("../projectStore");
     const browserPanel = {
       id: "browser-1",
       kind: "browser",
@@ -197,9 +197,9 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
       location: "grid",
       browserUrl: "https://example.com",
     };
-    setTerminalStoreGetter(() => ({
-      terminalsById: { "browser-1": browserPanel } as never,
-      terminalIds: ["browser-1"],
+    setPanelStoreGetter(() => ({
+      panelsById: { "browser-1": browserPanel } as never,
+      panelIds: ["browser-1"],
       tabGroups: new Map(),
     }));
 
@@ -214,16 +214,16 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
   });
 
   it("includes dev-preview panel snapshots in outgoing terminals", async () => {
-    const { setTerminalStoreGetter } = await import("../projectStore");
+    const { setPanelStoreGetter } = await import("../projectStore");
     const devPreview = {
       id: "dev-1",
       kind: "dev-preview",
       title: "Dev Preview",
       location: "grid",
     };
-    setTerminalStoreGetter(() => ({
-      terminalsById: { "dev-1": devPreview } as never,
-      terminalIds: ["dev-1"],
+    setPanelStoreGetter(() => ({
+      panelsById: { "dev-1": devPreview } as never,
+      panelIds: ["dev-1"],
       tabGroups: new Map(),
     }));
 
@@ -238,7 +238,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
   });
 
   it("excludes trash, background, assistant, and smoke-test panels", async () => {
-    const { setTerminalStoreGetter } = await import("../projectStore");
+    const { setPanelStoreGetter } = await import("../projectStore");
     const panels = {
       "t-trash": { id: "t-trash", kind: "terminal", location: "trash" },
       "t-bg": { id: "t-bg", kind: "terminal", location: "background" },
@@ -246,9 +246,9 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
       "smoke-test-1": { id: "smoke-test-1", kind: "terminal", location: "grid" },
       "t-keep": { id: "t-keep", kind: "browser", location: "grid" },
     } as never;
-    setTerminalStoreGetter(() => ({
-      terminalsById: panels,
-      terminalIds: Object.keys(panels),
+    setPanelStoreGetter(() => ({
+      panelsById: panels,
+      panelIds: Object.keys(panels),
       tabGroups: new Map(),
     }));
 
@@ -264,14 +264,14 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
   });
 
   it("includes multi-panel tab groups, excludes single-panel groups", async () => {
-    const { setTerminalStoreGetter } = await import("../projectStore");
+    const { setPanelStoreGetter } = await import("../projectStore");
     const tabGroups = new Map([
       ["g1", { id: "g1", location: "grid" as const, activeTabId: "a", panelIds: ["a", "b"] }],
       ["g2", { id: "g2", location: "grid" as const, activeTabId: "c", panelIds: ["c"] }],
     ]);
-    setTerminalStoreGetter(() => ({
-      terminalsById: {} as never,
-      terminalIds: [],
+    setPanelStoreGetter(() => ({
+      panelsById: {} as never,
+      panelIds: [],
       tabGroups,
     }));
 
@@ -288,10 +288,10 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
   });
 
   it("sends empty tabGroups array to clear stale groups when none exist", async () => {
-    const { setTerminalStoreGetter } = await import("../projectStore");
-    setTerminalStoreGetter(() => ({
-      terminalsById: {} as never,
-      terminalIds: [],
+    const { setPanelStoreGetter } = await import("../projectStore");
+    setPanelStoreGetter(() => ({
+      panelsById: {} as never,
+      panelIds: [],
       tabGroups: new Map(),
     }));
 
@@ -306,11 +306,11 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
   });
 
   it("includes terminals in reopen outgoing state", async () => {
-    const { setTerminalStoreGetter } = await import("../projectStore");
+    const { setPanelStoreGetter } = await import("../projectStore");
     const panel = { id: "b-1", kind: "browser", location: "grid" };
-    setTerminalStoreGetter(() => ({
-      terminalsById: { "b-1": panel } as never,
-      terminalIds: ["b-1"],
+    setPanelStoreGetter(() => ({
+      panelsById: { "b-1": panel } as never,
+      panelIds: ["b-1"],
       tabGroups: new Map(),
     }));
 
@@ -372,7 +372,7 @@ describe("buildOutgoingState worktree selection (#5000)", () => {
   it("includes activeWorktreeId even when terminal store getter is null (early return)", async () => {
     mockActiveWorktreeId = "wt-early";
 
-    // Don't call setTerminalStoreGetter — forces the early return path
+    // Don't call setPanelStoreGetter — forces the early return path
     const { useProjectStore, setWorktreeSelectionStoreGetter } = await import("../projectStore");
     setWorktreeSelectionStoreGetter(() => ({ activeWorktreeId: mockActiveWorktreeId }));
     useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });

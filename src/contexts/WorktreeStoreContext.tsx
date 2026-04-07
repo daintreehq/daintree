@@ -6,7 +6,7 @@ import {
 } from "@/store/createWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { usePulseStore } from "@/store/pulseStore";
 import { worktreeClient } from "@/clients/worktreeClient";
 
@@ -160,16 +160,16 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         }
 
         // Side effect: kill associated terminals
-        const terminalStore = useTerminalStore.getState();
+        const terminalStore = usePanelStore.getState();
         const idsToKill: string[] = [];
-        for (const id of terminalStore.terminalIds) {
-          const t = terminalStore.terminalsById[id];
+        for (const id of terminalStore.panelIds) {
+          const t = terminalStore.panelsById[id];
           if (t && (t.worktreeId ?? undefined) === event.worktreeId) {
             idsToKill.push(id);
           }
         }
         for (const id of idsToKill) {
-          terminalStore.removeTerminal(id);
+          terminalStore.removePanel(id);
         }
       })
     );

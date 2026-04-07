@@ -1,5 +1,5 @@
 import { useProjectStore } from "@/store/projectStore";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { isActiveVoiceSession } from "@shared/types";
@@ -392,7 +392,7 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      useTerminalStore.subscribe((state) => {
+      usePanelStore.subscribe((state) => {
         const activeTarget = useVoiceRecordingStore.getState().activeTarget;
         if (!activeTarget) return;
 
@@ -401,7 +401,7 @@ class VoiceRecordingService {
         const currentProjectId = useProjectStore.getState().currentProject?.id;
         if (activeTarget.projectId && currentProjectId !== activeTarget.projectId) return;
 
-        const found = state.terminalsById[activeTarget.panelId];
+        const found = state.panelsById[activeTarget.panelId];
         const panel = found && found.location !== "trash" ? found : undefined;
 
         if (!panel) {
@@ -769,22 +769,22 @@ class VoiceRecordingService {
 
     await this.waitForPanel(target.panelId);
 
-    const foundPanel = useTerminalStore.getState().terminalsById[target.panelId];
+    const foundPanel = usePanelStore.getState().panelsById[target.panelId];
     if (!foundPanel || foundPanel.location === "trash") {
       return false;
     }
     const panel = foundPanel;
 
-    useTerminalStore.getState().activateTerminal(panel.id);
+    usePanelStore.getState().activateTerminal(panel.id);
     return true;
   }
 
   private getFocusedPanelTarget(): VoiceRecordingTarget | null {
-    const terminalState = useTerminalStore.getState();
+    const terminalState = usePanelStore.getState();
     const panelId = terminalState.focusedId;
     if (!panelId) return null;
 
-    const foundPanel = terminalState.terminalsById[panelId];
+    const foundPanel = terminalState.panelsById[panelId];
     if (!foundPanel || foundPanel.location === "trash") return null;
     const panel = foundPanel;
 
@@ -804,7 +804,7 @@ class VoiceRecordingService {
   }
 
   private async waitForPanel(panelId: string, timeoutMs = 5000): Promise<void> {
-    const existingPanel = useTerminalStore.getState().terminalsById[panelId];
+    const existingPanel = usePanelStore.getState().panelsById[panelId];
     if (existingPanel && existingPanel.location !== "trash") return;
 
     await new Promise<void>((resolve) => {
@@ -816,8 +816,8 @@ class VoiceRecordingService {
         resolve();
       }, timeoutMs);
 
-      const unsubscribe = useTerminalStore.subscribe((state) => {
-        const found = state.terminalsById[panelId];
+      const unsubscribe = usePanelStore.subscribe((state) => {
+        const found = state.panelsById[panelId];
         if (!found || found.location === "trash" || settled) return;
         settled = true;
         clearTimeout(timeout);

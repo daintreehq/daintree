@@ -2,7 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
 import { terminalClient } from "@/clients";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 export function registerTerminalQueryActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -27,8 +27,8 @@ export function registerTerminalQueryActions(
         worktreeId?: string;
         location?: "grid" | "dock" | "trash" | "background";
       };
-      const state = useTerminalStore.getState();
-      let terminals = state.terminalIds.map((id) => state.terminalsById[id]).filter(Boolean);
+      const state = usePanelStore.getState();
+      let terminals = state.panelIds.map((id) => state.panelsById[id]).filter(Boolean);
 
       // Filter by worktree if specified
       if (worktreeId) {
@@ -145,7 +145,7 @@ export function registerTerminalQueryActions(
       const { terminalId, command } = args as { terminalId: string; command: string };
 
       // Verify terminal exists and is valid for command execution
-      const terminal = useTerminalStore.getState().terminalsById[terminalId];
+      const terminal = usePanelStore.getState().panelsById[terminalId];
 
       if (!terminal) {
         throw new Error("Terminal not found");

@@ -42,7 +42,7 @@ import { useBranchValidation } from "./hooks/useBranchValidation";
 import { useBranchPicker } from "./hooks/useBranchPicker";
 import { usePrefixPicker } from "./hooks/usePrefixPicker";
 import { useRecipePicker, CLONE_LAYOUT_ID } from "./hooks/useRecipePicker";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 
 type BranchMode = "new" | "existing";
 
@@ -495,7 +495,7 @@ export function NewWorktreeDialog({
                 .getState()
                 .generateRecipeFromActiveTerminals(sourceWorktreeId);
               for (const t of terminals) {
-                await useTerminalStore.getState().addTerminal({
+                await usePanelStore.getState().addPanel({
                   kind:
                     t.type === "dev-preview"
                       ? "dev-preview"
@@ -675,7 +675,7 @@ export function NewWorktreeDialog({
               .getState()
               .generateRecipeFromActiveTerminals(sourceWorktreeId);
             for (const t of terminals) {
-              await useTerminalStore.getState().addTerminal({
+              await usePanelStore.getState().addPanel({
                 kind:
                   t.type === "dev-preview"
                     ? "dev-preview"

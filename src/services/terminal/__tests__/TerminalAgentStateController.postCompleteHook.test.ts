@@ -5,8 +5,8 @@ import type { ManagedTerminal } from "../types";
 import type { PostCompleteHook } from "../types";
 
 const mockUpdateAgentState = vi.fn();
-vi.mock("@/store/terminalStore", () => ({
-  useTerminalStore: {
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: {
     getState: () => ({
       updateAgentState: mockUpdateAgentState,
     }),

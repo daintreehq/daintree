@@ -4,7 +4,7 @@ import {
   type TerminalCommandQueueSlice,
 } from "../terminalCommandQueueSlice";
 import { terminalClient } from "@/clients";
-import type { TerminalInstance } from "../terminalRegistrySlice";
+import type { TerminalInstance } from "../panelRegistrySlice";
 
 vi.mock("@/clients", () => ({
   terminalClient: {

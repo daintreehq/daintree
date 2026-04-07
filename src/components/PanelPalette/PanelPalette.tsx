@@ -5,7 +5,7 @@ import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import type { PanelKindOption } from "@/hooks/usePanelPalette";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { PanelKindIcon } from "./PanelKindIcon";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 
@@ -116,10 +116,10 @@ export function PanelPalette({
     [onSelectPrevious, onSelectNext, onConfirm, onClose]
   );
 
-  const panelCount = useTerminalStore((state) => {
+  const panelCount = usePanelStore((state) => {
     let count = 0;
-    for (const id of state.terminalIds) {
-      const t = state.terminalsById[id];
+    for (const id of state.panelIds) {
+      const t = state.panelsById[id];
       if (t && t.location !== "trash") count++;
     }
     return count;

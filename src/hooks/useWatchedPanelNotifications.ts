@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { fireWatchNotification } from "@/lib/watchNotification";
 
@@ -9,12 +9,12 @@ export function useWatchedPanelNotifications(): void {
   useEffect(() => {
     // Sync initial watched set to main process
     window.electron?.notification?.syncWatchedPanels?.(
-      Array.from(useTerminalStore.getState().watchedPanels)
+      Array.from(usePanelStore.getState().watchedPanels)
     );
 
     // Keep main process in sync whenever the watched set changes
-    let prevWatchedPanels = useTerminalStore.getState().watchedPanels;
-    const unsubWatched = useTerminalStore.subscribe((state) => {
+    let prevWatchedPanels = usePanelStore.getState().watchedPanels;
+    const unsubWatched = usePanelStore.subscribe((state) => {
       if (state.watchedPanels !== prevWatchedPanels) {
         prevWatchedPanels = state.watchedPanels;
         window.electron?.notification?.syncWatchedPanels?.(Array.from(state.watchedPanels));
@@ -22,8 +22,8 @@ export function useWatchedPanelNotifications(): void {
     });
 
     let prevAgentStates = new Map<string, string | undefined>(
-      useTerminalStore.getState().terminalIds.map((id) => {
-        const t = useTerminalStore.getState().terminalsById[id];
+      usePanelStore.getState().panelIds.map((id) => {
+        const t = usePanelStore.getState().panelsById[id];
         return [id, t?.agentState];
       })
     );
@@ -48,10 +48,10 @@ export function useWatchedPanelNotifications(): void {
       }
     }
 
-    const unsubscribe = useTerminalStore.subscribe((state) => {
-      const { watchedPanels, terminalsById, terminalIds } = state;
+    const unsubscribe = usePanelStore.subscribe((state) => {
+      const { watchedPanels, panelsById, panelIds } = state;
       const currentAgentStates = new Map<string, string | undefined>(
-        terminalIds.map((id) => [id, terminalsById[id]?.agentState])
+        panelIds.map((id) => [id, panelsById[id]?.agentState])
       );
 
       for (const panelId of watchedPanels) {
@@ -64,7 +64,7 @@ export function useWatchedPanelNotifications(): void {
             currentState === "exited") &&
           currentState !== previousState
         ) {
-          const terminal = terminalsById[panelId];
+          const terminal = panelsById[panelId];
           if (!terminal || terminal.location === "trash") {
             state.unwatchPanel(panelId);
             continue;
@@ -77,7 +77,7 @@ export function useWatchedPanelNotifications(): void {
 
           enqueueNotification(() => {
             // Guard: skip if panel has since been removed or trashed
-            const liveTerminal = useTerminalStore.getState().terminalsById[capturedPanelId];
+            const liveTerminal = usePanelStore.getState().panelsById[capturedPanelId];
             if (!liveTerminal || liveTerminal.location === "trash") return;
 
             fireWatchNotification(capturedPanelId, capturedTitle, capturedState);
@@ -99,7 +99,7 @@ export function useWatchedPanelNotifications(): void {
         if (worktreeId) {
           useWorktreeSelectionStore.getState().setActiveWorktree(worktreeId);
         }
-        useTerminalStore.getState().setFocused(panelId, true);
+        usePanelStore.getState().setFocused(panelId, true);
       });
     }
 

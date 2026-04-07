@@ -7,7 +7,7 @@ import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
 import { useUrlHistoryStore } from "./urlHistoryStore";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
-import { terminalPersistence, terminalToSnapshot } from "./persistence/terminalPersistence";
+import { panelPersistence, panelToSnapshot } from "./persistence/panelPersistence";
 import { useTerminalInputStore } from "./terminalInputStore";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
@@ -22,29 +22,29 @@ function shouldPersistTerminal(t: TerminalInstance): boolean {
   );
 }
 
-// Lazy reference to useTerminalStore to break circular dependency.
-// Injected at module-init time from terminalStore.ts (same pattern as
-// terminalPersistence.setProjectIdGetter).
-let _getTerminalStoreState:
+// Lazy reference to usePanelStore to break circular dependency.
+// Injected at module-init time from panelStore.ts (same pattern as
+// panelPersistence.setProjectIdGetter).
+let _getPanelStoreState:
   | (() => {
-      terminalsById: Record<string, TerminalInstance>;
-      terminalIds: string[];
+      panelsById: Record<string, TerminalInstance>;
+      panelIds: string[];
       tabGroups: Map<string, TabGroup>;
     })
   | null = null;
 
-export function setTerminalStoreGetter(
+export function setPanelStoreGetter(
   getter: () => {
-    terminalsById: Record<string, TerminalInstance>;
-    terminalIds: string[];
+    panelsById: Record<string, TerminalInstance>;
+    panelIds: string[];
     tabGroups: Map<string, TabGroup>;
   }
 ): void {
-  _getTerminalStoreState = getter;
+  _getPanelStoreState = getter;
 }
 
 // Lazy reference to useWorktreeSelectionStore to break circular dependency.
-// worktreeStore → terminalInstanceService → terminalStore → setTerminalStoreGetter
+// worktreeStore → terminalInstanceService → terminalStore → setPanelStoreGetter
 // would create a TDZ error if imported statically.
 let _getWorktreeSelectionState: (() => { activeWorktreeId: string | null }) | null = null;
 
@@ -61,18 +61,18 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   // Synchronously snapshot terminal state from the Zustand store before the
   // renderer gets detached.  This captures browser/dev-preview panel state
   // that would otherwise be lost because the debounced persistence hasn't
-  // flushed yet.  Uses the same filter as TerminalPersistence.save().
-  const terminalState = _getTerminalStoreState?.();
+  // flushed yet.  Uses the same filter as PanelPersistence.save().
+  const terminalState = _getPanelStoreState?.();
   if (!terminalState) {
     return { draftInputs, activeWorktreeId };
   }
 
-  const { terminalsById, terminalIds, tabGroups } = terminalState;
+  const { panelsById, panelIds, tabGroups } = terminalState;
 
-  const terminals = terminalIds
-    .map((id) => terminalsById[id])
+  const terminals = panelIds
+    .map((id) => panelsById[id])
     .filter((t): t is TerminalInstance => t != null && shouldPersistTerminal(t))
-    .map(terminalToSnapshot);
+    .map(panelToSnapshot);
 
   const tabGroupArray = Array.from(tabGroups.values()).filter((g) => g.panelIds.length > 1);
 
@@ -540,4 +540,4 @@ export const useProjectStore = create<ProjectState>()(
 );
 
 // Break circular dependency by injecting project ID getter
-terminalPersistence.setProjectIdGetter(() => useProjectStore.getState().currentProject?.id);
+panelPersistence.setProjectIdGetter(() => useProjectStore.getState().currentProject?.id);

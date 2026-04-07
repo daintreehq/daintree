@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { X, AlertTriangle, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelLimitStore, shouldShowSoftWarning } from "@/store/panelLimitStore";
 
@@ -11,12 +11,12 @@ interface TerminalCountWarningProps {
 }
 
 export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalCountWarningProps) {
-  const { activeCount, completedCount } = useTerminalStore(
+  const { activeCount, completedCount } = usePanelStore(
     useShallow((state) => {
       let active = 0;
       let completed = 0;
-      for (const id of state.terminalIds) {
-        const t = state.terminalsById[id];
+      for (const id of state.panelIds) {
+        const t = state.panelsById[id];
         if (t && t.location !== "trash") {
           active++;
           if (t.agentState === "completed" || t.agentState === "exited") completed++;
@@ -83,15 +83,15 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
     if (onOpenBulkActions) {
       onOpenBulkActions();
     } else {
-      const { terminalsById, terminalIds } = useTerminalStore.getState();
-      for (const id of terminalIds) {
-        const t = terminalsById[id];
+      const { panelsById, panelIds } = usePanelStore.getState();
+      for (const id of panelIds) {
+        const t = panelsById[id];
         if (
           t &&
           (t.agentState === "completed" || t.agentState === "exited") &&
           t.location !== "trash"
         ) {
-          useTerminalStore.getState().trashTerminal(t.id);
+          usePanelStore.getState().trashPanel(t.id);
         }
       }
     }

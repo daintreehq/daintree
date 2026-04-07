@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import { notify } from "@/lib/notify";
 import { isElectronAvailable } from "../useElectron";
@@ -30,8 +30,8 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
 
         eligibleRef.current = true;
 
-        const { terminalsById, terminalIds } = useTerminalStore.getState();
-        const hasWaiting = terminalIds.some((id) => terminalsById[id]?.agentState === "waiting");
+        const { panelsById, panelIds } = usePanelStore.getState();
+        const hasWaiting = panelIds.some((id) => panelsById[id]?.agentState === "waiting");
         if (hasWaiting && !firedRef.current) {
           fireNudge();
         }
@@ -49,20 +49,20 @@ export function useAgentWaitingNudge(isStateLoaded: boolean): void {
   useEffect(() => {
     if (!isElectronAvailable() || !isStateLoaded) return;
 
-    const initState = useTerminalStore.getState();
+    const initState = usePanelStore.getState();
     let prevAgentStates = new Map<string, string | undefined>(
-      initState.terminalIds.map((id) => [id, initState.terminalsById[id]?.agentState])
+      initState.panelIds.map((id) => [id, initState.panelsById[id]?.agentState])
     );
 
-    const unsubscribe = useTerminalStore.subscribe((state) => {
+    const unsubscribe = usePanelStore.subscribe((state) => {
       if (!eligibleRef.current || firedRef.current) return;
 
       const currentAgentStates = new Map<string, string | undefined>(
-        state.terminalIds.map((id) => [id, state.terminalsById[id]?.agentState])
+        state.panelIds.map((id) => [id, state.panelsById[id]?.agentState])
       );
 
-      for (const id of state.terminalIds) {
-        const terminal = state.terminalsById[id];
+      for (const id of state.panelIds) {
+        const terminal = state.panelsById[id];
         if (!terminal) continue;
         const prev = prevAgentStates.get(id);
         if (terminal.agentState === "waiting" && prev !== "waiting") {

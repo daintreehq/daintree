@@ -51,7 +51,7 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
 
 const {
   terminalStoreState,
-  useTerminalStoreMock,
+  usePanelStoreMock,
   useProjectStoreMock,
   useIsDraggingMock,
   actionDispatchMock,
@@ -63,11 +63,11 @@ const {
     setBrowserHistory: vi.fn(),
     setBrowserZoom: vi.fn(),
   };
-  const useTerminalStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
+  const usePanelStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
     selector(terminalStoreState)
   );
-  (useTerminalStoreMock as unknown as { getState: () => typeof terminalStoreState }).getState =
-    () => terminalStoreState;
+  (usePanelStoreMock as unknown as { getState: () => typeof terminalStoreState }).getState = () =>
+    terminalStoreState;
   const projectStoreState = { currentProject: { id: "test-project" } };
   const useProjectStoreMock = vi.fn((selector: (state: typeof projectStoreState) => unknown) =>
     selector(projectStoreState)
@@ -85,7 +85,7 @@ const {
     () => urlHistoryStoreState;
   return {
     terminalStoreState,
-    useTerminalStoreMock,
+    usePanelStoreMock,
     useProjectStoreMock,
     useIsDraggingMock,
     actionDispatchMock,
@@ -94,7 +94,7 @@ const {
 });
 
 vi.mock("@/store", () => ({
-  useTerminalStore: useTerminalStoreMock,
+  usePanelStore: usePanelStoreMock,
   useProjectStore: useProjectStoreMock,
 }));
 

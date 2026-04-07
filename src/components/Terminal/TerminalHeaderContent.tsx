@@ -9,7 +9,7 @@ import {
   getEffectiveStateLabel,
 } from "@/components/Worktree/terminalStateConfig";
 import type { ActivityState } from "./TerminalPane";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatTokenCount } from "@/utils/formatTokenCount";
@@ -92,9 +92,9 @@ function TerminalHeaderContentComponent({
     waitingReason,
     sessionCost,
     sessionTokens,
-  } = useTerminalStore(
+  } = usePanelStore(
     useShallow((state) => {
-      const t = state.terminalsById[id];
+      const t = state.panelsById[id];
       return {
         isInputLocked: t?.isInputLocked ?? false,
         startedAt: t?.startedAt,

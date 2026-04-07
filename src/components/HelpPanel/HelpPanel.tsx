@@ -9,7 +9,7 @@ import {
   HELP_PANEL_MIN_WIDTH,
   HELP_PANEL_MAX_WIDTH,
 } from "@/store/helpPanelStore";
-import { useTerminalStore, getTerminalRefreshTier, useAgentSettingsStore } from "@/store";
+import { usePanelStore, getTerminalRefreshTier, useAgentSettingsStore } from "@/store";
 import { getAgentConfig } from "@/config/agents";
 import { getAgentSettingsEntry } from "@shared/types";
 import { ASSISTANT_FAST_MODELS } from "@shared/config/agentRegistry";
@@ -49,8 +49,8 @@ export function HelpPanel() {
     clearPreferredAgent,
   } = useHelpPanelStore();
 
-  const terminal = useTerminalStore((s) => (terminalId ? s.terminalsById[terminalId] : undefined));
-  const removeTerminal = useTerminalStore((s) => s.removeTerminal);
+  const terminal = usePanelStore((s) => (terminalId ? s.panelsById[terminalId] : undefined));
+  const removePanel = usePanelStore((s) => s.removePanel);
 
   const agentConfig = agentId ? getAgentConfig(agentId) : undefined;
 
@@ -62,7 +62,7 @@ export function HelpPanel() {
       if (!document.hidden) return;
       const { terminalId: tid } = useHelpPanelStore.getState();
       if (tid) {
-        useTerminalStore.getState().removeTerminal(tid);
+        usePanelStore.getState().removePanel(tid);
         useHelpPanelStore.getState().clearTerminal();
       }
     };
@@ -167,7 +167,7 @@ export function HelpPanel() {
     async (selectedAgentId: string) => {
       // Remove existing terminal if switching agents
       if (terminalId) {
-        removeTerminal(terminalId);
+        removePanel(terminalId);
         clearTerminal();
       }
 
@@ -192,23 +192,23 @@ export function HelpPanel() {
         window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
       }
     },
-    [terminalId, removeTerminal, clearTerminal]
+    [terminalId, removePanel, clearTerminal]
   );
 
   const handleBack = useCallback(() => {
     if (terminalId) {
-      removeTerminal(terminalId);
+      removePanel(terminalId);
     }
     clearPreferredAgent();
-  }, [terminalId, removeTerminal, clearPreferredAgent]);
+  }, [terminalId, removePanel, clearPreferredAgent]);
 
   const handleClose = useCallback(() => {
     if (terminalId) {
-      removeTerminal(terminalId);
+      removePanel(terminalId);
       clearTerminal();
     }
     setOpen(false);
-  }, [terminalId, removeTerminal, clearTerminal, setOpen]);
+  }, [terminalId, removePanel, clearTerminal, setOpen]);
 
   const getRefreshTier = useMemo(() => {
     return () => {

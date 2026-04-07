@@ -5,7 +5,7 @@ import { useDroppable } from "@dnd-kit/core";
 import { cn } from "@/lib/utils";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import {
-  useTerminalStore,
+  usePanelStore,
   useLayoutConfigStore,
   useWorktreeSelectionStore,
   usePreferencesStore,
@@ -353,7 +353,7 @@ export function ContentGrid({
 }: ContentGridProps) {
   "use memo";
   const {
-    terminalsById,
+    panelsById,
     storeTerminalIds,
     trashedTerminals,
     focusedId,
@@ -365,10 +365,10 @@ export function ContentGrid({
     getTerminal,
     getActiveTabId,
     setFocused,
-  } = useTerminalStore(
+  } = usePanelStore(
     useShallow((state) => ({
-      terminalsById: state.terminalsById,
-      storeTerminalIds: state.terminalIds,
+      panelsById: state.panelsById,
+      storeTerminalIds: state.panelIds,
       trashedTerminals: state.trashedTerminals,
       focusedId: state.focusedId,
       maximizedId: state.maximizedId,
@@ -407,7 +407,7 @@ export function ContentGrid({
       : activeWorktree.branch?.trim() || activeWorktree.name?.trim() || "Unknown Worktree"
     : null;
 
-  const isInTrash = useTerminalStore((state) => state.isInTrash);
+  const isInTrash = usePanelStore((state) => state.isInTrash);
 
   // Two-pane split mode settings
   const twoPaneSplitEnabled = useTwoPaneSplitStore((state) => state.config.enabled);
@@ -416,7 +416,7 @@ export function ContentGrid({
   const gridTerminals = useMemo(() => {
     const result: TerminalInstance[] = [];
     for (const id of storeTerminalIds) {
-      const t = terminalsById[id];
+      const t = panelsById[id];
       if (
         t &&
         (t.location === "grid" || t.location === undefined) &&
@@ -426,23 +426,23 @@ export function ContentGrid({
       }
     }
     return result;
-  }, [terminalsById, storeTerminalIds, activeWorktreeId]);
+  }, [panelsById, storeTerminalIds, activeWorktreeId]);
 
   // Get tab groups for the grid
-  const getTabGroups = useTerminalStore((state) => state.getTabGroups);
-  const getTabGroupPanels = useTerminalStore((state) => state.getTabGroupPanels);
-  const getPanelGroup = useTerminalStore((state) => state.getPanelGroup);
-  const createTabGroup = useTerminalStore((state) => state.createTabGroup);
-  const addPanelToGroup = useTerminalStore((state) => state.addPanelToGroup);
-  const deleteTabGroup = useTerminalStore((state) => state.deleteTabGroup);
-  const addTerminal = useTerminalStore((state) => state.addTerminal);
-  const setActiveTab = useTerminalStore((state) => state.setActiveTab);
+  const getTabGroups = usePanelStore((state) => state.getTabGroups);
+  const getTabGroupPanels = usePanelStore((state) => state.getTabGroupPanels);
+  const getPanelGroup = usePanelStore((state) => state.getPanelGroup);
+  const createTabGroup = usePanelStore((state) => state.createTabGroup);
+  const addPanelToGroup = usePanelStore((state) => state.addPanelToGroup);
+  const deleteTabGroup = usePanelStore((state) => state.deleteTabGroup);
+  const addPanel = usePanelStore((state) => state.addPanel);
+  const setActiveTab = usePanelStore((state) => state.setActiveTab);
 
   // Get tab groups for the active worktree
   const tabGroups = useMemo(() => {
     return getTabGroups("grid", activeWorktreeId ?? undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeTerminalIds/terminalsById/trashedTerminals are intentional trigger deps
-  }, [getTabGroups, activeWorktreeId, storeTerminalIds, terminalsById, trashedTerminals]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeTerminalIds/panelsById/trashedTerminals are intentional trigger deps
+  }, [getTabGroups, activeWorktreeId, storeTerminalIds, panelsById, trashedTerminals]);
 
   // Handler for adding a new tab to a single panel (creates a tab group)
   const handleAddTabForPanel = useCallback(
@@ -461,7 +461,7 @@ export function ContentGrid({
         }
 
         const options = await buildPanelDuplicateOptions(panel, "grid");
-        const newPanelId = await addTerminal(options);
+        const newPanelId = await addPanel(options);
         if (!newPanelId) {
           if (createdNewGroup && groupId!) deleteTabGroup(groupId);
           return;
@@ -482,7 +482,7 @@ export function ContentGrid({
       createTabGroup,
       addPanelToGroup,
       deleteTabGroup,
-      addTerminal,
+      addPanel,
       setActiveTab,
       setFocused,
     ]
@@ -675,7 +675,7 @@ export function ContentGrid({
   );
 
   // Terminal IDs for SortableContext
-  const terminalIds = useMemo(() => {
+  const panelIds = useMemo(() => {
     const ids = tabGroups.map((g) => g.panelIds[0] ?? g.id);
     if (showPlaceholder && placeholderInGrid) {
       const insertIndex = Math.min(Math.max(0, placeholderIndex), ids.length);
@@ -713,7 +713,7 @@ export function ContentGrid({
       clearTimeout(timeoutId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- gridTerminals intentionally excluded to prevent redundant fit cycles on worktree switch
-  }, [gridCols, terminalIds]);
+  }, [gridCols, panelIds]);
 
   // Show "grid full" overlay when trying to drag from dock to a full grid
   const showGridFullOverlay = sourceContainer === "dock" && isGridFull;
@@ -1005,7 +1005,7 @@ export function ContentGrid({
       <GridNotificationBar className="mx-1 mt-1 shrink-0" />
       <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
       <div className="relative flex-1 min-h-0">
-        <SortableContext id="grid-container" items={terminalIds} strategy={rectSortingStrategy}>
+        <SortableContext id="grid-container" items={panelIds} strategy={rectSortingStrategy}>
           <ContextMenu>
             <ContextMenuTrigger asChild>
               <div

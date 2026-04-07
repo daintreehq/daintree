@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import type { WorktreeState } from "@/types";
 import { actionService } from "@/services/ActionService";
 import { useRecipeStore } from "@/store/recipeStore";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 
 export interface ConfirmDialogState {
   isOpen: boolean;
@@ -46,7 +46,7 @@ export function useWorktreeActions({
   allTerminalCount: number;
 }): UseWorktreeActionsResult {
   const runRecipe = useRecipeStore((state) => state.runRecipe);
-  const bulkRestartPreflightCheckByWorktree = useTerminalStore(
+  const bulkRestartPreflightCheckByWorktree = usePanelStore(
     (state) => state.bulkRestartPreflightCheckByWorktree
   );
 

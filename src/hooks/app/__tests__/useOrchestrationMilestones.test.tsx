@@ -28,14 +28,14 @@ type WorktreeLike = { prState?: string };
 type RecipeLike = { lastUsedAt?: number };
 
 let terminalState = {
-  terminalsById: {} as Record<string, TerminalLike>,
-  terminalIds: [] as string[],
+  panelsById: {} as Record<string, TerminalLike>,
+  panelIds: [] as string[],
 };
 let terminalSubscribers: Array<(state: typeof terminalState, prev: typeof terminalState) => void> =
   [];
 
-vi.mock("@/store/terminalStore", () => ({
-  useTerminalStore: {
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: {
     getState: () => terminalState,
     subscribe: (fn: (state: typeof terminalState, prev: typeof terminalState) => void) => {
       terminalSubscribers.push(fn);
@@ -83,7 +83,7 @@ describe("useOrchestrationMilestones", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
-    terminalState = { terminalsById: {}, terminalIds: [] };
+    terminalState = { panelsById: {}, panelIds: [] };
     worktreeState = { worktrees: new Map() };
     recipeState = { recipes: [] };
     terminalSubscribers = [];
@@ -104,8 +104,8 @@ describe("useOrchestrationMilestones", () => {
 
   it("silently marks already-achieved milestones during reconciliation", async () => {
     terminalState = {
-      terminalsById: { t1: { id: "t1", kind: "agent", agentState: "completed" } },
-      terminalIds: ["t1"],
+      panelsById: { t1: { id: "t1", kind: "agent", agentState: "completed" } },
+      panelIds: ["t1"],
     };
 
     renderHook(() => useOrchestrationMilestones(true));
@@ -120,18 +120,18 @@ describe("useOrchestrationMilestones", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     const prev = {
-      terminalsById: { t1: { id: "t1", kind: "agent", agentState: "working" } } as Record<
+      panelsById: { t1: { id: "t1", kind: "agent", agentState: "working" } } as Record<
         string,
         TerminalLike
       >,
-      terminalIds: ["t1"],
+      panelIds: ["t1"],
     };
     const next = {
-      terminalsById: { t1: { id: "t1", kind: "agent", agentState: "completed" } } as Record<
+      panelsById: { t1: { id: "t1", kind: "agent", agentState: "completed" } } as Record<
         string,
         TerminalLike
       >,
-      terminalIds: ["t1"],
+      panelIds: ["t1"],
     };
     for (const sub of terminalSubscribers) {
       sub(next, prev);
@@ -154,18 +154,18 @@ describe("useOrchestrationMilestones", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     const prev = {
-      terminalsById: { t1: { id: "t1", kind: "agent", agentState: "working" } } as Record<
+      panelsById: { t1: { id: "t1", kind: "agent", agentState: "working" } } as Record<
         string,
         TerminalLike
       >,
-      terminalIds: ["t1"],
+      panelIds: ["t1"],
     };
     const next = {
-      terminalsById: { t1: { id: "t1", kind: "agent", agentState: "completed" } } as Record<
+      panelsById: { t1: { id: "t1", kind: "agent", agentState: "completed" } } as Record<
         string,
         TerminalLike
       >,
-      terminalIds: ["t1"],
+      panelIds: ["t1"],
     };
     for (const sub of terminalSubscribers) {
       sub(next, prev);
@@ -208,17 +208,17 @@ describe("useOrchestrationMilestones", () => {
 
     // Fire two milestones simultaneously
     const prev1 = {
-      terminalsById: {} as Record<string, TerminalLike>,
-      terminalIds: [] as string[],
+      panelsById: {} as Record<string, TerminalLike>,
+      panelIds: [] as string[],
     };
     const next1 = {
-      terminalsById: {
+      panelsById: {
         t1: { id: "t1", kind: "agent", agentState: "completed" },
         t2: { id: "t2", kind: "agent", agentState: "working" },
         t3: { id: "t3", kind: "agent", agentState: "working" },
         t4: { id: "t4", kind: "agent", agentState: "working" },
       } as Record<string, TerminalLike>,
-      terminalIds: ["t1", "t2", "t3", "t4"],
+      panelIds: ["t1", "t2", "t3", "t4"],
     };
     for (const sub of terminalSubscribers) {
       sub(next1, prev1);

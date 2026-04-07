@@ -4,7 +4,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { FolderOpen, AlertCircle } from "lucide-react";
 import { systemClient } from "@/clients/systemClient";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 
 interface UpdateCwdDialogProps {
   isOpen: boolean;
@@ -19,8 +19,8 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
   const [validationError, setValidationError] = useState<string>();
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const updateTerminalCwd = useTerminalStore((state) => state.updateTerminalCwd);
-  const restartTerminal = useTerminalStore((state) => state.restartTerminal);
+  const updateTerminalCwd = usePanelStore((state) => state.updateTerminalCwd);
+  const restartTerminal = usePanelStore((state) => state.restartTerminal);
 
   useEffect(() => {
     if (isOpen) {

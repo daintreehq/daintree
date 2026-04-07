@@ -48,11 +48,8 @@ export interface Project {
   lastAccessedAt?: number;
 }
 
-/**
- * Panel snapshot for state preservation.
- * Note: Named TerminalSnapshot for backward compatibility.
- */
-export interface TerminalSnapshot {
+/** Panel snapshot for state preservation. */
+export interface PanelSnapshot {
   /** Terminal ID */
   id: string;
   /** Terminal category */
@@ -114,8 +111,8 @@ export interface TerminalSnapshot {
   // Note: Tab membership is now stored in ProjectState.tabGroups, not on terminals
 }
 
-/** Type alias for TerminalSnapshot. Use this in new code. */
-export type PanelSnapshot = TerminalSnapshot;
+/** @deprecated Use PanelSnapshot instead. */
+export type TerminalSnapshot = PanelSnapshot;
 
 /** Terminal layout metadata */
 export interface TerminalLayout {

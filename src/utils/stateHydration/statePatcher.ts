@@ -9,7 +9,7 @@ import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 
 /**
- * Args for building addTerminal options from hydration data.
+ * Args for building addPanel options from hydration data.
  * Uses AddPanelOptionsBase (flat) rather than the discriminated union because
  * hydration builders construct args dynamically based on saved state,
  * mixing fields from different panel kinds.

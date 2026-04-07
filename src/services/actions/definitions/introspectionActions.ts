@@ -1,7 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 
@@ -71,13 +71,13 @@ export function registerIntrospectionActions(
       const { usePortalStore } = await import("@/store/portalStore");
 
       const project = useProjectStore.getState().currentProject;
-      const terminalState = useTerminalStore.getState();
+      const terminalState = usePanelStore.getState();
       const worktreeSelection = useWorktreeSelectionStore.getState();
       const worktrees = getCurrentViewStore().getState().worktrees;
       const portal = usePortalStore.getState();
 
       const focusedId = terminalState.focusedId;
-      const focusedTerminal = focusedId ? (terminalState.terminalsById[focusedId] ?? null) : null;
+      const focusedTerminal = focusedId ? (terminalState.panelsById[focusedId] ?? null) : null;
 
       const activeWorktreeId = worktreeSelection.activeWorktreeId;
       const activeWorktree = activeWorktreeId ? worktrees.get(activeWorktreeId) : null;
@@ -102,8 +102,8 @@ export function registerIntrospectionActions(
         ...ctx,
         portalOpen: portal.isOpen,
         portalActiveTabId: portal.activeTabId,
-        terminalCount: terminalState.terminalIds.filter(
-          (id) => terminalState.terminalsById[id]?.location !== "trash"
+        terminalCount: terminalState.panelIds.filter(
+          (id) => terminalState.panelsById[id]?.location !== "trash"
         ).length,
         worktreeCount: worktrees.size,
       };

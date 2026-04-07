@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import type { TerminalInstance } from "./terminalRegistrySlice";
+import type { TerminalInstance } from "./panelRegistrySlice";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isAgentTerminal } from "@/utils/terminalType";
@@ -458,7 +458,7 @@ export const createTerminalFocusSlice =
       focusNextBlockedDock: (activeWorktreeId, getPanelGroup) => {
         const terminals = getTerminals();
         const { activeDockTerminalId, openDockTerminal, pingTerminal } = get();
-        // setActiveTab lives on TerminalRegistrySlice; accessed via composed store at runtime
+        // setActiveTab lives on PanelRegistrySlice; accessed via composed store at runtime
         const setActiveTab = (get() as unknown as { setActiveTab: (g: string, p: string) => void })
           .setActiveTab;
 

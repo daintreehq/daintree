@@ -2,7 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 
 export function registerWorktreeSessionActions(
   actions: ActionRegistry,
@@ -21,7 +21,7 @@ export function registerWorktreeSessionActions(
       const { worktreeId } = args as { worktreeId?: string };
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
-      useTerminalStore.getState().bulkMoveToDockByWorktree(targetWorktreeId);
+      usePanelStore.getState().bulkMoveToDockByWorktree(targetWorktreeId);
     },
   }));
 
@@ -38,7 +38,7 @@ export function registerWorktreeSessionActions(
       const { worktreeId } = args as { worktreeId?: string };
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
-      useTerminalStore.getState().bulkMoveToGridByWorktree(targetWorktreeId);
+      usePanelStore.getState().bulkMoveToGridByWorktree(targetWorktreeId);
     },
   }));
 
@@ -55,7 +55,7 @@ export function registerWorktreeSessionActions(
       const { worktreeId } = args as { worktreeId?: string };
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
-      await useTerminalStore.getState().bulkRestartByWorktree(targetWorktreeId);
+      await usePanelStore.getState().bulkRestartByWorktree(targetWorktreeId);
     },
   }));
 
@@ -72,9 +72,9 @@ export function registerWorktreeSessionActions(
       const { worktreeId } = args as { worktreeId?: string };
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
-      const { terminalsById, terminalIds } = useTerminalStore.getState();
-      for (const id of terminalIds) {
-        const t = terminalsById[id];
+      const { panelsById, panelIds } = usePanelStore.getState();
+      for (const id of panelIds) {
+        const t = panelsById[id];
         if (t && t.worktreeId === targetWorktreeId) {
           terminalInstanceService.resetRenderer(t.id);
         }
@@ -95,7 +95,7 @@ export function registerWorktreeSessionActions(
       const { worktreeId } = args as { worktreeId?: string };
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
-      const store = useTerminalStore.getState();
+      const store = usePanelStore.getState();
       store.bulkCloseByWorktree(targetWorktreeId, "completed");
       store.bulkCloseByWorktree(targetWorktreeId, "exited");
     },
@@ -114,7 +114,7 @@ export function registerWorktreeSessionActions(
       const { worktreeId } = args as { worktreeId?: string };
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
-      useTerminalStore.getState().bulkTrashByWorktree(targetWorktreeId);
+      usePanelStore.getState().bulkTrashByWorktree(targetWorktreeId);
     },
   }));
 
@@ -131,7 +131,7 @@ export function registerWorktreeSessionActions(
       const { worktreeId } = args as { worktreeId?: string };
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
-      useTerminalStore.getState().bulkCloseByWorktree(targetWorktreeId);
+      usePanelStore.getState().bulkCloseByWorktree(targetWorktreeId);
     },
   }));
 }

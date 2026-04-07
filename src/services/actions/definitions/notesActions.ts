@@ -54,9 +54,9 @@ export function registerNotesActions(actions: ActionRegistry, _callbacks: Action
         await notesClient.write(note.path, content, note.metadata);
       }
       if (openPanel) {
-        const { useTerminalStore } = await import("@/store/terminalStore");
+        const { usePanelStore } = await import("@/store/panelStore");
         const resolvedScope = noteScope ?? "project";
-        await useTerminalStore.getState().addTerminal({
+        await usePanelStore.getState().addPanel({
           kind: "notes",
           title: note.metadata.title,
           notePath: note.path,

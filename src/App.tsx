@@ -60,7 +60,7 @@ import {
   useAppHydration,
   useProjectSwitchRehydration,
   useShortcutHints,
-  useTerminalStoreBootstrap,
+  usePanelStoreBootstrap,
   useSemanticWorkerLifecycle,
   useSystemWakeHandler,
   useCloudSyncWarning,
@@ -150,7 +150,7 @@ import {
   getWorktreeSortDragId,
 } from "./components/DragDrop/SortableWorktreeCard";
 import {
-  useTerminalStore,
+  usePanelStore,
   useWorktreeSelectionStore,
   useProjectStore,
   useErrorStore,
@@ -485,8 +485,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const expandWorktree = useWorktreeFilterStore((state) => state.expandWorktree);
 
   // Terminal store for derived metadata
-  const terminalsById = useTerminalStore(useShallow((state) => state.terminalsById));
-  const terminalIds = useTerminalStore(useShallow((state) => state.terminalIds));
+  const panelsById = usePanelStore(useShallow((state) => state.panelsById));
+  const panelIds = usePanelStore(useShallow((state) => state.panelIds));
 
   // Error store for derived metadata
   const getWorktreeErrors = useErrorStore((state) => state.getWorktreeErrors);
@@ -559,8 +559,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       let hasCompletedAgent = false;
       let hasExitedAgent = false;
 
-      for (const id of terminalIds) {
-        const t = terminalsById[id];
+      for (const id of panelIds) {
+        const t = panelsById[id];
         if (!t || t.worktreeId !== worktree.id || t.location === "trash") continue;
         terminalCount++;
         if (t.agentState === "working") hasWorkingAgent = true;
@@ -610,7 +610,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       });
     }
     return map;
-  }, [deferredWorktrees, terminalsById, terminalIds, getWorktreeErrors]);
+  }, [deferredWorktrees, panelsById, panelIds, getWorktreeErrors]);
 
   // Apply filters and sorting
   const mainWorktree = useMemo(
@@ -1303,10 +1303,10 @@ function App() {
     }))
   );
 
-  const { focusedId, addTerminal } = useTerminalStore(
+  const { focusedId, addPanel } = usePanelStore(
     useShallow((state) => ({
       focusedId: state.focusedId,
-      addTerminal: state.addTerminal,
+      addPanel: state.addPanel,
     }))
   );
 
@@ -1473,10 +1473,10 @@ function App() {
 
   const handleToggleSidebar = useCallback(() => {
     const activeWtId = useWorktreeSelectionStore.getState().activeWorktreeId;
-    const storeState = useTerminalStore.getState();
+    const storeState = usePanelStore.getState();
     const gridIds: string[] = [];
-    for (const id of storeState.terminalIds) {
-      const t = storeState.terminalsById[id];
+    for (const id of storeState.panelIds) {
+      const t = storeState.panelsById[id];
       if (t && t.location !== "dock" && t.worktreeId === activeWtId) {
         gridIds.push(t.id);
       }
@@ -1529,7 +1529,7 @@ function App() {
   useGlobalEscapeDispatcher();
 
   // App lifecycle hooks
-  useTerminalStoreBootstrap();
+  usePanelStoreBootstrap();
   useSemanticWorkerLifecycle();
   useSystemWakeHandler();
   useCloudSyncWarning(homeDir);
@@ -1683,7 +1683,7 @@ function App() {
               session.agentLaunchFlags
             );
             if (command && agentConfig) {
-              addTerminal({
+              addPanel({
                 kind: "agent",
                 type: session.agentId as TerminalType,
                 agentId: session.agentId,
@@ -1700,7 +1700,7 @@ function App() {
               launchAgent(agentId);
             }
           } else {
-            addTerminal({
+            addPanel({
               kind: result.id as PanelKind,
               cwd: defaultTerminalCwd,
               worktreeId: activeWorktreeId ?? undefined,
@@ -1721,7 +1721,7 @@ function App() {
               session.agentLaunchFlags
             );
             if (command && agentConfig) {
-              addTerminal({
+              addPanel({
                 kind: "agent",
                 type: session.agentId as TerminalType,
                 agentId: session.agentId,
@@ -1738,7 +1738,7 @@ function App() {
               launchAgent(agentId);
             }
           } else {
-            addTerminal({
+            addPanel({
               kind: selected.id as PanelKind,
               cwd: defaultTerminalCwd,
               worktreeId: activeWorktreeId ?? undefined,

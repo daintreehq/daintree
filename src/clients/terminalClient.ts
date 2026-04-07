@@ -348,8 +348,8 @@ export const terminalClient = {
    * Get serialized terminal states in a single round-trip.
    * Returns a map keyed by terminal ID with null for missing states.
    */
-  getSerializedStates: (terminalIds: string[]): Promise<Record<string, string | null>> => {
-    return window.electron.terminal.getSerializedStates(terminalIds);
+  getSerializedStates: (panelIds: string[]): Promise<Record<string, string | null>> => {
+    return window.electron.terminal.getSerializedStates(panelIds);
   },
 
   /**

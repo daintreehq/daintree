@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { TerminalInstance } from "@/store";
-import type { AddTerminalOptions } from "@/store/slices/terminalRegistry/types";
+import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
 import type {
   BrowserPanelOptions,
   NotesPanelOptions,
@@ -46,7 +46,7 @@ function makePanel(overrides: Partial<TerminalInstance> = {}): TerminalInstance 
 }
 
 describe("buildPanelSnapshotOptions", () => {
-  let buildPanelSnapshotOptions: (panel: TerminalInstance) => AddTerminalOptions;
+  let buildPanelSnapshotOptions: (panel: TerminalInstance) => AddPanelOptions;
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -127,7 +127,7 @@ describe("panelDuplicationService", () => {
   let buildPanelDuplicateOptions: (
     panel: TerminalInstance,
     location: "grid" | "dock"
-  ) => Promise<AddTerminalOptions>;
+  ) => Promise<AddPanelOptions>;
 
   beforeEach(async () => {
     vi.clearAllMocks();

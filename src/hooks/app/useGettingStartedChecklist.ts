@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isElectronAvailable } from "../useElectron";
 import { useProjectStore } from "@/store/projectStore";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { notify } from "@/lib/notify";
 import type { ChecklistState, ChecklistItemId } from "@shared/types/ipc/maps";
@@ -29,9 +29,9 @@ function reconcileCurrentState(
   }
   if (
     !cl.items.launchedAgent &&
-    useTerminalStore
+    usePanelStore
       .getState()
-      .terminalIds.some((id) => useTerminalStore.getState().terminalsById[id]?.kind === "agent")
+      .panelIds.some((id) => usePanelStore.getState().panelsById[id]?.kind === "agent")
   ) {
     markItem("launchedAgent");
   }
@@ -123,10 +123,10 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
           markItem("openedProject");
         }
       }),
-      useTerminalStore.subscribe((state) => {
+      usePanelStore.subscribe((state) => {
         const cl = getChecklist();
         if (!cl || cl.dismissed || cl.items.launchedAgent) return;
-        if (state.terminalIds.some((id) => state.terminalsById[id]?.kind === "agent")) {
+        if (state.panelIds.some((id) => state.panelsById[id]?.kind === "agent")) {
           markItem("launchedAgent");
         }
       }),

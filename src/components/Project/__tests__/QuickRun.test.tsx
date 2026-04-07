@@ -29,14 +29,14 @@ vi.mock("@/hooks/useProjectSettings", () => ({
   }),
 }));
 
-vi.mock("@/store/terminalStore", () => ({
-  useTerminalStore: (
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: (
     selector: (s: {
-      addTerminal: typeof mockAddTerminal;
-      terminalsById: Record<string, never>;
-      terminalIds: never[];
+      addPanel: typeof mockAddTerminal;
+      panelsById: Record<string, never>;
+      panelIds: never[];
     }) => unknown
-  ) => selector({ addTerminal: mockAddTerminal, terminalsById: {}, terminalIds: [] }),
+  ) => selector({ addPanel: mockAddTerminal, panelsById: {}, panelIds: [] }),
 }));
 
 vi.mock("@/store/worktreeStore", () => ({
@@ -109,7 +109,7 @@ describe("QuickRun", () => {
     const input = screen.getByPlaceholderText("Execute command...");
     fireEvent.change(input, { target: { value: "npm test" } });
 
-    // Fire Enter twice before the first addTerminal resolves
+    // Fire Enter twice before the first addPanel resolves
     fireEvent.keyDown(input, { key: "Enter" });
     fireEvent.keyDown(input, { key: "Enter" });
 
@@ -129,7 +129,7 @@ describe("QuickRun", () => {
     // Enter via keyboard
     fireEvent.keyDown(input, { key: "Enter" });
 
-    // Then click the run button before addTerminal resolves
+    // Then click the run button before addPanel resolves
     const runButton = screen.getByLabelText("Run command");
     fireEvent.click(runButton);
 
@@ -158,7 +158,7 @@ describe("QuickRun", () => {
     await act(async () => resolveTerminal());
   });
 
-  it("releases the guard when addTerminal throws", async () => {
+  it("releases the guard when addPanel throws", async () => {
     setupPendingTerminal();
     render(<QuickRun projectId="test-project" />);
 
@@ -178,7 +178,7 @@ describe("QuickRun", () => {
     await act(async () => resolveTerminal());
   });
 
-  it("does not call addTerminal for blank input", () => {
+  it("does not call addPanel for blank input", () => {
     render(<QuickRun projectId="test-project" />);
 
     const input = screen.getByPlaceholderText("Execute command...");

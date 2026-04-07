@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
 import { createTerminalFocusSlice, type TerminalFocusSlice } from "../terminalFocusSlice";
-import type { TerminalInstance } from "../terminalRegistrySlice";
+import type { TerminalInstance } from "../panelRegistrySlice";
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {

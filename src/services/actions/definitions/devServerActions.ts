@@ -1,7 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { projectClient } from "@/clients";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 
 export function registerDevServerActions(
   actions: ActionRegistry,
@@ -25,7 +25,7 @@ export function registerDevServerActions(
 
       const cwd = ctx.activeWorktreePath ?? ctx.projectPath;
 
-      await useTerminalStore.getState().addTerminal({
+      await usePanelStore.getState().addPanel({
         kind: "dev-preview",
         title: "Dev Server",
         cwd,

@@ -5,7 +5,7 @@ import { useWebviewEviction } from "@/hooks/useWebviewEviction";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { AlertTriangle, ExternalLink } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 import type { BrowserHistory } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "./BrowserToolbar";
@@ -66,9 +66,9 @@ export function BrowserPane({
     webviewRef.current = node;
     setWebviewElement(node);
   }, []);
-  const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
-  const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
-  const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
+  const setBrowserUrl = usePanelStore((state) => state.setBrowserUrl);
+  const setBrowserHistory = usePanelStore((state) => state.setBrowserHistory);
+  const setBrowserZoom = usePanelStore((state) => state.setBrowserZoom);
   const isDragging = useIsDragging();
   const addStructuredMessage = useConsoleCaptureStore((state) => state.addStructuredMessage);
   const markStale = useConsoleCaptureStore((state) => state.markStale);
@@ -81,17 +81,17 @@ export function BrowserPane({
   );
   const loadTimeoutMs = Math.min(Math.max(devServerLoadTimeout ?? 30, 1), 120) * 1000;
 
-  const isConsoleOpen = useTerminalStore(
+  const isConsoleOpen = usePanelStore(
     (state) => state.getTerminal(id)?.browserConsoleOpen ?? false
   );
-  const setBrowserConsoleOpen = useTerminalStore((state) => state.setBrowserConsoleOpen);
+  const setBrowserConsoleOpen = usePanelStore((state) => state.setBrowserConsoleOpen);
 
   // Track whether the current load is the initial session-restored load (not a fresh panel)
   const isInitialRestoredLoadRef = useRef(true);
 
   // Initialize history from persisted state or initialUrl
   const [history, setHistory] = useState<BrowserHistory>(() => {
-    const terminal = useTerminalStore.getState().getTerminal(id);
+    const terminal = usePanelStore.getState().getTerminal(id);
     const saved = terminal?.browserHistory;
     // Only treat this as a restored session load if we actually have persisted history
     isInitialRestoredLoadRef.current = Boolean(saved?.present);
@@ -103,7 +103,7 @@ export function BrowserPane({
   // Initialize zoom factor from persisted state (default 1.0 = 100%)
   // Clamp to valid range [0.25, 2.0] to handle corrupt storage
   const [zoomFactor, setZoomFactor] = useState<number>(() => {
-    const terminal = useTerminalStore.getState().getTerminal(id);
+    const terminal = usePanelStore.getState().getTerminal(id);
     const savedZoom = terminal?.browserZoom ?? 1.0;
     return Number.isFinite(savedZoom) ? Math.max(0.25, Math.min(2.0, savedZoom)) : 1.0;
   });

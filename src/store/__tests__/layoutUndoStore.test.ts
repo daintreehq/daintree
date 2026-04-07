@@ -42,7 +42,7 @@ vi.mock("@/clients/appClient", () => ({
 }));
 
 import { useLayoutUndoStore } from "../layoutUndoStore";
-import { useTerminalStore } from "../terminalStore";
+import { usePanelStore } from "../panelStore";
 import { useLayoutConfigStore } from "../layoutConfigStore";
 import type { TerminalInstance } from "@shared/types";
 
@@ -56,16 +56,16 @@ function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstan
 }
 
 function setTerminals(terminals: TerminalInstance[]) {
-  useTerminalStore.setState({
-    terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
-    terminalIds: terminals.map((t) => t.id),
+  usePanelStore.setState({
+    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    panelIds: terminals.map((t) => t.id),
   });
 }
 
 function seedTerminals(terminals: TerminalInstance[]) {
-  useTerminalStore.setState({
-    terminalsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
-    terminalIds: terminals.map((t) => t.id),
+  usePanelStore.setState({
+    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    panelIds: terminals.map((t) => t.id),
     tabGroups: new Map(),
     focusedId: terminals[0]?.id ?? null,
     maximizedId: null,
@@ -74,13 +74,13 @@ function seedTerminals(terminals: TerminalInstance[]) {
 }
 
 function getTerminals() {
-  const state = useTerminalStore.getState();
-  return state.terminalIds.map((id) => state.terminalsById[id]);
+  const state = usePanelStore.getState();
+  return state.panelIds.map((id) => state.panelsById[id]);
 }
 
 function firstTerminal() {
-  const s = useTerminalStore.getState();
-  return s.terminalsById[s.terminalIds[0]];
+  const s = usePanelStore.getState();
+  return s.panelsById[s.panelIds[0]];
 }
 
 describe("layoutUndoStore", () => {
@@ -91,9 +91,9 @@ describe("layoutUndoStore", () => {
       canUndo: false,
       canRedo: false,
     });
-    useTerminalStore.setState({
-      terminalsById: {},
-      terminalIds: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       tabGroups: new Map(),
       focusedId: null,
       maximizedId: null,
@@ -130,13 +130,13 @@ describe("layoutUndoStore", () => {
       { ...t1, location: "dock" },
       { ...t2, location: "grid" },
     ]);
-    useTerminalStore.setState({ focusedId: "t2" });
+    usePanelStore.setState({ focusedId: "t2" });
 
     useLayoutUndoStore.getState().undo();
 
-    const state = useTerminalStore.getState();
-    expect(state.terminalsById[state.terminalIds[0]].location).toBe("grid");
-    expect(state.terminalsById[state.terminalIds[1]].location).toBe("grid");
+    const state = usePanelStore.getState();
+    expect(state.panelsById[state.panelIds[0]].location).toBe("grid");
+    expect(state.panelsById[state.panelIds[1]].location).toBe("grid");
     expect(state.focusedId).toBe("t1");
   });
 
@@ -147,7 +147,7 @@ describe("layoutUndoStore", () => {
     useLayoutUndoStore.getState().pushLayoutSnapshot();
 
     setTerminals([{ ...t1, location: "dock" }]);
-    useTerminalStore.setState({ focusedId: null });
+    usePanelStore.setState({ focusedId: null });
 
     useLayoutUndoStore.getState().undo();
     expect(firstTerminal().location).toBe("grid");
@@ -248,7 +248,7 @@ describe("layoutUndoStore", () => {
       activeTabId: "t1",
       panelIds: ["t1"],
     });
-    useTerminalStore.setState({ tabGroups });
+    usePanelStore.setState({ tabGroups });
 
     useLayoutUndoStore.getState().pushLayoutSnapshot();
 
@@ -280,7 +280,7 @@ describe("layoutUndoStore", () => {
 
     useLayoutUndoStore.getState().undo();
 
-    const ids = useTerminalStore.getState().terminalIds;
+    const ids = usePanelStore.getState().panelIds;
     expect(ids).toEqual(["t1", "t2", "t3"]);
   });
 
@@ -327,9 +327,9 @@ describe("layoutUndoStore", () => {
       panelIds: ["t1"],
     });
 
-    useTerminalStore.setState({
-      terminalsById: Object.fromEntries([t1, t2].map((t) => [t.id, t])),
-      terminalIds: [t1, t2].map((t) => t.id),
+    usePanelStore.setState({
+      panelsById: Object.fromEntries([t1, t2].map((t) => [t.id, t])),
+      panelIds: [t1, t2].map((t) => t.id),
       tabGroups,
       focusedId: "t1",
       maximizedId: "t1",
@@ -342,9 +342,9 @@ describe("layoutUndoStore", () => {
       { ...t1, location: "dock" as const, worktreeId: "w2" },
       { ...t2, location: "grid" as const, worktreeId: "w2" },
     ];
-    useTerminalStore.setState({
-      terminalsById: Object.fromEntries(mutated.map((t) => [t.id, t])),
-      terminalIds: mutated.map((t) => t.id),
+    usePanelStore.setState({
+      panelsById: Object.fromEntries(mutated.map((t) => [t.id, t])),
+      panelIds: mutated.map((t) => t.id),
       tabGroups: new Map(),
       focusedId: "t2",
       maximizedId: null,
@@ -353,11 +353,11 @@ describe("layoutUndoStore", () => {
 
     useLayoutUndoStore.getState().undo();
 
-    const state = useTerminalStore.getState();
-    expect(state.terminalsById[state.terminalIds[0]].location).toBe("grid");
-    expect(state.terminalsById[state.terminalIds[0]].worktreeId).toBe("w1");
-    expect(state.terminalsById[state.terminalIds[1]].location).toBe("dock");
-    expect(state.terminalsById[state.terminalIds[1]].worktreeId).toBe("w1");
+    const state = usePanelStore.getState();
+    expect(state.panelsById[state.panelIds[0]].location).toBe("grid");
+    expect(state.panelsById[state.panelIds[0]].worktreeId).toBe("w1");
+    expect(state.panelsById[state.panelIds[1]].location).toBe("dock");
+    expect(state.panelsById[state.panelIds[1]].worktreeId).toBe("w1");
     expect(state.focusedId).toBe("t1");
     expect(state.maximizedId).toBe("t1");
     expect(state.activeDockTerminalId).toBe("t2");
@@ -451,17 +451,17 @@ describe("layoutUndoStore", () => {
 
       useLayoutUndoStore.getState().undo();
 
-      const state = useTerminalStore.getState();
-      const allTerms = state.terminalIds.map((id) => state.terminalsById[id]);
+      const state = usePanelStore.getState();
+      const allTerms = state.panelIds.map((id) => state.panelsById[id]);
       const gridCount = allTerms.filter((t) => t.location === "grid").length;
       const dockCount = allTerms.filter((t) => t.location === "dock").length;
 
       expect(gridCount).toBe(2);
       expect(dockCount).toBe(4);
 
-      expect(state.terminalsById[state.terminalIds[0]].location).toBe("grid");
-      expect(state.terminalsById[state.terminalIds[1]].location).toBe("grid");
-      expect(state.terminalsById[state.terminalIds[2]].location).toBe("dock");
+      expect(state.panelsById[state.panelIds[0]].location).toBe("grid");
+      expect(state.panelsById[state.panelIds[1]].location).toBe("grid");
+      expect(state.panelsById[state.panelIds[2]].location).toBe("dock");
     });
 
     it("undo respects per-worktree capacity", () => {
@@ -480,8 +480,8 @@ describe("layoutUndoStore", () => {
 
       useLayoutUndoStore.getState().undo();
 
-      const state = useTerminalStore.getState();
-      const allTerms = state.terminalIds.map((id) => state.terminalsById[id]);
+      const state = usePanelStore.getState();
+      const allTerms = state.panelIds.map((id) => state.panelsById[id]);
       const w1Grid = allTerms.filter((t) => t.worktreeId === "w1" && t.location === "grid");
       const w1Dock = allTerms.filter((t) => t.worktreeId === "w1" && t.location === "dock");
       const w2Grid = allTerms.filter((t) => t.worktreeId === "w2" && t.location === "grid");
@@ -508,9 +508,9 @@ describe("layoutUndoStore", () => {
       });
 
       const allTerms = [t1, t2, t3, tg1, tg2];
-      useTerminalStore.setState({
-        terminalsById: Object.fromEntries(allTerms.map((t) => [t.id, t])),
-        terminalIds: allTerms.map((t) => t.id),
+      usePanelStore.setState({
+        panelsById: Object.fromEntries(allTerms.map((t) => [t.id, t])),
+        panelIds: allTerms.map((t) => t.id),
         tabGroups,
         focusedId: "t1",
         maximizedId: null,
@@ -520,9 +520,9 @@ describe("layoutUndoStore", () => {
       useLayoutUndoStore.getState().pushLayoutSnapshot();
 
       const docked = allTerms.map((t) => ({ ...t, location: "dock" as const }));
-      useTerminalStore.setState({
-        terminalsById: Object.fromEntries(docked.map((t) => [t.id, t])),
-        terminalIds: docked.map((t) => t.id),
+      usePanelStore.setState({
+        panelsById: Object.fromEntries(docked.map((t) => [t.id, t])),
+        panelIds: docked.map((t) => t.id),
         tabGroups: new Map(),
       });
 
@@ -530,13 +530,13 @@ describe("layoutUndoStore", () => {
 
       useLayoutUndoStore.getState().undo();
 
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
 
-      expect(state.terminalsById["t1"]?.location).toBe("grid");
-      expect(state.terminalsById["t2"]?.location).toBe("grid");
-      expect(state.terminalsById["t3"]?.location).toBe("dock");
-      expect(state.terminalsById["tg1"]?.location).toBe("dock");
-      expect(state.terminalsById["tg2"]?.location).toBe("dock");
+      expect(state.panelsById["t1"]?.location).toBe("grid");
+      expect(state.panelsById["t2"]?.location).toBe("grid");
+      expect(state.panelsById["t3"]?.location).toBe("dock");
+      expect(state.panelsById["tg1"]?.location).toBe("dock");
+      expect(state.panelsById["tg2"]?.location).toBe("dock");
       expect(state.tabGroups.get("g1")?.location).toBe("dock");
     });
 
@@ -555,9 +555,9 @@ describe("layoutUndoStore", () => {
 
       useLayoutUndoStore.getState().undo();
 
-      const state = useTerminalStore.getState();
-      expect(state.terminalsById[state.terminalIds[0]].location).toBe("grid");
-      expect(state.terminalsById[state.terminalIds[1]].location).toBe("grid");
+      const state = usePanelStore.getState();
+      expect(state.panelsById[state.panelIds[0]].location).toBe("grid");
+      expect(state.panelsById[state.panelIds[1]].location).toBe("grid");
     });
 
     it("undo with null gridDimensions uses absolute max", () => {
@@ -571,9 +571,9 @@ describe("layoutUndoStore", () => {
 
       useLayoutUndoStore.getState().undo();
 
-      const state = useTerminalStore.getState();
-      const gridCount = state.terminalIds
-        .map((id) => state.terminalsById[id])
+      const state = usePanelStore.getState();
+      const gridCount = state.panelIds
+        .map((id) => state.panelsById[id])
         .filter((t) => t.location === "grid").length;
       expect(gridCount).toBe(10);
     });
@@ -591,10 +591,10 @@ describe("layoutUndoStore", () => {
 
       useLayoutUndoStore.getState().undo();
 
-      const state = useTerminalStore.getState();
-      expect(state.terminalsById["t1"]?.location).toBe("grid");
-      expect(state.terminalsById["t2"]?.location).toBe("grid");
-      expect(state.terminalsById["t3"]?.location).toBe("dock");
+      const state = usePanelStore.getState();
+      expect(state.panelsById["t1"]?.location).toBe("grid");
+      expect(state.panelsById["t2"]?.location).toBe("grid");
+      expect(state.panelsById["t3"]?.location).toBe("dock");
     });
   });
 });

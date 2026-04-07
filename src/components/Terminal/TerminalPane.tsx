@@ -25,7 +25,7 @@ import { ContentPanel } from "@/components/Panel";
 import { useIsDragging } from "@/components/DragDrop";
 import {
   useErrorStore,
-  useTerminalStore,
+  usePanelStore,
   getTerminalRefreshTier,
   useTerminalInputStore,
 } from "@/store";
@@ -165,20 +165,20 @@ function TerminalPaneComponent({
     processStartTimeRef.current = Date.now();
   }, [restartKey]);
 
-  const updateVisibility = useTerminalStore((state) => state.updateVisibility);
-  const getTerminal = useTerminalStore((state) => state.getTerminal);
-  const restartTerminal = useTerminalStore((state) => state.restartTerminal);
-  const trashTerminal = useTerminalStore((state) => state.trashTerminal);
-  const setFocused = useTerminalStore((state) => state.setFocused);
-  const updateLastCommand = useTerminalStore((state) => state.updateLastCommand);
-  const backendStatus = useTerminalStore((state) => state.backendStatus);
-  const lastCrashType = useTerminalStore((state) => state.lastCrashType);
-  const clearReconnectError = useTerminalStore((state) => state.clearReconnectError);
+  const updateVisibility = usePanelStore((state) => state.updateVisibility);
+  const getTerminal = usePanelStore((state) => state.getTerminal);
+  const restartTerminal = usePanelStore((state) => state.restartTerminal);
+  const trashPanel = usePanelStore((state) => state.trashPanel);
+  const setFocused = usePanelStore((state) => state.setFocused);
+  const updateLastCommand = usePanelStore((state) => state.updateLastCommand);
+  const backendStatus = usePanelStore((state) => state.backendStatus);
+  const lastCrashType = usePanelStore((state) => state.lastCrashType);
+  const clearReconnectError = usePanelStore((state) => state.clearReconnectError);
 
   // Consolidate terminal state selectors to avoid multiple scans and ensure consistent snapshots
-  const terminalState = useTerminalStore(
+  const terminalState = usePanelStore(
     useShallow((state) => {
-      const terminal = state.terminalsById[id];
+      const terminal = state.panelsById[id];
       return {
         isInputLocked: terminal?.isInputLocked ?? false,
         stateChangeTrigger: terminal?.stateChangeTrigger,
@@ -218,13 +218,13 @@ function TerminalPaneComponent({
   const isAgentTerminal = effectiveAgentId !== undefined;
   const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
 
-  const queueCount = useTerminalStore((state) => state.commandQueueCountById[id] ?? 0);
+  const queueCount = usePanelStore((state) => state.commandQueueCountById[id] ?? 0);
 
   const pingedIdSelector = useMemo(
-    () => (state: ReturnType<typeof useTerminalStore.getState>) => state.pingedId === id,
+    () => (state: ReturnType<typeof usePanelStore.getState>) => state.pingedId === id,
     [id]
   );
-  const isPinged = useTerminalStore(pingedIdSelector);
+  const isPinged = usePanelStore(pingedIdSelector);
   const wasJustSelected = isPinged && isFocused && performance.now() < justFocusedUntilRef.current;
 
   const terminalErrors = useErrorStore(
@@ -286,7 +286,7 @@ function TerminalPaneComponent({
 
     autoRestartTimerRef.current = setTimeout(() => {
       autoRestartTimerRef.current = null;
-      const currentTerminal = useTerminalStore.getState().terminalsById[id];
+      const currentTerminal = usePanelStore.getState().panelsById[id];
       if (!currentTerminal || currentTerminal.location === "trash") {
         setIsAutoRestarting(false);
         return;
@@ -515,8 +515,8 @@ function TerminalPaneComponent({
   }, []);
 
   const handleTrash = useCallback(() => {
-    trashTerminal(id);
-  }, [trashTerminal, id]);
+    trashPanel(id);
+  }, [trashPanel, id]);
 
   const handleDismissReconnectError = useCallback(() => {
     clearReconnectError(id);

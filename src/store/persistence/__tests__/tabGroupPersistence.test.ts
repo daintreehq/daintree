@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { TerminalPersistence } from "../terminalPersistence";
+import { PanelPersistence } from "../panelPersistence";
 import type { TabGroup } from "@/types";
 
 const createMockProjectClient = () => ({
@@ -57,7 +57,7 @@ const createMockProjectClient = () => ({
   deleteInRepoRecipe: vi.fn().mockResolvedValue(undefined),
 });
 
-describe("TerminalPersistence.saveTabGroups", () => {
+describe("PanelPersistence.saveTabGroups", () => {
   const projectId = "test-project-id";
 
   beforeEach(() => {
@@ -71,7 +71,7 @@ describe("TerminalPersistence.saveTabGroups", () => {
   describe("explicit group filtering", () => {
     it("only persists groups with panelIds.length > 1", async () => {
       const client = createMockProjectClient();
-      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
 
       const explicitGroup: TabGroup = {
         id: "group-1",
@@ -108,7 +108,7 @@ describe("TerminalPersistence.saveTabGroups", () => {
 
     it("persists multiple explicit groups", async () => {
       const client = createMockProjectClient();
-      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
 
       const group1: TabGroup = {
         id: "group-1",
@@ -142,7 +142,7 @@ describe("TerminalPersistence.saveTabGroups", () => {
 
     it("persists empty array when all groups are virtual (single panel)", async () => {
       const client = createMockProjectClient();
-      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
 
       const singlePanelGroup1: TabGroup = {
         id: "group-1",
@@ -173,7 +173,7 @@ describe("TerminalPersistence.saveTabGroups", () => {
   describe("project ID handling", () => {
     it("skips save if no project ID is provided", async () => {
       const client = createMockProjectClient();
-      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
 
       const group: TabGroup = {
         id: "group-1",
@@ -191,7 +191,7 @@ describe("TerminalPersistence.saveTabGroups", () => {
 
     it("uses getProjectId option if projectId not passed directly", async () => {
       const client = createMockProjectClient();
-      const persistence = new TerminalPersistence(client, {
+      const persistence = new PanelPersistence(client, {
         debounceMs: 100,
         getProjectId: () => "from-option",
       });
@@ -214,7 +214,7 @@ describe("TerminalPersistence.saveTabGroups", () => {
   describe("debouncing", () => {
     it("debounces multiple saves into single persist call", async () => {
       const client = createMockProjectClient();
-      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
 
       const group1: TabGroup = {
         id: "group-1",
@@ -244,7 +244,7 @@ describe("TerminalPersistence.saveTabGroups", () => {
 
     it("skips redundant tab group persist when payload is unchanged", async () => {
       const client = createMockProjectClient();
-      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
 
       const group: TabGroup = {
         id: "group-1",
@@ -267,7 +267,7 @@ describe("TerminalPersistence.saveTabGroups", () => {
   describe("cancel and flush", () => {
     it("cancel prevents pending tab group save", async () => {
       const client = createMockProjectClient();
-      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
 
       const group: TabGroup = {
         id: "group-1",
@@ -286,7 +286,7 @@ describe("TerminalPersistence.saveTabGroups", () => {
 
     it("flush immediately executes pending tab group save", async () => {
       const client = createMockProjectClient();
-      const persistence = new TerminalPersistence(client, { debounceMs: 500 });
+      const persistence = new PanelPersistence(client, { debounceMs: 500 });
 
       const group: TabGroup = {
         id: "group-1",
@@ -309,7 +309,7 @@ describe("TerminalPersistence.saveTabGroups", () => {
   describe("worktree groups", () => {
     it("preserves worktreeId in persisted groups", async () => {
       const client = createMockProjectClient();
-      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
 
       const worktreeGroup: TabGroup = {
         id: "group-1",
@@ -328,7 +328,7 @@ describe("TerminalPersistence.saveTabGroups", () => {
 
     it("preserves undefined worktreeId for global groups", async () => {
       const client = createMockProjectClient();
-      const persistence = new TerminalPersistence(client, { debounceMs: 100 });
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
 
       const globalGroup: TabGroup = {
         id: "group-1",

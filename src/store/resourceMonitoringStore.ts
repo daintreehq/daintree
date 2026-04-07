@@ -15,7 +15,7 @@ interface ResourceMonitoringStore {
   metrics: Map<string, TerminalResourceState>;
   setEnabled: (enabled: boolean) => void;
   updateMetrics: (batch: TerminalResourceBatchPayload) => void;
-  removeTerminal: (id: string) => void;
+  removePanel: (id: string) => void;
   clear: () => void;
 }
 
@@ -48,7 +48,7 @@ export const useResourceMonitoringStore = create<ResourceMonitoringStore>((set) 
       return { metrics: next };
     }),
 
-  removeTerminal: (id) =>
+  removePanel: (id) =>
     set((state) => {
       const next = new Map(state.metrics);
       next.delete(id);

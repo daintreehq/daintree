@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { AlertTriangle, RotateCw, ExternalLink, Settings, WandSparkles } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { BrowserHistory } from "@shared/types/browser";
@@ -187,16 +187,16 @@ export function DevPreviewPane({
 }: DevPreviewPaneProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
   const [webviewElement, setWebviewElement] = useState<Electron.WebviewTag | null>(null);
-  const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
-  const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
-  const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
-  const setDevPreviewConsoleOpen = useTerminalStore((state) => state.setDevPreviewConsoleOpen);
+  const setBrowserUrl = usePanelStore((state) => state.setBrowserUrl);
+  const setBrowserHistory = usePanelStore((state) => state.setBrowserHistory);
+  const setBrowserZoom = usePanelStore((state) => state.setBrowserZoom);
+  const setDevPreviewConsoleOpen = usePanelStore((state) => state.setDevPreviewConsoleOpen);
   const currentProjectId = useProjectStore((state) => state.currentProject?.id);
   const projectSettings = useProjectSettingsStore((state) => state.settings);
   const projectEnv = projectSettings?.environmentVariables;
   const isDragging = useIsDragging();
 
-  const terminal = useTerminalStore((state) => state.getTerminal(id));
+  const terminal = usePanelStore((state) => state.getTerminal(id));
   const devCommand =
     terminal?.devCommand?.trim() || projectSettings?.devServerCommand?.trim() || "";
 

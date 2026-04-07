@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useTerminalStore, type TerminalInstance } from "@/store";
+import { usePanelStore, type TerminalInstance } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { getPanelKindDefinition, type PanelComponentProps } from "@/registry";
 import { ContentPanel, triggerPanelTransition } from "@/components/Panel";
@@ -14,8 +14,8 @@ export interface DockedPanelProps {
 }
 
 export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelProps) {
-  const moveTerminalToGrid = useTerminalStore((state) => state.moveTerminalToGrid);
-  const closeDockTerminal = useTerminalStore((state) => state.closeDockTerminal);
+  const moveTerminalToGrid = usePanelStore((state) => state.moveTerminalToGrid);
+  const closeDockTerminal = usePanelStore((state) => state.closeDockTerminal);
 
   const lifecycle = usePanelLifecycle();
   const { handleFocus, handleClose, handleTitleChange } = usePanelHandlers({
@@ -59,7 +59,7 @@ export function DockedPanel({ terminal, onPopoverClose, onAddTab }: DockedPanelP
     closeDockTerminal();
   }, [closeDockTerminal]);
 
-  const focusedId = useTerminalStore((state) => state.focusedId);
+  const focusedId = usePanelStore((state) => state.focusedId);
   const isFocused = focusedId === terminal.id;
 
   const kind = terminal.kind ?? "terminal";

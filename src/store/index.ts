@@ -1,12 +1,12 @@
-export { useTerminalStore, isAgentReady, getTerminalRefreshTier } from "./terminalStore";
-export type { TerminalInstance, AddTerminalOptions, QueuedCommand } from "./terminalStore";
+export { usePanelStore, isAgentReady, getTerminalRefreshTier } from "./panelStore";
+export type { TerminalInstance, AddPanelOptions, QueuedCommand } from "./panelStore";
 export type { CrashType } from "@shared/types/pty-host";
-export { MAX_GRID_TERMINALS } from "./slices/terminalRegistrySlice";
+export { MAX_GRID_TERMINALS } from "./slices/panelRegistrySlice";
 
-// Panel aliases for new code (gradual migration from terminal naming)
-export { useTerminalStore as usePanelStore } from "./terminalStore";
-export type { TerminalInstance as PanelInstance } from "./terminalStore";
-export type { AddTerminalOptions as AddPanelOptions } from "./terminalStore";
+// Legacy aliases for backward compatibility during migration
+export { usePanelStore as useTerminalStore } from "./panelStore";
+export type { TerminalInstance as PanelInstance } from "./panelStore";
+export type { AddPanelOptions as AddTerminalOptions } from "./panelStore";
 
 export { useWorktreeSelectionStore } from "./worktreeStore";
 

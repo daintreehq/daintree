@@ -6,10 +6,10 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import type { TerminalInstance } from "@/store/terminalStore";
+import type { TerminalInstance } from "@/store/panelStore";
 import type { PanelLocation } from "@shared/types";
 import type { ComponentType } from "react";
 
@@ -39,7 +39,7 @@ interface StatusContainerProps {
 export function StatusContainer({ config, compact = false }: StatusContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const terminals = config.useTerminals();
-  const { activateTerminal, pingTerminal } = useTerminalStore(
+  const { activateTerminal, pingTerminal } = usePanelStore(
     useShallow((state) => ({
       activateTerminal: state.activateTerminal,
       pingTerminal: state.pingTerminal,

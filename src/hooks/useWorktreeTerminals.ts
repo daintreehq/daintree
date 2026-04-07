@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
+import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 import type { AgentState } from "@/types";
 import { getDominantAgentState } from "@/components/Worktree/AgentStatusIndicator";
 
@@ -41,10 +41,10 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
   // Use useShallow to prevent infinite loops.
   // Without this, .filter() returns a new reference every render,
   // breaking React's useSyncExternalStore contract.
-  const terminals = useTerminalStore(
+  const terminals = usePanelStore(
     useShallow((state) =>
-      state.terminalIds
-        .map((id) => state.terminalsById[id])
+      state.panelIds
+        .map((id) => state.panelsById[id])
         .filter((t) => t && t.worktreeId === worktreeId && t.location !== "trash")
     )
   );

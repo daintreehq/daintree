@@ -50,7 +50,7 @@ import {
   useHorizontalScrollControls,
   useKeybindingDisplay,
 } from "@/hooks";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -204,9 +204,9 @@ function PanelHeaderComponent({
   const { activeCount, workingCount } = useBackgroundPanelStats(id);
 
   // Watch state — only relevant for agent panels
-  const isWatched = useTerminalStore((state) => state.watchedPanels.has(id));
-  const watchPanel = useTerminalStore((state) => state.watchPanel);
-  const unwatchPanel = useTerminalStore((state) => state.unwatchPanel);
+  const isWatched = usePanelStore((state) => state.watchedPanels.has(id));
+  const watchPanel = usePanelStore((state) => state.watchPanel);
+  const unwatchPanel = usePanelStore((state) => state.unwatchPanel);
   const showWatchButton = !!agentId;
 
   const duplicateShortcut = useKeybindingDisplay("terminal.duplicate");
@@ -216,7 +216,7 @@ function PanelHeaderComponent({
   const closeShortcut = useKeybindingDisplay("terminal.close");
 
   // Terminal record for overflow menu actions (single shallow selector, matching TerminalContextMenu pattern)
-  const terminal = useTerminalStore(useShallow((state) => state.terminalsById[id]));
+  const terminal = usePanelStore(useShallow((state) => state.panelsById[id]));
   const isInputLocked = terminal?.isInputLocked ?? false;
   const hasPty = panelKindHasPty(kind);
 

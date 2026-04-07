@@ -40,12 +40,12 @@ let mockStoreState: Record<string, unknown> = {
   watchedPanels: new Set<string>(),
   watchPanel: mockWatchPanel,
   unwatchPanel: mockUnwatchPanel,
-  terminalsById: {} as Record<string, unknown>,
-  terminalIds: [] as string[],
+  panelsById: {} as Record<string, unknown>,
+  panelIds: [] as string[],
 };
 
-vi.mock("@/store/terminalStore", () => ({
-  useTerminalStore: (selector: (s: Record<string, unknown>) => unknown) => selector(mockStoreState),
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: (selector: (s: Record<string, unknown>) => unknown) => selector(mockStoreState),
 }));
 
 let mockHasPty = false;
@@ -149,8 +149,8 @@ describe("PanelHeader", () => {
       watchedPanels: new Set<string>(),
       watchPanel: mockWatchPanel,
       unwatchPanel: mockUnwatchPanel,
-      terminalsById: {},
-      terminalIds: [],
+      panelsById: {},
+      panelIds: [],
     };
   });
 
@@ -309,8 +309,8 @@ describe("PanelHeader", () => {
       mockHasPty = true;
       mockStoreState = {
         ...mockStoreState,
-        terminalsById: { "test-panel": { id: "test-panel", isInputLocked: true } },
-        terminalIds: ["test-panel"],
+        panelsById: { "test-panel": { id: "test-panel", isInputLocked: true } },
+        panelIds: ["test-panel"],
       };
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
       const menu = screen.getByTestId("overflow-menu");

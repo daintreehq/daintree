@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 
 /**
  * Returns whether a panel has ever been visible. For grid panels this is
@@ -10,11 +10,11 @@ import { useTerminalStore } from "@/store";
  * avoiding the Chromium renderer process cost for background dock panels.
  */
 export function useHasBeenVisible(panelId: string, location: string): boolean {
-  const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
+  const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
 
   const [hasBeenVisible, setHasBeenVisible] = useState(() => {
     if (location !== "dock") return true;
-    return useTerminalStore.getState().activeDockTerminalId === panelId;
+    return usePanelStore.getState().activeDockTerminalId === panelId;
   });
 
   useEffect(() => {

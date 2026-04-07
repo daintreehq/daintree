@@ -26,7 +26,7 @@ vi.mock("@/hooks/useWorktreeTerminals", () => ({
 }));
 
 vi.mock("@/store", () => ({
-  useTerminalStore: () => vi.fn(),
+  usePanelStore: () => vi.fn(),
 }));
 
 vi.mock("@/components/ui/AppDialog", () => {

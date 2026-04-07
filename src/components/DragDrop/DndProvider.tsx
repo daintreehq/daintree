@@ -28,7 +28,7 @@ import {
   type MeasuringConfiguration,
 } from "@dnd-kit/core";
 import {
-  useTerminalStore,
+  usePanelStore,
   useLayoutConfigStore,
   useWorktreeSelectionStore,
   type TerminalInstance,
@@ -281,13 +281,13 @@ export function DndProvider({ children }: DndProviderProps) {
     })
   );
 
-  const terminalsById = useTerminalStore(useShallow((state) => state.terminalsById));
-  const reorderTerminals = useTerminalStore((s) => s.reorderTerminals);
-  const reorderTabGroups = useTerminalStore((s) => s.reorderTabGroups);
-  const moveTerminalToPosition = useTerminalStore((s) => s.moveTerminalToPosition);
-  const moveTabGroupToLocation = useTerminalStore((s) => s.moveTabGroupToLocation);
-  const moveTerminalToWorktree = useTerminalStore((s) => s.moveTerminalToWorktree);
-  const setFocused = useTerminalStore((s) => s.setFocused);
+  const panelsById = usePanelStore(useShallow((state) => state.panelsById));
+  const reorderTerminals = usePanelStore((s) => s.reorderTerminals);
+  const reorderTabGroups = usePanelStore((s) => s.reorderTabGroups);
+  const moveTerminalToPosition = usePanelStore((s) => s.moveTerminalToPosition);
+  const moveTabGroupToLocation = usePanelStore((s) => s.moveTabGroupToLocation);
+  const moveTerminalToWorktree = usePanelStore((s) => s.moveTerminalToWorktree);
+  const setFocused = usePanelStore((s) => s.setFocused);
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const getMaxGridCapacity = useLayoutConfigStore((state) => state.getMaxGridCapacity);
 
@@ -296,8 +296,8 @@ export function DndProvider({ children }: DndProviderProps) {
     if (activeData?.terminal) return activeData.terminal;
     // Parse accordion IDs to get actual terminal ID
     const terminalId = parseAccordionDragId(activeId!) ?? activeId;
-    return (terminalId ? terminalsById[terminalId] : null) ?? null;
-  }, [activeId, activeData, terminalsById]);
+    return (terminalId ? panelsById[terminalId] : null) ?? null;
+  }, [activeId, activeData, panelsById]);
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     const { active } = event;
@@ -372,7 +372,7 @@ export function DndProvider({ children }: DndProviderProps) {
       // Skip accordion drop targets for non-accordion drags
       const parsedId = parseAccordionDragId(overId);
       const terminalId = parsedId ?? overId;
-      const overTerminal = useTerminalStore.getState().terminalsById[terminalId];
+      const overTerminal = usePanelStore.getState().panelsById[terminalId];
       if (overTerminal && !parsedId) {
         // Only set container for non-accordion terminals
         detectedContainer = overTerminal.location === "dock" ? "dock" : "grid";
@@ -390,7 +390,7 @@ export function DndProvider({ children }: DndProviderProps) {
       // Get tab groups to compute group-based placeholder index
       // ContentGrid uses tab groups for SortableContext, so placeholderIndex must be a group index
       const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
-      const tabGroups = useTerminalStore
+      const tabGroups = usePanelStore
         .getState()
         .getTabGroups("grid", activeWorktreeId ?? undefined);
 
@@ -483,8 +483,8 @@ export function DndProvider({ children }: DndProviderProps) {
       }
 
       // Read fresh terminal state from store to avoid stale closures
-      const { terminalsById: freshTerminalsById, terminalIds: freshTerminalIds } =
-        useTerminalStore.getState();
+      const { panelsById: freshTerminalsById, panelIds: freshTerminalIds } =
+        usePanelStore.getState();
 
       // Capture dragged terminal ID from data (works for both sortable and worktree list)
       const data = active.data.current as DragData | undefined;
@@ -648,7 +648,7 @@ export function DndProvider({ children }: DndProviderProps) {
           }
         }
         // Count groups using TabGroup data from store
-        const tabGroups = useTerminalStore.getState().tabGroups;
+        const tabGroups = usePanelStore.getState().tabGroups;
         const panelsInGroups = new Set<string>();
         let explicitGroupCount = 0;
         for (const group of tabGroups.values()) {
@@ -675,7 +675,7 @@ export function DndProvider({ children }: DndProviderProps) {
           // Group-aware drag: move the entire tab group
           if (sourceLocation === targetContainer) {
             // Same container: reorder groups
-            const tabGroupsAtLocation = useTerminalStore
+            const tabGroupsAtLocation = usePanelStore
               .getState()
               .getTabGroups(targetContainer, activeWorktreeId ?? undefined);
 
@@ -721,7 +721,7 @@ export function DndProvider({ children }: DndProviderProps) {
             if (moveSuccess) {
               // After moving, reorder to the drop position
               // The group is now at the end, move it to targetIndex
-              const tabGroupsAtLocation = useTerminalStore
+              const tabGroupsAtLocation = usePanelStore
                 .getState()
                 .getTabGroups(targetContainer, activeWorktreeId ?? undefined);
 
@@ -820,14 +820,14 @@ export function DndProvider({ children }: DndProviderProps) {
         }
 
         // Get fresh terminal state from store to avoid stale closures
-        const storeState = useTerminalStore.getState();
+        const storeState = usePanelStore.getState();
         const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
 
         // Only stabilize grid terminals in the ACTIVE worktree
         // Use nullish coalescing to handle null/undefined mismatch (matches ContentGrid filter)
         const gridTerminalsList: TerminalInstance[] = [];
-        for (const tid of storeState.terminalIds) {
-          const t = storeState.terminalsById[tid];
+        for (const tid of storeState.panelIds) {
+          const t = storeState.panelsById[tid];
           if (
             t &&
             (t.location === "grid" || t.location === undefined) &&
@@ -842,7 +842,7 @@ export function DndProvider({ children }: DndProviderProps) {
           terminalInstanceService.flushResize(terminal.id);
 
           // Force store visibility to true to ensure terminals re-render after drag
-          useTerminalStore.getState().updateVisibility(terminal.id, true);
+          usePanelStore.getState().updateVisibility(terminal.id, true);
 
           const managed = terminalInstanceService.get(terminal.id);
           if (managed?.hostElement.isConnected) {
@@ -865,7 +865,7 @@ export function DndProvider({ children }: DndProviderProps) {
         if (sourceLocation === "grid" && targetContainer === "dock" && draggedId) {
           const refreshDockTerminal = () => {
             // Re-check current location to avoid race conditions
-            const currentTerminal = useTerminalStore.getState().terminalsById[draggedId];
+            const currentTerminal = usePanelStore.getState().panelsById[draggedId];
             if (currentTerminal?.location !== "dock") return;
 
             terminalInstanceService.flushResize(draggedId);

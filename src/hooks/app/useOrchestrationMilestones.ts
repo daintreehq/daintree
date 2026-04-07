@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { isElectronAvailable } from "../useElectron";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { notify } from "@/lib/notify";
@@ -43,16 +43,16 @@ const TOAST_DURATION = 5000;
 const TOAST_STAGGER = 5500;
 
 function checkAgentCompleted(): boolean {
-  const { terminalsById, terminalIds } = useTerminalStore.getState();
-  return terminalIds.some((id) => {
-    const state = terminalsById[id]?.agentState;
+  const { panelsById, panelIds } = usePanelStore.getState();
+  return panelIds.some((id) => {
+    const state = panelsById[id]?.agentState;
     return state === "completed" || state === "exited";
   });
 }
 
 function checkConcurrentAgents(): boolean {
-  const { terminalsById, terminalIds } = useTerminalStore.getState();
-  return terminalIds.filter((id) => terminalsById[id]?.agentState === "working").length >= 3;
+  const { panelsById, panelIds } = usePanelStore.getState();
+  return panelIds.filter((id) => panelsById[id]?.agentState === "working").length >= 3;
 }
 
 function checkContextInjection(): boolean {
@@ -149,25 +149,25 @@ export function useOrchestrationMilestones(isStateLoaded: boolean): void {
         const shown = shownRef.current;
 
         unsubs.push(
-          useTerminalStore.subscribe((state, prev) => {
+          usePanelStore.subscribe((state, prev) => {
             if (!shown["first-agent-completed"]) {
-              const had = prev.terminalIds.some((id) => {
-                const s = prev.terminalsById[id]?.agentState;
+              const had = prev.panelIds.some((id) => {
+                const s = prev.panelsById[id]?.agentState;
                 return s === "completed" || s === "exited";
               });
-              const has = state.terminalIds.some((id) => {
-                const s = state.terminalsById[id]?.agentState;
+              const has = state.panelIds.some((id) => {
+                const s = state.panelsById[id]?.agentState;
                 return s === "completed" || s === "exited";
               });
               if (!had && has) showToast("first-agent-completed");
             }
 
             if (!shown["first-concurrent-agents"]) {
-              const prevCount = prev.terminalIds.filter(
-                (id) => prev.terminalsById[id]?.agentState === "working"
+              const prevCount = prev.panelIds.filter(
+                (id) => prev.panelsById[id]?.agentState === "working"
               ).length;
-              const curCount = state.terminalIds.filter(
-                (id) => state.terminalsById[id]?.agentState === "working"
+              const curCount = state.panelIds.filter(
+                (id) => state.panelsById[id]?.agentState === "working"
               ).length;
               if (prevCount < 3 && curCount >= 3) showToast("first-concurrent-agents");
             }

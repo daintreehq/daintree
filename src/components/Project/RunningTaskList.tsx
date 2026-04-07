@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { X, Eye, RotateCw } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
+import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 import { terminalClient } from "@/clients";
 import { cn } from "@/lib/utils";
 
@@ -30,11 +30,11 @@ interface RunningTaskListProps {
 }
 
 export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
-  const quickRunTerminals = useTerminalStore(
+  const quickRunTerminals = usePanelStore(
     useShallow((state) => {
       const result: TerminalInstance[] = [];
-      for (const id of state.terminalIds) {
-        const t = state.terminalsById[id];
+      for (const id of state.panelIds) {
+        const t = state.panelsById[id];
         if (
           t &&
           t.spawnedBy === "quickrun" &&
@@ -48,8 +48,8 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
     })
   );
 
-  const activateTerminal = useTerminalStore((s) => s.activateTerminal);
-  const restartTerminal = useTerminalStore((s) => s.restartTerminal);
+  const activateTerminal = usePanelStore((s) => s.activateTerminal);
+  const restartTerminal = usePanelStore((s) => s.restartTerminal);
 
   const [now, setNow] = useState(Date.now());
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set());

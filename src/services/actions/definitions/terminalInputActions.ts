@@ -1,7 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { openPanelContextMenu } from "@/lib/panelContextMenu";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 export function registerTerminalInputActions(
   actions: ActionRegistry,
@@ -34,7 +34,7 @@ export function registerTerminalInputActions(
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
       const { terminalInstanceService } =
@@ -60,10 +60,10 @@ export function registerTerminalInputActions(
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
-      const terminal = state.terminalsById[targetId];
+      const terminal = state.panelsById[targetId];
       if (terminal?.isInputLocked) return;
       const { terminalInstanceService } =
         await import("@/services/terminal/TerminalInstanceService");
@@ -112,7 +112,7 @@ export function registerTerminalInputActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = (args ?? {}) as { terminalId?: string };
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
         openPanelContextMenu(targetId);
@@ -130,7 +130,7 @@ export function registerTerminalInputActions(
     scope: "renderer",
     run: async () => {
       const { triggerStashInput } = await import("@/store/terminalInputStore");
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = state.focusedId;
       if (targetId) triggerStashInput(targetId);
     },
@@ -146,7 +146,7 @@ export function registerTerminalInputActions(
     scope: "renderer",
     run: async () => {
       const { triggerPopStash } = await import("@/store/terminalInputStore");
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = state.focusedId;
       if (targetId) triggerPopStash(targetId);
     },
@@ -178,11 +178,11 @@ export function registerTerminalInputActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = (args ?? {}) as { terminalId?: string };
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const sourceId = terminalId ?? state.focusedId;
       if (!sourceId) return;
 
-      const terminal = state.terminalsById[sourceId];
+      const terminal = state.panelsById[sourceId];
       if (!terminal) return;
       if (terminal.kind && !panelKindHasPty(terminal.kind)) return;
 

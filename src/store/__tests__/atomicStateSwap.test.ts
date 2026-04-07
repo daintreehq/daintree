@@ -45,7 +45,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-const { useTerminalStore } = await import("../terminalStore");
+const { usePanelStore } = await import("../panelStore");
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 
 function seedTerminals() {
@@ -67,9 +67,9 @@ function seedTerminals() {
     rows: 24,
     location: "dock" as const,
   };
-  useTerminalStore.setState({
-    terminalsById: { "term-1": t1, "term-2": t2 },
-    terminalIds: ["term-1", "term-2"],
+  usePanelStore.setState({
+    panelsById: { "term-1": t1, "term-2": t2 },
+    panelIds: ["term-1", "term-2"],
     tabGroups: new Map(),
     focusedId: "term-1",
     maximizedId: null,
@@ -90,9 +90,9 @@ function seedTerminals() {
 describe("detachTerminalsForProjectSwitch", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    useTerminalStore.setState({
-      terminalsById: {},
-      terminalIds: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -111,7 +111,7 @@ describe("detachTerminalsForProjectSwitch", () => {
   it("detaches xterm instances and suppresses resizes without clearing state", () => {
     seedTerminals();
 
-    useTerminalStore.getState().detachTerminalsForProjectSwitch();
+    usePanelStore.getState().detachTerminalsForProjectSwitch();
 
     expect(terminalInstanceService.suppressResizesDuringProjectSwitch).toHaveBeenCalledWith(
       ["term-1", "term-2"],
@@ -120,8 +120,8 @@ describe("detachTerminalsForProjectSwitch", () => {
     expect(terminalInstanceService.detachForProjectSwitch).toHaveBeenCalledWith("term-1");
     expect(terminalInstanceService.detachForProjectSwitch).toHaveBeenCalledWith("term-2");
 
-    const state = useTerminalStore.getState();
-    expect(state.terminalIds).toHaveLength(2);
+    const state = usePanelStore.getState();
+    expect(state.panelIds).toHaveLength(2);
     expect(state.focusedId).toBe("term-1");
     expect(state.activeDockTerminalId).toBe("term-2");
     expect(state.commandQueue).toHaveLength(1);
@@ -130,7 +130,7 @@ describe("detachTerminalsForProjectSwitch", () => {
   it("does not destroy any terminal instances", () => {
     seedTerminals();
 
-    useTerminalStore.getState().detachTerminalsForProjectSwitch();
+    usePanelStore.getState().detachTerminalsForProjectSwitch();
 
     expect(terminalInstanceService.destroy).not.toHaveBeenCalled();
   });
@@ -139,9 +139,9 @@ describe("detachTerminalsForProjectSwitch", () => {
 describe("clearTerminalStoreForSwitch", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    useTerminalStore.setState({
-      terminalsById: {},
-      terminalIds: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -160,11 +160,11 @@ describe("clearTerminalStoreForSwitch", () => {
   it("clears all terminal state without running side-effects", () => {
     seedTerminals();
 
-    useTerminalStore.getState().clearTerminalStoreForSwitch();
+    usePanelStore.getState().clearTerminalStoreForSwitch();
 
-    const state = useTerminalStore.getState();
-    expect(state.terminalIds).toEqual([]);
-    expect(Object.keys(state.terminalsById)).toEqual([]);
+    const state = usePanelStore.getState();
+    expect(state.panelIds).toEqual([]);
+    expect(Object.keys(state.panelsById)).toEqual([]);
     expect(state.focusedId).toBeNull();
     expect(state.maximizedId).toBeNull();
     expect(state.activeDockTerminalId).toBeNull();
@@ -182,9 +182,9 @@ describe("clearTerminalStoreForSwitch", () => {
 describe("atomic swap: detach then clear sequence", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    useTerminalStore.setState({
-      terminalsById: {},
-      terminalIds: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -201,34 +201,34 @@ describe("atomic swap: detach then clear sequence", () => {
   });
 
   it("detachTerminalsForProjectSwitch is a no-op with empty terminals", () => {
-    useTerminalStore.getState().detachTerminalsForProjectSwitch();
+    usePanelStore.getState().detachTerminalsForProjectSwitch();
 
     expect(terminalInstanceService.suppressResizesDuringProjectSwitch).toHaveBeenCalledWith(
       [],
       10_000
     );
     expect(terminalInstanceService.detachForProjectSwitch).not.toHaveBeenCalled();
-    expect(useTerminalStore.getState().terminalIds).toEqual([]);
+    expect(usePanelStore.getState().panelIds).toEqual([]);
   });
 
   it("clearTerminalStoreForSwitch is idempotent", () => {
     seedTerminals();
 
-    useTerminalStore.getState().clearTerminalStoreForSwitch();
-    expect(useTerminalStore.getState().terminalIds).toEqual([]);
+    usePanelStore.getState().clearTerminalStoreForSwitch();
+    expect(usePanelStore.getState().panelIds).toEqual([]);
 
-    useTerminalStore.getState().clearTerminalStoreForSwitch();
-    expect(useTerminalStore.getState().terminalIds).toEqual([]);
+    usePanelStore.getState().clearTerminalStoreForSwitch();
+    expect(usePanelStore.getState().panelIds).toEqual([]);
   });
 
   it("preserves terminal state after detach, then clears on explicit call", () => {
     seedTerminals();
 
-    useTerminalStore.getState().detachTerminalsForProjectSwitch();
-    expect(useTerminalStore.getState().terminalIds).toHaveLength(2);
+    usePanelStore.getState().detachTerminalsForProjectSwitch();
+    expect(usePanelStore.getState().panelIds).toHaveLength(2);
 
-    useTerminalStore.getState().clearTerminalStoreForSwitch();
-    expect(useTerminalStore.getState().terminalIds).toEqual([]);
+    usePanelStore.getState().clearTerminalStoreForSwitch();
+    expect(usePanelStore.getState().panelIds).toEqual([]);
 
     expect(terminalInstanceService.detachForProjectSwitch).toHaveBeenCalledTimes(2);
   });
