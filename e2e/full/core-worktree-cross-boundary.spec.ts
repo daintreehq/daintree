@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { launchApp, closeApp, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, refreshActiveWindow, type AppContext } from "../helpers/launch";
 import { createFixtureRepo, createMultiProjectFixture } from "../helpers/fixtures";
 import type { MultiProjectFixture } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
@@ -30,6 +30,23 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
     });
 
     ctx = await launchApp();
+
+    // Disable two-pane split mode: the test spawns 2 terminals in the
+    // feature worktree, which triggers a race condition where the split
+    // layout momentarily activates and crashes the Electron process.
+    await ctx.window.evaluate(() => {
+      localStorage.setItem(
+        "canopy-two-pane-split",
+        JSON.stringify({
+          state: {
+            config: { enabled: false, defaultRatio: 0.5, preferPreview: false },
+            ratioByWorktreeId: {},
+          },
+          version: 1,
+        })
+      );
+    });
+
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, "Cross Boundary");
   });
 
@@ -127,6 +144,9 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
   });
 
   test("overview modal opens and shows worktree cards", async () => {
+    // Re-acquire the active window — worktree switches in the preceding
+    // test may have changed the active WebContentsView.
+    ctx.window = await refreshActiveWindow(ctx.app);
     const { window } = ctx;
 
     await window.keyboard.press(`${mod}+Shift+O`);
