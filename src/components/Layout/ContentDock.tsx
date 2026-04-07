@@ -69,8 +69,15 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     const groups = getTabGroups("dock", activeWorktreeId ?? undefined);
     if (!helpTerminalId) return groups;
     return groups.filter((g) => !(g.panelIds.length === 1 && g.panelIds[0] === helpTerminalId));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeTerminalIds/trashedTerminals are intentional trigger deps
-  }, [getTabGroups, activeWorktreeId, storeTerminalIds, trashedTerminals, helpTerminalId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeTerminalIds/terminalsById/trashedTerminals are intentional trigger deps
+  }, [
+    getTabGroups,
+    activeWorktreeId,
+    storeTerminalIds,
+    terminalsById,
+    trashedTerminals,
+    helpTerminalId,
+  ]);
 
   const { worktrees } = useWorktrees();
 

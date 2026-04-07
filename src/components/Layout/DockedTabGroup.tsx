@@ -87,15 +87,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   // Derive isOpen from store state - open if ANY panel in this group is active
   const isOpen = panels.some((p) => p.id === activeDockTerminalId);
 
-  // Click/double-click arbitration: defer single-click action to distinguish from double-click.
-  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
-    };
-  }, []);
-
   // Track when popover was just programmatically opened
   const wasJustOpenedRef = useRef(false);
   const prevIsOpenRef = useRef(isOpen);
@@ -401,22 +392,18 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              if (clickTimerRef.current) {
-                clearTimeout(clickTimerRef.current);
-                clickTimerRef.current = null;
+              if (e.detail >= 2) return;
+              if (isOpen) {
+                closeDockTerminal();
+              } else {
+                openDockTerminal(activeTabId);
               }
-              if (e.detail >= 2) {
-                moveTerminalToGrid(activePanel.id);
-                return;
-              }
-              clickTimerRef.current = setTimeout(() => {
-                clickTimerRef.current = null;
-                if (isOpen) {
-                  closeDockTerminal();
-                } else {
-                  openDockTerminal(activeTabId);
-                }
-              }, 250);
+            }}
+            onDoubleClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const moved = moveTerminalToGrid(activePanel.id);
+              if (moved) closeDockTerminal();
             }}
             aria-label={`${activePanel.title} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
           >

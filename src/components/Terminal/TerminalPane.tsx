@@ -314,9 +314,13 @@ function TerminalPaneComponent({
     isDraggingRef.current = isDragging;
   }, [isDragging]);
 
-  // Visibility observation - stable observer, ref-gated callback
+  // Visibility observation - stable observer, ref-gated callback.
+  // Capture attach generation so stale IntersectionObserver callbacks from a
+  // previous mount site don't hide a terminal that has already been re-attached.
   useEffect(() => {
     if (!containerRef.current) return;
+
+    const gen = terminalInstanceService.getAttachGeneration(id);
 
     const observer = new IntersectionObserver(
       ([entry]) => {
@@ -324,7 +328,7 @@ function TerminalPaneComponent({
         if (isDraggingRef.current) return;
 
         updateVisibility(id, entry.isIntersecting);
-        terminalInstanceService.setVisible(id, entry.isIntersecting);
+        terminalInstanceService.setVisible(id, entry.isIntersecting, gen);
       },
       {
         threshold: 0.1,
@@ -333,16 +337,17 @@ function TerminalPaneComponent({
 
     observer.observe(containerRef.current);
     return () => observer.disconnect();
-  }, [id, updateVisibility]);
+  }, [id, restartKey, updateVisibility]);
 
-  // Separate unmount cleanup - only runs on actual unmount, not on drag changes.
-  // Capture attach generation so stale dock unmounts don't background a terminal
-  // that has already been re-attached to the grid.
+  // Separate unmount cleanup — only update store visibility.
+  // The service-level setVisible(false) is handled by XtermAdapter's own
+  // useLayoutEffect cleanup, which has the correct attachGeneration guard.
+  // Calling it here too is redundant and breaks in React StrictMode (dev),
+  // where the effect's cleanup captures the same generation as the active
+  // mount, bypassing the stale-generation guard and hiding the terminal.
   useEffect(() => {
-    const gen = terminalInstanceService.getAttachGeneration(id);
     return () => {
       updateVisibility(id, false);
-      terminalInstanceService.setVisible(id, false, gen);
     };
   }, [id, updateVisibility]);
 

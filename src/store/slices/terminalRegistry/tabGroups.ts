@@ -237,7 +237,9 @@ export const createTabGroupActions = (
       if (group.location === location && (group.worktreeId ?? undefined) === worktreeId) {
         const validPanelIds = group.panelIds.filter((id) => {
           const panel = state.terminalsById[id];
-          return panel && panel.location !== "trash" && !trashedTerminals.has(id);
+          if (!panel || trashedTerminals.has(id)) return false;
+          const panelLocation = panel.location ?? "grid";
+          return panelLocation === location;
         });
 
         if (validPanelIds.length > 0) {

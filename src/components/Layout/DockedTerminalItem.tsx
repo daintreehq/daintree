@@ -42,15 +42,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   // Derive isOpen from store state
   const isOpen = activeDockTerminalId === terminal.id;
 
-  // Click/double-click arbitration: defer single-click action to distinguish from double-click.
-  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
-    };
-  }, []);
-
   // Track when popover was just programmatically opened to ignore immediate close events
   const wasJustOpenedRef = useRef(false);
   const prevIsOpenRef = useRef(isOpen);
@@ -232,25 +223,18 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              if (clickTimerRef.current) {
-                clearTimeout(clickTimerRef.current);
-                clickTimerRef.current = null;
+              if (e.detail >= 2) return;
+              if (isOpen) {
+                closeDockTerminal();
+              } else {
+                openDockTerminal(terminal.id);
               }
-              if (e.detail >= 2) {
-                // Double-click: move to grid. moveTerminalToGrid in the store
-                // atomically clears activeDockTerminalId so no separate close needed.
-                moveTerminalToGrid(terminal.id);
-                return;
-              }
-              // Single-click: defer to distinguish from double-click
-              clickTimerRef.current = setTimeout(() => {
-                clickTimerRef.current = null;
-                if (isOpen) {
-                  closeDockTerminal();
-                } else {
-                  openDockTerminal(terminal.id);
-                }
-              }, 250);
+            }}
+            onDoubleClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const moved = moveTerminalToGrid(terminal.id);
+              if (moved) closeDockTerminal();
             }}
             aria-label={`${terminal.title} - Click to preview, double-click to move to grid, drag to reorder`}
           >
