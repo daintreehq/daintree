@@ -9,7 +9,6 @@ import { useUrlHistoryStore } from "./urlHistoryStore";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { terminalPersistence, terminalToSnapshot } from "./persistence/terminalPersistence";
 import { useTerminalInputStore } from "./terminalInputStore";
-import { useWorktreeSelectionStore } from "./worktreeStore";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
 import type { TerminalInstance, TabGroup } from "@shared/types";
@@ -44,9 +43,20 @@ export function setTerminalStoreGetter(
   _getTerminalStoreState = getter;
 }
 
+// Lazy reference to useWorktreeSelectionStore to break circular dependency.
+// worktreeStore → terminalInstanceService → terminalStore → setTerminalStoreGetter
+// would create a TDZ error if imported statically.
+let _getWorktreeSelectionState: (() => { activeWorktreeId: string | null }) | null = null;
+
+export function setWorktreeSelectionStoreGetter(
+  getter: () => { activeWorktreeId: string | null }
+): void {
+  _getWorktreeSelectionState = getter;
+}
+
 function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   const draftInputs = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
-  const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId ?? undefined;
+  const activeWorktreeId = _getWorktreeSelectionState?.()?.activeWorktreeId ?? undefined;
 
   // Synchronously snapshot terminal state from the Zustand store before the
   // renderer gets detached.  This captures browser/dev-preview panel state

@@ -6,6 +6,7 @@ import { useFocusStore } from "@/store/focusStore";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
+import { setWorktreeSelectionStoreGetter } from "./projectStore";
 
 interface CreateDialogState {
   isOpen: boolean;
@@ -532,6 +533,9 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 export const useWorktreeSelectionStore = create<WorktreeSelectionState>()(
   createWorktreeSelectionStore
 );
+
+// Inject lazy reference into projectStore to break circular dependency.
+setWorktreeSelectionStoreGetter(() => useWorktreeSelectionStore.getState());
 
 function applyWorktreeTerminalPolicy(
   get: () => WorktreeSelectionState,

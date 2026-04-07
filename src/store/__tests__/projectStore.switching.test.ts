@@ -329,7 +329,8 @@ describe("buildOutgoingState worktree selection (#5000)", () => {
   it("includes non-root activeWorktreeId in switchProject outgoing state", async () => {
     mockActiveWorktreeId = "wt-feature";
 
-    const { useProjectStore } = await import("../projectStore");
+    const { useProjectStore, setWorktreeSelectionStoreGetter } = await import("../projectStore");
+    setWorktreeSelectionStoreGetter(() => ({ activeWorktreeId: mockActiveWorktreeId }));
     useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
     await useProjectStore.getState().switchProject(projectB.id);
@@ -342,7 +343,8 @@ describe("buildOutgoingState worktree selection (#5000)", () => {
   it("includes non-root activeWorktreeId in reopenProject outgoing state", async () => {
     mockActiveWorktreeId = "wt-feature";
 
-    const { useProjectStore } = await import("../projectStore");
+    const { useProjectStore, setWorktreeSelectionStoreGetter } = await import("../projectStore");
+    setWorktreeSelectionStoreGetter(() => ({ activeWorktreeId: mockActiveWorktreeId }));
     useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
     await useProjectStore.getState().reopenProject(projectB.id);
@@ -355,7 +357,8 @@ describe("buildOutgoingState worktree selection (#5000)", () => {
   it("converts null activeWorktreeId to undefined in outgoing state", async () => {
     mockActiveWorktreeId = null;
 
-    const { useProjectStore } = await import("../projectStore");
+    const { useProjectStore, setWorktreeSelectionStoreGetter } = await import("../projectStore");
+    setWorktreeSelectionStoreGetter(() => ({ activeWorktreeId: mockActiveWorktreeId }));
     useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
     await useProjectStore.getState().switchProject(projectB.id);
@@ -370,7 +373,8 @@ describe("buildOutgoingState worktree selection (#5000)", () => {
     mockActiveWorktreeId = "wt-early";
 
     // Don't call setTerminalStoreGetter — forces the early return path
-    const { useProjectStore } = await import("../projectStore");
+    const { useProjectStore, setWorktreeSelectionStoreGetter } = await import("../projectStore");
+    setWorktreeSelectionStoreGetter(() => ({ activeWorktreeId: mockActiveWorktreeId }));
     useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
 
     await useProjectStore.getState().switchProject(projectB.id);
