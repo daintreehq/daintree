@@ -408,12 +408,12 @@ export const terminalClient = {
   },
 
   onReduceScrollback: (
-    callback: (data: { panelIds: string[]; targetLines: number }) => void
+    callback: (data: { terminalIds: string[]; targetLines: number }) => void
   ): (() => void) => {
     return window.electron.terminal.onReduceScrollback(callback);
   },
 
-  onRestoreScrollback: (callback: (data: { panelIds: string[] }) => void): (() => void) => {
+  onRestoreScrollback: (callback: (data: { terminalIds: string[] }) => void): (() => void) => {
     return window.electron.terminal.onRestoreScrollback(callback);
   },
 

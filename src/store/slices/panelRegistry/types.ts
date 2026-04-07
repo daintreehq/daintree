@@ -15,12 +15,7 @@ import type {
 } from "@/types";
 
 export type TerminalInstance = TerminalInstanceType;
-
-/**
- * Options for creating a new panel via addPanel.
- * Re-exported from the shared discriminated union type.
- */
-export type AddPanelOptions = AddPanelOptions;
+export type { AddPanelOptions };
 
 export interface TrashedTerminalGroupMetadata {
   panelIds: string[];

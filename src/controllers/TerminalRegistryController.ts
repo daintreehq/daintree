@@ -341,11 +341,11 @@ class TerminalRegistryController {
     return terminalClient.onSpawnResult(handler);
   }
 
-  onReduceScrollback(handler: (data: { panelIds: string[]; targetLines: number }) => void) {
+  onReduceScrollback(handler: (data: { terminalIds: string[]; targetLines: number }) => void) {
     return terminalClient.onReduceScrollback(handler);
   }
 
-  onRestoreScrollback(handler: (data: { panelIds: string[] }) => void) {
+  onRestoreScrollback(handler: (data: { terminalIds: string[] }) => void) {
     return terminalClient.onRestoreScrollback(handler);
   }
 }

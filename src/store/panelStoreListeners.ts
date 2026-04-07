@@ -437,18 +437,20 @@ export function setupTerminalStoreListeners() {
   });
 
   reduceScrollbackUnsubscribe = terminalRegistryController.onReduceScrollback(
-    ({ panelIds, targetLines }) => {
-      for (const id of panelIds) {
+    ({ terminalIds, targetLines }) => {
+      for (const id of terminalIds) {
         terminalInstanceService.reduceScrollback(id, targetLines);
       }
     }
   );
 
-  restoreScrollbackUnsubscribe = terminalRegistryController.onRestoreScrollback(({ panelIds }) => {
-    for (const id of panelIds) {
-      terminalInstanceService.restoreScrollback(id);
+  restoreScrollbackUnsubscribe = terminalRegistryController.onRestoreScrollback(
+    ({ terminalIds }) => {
+      for (const id of terminalIds) {
+        terminalInstanceService.restoreScrollback(id);
+      }
     }
-  });
+  );
 
   // Resource metrics listener
   resourceMetricsUnsubscribe = window.electron.terminal.onResourceMetrics((data) => {
