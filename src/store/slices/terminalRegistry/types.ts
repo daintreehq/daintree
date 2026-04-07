@@ -3,92 +3,24 @@ import type {
   TerminalInstance as TerminalInstanceType,
   AgentState,
   TerminalType,
-  PanelLocation,
   AgentStateChangeTrigger,
   TerminalFlowStatus,
   TerminalRuntimeStatus,
   SpawnError,
-  PanelExitBehavior,
   TerminalReconnectError,
   TabGroup,
   TabGroupLocation,
   BrowserHistory,
-  TerminalSpawnSource,
+  AddPanelOptions,
 } from "@/types";
-import type { PanelKind } from "@/types";
 
 export type TerminalInstance = TerminalInstanceType;
 
-export interface AddTerminalOptions {
-  kind?: PanelKind;
-  type?: TerminalType;
-  /** Agent ID when type is an agent - enables extensibility for new agents */
-  agentId?: string;
-  title?: string;
-  worktreeId?: string;
-  /** Working directory - required for PTY panels, optional/unused for non-PTY panels */
-  cwd?: string;
-  shell?: string;
-  command?: string;
-  location?: PanelLocation;
-  agentState?: AgentState;
-  lastStateChange?: number;
-  /** If provided, request a stable ID when spawning a new backend process */
-  requestedId?: string;
-  /** If provided, reconnect to existing backend process instead of spawning */
-  existingId?: string;
-  /** Store command on instance but don't execute it on spawn */
-  skipCommandExecution?: boolean;
-  /** Restore input lock state (read-only monitor mode) */
-  isInputLocked?: boolean;
-  /** Initial URL for browser panes (kind === 'browser') */
-  browserUrl?: string;
-  /** Navigation history for browser/dev-preview panels */
-  browserHistory?: BrowserHistory;
-  /** Zoom factor for browser/dev-preview panels */
-  browserZoom?: number;
-  /** Path to note file (kind === 'notes') */
-  notePath?: string;
-  /** Note ID (kind === 'notes') */
-  noteId?: string;
-  /** Note scope (kind === 'notes') */
-  scope?: "worktree" | "project";
-  /** Note creation timestamp (kind === 'notes') */
-  createdAt?: number;
-  /** Dev server command override for dev-preview panels (kind === 'dev-preview') */
-  devCommand?: string;
-  /** Dev server status for dev-preview panels (kind === 'dev-preview') */
-  devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
-  /** Dev server URL for dev-preview panels (kind === 'dev-preview') */
-  devServerUrl?: string;
-  /** Dev server error for dev-preview panels (kind === 'dev-preview') */
-  devServerError?: { type: string; message: string };
-  /** Terminal ID associated with dev server for dev-preview panels (kind === 'dev-preview') */
-  devServerTerminalId?: string;
-  /** Whether the browser console drawer is open (kind === 'browser') */
-  browserConsoleOpen?: boolean;
-  /** Whether the dev-preview console drawer is open (kind === 'dev-preview') */
-  devPreviewConsoleOpen?: boolean;
-  /** Environment variables to set for this terminal */
-  env?: Record<string, string>;
-  /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
-  exitBehavior?: PanelExitBehavior;
-  /** Captured agent session ID from graceful shutdown (used for session resume) */
-  agentSessionId?: string;
-  /** Process-level flags captured at launch time, persisted for session resume */
-  agentLaunchFlags?: string[];
-  /** Model ID selected at launch time for per-panel model selection */
-  agentModelId?: string;
-  /** Opaque state bag for extension panels — survives the save/restore round-trip */
-  extensionState?: Record<string, unknown>;
-  /** Origin that spawned this terminal */
-  spawnedBy?: TerminalSpawnSource;
-  /** Bypass rate limiter during session restore (consumes main-process quota) */
-  restore?: boolean;
-  /** Bypass panel limit checks (used during hydration/state restoration) */
-  bypassLimits?: boolean;
-  // Note: Tab membership is now managed via createTabGroup/addPanelToGroup, not on terminals
-}
+/**
+ * Options for creating a new panel via addTerminal.
+ * Re-exported from the shared discriminated union type.
+ */
+export type AddTerminalOptions = AddPanelOptions;
 
 export interface TrashedTerminalGroupMetadata {
   panelIds: string[];

@@ -1,27 +1,22 @@
 import type { PanelKind, TerminalType, AgentState } from "@/types";
 import type { BrowserHistory } from "@shared/types/browser";
 import type { PanelExitBehavior } from "@shared/types/panel";
+import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
 import { generateAgentCommand, buildResumeCommand } from "@shared/types";
 import { logWarn } from "@/utils/logger";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 
-export interface AddTerminalArgs {
-  kind?: PanelKind;
-  type?: TerminalType;
-  agentId?: string;
-  title?: string;
+/**
+ * Args for building addTerminal options from hydration data.
+ * Uses AddPanelOptionsBase (flat) rather than the discriminated union because
+ * hydration builders construct args dynamically based on saved state,
+ * mixing fields from different panel kinds.
+ */
+export interface AddTerminalArgs extends AddPanelOptionsBase {
   cwd: string;
-  worktreeId?: string;
   location?: "grid" | "dock";
-  command?: string;
-  agentState?: AgentState;
-  lastStateChange?: number;
-  existingId?: string;
-  requestedId?: string;
-  skipCommandExecution?: boolean;
-  isInputLocked?: boolean;
   browserUrl?: string;
   browserHistory?: BrowserHistory;
   browserZoom?: number;
@@ -36,13 +31,6 @@ export interface AddTerminalArgs {
   devServerError?: { type: string; message: string } | null;
   devServerTerminalId?: string | null;
   devPreviewConsoleOpen?: boolean;
-  exitBehavior?: PanelExitBehavior;
-  agentSessionId?: string;
-  agentLaunchFlags?: string[];
-  agentModelId?: string;
-  extensionState?: Record<string, unknown>;
-  restore?: boolean;
-  bypassLimits?: boolean;
 }
 
 export interface SavedTerminalData {

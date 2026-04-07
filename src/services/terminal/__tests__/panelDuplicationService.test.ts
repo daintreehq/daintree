@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { TerminalInstance } from "@/store";
 import type { AddTerminalOptions } from "@/store/slices/terminalRegistry/types";
+import type {
+  BrowserPanelOptions,
+  NotesPanelOptions,
+  DevPreviewPanelOptions,
+} from "@shared/types/addPanelOptions";
 
 vi.mock("@/clients", () => ({
   agentSettingsClient: {
@@ -94,7 +99,7 @@ describe("buildPanelSnapshotOptions", () => {
       browserUrl: "https://example.com",
       browserConsoleOpen: true,
     });
-    const result = buildPanelSnapshotOptions(panel);
+    const result = buildPanelSnapshotOptions(panel) as BrowserPanelOptions;
     expect(result.browserUrl).toBe("https://example.com");
     expect(result.browserConsoleOpen).toBe(true);
   });
@@ -196,11 +201,11 @@ describe("panelDuplicationService", () => {
 
   it("includes browserUrl for browser panels", async () => {
     const panel = makePanel({ kind: "browser", browserUrl: "https://example.com" });
-    const result = await buildPanelDuplicateOptions(panel, "grid");
+    const result = (await buildPanelDuplicateOptions(panel, "grid")) as BrowserPanelOptions;
 
     expect(result.browserUrl).toBe("https://example.com");
-    expect(result.notePath).toBeUndefined();
-    expect(result.devCommand).toBeUndefined();
+    expect((result as unknown as Record<string, unknown>).notePath).toBeUndefined();
+    expect((result as unknown as Record<string, unknown>).devCommand).toBeUndefined();
   });
 
   it("includes notes fields for notes panels", async () => {
@@ -211,7 +216,7 @@ describe("panelDuplicationService", () => {
       scope: "worktree",
     } as Partial<TerminalInstance>);
 
-    const result = await buildPanelDuplicateOptions(panel, "dock");
+    const result = (await buildPanelDuplicateOptions(panel, "dock")) as NotesPanelOptions;
 
     expect(result.notePath).toBe("/notes/readme.md");
     expect(result.noteId).toBe("note-123");
@@ -227,7 +232,7 @@ describe("panelDuplicationService", () => {
       devPreviewConsoleOpen: true,
     } as Partial<TerminalInstance>);
 
-    const result = await buildPanelDuplicateOptions(panel, "grid");
+    const result = (await buildPanelDuplicateOptions(panel, "grid")) as DevPreviewPanelOptions;
 
     expect(result.devCommand).toBe("npm run dev");
     expect(result.browserUrl).toBe("http://localhost:3000");

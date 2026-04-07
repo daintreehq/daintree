@@ -9,7 +9,12 @@ import { terminalClient, projectClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { isRegisteredAgent } from "@/config/agents";
-import { panelKindHasPty, panelKindUsesTerminalUi } from "@shared/config/panelKindRegistry";
+import {
+  panelKindHasPty,
+  panelKindUsesTerminalUi,
+  getPanelKindConfig,
+  getExtensionFallbackDefaults,
+} from "@shared/config/panelKindRegistry";
 import { useScrollbackStore } from "@/store/scrollbackStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
@@ -169,88 +174,19 @@ export const createCorePanelActions = (
       const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
       const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 
-      let terminal: TerminalInstance;
-      if (requestedKind === "browser") {
-        terminal = {
-          id,
-          kind: "browser",
-          title,
-          worktreeId: options.worktreeId,
-          location,
-          isVisible: location === "grid",
-          runtimeStatus,
-          extensionState: options.extensionState,
-          browserUrl: options.browserUrl || "http://localhost:3000",
-          browserHistory: options.browserHistory,
-          browserZoom: options.browserZoom,
-          browserConsoleOpen: options.browserConsoleOpen,
-          type: "terminal" as const,
-          cwd: "",
-          cols: 80,
-          rows: 24,
-        };
-      } else if (requestedKind === "notes") {
-        terminal = {
-          id,
-          kind: "notes",
-          title,
-          worktreeId: options.worktreeId,
-          location,
-          isVisible: location === "grid",
-          runtimeStatus,
-          extensionState: options.extensionState,
-          notePath: options.notePath ?? "",
-          noteId: options.noteId ?? "",
-          scope: options.scope ?? "project",
-          createdAt: options.createdAt ?? Date.now(),
-          type: "terminal" as const,
-          cwd: "",
-          cols: 80,
-          rows: 24,
-        };
-      } else if (requestedKind === "dev-preview") {
-        // Dev-preview panels manage their own ephemeral PTYs via useDevServer hook
-        terminal = {
-          id,
-          kind: "dev-preview",
-          title,
-          worktreeId: options.worktreeId,
-          location,
-          isVisible: location === "grid",
-          runtimeStatus,
-          extensionState: options.extensionState,
-          cwd: options.cwd ?? "",
-          devCommand: options.devCommand,
-          browserUrl: options.browserUrl,
-          browserHistory: options.browserHistory,
-          browserZoom: options.browserZoom,
-          devServerStatus: options.devServerStatus,
-          devServerUrl: options.devServerUrl ?? undefined,
-          devServerError: options.devServerError ?? undefined,
-          devServerTerminalId: options.devServerTerminalId ?? undefined,
-          devPreviewConsoleOpen: options.devPreviewConsoleOpen,
-          exitBehavior: options.exitBehavior,
-          type: "terminal" as const,
-          cols: 80,
-          rows: 24,
-        };
-      } else {
-        // Generic non-PTY panel fallback for extensions
-        terminal = {
-          id,
-          kind: requestedKind,
-          title,
-          worktreeId: options.worktreeId,
-          location,
-          isVisible: location === "grid",
-          runtimeStatus,
-          extensionState: options.extensionState,
-          type: "terminal" as const,
-          cwd: "",
-          cols: 80,
-          rows: 24,
-        };
-      }
+      const kindConfig = getPanelKindConfig(requestedKind);
+      const kindFields = kindConfig?.createDefaults?.(options) ?? getExtensionFallbackDefaults();
+      const terminal: TerminalInstance = {
+        id,
+        kind: requestedKind,
+        title,
+        worktreeId: options.worktreeId,
+        location,
+        isVisible: location === "grid",
+        runtimeStatus,
+        extensionState: options.extensionState,
+        ...kindFields,
+      };
 
       set((state) => {
         const existing = state.terminalsById[id];
@@ -502,18 +438,6 @@ export const createCorePanelActions = (
         extensionState: options.extensionState,
         spawnedBy: options.spawnedBy,
         startedAt: Date.now(),
-        // Dev-preview specific fields
-        ...(kind === "dev-preview" && {
-          devCommand: options.devCommand,
-          browserUrl: options.browserUrl,
-          browserHistory: options.browserHistory,
-          browserZoom: options.browserZoom,
-          devServerStatus: options.devServerStatus,
-          devServerUrl: options.devServerUrl,
-          devServerError: options.devServerError,
-          devServerTerminalId: options.devServerTerminalId,
-          devPreviewConsoleOpen: options.devPreviewConsoleOpen,
-        }),
       };
 
       set((state) => {
