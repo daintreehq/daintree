@@ -11,6 +11,7 @@ import { useHomeDir } from "@/hooks/app/useHomeDir";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { generateAgentCommand, buildAgentLaunchFlags } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent, getAgentDisplayTitle } from "@/config/agents";
+import { normalizeAgentSelection } from "@/store/agentSettingsStore";
 
 const CLIPBOARD_DIR_NAME = "canopy-clipboard";
 
@@ -57,18 +58,22 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       agentSettingsClient.get(),
     ]);
 
-    if (isMounted.current && settingsResult.status === "fulfilled") {
-      setAgentSettings(settingsResult.value);
+    if (isMounted.current && settingsResult.status === "fulfilled" && settingsResult.value) {
+      const currentAvailability = useCliAvailabilityStore.getState().availability;
+      setAgentSettings(normalizeAgentSelection(settingsResult.value, currentAvailability));
     }
   }, [refreshCliAvailability]);
 
   useEffect(() => {
     isMounted.current = true;
-    void initializeCliAvailability();
-    agentSettingsClient
-      .get()
-      .then((settings) => {
-        if (isMounted.current) setAgentSettings(settings);
+
+    Promise.allSettled([initializeCliAvailability(), agentSettingsClient.get()])
+      .then(([, settingsResult]) => {
+        if (!isMounted.current) return;
+        if (settingsResult.status === "fulfilled" && settingsResult.value) {
+          const currentAvailability = useCliAvailabilityStore.getState().availability;
+          setAgentSettings(normalizeAgentSelection(settingsResult.value, currentAvailability));
+        }
       })
       .catch((error) => {
         console.error("Failed to load agent settings:", error);

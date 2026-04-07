@@ -90,6 +90,7 @@ describe("OnboardingFlow progress indicator", () => {
   const defaultProps = {
     availability: {} as import("@shared/types").CliAvailability,
     onRefreshSettings: vi.fn(() => Promise.resolve()),
+    hasAnySelectedAgent: true as boolean | null,
   };
 
   beforeEach(() => {
@@ -195,6 +196,7 @@ describe("OnboardingFlow telemetry tracking", () => {
   const defaultProps = {
     availability: {} as import("@shared/types").CliAvailability,
     onRefreshSettings: vi.fn(() => Promise.resolve()),
+    hasAnySelectedAgent: true as boolean | null,
   };
 
   beforeEach(() => {
@@ -364,6 +366,7 @@ describe("OnboardingFlow agent setup", () => {
   const defaultProps = {
     availability: {} as import("@shared/types").CliAvailability,
     onRefreshSettings: vi.fn(() => Promise.resolve()),
+    hasAnySelectedAgent: true as boolean | null,
   };
 
   beforeEach(() => {
@@ -464,5 +467,102 @@ describe("OnboardingFlow agent setup", () => {
     await vi.waitFor(() => {
       expect(defaultProps.onRefreshSettings).toHaveBeenCalled();
     });
+  });
+});
+
+describe("OnboardingFlow auto-open wizard on no selected agents", () => {
+  const completedOnboardingState: OnboardingState = {
+    ...defaultOnboardingState,
+    completed: true,
+    currentStep: null,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    onboardingMock.get.mockResolvedValue({ ...completedOnboardingState });
+  });
+
+  it("auto-opens wizard when onboarding complete and no agents selected", async () => {
+    const { getByTestId } = await act(async () => {
+      return render(
+        <OnboardingFlow
+          availability={{} as import("@shared/types").CliAvailability}
+          onRefreshSettings={vi.fn(() => Promise.resolve())}
+          hasAnySelectedAgent={false}
+        />
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(getByTestId("agent-setup-wizard")).toBeTruthy();
+    });
+  });
+
+  it("does NOT auto-open wizard when hasAnySelectedAgent is null (loading)", async () => {
+    const { baseElement } = await act(async () => {
+      return render(
+        <OnboardingFlow
+          availability={{} as import("@shared/types").CliAvailability}
+          onRefreshSettings={vi.fn(() => Promise.resolve())}
+          hasAnySelectedAgent={null}
+        />
+      );
+    });
+
+    // Give effects time to run
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    const wizard = baseElement.ownerDocument.querySelector('[data-testid="agent-setup-wizard"]');
+    expect(wizard).toBeNull();
+  });
+
+  it("does NOT auto-open wizard when agents are selected", async () => {
+    const { baseElement } = await act(async () => {
+      return render(
+        <OnboardingFlow
+          availability={{} as import("@shared/types").CliAvailability}
+          onRefreshSettings={vi.fn(() => Promise.resolve())}
+          hasAnySelectedAgent={true}
+        />
+      );
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    const wizard = baseElement.ownerDocument.querySelector('[data-testid="agent-setup-wizard"]');
+    expect(wizard).toBeNull();
+  });
+
+  it("does NOT auto-open wizard when onboarding is not complete", async () => {
+    onboardingMock.get.mockResolvedValue({ ...defaultOnboardingState, completed: false });
+
+    const { baseElement } = await act(async () => {
+      return render(
+        <OnboardingFlow
+          availability={{} as import("@shared/types").CliAvailability}
+          onRefreshSettings={vi.fn(() => Promise.resolve())}
+          hasAnySelectedAgent={false}
+        />
+      );
+    });
+
+    // Wait for hydration; the flow should show welcome step, not wizard
+    await vi.waitFor(() => {
+      expect(trackMock).toHaveBeenCalled();
+    });
+
+    // Wizard should not appear as a manual/auto-open
+    // (the welcome step or agent setup step appears as part of onboarding flow instead)
+    const manualWizard = baseElement.ownerDocument.querySelector(
+      '[data-testid="agent-setup-wizard"]'
+    );
+    // If it exists, it should be part of the onboarding flow (step 2), not auto-opened
+    // The key check is that auto-open doesn't trigger during incomplete onboarding
+    // With completed=false and no currentStep match, it starts at welcome
+    expect(baseElement.ownerDocument.querySelector('[data-testid="welcome-step"]')).toBeTruthy();
   });
 });

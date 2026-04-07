@@ -21,6 +21,7 @@ const STEP_ORDER: OnboardingStep[] = ["welcome", "agentSetup"];
 interface OnboardingFlowProps {
   availability: CliAvailability;
   onRefreshSettings: () => Promise<void>;
+  hasAnySelectedAgent: boolean | null;
   onComplete?: () => void;
 }
 
@@ -31,6 +32,7 @@ function trackOnboarding(event: string, properties: Record<string, unknown> = {}
 export function OnboardingFlow({
   availability,
   onRefreshSettings,
+  hasAnySelectedAgent,
   onComplete,
 }: OnboardingFlowProps) {
   const [state, setState] = useState<OnboardingState | null>(null);
@@ -41,6 +43,7 @@ export function OnboardingFlow({
   const flowStartTimeRef = useRef<number>(0);
   const completedRef = useRef(false);
   const currentStepRef = useRef<OnboardingStep | null>(null);
+  const autoOpenedRef = useRef(false);
 
   // Hydrate state from electron-store and run localStorage migration
   useEffect(() => {
@@ -106,6 +109,15 @@ export function OnboardingFlow({
     window.addEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
     return () => window.removeEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
   }, []);
+
+  // Auto-open wizard when onboarding is complete but no agents are selected
+  useEffect(() => {
+    if (hasAnySelectedAgent !== false) return;
+    if (!state?.completed) return;
+    if (autoOpenedRef.current) return;
+    autoOpenedRef.current = true;
+    setManualWizardOpen(true);
+  }, [hasAnySelectedAgent, state?.completed]);
 
   // Track step views and keep ref in sync
   useEffect(() => {

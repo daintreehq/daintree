@@ -180,6 +180,7 @@ import { computeChipState } from "./components/Worktree/utils/computeChipState";
 import { parseExactNumber } from "./lib/parseExactNumber";
 import type { WorktreeState, PanelKind } from "./types";
 import type { TerminalType } from "@shared/types";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { actionService } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { terminalInstanceService } from "./services/terminal/TerminalInstanceService";
@@ -1311,6 +1312,12 @@ function App() {
 
   const { launchAgent, availability, agentSettings, refreshSettings } = useAgentLauncher();
 
+  const hasAnySelectedAgent = useMemo(() => {
+    if (agentSettings === null) return null;
+    const agents = agentSettings.agents ?? {};
+    return BUILT_IN_AGENT_IDS.some((id) => agents[id]?.selected !== false);
+  }, [agentSettings]);
+
   useTerminalConfig();
   useAppThemeConfig();
   useWindowNotifications();
@@ -1870,6 +1877,7 @@ function App() {
       <OnboardingFlow
         availability={availability}
         onRefreshSettings={refreshSettings}
+        hasAnySelectedAgent={hasAnySelectedAgent}
         onComplete={gettingStarted.notifyOnboardingComplete}
       />
       {currentProject !== null && gettingStarted.visible && gettingStarted.checklist && (
