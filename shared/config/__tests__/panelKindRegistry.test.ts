@@ -3,8 +3,8 @@ import {
   getPanelKindConfig,
   getExtensionFallbackDefaults,
   panelKindUsesTerminalUi,
-} from "../panelKindRegistry";
-import type { AddPanelOptions } from "../../types/addPanelOptions";
+} from "../panelKindRegistry.js";
+import type { AddPanelOptions } from "../../types/addPanelOptions.js";
 
 describe("panelKindRegistry createDefaults", () => {
   it("browser factory returns browserUrl with default when not provided", () => {
