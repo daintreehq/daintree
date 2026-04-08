@@ -14,16 +14,8 @@ import type { PrerequisiteCheckResult, PrerequisiteSpec } from "@shared/types";
 import type { AgentInstallBlock } from "@shared/config/agentRegistry";
 import { detectOS } from "@/lib/agentInstall";
 import { InstallBlock } from "./InstallBlock";
-import { EmbeddedTerminal } from "./EmbeddedTerminal";
 
 const POOL_CONCURRENCY = 3;
-
-const BASELINE_TOOLS = new Set(["git", "node", "npm", "gh"]);
-
-interface SystemHealthCheckStepProps {
-  onSkip: () => void;
-  agentIds?: readonly string[];
-}
 
 type CheckState = "loading" | PrerequisiteCheckResult;
 
@@ -41,7 +33,11 @@ async function runPool<T>(
   await Promise.all(Array.from({ length: concurrency }, worker));
 }
 
-export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckStepProps) {
+interface SystemToolsStepProps {
+  onSkip: () => void;
+}
+
+export function SystemToolsStep({ onSkip }: SystemToolsStepProps) {
   const [specs, setSpecs] = useState<PrerequisiteSpec[]>([]);
   const [checkStates, setCheckStates] = useState<Record<string, CheckState>>({});
   const [isChecking, setIsChecking] = useState(false);
@@ -58,9 +54,7 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
     setCheckStates({});
 
     try {
-      const resolvedSpecs = await systemClient.getHealthCheckSpecs(
-        agentIds ? [...agentIds] : undefined
-      );
+      const resolvedSpecs = await systemClient.getHealthCheckSpecs();
       if (!activeRef.current) return;
 
       setSpecs(resolvedSpecs);
@@ -97,7 +91,7 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
       isCheckingRef.current = false;
       if (activeRef.current) setIsChecking(false);
     }
-  }, [agentIds]);
+  }, []);
 
   useEffect(() => {
     activeRef.current = true;
@@ -108,8 +102,6 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
   }, [runCheck]);
 
   const visibleSpecs = specs.filter((s) => s.severity !== "silent");
-  const systemSpecs = visibleSpecs.filter((s) => BASELINE_TOOLS.has(s.tool));
-  const agentSpecs = visibleSpecs.filter((s) => !BASELINE_TOOLS.has(s.tool));
 
   const allDone =
     visibleSpecs.length > 0 && visibleSpecs.every((s) => checkStates[s.tool] !== "loading");
@@ -131,37 +123,15 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
         </p>
       </div>
 
-      {systemSpecs.length > 0 && (
-        <div className="space-y-2">
-          <div className="text-xs font-medium text-canopy-text/50 uppercase tracking-wide">
-            System tools
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {systemSpecs.map((spec) => (
-              <PrerequisiteCard
-                key={spec.tool}
-                spec={spec}
-                state={checkStates[spec.tool] ?? "loading"}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {agentSpecs.length > 0 && (
-        <div className="space-y-2">
-          <div className="text-xs font-medium text-canopy-text/50 uppercase tracking-wide">
-            Agent CLIs
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {agentSpecs.map((spec) => (
-              <PrerequisiteCard
-                key={spec.tool}
-                spec={spec}
-                state={checkStates[spec.tool] ?? "loading"}
-              />
-            ))}
-          </div>
+      {visibleSpecs.length > 0 && (
+        <div className="grid grid-cols-2 gap-2">
+          {visibleSpecs.map((spec) => (
+            <PrerequisiteCard
+              key={spec.tool}
+              spec={spec}
+              state={checkStates[spec.tool] ?? "loading"}
+            />
+          ))}
         </div>
       )}
 
@@ -175,14 +145,6 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
           ))}
         </div>
       )}
-
-      <div className="border-t border-canopy-border pt-4">
-        <div className="flex items-center gap-2 mb-3">
-          <div className="text-xs font-medium text-canopy-text/60">Terminal</div>
-          <div className="text-[11px] text-canopy-text/30">Run installation commands here</div>
-        </div>
-        <EmbeddedTerminal />
-      </div>
 
       {error && (
         <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5">

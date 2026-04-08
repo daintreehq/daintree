@@ -6,27 +6,19 @@ import { describe, expect, it } from "vitest";
 // Replicate the types and reducer for unit testing.
 // This mirrors the production code in AgentSetupWizard.tsx.
 
-const AGENT_ORDER = ["claude", "gemini", "codex", "opencode", "cursor"];
-
-type WizardStep =
-  | { type: "health" }
-  | { type: "selection" }
-  | { type: "agent"; agentId: string }
-  | { type: "complete" };
+type WizardStep = { type: "system-tools" } | { type: "agent-cli" } | { type: "complete" };
 
 interface WizardState {
   step: WizardStep;
   history: WizardStep[];
   availability: Record<string, boolean>;
   selections: Record<string, boolean>;
-  agentQueue: string[];
   selectionsInitialized: boolean;
 }
 
 type WizardAction =
-  | { type: "HEALTH_CONTINUE" }
-  | { type: "SELECTION_CONTINUE" }
-  | { type: "AGENT_NEXT" }
+  | { type: "SYSTEM_TOOLS_CONTINUE" }
+  | { type: "AGENT_CLI_CONTINUE" }
   | { type: "BACK" }
   | { type: "SET_AVAILABILITY"; payload: Record<string, boolean> }
   | { type: "INIT_SELECTIONS"; payload: Record<string, boolean> }
@@ -38,51 +30,29 @@ function buildInitialState(
   skipHealth: boolean
 ): WizardState {
   return {
-    step: skipHealth ? { type: "selection" } : { type: "health" },
+    step: skipHealth ? { type: "agent-cli" } : { type: "system-tools" },
     history: [],
     availability,
     selections: {},
-    agentQueue: [],
     selectionsInitialized: false,
   };
 }
 
 function wizardReducer(state: WizardState, action: WizardAction): WizardState {
   switch (action.type) {
-    case "HEALTH_CONTINUE":
+    case "SYSTEM_TOOLS_CONTINUE":
       return {
         ...state,
-        step: { type: "selection" },
+        step: { type: "agent-cli" },
         history: [...state.history, state.step],
       };
 
-    case "SELECTION_CONTINUE": {
-      const queue = AGENT_ORDER.filter(
-        (id) => state.selections[id] && state.availability[id] !== true
-      );
-      const nextStep: WizardStep =
-        queue.length > 0 ? { type: "agent", agentId: queue[0] } : { type: "complete" };
+    case "AGENT_CLI_CONTINUE":
       return {
         ...state,
-        step: nextStep,
-        history: [...state.history, state.step],
-        agentQueue: queue,
-      };
-    }
-
-    case "AGENT_NEXT": {
-      if (state.step.type !== "agent") return state;
-      const idx = state.agentQueue.indexOf(state.step.agentId);
-      const nextStep: WizardStep =
-        idx < state.agentQueue.length - 1
-          ? { type: "agent", agentId: state.agentQueue[idx + 1] }
-          : { type: "complete" };
-      return {
-        ...state,
-        step: nextStep,
+        step: { type: "complete" },
         history: [...state.history, state.step],
       };
-    }
 
     case "BACK": {
       if (state.history.length === 0) return state;
@@ -123,98 +93,58 @@ describe("AgentSetupWizard reducer", () => {
   const emptyAvail: Record<string, boolean> = {};
   const partialAvail: Record<string, boolean> = { claude: true, gemini: false, codex: false };
 
-  it("starts at health step by default", () => {
+  it("starts at system-tools step by default", () => {
     const state = buildInitialState(emptyAvail, false);
-    expect(state.step).toEqual({ type: "health" });
+    expect(state.step).toEqual({ type: "system-tools" });
     expect(state.history).toEqual([]);
   });
 
-  it("starts at selection step when skipHealth is true", () => {
+  it("starts at agent-cli step when skipHealth is true", () => {
     const state = buildInitialState(emptyAvail, true);
-    expect(state.step).toEqual({ type: "selection" });
+    expect(state.step).toEqual({ type: "agent-cli" });
   });
 
-  it("advances from health to selection", () => {
+  it("advances from system-tools to agent-cli", () => {
     const state = buildInitialState(emptyAvail, false);
-    const next = wizardReducer(state, { type: "HEALTH_CONTINUE" });
-    expect(next.step).toEqual({ type: "selection" });
-    expect(next.history).toEqual([{ type: "health" }]);
+    const next = wizardReducer(state, { type: "SYSTEM_TOOLS_CONTINUE" });
+    expect(next.step).toEqual({ type: "agent-cli" });
+    expect(next.history).toEqual([{ type: "system-tools" }]);
   });
 
-  it("advances from selection to first uninstalled selected agent", () => {
-    let state = buildInitialState(partialAvail, false);
-    state = wizardReducer(state, { type: "HEALTH_CONTINUE" });
-    state = wizardReducer(state, {
-      type: "INIT_SELECTIONS",
-      payload: { claude: true, gemini: true, codex: true },
-    });
-    state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
-    // claude is installed, so queue should be [gemini, codex]
-    expect(state.agentQueue).toEqual(["gemini", "codex"]);
-    expect(state.step).toEqual({ type: "agent", agentId: "gemini" });
-  });
-
-  it("skips to complete when all selected agents are installed", () => {
-    const allInstalled: Record<string, boolean> = { claude: true, gemini: true };
-    let state = buildInitialState(allInstalled, true);
+  it("advances from agent-cli to complete", () => {
+    let state = buildInitialState(emptyAvail, false);
+    state = wizardReducer(state, { type: "SYSTEM_TOOLS_CONTINUE" });
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: true, gemini: true },
     });
-    state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
-    expect(state.agentQueue).toEqual([]);
+    state = wizardReducer(state, { type: "AGENT_CLI_CONTINUE" });
     expect(state.step).toEqual({ type: "complete" });
-  });
-
-  it("skips to complete when no agents are selected", () => {
-    let state = buildInitialState(emptyAvail, true);
-    state = wizardReducer(state, {
-      type: "INIT_SELECTIONS",
-      payload: { claude: false, gemini: false },
-    });
-    state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
-    expect(state.agentQueue).toEqual([]);
-    expect(state.step).toEqual({ type: "complete" });
-  });
-
-  it("advances through agent queue", () => {
-    let state = buildInitialState(emptyAvail, true);
-    state = wizardReducer(state, {
-      type: "INIT_SELECTIONS",
-      payload: { claude: true, gemini: true, codex: true },
-    });
-    state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
-    expect(state.step).toEqual({ type: "agent", agentId: "claude" });
-
-    state = wizardReducer(state, { type: "AGENT_NEXT" });
-    expect(state.step).toEqual({ type: "agent", agentId: "gemini" });
-
-    state = wizardReducer(state, { type: "AGENT_NEXT" });
-    expect(state.step).toEqual({ type: "agent", agentId: "codex" });
-
-    state = wizardReducer(state, { type: "AGENT_NEXT" });
-    expect(state.step).toEqual({ type: "complete" });
+    expect(state.history).toHaveLength(2);
   });
 
   it("navigates back through history", () => {
     let state = buildInitialState(emptyAvail, false);
-    state = wizardReducer(state, { type: "HEALTH_CONTINUE" });
-    state = wizardReducer(state, {
-      type: "INIT_SELECTIONS",
-      payload: { claude: true },
-    });
-    state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
-    expect(state.step).toEqual({ type: "agent", agentId: "claude" });
+    state = wizardReducer(state, { type: "SYSTEM_TOOLS_CONTINUE" });
+    expect(state.step).toEqual({ type: "agent-cli" });
 
     state = wizardReducer(state, { type: "BACK" });
-    expect(state.step).toEqual({ type: "selection" });
+    expect(state.step).toEqual({ type: "system-tools" });
 
-    state = wizardReducer(state, { type: "BACK" });
-    expect(state.step).toEqual({ type: "health" });
-
-    // Back from health does nothing
+    // Back from system-tools does nothing
     const unchanged = wizardReducer(state, { type: "BACK" });
-    expect(unchanged.step).toEqual({ type: "health" });
+    expect(unchanged.step).toEqual({ type: "system-tools" });
+    expect(unchanged).toBe(state);
+  });
+
+  it("navigates back from complete to agent-cli", () => {
+    let state = buildInitialState(emptyAvail, false);
+    state = wizardReducer(state, { type: "SYSTEM_TOOLS_CONTINUE" });
+    state = wizardReducer(state, { type: "AGENT_CLI_CONTINUE" });
+    expect(state.step).toEqual({ type: "complete" });
+
+    state = wizardReducer(state, { type: "BACK" });
+    expect(state.step).toEqual({ type: "agent-cli" });
   });
 
   it("toggles agent selection", () => {
@@ -247,43 +177,46 @@ describe("AgentSetupWizard reducer", () => {
 
   it("resets to initial state", () => {
     let state = buildInitialState(emptyAvail, false);
-    state = wizardReducer(state, { type: "HEALTH_CONTINUE" });
+    state = wizardReducer(state, { type: "SYSTEM_TOOLS_CONTINUE" });
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: true },
     });
 
     const reset = wizardReducer(state, { type: "RESET", availability: partialAvail });
-    expect(reset.step).toEqual({ type: "health" });
+    expect(reset.step).toEqual({ type: "system-tools" });
     expect(reset.history).toEqual([]);
     expect(reset.selections).toEqual({});
-    expect(reset.agentQueue).toEqual([]);
     expect(reset.availability).toBe(partialAvail);
   });
 
-  it("AGENT_NEXT is no-op when not on agent step", () => {
-    const state = buildInitialState(emptyAvail, true);
-    const next = wizardReducer(state, { type: "AGENT_NEXT" });
-    expect(next).toBe(state);
+  it("initializes selections and marks selectionsInitialized", () => {
+    let state = buildInitialState(emptyAvail, false);
+    expect(state.selectionsInitialized).toBe(false);
+    state = wizardReducer(state, {
+      type: "INIT_SELECTIONS",
+      payload: { claude: true, gemini: false },
+    });
+    expect(state.selectionsInitialized).toBe(true);
+    expect(state.selections).toEqual({ claude: true, gemini: false });
   });
 
-  it("rebuilds queue when going back to selection and re-confirming", () => {
-    let state = buildInitialState(emptyAvail, true);
+  it("full flow: system-tools → agent-cli → complete → back → agent-cli", () => {
+    let state = buildInitialState(partialAvail, false);
+
+    state = wizardReducer(state, { type: "SYSTEM_TOOLS_CONTINUE" });
+    expect(state.step).toEqual({ type: "agent-cli" });
+
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: true, gemini: true },
     });
-    state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
-    expect(state.agentQueue).toEqual(["claude", "gemini"]);
+    state = wizardReducer(state, { type: "AGENT_CLI_CONTINUE" });
+    expect(state.step).toEqual({ type: "complete" });
 
-    // Go back to selection
     state = wizardReducer(state, { type: "BACK" });
-    expect(state.step).toEqual({ type: "selection" });
-
-    // Change selections
-    state = wizardReducer(state, { type: "TOGGLE_SELECTION", agentId: "gemini", checked: false });
-    state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
-    expect(state.agentQueue).toEqual(["claude"]);
-    expect(state.step).toEqual({ type: "agent", agentId: "claude" });
+    expect(state.step).toEqual({ type: "agent-cli" });
+    // Selections preserved after going back
+    expect(state.selections).toEqual({ claude: true, gemini: true });
   });
 });
