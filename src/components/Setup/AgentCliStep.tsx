@@ -6,26 +6,30 @@ import { getInstallBlocksForCurrentOS, getInstallCommand } from "@/lib/agentInst
 import { terminalClient } from "@/clients";
 import { systemClient } from "@/clients";
 import { EmbeddedTerminal } from "./EmbeddedTerminal";
+import { AGENT_DESCRIPTIONS } from "./AgentSetupWizard";
 import type { CliAvailability } from "@shared/types";
 
 const AGENT_ORDER = BUILT_IN_AGENT_IDS;
-
-const AGENT_DESCRIPTIONS: Record<string, string> = {
-  claude: "Deep refactoring, architecture, and complex reasoning",
-  gemini: "Quick exploration and broad knowledge lookup",
-  codex: "Careful, methodical runs with sandboxed execution",
-  opencode: "Provider-agnostic, open-source flexibility",
-};
 
 interface AgentCliStepProps {
   availability: CliAvailability;
   selections: Record<string, boolean>;
 }
 
+const INSTALL_TIMEOUT_MS = 60_000;
+
 export function AgentCliStep({ availability, selections }: AgentCliStepProps) {
   const [terminalId, setTerminalId] = useState<string | null>(null);
   const [installingAgentId, setInstallingAgentId] = useState<string | null>(null);
   const [selectedMethodIndex, setSelectedMethodIndex] = useState<Record<string, number>>({});
+  const installTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const submittingRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      if (installTimeoutRef.current) clearTimeout(installTimeoutRef.current);
+    };
+  }, []);
 
   const prevAvailabilityRef = useRef(availability);
   useEffect(() => {
@@ -35,6 +39,10 @@ export function AgentCliStep({ availability, selections }: AgentCliStepProps) {
       prevAvailabilityRef.current[installingAgentId] !== true
     ) {
       setInstallingAgentId(null);
+      if (installTimeoutRef.current) {
+        clearTimeout(installTimeoutRef.current);
+        installTimeoutRef.current = null;
+      }
     }
     prevAvailabilityRef.current = availability;
   }, [availability, installingAgentId]);
@@ -43,9 +51,18 @@ export function AgentCliStep({ availability, selections }: AgentCliStepProps) {
     setTerminalId(id);
   }, []);
 
+  const handleTerminalExit = useCallback(() => {
+    setTerminalId(null);
+    setInstallingAgentId(null);
+    if (installTimeoutRef.current) {
+      clearTimeout(installTimeoutRef.current);
+      installTimeoutRef.current = null;
+    }
+  }, []);
+
   const handleAgentSelect = useCallback(
     (agentId: string) => {
-      if (!terminalId || installingAgentId) return;
+      if (!terminalId || installingAgentId || submittingRef.current) return;
 
       const agent = getAgentConfig(agentId);
       if (!agent) return;
@@ -58,8 +75,27 @@ export function AgentCliStep({ availability, selections }: AgentCliStepProps) {
       const command = getInstallCommand(block);
       if (!command) return;
 
+      submittingRef.current = true;
       setInstallingAgentId(agentId);
-      terminalClient.submit(terminalId, command);
+
+      if (installTimeoutRef.current) clearTimeout(installTimeoutRef.current);
+      installTimeoutRef.current = setTimeout(() => {
+        setInstallingAgentId(null);
+        installTimeoutRef.current = null;
+      }, INSTALL_TIMEOUT_MS);
+
+      terminalClient
+        .submit(terminalId, command)
+        .catch(() => {
+          setInstallingAgentId(null);
+          if (installTimeoutRef.current) {
+            clearTimeout(installTimeoutRef.current);
+            installTimeoutRef.current = null;
+          }
+        })
+        .finally(() => {
+          submittingRef.current = false;
+        });
     },
     [terminalId, installingAgentId, selectedMethodIndex]
   );
@@ -178,7 +214,10 @@ export function AgentCliStep({ availability, selections }: AgentCliStepProps) {
               : "Click an agent above to install"}
           </div>
         </div>
-        <EmbeddedTerminal onTerminalReady={handleTerminalReady} />
+        <EmbeddedTerminal
+          onTerminalReady={handleTerminalReady}
+          onTerminalExit={handleTerminalExit}
+        />
       </div>
     </div>
   );

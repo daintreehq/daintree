@@ -19,7 +19,7 @@ const POLL_INTERVAL = 3000;
 
 const SKIP_FIRST_RUN_DIALOGS = isCanopyEnvEnabled("CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS");
 
-const AGENT_DESCRIPTIONS: Record<string, string> = {
+export const AGENT_DESCRIPTIONS: Record<string, string> = {
   claude: "Deep refactoring, architecture, and complex reasoning",
   gemini: "Quick exploration and broad knowledge lookup",
   codex: "Careful, methodical runs with sandboxed execution",
@@ -28,13 +28,13 @@ const AGENT_DESCRIPTIONS: Record<string, string> = {
 
 // --- Wizard state machine ---
 
-type WizardStep =
+export type WizardStep =
   | { type: "health" }
   | { type: "selection" }
   | { type: "cli" }
   | { type: "complete" };
 
-interface WizardState {
+export interface WizardState {
   step: WizardStep;
   history: WizardStep[];
   availability: CliAvailability;
@@ -42,7 +42,7 @@ interface WizardState {
   selectionsInitialized: boolean;
 }
 
-type WizardAction =
+export type WizardAction =
   | { type: "HEALTH_CONTINUE" }
   | { type: "SELECTION_CONTINUE" }
   | { type: "CLI_CONTINUE" }
@@ -54,7 +54,7 @@ type WizardAction =
 
 const TOTAL_STEPS = 4; // health, selection, cli, complete
 
-function buildInitialState(availability: CliAvailability, skipHealth: boolean): WizardState {
+export function buildInitialState(availability: CliAvailability, skipHealth: boolean): WizardState {
   return {
     step: skipHealth ? { type: "selection" } : { type: "health" },
     history: [],
@@ -64,7 +64,7 @@ function buildInitialState(availability: CliAvailability, skipHealth: boolean): 
   };
 }
 
-function wizardReducer(state: WizardState, action: WizardAction): WizardState {
+export function wizardReducer(state: WizardState, action: WizardAction): WizardState {
   switch (action.type) {
     case "HEALTH_CONTINUE":
       return {
