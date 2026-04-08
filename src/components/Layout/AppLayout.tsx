@@ -54,6 +54,7 @@ export function AppLayout({
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const currentProject = useProjectStore((state) => state.currentProject);
   const layout = useLayoutState();
+  const showSidebar = !layout.isFocusMode && currentProject != null;
 
   useEffect(() => {
     if (layout.performanceMode) {
@@ -227,8 +228,8 @@ export function AppLayout({
 
   // Sync macro focus region visibility from layout state
   useEffect(() => {
-    useMacroFocusStore.getState().setVisibility("sidebar", !layout.isFocusMode);
-  }, [layout.isFocusMode]);
+    useMacroFocusStore.getState().setVisibility("sidebar", showSidebar);
+  }, [showSidebar]);
 
   useEffect(() => {
     useMacroFocusStore.getState().setVisibility("portal", layout.portalOpen);
@@ -307,7 +308,7 @@ export function AppLayout({
           className="flex-1 flex overflow-hidden"
           style={{ flex: 1, display: "flex", overflow: "hidden" }}
         >
-          {!layout.isFocusMode && (
+          {showSidebar && (
             <ErrorBoundary variant="section" componentName="Sidebar">
               <Sidebar width={effectiveSidebarWidth} onResize={handleSidebarResize}>
                 {sidebarContent}
