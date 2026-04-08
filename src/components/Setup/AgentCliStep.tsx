@@ -4,7 +4,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { systemClient } from "@/clients";
 import { AGENT_REGISTRY } from "@/config/agents";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
-import type { PrerequisiteCheckResult, PrerequisiteSpec, CliAvailability } from "@shared/types";
+import type { PrerequisiteCheckResult, CliAvailability } from "@shared/types";
 import { EmbeddedTerminal } from "./EmbeddedTerminal";
 
 const POOL_CONCURRENCY = 3;
@@ -58,7 +58,6 @@ export function AgentCliStep({
   isSaving,
   onToggle,
 }: AgentCliStepProps) {
-  const [, setSpecs] = useState<PrerequisiteSpec[]>([]);
   const [checkStates, setCheckStates] = useState<Record<string, CheckState>>({});
   const [isChecking, setIsChecking] = useState(false);
   const activeRef = useRef(true);
@@ -68,7 +67,6 @@ export function AgentCliStep({
     if (isCheckingRef.current) return;
     isCheckingRef.current = true;
     setIsChecking(true);
-    setSpecs([]);
     setCheckStates({});
 
     try {
@@ -76,7 +74,6 @@ export function AgentCliStep({
       if (!activeRef.current) return;
 
       const visible = resolvedSpecs.filter((s) => s.severity !== "silent");
-      setSpecs(visible);
       setCheckStates(Object.fromEntries(visible.map((s) => [s.tool, "loading" as const])));
 
       await runPool(visible, POOL_CONCURRENCY, async (spec) => {
