@@ -2,12 +2,6 @@ export { usePanelStore, isAgentReady, getTerminalRefreshTier } from "./panelStor
 export type { TerminalInstance, AddPanelOptions, QueuedCommand } from "./panelStore";
 export type { CrashType } from "@shared/types/pty-host";
 export { MAX_GRID_TERMINALS } from "./slices/panelRegistrySlice";
-
-// Legacy aliases for backward compatibility during migration
-export { usePanelStore as useTerminalStore } from "./panelStore";
-export type { TerminalInstance as PanelInstance } from "./panelStore";
-export type { AddPanelOptions as AddTerminalOptions } from "./panelStore";
-
 export { useWorktreeSelectionStore } from "./worktreeStore";
 
 export { getCurrentViewStore, cleanupOrphanedTerminals } from "./createWorktreeStore";

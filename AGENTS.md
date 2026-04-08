@@ -25,11 +25,11 @@ electron/                    # Main process
 ├── ipc/
 │   ├── channels.ts          # Channel constants
 │   ├── handlers.ts          # IPC request handlers
-│   └── handlers/            # 51 domain-specific handlers
+│   └── handlers/            # 52 top-level + subdirectory handlers (~87 total)
 ├── lifecycle/               # App lifecycle management
 ├── setup/                   # App setup/initialization
-├── window/                  # Window management
-├── services/                # ~86 backend services
+├── window/                  # Window management (ProjectViewManager, WindowRegistry, multi-window)
+├── services/                # ~99 backend services
 ├── schemas/                 # Zod schemas
 ├── types/                   # Main process types
 ├── utils/                   # Utilities
@@ -41,7 +41,8 @@ shared/                      # Shared between main & renderer
 │   ├── panel.ts             # PanelInstance, PanelKind types
 │   ├── keymap.ts            # KeyAction union, keybinding types
 │   └── ipc/                 # IPC type definitions (27 files)
-└── config/                  # panelKindRegistry, agentRegistry, scrollback, devServer, trash, etc.
+├── config/                  # panelKindRegistry, agentRegistry, scrollback, devServer, trash, etc.
+└── theme/                   # Theme system — 14 built-in themes, palette/semantic/terminal tokens
 
 src/                         # Renderer (React 19)
 ├── services/
@@ -50,9 +51,11 @@ src/                         # Renderer (React 19)
 │       ├── actionDefinitions.ts  # Registration entry point
 │       ├── actionTypes.ts        # Callback interfaces
 │       └── definitions/          # 28 domain-specific action files
-├── components/              # 37 component directories (Terminal, Worktree, Panel,
+├── panels/                  # Per-kind panel modules (terminal/, agent/, browser/, notes/, dev-preview/)
+│   └── registry.tsx         # Unified panel kind registry (components + serializers + defaults)
+├── components/              # 38 component directories (Terminal, Worktree, Panel,
 │                            #   Layout, Settings, Browser, GitHub, DevPreview, etc.)
-├── store/                   # 57 Zustand stores + slices (terminalStore, projectStore, etc.)
+├── store/                   # 59 Zustand stores + slices (panelStore, projectStore, etc.)
 ├── hooks/                   # React hooks (useActionRegistry, useMenuActions, useKeybinding)
 ├── clients/                 # IPC client wrappers
 └── types/
@@ -82,7 +85,8 @@ Discriminated union types for type safety:
 - `PanelInstance = PtyPanelData | BrowserPanelData | NotesPanelData | DevPreviewPanelData` (`shared/types/panel.ts`)
 - Built-in kinds: `"terminal"` | `"agent"` | `"browser"` | `"notes"` | `"dev-preview"`
 - `panelKindHasPty(kind)` — Check if panel needs PTY
-- Registry: `shared/config/panelKindRegistry.ts`
+- Config registry: `shared/config/panelKindRegistry.ts`
+- Per-kind modules: `src/panels/<kind>/` (serializer, defaults, component). Unified in `src/panels/registry.tsx`
 
 ### IPC Bridge (`window.electron`)
 
@@ -90,18 +94,23 @@ Renderer accesses main via 56 namespaced APIs. Returns Promises or Cleanups.
 
 - Types: `src/types/electron.d.ts`
 - Channels: `electron/ipc/channels.ts`
-- Handlers: `electron/ipc/handlers/` (51 domain-specific files)
+- Handlers: `electron/ipc/handlers/` (52 top-level + subdirectory handlers)
 - Preload: `electron/preload.cts`
+
+### Multi-Window & Project Views
+
+Each project gets its own `WebContentsView` with an independent V8 context. `ProjectViewManager` (`electron/window/ProjectViewManager.ts`) manages view creation, switching, and LRU eviction. Per-window services scoped via `WindowContext.services`; global services (PtyClient, WorkspaceClient) shared across windows.
 
 ### Terminal System
 
 - `PtyManager` (main process) manages node-pty processes
 - `terminalInstanceService` (renderer) manages xterm.js instances
 - Uses @xterm/xterm 6.0 with @xterm/addon-fit 0.11 (DOM renderer only — no canvas addon)
+- Worktree data delivered via per-view MessagePorts (`WorktreePortBroker`), not global IPC
 
 ### State Management
 
-Zustand 5 stores in `src/store/` — 57 domain stores plus slices pattern. Panel state in `terminalStore.ts`.
+Zustand 5 stores in `src/store/` — 59 domain stores plus slices pattern. Panel state in `panelStore.ts`. Store uses normalized shape: `terminalsById: Record<string, PanelInstance>` + `terminalIds: string[]`.
 
 ## Coding Standards
 
@@ -125,7 +134,7 @@ npm run rebuild      # Rebuild native modules (node-pty)
 
 ### CI Testing Strategy
 
-PRs run typecheck, lint, format, and unit tests only — no E2E. E2E tiers: `e2e/core/` (13 tests — gates releases), `e2e/full/` (59 tests — nightly), `e2e/online/` (2 agent integration tests — gates releases), `e2e/nightly/` (memory leak detection). Tagged releases wait for E2E to pass before publishing.
+PRs run typecheck, lint, format, and unit tests only — no E2E. E2E tiers: `e2e/core/` (13 tests — gates releases), `e2e/full/` (61 tests — nightly), `e2e/online/` (2 agent integration tests — gates releases), `e2e/nightly/` (memory leak detection). Tagged releases wait for E2E to pass before publishing.
 
 Theme docs: `docs/themes/theme-system.md`, `docs/themes/theme-tokens.md`
 

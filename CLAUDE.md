@@ -31,7 +31,7 @@ npm run rebuild      # Rebuild native modules
 - **PRs / pushes:** Typecheck, lint, format, and unit tests on **Ubuntu only** (no E2E). `ci-ok` gate job is the sole required status check.
 - **Nightly (2 AM UTC):** Full cross-platform CI on all 3 OSes: check + test + build + smoke + E2E full + E2E online + E2E nightly. Auto-creates GitHub issue on failure (`nightly-failure` label).
 - **Releases:** E2E core and E2E online gate the release publish on macOS + Linux. Windows E2E is nightly-only.
-- **E2E tiers:** `e2e/core/` (13 tests — gates releases), `e2e/full/` (59 tests — nightly), `e2e/online/` (2 agent integration tests — gates releases), `e2e/nightly/` (memory leak detection).
+- **E2E tiers:** `e2e/core/` (13 tests — gates releases), `e2e/full/` (61 tests — nightly), `e2e/online/` (2 agent integration tests — gates releases), `e2e/nightly/` (memory leak detection).
 - **Single-file E2E:** `gh workflow run "E2E Core Tests" --ref develop -f platform=linux -f test_file=e2e/core/core-foo.spec.ts` — use this when fixing a specific flaky test instead of re-running the full suite.
 - **Local E2E before push:** When adding a new E2E test or modifying a feature that has an existing E2E test, run that specific test locally and confirm it passes before pushing. Use `npx playwright test e2e/core/core-foo.spec.ts` to run a single test file.
 
@@ -47,7 +47,7 @@ Central orchestration layer for all UI operations. Provides a unified, typed API
 
 - `ActionService` (`src/services/ActionService.ts`) — Registry and dispatcher singleton
 - 28 definition files in `src/services/actions/definitions/` (one per domain)
-- Types in `shared/types/actions.ts` — `ActionId`, `ActionDefinition`, `ActionManifestEntry`
+- ~258 built-in action IDs in `shared/types/actions.ts` — `BuiltInActionId`, `ActionDefinition`, `ActionManifestEntry`
 - `dispatch(actionId, args?, options?)` — Execute any action by ID
 - `list()` / `get(id)` — Introspect available actions (MCP-compatible manifest)
 - `ActionSource`: "user" | "keybinding" | "menu" | "agent" | "context-menu"
@@ -61,7 +61,12 @@ Discriminated union types for type safety:
 - `PanelInstance = PtyPanelData | BrowserPanelData | NotesPanelData | DevPreviewPanelData` (`shared/types/panel.ts`)
 - Built-in panel kinds: `"terminal"` | `"agent"` | `"browser"` | `"notes"` | `"dev-preview"`
 - `panelKindHasPty(kind)` — Check if panel requires PTY process
-- Panel Kind Registry (`shared/config/panelKindRegistry.ts`)
+- Panel Kind Registry (`shared/config/panelKindRegistry.ts`) — config/metadata shared between processes
+- Panel Kind Modules (`src/panels/<kind>/`) — per-kind serializer, defaults factory, and component. Unified registry in `src/panels/registry.tsx`
+
+### Multi-Window & Project Views
+
+Each project gets its own `WebContentsView` with an independent V8 context, managed by `ProjectViewManager` (`electron/window/ProjectViewManager.ts`). LRU eviction reclaims views when memory is tight. Per-window services are scoped via `WindowContext.services` (PortalManager, EventBuffer, MessagePorts), while global services (PtyClient, WorkspaceClient) are shared across windows.
 
 ### IPC Bridge (`window.electron`)
 
@@ -70,10 +75,11 @@ Access native features via namespaced API in Renderer. 56 namespaces exposed via
 ## Key Features & Implementation
 
 - **Panels:** `PtyManager` (Main) manages node-pty processes. `terminalInstanceService` (Renderer) manages xterm.js instances.
-- **Worktrees:** `WorkspaceService` polls git status. `WorktreeMonitor` tracks individual worktrees.
-- **Agent State:** `AgentStateMachine` tracks idle/working/waiting/completed via output heuristics.
+- **Worktrees:** `WorkspaceService` polls git status. `WorktreeMonitor` tracks individual worktrees. Per-view worktree stores backed by dedicated MessagePorts (`WorktreePortBroker`).
+- **Agent State:** `AgentStateMachine` tracks idle/working/running/waiting/directing/completed/exited via output heuristics.
 - **Context:** `CopyTreeService` generates context for agents, injects into terminals.
 - **Actions:** `ActionService` dispatches all UI operations with validation and observability.
+- **Resource Profiles:** `ResourceProfileService` adaptively selects Performance/Balanced/Efficiency profiles based on memory pressure, event loop lag, battery state, and worktree count.
 
 ## Directory Map
 
@@ -93,11 +99,11 @@ electron/
 │   ├── channels.ts          # Channel constants
 │   ├── handlers.ts          # IPC request handler registry
 │   ├── errorHandlers.ts     # IPC error handling
-│   └── handlers/            # 51 domain-specific handlers
+│   └── handlers/            # 52 top-level + subdirectory handlers (~87 total)
 ├── lifecycle/               # App lifecycle management
 ├── setup/                   # App setup/initialization
-├── window/                  # Window management
-├── services/                # ~86 backend services
+├── window/                  # Window management (ProjectViewManager, WindowRegistry, multi-window)
+├── services/                # ~99 backend services
 ├── schemas/                 # Zod schemas
 ├── types/                   # Main process types
 ├── utils/                   # Utilities
@@ -109,22 +115,24 @@ shared/
 │   ├── panel.ts             # PanelInstance, PanelKind types
 │   ├── keymap.ts            # KeyAction union, keybinding types
 │   ├── ipc/                 # IPC type definitions (27 files)
-│   └── ...                  # 34 type files total
+│   └── ...                  # 35 type files total
 ├── config/                  # panelKindRegistry, agentRegistry, scrollback, devServer, trash, etc.
-├── theme/                   # Theme system (entityColors, terminal, themes)
+├── theme/                   # Theme system — 14 built-in themes, palette/semantic/terminal tokens
 ├── perf/                    # Performance marks
 └── utils/                   # Shared utilities
 
 src/
+├── panels/                  # Per-kind panel modules (terminal/, agent/, browser/, notes/, dev-preview/)
+│   └── registry.tsx         # Unified panel kind registry (components + serializers + defaults)
 ├── services/
 │   ├── ActionService.ts     # Action registry & dispatcher
 │   ├── actions/definitions/ # 28 action definition files
 │   ├── terminal/            # Terminal instance service
 │   └── project/             # Project services
-├── components/              # 37 component directories (Terminal, Worktree, Panel, Layout,
+├── components/              # 38 component directories (Terminal, Worktree, Panel, Layout,
 │                            #   Settings, Browser, GitHub, DevPreview, Notes, Commands,
 │                            #   Portal, Pulse, QuickSwitcher, Onboarding, Notifications, etc.)
-├── store/                   # 57 Zustand stores + slices (terminalStore, projectStore,
+├── store/                   # 59 Zustand stores + slices (panelStore, projectStore,
 │                            #   layoutConfigStore, notificationStore, etc.)
 ├── hooks/                   # React hooks (useActionRegistry, useMenuActions, useKeybinding, etc.)
 ├── controllers/             # UI controllers
@@ -137,6 +145,13 @@ src/
 ├── utils/                   # Renderer utilities
 └── types/
     └── electron.d.ts        # window.electron types
+```
+
+```text
+demo/
+├── stage.ts                 # Stage DSL (cursor, keyboard, camera, wait helpers)
+├── runner.ts                # Scene sequencing and capture lifecycle
+└── scenes/                  # Demo scene definitions
 ```
 
 ### Custom Icons
