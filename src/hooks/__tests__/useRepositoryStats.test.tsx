@@ -68,6 +68,95 @@ describe("useRepositoryStats", () => {
     });
   });
 
+  describe("isTokenError", () => {
+    const tokenErrorMessages = [
+      "GitHub token not configured. Set it in Settings.",
+      "Invalid GitHub token",
+      "Token lacks required permissions",
+      "SSO authorization required for this organization",
+    ];
+
+    it.each(tokenErrorMessages)("returns isTokenError=true for ghError: %s", async (errorMsg) => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 0,
+        issueCount: 0,
+        prCount: 0,
+        loading: false,
+        stale: false,
+        lastUpdated: null,
+        ghError: errorMsg,
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.isTokenError).toBe(true);
+        expect(result.current.error).toBe(errorMsg);
+      });
+    });
+
+    it("returns isTokenError=false for non-token errors", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 0,
+        issueCount: 0,
+        prCount: 0,
+        loading: false,
+        stale: false,
+        lastUpdated: null,
+        ghError: "Network timeout",
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.isTokenError).toBe(false);
+        expect(result.current.error).toBe("Network timeout");
+      });
+    });
+
+    it("resets isTokenError when error clears on successful fetch", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValueOnce({
+        commitCount: 0,
+        issueCount: 0,
+        prCount: 0,
+        loading: false,
+        stale: false,
+        lastUpdated: null,
+        ghError: "GitHub token not configured. Set it in Settings.",
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.isTokenError).toBe(true);
+      });
+
+      getRepoStatsMock.mockResolvedValueOnce({
+        commitCount: 5,
+        issueCount: 2,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: 2000,
+      });
+
+      await act(async () => {
+        await result.current.refresh({ force: true });
+      });
+
+      await waitFor(() => {
+        expect(result.current.isTokenError).toBe(false);
+        expect(result.current.error).toBeNull();
+      });
+    });
+  });
+
   it("queues a refetch on project switch when an earlier fetch is still in flight", async () => {
     let currentProject = { id: "project-a", path: "/repo/a" };
     getCurrentMock.mockImplementation(async () => currentProject);

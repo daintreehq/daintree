@@ -8,6 +8,7 @@ import {
   nextGeneration,
   getGeneration,
 } from "@/lib/githubResourceCache";
+import { isTokenRelatedError } from "@/lib/githubErrors";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -530,16 +531,6 @@ export function GitHubResourceList({
       selection,
     ]
   );
-
-  const isTokenRelatedError = (msg: string | null | undefined): boolean => {
-    if (!msg) return false;
-    return (
-      msg.includes("GitHub token not configured") ||
-      msg.includes("Invalid GitHub token") ||
-      msg.includes("Token lacks required permissions") ||
-      msg.includes("SSO authorization required")
-    );
-  };
 
   const isTokenError = isTokenRelatedError(error);
 
