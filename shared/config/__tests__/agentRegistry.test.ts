@@ -33,6 +33,14 @@ describe("agentRegistry", () => {
       expect(ids).toContain("codex");
       expect(ids).toContain("opencode");
       expect(ids).toContain("cursor");
+      expect(ids).toContain("kiro");
+    });
+
+    it("kiro only has macOS and Linux install blocks (no Windows)", () => {
+      const config = getAgentConfig("kiro");
+      expect(config?.install?.byOs?.macos?.length).toBeGreaterThan(0);
+      expect(config?.install?.byOs?.linux?.length).toBeGreaterThan(0);
+      expect(config?.install?.byOs?.windows).toBeUndefined();
     });
 
     it("each built-in agent has a non-empty color", () => {

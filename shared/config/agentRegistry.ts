@@ -926,6 +926,137 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       },
     ],
   },
+  kiro: {
+    id: "kiro",
+    name: "Kiro",
+    command: "kiro-cli",
+    color: "#7C3AED",
+    iconId: "kiro",
+    supportsContextInjection: true,
+    shortcut: "Cmd/Ctrl+Alt+K",
+    tooltip: "Amazon's AI coding agent",
+    usageUrl: "https://kiro.dev/",
+    version: {
+      args: ["--version"],
+    },
+    update: {
+      other: {
+        curl: "curl -fsSL https://cli.kiro.dev/install | bash",
+      },
+    },
+    install: {
+      docsUrl: "https://kiro.dev/cli/",
+      byOs: {
+        macos: [
+          {
+            label: "curl",
+            commands: ["curl -fsSL https://cli.kiro.dev/install | bash"],
+          },
+        ],
+        linux: [
+          {
+            label: "curl",
+            commands: ["curl -fsSL https://cli.kiro.dev/install | bash"],
+          },
+        ],
+      },
+      troubleshooting: [
+        "Restart Canopy after installation to update PATH",
+        "Verify installation with: kiro-cli --version",
+        "Kiro CLI is only supported on macOS and Linux",
+        "Authenticate after installing via Kiro's login flow",
+      ],
+    },
+    capabilities: {
+      scrollback: 10000,
+      supportsBracketedPaste: true,
+      softNewlineSequence: "\x1b\r",
+      ignoredInputSequences: ["\x1b\r"],
+    },
+    detection: {
+      primaryPatterns: [
+        // @generated:kiro:primaryPatterns:start
+        "[·*✢✳✶✻✽●✼✾⟡◇◆○⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+[^()\\n]{2,80}\\s*\\(esc to interrupt",
+        "esc to interrupt[^)\\n]*\\)?$",
+        "\\(\\d+s\\s*[·•]\\s*esc to interrupt",
+        "[·*✢✳✶✻✽●✼✾⟡◇◆○⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+Thinking",
+        // @generated:kiro:primaryPatterns:end
+      ],
+      fallbackPatterns: [
+        // @generated:kiro:fallbackPatterns:start
+        "[·•●⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+Thinking",
+        "[·•●]\\s+\\w+",
+        // @generated:kiro:fallbackPatterns:end
+      ],
+      bootCompletePatterns: [
+        // @generated:kiro:bootCompletePatterns:start
+        "Jump into building with Kiro",
+        "Use /help for more information and happy coding",
+        "Model: auto",
+        // @generated:kiro:bootCompletePatterns:end
+      ],
+      promptPatterns: ["^\\s*>\\s*"],
+      promptHintPatterns: ["^\\s*>\\s*$"],
+      completionPatterns: [
+        // @generated:kiro:completionPatterns:start
+        "Task\\s+completed",
+        "\\d+\\s+files?\\s+changed",
+        // @generated:kiro:completionPatterns:end
+      ],
+      completionConfidence: 0.9,
+      scanLineCount: 10,
+      primaryConfidence: 0.95,
+      fallbackConfidence: 0.75,
+      promptConfidence: 0.85,
+      debounceMs: 4000,
+    },
+    routing: {
+      capabilities: [
+        "javascript",
+        "typescript",
+        "python",
+        "go",
+        "rust",
+        "react",
+        "node",
+        "debugging",
+        "refactoring",
+        "general-purpose",
+      ],
+      domains: {
+        frontend: 0.8,
+        backend: 0.8,
+        testing: 0.75,
+        refactoring: 0.8,
+        debugging: 0.8,
+        architecture: 0.75,
+      },
+      maxConcurrent: 2,
+      enabled: true,
+    },
+    shutdown: {
+      quitCommand: "/quit",
+      // Kiro uses directory-based sessions; no session ID is emitted on exit.
+      // Pattern intentionally non-matching — graceful quit fires but no ID is captured.
+      sessionIdPattern: "kiro-cli --resume ([\\w-]+)",
+    },
+    resume: {
+      // Kiro's --resume is directory-based and requires no session ID argument.
+      args: (_sessionId: string) => ["--resume"],
+    },
+    help: {
+      args: [],
+    },
+    prerequisites: [
+      {
+        tool: "kiro-cli",
+        label: "Kiro CLI",
+        versionArgs: ["--version"],
+        severity: "fatal",
+        installUrl: "https://kiro.dev/cli/",
+      },
+    ],
+  },
 };
 
 import { BUILT_IN_AGENT_IDS } from "./agentIds.js";

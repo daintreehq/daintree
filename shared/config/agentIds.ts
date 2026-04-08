@@ -1,4 +1,11 @@
-export const BUILT_IN_AGENT_IDS = ["claude", "gemini", "codex", "opencode", "cursor"] as const;
+export const BUILT_IN_AGENT_IDS = [
+  "claude",
+  "gemini",
+  "codex",
+  "opencode",
+  "cursor",
+  "kiro",
+] as const;
 
 export type BuiltInAgentId = (typeof BUILT_IN_AGENT_IDS)[number];
 
