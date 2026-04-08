@@ -120,7 +120,7 @@ describe("AgentSetupWizard reducer", () => {
     expect(state.step).toEqual({ type: "cli" });
   });
 
-  it("advances from selection to cli even when all agents installed", () => {
+  it("skips to complete when all selected agents are installed", () => {
     const allInstalled = { claude: "ready", gemini: "ready" } as CliAvailability;
     let state = buildInitialState(allInstalled, true);
     state = wizardReducer(state, {
@@ -128,7 +128,45 @@ describe("AgentSetupWizard reducer", () => {
       payload: { claude: true, gemini: true },
     });
     state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
+    expect(state.step).toEqual({ type: "complete" });
+    expect(state.history).toEqual([{ type: "selection" }]);
+  });
+
+  it("goes to cli when at least one selected agent is not installed", () => {
+    const partial = { claude: "ready", gemini: "missing" } as CliAvailability;
+    let state = buildInitialState(partial, true);
+    state = wizardReducer(state, {
+      type: "INIT_SELECTIONS",
+      payload: { claude: true, gemini: true },
+    });
+    state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
     expect(state.step).toEqual({ type: "cli" });
+  });
+
+  it("skips to complete when only selected agents are installed (unselected missing)", () => {
+    const avail = { claude: "ready", gemini: "missing" } as CliAvailability;
+    let state = buildInitialState(avail, true);
+    state = wizardReducer(state, {
+      type: "INIT_SELECTIONS",
+      payload: { claude: true, gemini: false },
+    });
+    state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
+    expect(state.step).toEqual({ type: "complete" });
+  });
+
+  it("BACK from complete (after skip) returns to selection, not cli", () => {
+    const allInstalled = { claude: "ready", gemini: "ready" } as CliAvailability;
+    let state = buildInitialState(allInstalled, true);
+    state = wizardReducer(state, {
+      type: "INIT_SELECTIONS",
+      payload: { claude: true, gemini: true },
+    });
+    state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
+    expect(state.step).toEqual({ type: "complete" });
+
+    state = wizardReducer(state, { type: "BACK" });
+    expect(state.step).toEqual({ type: "selection" });
+    expect(state.history).toEqual([]);
   });
 
   it("advances from cli to complete", () => {
