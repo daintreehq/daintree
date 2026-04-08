@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CircleCheck, CircleDashed, Loader2, RotateCw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { systemClient } from "@/clients";
@@ -9,6 +9,16 @@ import { EmbeddedTerminal } from "./EmbeddedTerminal";
 
 const POOL_CONCURRENCY = 3;
 const AGENT_ORDER = BUILT_IN_AGENT_IDS;
+
+// Build a mapping from agent ID to its prerequisite tool name.
+// Most agents use the agent ID as the tool name (e.g., "claude" → "claude"),
+// but some differ (e.g., "cursor" → "cursor-agent").
+const AGENT_TOOL_NAMES: Record<string, string> = {};
+for (const agentId of AGENT_ORDER) {
+  const config = AGENT_REGISTRY[agentId];
+  const prereq = config?.prerequisites?.[0];
+  AGENT_TOOL_NAMES[agentId] = prereq?.tool ?? agentId;
+}
 
 const AGENT_DESCRIPTIONS: Record<string, string> = {
   claude: "Deep refactoring, architecture, and complex reasoning",
@@ -134,7 +144,8 @@ export function AgentCliStep({
             const isChecked = selections[agentId] ?? false;
             const Icon = config.icon;
             const description = AGENT_DESCRIPTIONS[agentId] ?? config.tooltip ?? "";
-            const checkState = checkStates[agentId];
+            const toolName = AGENT_TOOL_NAMES[agentId] ?? agentId;
+            const checkState = checkStates[toolName];
             const checkLoading = checkState === "loading" || (isChecking && !checkState);
 
             return (
@@ -218,7 +229,7 @@ function AgentStatusBadge({
   }
 
   const check = checkState && checkState !== "loading" ? checkState : null;
-  if (check?.available) {
+  if (check?.available && check.meetsMinVersion) {
     return (
       <span className="inline-flex items-center gap-1 text-[11px] text-status-success font-medium shrink-0">
         <CircleCheck className="w-3 h-3" />
