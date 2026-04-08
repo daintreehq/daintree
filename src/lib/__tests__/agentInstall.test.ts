@@ -88,45 +88,45 @@ describe("agentInstall", () => {
     });
   });
 
-  describe("getInstallBlocksForCurrentOS", () => {
-    const mockAgent: AgentConfig = {
-      id: "test",
-      name: "Test",
-      command: "test",
-      color: "#000000",
-      iconId: "test",
-      supportsContextInjection: false,
-      install: {
-        docsUrl: "https://example.com/docs",
-        byOs: {
-          macos: [
-            {
-              label: "Homebrew",
-              commands: ["brew install test"],
-            },
-          ],
-          windows: [
-            {
-              label: "npm",
-              commands: ["npm install -g test"],
-            },
-          ],
-          linux: [
-            {
-              label: "apt",
-              commands: ["apt install test"],
-            },
-          ],
-          generic: [
-            {
-              label: "Generic",
-              commands: ["curl https://example.com/install.sh | sh"],
-            },
-          ],
-        },
+  const mockAgent: AgentConfig = {
+    id: "test",
+    name: "Test",
+    command: "test",
+    color: "#000000",
+    iconId: "test",
+    supportsContextInjection: false,
+    install: {
+      docsUrl: "https://example.com/docs",
+      byOs: {
+        macos: [
+          {
+            label: "Homebrew",
+            commands: ["brew install test"],
+          },
+        ],
+        windows: [
+          {
+            label: "npm",
+            commands: ["npm install -g test"],
+          },
+        ],
+        linux: [
+          {
+            label: "apt",
+            commands: ["apt install test"],
+          },
+        ],
+        generic: [
+          {
+            label: "Generic",
+            commands: ["curl https://example.com/install.sh | sh"],
+          },
+        ],
       },
-    };
+    },
+  };
 
+  describe("getInstallBlocksForCurrentOS", () => {
     it("should return macOS blocks on macOS", async () => {
       stubNavigator(
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -322,6 +322,84 @@ describe("agentInstall", () => {
       const blocks = getInstallBlocksForCurrentOS(agentWithEmptyMacOS);
       expect(blocks).toHaveLength(1);
       expect(blocks?.[0].label).toBe("Generic");
+    });
+  });
+
+  describe("getDefaultInstallBlock", () => {
+    it("should return the first block for current OS", async () => {
+      stubNavigator(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "MacIntel"
+      );
+      const { getDefaultInstallBlock } = await import("../agentInstall");
+      const agentWithMultiple: AgentConfig = {
+        ...mockAgent,
+        install: {
+          byOs: {
+            macos: [
+              { label: "curl", commands: ["curl https://example.com/install | bash"] },
+              { label: "npm", commands: ["npm install -g test"] },
+              { label: "Homebrew", commands: ["brew install test"] },
+            ],
+          },
+        },
+      };
+      const block = getDefaultInstallBlock(agentWithMultiple);
+      expect(block).not.toBeNull();
+      expect(block?.label).toBe("curl");
+    });
+
+    it("should return null for agent with no install config", async () => {
+      stubNavigator("", "");
+      const { getDefaultInstallBlock } = await import("../agentInstall");
+      const agentNoInstall: AgentConfig = {
+        id: "test",
+        name: "Test",
+        command: "test",
+        color: "#000",
+        iconId: "test",
+        supportsContextInjection: false,
+      };
+      expect(getDefaultInstallBlock(agentNoInstall)).toBeNull();
+    });
+
+    it("should return null when blocks array is empty", async () => {
+      stubNavigator(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "MacIntel"
+      );
+      const { getDefaultInstallBlock } = await import("../agentInstall");
+      const agentEmpty: AgentConfig = {
+        ...mockAgent,
+        install: { byOs: { macos: [] } },
+      };
+      expect(getDefaultInstallBlock(agentEmpty)).toBeNull();
+    });
+  });
+
+  describe("getInstallCommand", () => {
+    it("should return single command as-is", async () => {
+      const { getInstallCommand } = await import("../agentInstall");
+      expect(getInstallCommand({ commands: ["npm install -g test"] })).toBe("npm install -g test");
+    });
+
+    it("should join multiple commands with newline", async () => {
+      const { getInstallCommand } = await import("../agentInstall");
+      expect(
+        getInstallCommand({
+          commands: ["scoop bucket add extras", "scoop install extras/opencode"],
+        })
+      ).toBe("scoop bucket add extras\nscoop install extras/opencode");
+    });
+
+    it("should return null for empty commands array", async () => {
+      const { getInstallCommand } = await import("../agentInstall");
+      expect(getInstallCommand({ commands: [] })).toBeNull();
+    });
+
+    it("should return null for undefined commands", async () => {
+      const { getInstallCommand } = await import("../agentInstall");
+      expect(getInstallCommand({ label: "steps-only", steps: ["Do something"] })).toBeNull();
     });
   });
 });
