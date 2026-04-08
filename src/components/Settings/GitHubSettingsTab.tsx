@@ -141,7 +141,7 @@ export function GitHubSettingsTab() {
     void actionService.dispatch(
       "system.openExternal",
       {
-        url: "https://github.com/settings/tokens/new?scopes=repo,read:org&description=Canopy%20Command%20Center",
+        url: "https://github.com/settings/tokens/new?scopes=repo,read:org&description=Canopy",
       },
       { source: "user" }
     );

@@ -14,6 +14,7 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 import { useGitHubConfigStore } from "@/store";
+import { actionService } from "@/services/ActionService";
 
 const mockedUseGitHubConfigStore = vi.mocked(useGitHubConfigStore);
 
@@ -30,6 +31,7 @@ function setupStore(overrides: Record<string, unknown> = {}) {
 
 describe("GitHubSettingsTab accessibility", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.useFakeTimers();
     setupStore();
   });
@@ -104,5 +106,19 @@ describe("GitHubSettingsTab accessibility", () => {
     for (const svg of spinnerSvgs) {
       expect(svg.getAttribute("aria-hidden")).toBe("true");
     }
+  });
+
+  it("Create Token button opens GitHub with correct description", () => {
+    render(<GitHubSettingsTab />);
+    const btn = screen.getByRole("button", { name: /create token on github/i });
+    fireEvent.click(btn);
+
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      {
+        url: "https://github.com/settings/tokens/new?scopes=repo,read:org&description=Canopy",
+      },
+      { source: "user" }
+    );
   });
 });
