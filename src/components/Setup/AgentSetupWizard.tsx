@@ -22,8 +22,8 @@ const SKIP_FIRST_RUN_DIALOGS = isCanopyEnvEnabled("CANOPY_E2E_SKIP_FIRST_RUN_DIA
 
 // Tier arrays for the selection step — featured agents get prominent display,
 // the rest fall into "More agents". New built-in agents automatically land in MORE_AGENT_IDS.
-const FEATURED_AGENT_IDS: readonly string[] = ["claude", "gemini", "codex"];
-const MORE_AGENT_IDS: readonly string[] = BUILT_IN_AGENT_IDS.filter(
+export const FEATURED_AGENT_IDS: readonly string[] = ["claude", "gemini", "codex"];
+export const MORE_AGENT_IDS: readonly string[] = BUILT_IN_AGENT_IDS.filter(
   (id) => !(FEATURED_AGENT_IDS as readonly string[]).includes(id)
 );
 

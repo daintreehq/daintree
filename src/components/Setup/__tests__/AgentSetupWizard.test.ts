@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildInitialState, sortTierByInstalled, wizardReducer } from "../AgentSetupWizard";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import {
+  buildInitialState,
+  FEATURED_AGENT_IDS,
+  MORE_AGENT_IDS,
+  sortTierByInstalled,
+  wizardReducer,
+} from "../AgentSetupWizard";
 import type { CliAvailability } from "@shared/types";
 
 describe("sortTierByInstalled", () => {
@@ -50,6 +57,26 @@ describe("sortTierByInstalled", () => {
       kiro: "missing",
     } as CliAvailability);
     expect(result).toEqual(["cursor", "opencode", "kiro"]);
+  });
+
+  it("returns empty array for empty input", () => {
+    expect(sortTierByInstalled([], {} as CliAvailability)).toEqual([]);
+  });
+
+  it("ignores extra availability keys not in the tier", () => {
+    const result = sortTierByInstalled(["claude"] as const, { claude: "ready", gemini: "ready" } as CliAvailability);
+    expect(result).toEqual(["claude"]);
+  });
+});
+
+describe("tier partition completeness", () => {
+  it("FEATURED + MORE covers all BUILT_IN_AGENT_IDS with no overlap", () => {
+    const combined = [...FEATURED_AGENT_IDS, ...MORE_AGENT_IDS].sort();
+    const expected = [...BUILT_IN_AGENT_IDS].sort();
+    expect(combined).toEqual(expected);
+
+    const overlap = FEATURED_AGENT_IDS.filter((id) => MORE_AGENT_IDS.includes(id));
+    expect(overlap).toEqual([]);
   });
 });
 
