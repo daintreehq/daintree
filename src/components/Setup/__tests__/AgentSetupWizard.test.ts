@@ -1,6 +1,57 @@
 import { describe, expect, it } from "vitest";
-import { buildInitialState, wizardReducer } from "../AgentSetupWizard";
+import { buildInitialState, sortTierByInstalled, wizardReducer } from "../AgentSetupWizard";
 import type { CliAvailability } from "@shared/types";
+
+describe("sortTierByInstalled", () => {
+  const tier = ["claude", "gemini", "codex"] as const;
+
+  it("preserves original order when all uninstalled", () => {
+    const result = sortTierByInstalled(tier, {} as CliAvailability);
+    expect(result).toEqual(["claude", "gemini", "codex"]);
+  });
+
+  it("preserves original order when all installed", () => {
+    const result = sortTierByInstalled(tier, {
+      claude: "ready",
+      gemini: "ready",
+      codex: "ready",
+    } as CliAvailability);
+    expect(result).toEqual(["claude", "gemini", "codex"]);
+  });
+
+  it("floats installed agents to the front, preserving relative order", () => {
+    const result = sortTierByInstalled(tier, {
+      claude: "missing",
+      gemini: "ready",
+      codex: "installed",
+    } as CliAvailability);
+    expect(result).toEqual(["gemini", "codex", "claude"]);
+  });
+
+  it("handles single installed agent", () => {
+    const result = sortTierByInstalled(tier, { codex: "ready" } as CliAvailability);
+    expect(result).toEqual(["codex", "claude", "gemini"]);
+  });
+
+  it("treats missing and undefined availability the same", () => {
+    const withMissing = sortTierByInstalled(tier, {
+      claude: "missing",
+      gemini: "ready",
+      codex: "missing",
+    } as CliAvailability);
+    const withUndefined = sortTierByInstalled(tier, { gemini: "ready" } as CliAvailability);
+    expect(withMissing).toEqual(withUndefined);
+  });
+
+  it("works with the more-agents tier", () => {
+    const moreTier = ["opencode", "cursor", "kiro"] as const;
+    const result = sortTierByInstalled(moreTier, {
+      cursor: "installed",
+      kiro: "missing",
+    } as CliAvailability);
+    expect(result).toEqual(["cursor", "opencode", "kiro"]);
+  });
+});
 
 describe("AgentSetupWizard reducer", () => {
   const emptyAvail = {} as CliAvailability;
