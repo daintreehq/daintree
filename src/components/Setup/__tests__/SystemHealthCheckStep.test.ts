@@ -1,37 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-// Test the promise pool helper logic and grouping behavior.
-// These mirror the production code in SystemHealthCheckStep.tsx.
-
-const BASELINE_TOOLS = new Set(["git", "node", "npm", "gh"]);
-
-describe("SystemHealthCheckStep grouping", () => {
-  const mockSpecs = [
-    { tool: "git", label: "Git", severity: "fatal" },
-    { tool: "node", label: "Node.js", severity: "fatal" },
-    { tool: "npm", label: "npm", severity: "warn" },
-    { tool: "gh", label: "GitHub CLI", severity: "warn" },
-    { tool: "claude", label: "Claude CLI", severity: "fatal" },
-    { tool: "gemini", label: "Gemini CLI", severity: "fatal" },
-  ];
-
-  it("should classify baseline tools as system tools", () => {
-    const systemSpecs = mockSpecs.filter((s) => BASELINE_TOOLS.has(s.tool));
-    expect(systemSpecs.map((s) => s.tool)).toEqual(["git", "node", "npm", "gh"]);
-  });
-
-  it("should classify non-baseline tools as agent CLIs", () => {
-    const agentSpecs = mockSpecs.filter((s) => !BASELINE_TOOLS.has(s.tool));
-    expect(agentSpecs.map((s) => s.tool)).toEqual(["claude", "gemini"]);
-  });
-
-  it("should filter out silent specs from both groups", () => {
-    const specsWithSilent = [...mockSpecs, { tool: "hidden", label: "Hidden", severity: "silent" }];
-    const visible = specsWithSilent.filter((s) => s.severity !== "silent");
-    expect(visible).toHaveLength(6);
-    expect(visible.every((s) => s.severity !== "silent")).toBe(true);
-  });
-});
+// Test the promise pool helper logic and allRequired derivation.
+// These mirror the production code used by SystemToolsStep and AgentCliStep.
 
 describe("Promise pool concurrency", () => {
   async function runPool<T>(
