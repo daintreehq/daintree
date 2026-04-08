@@ -651,7 +651,7 @@ export function ContentGrid({
       .map((id) => {
         const agentConfig = getEffectiveAgentConfig(id);
         const canLaunch =
-          id === "terminal" ? true : !agentAvailability || agentAvailability[id] === true;
+          id === "terminal" ? true : !agentAvailability || isAgentReady(agentAvailability[id]);
         return { id, name: agentConfig?.name ?? id, canLaunch };
       });
   }, [agentAvailability, gridSelectedAgentIds]);

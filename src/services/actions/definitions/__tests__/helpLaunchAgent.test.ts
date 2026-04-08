@@ -43,10 +43,10 @@ const stubCtx: ActionContext = {};
 
 function allAvailability(override?: Partial<CliAvailability>): CliAvailability {
   return {
-    claude: true,
-    gemini: true,
-    codex: true,
-    opencode: true,
+    claude: "ready",
+    gemini: "ready",
+    codex: "ready",
+    opencode: "ready",
     ...override,
   } as CliAvailability;
 }
@@ -159,7 +159,7 @@ describe("help.launchAgent", () => {
     );
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "gemini" });
     mockGetCliAvailabilityState.mockReturnValue({
-      availability: allAvailability({ gemini: false }),
+      availability: allAvailability({ gemini: "missing" }),
       isInitialized: true,
     });
 
@@ -178,7 +178,7 @@ describe("help.launchAgent", () => {
     );
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: undefined });
     mockGetCliAvailabilityState.mockReturnValue({
-      availability: allAvailability({ claude: false, gemini: false }),
+      availability: allAvailability({ claude: "missing", gemini: "missing" }),
       isInitialized: true,
     });
 
@@ -198,10 +198,10 @@ describe("help.launchAgent", () => {
     mockGetAgentPrefsState.mockReturnValue({ defaultAgent: undefined });
     mockGetCliAvailabilityState.mockReturnValue({
       availability: allAvailability({
-        claude: false,
-        gemini: false,
-        codex: false,
-        opencode: false,
+        claude: "missing",
+        gemini: "missing",
+        codex: "missing",
+        opencode: "missing",
       }),
       isInitialized: false,
     });
