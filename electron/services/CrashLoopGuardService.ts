@@ -60,7 +60,11 @@ export class CrashLoopGuardService {
     this.safeMode = state.crashes >= CRASH_THRESHOLD;
     this.relaunchAllowed = state.crashes < HARD_STOP_THRESHOLD;
 
-    this.writeState(state);
+    try {
+      this.writeState(state);
+    } catch (err) {
+      console.error("[CrashLoopGuard] Failed to persist state during initialize:", err);
+    }
 
     if (this.safeMode) {
       console.warn(`[CrashLoopGuard] Safe mode activated (${state.crashes} consecutive crashes)`);
@@ -141,20 +145,27 @@ export class CrashLoopGuardService {
   }
 
   private writeState(state: CrashLoopState): void {
+    const data = JSON.stringify(state);
+
+    // Ensure the parent directory exists (e.g. first launch of dev userData)
+    const dir = path.dirname(this.statePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    // Try atomic write (tmp + rename), fall back to direct write
     const tmpPath = `${this.statePath}.${Date.now()}.tmp`;
     try {
-      fs.writeFileSync(tmpPath, JSON.stringify(state), {
-        encoding: "utf8",
-        flush: true,
-      } as Parameters<typeof fs.writeFileSync>[2]);
+      fs.writeFileSync(tmpPath, data, "utf8");
       fs.renameSync(tmpPath, this.statePath);
-    } catch (err) {
+    } catch {
       try {
         fs.unlinkSync(tmpPath);
       } catch {
         // ignore
       }
-      throw err;
+      // Fallback: direct write (non-atomic but functional)
+      fs.writeFileSync(this.statePath, data, "utf8");
     }
   }
 }

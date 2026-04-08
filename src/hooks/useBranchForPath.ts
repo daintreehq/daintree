@@ -1,8 +1,8 @@
 import { useMemo } from "react";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 
 export function useBranchForPath(rootPath: string): string | undefined {
-  const worktrees = useWorktreeDataStore((s) => s.worktrees);
+  const worktrees = useWorktreeStore((s) => s.worktrees);
   return useMemo(() => {
     if (!rootPath) return undefined;
     const normalized = rootPath.endsWith("/") ? rootPath.slice(0, -1) : rootPath;

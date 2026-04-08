@@ -4,6 +4,15 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalInfoDialog } from "../TerminalInfoDialog";
 import type { TerminalInfoPayload } from "@/types/electron";
 
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+);
+
 const dispatchMock = vi.fn();
 
 vi.mock("@/services/ActionService", () => ({

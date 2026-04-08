@@ -42,7 +42,7 @@ test.describe.serial("Core: Browser Panel", () => {
 
     const fixture = createFixtureRepo({ name: "browser-panel-test" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixture, "Browser Panel Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, "Browser Panel Test");
   });
 
   test.afterAll(async () => {

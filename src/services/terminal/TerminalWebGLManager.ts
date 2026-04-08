@@ -14,7 +14,15 @@ export class TerminalWebGLManager {
   // Reserve 4 slots for potential non-terminal WebGL consumers in the
   // main renderer (browser/dev-preview panels are process-isolated via
   // <webview> partitions and have their own budgets).
-  static readonly MAX_CONTEXTS = 12;
+  private static _maxContexts = 12;
+
+  static get MAX_CONTEXTS(): number {
+    return TerminalWebGLManager._maxContexts;
+  }
+
+  static setMaxContexts(n: number): void {
+    TerminalWebGLManager._maxContexts = Math.max(1, n);
+  }
 
   private pool = new Map<string, WebGLEntry>();
   private lruOrder: string[] = [];

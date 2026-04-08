@@ -30,6 +30,17 @@ export interface UseDevServerReturn extends UseDevServerState {
 const STUCK_START_RECOVERY_MS = 10000;
 const MAX_AUTO_RECOVERY_ATTEMPTS = 1;
 
+/**
+ * Module-level cache that persists the last successful ensure configKey across
+ * React unmount/remount cycles (e.g. dock ↔ grid transitions). Keyed by panelId.
+ * Mirrors the scrollCache pattern in DevPreviewPane.tsx.
+ */
+const persistedEnsureCache = new Map<string, string>();
+
+export function _resetPersistedEnsureCacheForTests(): void {
+  persistedEnsureCache.clear();
+}
+
 function serializeEnv(env?: Record<string, string>): string {
   if (!env) return "";
   return Object.keys(env)
@@ -194,6 +205,7 @@ export function useDevServer({
 
         if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
           applyState(nextState);
+          persistedEnsureCache.set(requestPanelId, configKey);
         }
       } catch (err) {
         if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
@@ -238,6 +250,8 @@ export function useDevServer({
   const stop = useCallback(() => {
     const latest = latestContextRef.current;
     if (!latest.projectId) return;
+    persistedEnsureCache.delete(latest.panelId);
+    lastEnsureConfigRef.current = "";
     const requestVersion = requestVersionRef.current;
     const requestProjectId = latest.projectId;
     const requestPanelId = latest.panelId;
@@ -262,6 +276,7 @@ export function useDevServer({
       return;
     }
 
+    persistedEnsureCache.delete(latest.panelId);
     const requestVersion = requestVersionRef.current;
     const requestProjectId = latest.projectId;
     const requestPanelId = latest.panelId;
@@ -307,6 +322,7 @@ export function useDevServer({
       setIsRestarting(false);
       lastEnsureConfigRef.current = "";
       pendingEnsureConfigRef.current = null;
+      persistedEnsureCache.delete(panelId);
       return;
     }
 
@@ -331,6 +347,9 @@ export function useDevServer({
       const { state } = payload;
       if (state.panelId !== panelId) return;
       if (state.projectId !== currentProjectId) return;
+      if (state.status === "error" || state.status === "stopped") {
+        persistedEnsureCache.delete(panelId);
+      }
       applyState(state);
     });
   }, [panelId, currentProjectId, applyState]);
@@ -345,6 +364,7 @@ export function useDevServer({
 
     lastEnsureConfigRef.current = "";
     pendingEnsureConfigRef.current = null;
+    persistedEnsureCache.delete(panelId);
     void window.electron.devPreview
       .stop({ panelId: requestPanelId, projectId: requestProjectId })
       .then((state) => {
@@ -373,6 +393,16 @@ export function useDevServer({
     });
 
     if (lastEnsureConfigRef.current === configKey) return;
+
+    // Cross-remount guard: skip ensure() if a previous mount already ensured
+    // this exact config. The onStateChanged subscription handles crash propagation
+    // independently, and getState() hydrates current state on mount.
+    const cachedKey = persistedEnsureCache.get(panelId);
+    if (cachedKey === configKey) {
+      lastEnsureConfigRef.current = configKey;
+      return;
+    }
+
     void ensureLatestConfig(configKey);
   }, [panelId, currentProjectId, cwd, worktreeId, devCommand, envSignature, ensureLatestConfig]);
 

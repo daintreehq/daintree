@@ -1,7 +1,7 @@
 export interface DemoMoveToPayload {
   x: number;
   y: number;
-  durationMs: number;
+  durationMs?: number;
 }
 
 export interface DemoTypePayload {
@@ -26,7 +26,7 @@ export interface DemoSleepPayload {
 
 export interface DemoMoveToSelectorPayload {
   selector: string;
-  durationMs: number;
+  durationMs?: number;
   offsetX?: number;
   offsetY?: number;
 }
@@ -40,22 +40,23 @@ export interface DemoScreenshotResult {
 export interface DemoStartCapturePayload {
   fps?: number;
   maxFrames?: number;
-  outputDir?: string;
+  outputPath: string;
+  preset: DemoEncodePreset;
 }
 
 export interface DemoStartCaptureResult {
-  outputDir: string;
+  outputPath: string;
 }
 
 export interface DemoStopCaptureResult {
-  outputDir: string;
+  outputPath: string;
   frameCount: number;
 }
 
 export interface DemoCaptureStatus {
   active: boolean;
   frameCount: number;
-  outputDir: string | null;
+  outputPath: string | null;
 }
 
 export type DemoEncodePreset = "youtube-4k" | "youtube-1080p" | "web-webm";
@@ -77,4 +78,46 @@ export interface DemoEncodeProgressEvent {
 export interface DemoEncodeResult {
   outputPath: string;
   durationMs: number;
+}
+
+export interface DemoScrollPayload {
+  selector: string;
+}
+
+export interface DemoDragPayload {
+  fromSelector: string;
+  toSelector: string;
+  durationMs?: number;
+}
+
+export interface DemoPressKeyPayload {
+  key: string;
+  code?: string;
+  modifiers?: Array<"mod" | "ctrl" | "shift" | "alt" | "meta">;
+  selector?: string;
+}
+
+export interface DemoSpotlightPayload {
+  selector: string;
+  padding?: number;
+}
+
+export interface DemoAnnotatePayload {
+  selector: string;
+  text: string;
+  position?: "top" | "bottom" | "left" | "right";
+  id?: string;
+}
+
+export interface DemoAnnotateResult {
+  id: string;
+}
+
+export interface DemoDismissAnnotationPayload {
+  id?: string;
+}
+
+export interface DemoWaitForIdlePayload {
+  settleMs?: number;
+  timeoutMs?: number;
 }

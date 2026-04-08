@@ -1,4 +1,5 @@
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain } from "electron";
+import type { WindowRegistry } from "../window/WindowRegistry.js";
 import http from "node:http";
 import net from "node:net";
 import { randomUUID } from "node:crypto";
@@ -76,7 +77,7 @@ function safeSerializeToolResult(value: unknown): string {
 export class McpServerService {
   private httpServer: http.Server | null = null;
   private port: number | null = null;
-  private mainWindow: BrowserWindow | null = null;
+  private registry: WindowRegistry | null = null;
   private sessions = new Map<string, SSEServerTransport>();
   private pendingManifests = new Map<string, PendingRequest<ActionManifestEntry[]>>();
   private pendingDispatches = new Map<string, PendingRequest<ActionDispatchResult>>();
@@ -100,8 +101,8 @@ export class McpServerService {
 
   async setEnabled(enabled: boolean): Promise<void> {
     store.set("mcpServer", { ...this.getConfig(), enabled });
-    if (enabled && this.mainWindow && !this.isRunning) {
-      await this.start(this.mainWindow);
+    if (enabled && this.registry && !this.isRunning) {
+      await this.start(this.registry);
     } else if (!enabled && this.isRunning) {
       await this.stop();
     }
@@ -112,7 +113,7 @@ export class McpServerService {
     store.set("mcpServer", { ...config, port });
     if (config.enabled && this.isRunning) {
       await this.stop();
-      if (this.mainWindow) await this.start(this.mainWindow);
+      if (this.registry) await this.start(this.registry);
     }
   }
 
@@ -132,8 +133,8 @@ export class McpServerService {
     return key;
   }
 
-  async start(window: BrowserWindow): Promise<void> {
-    this.mainWindow = window;
+  async start(registry: WindowRegistry): Promise<void> {
+    this.registry = registry;
 
     if (this.httpServer) {
       return;
@@ -544,16 +545,25 @@ export class McpServerService {
   }
 
   private getLiveWebContents(): Electron.WebContents {
-    if (!this.mainWindow || this.mainWindow.isDestroyed()) {
-      throw new Error("MCP renderer bridge unavailable");
+    if (this.registry) {
+      const primary = this.registry.getPrimary();
+      if (primary && !primary.browserWindow.isDestroyed()) {
+        const { webContents } = primary.browserWindow;
+        if (webContents && !webContents.isDestroyed()) {
+          return webContents;
+        }
+      }
+      for (const ctx of this.registry.all()) {
+        if (!ctx.browserWindow.isDestroyed()) {
+          const { webContents } = ctx.browserWindow;
+          if (webContents && !webContents.isDestroyed()) {
+            return webContents;
+          }
+        }
+      }
     }
 
-    const { webContents } = this.mainWindow;
-    if (!webContents || webContents.isDestroyed()) {
-      throw new Error("MCP renderer bridge unavailable");
-    }
-
-    return webContents;
+    throw new Error("MCP renderer bridge unavailable");
   }
 
   private normalizeError(err: unknown, fallback: string): Error {

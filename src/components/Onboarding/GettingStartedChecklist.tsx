@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Check, ChevronDown, ChevronUp, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
-import type { ChecklistState } from "@shared/types/ipc/maps";
+import type { ChecklistState, ChecklistItemId } from "@shared/types/ipc/maps";
 import { CHECKLIST_ITEMS } from "./checklistItems";
 
 interface GettingStartedChecklistProps {
@@ -11,6 +11,7 @@ interface GettingStartedChecklistProps {
   collapsed: boolean;
   onDismiss: () => void;
   onToggleCollapse: () => void;
+  onMarkItem?: (id: ChecklistItemId) => void;
 }
 
 export function GettingStartedChecklist({
@@ -18,6 +19,7 @@ export function GettingStartedChecklist({
   collapsed,
   onDismiss,
   onToggleCollapse,
+  onMarkItem,
 }: GettingStartedChecklistProps) {
   const [isVisible, setIsVisible] = useState(false);
 
@@ -42,7 +44,7 @@ export function GettingStartedChecklist({
           "pointer-events-auto relative w-full",
           "rounded-[var(--radius-sm)] border",
           "text-sm text-canopy-text",
-          "shadow-[0_4px_12px_rgba(0,0,0,0.2)]",
+          "shadow-[var(--theme-shadow-floating)]",
           "transition-[transform,opacity] duration-300 ease-out",
           isVisible ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
           "bg-[color-mix(in_oklab,var(--color-canopy-accent)_8%,var(--color-canopy-bg))]",
@@ -88,75 +90,90 @@ export function GettingStartedChecklist({
         {/* Collapsible body */}
         <div
           className={cn(
-            "overflow-hidden transition-all duration-300 ease-in-out",
+            "overflow-hidden transition-[height] duration-300 ease-in-out",
             collapsed ? "h-0" : "h-auto"
           )}
           {...(collapsed ? { inert: true } : {})}
         >
           <div className="px-3 pb-3 space-y-1.5">
-            {CHECKLIST_ITEMS.map(({ id, label, icon: Icon, actionId }) => {
-              const done = checklist.items[id];
-              const content = (
-                <>
-                  <div
-                    className={cn(
-                      "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition-colors duration-200",
-                      done ? "bg-canopy-accent border-canopy-accent" : "border-canopy-text/30"
-                    )}
-                  >
-                    {done && <Check className="h-2.5 w-2.5 text-canopy-bg" />}
-                  </div>
-                  <Icon
-                    className={cn(
-                      "h-3.5 w-3.5 shrink-0",
-                      done ? "text-canopy-text/40" : "text-canopy-text/70"
-                    )}
-                  />
-                  <span
-                    className={cn(
-                      "text-xs leading-snug",
-                      done ? "line-through text-canopy-text/40" : "text-canopy-text/90"
-                    )}
-                  >
-                    {label}
-                  </span>
-                </>
-              );
+            {CHECKLIST_ITEMS.map(
+              ({ id, label, description, icon: Icon, actionId, actionArgs, markOnClick }) => {
+                const done = checklist.items[id];
+                const content = (
+                  <>
+                    <div
+                      className={cn(
+                        "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition-colors duration-200",
+                        done ? "bg-canopy-accent border-canopy-accent" : "border-canopy-text/30"
+                      )}
+                    >
+                      {done && <Check className="h-2.5 w-2.5 text-canopy-bg" />}
+                    </div>
+                    <Icon
+                      className={cn(
+                        "h-3.5 w-3.5 shrink-0",
+                        done ? "text-canopy-text/40" : "text-canopy-text/70"
+                      )}
+                    />
+                    <div className="flex flex-col min-w-0 flex-1">
+                      <span
+                        className={cn(
+                          "text-xs leading-snug",
+                          done ? "line-through text-canopy-text/40" : "text-canopy-text/90"
+                        )}
+                      >
+                        {label}
+                      </span>
+                      {description && (
+                        <span
+                          className={cn(
+                            "text-[10px] leading-snug",
+                            done ? "text-canopy-text/30" : "text-canopy-text/50"
+                          )}
+                        >
+                          {description}
+                        </span>
+                      )}
+                    </div>
+                  </>
+                );
 
-              const sharedClasses = cn(
-                "flex items-center gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5",
-                "transition-colors duration-200",
-                done ? "opacity-60" : "opacity-100"
-              );
+                const sharedClasses = cn(
+                  "flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5",
+                  "transition-colors duration-200",
+                  done ? "opacity-60" : "opacity-100"
+                );
 
-              if (done) {
+                if (done) {
+                  return (
+                    <div key={id} className={sharedClasses}>
+                      {content}
+                    </div>
+                  );
+                }
+
                 return (
-                  <div key={id} className={sharedClasses}>
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => {
+                      void actionService.dispatch(actionId, actionArgs, {
+                        source: "user",
+                      });
+                      if (markOnClick) onMarkItem?.(id);
+                    }}
+                    className={cn(
+                      sharedClasses,
+                      "w-full text-left cursor-pointer",
+                      "hover:bg-tint/10",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+                    )}
+                  >
                     {content}
-                  </div>
+                  </button>
                 );
               }
-
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() =>
-                    void actionService.dispatch(actionId, undefined, {
-                      source: "user",
-                    })
-                  }
-                  className={cn(
-                    sharedClasses,
-                    "w-full text-left cursor-pointer",
-                    "hover:bg-tint/10",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
-                  )}
-                >
-                  {content}
-                </button>
-              );
-            })}
+            )}
           </div>
         </div>
       </div>

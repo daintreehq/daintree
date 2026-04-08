@@ -47,7 +47,7 @@ test.describe.serial("Core: Portal Multi-Tab Lifecycle", () => {
 
     const fixture = createFixtureRepo({ name: "portal-test" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixture, "Portal Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, "Portal Test");
   });
 
   test.afterAll(async () => {

@@ -18,7 +18,7 @@ test.describe.serial("Core: Worktree Session Bulk", () => {
     });
 
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixture, "Session Bulk");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, "Session Bulk");
   });
 
   test.afterAll(async () => {

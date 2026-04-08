@@ -1,4 +1,5 @@
 import { ipcMain } from "electron";
+import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import path from "path";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
@@ -17,18 +18,24 @@ import { generateWorktreePath, validatePathPattern } from "../../../shared/utils
 import { projectStore } from "../../services/ProjectStore.js";
 import { logDebug, logError } from "../../utils/logger.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
-import { checkRateLimit } from "../utils.js";
+import { soundService } from "../../services/SoundService.js";
+import { checkRateLimit, waitForRateLimitSlot } from "../utils.js";
+
+const WORKTREE_RATE_LIMIT_KEY = "worktreeCreate";
+const WORKTREE_RATE_LIMIT_MAX = 2;
+const WORKTREE_RATE_LIMIT_WINDOW_MS = 2_000;
 import { resolveWorktreePattern } from "../../utils/worktreePattern.js";
 import { taskWorktreeService } from "../../services/TaskWorktreeService.js";
 
 export function registerWorktreeHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleWorktreeGetAll = async () => {
+  const handleWorktreeGetAll = async (event: Electron.IpcMainInvokeEvent) => {
     if (!deps.worktreeService) {
       return [];
     }
-    return await deps.worktreeService.getAllStatesAsync();
+    const senderWindow = getWindowForWebContents(event.sender);
+    return await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
   };
   ipcMain.handle(CHANNELS.WORKTREE_GET_ALL, handleWorktreeGetAll);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_ALL));
@@ -61,13 +68,15 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_PR_STATUS));
 
   const handleWorktreeSetActive = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: WorktreeSetActivePayload
   ) => {
     if (!deps.worktreeService) {
       return;
     }
-    await deps.worktreeService.setActiveWorktree(payload.worktreeId, { silent: true });
+    const senderWindow = getWindowForWebContents(event.sender);
+    const windowId = senderWindow?.id;
+    await deps.worktreeService.setActiveWorktree(payload.worktreeId, windowId, { silent: true });
   };
   ipcMain.handle(CHANNELS.WORKTREE_SET_ACTIVE, handleWorktreeSetActive);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_SET_ACTIVE));
@@ -79,7 +88,11 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       options: { baseBranch: string; newBranch: string; path: string; fromRemote?: boolean };
     }
   ): Promise<string> => {
-    checkRateLimit(CHANNELS.WORKTREE_CREATE, 10, 10_000);
+    await waitForRateLimitSlot(
+      WORKTREE_RATE_LIMIT_KEY,
+      WORKTREE_RATE_LIMIT_MAX,
+      WORKTREE_RATE_LIMIT_WINDOW_MS
+    );
     if (!deps.worktreeService) {
       throw new Error("Workspace client not initialized");
     }
@@ -88,6 +101,9 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       fileSearchService.invalidate(payload.options.path);
     } catch (error) {
       console.warn("[worktree.create] Failed to invalidate file search cache:", error);
+    }
+    if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
+      soundService.play("worktree-create");
     }
     return worktreeId;
   };
@@ -105,6 +121,31 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   };
   ipcMain.handle(CHANNELS.WORKTREE_LIST_BRANCHES, handleWorktreeListBranches);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_LIST_BRANCHES));
+
+  const handleWorktreeFetchPRBranch = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { rootPath: string; prNumber: number; headRefName: string }
+  ) => {
+    if (!deps.worktreeService) {
+      throw new Error("Workspace client not initialized");
+    }
+    if (!payload.rootPath || typeof payload.rootPath !== "string") {
+      throw new Error("rootPath is required");
+    }
+    if (!payload.prNumber || typeof payload.prNumber !== "number" || payload.prNumber <= 0) {
+      throw new Error("prNumber must be a positive number");
+    }
+    if (!payload.headRefName || typeof payload.headRefName !== "string") {
+      throw new Error("headRefName is required");
+    }
+    return await deps.worktreeService.fetchPRBranch(
+      payload.rootPath,
+      payload.prNumber,
+      payload.headRefName
+    );
+  };
+  ipcMain.handle(CHANNELS.WORKTREE_FETCH_PR_BRANCH, handleWorktreeFetchPRBranch);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_FETCH_PR_BRANCH));
 
   const handleWorktreeGetRecentBranches = async (
     _event: Electron.IpcMainInvokeEvent,
@@ -178,7 +219,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH));
 
   const handleWorktreeDelete = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: WorktreeDeletePayload
   ) => {
     checkRateLimit(CHANNELS.WORKTREE_DELETE, 10, 10_000);
@@ -197,7 +238,8 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     if (payload.deleteBranch !== undefined && typeof payload.deleteBranch !== "boolean") {
       throw new Error("Invalid deleteBranch parameter");
     }
-    const states = await deps.worktreeService.getAllStatesAsync();
+    const senderWindow = getWindowForWebContents(event.sender);
+    const states = await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
     const worktree = states.find((wt) => wt.id === payload.worktreeId);
     await deps.worktreeService.deleteWorktree(
       payload.worktreeId,
@@ -210,6 +252,9 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       } catch (error) {
         console.warn("[worktree.delete] Failed to invalidate file search cache:", error);
       }
+    }
+    if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
+      soundService.play("worktree-delete");
     }
     // Clean up persisted issue association
     const issueMap = store.get("worktreeIssueMap", {});
@@ -297,7 +342,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_GET_FILE_DIFF));
 
   const handleGitGetProjectPulse = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: {
       worktreeId: string;
       rangeDays: PulseRangeDays;
@@ -342,7 +387,8 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       throw new Error(`Worktree not found: ${worktreeId}`);
     }
 
-    const states = await deps.worktreeService.getAllStatesAsync();
+    const senderWindowPulse = getWindowForWebContents(event.sender);
+    const states = await deps.worktreeService.getAllStatesAsync(senderWindowPulse?.id);
     const mainWorktree = states.find((wt) => wt.isMainWorktree);
     const mainBranch = mainWorktree?.branch ?? "main";
 
@@ -389,10 +435,14 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   // Task orchestration handlers
 
   const handleWorktreeCreateForTask = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: CreateForTaskPayload
   ): Promise<WorktreeState> => {
-    checkRateLimit(CHANNELS.WORKTREE_CREATE_FOR_TASK, 10, 10_000);
+    await waitForRateLimitSlot(
+      WORKTREE_RATE_LIMIT_KEY,
+      WORKTREE_RATE_LIMIT_MAX,
+      WORKTREE_RATE_LIMIT_WINDOW_MS
+    );
     if (!deps.worktreeService) {
       throw new Error("Workspace client not initialized");
     }
@@ -417,7 +467,8 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     const rootPath = project.path;
 
     // Get all states to find the main worktree and determine base branch
-    const states = await deps.worktreeService.getAllStatesAsync();
+    const senderWindowCreate = getWindowForWebContents(event.sender);
+    const states = await deps.worktreeService.getAllStatesAsync(senderWindowCreate?.id);
     const mainWorktree = states.find((wt) => wt.isMainWorktree);
 
     // Use provided baseBranch, or default to main worktree's branch, or "main"
@@ -624,7 +675,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_BY_TASK_ID));
 
   const handleWorktreeCleanupTask = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     taskId: string,
     options?: CleanupTaskOptions
   ): Promise<void> => {
@@ -664,9 +715,10 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     const errors: string[] = [];
 
     // Fetch all worktree states once for efficient main-worktree checking
+    const senderWindowCleanup = getWindowForWebContents(event.sender);
     let allStates: Awaited<ReturnType<typeof deps.worktreeService.getAllStatesAsync>> = [];
     try {
-      allStates = await deps.worktreeService.getAllStatesAsync();
+      allStates = await deps.worktreeService.getAllStatesAsync(senderWindowCleanup?.id);
     } catch (error) {
       logDebug("Could not fetch worktree states for cleanup pre-check", {
         error: error instanceof Error ? error.message : String(error),

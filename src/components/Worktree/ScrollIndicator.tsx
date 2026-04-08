@@ -36,7 +36,7 @@ export function ScrollIndicator({ direction, count, onClick }: ScrollIndicatorPr
           "bg-canopy-bg/90 border border-canopy-border/40 text-canopy-text shadow-[var(--theme-shadow-floating)]",
           "text-xs font-medium cursor-pointer",
           "hover:bg-canopy-bg hover:border-canopy-border/60",
-          "transition-all duration-150",
+          "transition duration-150",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1",
           isVisible

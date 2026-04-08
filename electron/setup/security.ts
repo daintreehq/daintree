@@ -163,7 +163,7 @@ function logPermissionDenial(
   );
 }
 
-// Electron 40 permission types (from electron.d.ts) — kept as reference for auditing.
+// Electron 41 permission types (from electron.d.ts) — kept as reference for auditing.
 // setPermissionRequestHandler: clipboard-read, clipboard-sanitized-write, display-capture,
 //   fullscreen, geolocation, idle-detection, media, mediaKeySystem, midi, midiSysex,
 //   notifications, pointerLock, keyboardLock, openExternal, speaker-selection,
@@ -230,7 +230,14 @@ export function setupPermissionLockdown(): void {
     PORTAL_SESSION_PERMISSIONS
   );
 
-  // Catch all dynamically created sessions (e.g., persist:dev-preview-*)
+  // Shared project session — all project views share this single partition for V8 code cache reuse
+  lockdownTrustedPermissions(
+    session.fromPartition("persist:canopy-app"),
+    "canopy-app",
+    TRUSTED_SESSION_PERMISSIONS
+  );
+
+  // Catch dynamically created sessions (e.g., persist:dev-preview-*)
   // Guard against duplicate listeners when createWindow is called multiple times (macOS dock)
   if (!permissionLockdownInitialized) {
     permissionLockdownInitialized = true;

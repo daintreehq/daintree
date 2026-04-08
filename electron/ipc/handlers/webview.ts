@@ -1,7 +1,9 @@
-import { ipcMain, webContents } from "electron";
+import { BrowserWindow, ipcMain, webContents } from "electron";
+import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import { CHANNELS } from "../channels.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
-import { sendToRenderer } from "../utils.js";
+import { broadcastToRenderer, sendToRenderer } from "../utils.js";
+import { startOAuthLoopback } from "../../services/OAuthLoopbackService.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   CdpRemoteArg,
@@ -17,6 +19,7 @@ interface CdpSession {
   navigationGeneration: number;
   groupDepthByPane: Map<string, number>;
   objectIdsByPane: Map<string, Set<string>>;
+  ownerWindow: BrowserWindow | null;
   messageListener: ((event: Electron.Event, method: string, params: unknown) => void) | null;
   detachListener: ((event: Electron.Event, reason: string) => void) | null;
 }
@@ -33,6 +36,7 @@ function getOrCreateSession(wcId: number): CdpSession {
       navigationGeneration: 0,
       groupDepthByPane: new Map(),
       objectIdsByPane: new Map(),
+      ownerWindow: null,
       messageListener: null,
       detachListener: null,
     };
@@ -211,7 +215,7 @@ function cleanupSession(wcId: number): void {
   sessions.delete(wcId);
 }
 
-export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
+export function registerWebviewHandlers(_deps: HandlerDependencies): () => void {
   const handleSetLifecycleState = async (
     _event: Electron.IpcMainInvokeEvent,
     webContentsId: unknown,
@@ -263,6 +267,11 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
     session.paneIds.add(paneId);
     session.groupDepthByPane.set(paneId, 0);
 
+    if (session.ownerWindow === null) {
+      const hostWc = wc.hostWebContents;
+      session.ownerWindow = hostWc ? getWindowForWebContents(hostWc) : null;
+    }
+
     if (!session.objectIdsByPane.has(paneId)) {
       session.objectIdsByPane.set(paneId, new Set());
     }
@@ -286,10 +295,19 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
             for (const pid of session.paneIds) {
               session.groupDepthByPane.set(pid, 0);
               session.objectIdsByPane.get(pid)?.clear();
-              sendToRenderer(deps.mainWindow, CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, {
+              const payload = {
                 paneId: pid,
                 navigationGeneration: session.navigationGeneration,
-              });
+              };
+              if (session.ownerWindow && !session.ownerWindow.isDestroyed()) {
+                sendToRenderer(
+                  session.ownerWindow,
+                  CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED,
+                  payload
+                );
+              } else {
+                broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, payload);
+              }
             }
           }
         };
@@ -307,10 +325,19 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
           for (const pid of session.paneIds) {
             session.groupDepthByPane.set(pid, 0);
             session.objectIdsByPane.get(pid)?.clear();
-            sendToRenderer(deps.mainWindow, CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, {
+            const payload = {
               paneId: pid,
               navigationGeneration: session.navigationGeneration,
-            });
+            };
+            if (session.ownerWindow && !session.ownerWindow.isDestroyed()) {
+              sendToRenderer(
+                session.ownerWindow,
+                CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED,
+                payload
+              );
+            } else {
+              broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, payload);
+            }
           }
         };
         session.detachListener = detachListener;
@@ -372,7 +399,11 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
         navigationGeneration: session.navigationGeneration,
       };
 
-      sendToRenderer(deps.mainWindow, CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
+      if (session.ownerWindow && !session.ownerWindow.isDestroyed()) {
+        sendToRenderer(session.ownerWindow, CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
+      } else {
+        broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
+      }
 
       // Adjust depth AFTER emitting the group header row
       if (cdpType === "startGroup" || cdpType === "startGroupCollapsed") {
@@ -524,6 +555,243 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
     getWebviewDialogService().resolveDialog(dialogId, confirmed, response);
   };
 
+  const handleOAuthLoopback = async (
+    _event: Electron.IpcMainInvokeEvent,
+    authUrl: unknown,
+    panelId: unknown,
+    webContentsId: unknown,
+    providedSessionStorageSnapshot: unknown
+  ): Promise<{ success: boolean; error?: string } | null> => {
+    if (
+      typeof authUrl !== "string" ||
+      typeof panelId !== "string" ||
+      typeof webContentsId !== "number" ||
+      (providedSessionStorageSnapshot !== undefined &&
+        (!Array.isArray(providedSessionStorageSnapshot) ||
+          providedSessionStorageSnapshot.some(
+            (entry) =>
+              !Array.isArray(entry) ||
+              entry.length !== 2 ||
+              typeof entry[0] !== "string" ||
+              typeof entry[1] !== "string"
+          )))
+    ) {
+      throw new Error(
+        "Invalid arguments: authUrl must be string, panelId must be string, webContentsId must be number, sessionStorageSnapshot must be string tuples"
+      );
+    }
+
+    // Validate webContentsId is registered to this panelId
+    const registeredPanel = getWebviewDialogService().getPanelId(webContentsId);
+    if (registeredPanel !== panelId) {
+      throw new Error("WebContents ID does not match the registered panel");
+    }
+
+    // Step 1: Get the webview's webContents for session capture + CDP + navigation
+    const wc = webContents.fromId(webContentsId);
+    if (!wc || wc.isDestroyed()) {
+      console.error("[OAuthLoopback] WebContents not found or destroyed:", webContentsId);
+      return { success: false, error: "WebView no longer available" };
+    }
+
+    let sessionStorageSnapshot =
+      (providedSessionStorageSnapshot as Array<[string, string]> | undefined) ??
+      (await getWebviewDialogService().consumeOAuthSessionStorage(panelId));
+    if (sessionStorageSnapshot.length === 0) {
+      try {
+        const snapshot = await wc.executeJavaScript(
+          `(() => {
+            try {
+              return Object.entries(sessionStorage).filter(
+                (entry) =>
+                  Array.isArray(entry) &&
+                  entry.length === 2 &&
+                  typeof entry[0] === "string" &&
+                  typeof entry[1] === "string"
+              );
+            } catch {
+              return [];
+            }
+          })()`
+        );
+        if (Array.isArray(snapshot)) {
+          sessionStorageSnapshot = snapshot.filter(
+            (entry): entry is [string, string] =>
+              Array.isArray(entry) &&
+              entry.length === 2 &&
+              typeof entry[0] === "string" &&
+              typeof entry[1] === "string"
+          );
+        }
+      } catch (error) {
+        console.warn("[OAuthLoopback] Failed to capture sessionStorage snapshot:", error);
+      }
+    }
+
+    // Step 2: Start loopback server, open system browser, wait for callback
+    const loopbackResult = await startOAuthLoopback(authUrl, panelId);
+    if (!loopbackResult) return null;
+
+    const { callbackUrl, loopbackRedirectUri, originalRedirectUri } = loopbackResult;
+
+    // Step 3: Attach CDP Fetch interceptor BEFORE navigating.
+    // This intercepts the token exchange POST and rewrites redirect_uri
+    // so it matches what was sent in the authorization request (the loopback URI).
+    const INTERCEPT_TIMEOUT_MS = 30_000;
+    let fetchEnabled = false;
+    let restoreScriptIdentifier: string | null = null;
+    let interceptorListener:
+      | ((event: Electron.Event, method: string, params: unknown) => void)
+      | null = null;
+
+    try {
+      if (!wc.debugger.isAttached()) {
+        wc.debugger.attach("1.3");
+      }
+
+      await wc.debugger.sendCommand("Page.enable");
+
+      // Enable Fetch interception for Fetch/XHR only — token endpoints always use
+      // fetch() or XMLHttpRequest, so we skip Document/Script/Image/Font interception
+      await wc.debugger.sendCommand("Fetch.enable", {
+        patterns: [
+          { urlPattern: "*", resourceType: "Fetch", requestStage: "Request" },
+          { urlPattern: "*", resourceType: "XHR", requestStage: "Request" },
+        ],
+      });
+      fetchEnabled = true;
+
+      if (sessionStorageSnapshot.length > 0) {
+        const callbackOrigin = new URL(callbackUrl).origin;
+        const restoreScript = `
+          (() => {
+            if (window.__canopyOAuthRestored) return;
+            window.__canopyOAuthRestored = true;
+            const expectedOrigin = ${JSON.stringify(callbackOrigin)};
+            const entries = ${JSON.stringify(sessionStorageSnapshot)};
+            try {
+              if (window.location.origin !== expectedOrigin) return;
+              for (const [key, value] of entries) {
+                if (typeof key === "string" && typeof value === "string") {
+                  sessionStorage.setItem(key, value);
+                }
+              }
+            } catch {
+              // Ignore restoration failures
+            }
+          })();
+        `;
+
+        const result = (await wc.debugger.sendCommand("Page.addScriptToEvaluateOnNewDocument", {
+          source: restoreScript,
+        })) as { identifier?: string };
+        restoreScriptIdentifier = result.identifier ?? null;
+      }
+
+      // Set up the interceptor as a promise that resolves on first match or timeout
+      await new Promise<void>((resolveIntercept) => {
+        let interceptDone = false;
+        const finishIntercept = () => {
+          if (interceptDone) return;
+          interceptDone = true;
+          resolveIntercept();
+        };
+
+        const timeout = setTimeout(() => {
+          console.log(
+            "[OAuthLoopback] CDP intercept timeout — token exchange may not need rewriting"
+          );
+          finishIntercept();
+        }, INTERCEPT_TIMEOUT_MS);
+
+        interceptorListener = (_event: Electron.Event, method: string, params: unknown) => {
+          if (method !== "Fetch.requestPaused") return;
+
+          const p = params as {
+            requestId: string;
+            request: { url: string; method: string; postData?: string };
+          };
+
+          // Only intercept POST requests that contain grant_type=authorization_code
+          const isTokenExchange =
+            p.request.method === "POST" &&
+            p.request.postData?.includes("grant_type=authorization_code");
+
+          if (!isTokenExchange) {
+            // Not the token exchange — let it through
+            wc.debugger
+              .sendCommand("Fetch.continueRequest", { requestId: p.requestId })
+              .catch(() => {});
+            return;
+          }
+
+          // Rewrite redirect_uri in the POST body
+          const originalBody = p.request.postData ?? "";
+          const encodedOriginal = encodeURIComponent(originalRedirectUri);
+          const encodedLoopback = encodeURIComponent(loopbackRedirectUri);
+          const rewrittenBody = originalBody.replace(
+            `redirect_uri=${encodedOriginal}`,
+            `redirect_uri=${encodedLoopback}`
+          );
+
+          const didRewrite = rewrittenBody !== originalBody;
+          console.log(
+            `[OAuthLoopback] CDP intercepted token exchange POST to ${p.request.url}. ` +
+              `Redirect_uri rewrite: ${didRewrite ? "applied" : "not needed"}`
+          );
+
+          // Continue the request with the modified body (base64-encoded)
+          wc.debugger
+            .sendCommand("Fetch.continueRequest", {
+              requestId: p.requestId,
+              postData: Buffer.from(rewrittenBody).toString("base64"),
+            })
+            .catch((err) => {
+              console.error("[OAuthLoopback] CDP continueRequest failed:", err);
+            });
+
+          clearTimeout(timeout);
+          finishIntercept();
+        };
+
+        wc.debugger.on("message", interceptorListener);
+
+        // Step 4: Navigate the webview to the callback URL
+        // The page will load, the app's JS will fire the token exchange fetch,
+        // and our CDP listener will intercept and rewrite it.
+        wc.loadURL(callbackUrl).catch((err) => {
+          console.error("[OAuthLoopback] Failed to navigate webview:", err);
+          clearTimeout(timeout);
+          finishIntercept();
+        });
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[OAuthLoopback] CDP setup failed:", msg);
+      // Still try to navigate even without interception — might work for providers
+      // that don't enforce strict redirect_uri matching at token exchange
+      wc.loadURL(callbackUrl).catch(() => {});
+      return { success: false, error: `CDP interception failed: ${msg}` };
+    } finally {
+      // Clean up CDP Fetch — remove listener and disable
+      if (interceptorListener) {
+        wc.debugger.removeListener("message", interceptorListener);
+      }
+      if (restoreScriptIdentifier && !wc.isDestroyed()) {
+        wc.debugger
+          .sendCommand("Page.removeScriptToEvaluateOnNewDocument", {
+            identifier: restoreScriptIdentifier,
+          })
+          .catch(() => {});
+      }
+      if (fetchEnabled && !wc.isDestroyed()) {
+        wc.debugger.sendCommand("Fetch.disable").catch(() => {});
+      }
+    }
+
+    return { success: true };
+  };
+
   ipcMain.handle(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, handleSetLifecycleState);
   ipcMain.handle(CHANNELS.WEBVIEW_REGISTER_PANEL, handleRegisterPanel);
   ipcMain.handle(CHANNELS.WEBVIEW_DIALOG_RESPONSE, handleDialogResponse);
@@ -531,6 +799,7 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, handleStopConsoleCapture);
   ipcMain.handle(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, handleClearConsoleCapture);
   ipcMain.handle(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, handleGetConsoleProperties);
+  ipcMain.handle(CHANNELS.WEBVIEW_OAUTH_LOOPBACK, handleOAuthLoopback);
 
   return () => {
     ipcMain.removeHandler(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE);
@@ -540,6 +809,7 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
     ipcMain.removeHandler(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE);
     ipcMain.removeHandler(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE);
     ipcMain.removeHandler(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES);
+    ipcMain.removeHandler(CHANNELS.WEBVIEW_OAUTH_LOOPBACK);
 
     // Clean up all sessions
     for (const wcId of sessions.keys()) {

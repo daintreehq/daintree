@@ -18,7 +18,8 @@ interface IpcSampleMeta {
   errored?: boolean;
 }
 
-const APP_BOOT_T0 = performance.now();
+export const APP_BOOT_T0 = performance.now();
+export const mainTimeOrigin = performance.timeOrigin;
 const SHOULD_CAPTURE = process.env.CANOPY_PERF_CAPTURE === "1";
 const METRICS_FILE = process.env.CANOPY_PERF_METRICS_FILE
   ? path.resolve(process.cwd(), process.env.CANOPY_PERF_METRICS_FILE)
@@ -169,3 +170,13 @@ export function startProcessMemoryMonitor(intervalMs = 15000): () => void {
     clearInterval(timer);
   };
 }
+
+export function rebaseRendererElapsedMs(
+  rendererTimeOrigin: number,
+  rendererT0: number,
+  elapsedMs: number
+): number {
+  return rendererTimeOrigin + rendererT0 + elapsedMs - (mainTimeOrigin + APP_BOOT_T0);
+}
+
+export { appendPayload };

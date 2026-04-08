@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { escapeShellArg } from "@shared/utils/shellEscape";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 const appClientMock = {
   hydrate: vi.fn(),
@@ -19,6 +18,8 @@ const worktreeClientMock = {
 const projectClientMock = {
   getTabGroups: vi.fn(),
   getTerminalSizes: vi.fn(),
+  getDraftInputs: vi.fn(),
+  setDraftInputs: vi.fn(),
 };
 
 const terminalConfigClientMock = {
@@ -79,7 +80,7 @@ vi.mock("@/store", () => ({
   useTerminalInputStore: {
     getState: () => terminalInputState,
   },
-  useTerminalStore: {
+  usePanelStore: {
     getState: () => terminalStoreState,
   },
 }));
@@ -100,6 +101,7 @@ vi.mock("@/services/KeybindingService", () => ({
 
 const initializeBackendTierMock = vi.fn();
 const setGPUHardwareAvailableMock = vi.fn();
+const setTargetSizeMock = vi.fn();
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
@@ -108,6 +110,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     initializeBackendTier: initializeBackendTierMock,
     get: getManagedTerminalMock,
     setGPUHardwareAvailable: setGPUHardwareAvailableMock,
+    setTargetSize: setTargetSizeMock,
   },
 }));
 
@@ -122,14 +125,50 @@ vi.mock("@/lib/notify", () => ({
 
 const { hydrateAppState } = await import("../stateHydration");
 
+function makeMockManagedTerminal(id: string) {
+  const hostElement = document.createElement("div");
+  return {
+    id,
+    scrollbackRestoreState: "none" as "none" | "pending" | "in-progress" | "done",
+    scrollbackRestoreDisposable: undefined as { dispose: () => void } | undefined,
+    hostElement,
+    listeners: [] as Array<() => void>,
+  };
+}
+
 describe("hydrateAppState", () => {
   const project = { id: "project-1", path: "/project" };
   const terminalConfig = { scrollbackLines: 1000, performanceMode: false };
   const agentSettings = { agents: {} };
+  let postTaskCallbacks: Array<() => void>;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    getManagedTerminalMock.mockReturnValue(null);
+    postTaskCallbacks = [];
+
+    vi.stubGlobal("scheduler", {
+      postTask: vi.fn((cb: () => unknown) => {
+        return new Promise<unknown>((resolve, reject) => {
+          postTaskCallbacks.push(() => {
+            try {
+              resolve(cb());
+            } catch (e) {
+              reject(e);
+            }
+          });
+        });
+      }),
+    });
+
+    // By default, return a cached mock managed terminal for any ID (enables scrollback scheduling).
+    // Caching ensures identity checks (current !== managed) pass correctly.
+    const managedCache = new Map<string, ReturnType<typeof makeMockManagedTerminal>>();
+    getManagedTerminalMock.mockImplementation((id: string) => {
+      if (!managedCache.has(id)) {
+        managedCache.set(id, makeMockManagedTerminal(id));
+      }
+      return managedCache.get(id);
+    });
     isTerminalWarmInProjectSwitchCacheMock.mockReturnValue(false);
     terminalClientMock.getForProject.mockResolvedValue([]);
     terminalClientMock.reconnect.mockResolvedValue({ exists: false });
@@ -139,7 +178,21 @@ describe("hydrateAppState", () => {
     worktreeClientMock.getAll.mockResolvedValue([]);
     projectClientMock.getTabGroups.mockResolvedValue([]);
     projectClientMock.getTerminalSizes.mockResolvedValue({});
+    projectClientMock.getDraftInputs.mockResolvedValue({});
   });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    postTaskCallbacks = [];
+  });
+
+  const flushPostTasks = async () => {
+    const callbacks = [...postTaskCallbacks];
+    postTaskCallbacks = [];
+    for (const cb of callbacks) cb();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+  };
 
   it("rehydrates dev-preview panels without backend terminals", async () => {
     appClientMock.hydrate.mockResolvedValue({
@@ -167,20 +220,20 @@ describe("hydrateAppState", () => {
       agentSettings,
     });
 
-    const addTerminal = vi.fn().mockResolvedValue("dev-preview-1");
+    const addPanel = vi.fn().mockResolvedValue("dev-preview-1");
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(1);
-    expect(addTerminal).toHaveBeenCalledWith(
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "dev-preview",
         requestedId: "dev-preview-1",
@@ -191,11 +244,11 @@ describe("hydrateAppState", () => {
       })
     );
 
-    const addTerminalArg = addTerminal.mock.calls[0][0] as Record<string, unknown>;
-    expect(addTerminalArg.devServerStatus).toBeUndefined();
-    expect(addTerminalArg.devServerUrl).toBeUndefined();
-    expect(addTerminalArg.devServerError).toBeUndefined();
-    expect(addTerminalArg.devServerTerminalId).toBeUndefined();
+    const addPanelArg = addPanel.mock.calls[0][0] as Record<string, unknown>;
+    expect(addPanelArg.devServerStatus).toBeUndefined();
+    expect(addPanelArg.devServerUrl).toBeUndefined();
+    expect(addPanelArg.devServerError).toBeUndefined();
+    expect(addPanelArg.devServerTerminalId).toBeUndefined();
   });
 
   it("rehydrates multiple dev-preview panels in one worktree without leaking runtime state", async () => {
@@ -240,20 +293,20 @@ describe("hydrateAppState", () => {
       agentSettings,
     });
 
-    const addTerminal = vi.fn().mockResolvedValue("panel-id");
+    const addPanel = vi.fn().mockResolvedValue("panel-id");
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(2);
-    expect(addTerminal).toHaveBeenNthCalledWith(
+    expect(addPanel).toHaveBeenCalledTimes(2);
+    expect(addPanel).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         kind: "dev-preview",
@@ -264,7 +317,7 @@ describe("hydrateAppState", () => {
         devPreviewConsoleOpen: true,
       })
     );
-    expect(addTerminal).toHaveBeenNthCalledWith(
+    expect(addPanel).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         kind: "dev-preview",
@@ -276,8 +329,8 @@ describe("hydrateAppState", () => {
       })
     );
 
-    const firstAddArg = addTerminal.mock.calls[0][0] as Record<string, unknown>;
-    const secondAddArg = addTerminal.mock.calls[1][0] as Record<string, unknown>;
+    const firstAddArg = addPanel.mock.calls[0][0] as Record<string, unknown>;
+    const secondAddArg = addPanel.mock.calls[1][0] as Record<string, unknown>;
 
     expect(firstAddArg.devServerStatus).toBeUndefined();
     expect(firstAddArg.devServerUrl).toBeUndefined();
@@ -321,20 +374,20 @@ describe("hydrateAppState", () => {
       agentSettings,
     });
 
-    const addTerminal = vi.fn().mockResolvedValue("panel-id");
+    const addPanel = vi.fn().mockResolvedValue("panel-id");
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(2);
-    expect(addTerminal).toHaveBeenNthCalledWith(
+    expect(addPanel).toHaveBeenCalledTimes(2);
+    expect(addPanel).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         kind: "browser",
@@ -342,7 +395,7 @@ describe("hydrateAppState", () => {
         browserUrl: "http://localhost:5173",
       })
     );
-    expect(addTerminal).toHaveBeenNthCalledWith(
+    expect(addPanel).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         kind: "notes",
@@ -375,20 +428,20 @@ describe("hydrateAppState", () => {
       agentSettings,
     });
 
-    const addTerminal = vi.fn().mockResolvedValue("terminal-1");
+    const addPanel = vi.fn().mockResolvedValue("terminal-1");
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(1);
-    expect(addTerminal).toHaveBeenCalledWith(
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "terminal",
         requestedId: "terminal-1",
@@ -398,10 +451,9 @@ describe("hydrateAppState", () => {
     );
   });
 
-  it("silently respawns agent panels when not found in backend", async () => {
-    // When an agent terminal can't be reconnected (not found in backend),
-    // we silently respawn it with a fresh session instead of showing errors.
-    // The command is regenerated from current agent settings (no old prompt).
+  it("skips phantom agent panel during project switch when not found in backend", async () => {
+    // During a live project switch (switchId defined), an agent terminal that
+    // can't be reconnected should be silently dropped — not respawned as a phantom.
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -429,35 +481,72 @@ describe("hydrateAppState", () => {
       },
     });
 
-    const addTerminal = vi.fn().mockResolvedValue("agent-1");
+    const addPanel = vi.fn().mockResolvedValue("agent-1");
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
 
-    await hydrateAppState({
-      addTerminal,
-      setActiveWorktree,
-      loadRecipes,
-      openDiagnosticsDock,
+    await hydrateAppState(
+      {
+        addPanel,
+        setActiveWorktree,
+        loadRecipes,
+        openDiagnosticsDock,
+      },
+      "switch-abc"
+    );
+
+    // Agent terminal not found during project switch → should NOT be respawned
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("respawns agent panel on cold start when reconnect returns not_found", async () => {
+    // On cold app restart (no switchId), not_found means the PTY process was
+    // killed on quit — the agent panel should be respawned.
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "agent-1",
+            kind: "agent",
+            type: "claude",
+            agentId: "claude",
+            title: "Claude",
+            cwd: "/project",
+            location: "grid",
+            command: "claude -p 'Old prompt'",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings: {
+        agents: {
+          claude: {
+            customFlags: "--model sonnet-4",
+          },
+        },
+      },
     });
 
-    // Agent terminals respawn with requestedId (fresh session)
-    expect(addTerminal).toHaveBeenCalledTimes(1);
-    const callArgs = addTerminal.mock.calls[0][0];
+    const addPanel = vi.fn().mockResolvedValue("agent-1");
 
-    // Assert requestedId is used (respawn mode)
-    expect(callArgs).toHaveProperty("requestedId", "agent-1");
-    // Assert existingId is NOT used (not reconnecting)
-    expect(callArgs).not.toHaveProperty("existingId");
+    await hydrateAppState({
+      addPanel,
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
 
-    // Verify command is regenerated from settings (doesn't include old prompt)
-    // Non-flag values are shell-escaped by generateAgentCommand (platform-dependent quoting)
-    expect(callArgs.command).toBe(`claude --model ${escapeShellArg("sonnet-4")}`);
-    expect(callArgs.command).not.toContain("-p");
-    expect(callArgs.command).not.toContain("Old prompt");
-
-    // Verify NO DISCONNECTED error was set (silent respawn)
-    expect(setSpawnErrorMock).not.toHaveBeenCalled();
+    // Cold start: agent panel should be respawned
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    expect(addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "agent",
+        requestedId: "agent-1",
+      })
+    );
   });
 
   it("reconnects via fallback when getForProject misses the terminal but reconnect finds it", async () => {
@@ -506,13 +595,13 @@ describe("hydrateAppState", () => {
       hasPty: true,
     });
 
-    const addTerminal = vi.fn().mockResolvedValue("agent-1");
+    const addPanel = vi.fn().mockResolvedValue("agent-1");
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
@@ -522,8 +611,8 @@ describe("hydrateAppState", () => {
     expect(terminalClientMock.reconnect).toHaveBeenCalledWith("agent-1");
 
     // Should reconnect with existingId, not respawn with requestedId
-    expect(addTerminal).toHaveBeenCalledTimes(1);
-    expect(addTerminal).toHaveBeenCalledWith(
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "agent",
         agentId: "claude",
@@ -534,7 +623,7 @@ describe("hydrateAppState", () => {
     );
 
     // Should NOT have requestedId (that's the respawn path)
-    expect(addTerminal).not.toHaveBeenCalledWith(
+    expect(addPanel).not.toHaveBeenCalledWith(
       expect.objectContaining({
         requestedId: "agent-1",
       })
@@ -543,22 +632,12 @@ describe("hydrateAppState", () => {
     // Should initialize backend tier from reconnect result
     expect(initializeBackendTierMock).toHaveBeenCalledWith("agent-1", "background");
 
-    // Should restore terminal content
+    // Scrollback restore is deferred to background — flush to verify
+    await flushPostTasks();
     expect(fetchAndRestoreMock).toHaveBeenCalledWith("agent-1");
   });
 
-  it("restores backend terminal snapshots concurrently during hydration", async () => {
-    let releaseFirstRestore!: () => void;
-    const firstRestore = new Promise<void>((resolve) => {
-      releaseFirstRestore = resolve;
-    });
-    fetchAndRestoreMock.mockImplementation((terminalId: string) => {
-      if (terminalId === "terminal-1") {
-        return firstRestore;
-      }
-      return Promise.resolve();
-    });
-
+  it("schedules scrollback restore as background tasks, not blocking hydration", async () => {
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -603,113 +682,94 @@ describe("hydrateAppState", () => {
       },
     ]);
 
-    const addTerminal = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
-      return options.existingId ?? options.requestedId ?? "terminal-id";
-    });
-    const setActiveWorktree = vi.fn();
-    const loadRecipes = vi.fn().mockResolvedValue(undefined);
-    const openDiagnosticsDock = vi.fn();
-
-    const hydrationPromise = hydrateAppState({
-      addTerminal,
-      setActiveWorktree,
-      loadRecipes,
-      openDiagnosticsDock,
-    });
-
-    for (let i = 0; i < 30; i += 1) {
-      if (fetchAndRestoreMock.mock.calls.length >= 2) {
-        break;
-      }
-      await Promise.resolve();
-    }
-
-    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-1");
-    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-2");
-
-    releaseFirstRestore();
-    await hydrationPromise;
-  });
-
-  it("uses batch serialized state restore when available", async () => {
-    terminalClientMock.getSerializedStates.mockResolvedValue({
-      "terminal-1": "serialized-1",
-      "terminal-2": "serialized-2",
-    });
-
-    appClientMock.hydrate.mockResolvedValue({
-      appState: {
-        terminals: [
-          {
-            id: "terminal-1",
-            kind: "terminal",
-            title: "Terminal 1",
-            cwd: "/project",
-            location: "grid",
-          },
-          {
-            id: "terminal-2",
-            kind: "terminal",
-            title: "Terminal 2",
-            cwd: "/project",
-            location: "grid",
-          },
-        ],
-        sidebarWidth: 350,
-      },
-      terminalConfig,
-      project,
-      agentSettings,
-    });
-
-    terminalClientMock.getForProject.mockResolvedValue([
-      {
-        id: "terminal-1",
-        hasPty: true,
-        cwd: "/project",
-        kind: "terminal",
-        title: "Terminal 1",
-      },
-      {
-        id: "terminal-2",
-        hasPty: true,
-        cwd: "/project",
-        kind: "terminal",
-        title: "Terminal 2",
-      },
-    ]);
-
-    const addTerminal = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
+    const addPanel = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
       return options.existingId ?? options.requestedId ?? "terminal-id";
     });
 
+    // Hydration completes without waiting for scrollback restore
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree: vi.fn(),
       loadRecipes: vi.fn().mockResolvedValue(undefined),
       openDiagnosticsDock: vi.fn(),
     });
 
-    expect(terminalClientMock.getSerializedStates).toHaveBeenCalledWith([
-      "terminal-1",
-      "terminal-2",
-    ]);
-    expect(restoreFetchedStateMock).toHaveBeenCalledWith("terminal-1", "serialized-1");
-    expect(restoreFetchedStateMock).toHaveBeenCalledWith("terminal-2", "serialized-2");
+    // fetchAndRestore NOT called synchronously during hydration
     expect(fetchAndRestoreMock).not.toHaveBeenCalled();
+
+    // Flush background scheduler tasks
+    await flushPostTasks();
+
+    // Now both terminals should have been restored
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-1");
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-2");
   });
 
-  it("prefetches worktrees and tab groups while snapshot restoration is in progress", async () => {
-    let releaseRestore!: () => void;
-    fetchAndRestoreMock.mockImplementation((terminalId: string) => {
-      if (terminalId === "terminal-1") {
-        return new Promise<void>((resolve) => {
-          releaseRestore = resolve;
-        });
-      }
-      return Promise.resolve();
+  it("does not call batch getSerializedStates — uses per-terminal fetchAndRestore", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "terminal-1",
+            kind: "terminal",
+            title: "Terminal 1",
+            cwd: "/project",
+            location: "grid",
+          },
+          {
+            id: "terminal-2",
+            kind: "terminal",
+            title: "Terminal 2",
+            cwd: "/project",
+            location: "grid",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
     });
 
+    terminalClientMock.getForProject.mockResolvedValue([
+      {
+        id: "terminal-1",
+        hasPty: true,
+        cwd: "/project",
+        kind: "terminal",
+        title: "Terminal 1",
+      },
+      {
+        id: "terminal-2",
+        hasPty: true,
+        cwd: "/project",
+        kind: "terminal",
+        title: "Terminal 2",
+      },
+    ]);
+
+    const addPanel = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
+      return options.existingId ?? options.requestedId ?? "terminal-id";
+    });
+
+    await hydrateAppState({
+      addPanel,
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    // Batch endpoint is never called — scrollback restore uses per-terminal fetch
+    expect(terminalClientMock.getSerializedStates).not.toHaveBeenCalled();
+    expect(restoreFetchedStateMock).not.toHaveBeenCalled();
+
+    // Flush background tasks to trigger per-terminal restore
+    await flushPostTasks();
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-1");
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-2");
+  });
+
+  it("prefetches worktrees and tab groups during hydration", async () => {
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -741,124 +801,128 @@ describe("hydrateAppState", () => {
       },
     ]);
 
-    const addTerminal = vi.fn(async (options: { existingId?: string }) => {
+    const addPanel = vi.fn(async (options: { existingId?: string }) => {
       return options.existingId ?? "terminal-id";
     });
 
-    const hydrationPromise = hydrateAppState({
-      addTerminal,
+    await hydrateAppState({
+      addPanel,
       setActiveWorktree: vi.fn(),
       loadRecipes: vi.fn().mockResolvedValue(undefined),
       openDiagnosticsDock: vi.fn(),
       hydrateTabGroups: vi.fn(),
     });
 
-    for (let i = 0; i < 30; i += 1) {
-      if (fetchAndRestoreMock.mock.calls.length > 0) {
-        break;
-      }
-      await Promise.resolve();
-    }
-
     expect(worktreeClientMock.getAll).toHaveBeenCalledTimes(1);
     expect(projectClientMock.getTabGroups).toHaveBeenCalledWith("project-1");
-
-    releaseRestore();
-    await hydrationPromise;
   });
 
-  it("defers non-critical snapshot restoration during project-switch hydration", async () => {
-    vi.useFakeTimers();
-    try {
-      appClientMock.hydrate.mockResolvedValue({
-        appState: {
-          terminals: [
-            {
-              id: "terminal-active",
-              kind: "terminal",
-              title: "Active",
-              cwd: "/project",
-              location: "grid",
-              worktreeId: "wt-active",
-            },
-            {
-              id: "terminal-background",
-              kind: "terminal",
-              title: "Background",
-              cwd: "/project",
-              location: "grid",
-              worktreeId: "wt-background",
-            },
-            {
-              id: "terminal-dock",
-              kind: "terminal",
-              title: "Dock",
-              cwd: "/project",
-              location: "dock",
-              worktreeId: "wt-background",
-            },
-          ],
-          activeWorktreeId: "wt-active",
-          sidebarWidth: 350,
-        },
-        terminalConfig,
-        project,
-        agentSettings,
-      });
+  it("defers non-critical snapshot restoration to lazy scroll during project-switch", async () => {
+    // Track managed terminals per ID so we can simulate scroll events
+    const managedTerminals = new Map<string, ReturnType<typeof makeMockManagedTerminal>>();
+    getManagedTerminalMock.mockImplementation((id: string) => {
+      if (!managedTerminals.has(id)) {
+        managedTerminals.set(id, makeMockManagedTerminal(id));
+      }
+      return managedTerminals.get(id);
+    });
 
-      terminalClientMock.getForProject.mockResolvedValue([
-        {
-          id: "terminal-active",
-          hasPty: true,
-          cwd: "/project",
-          kind: "terminal",
-          title: "Active",
-          worktreeId: "wt-active",
-        },
-        {
-          id: "terminal-background",
-          hasPty: true,
-          cwd: "/project",
-          kind: "terminal",
-          title: "Background",
-          worktreeId: "wt-background",
-        },
-        {
-          id: "terminal-dock",
-          hasPty: true,
-          cwd: "/project",
-          kind: "terminal",
-          title: "Dock",
-          worktreeId: "wt-background",
-        },
-      ]);
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "terminal-active",
+            kind: "terminal",
+            title: "Active",
+            cwd: "/project",
+            location: "grid",
+            worktreeId: "wt-active",
+          },
+          {
+            id: "terminal-background",
+            kind: "terminal",
+            title: "Background",
+            cwd: "/project",
+            location: "grid",
+            worktreeId: "wt-background",
+          },
+          {
+            id: "terminal-dock",
+            kind: "terminal",
+            title: "Dock",
+            cwd: "/project",
+            location: "dock",
+            worktreeId: "wt-background",
+          },
+        ],
+        activeWorktreeId: "wt-active",
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
 
-      const addTerminal = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
-        return options.existingId ?? options.requestedId ?? "terminal-id";
-      });
+    terminalClientMock.getForProject.mockResolvedValue([
+      {
+        id: "terminal-active",
+        hasPty: true,
+        cwd: "/project",
+        kind: "terminal",
+        title: "Active",
+        worktreeId: "wt-active",
+      },
+      {
+        id: "terminal-background",
+        hasPty: true,
+        cwd: "/project",
+        kind: "terminal",
+        title: "Background",
+        worktreeId: "wt-background",
+      },
+      {
+        id: "terminal-dock",
+        hasPty: true,
+        cwd: "/project",
+        kind: "terminal",
+        title: "Dock",
+        worktreeId: "wt-background",
+      },
+    ]);
 
-      await hydrateAppState(
-        {
-          addTerminal,
-          setActiveWorktree: vi.fn(),
-          loadRecipes: vi.fn().mockResolvedValue(undefined),
-          openDiagnosticsDock: vi.fn(),
-        },
-        "switch-1",
-        () => true
-      );
+    const addPanel = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
+      return options.existingId ?? options.requestedId ?? "terminal-id";
+    });
 
-      expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-active");
-      expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-dock");
-      expect(fetchAndRestoreMock).not.toHaveBeenCalledWith("terminal-background");
+    await hydrateAppState(
+      {
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      },
+      "switch-1",
+      () => true
+    );
 
-      await vi.advanceTimersByTimeAsync(40);
-      await Promise.resolve();
+    // Nothing restored yet — all scheduled as background or lazy
+    expect(fetchAndRestoreMock).not.toHaveBeenCalled();
 
-      expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-background");
-    } finally {
-      vi.useRealTimers();
-    }
+    // Flush background tasks — critical terminals (active + dock) get restored
+    await flushPostTasks();
+
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-active");
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-dock");
+    expect(fetchAndRestoreMock).not.toHaveBeenCalledWith("terminal-background");
+
+    // Background terminal restores lazily — simulate scroll event on its host element
+    const bgManaged = managedTerminals.get("terminal-background")!;
+    expect(bgManaged.scrollbackRestoreState).toBe("pending");
+
+    bgManaged.hostElement.dispatchEvent(new Event("wheel"));
+    await flushPostTasks();
+
+    expect(fetchAndRestoreMock).toHaveBeenCalledWith("terminal-background");
   });
 
   it("skips snapshot fetch for warm cached terminal instances during switch-back hydration", async () => {
@@ -891,15 +955,29 @@ describe("hydrateAppState", () => {
     ]);
 
     isTerminalWarmInProjectSwitchCacheMock.mockReturnValue(true);
-    getManagedTerminalMock.mockReturnValue({ id: "terminal-cached" });
 
-    const addTerminal = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
+    // Warm cached terminals already have their scrollback loaded, so
+    // scheduleScrollbackRestore skips them (scrollbackRestoreState !== "none").
+    getManagedTerminalMock.mockImplementation((id: string) => {
+      if (id === "terminal-cached") {
+        return {
+          id,
+          scrollbackRestoreState: "done",
+          scrollbackRestoreDisposable: undefined,
+          hostElement: document.createElement("div"),
+          listeners: [] as Array<() => void>,
+        };
+      }
+      return makeMockManagedTerminal(id);
+    });
+
+    const addPanel = vi.fn(async (options: { existingId?: string; requestedId?: string }) => {
       return options.existingId ?? options.requestedId ?? "terminal-id";
     });
 
     await hydrateAppState(
       {
-        addTerminal,
+        addPanel,
         setActiveWorktree: vi.fn(),
         loadRecipes: vi.fn().mockResolvedValue(undefined),
         openDiagnosticsDock: vi.fn(),
@@ -908,11 +986,14 @@ describe("hydrateAppState", () => {
       () => true
     );
 
-    expect(addTerminal).toHaveBeenCalledWith(
+    expect(addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         existingId: "terminal-cached",
       })
     );
+
+    // Flush background tasks — warm terminal should not be scheduled for restore
+    await flushPostTasks();
     expect(fetchAndRestoreMock).not.toHaveBeenCalled();
     expect(terminalClientMock.getSerializedStates).not.toHaveBeenCalled();
   });
@@ -935,7 +1016,7 @@ describe("hydrateAppState", () => {
 
     const hydratePromise = hydrateAppState(
       {
-        addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+        addPanel: vi.fn().mockResolvedValue("terminal-id"),
         setActiveWorktree: vi.fn(),
         loadRecipes: vi.fn().mockReturnValue(pendingRecipes),
         openDiagnosticsDock: vi.fn(),
@@ -949,7 +1030,7 @@ describe("hydrateAppState", () => {
     await pendingRecipes;
   });
 
-  it("waits for recipe loading during initial hydration", async () => {
+  it("does not block initial hydration on recipe loading", async () => {
     let resolveRecipes!: () => void;
     const pendingRecipes = new Promise<void>((resolve) => {
       resolveRecipes = resolve;
@@ -965,22 +1046,20 @@ describe("hydrateAppState", () => {
       agentSettings,
     });
 
-    let hydrationComplete = false;
-    const hydratePromise = hydrateAppState({
-      addTerminal: vi.fn().mockResolvedValue("terminal-id"),
-      setActiveWorktree: vi.fn(),
-      loadRecipes: vi.fn().mockReturnValue(pendingRecipes),
-      openDiagnosticsDock: vi.fn(),
-    }).then(() => {
-      hydrationComplete = true;
-    });
+    const hydratePromise = hydrateAppState(
+      {
+        addPanel: vi.fn().mockResolvedValue("terminal-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockReturnValue(pendingRecipes),
+        openDiagnosticsDock: vi.fn(),
+      },
+      undefined,
+      () => true
+    );
 
-    await Promise.resolve();
-    expect(hydrationComplete).toBe(false);
-
+    await expect(hydratePromise).resolves.toBeUndefined();
     resolveRecipes();
-    await hydratePromise;
-    expect(hydrationComplete).toBe(true);
+    await pendingRecipes;
   });
 
   it("loads and hydrates persisted tab groups after terminal restore", async () => {
@@ -1023,14 +1102,14 @@ describe("hydrateAppState", () => {
     ];
     projectClientMock.getTabGroups.mockResolvedValue(persistedTabGroups);
 
-    const addTerminal = vi.fn().mockResolvedValue("terminal-id");
+    const addPanel = vi.fn().mockResolvedValue("terminal-id");
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
     const hydrateTabGroups = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
@@ -1060,14 +1139,14 @@ describe("hydrateAppState", () => {
 
     projectClientMock.getTabGroups.mockResolvedValue([]);
 
-    const addTerminal = vi.fn().mockResolvedValue("terminal-id");
+    const addPanel = vi.fn().mockResolvedValue("terminal-id");
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
     const hydrateTabGroups = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
@@ -1093,14 +1172,14 @@ describe("hydrateAppState", () => {
 
     projectClientMock.getTabGroups.mockRejectedValue(new Error("Storage error"));
 
-    const addTerminal = vi.fn().mockResolvedValue("terminal-id");
+    const addPanel = vi.fn().mockResolvedValue("terminal-id");
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
     const hydrateTabGroups = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
@@ -1111,7 +1190,9 @@ describe("hydrateAppState", () => {
     expect(hydrateTabGroups).toHaveBeenCalledWith([], { skipPersist: true });
   });
 
-  it("uses resume command when agent panel has agentSessionId and no backend process", async () => {
+  it("skips phantom agent with agentSessionId during project switch when not found in backend", async () => {
+    // During project switch, agent with agentSessionId but no backend process
+    // should be dropped — it would create a phantom panel.
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -1138,31 +1219,23 @@ describe("hydrateAppState", () => {
       },
     });
 
-    const addTerminal = vi.fn().mockResolvedValue("agent-1");
-    const setActiveWorktree = vi.fn();
-    const loadRecipes = vi.fn().mockResolvedValue(undefined);
-    const openDiagnosticsDock = vi.fn();
+    const addPanel = vi.fn().mockResolvedValue("agent-1");
 
-    await hydrateAppState({
-      addTerminal,
-      setActiveWorktree,
-      loadRecipes,
-      openDiagnosticsDock,
-    });
+    await hydrateAppState(
+      {
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      },
+      "switch-abc"
+    );
 
-    expect(addTerminal).toHaveBeenCalledTimes(1);
-    const callArgs = addTerminal.mock.calls[0][0];
-
-    // Should use resume command instead of regenerated command
-    expect(callArgs.command).toBe("claude --resume session-uuid-123");
-    expect(callArgs.command).not.toContain("--model");
-    expect(callArgs.command).not.toContain("sonnet-4");
-
-    // agentSessionId should NOT be forwarded (cleared on respawn)
-    expect(callArgs.agentSessionId).toBeUndefined();
+    // Phantom agent during project switch should NOT be respawned
+    expect(addPanel).not.toHaveBeenCalled();
   });
 
-  it("uses fresh command when agent panel has no agentSessionId", async () => {
+  it("skips phantom agent without agentSessionId during project switch when not found in backend", async () => {
     appClientMock.hydrate.mockResolvedValue({
       appState: {
         terminals: [
@@ -1188,24 +1261,68 @@ describe("hydrateAppState", () => {
       },
     });
 
-    const addTerminal = vi.fn().mockResolvedValue("agent-1");
-    const setActiveWorktree = vi.fn();
-    const loadRecipes = vi.fn().mockResolvedValue(undefined);
-    const openDiagnosticsDock = vi.fn();
+    const addPanel = vi.fn().mockResolvedValue("agent-1");
 
-    await hydrateAppState({
-      addTerminal,
-      setActiveWorktree,
-      loadRecipes,
-      openDiagnosticsDock,
+    await hydrateAppState(
+      {
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      },
+      "switch-abc"
+    );
+
+    // Phantom agent during project switch should NOT be respawned
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("respawns agent panel with agentSessionId on cold start when not found in backend", async () => {
+    // On cold restart (no switchId), agent with agentSessionId should be
+    // respawned — not_found means PTY was killed on quit.
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "agent-1",
+            kind: "agent",
+            type: "claude",
+            agentId: "claude",
+            title: "Claude",
+            cwd: "/project",
+            location: "grid",
+            command: "claude --model sonnet-4",
+            agentSessionId: "session-uuid-123",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings: {
+        agents: {
+          claude: { customFlags: "--model sonnet-4" },
+        },
+      },
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(1);
-    const callArgs = addTerminal.mock.calls[0][0];
+    const addPanel = vi.fn().mockResolvedValue("agent-1");
 
-    // Should use fresh generated command (no resume)
-    expect(callArgs.command).toContain("--model");
-    expect(callArgs.command).not.toContain("--resume");
+    await hydrateAppState({
+      addPanel,
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    // Cold start: agent panel should be respawned
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    expect(addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "agent",
+        requestedId: "agent-1",
+      })
+    );
   });
 
   it("preserves agentSessionId on successful reconnect to live backend", async () => {
@@ -1246,20 +1363,20 @@ describe("hydrateAppState", () => {
       },
     ]);
 
-    const addTerminal = vi.fn().mockResolvedValue("agent-1");
+    const addPanel = vi.fn().mockResolvedValue("agent-1");
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(1);
-    const callArgs = addTerminal.mock.calls[0][0];
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    const callArgs = addPanel.mock.calls[0][0];
 
     // On reconnect, agentSessionId should be preserved
     expect(callArgs.existingId).toBe("agent-1");
@@ -1348,7 +1465,7 @@ describe("hydrateAppState", () => {
       },
     ]);
 
-    const addTerminal = vi.fn().mockImplementation((opts: { existingId?: string }) => {
+    const addPanel = vi.fn().mockImplementation((opts: { existingId?: string }) => {
       callOrder.push(opts.existingId ?? "unknown");
       return Promise.resolve(opts.existingId ?? "id");
     });
@@ -1357,13 +1474,13 @@ describe("hydrateAppState", () => {
     const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(4);
+    expect(addPanel).toHaveBeenCalledTimes(4);
 
     // Active worktree panel should be restored first
     expect(callOrder[0]).toBe("active-1");
@@ -1394,20 +1511,20 @@ describe("hydrateAppState", () => {
     // No backend terminal → will attempt reconnect fallback → respawn
     terminalClientMock.getForProject.mockResolvedValue([]);
 
-    const addTerminal = vi.fn().mockResolvedValue("term-1");
+    const addPanel = vi.fn().mockResolvedValue("term-1");
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(1);
-    const callArgs = addTerminal.mock.calls[0][0] as Record<string, unknown>;
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    const callArgs = addPanel.mock.calls[0][0] as Record<string, unknown>;
     expect(callArgs.restore).toBe(true);
   });
 
@@ -1440,20 +1557,20 @@ describe("hydrateAppState", () => {
       },
     ]);
 
-    const addTerminal = vi.fn().mockResolvedValue("term-1");
+    const addPanel = vi.fn().mockResolvedValue("term-1");
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(1);
-    const callArgs = addTerminal.mock.calls[0][0] as Record<string, unknown>;
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    const callArgs = addPanel.mock.calls[0][0] as Record<string, unknown>;
     // Reconnects should not have restore flag
     expect(callArgs.restore).toBeUndefined();
   });
@@ -1491,7 +1608,7 @@ describe("hydrateAppState", () => {
     terminalClientMock.getForProject.mockResolvedValue([]);
 
     let callCount = 0;
-    const addTerminal = vi.fn().mockImplementation(() => {
+    const addPanel = vi.fn().mockImplementation(() => {
       callCount++;
       if (callCount === 1) {
         return Promise.reject(new Error("Spawn failed"));
@@ -1505,7 +1622,7 @@ describe("hydrateAppState", () => {
     // Should not throw despite first panel failing
     await expect(
       hydrateAppState({
-        addTerminal,
+        addPanel,
         setActiveWorktree,
         loadRecipes,
         openDiagnosticsDock,
@@ -1513,7 +1630,7 @@ describe("hydrateAppState", () => {
     ).resolves.toBeUndefined();
 
     // Both should have been attempted
-    expect(addTerminal).toHaveBeenCalledTimes(2);
+    expect(addPanel).toHaveBeenCalledTimes(2);
   });
 
   it("restores non-PTY panels before PTY panels are added", async () => {
@@ -1564,7 +1681,7 @@ describe("hydrateAppState", () => {
       },
     ]);
 
-    const addTerminal = vi
+    const addPanel = vi
       .fn()
       .mockImplementation((opts: { kind?: string; requestedId?: string; existingId?: string }) => {
         callOrder.push(opts.kind ?? "unknown");
@@ -1575,13 +1692,13 @@ describe("hydrateAppState", () => {
     const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(3);
+    expect(addPanel).toHaveBeenCalledTimes(3);
 
     // Non-PTY panels (browser, notes) should be restored before PTY panel (terminal)
     const terminalIndex = callOrder.indexOf("terminal");
@@ -1629,7 +1746,7 @@ describe("hydrateAppState", () => {
       agentSettings,
     });
 
-    const addTerminal = vi.fn().mockImplementation((opts: { requestedId?: string }) => {
+    const addPanel = vi.fn().mockImplementation((opts: { requestedId?: string }) => {
       return Promise.resolve(opts.requestedId ?? "id");
     });
     const setActiveWorktree = vi.fn();
@@ -1637,22 +1754,22 @@ describe("hydrateAppState", () => {
     const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(3);
+    expect(addPanel).toHaveBeenCalledTimes(3);
 
     // All three non-PTY panels should be restored with correct kinds in order
-    expect(addTerminal.mock.calls[0][0]).toEqual(
+    expect(addPanel.mock.calls[0][0]).toEqual(
       expect.objectContaining({ kind: "browser", requestedId: "browser-1" })
     );
-    expect(addTerminal.mock.calls[1][0]).toEqual(
+    expect(addPanel.mock.calls[1][0]).toEqual(
       expect.objectContaining({ kind: "notes", requestedId: "notes-1" })
     );
-    expect(addTerminal.mock.calls[2][0]).toEqual(
+    expect(addPanel.mock.calls[2][0]).toEqual(
       expect.objectContaining({ kind: "dev-preview", requestedId: "dev-preview-1" })
     );
   });
@@ -1727,7 +1844,7 @@ describe("hydrateAppState", () => {
       },
     ]);
 
-    const addTerminal = vi
+    const addPanel = vi
       .fn()
       .mockImplementation((opts: { kind?: string; requestedId?: string; existingId?: string }) => {
         callOrder.push(`${opts.kind}:${opts.requestedId ?? opts.existingId}`);
@@ -1738,13 +1855,13 @@ describe("hydrateAppState", () => {
     const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(4);
+    expect(addPanel).toHaveBeenCalledTimes(4);
 
     // Both non-PTY panels (from different worktrees) should come before either PTY panel
     const browserIdx = callOrder.findIndex((c) => c.startsWith("browser:"));
@@ -1797,7 +1914,7 @@ describe("hydrateAppState", () => {
       },
     ]);
 
-    const addTerminal = vi
+    const addPanel = vi
       .fn()
       .mockImplementation((opts: { kind?: string; requestedId?: string; existingId?: string }) => {
         callOrder.push(opts.kind ?? "unknown");
@@ -1808,13 +1925,13 @@ describe("hydrateAppState", () => {
     const openDiagnosticsDock = vi.fn();
 
     await hydrateAppState({
-      addTerminal,
+      addPanel,
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,
     });
 
-    expect(addTerminal).toHaveBeenCalledTimes(2);
+    expect(addPanel).toHaveBeenCalledTimes(2);
 
     // Browser (non-PTY, no backend) should come before dev-preview (has backend terminal)
     const browserIdx = callOrder.indexOf("browser");
@@ -1836,7 +1953,7 @@ describe("hydrateAppState", () => {
     });
 
     await hydrateAppState({
-      addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+      addPanel: vi.fn().mockResolvedValue("terminal-id"),
       setActiveWorktree: vi.fn(),
       loadRecipes: vi.fn().mockResolvedValue(undefined),
       openDiagnosticsDock: vi.fn(),
@@ -1859,7 +1976,7 @@ describe("hydrateAppState", () => {
     });
 
     await hydrateAppState({
-      addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+      addPanel: vi.fn().mockResolvedValue("terminal-id"),
       setActiveWorktree: vi.fn(),
       loadRecipes: vi.fn().mockResolvedValue(undefined),
       openDiagnosticsDock: vi.fn(),
@@ -1881,7 +1998,7 @@ describe("hydrateAppState", () => {
     });
 
     await hydrateAppState({
-      addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+      addPanel: vi.fn().mockResolvedValue("terminal-id"),
       setActiveWorktree: vi.fn(),
       loadRecipes: vi.fn().mockResolvedValue(undefined),
       openDiagnosticsDock: vi.fn(),
@@ -1905,7 +2022,7 @@ describe("hydrateAppState", () => {
       });
 
       await hydrateAppState({
-        addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+        addPanel: vi.fn().mockResolvedValue("terminal-id"),
         setActiveWorktree: vi.fn(),
         loadRecipes: vi.fn().mockResolvedValue(undefined),
         openDiagnosticsDock: vi.fn(),
@@ -1937,7 +2054,7 @@ describe("hydrateAppState", () => {
       });
 
       await hydrateAppState({
-        addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+        addPanel: vi.fn().mockResolvedValue("terminal-id"),
         setActiveWorktree: vi.fn(),
         loadRecipes: vi.fn().mockResolvedValue(undefined),
         openDiagnosticsDock: vi.fn(),
@@ -1965,7 +2082,7 @@ describe("hydrateAppState", () => {
       });
 
       await hydrateAppState({
-        addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+        addPanel: vi.fn().mockResolvedValue("terminal-id"),
         setActiveWorktree: vi.fn(),
         loadRecipes: vi.fn().mockResolvedValue(undefined),
         openDiagnosticsDock: vi.fn(),
@@ -1984,7 +2101,7 @@ describe("hydrateAppState", () => {
       });
 
       await hydrateAppState({
-        addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+        addPanel: vi.fn().mockResolvedValue("terminal-id"),
         setActiveWorktree: vi.fn(),
         loadRecipes: vi.fn().mockResolvedValue(undefined),
         openDiagnosticsDock: vi.fn(),
@@ -1992,6 +2109,553 @@ describe("hydrateAppState", () => {
 
       expect(notifyMock).toHaveBeenCalledTimes(1);
       expect(notifyMock.mock.calls[0][0].message).not.toContain("preserved at");
+    });
+  });
+
+  describe("orphan filter for default terminals", () => {
+    it("filters out default-N orphan when no saved panels exist (brand-new project)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "default-1",
+          hasPty: true,
+          cwd: "/home/user",
+          kind: "terminal",
+          title: "Terminal",
+        },
+      ]);
+
+      const addPanel = vi.fn().mockResolvedValue("default-1");
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addPanel).not.toHaveBeenCalled();
+    });
+
+    it("allows non-default orphans through when no saved panels exist", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "orphan-term-1",
+          hasPty: true,
+          cwd: "/project",
+          kind: "terminal",
+          title: "Orphan",
+        },
+      ]);
+
+      const addPanel = vi.fn().mockResolvedValue("orphan-term-1");
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addPanel).toHaveBeenCalledTimes(1);
+      expect(addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({ existingId: "orphan-term-1" })
+      );
+    });
+
+    it("allows default-N orphan through when saved panels exist (restart scenario)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "terminal-1",
+              kind: "terminal",
+              title: "Saved Terminal",
+              cwd: "/project",
+              location: "grid",
+              type: "terminal",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "terminal-1",
+          hasPty: true,
+          cwd: "/project",
+          kind: "terminal",
+          title: "Saved Terminal",
+        },
+        {
+          id: "default-1",
+          hasPty: true,
+          cwd: "/home/user",
+          kind: "terminal",
+          title: "Default",
+        },
+      ]);
+
+      const addPanel = vi
+        .fn()
+        .mockImplementation((opts: { existingId?: string; requestedId?: string }) =>
+          Promise.resolve(opts.existingId ?? opts.requestedId ?? "id")
+        );
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      // terminal-1 is restored from saved state, default-1 passes through as orphan
+      expect(addPanel).toHaveBeenCalledTimes(2);
+      expect(addPanel).toHaveBeenCalledWith(expect.objectContaining({ existingId: "default-1" }));
+    });
+  });
+
+  describe("phantom agent terminal prevention", () => {
+    it("drops dead orphan backend terminals (hasPty: false)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "dead-agent-1",
+          hasPty: false,
+          cwd: "/project",
+          kind: "agent",
+          type: "claude",
+          agentId: "claude",
+          title: "Claude",
+        },
+      ]);
+
+      const addPanel = vi.fn().mockResolvedValue("dead-agent-1");
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addPanel).not.toHaveBeenCalled();
+    });
+
+    it("drops dead non-agent orphan backend terminals (hasPty: false)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "dead-term-1",
+          hasPty: false,
+          cwd: "/project",
+          kind: "terminal",
+          title: "Terminal",
+        },
+      ]);
+
+      const addPanel = vi.fn().mockResolvedValue("dead-term-1");
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addPanel).not.toHaveBeenCalled();
+    });
+
+    it("keeps live orphan backend terminals (hasPty: true)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "live-agent-1",
+          hasPty: true,
+          cwd: "/project",
+          kind: "agent",
+          type: "claude",
+          agentId: "claude",
+          title: "Claude",
+        },
+      ]);
+
+      const addPanel = vi.fn().mockResolvedValue("live-agent-1");
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addPanel).toHaveBeenCalledTimes(1);
+      expect(addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({ existingId: "live-agent-1" })
+      );
+    });
+
+    it("keeps orphan with hasPty: undefined (treat as alive)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "orphan-1",
+          cwd: "/project",
+          kind: "terminal",
+          title: "Terminal",
+          // hasPty is undefined — should be treated as alive
+        },
+      ]);
+
+      const addPanel = vi.fn().mockResolvedValue("orphan-1");
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addPanel).toHaveBeenCalledTimes(1);
+      expect(addPanel).toHaveBeenCalledWith(expect.objectContaining({ existingId: "orphan-1" }));
+    });
+
+    it("skips matched dead agent backend terminal and prevents orphan leak", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "agent-1",
+              kind: "agent",
+              type: "claude",
+              agentId: "claude",
+              title: "Claude",
+              cwd: "/project",
+              location: "grid",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "agent-1",
+          hasPty: false,
+          cwd: "/project",
+          kind: "agent",
+          type: "claude",
+          agentId: "claude",
+          title: "Claude",
+        },
+      ]);
+
+      const addPanel = vi.fn().mockResolvedValue("agent-1");
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      // Dead agent backend match should be skipped AND not appear as orphan
+      expect(addPanel).not.toHaveBeenCalled();
+    });
+
+    it("keeps matched dead non-agent backend terminal (shows exit state)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "term-1",
+              kind: "terminal",
+              type: "terminal",
+              title: "Terminal",
+              cwd: "/project",
+              location: "grid",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        {
+          id: "term-1",
+          hasPty: false,
+          cwd: "/project",
+          kind: "terminal",
+          title: "Terminal",
+        },
+      ]);
+
+      const addPanel = vi.fn().mockResolvedValue("term-1");
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      // Non-agent dead backend terminal still restores (exit state is useful)
+      expect(addPanel).toHaveBeenCalledTimes(1);
+    });
+
+    it("still respawns agent on reconnect timeout (network issue)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "agent-1",
+              kind: "agent",
+              type: "claude",
+              agentId: "claude",
+              title: "Claude",
+              cwd: "/project",
+              location: "grid",
+              command: "claude",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings: {
+          agents: {
+            claude: { customFlags: "--model sonnet-4" },
+          },
+        },
+      });
+
+      // getForProject returns empty
+      terminalClientMock.getForProject.mockResolvedValue([]);
+      // reconnect times out
+      terminalClientMock.reconnect.mockImplementation(
+        () =>
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Reconnection timeout")), 10)
+          )
+      );
+
+      const addPanel = vi.fn().mockResolvedValue("agent-1");
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      // Agent should still respawn on timeout (could be a temporary network issue)
+      expect(addPanel).toHaveBeenCalledTimes(1);
+      expect(addPanel).toHaveBeenCalledWith(expect.objectContaining({ kind: "agent" }));
+    });
+
+    it("still respawns non-agent terminal when not found in backend", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "term-1",
+              kind: "terminal",
+              type: "terminal",
+              title: "Terminal",
+              cwd: "/project",
+              location: "grid",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([]);
+
+      const addPanel = vi.fn().mockResolvedValue("term-1");
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      // Non-agent terminals should still respawn when not found
+      expect(addPanel).toHaveBeenCalledTimes(1);
+      expect(addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "terminal", requestedId: "term-1" })
+      );
+    });
+
+    it("skips older agent snapshot with type but no kind during project switch when not found", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "agent-old",
+              type: "claude",
+              agentId: "claude",
+              title: "Claude",
+              cwd: "/project",
+              location: "grid",
+              command: "claude",
+            },
+          ],
+          sidebarWidth: 350,
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([]);
+
+      const addPanel = vi.fn().mockResolvedValue("agent-old");
+
+      await hydrateAppState(
+        {
+          addPanel,
+          setActiveWorktree: vi.fn(),
+          loadRecipes: vi.fn().mockResolvedValue(undefined),
+          openDiagnosticsDock: vi.fn(),
+        },
+        "switch-abc"
+      );
+
+      // Older agent snapshots (type: "claude" but no kind) should be skipped during project switch
+      expect(addPanel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("prefetchedHydrateResult", () => {
+    const fullProject = {
+      id: "project-1",
+      path: "/project",
+      name: "project-1",
+      emoji: "🌳",
+      lastOpened: Date.now(),
+    };
+
+    it("skips appClient.hydrate() when prefetched result is provided", async () => {
+      const prefetched = {
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project: fullProject,
+        agentSettings,
+        gpuWebGLHardware: true,
+        gpuHardwareAccelerationDisabled: false,
+        safeMode: false,
+        settingsRecovery: null,
+      } as unknown as import("@shared/types/ipc/app").HydrateResult;
+
+      await hydrateAppState(
+        {
+          addPanel: vi.fn().mockResolvedValue("terminal-id"),
+          setActiveWorktree: vi.fn(),
+          loadRecipes: vi.fn().mockResolvedValue(undefined),
+          openDiagnosticsDock: vi.fn(),
+        },
+        "switch-1",
+        () => true,
+        prefetched
+      );
+
+      expect(appClientMock.hydrate).not.toHaveBeenCalled();
+    });
+
+    it("calls appClient.hydrate() when no prefetched result is provided", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        gpuHardwareAccelerationDisabled: false,
+        safeMode: false,
+        settingsRecovery: null,
+      });
+
+      await hydrateAppState(
+        {
+          addPanel: vi.fn().mockResolvedValue("terminal-id"),
+          setActiveWorktree: vi.fn(),
+          loadRecipes: vi.fn().mockResolvedValue(undefined),
+          openDiagnosticsDock: vi.fn(),
+        },
+        "switch-1",
+        () => true
+      );
+
+      expect(appClientMock.hydrate).toHaveBeenCalledTimes(1);
     });
   });
 });

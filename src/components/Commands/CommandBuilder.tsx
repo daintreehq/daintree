@@ -9,7 +9,8 @@ import type {
   BuilderStep,
   BuilderField,
 } from "@shared/types/commands";
-import { ChevronLeft, ChevronRight, Loader2, AlertCircle, CheckCircle } from "lucide-react";
+import { ChevronLeft, ChevronRight, AlertCircle, CheckCircle } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 
 interface CommandBuilderProps {
   command: CommandManifestEntry;
@@ -534,7 +535,7 @@ export function CommandBuilder({
                 <Button onClick={handleExecute} disabled={isExecuting}>
                   {isExecuting ? (
                     <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <Spinner size="md" />
                       Executing...
                     </>
                   ) : (

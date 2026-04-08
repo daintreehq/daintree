@@ -80,7 +80,7 @@ jobs:
 
       - name: Import macOS certificates
         if: startsWith(matrix.os, 'macos')
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@v6
         with:
           p12-file-base64: ${{ secrets.MAC_CERTS }}
           p12-password: ${{ secrets.MAC_CERTS_PASSWORD }}
@@ -160,7 +160,7 @@ jobs:
           fi
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.os }}
           path: |
@@ -195,19 +195,19 @@ jobs:
 
     steps:
       - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-macos-14
           path: release/
 
       - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-ubuntu-22.04
           path: release/
 
       - name: Download Windows artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-windows-latest
           path: release/

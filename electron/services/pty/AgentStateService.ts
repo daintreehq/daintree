@@ -104,7 +104,9 @@ export class AgentStateService {
     event: AgentEvent,
     trigger?: AgentStateChangeTrigger,
     confidence?: number,
-    waitingReason?: WaitingReason
+    waitingReason?: WaitingReason,
+    sessionCost?: number,
+    sessionTokens?: number
   ): boolean {
     if (!terminal.agentId) {
       return false;
@@ -178,6 +180,12 @@ export class AgentStateService {
       trigger: inferredTrigger,
       confidence: inferredConfidence,
       ...(newState === "waiting" && waitingReason ? { waitingReason } : {}),
+      ...((newState === "completed" || newState === "exited") && sessionCost != null
+        ? { sessionCost }
+        : {}),
+      ...((newState === "completed" || newState === "exited") && sessionTokens != null
+        ? { sessionTokens }
+        : {}),
     };
 
     const validatedStateChange = AgentStateChangedSchema.safeParse(stateChangePayload);
@@ -282,9 +290,11 @@ export class AgentStateService {
     terminal: TerminalInfo,
     activity: "busy" | "idle" | "completed",
     metadata?: {
-      trigger: "input" | "output" | "pattern" | "timeout";
+      trigger: "input" | "output" | "pattern" | "timeout" | "dispose";
       patternConfidence?: number;
       waitingReason?: WaitingReason;
+      sessionCost?: number;
+      sessionTokens?: number;
     }
   ): void {
     if (!terminal.agentId) {
@@ -304,7 +314,15 @@ export class AgentStateService {
       this.updateAgentState(terminal, event, "timeout", 0.6, metadata?.waitingReason);
     } else if (metadata?.trigger === "pattern") {
       const confidence = metadata.patternConfidence ?? 0.9;
-      this.updateAgentState(terminal, event, "heuristic", confidence, metadata?.waitingReason);
+      this.updateAgentState(
+        terminal,
+        event,
+        "heuristic",
+        confidence,
+        metadata?.waitingReason,
+        metadata?.sessionCost,
+        metadata?.sessionTokens
+      );
     } else if (metadata?.trigger === "output") {
       this.updateAgentState(terminal, event, "output", 1.0, metadata?.waitingReason);
     } else if (metadata?.trigger === "input") {

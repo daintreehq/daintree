@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ChevronDown } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Monitor, Palette, Shuffle } from "lucide-react";
+import { ThemeSelector } from "./ThemeSelector";
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
-import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { AppDialog } from "@/components/ui/AppDialog";
 import { APP_THEME_PREVIEW_KEYS, getAppThemeWarnings } from "@shared/theme";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
+import { SettingsSwitchCard } from "./SettingsSwitchCard";
 
 function PaletteStrip({ scheme }: { scheme: AppColorScheme }) {
   const t = scheme.tokens;
@@ -61,66 +63,6 @@ function HeroImage({ scheme, size }: { scheme: AppColorScheme; size: number }) {
   );
 }
 
-function ThemeOption({
-  scheme,
-  selected,
-  highlighted,
-  warnings,
-  onClick,
-  id,
-}: {
-  scheme: AppColorScheme;
-  selected: boolean;
-  highlighted: boolean;
-  warnings: AppThemeValidationWarning[];
-  onClick: () => void;
-  id: string;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (highlighted) {
-      ref.current?.scrollIntoView({ block: "nearest" });
-    }
-  }, [highlighted]);
-
-  return (
-    <div
-      ref={ref}
-      id={id}
-      role="option"
-      aria-selected={selected}
-      onClick={onClick}
-      className={cn(
-        "flex items-center gap-3 px-2 py-1.5 cursor-pointer rounded-[var(--radius-md)] transition-colors",
-        highlighted && "bg-canopy-accent/10",
-        selected && "bg-canopy-accent/15 border border-canopy-accent/30",
-        !selected && "border border-transparent",
-        !highlighted && !selected && "hover:bg-surface-hover"
-      )}
-    >
-      <HeroImage scheme={scheme} size={60} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs font-medium text-canopy-text truncate">{scheme.name}</span>
-          {warnings.length > 0 && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] text-status-warning shrink-0">
-              <AlertTriangle className="h-2.5 w-2.5" />
-              {warnings.length}
-            </span>
-          )}
-        </div>
-        {scheme.location && (
-          <span className="text-[11px] text-canopy-text/50 truncate block">{scheme.location}</span>
-        )}
-        <div className="mt-1">
-          <PaletteStrip scheme={scheme} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function prefersReducedMotion(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
   return (
@@ -129,9 +71,59 @@ function prefersReducedMotion(): boolean {
   );
 }
 
+function shuffleArray<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 async function persistCustomSchemes() {
   const { customSchemes } = useAppThemeStore.getState();
   await appThemeClient.setCustomSchemes(JSON.stringify(customSchemes));
+}
+
+function PreferredSchemePicker({
+  label,
+  schemes,
+  selectedId,
+  onSelect,
+}: {
+  label: string;
+  schemes: AppColorScheme[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <p className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/40">
+        {label}
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {schemes.map((scheme) => (
+          <button
+            key={scheme.id}
+            type="button"
+            onClick={() => onSelect(scheme.id)}
+            className={cn(
+              "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] border text-xs transition-colors",
+              selectedId === scheme.id
+                ? "border-canopy-accent/30 bg-canopy-accent/10 text-canopy-text"
+                : "border-canopy-border text-canopy-text/70 hover:bg-surface-hover"
+            )}
+          >
+            <div
+              className="w-3 h-3 rounded-sm shrink-0"
+              style={{ backgroundColor: scheme.tokens[APP_THEME_PREVIEW_KEYS.background] }}
+            />
+            {scheme.name}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function AppThemePicker() {
@@ -139,21 +131,23 @@ export function AppThemePicker() {
   const customSchemes = useAppThemeStore((s) => s.customSchemes);
   const setSelectedSchemeId = useAppThemeStore((s) => s.setSelectedSchemeId);
   const addCustomScheme = useAppThemeStore((s) => s.addCustomScheme);
+  const followSystem = useAppThemeStore((s) => s.followSystem);
+  const setFollowSystem = useAppThemeStore((s) => s.setFollowSystem);
+  const preferredDarkSchemeId = useAppThemeStore((s) => s.preferredDarkSchemeId);
+  const setPreferredDarkSchemeId = useAppThemeStore((s) => s.setPreferredDarkSchemeId);
+  const preferredLightSchemeId = useAppThemeStore((s) => s.preferredLightSchemeId);
+  const setPreferredLightSchemeId = useAppThemeStore((s) => s.setPreferredLightSchemeId);
   const [importWarnings, setImportWarnings] = useState<AppThemeValidationWarning[]>([]);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(-1);
 
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoGenRef = useRef(0);
+  const shuffleQueueRef = useRef<string[]>([]);
 
   const allSchemes = useMemo(() => [...BUILT_IN_APP_SCHEMES, ...customSchemes], [customSchemes]);
   const darkSchemes = useMemo(() => allSchemes.filter((s) => s.type !== "light"), [allSchemes]);
   const lightSchemes = useMemo(() => allSchemes.filter((s) => s.type === "light"), [allSchemes]);
-  const flatList = useMemo(() => [...darkSchemes, ...lightSchemes], [darkSchemes, lightSchemes]);
-
   const selectedScheme = useMemo(
     () => allSchemes.find((s) => s.id === selectedSchemeId) ?? allSchemes[0],
     [allSchemes, selectedSchemeId]
@@ -167,9 +161,14 @@ export function AppThemePicker() {
   const handleSelect = useCallback(
     async (id: string) => {
       const prev = selectedSchemeId;
+
+      if (followSystem) {
+        setFollowSystem(false);
+        appThemeClient.setFollowSystem(false).catch(console.error);
+      }
+
       setSelectedSchemeId(id);
       setOpen(false);
-      setActiveIndex(-1);
 
       try {
         await appThemeClient.setColorScheme(id);
@@ -196,7 +195,56 @@ export function AppThemePicker() {
         }
       }
     },
-    [setSelectedSchemeId, selectedSchemeId, allSchemes]
+    [setSelectedSchemeId, selectedSchemeId, allSchemes, followSystem, setFollowSystem]
+  );
+
+  const handleShuffle = useCallback(() => {
+    const otherIds = allSchemes.map((s) => s.id).filter((id) => id !== selectedSchemeId);
+    if (otherIds.length === 0) return;
+
+    // Filter out current theme in case it was manually selected mid-cycle
+    shuffleQueueRef.current = shuffleQueueRef.current.filter((id) => id !== selectedSchemeId);
+
+    if (shuffleQueueRef.current.length === 0) {
+      shuffleQueueRef.current = shuffleArray(otherIds);
+    }
+
+    const nextId = shuffleQueueRef.current.shift()!;
+    handleSelect(nextId);
+  }, [allSchemes, selectedSchemeId, handleSelect]);
+
+  const handleToggleFollowSystem = useCallback(async () => {
+    const newValue = !followSystem;
+    setFollowSystem(newValue);
+    try {
+      await appThemeClient.setFollowSystem(newValue);
+    } catch (error) {
+      console.error("Failed to persist follow system:", error);
+    }
+  }, [followSystem, setFollowSystem]);
+
+  const handlePreferredDarkChange = useCallback(
+    async (id: string) => {
+      setPreferredDarkSchemeId(id);
+      try {
+        await appThemeClient.setPreferredDarkScheme(id);
+      } catch (error) {
+        console.error("Failed to persist preferred dark scheme:", error);
+      }
+    },
+    [setPreferredDarkSchemeId]
+  );
+
+  const handlePreferredLightChange = useCallback(
+    async (id: string) => {
+      setPreferredLightSchemeId(id);
+      try {
+        await appThemeClient.setPreferredLightScheme(id);
+      } catch (error) {
+        console.error("Failed to persist preferred light scheme:", error);
+      }
+    },
+    [setPreferredLightSchemeId]
   );
 
   const handleImport = useCallback(async () => {
@@ -231,71 +279,47 @@ export function AppThemePicker() {
     }
   }, [addCustomScheme, setSelectedSchemeId]);
 
-  useEscapeStack(open, () => setOpen(false));
-
-  useEffect(() => {
-    if (!open) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        triggerRef.current?.contains(e.target as Node) ||
-        listRef.current?.contains(e.target as Node)
-      ) {
-        return;
-      }
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [open]);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (!open) {
-        if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          setOpen(true);
-          const idx = flatList.findIndex((s) => s.id === selectedSchemeId);
-          setActiveIndex(idx >= 0 ? idx : 0);
-        }
-        return;
-      }
-
-      switch (e.key) {
-        case "ArrowDown":
-          e.preventDefault();
-          setActiveIndex((prev) => (prev < flatList.length - 1 ? prev + 1 : prev));
-          break;
-        case "ArrowUp":
-          e.preventDefault();
-          setActiveIndex((prev) => (prev > 0 ? prev - 1 : prev));
-          break;
-        case "Home":
-          e.preventDefault();
-          setActiveIndex(0);
-          break;
-        case "End":
-          e.preventDefault();
-          setActiveIndex(flatList.length - 1);
-          break;
-        case "Enter":
-        case " ":
-          e.preventDefault();
-          if (activeIndex >= 0 && activeIndex < flatList.length) {
-            handleSelect(flatList[activeIndex].id);
-          }
-          break;
-      }
-    },
-    [open, flatList, activeIndex, selectedSchemeId, handleSelect]
-  );
-
-  const activeDescendant =
-    open && activeIndex >= 0 ? `theme-option-${flatList[activeIndex]?.id}` : undefined;
+  const handleExport = useCallback(async () => {
+    if (!selectedScheme) return;
+    try {
+      await appThemeClient.exportTheme(selectedScheme);
+    } catch (error) {
+      console.error("Failed to export app theme:", error);
+      setImportMessage("Failed to export app theme.");
+    }
+  }, [selectedScheme]);
 
   const selectedWarnings = warningsByScheme.get(selectedScheme.id) ?? [];
 
   return (
     <div className="space-y-3">
+      <SettingsSwitchCard
+        icon={Monitor}
+        title="Match system appearance"
+        subtitle="Automatically switch between dark and light themes"
+        isEnabled={followSystem}
+        onChange={handleToggleFollowSystem}
+        ariaLabel="Toggle automatic theme switching"
+        variant="compact"
+      />
+
+      {followSystem && (
+        <div className="space-y-2 pl-1">
+          <PreferredSchemePicker
+            label="Preferred dark theme"
+            schemes={darkSchemes}
+            selectedId={preferredDarkSchemeId}
+            onSelect={handlePreferredDarkChange}
+          />
+          <PreferredSchemePicker
+            label="Preferred light theme"
+            schemes={lightSchemes}
+            selectedId={preferredLightSchemeId}
+            onSelect={handlePreferredLightChange}
+          />
+        </div>
+      )}
+
       {importMessage && (
         <div className="rounded-[var(--radius-md)] border border-overlay bg-surface-panel px-3 py-2">
           <div className="flex items-start gap-2">
@@ -324,134 +348,128 @@ export function AppThemePicker() {
         </div>
       )}
 
-      <div className="relative">
-        <button
-          ref={triggerRef}
-          role="combobox"
-          aria-haspopup="listbox"
-          aria-expanded={open}
-          aria-controls="theme-listbox"
-          aria-activedescendant={activeDescendant}
-          onClick={() => {
-            setOpen((v) => !v);
-            if (!open) {
-              const idx = flatList.findIndex((s) => s.id === selectedSchemeId);
-              setActiveIndex(idx >= 0 ? idx : 0);
-            }
-          }}
-          onKeyDown={handleKeyDown}
-          onBlur={(e) => {
-            if (!listRef.current?.contains(e.relatedTarget as Node)) {
-              setOpen(false);
-            }
-          }}
-          className={cn(
-            "w-full flex items-center gap-3 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
-            "border-canopy-border bg-canopy-bg hover:border-canopy-text/30",
-            open && "border-canopy-accent"
+      <button
+        type="button"
+        data-testid="theme-picker-trigger"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen(true)}
+        className={cn(
+          "w-full flex items-center gap-3 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
+          "border-canopy-border bg-canopy-bg hover:border-canopy-text/30"
+        )}
+      >
+        <div className="relative shrink-0">
+          <HeroImage scheme={selectedScheme} size={96} />
+          {selectedScheme.heroVideo && (
+            <video
+              ref={videoRef}
+              muted
+              playsInline
+              preload="none"
+              className="absolute inset-0 w-full h-full rounded-lg object-cover transition-opacity duration-500"
+              style={{ opacity: 0 }}
+            />
           )}
-        >
-          <div className="relative shrink-0">
-            <HeroImage scheme={selectedScheme} size={96} />
-            {selectedScheme.heroVideo && (
-              <video
-                ref={videoRef}
-                muted
-                playsInline
-                preload="none"
-                className="absolute inset-0 w-full h-full rounded-lg object-cover transition-opacity duration-500"
-                style={{ opacity: 0 }}
-              />
-            )}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <span className="text-sm font-medium text-canopy-text truncate">
-                {selectedScheme.name}
-              </span>
-              {selectedWarnings.length > 0 && (
-                <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] text-status-warning shrink-0">
-                  <AlertTriangle className="h-2.5 w-2.5" />
-                  {selectedWarnings.length}
-                </span>
-              )}
-            </div>
-            {selectedScheme.location && (
-              <span className="text-xs text-canopy-text/50 truncate block">
-                {selectedScheme.location}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="text-sm font-medium text-canopy-text truncate">
+              {selectedScheme.name}
+            </span>
+            {selectedWarnings.length > 0 && (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] text-status-warning shrink-0">
+                <AlertTriangle className="h-2.5 w-2.5" />
+                {selectedWarnings.length}
               </span>
             )}
-            <div className="mt-1.5">
-              <PaletteStrip scheme={selectedScheme} />
-            </div>
           </div>
-          <ChevronDown
-            className={cn(
-              "h-4 w-4 shrink-0 text-canopy-text/40 transition-transform",
-              open && "rotate-180"
-            )}
-          />
-        </button>
+          {selectedScheme.location && (
+            <span className="text-xs text-canopy-text/50 truncate block">
+              {selectedScheme.location}
+            </span>
+          )}
+          <div className="mt-1.5">
+            <PaletteStrip scheme={selectedScheme} />
+          </div>
+        </div>
+      </button>
 
-        {open && (
-          <div
-            ref={listRef}
-            id="theme-listbox"
-            role="listbox"
-            aria-label="Theme list"
-            onMouseDown={(e) => e.preventDefault()}
-            className="absolute z-50 left-0 right-0 mt-1 max-h-[280px] overflow-y-auto rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg shadow-[var(--theme-shadow-floating)]"
+      <AppDialog
+        isOpen={open}
+        onClose={() => setOpen(false)}
+        size="xl"
+        data-testid="theme-picker-dialog"
+      >
+        <AppDialog.Header>
+          <AppDialog.Title icon={<Palette className="h-5 w-5" />}>Choose a theme</AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+        <AppDialog.BodyScroll>
+          <ThemeSelector<AppColorScheme>
+            groups={[
+              ...(darkSchemes.length > 0 ? [{ label: "Dark", items: darkSchemes }] : []),
+              ...(lightSchemes.length > 0 ? [{ label: "Light", items: lightSchemes }] : []),
+            ]}
+            selectedId={selectedSchemeId}
+            onSelect={handleSelect}
+            columns={3}
+            renderPreview={(scheme) => <HeroImage scheme={scheme} size={130} />}
+            renderMeta={(scheme) => {
+              const warnings = warningsByScheme.get(scheme.id) ?? [];
+              return (
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-medium text-canopy-text truncate">
+                      {scheme.name}
+                    </span>
+                    {warnings.length > 0 && (
+                      <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] text-status-warning shrink-0">
+                        <AlertTriangle className="h-2.5 w-2.5" />
+                        {warnings.length}
+                      </span>
+                    )}
+                  </div>
+                  {scheme.location && (
+                    <span className="text-[11px] text-canopy-text/50 truncate block">
+                      {scheme.location}
+                    </span>
+                  )}
+                  <div className="mt-1">
+                    <PaletteStrip scheme={scheme} />
+                  </div>
+                </div>
+              );
+            }}
+            getName={(s) => s.name}
+          />
+        </AppDialog.BodyScroll>
+      </AppDialog>
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleExport}
+          className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
+        >
+          Export app theme...
+        </button>
+        <button
+          onClick={handleImport}
+          className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
+        >
+          Import app theme...
+        </button>
+        {allSchemes.length > 1 && (
+          <button
+            type="button"
+            onClick={handleShuffle}
+            className="ml-auto flex items-center gap-1.5 text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
           >
-            {darkSchemes.length > 0 && (
-              <>
-                <div className="sticky top-0 bg-canopy-bg/90 backdrop-blur-sm px-2 py-1 z-10">
-                  <p className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/40 select-none">
-                    Dark
-                  </p>
-                </div>
-                {darkSchemes.map((scheme, i) => (
-                  <ThemeOption
-                    key={scheme.id}
-                    id={`theme-option-${scheme.id}`}
-                    scheme={scheme}
-                    selected={selectedSchemeId === scheme.id}
-                    highlighted={activeIndex === i}
-                    warnings={warningsByScheme.get(scheme.id) ?? []}
-                    onClick={() => handleSelect(scheme.id)}
-                  />
-                ))}
-              </>
-            )}
-            {lightSchemes.length > 0 && (
-              <>
-                <div className="sticky top-0 bg-canopy-bg/90 backdrop-blur-sm px-2 py-1 z-10">
-                  <p className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/40 select-none">
-                    Light
-                  </p>
-                </div>
-                {lightSchemes.map((scheme, i) => (
-                  <ThemeOption
-                    key={scheme.id}
-                    id={`theme-option-${scheme.id}`}
-                    scheme={scheme}
-                    selected={selectedSchemeId === scheme.id}
-                    highlighted={activeIndex === darkSchemes.length + i}
-                    warnings={warningsByScheme.get(scheme.id) ?? []}
-                    onClick={() => handleSelect(scheme.id)}
-                  />
-                ))}
-              </>
-            )}
-          </div>
+            <Shuffle className="h-3 w-3" />
+            Random theme
+          </button>
         )}
       </div>
-
-      <button
-        onClick={handleImport}
-        className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
-      >
-        Import app theme...
-      </button>
     </div>
   );
 }

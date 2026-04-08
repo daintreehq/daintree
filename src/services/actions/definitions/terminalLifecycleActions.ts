@@ -1,7 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
-import { appClient, terminalClient } from "@/clients";
-import { useTerminalStore } from "@/store/terminalStore";
+import { terminalClient } from "@/clients";
+import { usePanelStore } from "@/store/panelStore";
 export function registerTerminalLifecycleActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -18,17 +18,13 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId =
-        terminalId ?? state.focusedId ?? state.terminals.find((t) => t.location !== "trash")?.id;
+        terminalId ??
+        state.focusedId ??
+        state.panelIds.find((id) => state.panelsById[id]?.location !== "trash");
       if (targetId) {
-        state.trashTerminal(targetId);
-        const remaining = useTerminalStore
-          .getState()
-          .terminals.filter((t) => t.location !== "trash");
-        if (remaining.length === 0) {
-          await appClient.quit();
-        }
+        state.trashPanel(targetId);
       }
     },
   }));
@@ -44,10 +40,10 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        state.trashTerminal(targetId);
+        state.trashPanel(targetId);
       }
     },
   }));
@@ -63,10 +59,15 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        state.backgroundTerminal(targetId);
+        const group = state.getPanelGroup(targetId);
+        if (group) {
+          state.backgroundPanelGroup(targetId);
+        } else {
+          state.backgroundTerminal(targetId);
+        }
       }
     },
   }));
@@ -82,10 +83,10 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        state.removeTerminal(targetId);
+        state.removePanel(targetId);
       }
     },
   }));
@@ -101,7 +102,7 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
         state.restartTerminal(targetId);
@@ -120,7 +121,7 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
         const { terminalInstanceService } =
@@ -148,11 +149,11 @@ export function registerTerminalLifecycleActions(
     }),
     run: async (args: unknown) => {
       const { terminalId, name } = args as { terminalId?: string; name?: string };
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
 
       if (name !== undefined) {
-        useTerminalStore.getState().updateTitle(targetId, name);
+        usePanelStore.getState().updateTitle(targetId, name);
       } else {
         window.dispatchEvent(
           new CustomEvent("canopy:rename-terminal", { detail: { id: targetId } })
@@ -172,7 +173,7 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (targetId) {
         window.dispatchEvent(
           new CustomEvent("canopy:open-terminal-info", { detail: { id: targetId } })
@@ -192,7 +193,7 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (targetId) {
         window.dispatchEvent(
           new CustomEvent("canopy:open-terminal-info", { detail: { id: targetId } })
@@ -212,7 +213,7 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) {
         throw new Error("No terminal selected");
       }
@@ -231,7 +232,7 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
         state.toggleInputLocked(targetId);
@@ -250,7 +251,7 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: async (args: unknown) => {
       const { terminalId } = args as { terminalId?: string };
-      const targetId = terminalId ?? useTerminalStore.getState().focusedId;
+      const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (targetId) {
         await terminalClient.forceResume(targetId);
       }
@@ -266,13 +267,17 @@ export function registerTerminalLifecycleActions(
     danger: "confirm",
     scope: "renderer",
     run: async () => {
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
-      const terminalsToClose = state.terminals.filter(
-        (t) =>
-          t.location !== "trash" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      );
-      terminalsToClose.forEach((t) => state.trashTerminal(t.id));
+      const idsToClose = state.panelIds.filter((id) => {
+        const t = state.panelsById[id];
+        return (
+          t &&
+          t.location !== "trash" &&
+          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+        );
+      });
+      idsToClose.forEach((id) => state.trashPanel(id));
     },
   }));
 
@@ -285,7 +290,7 @@ export function registerTerminalLifecycleActions(
     danger: "confirm",
     scope: "renderer",
     run: async () => {
-      useTerminalStore.getState().bulkCloseAll();
+      usePanelStore.getState().bulkCloseAll();
     },
   }));
 
@@ -298,7 +303,7 @@ export function registerTerminalLifecycleActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      useTerminalStore.getState().bulkRestartAll();
+      usePanelStore.getState().bulkRestartAll();
     },
   }));
 
@@ -311,7 +316,7 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    isEnabled: () => useTerminalStore.getState().backendStatus === "disconnected",
+    isEnabled: () => usePanelStore.getState().backendStatus === "disconnected",
     run: async () => {
       await terminalClient.restartService();
     },
@@ -326,23 +331,59 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     isEnabled: (ctx) => !!ctx.focusedTerminalId,
-    run: async (_args, ctx) => {
-      const state = useTerminalStore.getState();
-      const targetId = ctx.focusedTerminalId ?? state.focusedId;
+    run: async (args: unknown, ctx) => {
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      const state = usePanelStore.getState();
+      const targetId = terminalId ?? ctx.focusedTerminalId ?? state.focusedId;
       if (!targetId) return;
 
       if (state.watchedPanels.has(targetId)) {
         state.unwatchPanel(targetId);
       } else {
-        const terminal = state.terminals.find((t) => t.id === targetId);
-        // Fire immediately if agent is already in a terminal attention state
-        if (terminal?.agentState === "completed" || terminal?.agentState === "waiting") {
+        const terminal = state.panelsById[targetId];
+        if (
+          terminal?.agentState === "completed" ||
+          terminal?.agentState === "waiting" ||
+          terminal?.agentState === "exited"
+        ) {
           const { fireWatchNotification } = await import("@/lib/watchNotification");
           fireWatchNotification(targetId, terminal.title ?? targetId, terminal.agentState);
         } else {
           state.watchPanel(targetId);
         }
+      }
+    },
+  }));
+
+  actions.set("terminal.deleteNote", () => ({
+    id: "terminal.deleteNote",
+    title: "Delete Note",
+    description: "Delete the note file and remove the panel",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    argsSchema: z.object({
+      terminalId: z.string(),
+      notePath: z.string(),
+      noteTitle: z.string().optional(),
+    }),
+    run: async (args: unknown) => {
+      const { terminalId, notePath, noteTitle } = args as {
+        terminalId: string;
+        notePath: string;
+        noteTitle?: string;
+      };
+      const { actionService } = await import("@/services/ActionService");
+      const result = await actionService.dispatch(
+        "notes.delete",
+        { notePath, noteTitle },
+        { source: "context-menu" }
+      );
+      if (result.ok) {
+        usePanelStore.getState().removePanel(terminalId);
       }
     },
   }));

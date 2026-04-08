@@ -58,18 +58,15 @@ describe("TerminalInstanceService bootstrap", () => {
       writable: true,
     });
 
-    getSharedBuffersMock.mockResolvedValue({
-      visualBuffers: [],
-      signalBuffer: null,
-    });
-
     await import("../TerminalInstanceService");
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(getSharedBuffersMock).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith(
-      "[TerminalOutputIngestService] SharedArrayBuffer unavailable, using IPC"
+      expect.stringContaining(
+        "[TerminalOutputIngestService] Using MessagePort data path (SAB worker disabled)"
+      ),
+      expect.anything()
     );
   });
 });

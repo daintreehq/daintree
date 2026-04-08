@@ -4,10 +4,8 @@ import type { PulseRangeDays, ProjectPulse, ProjectHealthData } from "@shared/ty
 import { usePulseStore, useProjectStore } from "@/store";
 import { cn } from "@/lib/utils";
 import {
-  Loader2,
   AlertCircle,
   RefreshCw,
-  Activity,
   GitBranch,
   CheckCircle2,
   XCircle,
@@ -21,6 +19,8 @@ import {
   Github,
   WifiOff,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
+import { ProjectPulseIcon } from "@/components/icons";
 import { PulseHeatmap } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
 import { useProjectHealth } from "@/hooks/useProjectHealth";
@@ -237,7 +237,7 @@ function PulseSkeleton({ className }: { className?: string }) {
         className
       )}
     >
-      <div className="px-4 py-3 border-b border-canopy-border flex items-center justify-between">
+      <div className="pulse-card-header px-4 py-3 border-b border-canopy-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded-[2px] pulse-skeleton-shimmer shrink-0" />
           <div className="h-4 pulse-skeleton-shimmer rounded w-36" />
@@ -407,7 +407,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
               role="status"
               aria-live="polite"
             >
-              <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
+              <Spinner size="xs" />
               <span className="text-xs">
                 Retrying ({retryCount}/{MAX_RETRIES})...
               </span>
@@ -429,11 +429,11 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
         className
       )}
     >
-      <div className="px-4 py-3 border-b border-canopy-border flex items-center justify-between">
+      <div className="pulse-card-header px-4 py-3 border-b border-canopy-border flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Activity className="w-4 h-4 text-status-success" />
+          <ProjectPulseIcon className="w-4 h-4 text-status-success" />
           <span className="text-sm font-medium text-canopy-text/90">{title}</span>
-          {isLoading && <Loader2 className="w-3 h-3 animate-spin text-canopy-text/55" />}
+          {isLoading && <Spinner size="xs" className="text-canopy-text/55" />}
         </div>
 
         <div className="flex items-center gap-2">

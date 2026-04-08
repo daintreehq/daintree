@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { AlertTriangle, Loader2, RefreshCw, Settings } from "lucide-react";
+import { AlertTriangle, RefreshCw, Settings } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import type {
   TerminalType,
   TerminalRestartError,
@@ -10,6 +11,7 @@ import type {
 import { cn } from "@/lib/utils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
+
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
@@ -23,19 +25,23 @@ import { ContentPanel } from "@/components/Panel";
 import { useIsDragging } from "@/components/DragDrop";
 import {
   useErrorStore,
-  useTerminalStore,
+  usePanelStore,
   getTerminalRefreshTier,
   useTerminalInputStore,
 } from "@/store";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { errorsClient } from "@/clients";
-import type { AgentState, LegacyAgentType } from "@/types";
+import type { AgentState } from "@/types";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { actionService } from "@/services/ActionService";
 import { InputTracker } from "@/services/clearCommandDetection";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { terminalClient } from "@/clients";
-import { HybridInputBar, type HybridInputBarHandle } from "./HybridInputBar";
+import type { HybridInputBarHandle } from "./HybridInputBar";
+const LazyHybridInputBar = lazy(() =>
+  import("./HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
+);
 import { getTerminalFocusTarget, shouldSuppressUnfocusedClick } from "./terminalFocus";
 import { registerPanelFocusHandler } from "./terminalFocusRegistry";
 
@@ -159,20 +165,20 @@ function TerminalPaneComponent({
     processStartTimeRef.current = Date.now();
   }, [restartKey]);
 
-  const updateVisibility = useTerminalStore((state) => state.updateVisibility);
-  const getTerminal = useTerminalStore((state) => state.getTerminal);
-  const restartTerminal = useTerminalStore((state) => state.restartTerminal);
-  const trashTerminal = useTerminalStore((state) => state.trashTerminal);
-  const setFocused = useTerminalStore((state) => state.setFocused);
-  const updateLastCommand = useTerminalStore((state) => state.updateLastCommand);
-  const backendStatus = useTerminalStore((state) => state.backendStatus);
-  const lastCrashType = useTerminalStore((state) => state.lastCrashType);
-  const clearReconnectError = useTerminalStore((state) => state.clearReconnectError);
+  const updateVisibility = usePanelStore((state) => state.updateVisibility);
+  const getTerminal = usePanelStore((state) => state.getTerminal);
+  const restartTerminal = usePanelStore((state) => state.restartTerminal);
+  const trashPanel = usePanelStore((state) => state.trashPanel);
+  const setFocused = usePanelStore((state) => state.setFocused);
+  const updateLastCommand = usePanelStore((state) => state.updateLastCommand);
+  const backendStatus = usePanelStore((state) => state.backendStatus);
+  const lastCrashType = usePanelStore((state) => state.lastCrashType);
+  const clearReconnectError = usePanelStore((state) => state.clearReconnectError);
 
   // Consolidate terminal state selectors to avoid multiple scans and ensure consistent snapshots
-  const terminalState = useTerminalStore(
+  const terminalState = usePanelStore(
     useShallow((state) => {
-      const terminal = state.terminals.find((t) => t.id === id);
+      const terminal = state.panelsById[id];
       return {
         isInputLocked: terminal?.isInputLocked ?? false,
         stateChangeTrigger: terminal?.stateChangeTrigger,
@@ -208,19 +214,17 @@ function TerminalPaneComponent({
       : type && isRegisteredAgent(type)
         ? type
         : undefined
-  ) as LegacyAgentType | undefined;
+  ) as BuiltInAgentId | undefined;
   const isAgentTerminal = effectiveAgentId !== undefined;
   const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
 
-  const queueCount = useTerminalStore(
-    useShallow((state) => state.commandQueue.filter((c) => c.terminalId === id).length)
-  );
+  const queueCount = usePanelStore((state) => state.commandQueueCountById[id] ?? 0);
 
   const pingedIdSelector = useMemo(
-    () => (state: ReturnType<typeof useTerminalStore.getState>) => state.pingedId === id,
+    () => (state: ReturnType<typeof usePanelStore.getState>) => state.pingedId === id,
     [id]
   );
-  const isPinged = useTerminalStore(pingedIdSelector);
+  const isPinged = usePanelStore(pingedIdSelector);
   const wasJustSelected = isPinged && isFocused && performance.now() < justFocusedUntilRef.current;
 
   const terminalErrors = useErrorStore(
@@ -282,7 +286,7 @@ function TerminalPaneComponent({
 
     autoRestartTimerRef.current = setTimeout(() => {
       autoRestartTimerRef.current = null;
-      const currentTerminal = useTerminalStore.getState().terminals.find((t) => t.id === id);
+      const currentTerminal = usePanelStore.getState().panelsById[id];
       if (!currentTerminal || currentTerminal.location === "trash") {
         setIsAutoRestarting(false);
         return;
@@ -310,9 +314,13 @@ function TerminalPaneComponent({
     isDraggingRef.current = isDragging;
   }, [isDragging]);
 
-  // Visibility observation - stable observer, ref-gated callback
+  // Visibility observation - stable observer, ref-gated callback.
+  // Capture attach generation so stale IntersectionObserver callbacks from a
+  // previous mount site don't hide a terminal that has already been re-attached.
   useEffect(() => {
     if (!containerRef.current) return;
+
+    const gen = terminalInstanceService.getAttachGeneration(id);
 
     const observer = new IntersectionObserver(
       ([entry]) => {
@@ -320,7 +328,7 @@ function TerminalPaneComponent({
         if (isDraggingRef.current) return;
 
         updateVisibility(id, entry.isIntersecting);
-        terminalInstanceService.setVisible(id, entry.isIntersecting);
+        terminalInstanceService.setVisible(id, entry.isIntersecting, gen);
       },
       {
         threshold: 0.1,
@@ -329,13 +337,17 @@ function TerminalPaneComponent({
 
     observer.observe(containerRef.current);
     return () => observer.disconnect();
-  }, [id, updateVisibility]);
+  }, [id, restartKey, updateVisibility]);
 
-  // Separate unmount cleanup - only runs on actual unmount, not on drag changes
+  // Separate unmount cleanup — only update store visibility.
+  // The service-level setVisible(false) is handled by XtermAdapter's own
+  // useLayoutEffect cleanup, which has the correct attachGeneration guard.
+  // Calling it here too is redundant and breaks in React StrictMode (dev),
+  // where the effect's cleanup captures the same generation as the active
+  // mount, bypassing the stale-generation guard and hiding the terminal.
   useEffect(() => {
     return () => {
       updateVisibility(id, false);
-      terminalInstanceService.setVisible(id, false);
     };
   }, [id, updateVisibility]);
 
@@ -503,8 +515,8 @@ function TerminalPaneComponent({
   }, []);
 
   const handleTrash = useCallback(() => {
-    trashTerminal(id);
-  }, [trashTerminal, id]);
+    trashPanel(id);
+  }, [trashPanel, id]);
 
   const handleDismissReconnectError = useCallback(() => {
     clearReconnectError(id);
@@ -771,7 +783,7 @@ function TerminalPaneComponent({
             >
               {isBackendRecovering ? (
                 <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="w-8 h-8 animate-spin motion-reduce:animate-none text-status-warning" />
+                  <Spinner size="2xl" className="text-status-warning" />
                   <span className="text-text-inverse font-medium">Reconnecting...</span>
                 </div>
               ) : (
@@ -831,7 +843,7 @@ function TerminalPaneComponent({
                       className="px-4 py-2 bg-canopy-accent/20 hover:bg-canopy-accent/30 text-canopy-accent rounded-lg border border-canopy-accent/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
                       {isRestartingService ? (
-                        <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />
+                        <Spinner size="md" />
                       ) : (
                         <RefreshCw className="w-4 h-4" />
                       )}
@@ -853,30 +865,32 @@ function TerminalPaneComponent({
         </div>
 
         {showHybridInputBar && (
-          <HybridInputBar
-            ref={inputBarRef}
-            terminalId={id}
-            disabled={isBackendDisconnected || isBackendRecovering || isInputLocked}
-            cwd={cwd}
-            agentId={effectiveAgentId}
-            agentHasLifecycleEvent={stateChangeTrigger !== undefined}
-            agentState={agentState}
-            restartKey={restartKey}
-            onActivate={handleClick}
-            onSend={({ trackerData, text }) => {
-              if (!isInputLocked) {
-                terminalInstanceService.notifyUserInput(id);
-                terminalClient.submit(id, text);
-                handleInput(trackerData);
-              }
-            }}
-            onSendKey={(key) => {
-              if (!isInputLocked) {
-                terminalInstanceService.notifyUserInput(id);
-                terminalClient.sendKey(id, key);
-              }
-            }}
-          />
+          <Suspense fallback={null}>
+            <LazyHybridInputBar
+              ref={inputBarRef}
+              terminalId={id}
+              disabled={isBackendDisconnected || isBackendRecovering || isInputLocked}
+              cwd={cwd}
+              agentId={effectiveAgentId}
+              agentHasLifecycleEvent={stateChangeTrigger !== undefined}
+              agentState={agentState}
+              restartKey={restartKey}
+              onActivate={handleClick}
+              onSend={({ trackerData, text }) => {
+                if (!isInputLocked) {
+                  terminalInstanceService.notifyUserInput(id);
+                  terminalClient.submit(id, text);
+                  handleInput(trackerData);
+                }
+              }}
+              onSendKey={(key) => {
+                if (!isInputLocked) {
+                  terminalInstanceService.notifyUserInput(id);
+                  terminalClient.sendKey(id, key);
+                }
+              }}
+            />
+          </Suspense>
         )}
       </div>
 

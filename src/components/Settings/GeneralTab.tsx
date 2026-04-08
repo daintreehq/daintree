@@ -5,16 +5,16 @@ import {
   Moon,
   CheckCircle,
   AlertCircle,
-  Activity,
   Wrench,
   LayoutGrid,
   PanelBottom,
   Keyboard,
   Info,
   ExternalLink,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CanopyIcon } from "@/components/icons";
+import { CanopyIcon, ProjectPulseIcon } from "@/components/icons";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
@@ -100,7 +100,15 @@ export function GeneralTab({
   const [cliCheckFailed, setCliCheckFailed] = useState(false);
   const [agentSettings, setAgentSettings] = useState<AgentSettings | null>(null);
   const [shortcuts, setShortcuts] = useState<ShortcutCategory[]>([]);
+  const [updateChannel, setUpdateChannel] = useState<"stable" | "nightly" | null>(null);
+  const [channelSaving, setChannelSaving] = useState(false);
   const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
   const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
@@ -108,15 +116,37 @@ export function GeneralTab({
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
 
   useEffect(() => {
+    let cancelled = false;
+    window.electron.update
+      .getChannel()
+      .then((ch) => {
+        if (!cancelled) setUpdateChannel(ch);
+      })
+      .catch(() => {
+        if (!cancelled) setUpdateChannel("stable");
+      });
     return () => {
-      isMountedRef.current = false;
+      cancelled = true;
     };
   }, []);
 
+  const handleChannelChange = async (channel: "stable" | "nightly") => {
+    if (channelSaving || channel === updateChannel) return;
+    setChannelSaving(true);
+    try {
+      const result = await window.electron.update.setChannel(channel);
+      if (isMountedRef.current) setUpdateChannel(result);
+    } catch (error) {
+      console.error("Failed to set update channel:", error);
+    } finally {
+      if (isMountedRef.current) setChannelSaving(false);
+    }
+  };
+
   useEffect(() => {
-    let settled = false;
+    let cancelled = false;
     const timer = setTimeout(() => {
-      if (!settled && isMountedRef.current) {
+      if (!cancelled) {
         setConfigError("Settings load timed out");
       }
     }, 10_000);
@@ -124,9 +154,8 @@ export function GeneralTab({
     actionService
       .dispatch("hibernation.getConfig", undefined, { source: "user" })
       .then((result) => {
-        settled = true;
         clearTimeout(timer);
-        if (!isMountedRef.current) return;
+        if (cancelled) return;
         if (!result.ok) {
           throw new Error(result.error.message);
         }
@@ -134,17 +163,20 @@ export function GeneralTab({
         setConfigError(null);
       })
       .catch((error) => {
-        settled = true;
         clearTimeout(timer);
-        if (!isMountedRef.current) return;
+        if (cancelled) return;
         console.error("Failed to load hibernation config:", error);
         setConfigError(error instanceof Error ? error.message : "Failed to load settings");
       });
 
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     const STATUS_TIMEOUT_MS = 15_000;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
@@ -163,7 +195,7 @@ export function GeneralTab({
       timeout,
     ])
       .then(([availabilityResult, settingsResult]) => {
-        if (!isMountedRef.current) return;
+        if (cancelled) return;
         if (!availabilityResult.ok) {
           throw new Error(availabilityResult.error.message);
         }
@@ -175,13 +207,14 @@ export function GeneralTab({
         setAgentSettings((settingsResult.result as AgentSettings) ?? DEFAULT_AGENT_SETTINGS);
       })
       .catch((error) => {
-        if (!isMountedRef.current) return;
+        if (cancelled) return;
         console.error("[GeneralTab] Failed to load agent availability:", error);
         setCliCheckFailed(true);
       })
       .finally(() => clearTimeout(timeoutId));
 
     return () => {
+      cancelled = true;
       clearTimeout(timeoutId);
     };
   }, []);
@@ -316,14 +349,14 @@ export function GeneralTab({
                 onClick={() =>
                   void actionService.dispatch(
                     "system.openExternal",
-                    { url: "https://github.com/canopyide/canopy" },
+                    { url: "https://canopyide.com" },
                     { source: "user" }
                   )
                 }
                 className="flex items-center gap-1.5 text-xs text-text-muted hover:text-canopy-accent transition-colors pt-1"
               >
                 <ExternalLink className="w-3 h-3" />
-                github.com/canopyide/canopy
+                canopyide.com
               </button>
             </div>
           </div>
@@ -390,6 +423,37 @@ export function GeneralTab({
                   </button>
                 )}
               </div>
+            )}
+          </SettingsSection>
+
+          <SettingsSection
+            icon={RefreshCw}
+            title="Update Channel"
+            description="Choose between stable releases and nightly builds."
+            id="general-update-channel"
+          >
+            <div className="flex gap-2">
+              {(["stable", "nightly"] as const).map((ch) => (
+                <button
+                  key={ch}
+                  disabled={channelSaving || updateChannel === null}
+                  onClick={() => void handleChannelChange(ch)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors capitalize",
+                    updateChannel === ch
+                      ? "bg-canopy-accent/10 border border-canopy-accent text-canopy-accent"
+                      : "border border-canopy-border hover:bg-tint/5 text-canopy-text/70"
+                  )}
+                >
+                  {ch}
+                </button>
+              ))}
+            </div>
+            {updateChannel === "nightly" && (
+              <p className="text-xs text-status-warning/80">
+                Nightly builds may contain unstable features. You can switch back to stable at any
+                time.
+              </p>
             )}
           </SettingsSection>
 
@@ -484,7 +548,7 @@ export function GeneralTab({
                         disabled={isSaving}
                         onClick={() => handleThresholdChange(value)}
                         className={cn(
-                          "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-all",
+                          "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                           hibernationConfig.inactiveThresholdHours === value
                             ? "bg-canopy-accent/10 border border-canopy-accent text-canopy-accent"
                             : "border border-canopy-border hover:bg-tint/5 text-canopy-text/70"
@@ -508,13 +572,13 @@ export function GeneralTab({
 
       {effectiveSubtab === "display" && (
         <SettingsSection
-          icon={Activity}
+          icon={ProjectPulseIcon}
           title="Display"
           description="Control which interface elements are visible."
           id="general-project-pulse"
         >
           <SettingsSwitchCard
-            icon={Activity}
+            icon={ProjectPulseIcon}
             title="Project Pulse"
             subtitle="Show activity heatmap on the empty panel grid"
             isEnabled={showProjectPulse}

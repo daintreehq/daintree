@@ -7,18 +7,7 @@ const fsMock = vi.hoisted(() => ({
   rmSync: vi.fn(),
 }));
 
-vi.mock("fs", () => ({
-  default: {
-    existsSync: fsMock.existsSync,
-    readdirSync: fsMock.readdirSync,
-    rmSync: fsMock.rmSync,
-  },
-  existsSync: fsMock.existsSync,
-  readdirSync: fsMock.readdirSync,
-  rmSync: fsMock.rmSync,
-}));
-
-vi.mock("electron", () => ({
+const electronMock = vi.hoisted(() => ({
   app: {
     isPackaged: false,
     getPath: vi.fn(() => "/tmp/test-appdata"),
@@ -30,9 +19,24 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("fix-path", () => ({
+const fixPathMock = vi.hoisted(() => ({
   default: vi.fn(),
 }));
+
+vi.mock("fs", () => ({
+  default: {
+    existsSync: fsMock.existsSync,
+    readdirSync: fsMock.readdirSync,
+    rmSync: fsMock.rmSync,
+  },
+  existsSync: fsMock.existsSync,
+  readdirSync: fsMock.readdirSync,
+  rmSync: fsMock.rmSync,
+}));
+
+vi.mock("electron", () => electronMock);
+
+vi.mock("fix-path", () => fixPathMock);
 
 vi.mock("node:v8", () => ({
   default: { setFlagsFromString: vi.fn() },
@@ -90,6 +94,10 @@ describe("Windows Git PATH discovery", () => {
     delete process.env["ProgramFiles"];
     delete process.env["ProgramFiles(x86)"];
     delete process.env["ChocolateyInstall"];
+    delete process.env["VOLTA_HOME"];
+    delete process.env["PNPM_HOME"];
+    delete process.env["FNM_MULTISHELL_PATH"];
+    delete process.env["NVM_SYMLINK"];
   });
 
   afterEach(() => {
@@ -196,6 +204,117 @@ describe("Windows Git PATH discovery", () => {
     expect(hasLocalBin).toBe(false);
   });
 
+  it("includes npm global bin path", async () => {
+    fsMock.existsSync.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    const candidates = getCandidatePaths();
+    expect(candidates).toContainEqual(
+      expect.stringContaining(path.join("AppData", "Roaming", "npm"))
+    );
+  });
+
+  it("includes Volta bin from VOLTA_HOME env var when set", async () => {
+    process.env["VOLTA_HOME"] = "D:\\Volta";
+    fsMock.existsSync.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    const candidates = getCandidatePaths();
+    expect(candidates).toContainEqual(expect.stringContaining(path.join("D:\\Volta", "bin")));
+    // Should NOT contain the hardcoded fallback
+    const hasFallback = candidates.some((p) =>
+      p.includes(path.join("AppData", "Local", "Volta", "bin"))
+    );
+    expect(hasFallback).toBe(false);
+
+    delete process.env["VOLTA_HOME"];
+  });
+
+  it("includes Volta bin from hardcoded fallback when VOLTA_HOME not set", async () => {
+    delete process.env["VOLTA_HOME"];
+    fsMock.existsSync.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    const candidates = getCandidatePaths();
+    expect(candidates).toContainEqual(
+      expect.stringContaining(path.join("AppData", "Local", "Volta", "bin"))
+    );
+  });
+
+  it("includes PNPM_HOME path when env var is set", async () => {
+    process.env["PNPM_HOME"] = "C:\\Users\\testuser\\AppData\\Local\\pnpm";
+    fsMock.existsSync.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    const candidates = getCandidatePaths();
+    expect(candidates).toContainEqual(expect.stringContaining("AppData\\Local\\pnpm"));
+
+    delete process.env["PNPM_HOME"];
+  });
+
+  it("does not include pnpm path when PNPM_HOME is not set", async () => {
+    delete process.env["PNPM_HOME"];
+    fsMock.existsSync.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    const candidates = getCandidatePaths();
+    const hasPnpm = candidates.some((p) => p.includes("pnpm"));
+    expect(hasPnpm).toBe(false);
+  });
+
+  it("includes FNM_MULTISHELL_PATH when env var is set", async () => {
+    process.env["FNM_MULTISHELL_PATH"] =
+      "C:\\Users\\testuser\\AppData\\Local\\fnm_multishells\\12345";
+    fsMock.existsSync.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    const candidates = getCandidatePaths();
+    expect(candidates).toContainEqual(expect.stringContaining("fnm_multishells"));
+
+    delete process.env["FNM_MULTISHELL_PATH"];
+  });
+
+  it("does not include fnm path when FNM_MULTISHELL_PATH is not set", async () => {
+    delete process.env["FNM_MULTISHELL_PATH"];
+    fsMock.existsSync.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    const candidates = getCandidatePaths();
+    const hasFnm = candidates.some((p) => p.includes("fnm"));
+    expect(hasFnm).toBe(false);
+  });
+
+  it("includes NVM_SYMLINK path when env var is set", async () => {
+    process.env["NVM_SYMLINK"] = "C:\\Program Files\\nodejs";
+    fsMock.existsSync.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    const candidates = getCandidatePaths();
+    expect(candidates).toContainEqual(expect.stringContaining("C:\\Program Files\\nodejs"));
+
+    delete process.env["NVM_SYMLINK"];
+  });
+
+  it("does not include nvm-windows path when NVM_SYMLINK is not set", async () => {
+    delete process.env["NVM_SYMLINK"];
+    fsMock.existsSync.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    const candidates = getCandidatePaths();
+    // "nodejs" only appears from NVM_SYMLINK, not from other paths
+    const hasNvm = candidates.some((p) => p === "C:\\Program Files\\nodejs");
+    expect(hasNvm).toBe(false);
+  });
+
   it("falls back to defaults when env vars are empty strings", async () => {
     process.env["ProgramFiles"] = "";
     process.env["ProgramFiles(x86)"] = "";
@@ -267,6 +386,63 @@ describe("GPU memory flags", () => {
       "gpu-rasterization-msaa-sample-count",
       "0"
     );
+  });
+});
+
+describe("Chromium feature flags", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    process.argv = ["electron", "main.js"];
+    delete process.env.XDG_SESSION_TYPE;
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    process.argv = originalArgv;
+    delete process.env.XDG_SESSION_TYPE;
+  });
+
+  it("always includes PartitionAllocMemoryReclaimer in enable-features", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    const calls = vi.mocked(app.commandLine.appendSwitch).mock.calls;
+    const enableCalls = calls.filter(([key]) => key === "enable-features");
+    expect(enableCalls).toHaveLength(1);
+    expect(enableCalls[0][1]).toBe("PartitionAllocMemoryReclaimer");
+  });
+
+  it("merges WaylandWindowDecorations with PartitionAllocMemoryReclaimer on Linux Wayland", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", writable: true });
+    process.env.XDG_SESSION_TYPE = "wayland";
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    const calls = vi.mocked(app.commandLine.appendSwitch).mock.calls;
+    const enableCalls = calls.filter(([key]) => key === "enable-features");
+    expect(enableCalls).toHaveLength(1);
+    expect(enableCalls[0][1]).toBe("PartitionAllocMemoryReclaimer,WaylandWindowDecorations");
+  });
+
+  it("does not include WaylandWindowDecorations on Linux non-Wayland", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", writable: true });
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    const calls = vi.mocked(app.commandLine.appendSwitch).mock.calls;
+    const enableCalls = calls.filter(([key]) => key === "enable-features");
+    expect(enableCalls).toHaveLength(1);
+    expect(enableCalls[0][1]).toBe("PartitionAllocMemoryReclaimer");
+    const imeCalls = calls.filter(([key]) => key === "enable-wayland-ime");
+    expect(imeCalls).toHaveLength(0);
   });
 });
 
@@ -370,5 +546,38 @@ describe("reset-data", () => {
     await import("../environment.js");
 
     expect(fsMock.readdirSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("fixPath packaging guard", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.argv = ["electron", "main.js"];
+  });
+
+  afterEach(() => {
+    electronMock.app.isPackaged = false;
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    process.argv = originalArgv;
+  });
+
+  it("does not call fixPath in dev mode (isPackaged=false)", async () => {
+    electronMock.app.isPackaged = false;
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    expect(fixPathMock.default).not.toHaveBeenCalled();
+  });
+
+  it("calls fixPath in packaged mode (isPackaged=true)", async () => {
+    electronMock.app.isPackaged = true;
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    expect(fixPathMock.default).toHaveBeenCalledOnce();
   });
 });

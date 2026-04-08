@@ -53,6 +53,17 @@ export class ProcessTreeCache {
     }
   }
 
+  setPollInterval(ms: number): void {
+    if (this.pollIntervalMs === ms) return;
+    this.pollIntervalMs = ms;
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+      this.refreshInterval = setInterval(() => {
+        this.refresh();
+      }, this.pollIntervalMs);
+    }
+  }
+
   onRefresh(callback: RefreshCallback): () => void {
     const wasEmpty = this.refreshCallbacks.size === 0;
     this.refreshCallbacks.add(callback);

@@ -68,11 +68,15 @@ vi.mock("@/store/terminalInputStore", () => {
   return { useTerminalInputStore: Object.assign(getState, { getState }) };
 });
 
-vi.mock("@/store/terminalStore", () => {
-  const state = { terminals: [] as unknown[], focusedId: null };
+vi.mock("@/store/panelStore", () => {
+  const state = {
+    panelsById: {} as Record<string, unknown>,
+    panelIds: [] as string[],
+    focusedId: null,
+  };
   const getState = () => state;
   const subscribe = vi.fn(() => () => {});
-  return { useTerminalStore: Object.assign(getState, { getState, subscribe }) };
+  return { usePanelStore: Object.assign(getState, { getState, subscribe }) };
 });
 
 vi.mock("@/store/projectStore", () => {
@@ -81,10 +85,11 @@ vi.mock("@/store/projectStore", () => {
   return { useProjectStore: Object.assign(getState, { getState }) };
 });
 
-vi.mock("@/store/worktreeDataStore", () => {
-  const getState = () => ({ worktrees: new Map() });
-  return { useWorktreeDataStore: Object.assign(getState, { getState }) };
-});
+vi.mock("@/store/createWorktreeStore", () => ({
+  getCurrentViewStore: () => ({
+    getState: () => ({ worktrees: new Map() }),
+  }),
+}));
 
 vi.mock("@/store/worktreeStore", () => {
   const getState = () => ({ activeWorktreeId: null, selectWorktree: vi.fn() });
@@ -131,6 +136,7 @@ function buildElectronStub() {
       paragraphBoundaryCallback = cb;
       return () => {};
     }),
+    onFileTokenResolved: vi.fn(() => () => {}),
     onError: vi.fn(() => () => {}),
     onStatus: vi.fn(() => () => {}),
     getSettings: vi.fn().mockResolvedValue({

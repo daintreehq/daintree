@@ -17,21 +17,35 @@ const debuggerMock = vi.hoisted(() => ({
 const mockWebContents = vi.hoisted(() => ({
   isDestroyed: vi.fn(() => false),
   debugger: debuggerMock,
+  executeJavaScript: vi.fn().mockResolvedValue([]),
+  hostWebContents: null as unknown,
 }));
 
 const webContentsMock = vi.hoisted(() => ({
   fromId: vi.fn(() => mockWebContents),
 }));
 
+const browserWindowMock = vi.hoisted(() => ({
+  getAllWindows: () => [mainWindowMock],
+  fromWebContents: vi.fn((): unknown => null),
+}));
+
+const appMock = vi.hoisted(() => ({
+  on: vi.fn(),
+}));
+
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   webContents: webContentsMock,
+  BrowserWindow: browserWindowMock,
+  app: appMock,
 }));
 
 const mockDialogService = vi.hoisted(() => ({
   registerPanel: vi.fn(),
   resolveDialog: vi.fn(),
   getPanelId: vi.fn<(id: number) => string | undefined>(() => "test-panel"),
+  consumeOAuthSessionStorage: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../../../services/WebviewDialogService.js", () => ({
@@ -52,9 +66,13 @@ vi.mock("../../utils.js", () => ({
       mainWindow.webContents.send(channel, ...args);
     }
   ),
+  broadcastToRenderer: vi.fn((channel: string, ...args: unknown[]) => {
+    mainWindowMock.webContents.send(channel, ...args);
+  }),
 }));
 
 import { registerWebviewHandlers } from "../webview.js";
+import { sendToRenderer, broadcastToRenderer } from "../../utils.js";
 import type { HandlerDependencies } from "../../types.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -328,6 +346,71 @@ describe("registerWebviewHandlers", () => {
       expect(calls[0][1].groupDepth).toBe(0); // startGroup header at depth 0
       expect(calls[1][1].groupDepth).toBe(1); // child at depth 1
       expect(calls[2][1].groupDepth).toBe(0); // after endGroup, back to depth 0
+    });
+
+    it("sends console messages to owner window when hostWebContents resolves", async () => {
+      const ownerWindowMock = {
+        webContents: { send: vi.fn(), isDestroyed: vi.fn(() => false) },
+        isDestroyed: vi.fn(() => false),
+      };
+      mockWebContents.hostWebContents = { id: 99 };
+      browserWindowMock.fromWebContents.mockReturnValue(ownerWindowMock);
+
+      cleanup = registerWebviewHandlers(deps);
+      const handler = getHandler("webview:start-console-capture");
+      await handler(null, 42, "pane-1");
+
+      const messageListener = debuggerMock.on.mock.calls.find(
+        ([event]: string[]) => event === "message"
+      )![1];
+
+      vi.mocked(sendToRenderer).mockClear();
+      vi.mocked(broadcastToRenderer).mockClear();
+
+      messageListener({}, "Runtime.consoleAPICalled", {
+        type: "log",
+        args: [{ type: "string", value: "targeted" }],
+        timestamp: 2000,
+      });
+
+      expect(sendToRenderer).toHaveBeenCalledWith(
+        ownerWindowMock,
+        "webview:console-message",
+        expect.objectContaining({ paneId: "pane-1", summaryText: "targeted" })
+      );
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+
+      // Reset for other tests
+      mockWebContents.hostWebContents = null;
+      browserWindowMock.fromWebContents.mockReturnValue(null);
+    });
+
+    it("falls back to broadcast when hostWebContents is null", async () => {
+      mockWebContents.hostWebContents = null;
+      browserWindowMock.fromWebContents.mockReturnValue(null);
+
+      cleanup = registerWebviewHandlers(deps);
+      const handler = getHandler("webview:start-console-capture");
+      await handler(null, 42, "pane-1");
+
+      const messageListener = debuggerMock.on.mock.calls.find(
+        ([event]: string[]) => event === "message"
+      )![1];
+
+      vi.mocked(sendToRenderer).mockClear();
+      vi.mocked(broadcastToRenderer).mockClear();
+
+      messageListener({}, "Runtime.consoleAPICalled", {
+        type: "log",
+        args: [{ type: "string", value: "fallback" }],
+        timestamp: 3000,
+      });
+
+      expect(broadcastToRenderer).toHaveBeenCalledWith(
+        "webview:console-message",
+        expect.objectContaining({ paneId: "pane-1", summaryText: "fallback" })
+      );
+      expect(sendToRenderer).not.toHaveBeenCalled();
     });
   });
 

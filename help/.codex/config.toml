@@ -1,0 +1,7 @@
+sandbox = "full"
+writable_roots = []
+allowed_commands = ["gh"]
+
+[mcp_servers.canopy-docs]
+url = "https://canopyide.com/api/mcp"
+enabled = true

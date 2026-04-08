@@ -19,7 +19,12 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
   test.beforeAll(async () => {
     ctx = await launchApp();
     const fixtureDir = createFixtureRepo({ name: "keyboard-shortcuts" });
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Keyboard Shortcuts Test");
+    ctx.window = await openAndOnboardProject(
+      ctx.app,
+      ctx.window,
+      fixtureDir,
+      "Keyboard Shortcuts Test"
+    );
   });
 
   test.afterAll(async () => {
@@ -122,6 +127,7 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
 
     test("Cmd+K Cmd+S opens keyboard shortcuts reference", async () => {
       const { window } = ctx;
+      await window.waitForTimeout(200);
       await pressChord(window, `${mod}+k`, `${mod}+s`);
 
       const title = window.locator('[role="dialog"] h1, [role="dialog"] h2').filter({
@@ -129,7 +135,8 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
       });
       await expect(title).toBeVisible({ timeout: T_MEDIUM });
 
-      await window.keyboard.press("Escape");
+      const closeBtn = window.getByRole("button", { name: "Close dialog" });
+      await closeBtn.click();
       await expect(title).not.toBeAttached({ timeout: T_SHORT });
     });
 

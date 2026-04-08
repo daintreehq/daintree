@@ -69,6 +69,8 @@ export const theme: BuiltInThemeSource = {
     },
     strategy: {
       shadowStyle: "crisp",
+      materialBlur: 12,
+      materialSaturation: 115,
     },
   },
   tokens: {
@@ -76,7 +78,7 @@ export const theme: BuiltInThemeSource = {
     "border-interactive": "rgba(140,200,180,0.12)",
     "border-strong": "rgba(140,200,180,0.20)",
     "border-subtle": "rgba(140,200,180,0.08)",
-    "focus-ring": "rgba(140,200,180,0.22)",
+    "focus-ring": "rgba(74,158,127,0.30)",
     "scrim-medium": "rgba(6,12,10,0.50)",
     "scrim-soft": "rgba(6,12,10,0.25)",
     "scrim-strong": "rgba(6,12,10,0.70)",
@@ -111,7 +113,7 @@ export const theme: BuiltInThemeSource = {
     "settings-search-bg": "#21302C",
     "settings-sidebar-bg": "rgba(17,22,21,0.70)",
     "sidebar-action-hover-bg": "rgba(74,158,127,0.08)",
-    "sidebar-active-bg": "rgba(255,255,255,0.05)",
+    "sidebar-active-bg": "rgba(74,158,127,0.10)",
     "sidebar-active-shadow": "inset 0 1px 0 0 rgba(140,200,180,0.06)",
     "sidebar-hover-bg": "rgba(74,158,127,0.04)",
     "toolbar-agent-hover-bg": "rgba(74,158,127,0.06)",

@@ -9,7 +9,7 @@ const SNAPSHOT_COOLDOWN_MS = 5 * 60 * 1000;
 
 const WARN_THRESHOLDS_MB: Record<string, number> = {
   Browser: 300,
-  Tab: 1536,
+  Tab: 768,
   Utility: 500,
 };
 

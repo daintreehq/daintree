@@ -1,8 +1,9 @@
+import os from "os";
 import PQueue from "p-queue";
 import { mkdir, writeFile, stat } from "fs/promises";
 import { join as pathJoin, dirname, resolve as pathResolve, isAbsolute } from "path";
 import { SimpleGit, BranchSummary } from "simple-git";
-import { createHardenedGit } from "../utils/hardenedGit.js";
+import { createHardenedGit, createAuthenticatedGit } from "../utils/hardenedGit.js";
 import type { Worktree } from "../../shared/types/worktree.js";
 import type {
   WorkspaceHostEvent,
@@ -68,18 +69,16 @@ export class WorkspaceService {
   private git: SimpleGit | null = null;
   private pollingEnabled: boolean = true;
   private projectRootPath: string | null = null;
-  private projectScopeId: string | null = null;
   private lifecycleService = new WorktreeLifecycleService();
   private listService = new WorktreeListService();
   private prService: PRIntegrationService;
+  private _shutdownController = new AbortController();
 
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
     this.prService = new PRIntegrationService(pullRequestService, events, {
       onPRDetected: (worktreeId, data) => {
         const monitor = this.monitors.get(worktreeId);
-        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
-          return;
-        }
+        if (!monitor) return;
 
         monitor.setPRInfo({
           prNumber: data.prNumber,
@@ -92,68 +91,51 @@ export class WorkspaceService {
           this.emitUpdate(monitor);
         }
 
-        if (this.projectScopeId) {
-          this.sendEvent({
-            type: "pr-detected",
-            worktreeId,
-            prNumber: data.prNumber,
-            prUrl: data.prUrl,
-            prState: data.prState,
-            prTitle: data.prTitle,
-            issueNumber: data.issueNumber,
-            issueTitle: data.issueTitle,
-            projectScopeId: this.projectScopeId,
-          });
-        }
+        this.sendEvent({
+          type: "pr-detected",
+          worktreeId,
+          prNumber: data.prNumber,
+          prUrl: data.prUrl,
+          prState: data.prState,
+          prTitle: data.prTitle,
+          issueNumber: data.issueNumber,
+          issueTitle: data.issueTitle,
+        });
       },
       onPRCleared: (worktreeId) => {
         const monitor = this.monitors.get(worktreeId);
-        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
-          return;
-        }
+        if (!monitor) return;
 
         monitor.clearPRInfo();
         if (monitor.hasInitialStatus) {
           this.emitUpdate(monitor);
         }
 
-        if (this.projectScopeId) {
-          this.sendEvent({
-            type: "pr-cleared",
-            worktreeId,
-            projectScopeId: this.projectScopeId,
-          });
-        }
+        this.sendEvent({
+          type: "pr-cleared",
+          worktreeId,
+        });
       },
       onIssueDetected: (worktreeId, data) => {
         const monitor = this.monitors.get(worktreeId);
-        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
-          return;
-        }
+        if (!monitor) return;
 
         monitor.setIssueTitle(data.issueTitle);
         if (monitor.hasInitialStatus) {
           this.emitUpdate(monitor);
         }
 
-        if (this.projectScopeId) {
-          this.sendEvent({
-            type: "issue-detected",
-            worktreeId,
-            issueNumber: data.issueNumber,
-            issueTitle: data.issueTitle,
-            projectScopeId: this.projectScopeId,
-          });
-        }
+        this.sendEvent({
+          type: "issue-detected",
+          worktreeId,
+          issueNumber: data.issueNumber,
+          issueTitle: data.issueTitle,
+        });
       },
       onIssueNotFound: (worktreeId, issueNumber) => {
         const monitor = this.monitors.get(worktreeId);
-        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
-          return;
-        }
-        if (monitor.issueNumber !== issueNumber) {
-          return;
-        }
+        if (!monitor) return;
+        if (monitor.issueNumber !== issueNumber) return;
 
         monitor.setIssueNumber(undefined);
         monitor.setIssueTitle(undefined);
@@ -161,27 +143,19 @@ export class WorkspaceService {
           this.emitUpdate(monitor);
         }
 
-        if (this.projectScopeId) {
-          this.sendEvent({
-            type: "issue-not-found",
-            worktreeId,
-            issueNumber,
-            projectScopeId: this.projectScopeId,
-          });
-        }
+        this.sendEvent({
+          type: "issue-not-found",
+          worktreeId,
+          issueNumber,
+        });
       },
     });
   }
 
-  async loadProject(
-    requestId: string,
-    projectRootPath: string,
-    projectScopeId: string
-  ): Promise<void> {
+  async loadProject(requestId: string, projectRootPath: string): Promise<void> {
     try {
       this.projectRootPath = projectRootPath;
-      this.projectScopeId = projectScopeId;
-      this.git = createHardenedGit(projectRootPath);
+      this.git = createHardenedGit(projectRootPath, this._shutdownController.signal);
       this.listService.setGit(this.git, projectRootPath);
 
       const rawWorktrees = await this.listService.list();
@@ -260,14 +234,11 @@ export class WorkspaceService {
         this.monitors.delete(id);
         clearGitDirCache(monitor.path);
         invalidateGitStatusCache(monitor.path);
-        if (this.projectScopeId) {
-          this.sendEvent({
-            type: "worktree-removed",
-            worktreeId: id,
-            projectScopeId: this.projectScopeId,
-          });
-          events.emit("sys:worktree:remove", { worktreeId: id, timestamp: Date.now() });
-        }
+        this.sendEvent({
+          type: "worktree-removed",
+          worktreeId: id,
+        });
+        events.emit("sys:worktree:remove", { worktreeId: id, timestamp: Date.now() });
       }
     }
 
@@ -283,7 +254,6 @@ export class WorkspaceService {
         existingMonitor.name = wt.name;
         existingMonitor.isCurrent = isActive;
         existingMonitor.isMainWorktree = wt.isMainWorktree ?? false;
-        existingMonitor.setProjectScopeId(this.projectScopeId);
 
         const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
         existingMonitor.updateConfig({
@@ -363,7 +333,6 @@ export class WorkspaceService {
         );
 
         monitor.setIssueNumber(issueNumber ?? undefined);
-        monitor.setProjectScopeId(this.projectScopeId);
         monitor.setCreatedAt(createdAt);
 
         this.monitors.set(wt.id, monitor);
@@ -400,33 +369,19 @@ export class WorkspaceService {
   }
 
   private handleMonitorUpdate(monitor: WorktreeMonitor, _snapshot: WorktreeSnapshot): void {
-    if (!this.projectScopeId) {
-      return;
-    }
-    if (monitor.projectScopeId !== this.projectScopeId) {
-      return;
-    }
     const snapshot = monitor.getSnapshot();
     this.sendEvent({
       type: "worktree-update",
       worktree: snapshot,
-      projectScopeId: this.projectScopeId,
     });
     events.emit("sys:worktree:update", snapshot as any);
   }
 
   private emitUpdate(monitor: WorktreeMonitor): void {
-    if (!this.projectScopeId) {
-      return;
-    }
-    if (monitor.projectScopeId !== this.projectScopeId) {
-      return;
-    }
     const snapshot = monitor.getSnapshot();
     this.sendEvent({
       type: "worktree-update",
       worktree: snapshot,
-      projectScopeId: this.projectScopeId,
     });
     events.emit("sys:worktree:update", snapshot as any);
   }
@@ -463,15 +418,8 @@ export class WorkspaceService {
       this.listService.invalidateCache(cacheKey);
     }
 
-    if (this.projectScopeId) {
-      if (monitor.projectScopeId !== this.projectScopeId) {
-        console.warn(
-          `[WorkspaceHost] Scope ID mismatch on removal: monitor=${monitor.projectScopeId}, service=${this.projectScopeId}`
-        );
-      }
-      this.sendEvent({ type: "worktree-removed", worktreeId, projectScopeId: this.projectScopeId });
-      events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
-    }
+    this.sendEvent({ type: "worktree-removed", worktreeId });
+    events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
 
     console.log(
       `[WorkspaceHost] Worktree deleted externally, removed monitor: ${monitor.name} (${worktreeId})`
@@ -481,12 +429,17 @@ export class WorkspaceService {
   getAllStates(requestId: string): void {
     const states: WorktreeSnapshot[] = [];
     for (const monitor of this.monitors.values()) {
-      if (this.projectScopeId && monitor.projectScopeId !== this.projectScopeId) {
-        continue;
-      }
       states.push(monitor.getSnapshot());
     }
     this.sendEvent({ type: "all-states", requestId, states });
+  }
+
+  getSnapshotsSync(): WorktreeSnapshot[] {
+    const states: WorktreeSnapshot[] = [];
+    for (const monitor of this.monitors.values()) {
+      states.push(monitor.getSnapshot());
+    }
+    return states;
   }
 
   getMonitor(requestId: string, worktreeId: string): void {
@@ -565,15 +518,17 @@ export class WorkspaceService {
   }
 
   private async refreshAll(): Promise<void> {
-    const promises = Array.from(this.monitors.values()).map(async (monitor) => {
-      try {
-        await monitor.updateGitStatus(true);
-      } finally {
-        if (monitor.isRunning && this.pollingEnabled) {
-          monitor.reschedulePolling();
+    const promises = Array.from(this.monitors.values()).map((monitor) =>
+      this.pollQueue.add(async () => {
+        try {
+          await monitor.updateGitStatus(true);
+        } finally {
+          if (monitor.isRunning && this.pollingEnabled) {
+            monitor.reschedulePolling();
+          }
         }
-      }
-    });
+      })
+    );
     await Promise.all(promises);
   }
 
@@ -812,8 +767,20 @@ export class WorkspaceService {
         throw new Error("Cannot delete the main worktree");
       }
 
-      if (!force && (monitor.getWorktreeChanges()?.changedFileCount ?? 0) > 0) {
-        throw new Error("Worktree has uncommitted changes. Use force delete to proceed.");
+      const wtChanges = monitor.getWorktreeChanges();
+      if (!force && (wtChanges?.changedFileCount ?? 0) > 0) {
+        const fileChanges = wtChanges?.changes ?? [];
+        const hasTracked = fileChanges.some(
+          (c) => c.status !== "untracked" && c.status !== "ignored"
+        );
+        const hasUntracked = fileChanges.some((c) => c.status === "untracked");
+        const description =
+          hasTracked && hasUntracked
+            ? "uncommitted changes and untracked files"
+            : hasTracked
+              ? "uncommitted changes"
+              : "untracked files";
+        throw new Error(`Worktree has ${description}. Use force delete to proceed.`);
       }
 
       const branchToDelete = deleteBranch ? monitor.branch : undefined;
@@ -859,13 +826,10 @@ export class WorkspaceService {
       monitor.stop();
       this.monitors.delete(worktreeId);
 
-      if (this.projectScopeId && monitor.projectScopeId === this.projectScopeId) {
-        this.sendEvent({
-          type: "worktree-removed",
-          worktreeId,
-          projectScopeId: this.projectScopeId,
-        });
-      }
+      this.sendEvent({
+        type: "worktree-removed",
+        worktreeId,
+      });
 
       if (branchToDelete && this.git) {
         try {
@@ -935,6 +899,26 @@ export class WorkspaceService {
     }
   }
 
+  async fetchPRBranch(
+    requestId: string,
+    rootPath: string,
+    prNumber: number,
+    headRefName: string
+  ): Promise<void> {
+    try {
+      const git = createAuthenticatedGit(rootPath);
+      await git.raw(["fetch", "origin", `pull/${prNumber}/head:${headRefName}`]);
+      this.sendEvent({ type: "fetch-pr-branch-result", requestId, success: true });
+    } catch (error) {
+      this.sendEvent({
+        type: "fetch-pr-branch-result",
+        requestId,
+        success: false,
+        error: (error as Error).message,
+      });
+    }
+  }
+
   async getRecentBranches(requestId: string, rootPath: string): Promise<void> {
     try {
       const git = createHardenedGit(rootPath);
@@ -980,9 +964,13 @@ export class WorkspaceService {
       }
 
       const normalizedPath = normalize(filePath);
-      if (normalizedPath.includes("..") || normalizedPath.startsWith(sep)) {
+      const pathSegments = normalizedPath.split(/[\\/]+/).filter(Boolean);
+      if (pathSegments.includes("..") || normalizedPath.startsWith(sep)) {
         throw new Error("Path traversal detected");
       }
+
+      // Git always uses forward slashes in diff output, even on Windows
+      const gitPath = normalizedPath.replaceAll("\\", "/");
 
       const git = createHardenedGit(cwd);
 
@@ -1008,10 +996,10 @@ export class WorkspaceService {
         const content = buffer.toString("utf-8");
         const lines = content.split("\n");
 
-        const diff = `diff --git a/${normalizedPath} b/${normalizedPath}
+        const diff = `diff --git a/${gitPath} b/${gitPath}
 new file mode 100644
 --- /dev/null
-+++ b/${normalizedPath}
++++ b/${gitPath}
 @@ -0,0 +1,${lines.length} @@
 ${lines.map((l) => "+" + l).join("\n")}`;
 
@@ -1042,6 +1030,27 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
   }
 
+  updateMonitorConfig(config: MonitorConfig): void {
+    if (config.pollIntervalActive !== undefined) {
+      this.pollIntervalActive = config.pollIntervalActive;
+    }
+    if (config.pollIntervalBackground !== undefined) {
+      this.pollIntervalBackground = config.pollIntervalBackground;
+    }
+    if (config.adaptiveBackoff !== undefined) {
+      this.adaptiveBackoff = config.adaptiveBackoff;
+    }
+    if (config.pollIntervalMax !== undefined) {
+      this.pollIntervalMax = config.pollIntervalMax;
+    }
+
+    for (const [worktreeId, monitor] of this.monitors) {
+      const isActive = worktreeId === this.activeWorktreeId;
+      const baseInterval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
+      monitor.updateConfig({ basePollingInterval: baseInterval });
+    }
+  }
+
   setPollingEnabled(enabled: boolean): void {
     if (this.pollingEnabled === enabled) return;
 
@@ -1056,6 +1065,31 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         monitor.resumePolling();
       }
     }
+  }
+
+  pause(): void {
+    console.log("[WorkspaceService] Pausing (backgrounded)");
+    this.setPollingEnabled(false);
+    pullRequestService.stop();
+    try {
+      os.setPriority(process.pid, os.constants.priority.PRIORITY_LOW);
+    } catch {
+      // Sandboxed environments may deny setpriority — non-fatal
+    }
+    if (typeof global.gc === "function") {
+      global.gc();
+    }
+  }
+
+  resume(): void {
+    console.log("[WorkspaceService] Resuming (foregrounded)");
+    try {
+      os.setPriority(process.pid, os.constants.priority.PRIORITY_NORMAL);
+    } catch {
+      // Sandboxed environments may deny setpriority — non-fatal
+    }
+    this.setPollingEnabled(true);
+    pullRequestService.start();
   }
 
   getPRStatus(requestId: string): void {
@@ -1111,16 +1145,12 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   }
 
   async onProjectSwitch(requestId: string): Promise<void> {
-    this.projectScopeId = null;
-
     this.prService.cleanup();
 
     for (const monitor of this.monitors.values()) {
       monitor.stop();
     }
     this.monitors.clear();
-
-    this.pollQueue.clear();
 
     this.activeWorktreeId = null;
     this.mainBranch = "main";
@@ -1135,6 +1165,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   }
 
   dispose(): void {
+    this._shutdownController.abort();
     this.prService.cleanup();
     for (const monitor of this.monitors.values()) {
       monitor.stop();

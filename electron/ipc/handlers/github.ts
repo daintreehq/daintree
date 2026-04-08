@@ -595,5 +595,40 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.GITHUB_GET_PR_BY_NUMBER, handleGitHubGetPRByNumber);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_PR_BY_NUMBER));
 
+  const handleGitHubListRemotes = async (
+    _event: Electron.IpcMainInvokeEvent,
+    cwd: string
+  ): Promise<
+    Array<{ name: string; fetchUrl: string; parsedRepo: { owner: string; repo: string } | null }>
+  > => {
+    if (typeof cwd !== "string" || !cwd) {
+      throw new Error("Invalid working directory");
+    }
+    if (!path.isAbsolute(cwd)) {
+      throw new Error("Working directory must be an absolute path");
+    }
+
+    const { GitService } = await import("../../services/GitService.js");
+    const { parseGitHubRepoUrl } = await import("../../services/GitHubService.js");
+    const gitService = new GitService(cwd);
+    const remotes = await gitService.listRemotes(cwd);
+
+    const result = remotes.map((r) => ({
+      name: r.name,
+      fetchUrl: r.fetchUrl,
+      parsedRepo: parseGitHubRepoUrl(r.fetchUrl),
+    }));
+
+    result.sort((a, b) => {
+      if (a.name === "origin") return -1;
+      if (b.name === "origin") return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    return result;
+  };
+  ipcMain.handle(CHANNELS.GITHUB_LIST_REMOTES, handleGitHubListRemotes);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_LIST_REMOTES));
+
   return () => handlers.forEach((cleanup) => cleanup());
 }

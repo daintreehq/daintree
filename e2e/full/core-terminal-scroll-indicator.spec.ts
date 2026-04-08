@@ -14,7 +14,12 @@ test.describe.serial("Core: Terminal Scroll Indicator", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "scroll-indicator" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Scroll Indicator Test");
+    ctx.window = await openAndOnboardProject(
+      ctx.app,
+      ctx.window,
+      fixtureDir,
+      "Scroll Indicator Test"
+    );
   });
 
   test.afterAll(async () => {

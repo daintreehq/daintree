@@ -31,7 +31,7 @@ test.describe.serial("Core: Concurrent terminal output during UI interactions", 
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "concurrent-ops" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Concurrent Ops");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Concurrent Ops");
 
     await openTerminal(ctx.window);
     terminalPanel = getFirstGridPanel(ctx.window);

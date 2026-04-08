@@ -13,7 +13,7 @@ test.describe.serial("Core: Terminal Scrollback Integrity Under Load", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "terminal-scrollback" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Scrollback Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Scrollback Test");
   });
 
   test.afterAll(async () => {
@@ -23,7 +23,7 @@ test.describe.serial("Core: Terminal Scrollback Integrity Under Load", () => {
   test("set scrollback and open terminal", async () => {
     const { window } = ctx;
 
-    // Set base scrollback to 5000 so terminal panels get 5000 * 0.2 = 1000 effective lines.
+    // Set base scrollback to 5000 so terminal panels get 5000 * 0.3 = 1500 effective lines.
     // Must use the action dispatcher (not the IPC bridge directly) because the action
     // updates both the renderer Zustand store AND persists via IPC.
     await window.evaluate(async () => {
@@ -56,7 +56,7 @@ test.describe.serial("Core: Terminal Scrollback Integrity Under Load", () => {
     await waitForTerminalText(panel, "LINE_05000", T_LONG);
   });
 
-  test("buffer retains approximately 1000 lines after ring buffer trimming", async () => {
+  test("buffer retains approximately 1500 lines after ring buffer trimming", async () => {
     const { window } = ctx;
     const panel = getFirstGridPanel(window);
 
@@ -75,14 +75,14 @@ test.describe.serial("Core: Terminal Scrollback Integrity Under Load", () => {
     const newest = Math.max(...lineNumbers);
     expect(newest).toBe(5000);
 
-    // Oldest line should be approximately 4000 (±100 to account for viewport rows)
+    // Oldest line should be approximately 3500 (±100 to account for viewport rows)
     const oldest = Math.min(...lineNumbers);
-    expect(oldest).toBeGreaterThan(3900);
-    expect(oldest).toBeLessThan(4050);
+    expect(oldest).toBeGreaterThan(3400);
+    expect(oldest).toBeLessThan(3550);
 
-    // Total retained lines should be approximately 1000 (upper bound generous for viewport rows)
-    expect(lineNumbers.length).toBeGreaterThan(950);
-    expect(lineNumbers.length).toBeLessThan(1150);
+    // Total retained lines should be approximately 1500 (upper bound generous for viewport rows)
+    expect(lineNumbers.length).toBeGreaterThan(1400);
+    expect(lineNumbers.length).toBeLessThan(1650);
 
     // Verify contiguous ascending sequence (no gaps or duplicates = true integrity)
     const sorted = [...lineNumbers].sort((a, b) => a - b);

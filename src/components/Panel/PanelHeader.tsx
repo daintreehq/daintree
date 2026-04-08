@@ -43,14 +43,14 @@ import { formatShortcutForTooltip, createTooltipWithShortcut } from "@/lib/platf
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import { MoveToDockIcon, MoveToGridIcon, WatchAlertIcon } from "@/components/icons";
+import { MoveToDockIcon, MoveToGridIcon, WatchAlertIcon, WorktreeIcon } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import {
   useBackgroundPanelStats,
   useHorizontalScrollControls,
   useKeybindingDisplay,
 } from "@/hooks";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,6 +72,8 @@ export interface PanelHeaderProps {
   type?: TerminalType;
   agentId?: string;
   detectedProcessId?: string;
+  worktreeAccentColor?: string;
+  worktreeBranch?: string;
   isFocused: boolean;
   isMaximized?: boolean;
   location?: "grid" | "dock";
@@ -121,6 +123,8 @@ function PanelHeaderComponent({
   type,
   agentId,
   detectedProcessId,
+  worktreeAccentColor,
+  worktreeBranch,
   isFocused,
   isMaximized = false,
   location = "grid",
@@ -200,9 +204,9 @@ function PanelHeaderComponent({
   const { activeCount, workingCount } = useBackgroundPanelStats(id);
 
   // Watch state — only relevant for agent panels
-  const isWatched = useTerminalStore((state) => state.watchedPanels.has(id));
-  const watchPanel = useTerminalStore((state) => state.watchPanel);
-  const unwatchPanel = useTerminalStore((state) => state.unwatchPanel);
+  const isWatched = usePanelStore((state) => state.watchedPanels.has(id));
+  const watchPanel = usePanelStore((state) => state.watchPanel);
+  const unwatchPanel = usePanelStore((state) => state.unwatchPanel);
   const showWatchButton = !!agentId;
 
   const duplicateShortcut = useKeybindingDisplay("terminal.duplicate");
@@ -212,9 +216,7 @@ function PanelHeaderComponent({
   const closeShortcut = useKeybindingDisplay("terminal.close");
 
   // Terminal record for overflow menu actions (single shallow selector, matching TerminalContextMenu pattern)
-  const terminal = useTerminalStore(
-    useShallow((state) => state.terminals.find((t) => t.id === id))
-  );
+  const terminal = usePanelStore(useShallow((state) => state.panelsById[id]));
   const isInputLocked = terminal?.isInputLocked ?? false;
   const hasPty = panelKindHasPty(kind);
 
@@ -276,7 +278,11 @@ function PanelHeaderComponent({
   const handleWatchToggle = useCallback(() => {
     if (isWatched) {
       unwatchPanel(id);
-    } else if (terminal?.agentState === "completed" || terminal?.agentState === "waiting") {
+    } else if (
+      terminal?.agentState === "completed" ||
+      terminal?.agentState === "waiting" ||
+      terminal?.agentState === "exited"
+    ) {
       fireWatchNotification(id, terminal.title ?? id, terminal.agentState);
     } else {
       watchPanel(id);
@@ -294,7 +300,7 @@ function PanelHeaderComponent({
     if (location === "dock") {
       onRestore?.();
     } else {
-      onToggleMaximize?.();
+      void actionService.dispatch("nav.toggleFocusMode");
     }
   };
 
@@ -714,7 +720,7 @@ function PanelHeaderComponent({
                       onAddTab();
                     }}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-all focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+                    className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
                     aria-label="Duplicate panel as new tab"
                     type="button"
                   >
@@ -726,6 +732,23 @@ function PanelHeaderComponent({
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
+          )}
+
+          {/* Worktree branch badge — shown when multiple worktrees are active */}
+          {worktreeBranch && worktreeAccentColor && (
+            <span
+              className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium leading-none select-none max-w-[120px]"
+              style={
+                {
+                  color: worktreeAccentColor,
+                  backgroundColor: "color-mix(in oklab, var(--worktree-color) 12%, transparent)",
+                  "--worktree-color": worktreeAccentColor,
+                } as React.CSSProperties
+              }
+              aria-label={`Branch: ${worktreeBranch}`}
+            >
+              <span className="truncate">{worktreeBranch}</span>
+            </span>
           )}
         </div>
       )}
@@ -799,8 +822,23 @@ function PanelHeaderComponent({
                   </DropdownMenuItem>
                 )}
 
+                {agentId && (
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      void actionService.dispatch(
+                        "terminal.moveToNewWorktree",
+                        { terminalId: id },
+                        { source: "menu" }
+                      )
+                    }
+                  >
+                    <WorktreeIcon className="w-3 h-3 mr-2" aria-hidden="true" />
+                    Move to New Worktree…
+                  </DropdownMenuItem>
+                )}
+
                 {/* Management group */}
-                {canRestart && onRestart && <DropdownMenuSeparator />}
+                {((canRestart && onRestart) || agentId) && <DropdownMenuSeparator />}
                 {location === "dock" && onRestore && (
                   <DropdownMenuItem onSelect={() => onRestore()}>
                     <MoveToGridIcon className="w-3 h-3 mr-2" aria-hidden="true" />
@@ -965,8 +1003,7 @@ function PanelHeaderComponent({
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Restore Grid View", maximizeShortcut) +
-                  " · double-click header"}
+                {createTooltipWithShortcut("Restore Grid View", maximizeShortcut)}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -989,8 +1026,7 @@ function PanelHeaderComponent({
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  {createTooltipWithShortcut("Maximize", maximizeShortcut) +
-                    " · double-click header"}
+                  {createTooltipWithShortcut("Maximize", maximizeShortcut)}
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>

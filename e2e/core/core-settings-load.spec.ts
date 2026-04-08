@@ -12,7 +12,7 @@ test.describe.serial("Core: Settings Pages Load", () => {
   test.beforeAll(async () => {
     ctx = await launchApp();
     const fixtureDir = createFixtureRepo({ name: "settings-load" });
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Settings Load Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Settings Load Test");
   });
 
   test.afterAll(async () => {
@@ -69,9 +69,11 @@ test.describe.serial("Core: Settings Pages Load", () => {
       timeout: T_SHORT,
     });
 
-    // App subtab (default) should show theme combobox
+    // App subtab (default) should show the theme picker trigger
     const settingsPanel = window.locator('[role="dialog"]');
-    await expect(settingsPanel.locator('[role="combobox"]')).toBeVisible({ timeout: T_SHORT });
+    await expect(settingsPanel.locator('[data-testid="theme-picker-trigger"]')).toBeVisible({
+      timeout: T_SHORT,
+    });
 
     // Switch to Terminal subtab
     await window
@@ -232,26 +234,16 @@ test.describe.serial("Core: Settings Pages Load", () => {
     await expect(window.locator("#github-token")).toBeVisible({ timeout: T_SHORT });
   });
 
-  test("Editor tab loads", async () => {
+  test("Integrations tab loads", async () => {
     const { window } = ctx;
 
-    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Editor" }).click();
-    await expect(window.locator("h3", { hasText: "Editor Integration" })).toBeVisible({
+    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Integrations" }).click();
+    // Integrations tab combines Editor and Image Viewer sections
+    await expect(window.locator("h4", { hasText: "External Editor" })).toBeVisible({
       timeout: T_SHORT,
     });
-  });
-
-  test("Image Viewer tab loads", async () => {
-    const { window } = ctx;
-
-    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Image Viewer" }).click();
-    await expect(window.locator("h3", { hasText: "Image Viewer" })).toBeVisible({
+    await expect(window.locator("h4", { hasText: "Image Viewer" })).toBeVisible({
       timeout: T_SHORT,
-    });
-
-    // Should show image viewer radio options after loading
-    await expect(window.locator('input[name="imageViewerMode"]').first()).toBeVisible({
-      timeout: T_MEDIUM,
     });
   });
 
@@ -277,23 +269,6 @@ test.describe.serial("Core: Settings Pages Load", () => {
     await expect(mcpToggle).toBeVisible({ timeout: T_SHORT });
     // Toggle should not be disabled (loading=false)
     await expect(mcpToggle).not.toBeDisabled({ timeout: T_MEDIUM });
-  });
-
-  test("Voice Input tab loads", async () => {
-    const { window } = ctx;
-
-    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
-    await expect(window.locator("h3", { hasText: "Voice Input" })).toBeVisible({
-      timeout: T_SHORT,
-    });
-
-    // Wait for loading to finish
-    await expect(window.locator("text=Loading voice input settings...")).not.toBeVisible({
-      timeout: T_MEDIUM,
-    });
-
-    // Voice input toggle should be visible
-    await expect(window.locator("text=Speech-to-Text")).toBeVisible({ timeout: T_SHORT });
   });
 
   test("Troubleshooting tab loads", async () => {

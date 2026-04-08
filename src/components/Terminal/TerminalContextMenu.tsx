@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useState } from "react";
+import { isMac } from "@/lib/platform";
 import type React from "react";
 import type { Terminal as XTermTerminal } from "@xterm/xterm";
-import { type TerminalLocation, type TerminalType } from "@/types";
-import { useTerminalStore } from "@/store";
+import { type PanelLocation, type TerminalType } from "@/types";
+import { usePanelStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { AGENT_IDS, getAgentConfig } from "@/config/agents";
@@ -10,9 +11,6 @@ import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { terminalClient } from "@/clients";
-import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
-import { fireWatchNotification } from "@/lib/watchNotification";
 import {
   ArrowDownFromLine,
   Bell,
@@ -26,6 +24,7 @@ import {
   Link,
   Lock,
   Maximize2,
+  NotebookPen,
   Minimize2,
   OctagonX,
   Pencil,
@@ -84,10 +83,49 @@ export function extractUrlAtPoint(
   return null;
 }
 
+export interface CreateNoteArgs {
+  title: string;
+  content: string;
+  scope: "worktree" | "project";
+  worktreeId?: string;
+}
+
+export function buildCreateNoteArgs(
+  agentName: string,
+  worktreeName: string | undefined,
+  selectionText: string,
+  worktreeId: string | undefined
+): CreateNoteArgs {
+  const timestamp = new Date().toLocaleString();
+  const title = `Note from ${agentName} — ${timestamp}`;
+
+  const lines: string[] = [];
+  lines.push(`**Agent:** ${agentName}`);
+  if (worktreeName) lines.push(`**Worktree:** ${worktreeName}`);
+  lines.push(`**Time:** ${timestamp}`);
+
+  if (selectionText) {
+    lines.push("");
+    lines.push(
+      selectionText
+        .split("\n")
+        .map((line) => `> ${line}`)
+        .join("\n")
+    );
+  }
+
+  return {
+    title,
+    content: lines.join("\n"),
+    scope: worktreeId ? "worktree" : "project",
+    worktreeId,
+  };
+}
+
 interface TerminalContextMenuProps {
   terminalId: string;
   children: React.ReactNode;
-  forceLocation?: TerminalLocation;
+  forceLocation?: PanelLocation;
 }
 
 /**
@@ -99,11 +137,9 @@ export function TerminalContextMenu({
   children,
   forceLocation,
 }: TerminalContextMenuProps) {
-  const terminal = useTerminalStore(
-    useShallow((state) => state.terminals.find((t) => t.id === terminalId))
-  );
-  const maximizeTarget = useTerminalStore((s) => s.maximizeTarget);
-  const getPanelGroup = useTerminalStore((s) => s.getPanelGroup);
+  const terminal = usePanelStore(useShallow((state) => state.panelsById[terminalId]));
+  const maximizeTarget = usePanelStore((s) => s.maximizeTarget);
+  const getPanelGroup = usePanelStore((s) => s.getPanelGroup);
 
   const isMaximized = useMemo(() => {
     if (!maximizeTarget) return false;
@@ -117,11 +153,10 @@ export function TerminalContextMenu({
 
   const { worktrees } = useWorktrees();
 
-  const isWatched = useTerminalStore((state) => state.watchedPanels.has(terminalId));
-  const watchPanel = useTerminalStore((state) => state.watchPanel);
-  const unwatchPanel = useTerminalStore((state) => state.unwatchPanel);
+  const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
 
   const [hasSelection, setHasSelection] = useState(false);
+  const [selectionText, setSelectionText] = useState("");
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
 
   const handleContextMenu = useCallback(
@@ -132,7 +167,9 @@ export function TerminalContextMenu({
         setHoveredUrl(null);
         return;
       }
-      setHasSelection(!!managed.terminal.getSelection());
+      const selection = managed.terminal.getSelection();
+      setHasSelection(!!selection);
+      setSelectionText(selection);
       setHoveredUrl(extractUrlAtPoint(managed.terminal, e.clientX, e.clientY));
     },
     [terminalId]
@@ -140,13 +177,13 @@ export function TerminalContextMenu({
 
   const isPaused = terminal?.flowStatus === "paused-backpressure";
 
-  const currentLocation: TerminalLocation = forceLocation ?? terminal?.location ?? "grid";
+  const currentLocation: PanelLocation = forceLocation ?? terminal?.location ?? "grid";
 
-  const isMac = navigator.platform.toLowerCase().includes("mac");
-  const modifierKey = isMac ? "⌘" : "Ctrl";
+  const mac = isMac();
+  const modifierKey = mac ? "⌘" : "Ctrl";
 
   const handleAction = useCallback(
-    async (actionId: string) => {
+    (actionId: string) => {
       if (!terminal) return;
 
       if (actionId.startsWith("open-link:")) {
@@ -157,68 +194,38 @@ export function TerminalContextMenu({
 
       if (actionId.startsWith("copy-link:")) {
         const url = actionId.slice("copy-link:".length);
-        void navigator.clipboard.writeText(url);
+        void actionService.dispatch("terminal.copyLink", { url }, { source: "context-menu" });
         return;
       }
 
       if (actionId.startsWith("move-to-worktree:")) {
         const worktreeId = actionId.slice("move-to-worktree:".length);
-        const result = await actionService.dispatch(
+        void actionService.dispatch(
           "terminal.moveToWorktree",
           { terminalId, worktreeId },
           { source: "context-menu" }
         );
-        if (!result.ok) {
-          console.error("Failed to move terminal to worktree:", result.error);
-        }
         return;
       }
 
       if (actionId.startsWith("convert-to:")) {
         const targetType = actionId.slice("convert-to:".length);
         if (targetType === "terminal" || AGENT_IDS.includes(targetType)) {
-          const result = await actionService.dispatch(
+          void actionService.dispatch(
             "terminal.convertType",
             { terminalId, type: targetType as TerminalType },
             { source: "context-menu" }
           );
-          if (!result.ok) {
-            console.error("Failed to convert terminal type:", result.error);
-          }
         }
         return;
       }
 
       switch (actionId) {
-        case "copy": {
-          const managed = terminalInstanceService.get(terminalId);
-          if (managed?.terminal) {
-            const selection = managed.terminal.getSelection();
-            if (selection) {
-              void navigator.clipboard.writeText(selection);
-            }
-          }
+        case "copy":
+          void actionService.dispatch("terminal.copy", { terminalId }, { source: "context-menu" });
           break;
-        }
         case "paste":
-          if (!terminal.isInputLocked) {
-            void (async () => {
-              try {
-                const text = await navigator.clipboard.readText();
-                if (!text) return;
-                const managed = terminalInstanceService.get(terminalId);
-                if (!managed || managed.isInputLocked) return;
-                if (managed.terminal.modes.bracketedPasteMode) {
-                  terminalClient.write(terminalId, formatWithBracketedPaste(text));
-                } else {
-                  terminalClient.write(terminalId, text.replace(/\r?\n/g, "\r"));
-                }
-                terminalInstanceService.notifyUserInput(terminalId);
-              } catch {
-                // Clipboard API may be denied
-              }
-            })();
-          }
+          void actionService.dispatch("terminal.paste", { terminalId }, { source: "context-menu" });
           break;
         case "move-to-dock":
           void actionService.dispatch(
@@ -270,13 +277,7 @@ export function TerminalContextMenu({
           );
           break;
         case "toggle-watch":
-          if (isWatched) {
-            unwatchPanel(terminalId);
-          } else if (terminal.agentState === "completed" || terminal.agentState === "waiting") {
-            fireWatchNotification(terminalId, terminal.title ?? terminalId, terminal.agentState);
-          } else {
-            watchPanel(terminalId);
-          }
+          void actionService.dispatch("terminal.watch", { terminalId }, { source: "context-menu" });
           break;
         case "duplicate":
           void actionService.dispatch(
@@ -335,19 +336,15 @@ export function TerminalContextMenu({
           break;
         case "delete-note":
           if (terminal.notePath) {
-            void (async () => {
-              const result = await actionService.dispatch(
-                "notes.delete",
-                {
-                  notePath: terminal.notePath,
-                  noteTitle: terminal.title,
-                },
-                { source: "context-menu" }
-              );
-              if (result.ok) {
-                useTerminalStore.getState().removeTerminal(terminalId);
-              }
-            })();
+            void actionService.dispatch(
+              "terminal.deleteNote",
+              {
+                terminalId,
+                notePath: terminal.notePath,
+                noteTitle: terminal.title,
+              },
+              { source: "context-menu", confirmed: true }
+            );
           }
           break;
         case "reveal-in-palette":
@@ -359,9 +356,32 @@ export function TerminalContextMenu({
             );
           }
           break;
+        case "create-note": {
+          const agentConfig = terminal.agentId ? getAgentConfig(terminal.agentId) : null;
+          const agentName = agentConfig?.name ?? terminal.agentId ?? "Agent";
+          const currentWorktree = worktrees.find((wt) => wt.id === terminal.worktreeId);
+          const worktreeName = currentWorktree
+            ? (currentWorktree.isMainWorktree
+                ? currentWorktree.name
+                : currentWorktree.branch || currentWorktree.name
+              ).trim() || undefined
+            : undefined;
+          const noteArgs = buildCreateNoteArgs(
+            agentName,
+            worktreeName,
+            selectionText,
+            terminal.worktreeId
+          );
+          void actionService.dispatch(
+            "notes.create",
+            { ...noteArgs, openPanel: true },
+            { source: "context-menu" }
+          );
+          break;
+        }
       }
     },
-    [terminal, terminalId, isWatched, watchPanel, unwatchPanel]
+    [terminal, terminalId, selectionText, worktrees]
   );
 
   if (!terminal) {
@@ -402,6 +422,20 @@ export function TerminalContextMenu({
             })}
           </ContextMenuSubContent>
         </ContextMenuSub>
+      )}
+      {terminal.agentId && (
+        <ContextMenuItem
+          onSelect={() =>
+            void actionService.dispatch(
+              "terminal.moveToNewWorktree",
+              { terminalId },
+              { source: "context-menu" }
+            )
+          }
+        >
+          <WorktreeIcon className={ICON_CLASS} />
+          Move to New Worktree…
+        </ContextMenuItem>
       )}
       <ContextMenuItem
         onSelect={() => handleAction(currentLocation === "grid" ? "move-to-dock" : "move-to-grid")}
@@ -624,7 +658,7 @@ export function TerminalContextMenu({
             <ContextMenuItem onSelect={() => handleAction("paste")}>
               <Clipboard className={ICON_CLASS} aria-hidden="true" />
               Paste
-              <ContextMenuShortcut>{isMac ? `${modifierKey}V` : "Ctrl+⇧V"}</ContextMenuShortcut>
+              <ContextMenuShortcut>{mac ? `${modifierKey}V` : "Ctrl+⇧V"}</ContextMenuShortcut>
             </ContextMenuItem>
             <ContextMenuItem
               disabled={!hasSelection}
@@ -638,7 +672,7 @@ export function TerminalContextMenu({
             >
               <Send className={ICON_CLASS} aria-hidden="true" />
               Send to Agent
-              <ContextMenuShortcut>{isMac ? "⌘⇧E" : "Ctrl+⇧E"}</ContextMenuShortcut>
+              <ContextMenuShortcut>{mac ? "⌘⇧E" : "Ctrl+⇧E"}</ContextMenuShortcut>
             </ContextMenuItem>
             {hoveredUrl && (
               <>
@@ -692,7 +726,13 @@ export function TerminalContextMenu({
               <Bell className={ICON_CLASS} aria-hidden="true" />
             )}
             {isWatched ? "Cancel Watch" : "Watch Terminal"}
-            <ContextMenuShortcut>{isMac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
+            <ContextMenuShortcut>{mac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
+          </ContextMenuItem>
+        )}
+        {terminal.agentId && (
+          <ContextMenuItem onSelect={() => handleAction("create-note")}>
+            <NotebookPen className={ICON_CLASS} aria-hidden="true" />
+            Create Note
           </ContextMenuItem>
         )}
         {showConvertTo && (

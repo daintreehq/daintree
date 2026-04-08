@@ -18,7 +18,7 @@ export function EventsContent({ className }: EventsContentProps) {
     selectedEventId,
     autoScroll,
     setAutoScroll,
-    addEvent,
+    addEvents,
     setEvents,
     setFilters,
     setSelectedEvent,
@@ -30,7 +30,7 @@ export function EventsContent({ className }: EventsContentProps) {
       selectedEventId: state.selectedEventId,
       autoScroll: state.autoScroll,
       setAutoScroll: state.setAutoScroll,
-      addEvent: state.addEvent,
+      addEvents: state.addEvents,
       setEvents: state.setEvents,
       setFilters: state.setFilters,
       setSelectedEvent: state.setSelectedEvent,
@@ -50,15 +50,15 @@ export function EventsContent({ className }: EventsContentProps) {
         console.error("Failed to load events:", error);
       });
 
-    const unsubscribe = eventInspectorClient.onEvent((event) => {
-      addEvent(event);
+    const unsubscribe = eventInspectorClient.onEventBatch((events) => {
+      addEvents(events);
     });
 
     return () => {
       unsubscribe();
       eventInspectorClient.unsubscribe();
     };
-  }, [addEvent, setEvents]);
+  }, [addEvents, setEvents]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const filteredEvents = useMemo(() => getFilteredEvents(), [events, filters, getFilteredEvents]);

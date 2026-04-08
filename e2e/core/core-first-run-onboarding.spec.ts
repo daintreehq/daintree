@@ -30,22 +30,19 @@ test.describe.serial("First-run onboarding flow", () => {
     ctx = await launchApp({
       userDataDir,
       env: FIRST_RUN_ENV,
-      waitForSelector: SEL.firstRun.themeTitle,
+      waitForSelector: SEL.firstRun.welcomeTitle,
     });
     const { window } = ctx;
 
-    // Step 1: Theme selection — verify dialog and click Continue
-    await expect(window.locator(SEL.firstRun.themeTitle)).toBeVisible({ timeout: T_MEDIUM });
+    // Step 1: Welcome — theme selection + telemetry toggle, click Continue
+    await expect(window.locator(SEL.firstRun.welcomeTitle)).toBeVisible({ timeout: T_MEDIUM });
     await window.locator('button:has-text("Continue")').click();
 
-    // Step 2: Telemetry consent — verify dialog and click Disable
-    await expect(window.locator(SEL.firstRun.telemetryDialog)).toBeVisible({ timeout: T_MEDIUM });
-    await window
-      .locator(SEL.firstRun.telemetryDialog)
-      .locator('button:has-text("Disable")')
-      .click();
-
-    // Step 3: Agent selection — verify dialog and click Skip
+    // Step 2: Agent setup wizard — health check then selection
+    await expect(window.locator(SEL.firstRun.agentSetupTitle)).toBeVisible({ timeout: T_MEDIUM });
+    // Advance past health check step
+    await window.locator('button:has-text("Continue")').click();
+    // Selection step — verify and skip
     await expect(window.locator(SEL.firstRun.agentTitle)).toBeVisible({ timeout: T_MEDIUM });
     await window.locator('button:has-text("Skip")').click();
 
@@ -73,8 +70,7 @@ test.describe.serial("First-run onboarding flow", () => {
     await window.waitForTimeout(T_SETTLE);
 
     // No onboarding dialogs should be visible
-    await expect(window.locator(SEL.firstRun.themeTitle)).not.toBeVisible();
-    await expect(window.locator(SEL.firstRun.telemetryDialog)).not.toBeVisible();
+    await expect(window.locator(SEL.firstRun.welcomeTitle)).not.toBeVisible();
     await expect(window.locator(SEL.firstRun.agentTitle)).not.toBeVisible();
     await expect(window.locator(SEL.firstRun.agentSetupTitle)).not.toBeVisible();
   });

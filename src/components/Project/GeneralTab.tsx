@@ -1,14 +1,42 @@
-import { useState, useRef, useEffect } from "react";
-import { Image, Upload, X, Rocket, Check, FolderOpen, Copy } from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Image, Upload, X, Rocket, Check, FolderOpen, Copy, Palette } from "lucide-react";
 import { WorktreeIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
-import { getProjectGradient } from "@/lib/colorUtils";
+import { getProjectGradient, isValidHexColor } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
-import { validateProjectSvg, sanitizeSvg, svgToDataUrl } from "@/lib/svg";
+import { sanitizeSvg, svgToDataUrl } from "@/lib/svg";
 import { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
 import type { Project } from "@shared/types/project";
+
+const PRESET_SWATCHES = [
+  { label: "Blue", cssVar: "--theme-category-blue" },
+  { label: "Purple", cssVar: "--theme-category-purple" },
+  { label: "Cyan", cssVar: "--theme-category-cyan" },
+  { label: "Green", cssVar: "--theme-category-green" },
+  { label: "Amber", cssVar: "--theme-category-amber" },
+  { label: "Orange", cssVar: "--theme-category-orange" },
+  { label: "Teal", cssVar: "--theme-category-teal" },
+  { label: "Indigo", cssVar: "--theme-category-indigo" },
+  { label: "Rose", cssVar: "--theme-category-rose" },
+  { label: "Pink", cssVar: "--theme-category-pink" },
+  { label: "Violet", cssVar: "--theme-category-violet" },
+  { label: "Slate", cssVar: "--theme-category-slate" },
+] as const;
+
+function cssColorToHex(cssColor: string): string | undefined {
+  if (!cssColor) return undefined;
+  const canvas = document.createElement("canvas");
+  canvas.width = 1;
+  canvas.height = 1;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return undefined;
+  ctx.fillStyle = cssColor;
+  ctx.fillRect(0, 0, 1, 1);
+  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+}
 
 interface GeneralTabProps {
   currentProject: Project | undefined;
@@ -16,6 +44,8 @@ interface GeneralTabProps {
   onNameChange: (value: string) => void;
   emoji: string;
   onEmojiChange: (value: string) => void;
+  color: string | undefined;
+  onColorChange: (value: string | undefined) => void;
   devServerCommand: string;
   onDevServerCommandChange: (value: string) => void;
   devServerLoadTimeout: number | undefined;
@@ -34,6 +64,8 @@ export function GeneralTab({
   onNameChange,
   emoji,
   onEmojiChange,
+  color,
+  onColorChange,
   devServerCommand,
   onDevServerCommandChange,
   devServerLoadTimeout,
@@ -50,11 +82,43 @@ export function GeneralTab({
   const [isDraggingIcon, setIsDraggingIcon] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [hexInput, setHexInput] = useState(color ?? "");
+  const [resolvedSwatches, setResolvedSwatches] = useState<string[]>([]);
+  const colorInputRef = useRef<HTMLInputElement>(null);
+
   const [inRepoExpanded, setInRepoExpanded] = useState(false);
   const [inRepoEnabling, setInRepoEnabling] = useState(false);
   const [inRepoError, setInRepoError] = useState<string | null>(null);
   const [gitignoreCopied, setGitignoreCopied] = useState(false);
   const gitignoreCopyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      const styles = getComputedStyle(document.documentElement);
+      const hexValues = PRESET_SWATCHES.map((s) => {
+        const raw = styles.getPropertyValue(s.cssVar).trim();
+        return cssColorToHex(raw) ?? "#000000";
+      });
+      setResolvedSwatches(hexValues);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isOpen]);
+
+  useEffect(() => {
+    setHexInput(color ?? "");
+  }, [color]);
+
+  const handleHexInputChange = useCallback(
+    (value: string) => {
+      setHexInput(value);
+      if (value === "") {
+        onColorChange(undefined);
+      } else if (isValidHexColor(value)) {
+        onColorChange(value.toLowerCase());
+      }
+    },
+    [onColorChange]
+  );
 
   useEffect(() => {
     if (!isOpen) {
@@ -80,7 +144,7 @@ export function GeneralTab({
     }
     try {
       const text = await file.text();
-      const result = validateProjectSvg(text);
+      const result = sanitizeSvg(text);
       if (!result.ok) {
         setIconError(result.error);
         return;
@@ -196,7 +260,7 @@ export function GeneralTab({
                   aria-label="Change project emoji"
                   className="flex h-14 w-14 items-center justify-center rounded-[var(--radius-xl)] shadow-inner shrink-0 bg-tint/5 hover:bg-tint/10 transition-colors border border-transparent hover:border-canopy-border cursor-pointer group"
                   style={{
-                    background: getProjectGradient(currentProject.color),
+                    background: getProjectGradient(color),
                   }}
                 >
                   <span className="text-3xl select-none filter drop-shadow-sm group-hover:scale-110 transition-transform">
@@ -226,10 +290,89 @@ export function GeneralTab({
                 type="text"
                 value={name}
                 onChange={(e) => onNameChange(e.target.value)}
-                className="w-full bg-transparent border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-text-muted"
+                className="w-full bg-transparent border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition placeholder:text-text-muted"
                 placeholder="My Awesome Project"
               />
             </div>
+          </div>
+        </div>
+      )}
+
+      {currentProject && (
+        <div className="mb-6 pb-6 border-b border-canopy-border">
+          <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+            <Palette className="h-4 w-4" />
+            Project Color
+          </h3>
+          <p className="text-xs text-canopy-text/60 mb-4">
+            Choose a color for your project&apos;s gradient background in the sidebar and dashboard.
+          </p>
+
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            {resolvedSwatches.map((hex, i) => (
+              <button
+                key={PRESET_SWATCHES[i].cssVar}
+                type="button"
+                title={PRESET_SWATCHES[i].label}
+                aria-label={`Set project color to ${PRESET_SWATCHES[i].label}`}
+                onClick={() => onColorChange(hex)}
+                className={cn(
+                  "h-7 w-7 rounded-full transition border-2 shrink-0",
+                  color === hex
+                    ? "border-canopy-text scale-110 shadow-sm"
+                    : "border-transparent hover:border-canopy-border hover:scale-105"
+                )}
+                style={{ backgroundColor: hex }}
+              />
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <input
+                ref={colorInputRef}
+                type="color"
+                value={color ?? "#6366f1"}
+                onChange={(e) => onColorChange(e.target.value.toLowerCase())}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                aria-label="Pick a custom color"
+              />
+              <div
+                className="h-8 w-8 rounded-[var(--radius-md)] border border-canopy-border flex items-center justify-center cursor-pointer hover:border-canopy-text/40 transition-colors"
+                style={{
+                  backgroundColor: color ?? undefined,
+                }}
+              >
+                {!color && <Palette className="h-4 w-4 text-canopy-text/40" />}
+              </div>
+            </div>
+            <input
+              type="text"
+              value={hexInput}
+              onChange={(e) => handleHexInputChange(e.target.value)}
+              placeholder="#hex"
+              spellCheck={false}
+              autoCapitalize="off"
+              autoComplete="off"
+              aria-label="Hex color value"
+              className={cn(
+                "w-28 bg-canopy-bg border rounded px-3 py-1.5 text-sm text-canopy-text font-mono focus:outline-none focus:ring-1 transition placeholder:text-text-muted",
+                hexInput && !isValidHexColor(hexInput)
+                  ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
+                  : "border-canopy-border focus:border-canopy-accent focus:ring-canopy-accent/30"
+              )}
+            />
+            {color && (
+              <button
+                type="button"
+                onClick={() => onColorChange(undefined)}
+                className="flex items-center gap-1 px-2 py-1.5 rounded text-xs text-canopy-text/60 hover:text-canopy-text hover:bg-tint/5 transition-colors"
+                aria-label="Clear project color"
+              >
+                <X className="h-3.5 w-3.5" />
+                Clear
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -249,7 +392,7 @@ export function GeneralTab({
           type="text"
           value={devServerCommand}
           onChange={(e) => onDevServerCommandChange(e.target.value)}
-          className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-text-muted"
+          className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition placeholder:text-text-muted"
           placeholder="npm run dev"
           spellCheck={false}
           autoCapitalize="off"
@@ -279,7 +422,7 @@ export function GeneralTab({
                 onDevServerLoadTimeoutChange(num);
               }
             }}
-            className="w-28 bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-text-muted"
+            className="w-28 bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition placeholder:text-text-muted"
             placeholder="30"
             aria-label="Dev server load timeout in seconds"
           />
@@ -394,7 +537,7 @@ export function GeneralTab({
           aria-checked={currentProject?.inRepoSettings ?? false}
           aria-label="Store settings in repository"
           className={cn(
-            "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-canopy-accent",
+            "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-canopy-accent",
             currentProject?.inRepoSettings
               ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
               : "border-canopy-border hover:bg-tint/5 text-canopy-text/70",

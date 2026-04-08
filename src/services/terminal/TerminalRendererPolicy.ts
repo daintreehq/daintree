@@ -23,7 +23,8 @@ export class TerminalRendererPolicy {
   }
 
   setBackendTier(id: string, tier: "active" | "background"): void {
-    if (this.lastBackendTier.get(id) === tier) {
+    const prev = this.lastBackendTier.get(id);
+    if (prev === tier) {
       return;
     }
     this.lastBackendTier.set(id, tier);

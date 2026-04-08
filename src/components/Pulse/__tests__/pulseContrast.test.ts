@@ -52,6 +52,11 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
     expect(content).toContain('"pulse-control');
   });
 
+  it("card header uses pulse-card-header class for per-theme header tinting", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    expect(content).toContain('"pulse-card-header');
+  });
+
   it("inline selector active item uses accent tint fill, not a surface token", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
     expect(content).toContain("color-mix(in oklab, var(--color-accent-primary) 12%, transparent)");

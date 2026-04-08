@@ -1,0 +1,7 @@
+# Agent session artifacts
+.claude/claude_cache/
+.claude/todos.json
+.claude/settings.local.json
+.gemini/tmp/
+*.session
+*.log

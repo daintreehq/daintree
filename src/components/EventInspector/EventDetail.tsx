@@ -33,7 +33,7 @@ function ContextPill({ label, value, filterKey, currentFilters, onToggle }: Cont
                 onToggle(filterKey, value);
               }}
               className={cn(
-                "group flex items-center gap-2 px-2 py-1 rounded text-xs font-mono text-left w-fit transition-all max-w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "group flex items-center gap-2 px-2 py-1 rounded text-xs font-mono text-left w-fit transition max-w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 isActive
                   ? "bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25"
                   : "hover:bg-muted border border-transparent hover:border-border text-foreground"

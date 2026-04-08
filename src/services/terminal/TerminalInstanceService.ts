@@ -1,4 +1,5 @@
 import { Terminal } from "@xterm/xterm";
+import { isMac } from "@/lib/platform";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier, TerminalType } from "@/types";
 import type { AgentState } from "@/types";
@@ -6,6 +7,7 @@ import {
   ManagedTerminal,
   RefreshTierProvider,
   AgentStateCallback,
+  PostCompleteHook,
   HIBERNATION_DELAY_MS,
 } from "./types";
 import {
@@ -25,50 +27,29 @@ import { TerminalWebGLManager } from "./TerminalWebGLManager";
 import { TerminalWakeManager } from "./TerminalWakeManager";
 import { TerminalAgentStateController } from "./TerminalAgentStateController";
 import { TerminalRestoreController } from "./TerminalRestoreController";
+import { TerminalHibernationManager } from "./TerminalHibernationManager";
 import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
+import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
+import { isNonKeyboardInput } from "./inputUtils";
 
-// eslint-disable-next-line no-control-regex
-const URXVT_MOUSE_RE = /^\x1b\[\d+;\d+;\d+M/;
+export { isNonKeyboardInput } from "./inputUtils";
 
-// CSI navigation: arrows, Home, End, and modified F1–F4 (with optional ;modifier param)
-// eslint-disable-next-line no-control-regex
-const CSI_NAV_RE = /^\x1b\[(1;\d+)?[ABCDHFPQRS]$/;
-
-// Application-mode arrows, Home/End, F1–F4 (SS3 prefix, unmodified only)
-// eslint-disable-next-line no-control-regex
-const SS3_NAV_RE = /^\x1bO[ABCDHFPQRS]$/;
-
-// Tilde-terminated navigation: Insert(2), Delete(3), PgUp(5), PgDn(6), F5–F12
-// Includes optional ;modifier param. Excludes bracketed paste markers (200~, 201~)
-// eslint-disable-next-line no-control-regex
-const TILDE_NAV_RE = /^\x1b\[(2|3|5|6|15|17|18|19|20|21|23|24)(;\d+)?~$/;
-
-export function isNonKeyboardInput(data: string): boolean {
-  // Mouse sequences
-  if (data.startsWith("\x1b[M")) return true;
-  if (data.startsWith("\x1b[<")) return true;
-  if (URXVT_MOUSE_RE.test(data)) return true;
-
-  // Focus reports
-  if (data === "\x1b[I" || data === "\x1b[O") return true;
-
-  // Lone Escape
-  if (data === "\x1b") return true;
-
-  // Navigation / cursor sequences
-  if (CSI_NAV_RE.test(data)) return true;
-  if (SS3_NAV_RE.test(data)) return true;
-  if (TILDE_NAV_RE.test(data)) return true;
-
-  // C0 control characters that are not prompt editing (Ctrl+C, Ctrl+D, Ctrl+L, Ctrl+Z)
-  if (data === "\x03" || data === "\x04" || data === "\x0c" || data === "\x1a") return true;
-
-  return false;
+/**
+ * Force a synchronous reflow that triggers xterm.js's IntersectionObserver
+ * re-evaluation without pausing the renderer. Using display:none would set
+ * isIntersecting=false, causing xterm to set _isPaused=true and halt rendering.
+ * Sub-pixel padding jitter keeps the element in the layout tree throughout.
+ */
+function forceXtermReflow(element: HTMLElement): void {
+  const prev = element.style.paddingTop;
+  element.style.paddingTop = "0.01px";
+  void element.offsetHeight;
+  element.style.paddingTop = prev;
 }
 
 function canAutoInitializeTerminalIngest(): boolean {
@@ -83,7 +64,6 @@ class TerminalInstanceService {
   private dataBuffer = new TerminalOutputIngestService((id, data) =>
     this.writeToTerminal(id, data)
   );
-  private readonly textEncoder = new TextEncoder();
   private perfWriteSampleCounter = 0;
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
@@ -101,6 +81,7 @@ class TerminalInstanceService {
   private wakeManager: TerminalWakeManager;
   private agentStateController: TerminalAgentStateController;
   private restoreController: TerminalRestoreController;
+  private hibernationManager: TerminalHibernationManager;
 
   constructor() {
     if (canAutoInitializeTerminalIngest()) {
@@ -121,6 +102,28 @@ class TerminalInstanceService {
       writeData: (id, data) => this.writeToTerminal(id, data),
     });
 
+    this.hibernationManager = new TerminalHibernationManager({
+      getInstance: (id) => this.instances.get(id),
+      destroyRestoreState: (id) => this.restoreController.destroy(id),
+      resetBufferedOutput: (id) => this.dataBuffer.resetForTerminal(id),
+      releaseWebGL: (id) => this.webGLManager.onTerminalDestroyed(id),
+      clearResizeJob: (managed) => this.resizeController.clearResizeJob(managed),
+      clearSettledTimer: (id) => this.resizeController.clearSettledTimer(id),
+      applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
+      openLink: (url, id, event) => this.linkHandler.openLink(url, id, event),
+      getCwdProvider: (id) => this.cwdProviders.get(id),
+      onBufferModeChange: (id, isAltBuffer) => this.handleBufferModeChange(id, isAltBuffer),
+      notifyParsed: (id) => this.dataBuffer.notifyParsed(id),
+      scrollToBottomSafe: (managed) => this.scrollToBottomSafe(managed),
+      clearUnseen: (id, fromUser) => this.unseenTracker.clearUnseen(id, fromUser),
+      updateScrollState: (id, isScrolledBack) =>
+        this.unseenTracker.updateScrollState(id, isScrolledBack),
+      setCachedSelection: (id, selection) => this.cachedSelections.set(id, selection),
+      clearDirectingState: (id) => this.agentStateController.clearDirectingState(id),
+      onUserInput: (id, data) => this.onUserInput(id, data),
+      onEnterPressed: (id) => this.onEnterPressed(id),
+    });
+
     this.wakeManager = new TerminalWakeManager({
       getInstance: (id) => this.instances.get(id),
       hasInstance: (id) => this.instances.has(id),
@@ -139,7 +142,12 @@ class TerminalInstanceService {
       onPostWake: (id) => this.handlePostWake(id),
       onTierApplied: (id, tier, managed) => {
         // Hibernation timer management
-        if (tier === TerminalRefreshTier.BACKGROUND && managed.kind !== "agent") {
+        if (
+          tier === TerminalRefreshTier.BACKGROUND &&
+          (managed.kind !== "agent" ||
+            managed.canonicalAgentState === "completed" ||
+            managed.canonicalAgentState === "exited")
+        ) {
           if (!managed.hibernationTimer && !managed.isHibernated) {
             managed.hibernationTimer = setTimeout(() => {
               managed.hibernationTimer = undefined;
@@ -210,14 +218,20 @@ class TerminalInstanceService {
           }
         }
 
-        if (
-          tier === TerminalRefreshTier.FOCUSED ||
-          tier === TerminalRefreshTier.BURST ||
-          tier === TerminalRefreshTier.VISIBLE
-        ) {
-          this.webGLManager.ensureContext(id, managed);
-        } else {
-          this.webGLManager.releaseContext(id);
+        if (managed.kind === "agent") {
+          if (
+            tier === TerminalRefreshTier.FOCUSED ||
+            tier === TerminalRefreshTier.BURST ||
+            tier === TerminalRefreshTier.VISIBLE
+          ) {
+            this.webGLManager.ensureContext(id, managed);
+          } else {
+            const hadWebGL = this.webGLManager.isActive(id);
+            this.webGLManager.releaseContext(id);
+            if (hadWebGL && managed.terminal.rows > 0) {
+              managed.terminal.refresh(0, managed.terminal.rows - 1);
+            }
+          }
         }
       },
     });
@@ -309,16 +323,16 @@ class TerminalInstanceService {
     if (!managed) return;
 
     if (managed.isHibernated) {
-      const bytes =
-        typeof data === "string" ? this.textEncoder.encode(data).length : data.byteLength;
+      const bytes = typeof data === "string" ? data.length : data.byteLength;
+      terminalClient.acknowledgePortData(id, bytes);
       this.dataBuffer.notifyWriteComplete(id, bytes);
       return;
     }
 
     if (managed.isSerializedRestoreInProgress) {
       managed.deferredOutput.push(data);
-      const deferredBytes =
-        typeof data === "string" ? this.textEncoder.encode(data).length : data.byteLength;
+      const deferredBytes = typeof data === "string" ? data.length : data.byteLength;
+      terminalClient.acknowledgePortData(id, deferredBytes);
       this.dataBuffer.notifyWriteComplete(id, deferredBytes);
       return;
     }
@@ -333,8 +347,7 @@ class TerminalInstanceService {
         ? data.length
         : data.byteLength
       : 0;
-    const acknowledgedBytes =
-      typeof data === "string" ? this.textEncoder.encode(data).length : data.byteLength;
+    const acknowledgedBytes = typeof data === "string" ? data.length : data.byteLength;
 
     if (shouldSample) {
       markRendererPerformance(PERF_MARKS.TERMINAL_DATA_PARSED, {
@@ -355,6 +368,7 @@ class TerminalInstanceService {
 
       managed.pendingWrites = Math.max(0, (managed.pendingWrites ?? 1) - 1);
 
+      terminalClient.acknowledgePortData(id, acknowledgedBytes);
       terminalClient.acknowledgeData(id, acknowledgedBytes);
       this.dataBuffer.notifyWriteComplete(id, acknowledgedBytes);
 
@@ -380,9 +394,15 @@ class TerminalInstanceService {
     });
   }
 
-  setVisible(id: string, isVisible: boolean): void {
+  setVisible(id: string, isVisible: boolean, expectedGeneration?: number): void {
     const managed = this.instances.get(id);
     if (!managed || managed.isHibernated) return;
+
+    // Guard: if a generation was provided and it doesn't match the current
+    // attach generation, this is a stale cleanup from a previous mount — skip.
+    if (expectedGeneration !== undefined && managed.attachGeneration !== expectedGeneration) {
+      return;
+    }
 
     const wasVisible = managed.isVisible;
     if (wasVisible !== isVisible) {
@@ -390,7 +410,9 @@ class TerminalInstanceService {
       managed.lastActiveTime = Date.now();
 
       if (isVisible) {
-        if (managed.isAttaching) return;
+        if (managed.isAttaching) {
+          return;
+        }
 
         const rect = managed.hostElement.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
@@ -408,6 +430,11 @@ class TerminalInstanceService {
           : TerminalRefreshTier.VISIBLE;
         this.rendererPolicy.applyRendererPolicy(id, tier);
 
+        const termEl = managed.terminal.element;
+        if (termEl) {
+          forceXtermReflow(termEl);
+        }
+
         requestAnimationFrame(() => {
           const current = this.instances.get(id);
           if (current && current.isVisible) {
@@ -424,21 +451,21 @@ class TerminalInstanceService {
 
   private layoutTransitionTimer: number | undefined;
 
-  suppressResizesDuringLayoutTransition(terminalIds: string[], durationMs: number): void {
-    if (terminalIds.length === 0) return;
+  suppressResizesDuringLayoutTransition(panelIds: string[], durationMs: number): void {
+    if (panelIds.length === 0) return;
 
     if (this.layoutTransitionTimer !== undefined) {
       clearTimeout(this.layoutTransitionTimer);
     }
 
     const safetyTtl = durationMs + 100;
-    for (const id of terminalIds) {
+    for (const id of panelIds) {
       this.resizeController.lockResize(id, true, safetyTtl);
     }
 
     this.layoutTransitionTimer = window.setTimeout(() => {
       this.layoutTransitionTimer = undefined;
-      for (const id of terminalIds) {
+      for (const id of panelIds) {
         if (!this.instances.has(id)) continue;
         this.resizeController.lockResize(id, false);
         this.resizeController.fit(id);
@@ -446,8 +473,8 @@ class TerminalInstanceService {
     }, durationMs);
   }
 
-  suppressResizesDuringProjectSwitch(terminalIds: string[], durationMs: number): void {
-    terminalIds.forEach((id) => {
+  suppressResizesDuringProjectSwitch(panelIds: string[], durationMs: number): void {
+    panelIds.forEach((id) => {
       const instance = this.instances.get(id);
       if (!instance) return;
 
@@ -520,6 +547,7 @@ class TerminalInstanceService {
     const existing = this.instances.get(id);
     if (existing) {
       existing.getRefreshTier = getRefreshTier;
+      existing.onInput = onInput;
       if (getCwd) {
         this.cwdProviders.set(id, getCwd);
       }
@@ -612,10 +640,13 @@ class TerminalInstanceService {
       restoreGeneration: 0,
       isSerializedRestoreInProgress: false,
       deferredOutput: [],
+      scrollbackRestoreState: "none",
+      attachGeneration: 0,
       attachRevealToken: 0,
       isAltBuffer: false,
       altBufferListeners: new Set(),
       ipcListenerCount: listeners.length,
+      onInput,
     };
 
     managed.parserHandler = new TerminalParserHandler(managed, () => {
@@ -923,6 +954,7 @@ class TerminalInstanceService {
     }
 
     const wasDetached = managed.isDetached === true;
+    const wasAlreadyOpened = managed.isOpened;
     const wasReparented = managed.hostElement.parentElement !== container;
     logDebug(`[TIS.attach] ${id}`, {
       wasReparented,
@@ -945,15 +977,41 @@ class TerminalInstanceService {
       managed.isOpened = true;
       logDebug(`[TIS.attach] Opened terminal ${id}`);
       if (
-        managed.lastAppliedTier === TerminalRefreshTier.FOCUSED ||
-        managed.lastAppliedTier === TerminalRefreshTier.BURST ||
-        managed.lastAppliedTier === TerminalRefreshTier.VISIBLE
+        managed.kind === "agent" &&
+        (managed.lastAppliedTier === TerminalRefreshTier.FOCUSED ||
+          managed.lastAppliedTier === TerminalRefreshTier.BURST ||
+          managed.lastAppliedTier === TerminalRefreshTier.VISIBLE)
       ) {
         this.webGLManager.ensureContext(id, managed);
       }
     }
+    managed.attachGeneration++;
     managed.lastAttachAt = Date.now();
     managed.isDetached = false;
+
+    // For warm terminals (previously opened, detached during project switch) with
+    // saved target dimensions, apply the resize synchronously before the rAF reveal.
+    // This runs inside useLayoutEffect (before browser paint), eliminating the visible
+    // layout snap that occurs when resize is deferred to the double-nested rAF.
+    let earlyResizeApplied = false;
+    if (wasDetached && wasAlreadyOpened && managed.targetCols && managed.targetRows) {
+      const needsLockBypass = managed.isResizeSuppressed;
+      let remainingMs = 0;
+      if (needsLockBypass && managed.resizeSuppressionEndTime) {
+        remainingMs = Math.max(0, managed.resizeSuppressionEndTime - Date.now());
+        this.resizeController.lockResize(id, false);
+      }
+      try {
+        this.resizeController.applyResize(id, managed.targetCols, managed.targetRows);
+        managed.targetCols = undefined;
+        managed.targetRows = undefined;
+        earlyResizeApplied = true;
+      } finally {
+        if (needsLockBypass) {
+          this.resizeController.lockResize(id, true, remainingMs);
+        }
+      }
+    }
 
     if (wasReparented && managed.isOpened) {
       const revealToken = managed.attachRevealToken;
@@ -961,9 +1019,30 @@ class TerminalInstanceService {
         if (this.instances.get(id) !== managed) return;
         if (managed.attachRevealToken !== revealToken) return;
         managed.isAttaching = false;
+
+        // Post-attach renderer recovery: reconcile the renderer policy now that
+        // isAttaching is cleared. During attach, setVisible(id, true) sets
+        // isVisible but early-returns before applying the renderer policy or
+        // scheduling a refresh (guarded by isAttaching). Without this
+        // reconciliation, terminals prewarmed at BACKGROUND tier never get
+        // upgraded to VISIBLE/FOCUSED, causing frozen display in switched-to
+        // projects where applyWorktreeTerminalPolicy already ran before the
+        // terminal was created.
+        if (managed.isVisible && managed.getRefreshTier) {
+          const currentTier = managed.getRefreshTier();
+          if (managed.lastAppliedTier === undefined || currentTier !== managed.lastAppliedTier) {
+            this.rendererPolicy.applyRendererPolicy(id, currentTier);
+          }
+        }
+
         if (!managed.terminal.element) {
           managed.hostElement.style.opacity = "";
           return;
+        }
+
+        const termEl = managed.terminal.element;
+        if (termEl) {
+          forceXtermReflow(termEl);
         }
 
         const reveal = () => {
@@ -989,6 +1068,8 @@ class TerminalInstanceService {
 
         requestAnimationFrame(() => {
           if (this.instances.get(id) !== managed) return;
+
+          if (earlyResizeApplied) return;
 
           if (wasDetached) {
             const rect = container.getBoundingClientRect();
@@ -1039,6 +1120,10 @@ class TerminalInstanceService {
     }
 
     return managed;
+  }
+
+  getAttachGeneration(id: string): number {
+    return this.instances.get(id)?.attachGeneration ?? 0;
   }
 
   detach(id: string, container: HTMLElement | null): void {
@@ -1288,6 +1373,55 @@ class TerminalInstanceService {
     };
   }
 
+  captureBufferText(id: string, maxChars: number = 20000): string {
+    const managed = this.instances.get(id);
+    if (!managed || managed.isHibernated) return "";
+
+    const buf = managed.terminal.buffer.active;
+    if (buf.length === 0) return "";
+
+    const lines: string[] = [];
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+
+    let text = stripAnsiAndOscCodes(lines.join("\n"));
+
+    if (text.length > maxChars) {
+      text = text.slice(-maxChars);
+    }
+
+    return text;
+  }
+
+  registerPostCompleteHook(id: string, callback: PostCompleteHook): () => void {
+    const managed = this.instances.get(id);
+    if (!managed) return () => {};
+
+    managed.postCompleteMarker?.dispose();
+    managed.postCompleteHook = callback;
+
+    if (!managed.isAltBuffer) {
+      managed.postCompleteMarker = managed.terminal.registerMarker(0);
+    } else {
+      managed.postCompleteMarker = undefined;
+    }
+
+    return () => {
+      this.unregisterPostCompleteHook(id);
+    };
+  }
+
+  unregisterPostCompleteHook(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    managed.postCompleteMarker?.dispose();
+    managed.postCompleteMarker = undefined;
+    managed.postCompleteHook = undefined;
+  }
+
   setFocused(id: string, isFocused: boolean): void {
     const managed = this.instances.get(id);
     if (!managed) return;
@@ -1425,6 +1559,20 @@ class TerminalInstanceService {
     restoreScrollback(managed);
   }
 
+  reduceScrollbackAllBackground(targetLines: number): void {
+    for (const managed of this.instances.values()) {
+      if (managed.isHibernated) continue;
+      if (managed.isFocused) continue;
+      if (
+        managed.kind === "agent" &&
+        managed.canonicalAgentState !== "completed" &&
+        managed.canonicalAgentState !== "exited"
+      )
+        continue;
+      reduceScrollback(managed, targetLines);
+    }
+  }
+
   addExitListener(id: string, cb: (exitCode: number) => void): () => void {
     const managed = this.instances.get(id);
     if (!managed) return () => {};
@@ -1437,213 +1585,11 @@ class TerminalInstanceService {
   }
 
   hibernate(id: string): void {
-    const managed = this.instances.get(id);
-    if (!managed || managed.isHibernated || managed.kind === "agent") return;
-
-    logDebug(`[TIS.hibernate] Hibernating terminal ${id}`);
-
-    if (managed.hibernationTimer) {
-      clearTimeout(managed.hibernationTimer);
-      managed.hibernationTimer = undefined;
-    }
-
-    this.restoreController.destroy(id);
-    this.dataBuffer.resetForTerminal(id);
-
-    // Release WebGL context first to avoid context leaks
-    this.webGLManager.onTerminalDestroyed(id);
-
-    // Dispose tier-managed addons
-    try {
-      managed.imageAddon?.dispose();
-    } catch {
-      /* ignore */
-    }
-    managed.imageAddon = null;
-    try {
-      managed.fileLinksDisposable?.dispose();
-    } catch {
-      /* ignore */
-    }
-    managed.fileLinksDisposable = null;
-    try {
-      managed.webLinksAddon?.dispose();
-    } catch {
-      /* ignore */
-    }
-    managed.webLinksAddon = null;
-
-    // Dispose terminal-bound listeners (keep IPC listeners at the beginning)
-    const terminalBoundListeners = managed.listeners.splice(managed.ipcListenerCount);
-    for (const unsub of terminalBoundListeners) {
-      try {
-        unsub();
-      } catch {
-        /* ignore — terminal already disposing */
-      }
-    }
-
-    // Dispose parser handler
-    managed.parserHandler?.dispose();
-    managed.parserHandler = undefined;
-
-    // Dispose last activity marker
-    managed.lastActivityMarker?.dispose();
-    managed.lastActivityMarker = undefined;
-
-    // Dispose terminal instance — this removes xterm's injected DOM elements
-    // from the hostElement but leaves the hostElement itself in the DOM
-    // so XtermAdapter's container ref stays valid for reattachment
-    managed.terminal.dispose();
-
-    managed.isHibernated = true;
-    managed.isOpened = false;
-    managed.keyHandlerInstalled = false;
-
-    // Clear resize state
-    this.resizeController.clearResizeJob(managed);
-    this.resizeController.clearSettledTimer(id);
+    this.hibernationManager.hibernate(id);
   }
 
   unhibernate(id: string): void {
-    const managed = this.instances.get(id);
-    if (!managed || !managed.isHibernated) return;
-
-    logDebug(`[TIS.unhibernate] Restoring terminal ${id}`);
-
-    // Create fresh Terminal with same options
-    const terminal = new Terminal(managed.terminal.options);
-    managed.terminal = terminal;
-
-    // Create fresh addons
-    const openLink = (url: string, event?: MouseEvent) => {
-      this.linkHandler.openLink(url, id, event);
-    };
-    const addons = setupTerminalAddons(
-      terminal,
-      () => (this.cwdProviders.get(id) ?? (() => ""))(),
-      (event, uri) => openLink(uri, event)
-    );
-    managed.fitAddon = addons.fitAddon;
-    managed.serializeAddon = addons.serializeAddon;
-    managed.searchAddon = addons.searchAddon;
-    managed.imageAddon = addons.imageAddon;
-    managed.fileLinksDisposable = addons.fileLinksDisposable;
-    managed.webLinksAddon = addons.webLinksAddon;
-
-    // Reuse existing hostElement — clear old xterm DOM nodes to prevent ghosting
-    const hostElement = managed.hostElement;
-    while (hostElement.firstChild) {
-      hostElement.removeChild(hostElement.firstChild);
-    }
-
-    // Re-create parser handler
-    managed.parserHandler = new TerminalParserHandler(managed, () => {
-      this.resizeController.applyDeferredResize(id);
-    });
-
-    // Re-register terminal-bound listeners (IPC listeners in managed.listeners survive)
-    const initialIsAltBuffer = terminal.buffer.active.type === "alternate";
-    managed.isAltBuffer = initialIsAltBuffer;
-
-    const bufferDisposable = terminal.buffer.onBufferChange(() => {
-      const newIsAltBuffer = terminal.buffer.active.type === "alternate";
-      if (newIsAltBuffer !== managed.isAltBuffer) {
-        managed.isAltBuffer = newIsAltBuffer;
-        this.handleBufferModeChange(id, newIsAltBuffer);
-      }
-    });
-    managed.listeners.push(() => bufferDisposable.dispose());
-
-    const oscDisposable = terminal.parser.registerOscHandler(11, () => {
-      if (managed.isAltBuffer) {
-        for (const callback of managed.altBufferListeners) {
-          try {
-            callback(true);
-          } catch (err) {
-            logError("Alt buffer callback error", err);
-          }
-        }
-      }
-      return false;
-    });
-    managed.listeners.push(() => oscDisposable.dispose());
-
-    const writeParsedDisposable = terminal.onWriteParsed(() => {
-      this.dataBuffer.notifyParsed(id);
-      if (managed && !managed.isUserScrolledBack && !managed.isAltBuffer) {
-        this.scrollToBottomSafe(managed);
-      }
-    });
-    managed.listeners.push(() => writeParsedDisposable.dispose());
-
-    const scrollDisposable = terminal.onScroll(() => {
-      const buffer = terminal.buffer.active;
-      const isAtBottom = buffer.viewportY >= buffer.baseY;
-      managed.latestWasAtBottom = isAtBottom;
-
-      managed._userScrollIntent = false;
-      if (managed._suppressScrollTracking) return;
-
-      if (isAtBottom) {
-        managed.isUserScrolledBack = false;
-        this.unseenTracker.clearUnseen(id, false);
-        if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
-          reduceScrollback(managed, SCROLLBACK_BACKGROUND);
-        }
-      } else {
-        managed.isUserScrolledBack = true;
-        this.unseenTracker.updateScrollState(id, true);
-      }
-    });
-    managed.listeners.push(() => scrollDisposable.dispose());
-
-    const SCROLL_KEYS = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"]);
-    const onWheel = () => {
-      managed._userScrollIntent = true;
-    };
-    const onKeydownScroll = (e: KeyboardEvent) => {
-      if (SCROLL_KEYS.has(e.key)) managed._userScrollIntent = true;
-    };
-    hostElement.addEventListener("wheel", onWheel, { passive: true });
-    hostElement.addEventListener("keydown", onKeydownScroll);
-    managed.listeners.push(() => {
-      hostElement.removeEventListener("wheel", onWheel);
-      hostElement.removeEventListener("keydown", onKeydownScroll);
-    });
-
-    const selectionDisposable = terminal.onSelectionChange(() => {
-      const sel = terminal.getSelection();
-      if (sel) {
-        this.cachedSelections.set(id, sel);
-      } else if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
-        reduceScrollback(managed, SCROLLBACK_BACKGROUND);
-      }
-    });
-    managed.listeners.push(() => selectionDisposable.dispose());
-
-    const inputDisposable = terminal.onData((data) => {
-      if (!managed.isInputLocked) {
-        if (isNonKeyboardInput(data)) {
-          if (data === "\x1b") {
-            this.agentStateController.clearDirectingState(id);
-          }
-        } else {
-          this.onUserInput(id, data);
-        }
-        terminalClient.write(id, data);
-      }
-    });
-    managed.listeners.push(() => inputDisposable.dispose());
-
-    // Reset restore state
-    managed.writeChain = Promise.resolve();
-    managed.restoreGeneration += 1;
-    managed.isSerializedRestoreInProgress = false;
-    managed.deferredOutput = [];
-
-    managed.isHibernated = false;
-    managed.isDetached = false;
+    this.hibernationManager.unhibernate(id);
   }
 
   destroy(id: string): void {
@@ -1662,6 +1608,12 @@ class TerminalInstanceService {
     this.cancelAttachReveal(managed);
     this.agentStateController.destroy(id);
     this.restoreController.destroy(id);
+
+    if (managed.scrollbackRestoreDisposable) {
+      managed.scrollbackRestoreDisposable.dispose();
+      managed.scrollbackRestoreDisposable = undefined;
+    }
+    managed.scrollbackRestoreState = "none";
 
     this.instances.delete(id);
 
@@ -1703,6 +1655,9 @@ class TerminalInstanceService {
     }
 
     managed.lastActivityMarker?.dispose();
+    managed.postCompleteMarker?.dispose();
+    managed.postCompleteMarker = undefined;
+    managed.postCompleteHook = undefined;
     managed.exitSubscribers.clear();
     managed.agentStateSubscribers.clear();
     managed.altBufferListeners.clear();
@@ -1823,10 +1778,10 @@ if (typeof window !== "undefined") {
   ): string => {
     const managed = terminalInstanceService["instances"].get(panelId);
     if (!managed) return "missing-panel";
-    const isMac = navigator.platform.toLowerCase().includes("mac");
+    const mac = isMac();
     const syntheticEvent = new MouseEvent("click", {
-      metaKey: isMac,
-      ctrlKey: !isMac,
+      metaKey: mac,
+      ctrlKey: !mac,
     });
     terminalInstanceService["linkHandler"].openLink(url, panelId, syntheticEvent);
     return "ok";

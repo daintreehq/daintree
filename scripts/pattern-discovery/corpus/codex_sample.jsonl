@@ -1,0 +1,13 @@
+{"time":0.0,"chunk":"OpenAI Codex v1.0.0","detectedState":"initializing","confidence":0.9,"agentId":"codex","agentVersion":"1.0.0"}
+{"time":0.5,"chunk":"› ","detectedState":"waiting","confidence":0.85,"agentId":"codex","agentVersion":"1.0.0"}
+{"time":1.0,"chunk":"• Working (1s • esc to interrupt)","detectedState":"working","confidence":0.95,"agentId":"codex","agentVersion":"1.0.0"}
+{"time":3.0,"chunk":"· Working (5s · esc to interrupt)","detectedState":"working","confidence":0.95,"agentId":"codex","agentVersion":"1.0.0"}
+{"time":5.0,"chunk":"• Exploring files with search (4s • esc to interrupt)","detectedState":"working","confidence":0.95,"agentId":"codex","agentVersion":"1.0.0"}
+{"time":7.0,"chunk":"• Working","detectedState":"working","confidence":0.75,"agentId":"codex","agentVersion":"1.0.0"}
+{"time":8.0,"chunk":"· Working","detectedState":"working","confidence":0.75,"agentId":"codex","agentVersion":"1.0.0"}
+{"time":9.0,"chunk":"Task completed successfully\n3 files changed","detectedState":"completed","confidence":0.9,"agentId":"codex","agentVersion":"1.0.0"}
+{"time":10.0,"chunk":"codex > ","detectedState":"waiting","confidence":0.85,"agentId":"codex","agentVersion":"1.0.0"}
+{"time":11.0,"chunk":"Done. Ready for next task.","detectedState":"waiting","confidence":0.0,"agentId":"codex","agentVersion":"1.0.0"}
+{"time":12.0,"chunk":"(15s • esc to interrupt)","detectedState":"working","confidence":0.95,"agentId":"codex","agentVersion":"1.0.0"}
+{"time":13.0,"chunk":"Created 2 files","detectedState":"completed","confidence":0.9,"agentId":"codex","agentVersion":"1.0.0"}
+{"time":14.0,"chunk":"context left: 85%","detectedState":"waiting","confidence":0.85,"agentId":"codex","agentVersion":"1.0.0"}

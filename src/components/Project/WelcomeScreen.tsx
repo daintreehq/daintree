@@ -7,6 +7,7 @@ import {
   Download,
   Newspaper,
   ExternalLink,
+  GitBranch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CanopyIcon } from "@/components/icons";
@@ -35,12 +36,13 @@ const SHORTCUT_TIPS: { label: string; actionId: string }[] = [
 export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const addProject = useProjectStore((state) => state.addProject);
   const openCreateFolderDialog = useProjectStore((state) => state.openCreateFolderDialog);
+  const openCloneRepoDialog = useProjectStore((state) => state.openCloneRepoDialog);
 
   const projects = useProjectStore((state) => state.projects);
   const switchProject = useProjectStore((state) => state.switchProject);
 
   const recentProjects = useMemo(
-    () => [...projects].sort((a, b) => b.lastOpened - a.lastOpened).slice(0, 5),
+    () => [...projects].sort((a, b) => (b.frecencyScore ?? 0) - (a.frecencyScore ?? 0)).slice(0, 5),
     [projects]
   );
 
@@ -58,7 +60,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
       <div className="max-w-2xl w-full flex flex-col items-center px-8 py-12 gap-10">
         {/* Hero */}
         <div className="flex flex-col items-center text-center">
-          <CanopyIcon className="h-16 w-16 text-tint/80 mb-6" />
+          <CanopyIcon className="h-16 w-16 text-tint/50 mb-6" />
           <h1 className="text-2xl font-semibold text-canopy-text tracking-tight mb-2">
             Welcome to Canopy
           </h1>
@@ -101,6 +103,10 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
             <Button size="lg" variant="outline" onClick={openCreateFolderDialog}>
               <FolderPlus />
               Create Project
+            </Button>
+            <Button size="lg" variant="outline" onClick={openCloneRepoDialog}>
+              <GitBranch />
+              Clone Repository
             </Button>
             <Button
               size="lg"
@@ -234,14 +240,14 @@ function InlineChecklist({
       {/* Progress bar */}
       <div className="w-full h-1 bg-canopy-border/50 rounded-full mb-4 overflow-hidden">
         <div
-          className="h-full bg-canopy-accent rounded-full transition-all duration-500"
+          className="h-full bg-canopy-accent rounded-full transition-[width] duration-500"
           style={{ width: `${(progressDone / progressTotal) * 100}%` }}
         />
       </div>
 
       <div className="space-y-1">
         {/* Endowed progress: Install Canopy (always complete) */}
-        <div className="flex items-center gap-2.5 px-2 py-1.5 opacity-60">
+        <div className="flex items-start gap-2.5 px-2 py-1.5 opacity-60">
           <div className="h-4 w-4 rounded-full bg-canopy-accent border border-canopy-accent flex items-center justify-center shrink-0">
             <Check className="h-2.5 w-2.5 text-canopy-bg" />
           </div>
@@ -250,7 +256,7 @@ function InlineChecklist({
         </div>
 
         {/* Real checklist items */}
-        {CHECKLIST_ITEMS.map(({ id, label, icon: Icon, actionId }) => {
+        {CHECKLIST_ITEMS.map(({ id, label, description, icon: Icon, actionId }) => {
           const done = checklist.items[id];
 
           const content = (
@@ -269,19 +275,31 @@ function InlineChecklist({
                   done ? "text-canopy-text/40" : "text-canopy-text/70"
                 )}
               />
-              <span
-                className={cn(
-                  "text-xs leading-snug",
-                  done ? "text-canopy-text/40" : "text-canopy-text/90"
+              <div className="flex flex-col min-w-0 flex-1">
+                <span
+                  className={cn(
+                    "text-xs leading-snug",
+                    done ? "text-canopy-text/40" : "text-canopy-text/90"
+                  )}
+                >
+                  {label}
+                </span>
+                {description && (
+                  <span
+                    className={cn(
+                      "text-[10px] leading-snug",
+                      done ? "text-canopy-text/30" : "text-canopy-text/50"
+                    )}
+                  >
+                    {description}
+                  </span>
                 )}
-              >
-                {label}
-              </span>
+              </div>
             </>
           );
 
           const sharedClasses = cn(
-            "flex items-center gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5",
+            "flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5",
             "transition-colors duration-200",
             done ? "opacity-60" : "opacity-100"
           );

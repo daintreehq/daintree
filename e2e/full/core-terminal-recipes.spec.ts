@@ -19,7 +19,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
   test.describe.serial("Recipe Editor", () => {
     test.beforeAll(async () => {
       const fixtureDir = createFixtureRepo({ name: "terminal-recipes" });
-      await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Recipes Test");
+      ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Recipes Test");
       await ctx.window.waitForTimeout(T_SETTLE);
     });
 
@@ -111,6 +111,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
     test("edit reopens with saved values and cancel confirms unsaved changes", async () => {
       const { window } = ctx;
       await openRecipesTab();
+      await window.waitForTimeout(300);
 
       // Click edit on the saved recipe (button is opacity-0 until hover)
       await window
@@ -165,11 +166,12 @@ test.describe.serial("Core: Terminal Recipes", () => {
 
     test("edit and save updates the recipe", async () => {
       const { window } = ctx;
+      await window.waitForTimeout(500);
       await openRecipesTab();
 
-      await window
-        .locator(SEL.projectSettings.editRecipeButton("E2E Test Recipe"))
-        .click({ force: true });
+      const editBtn = window.locator(SEL.projectSettings.editRecipeButton("E2E Test Recipe"));
+      await expect(editBtn).toBeVisible({ timeout: T_MEDIUM });
+      await editBtn.click({ force: true });
 
       const editor = getRecipeEditor("Edit Recipe");
       await expect(editor).toBeVisible({ timeout: T_MEDIUM });

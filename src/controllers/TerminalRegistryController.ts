@@ -14,7 +14,7 @@
 
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import type { TerminalType, TerminalLocation, AgentState } from "@/types";
+import type { TerminalType, PanelLocation, AgentState } from "@/types";
 import type {
   TerminalSpawnOptions,
   AgentStateChangePayload,
@@ -58,7 +58,7 @@ export interface SpawnTerminalOptions {
   cwd: string;
   shell?: string;
   command?: string;
-  location?: TerminalLocation;
+  location?: PanelLocation;
   skipCommandExecution?: boolean;
 }
 
@@ -142,7 +142,7 @@ class TerminalRegistryController {
     id: string,
     type: TerminalType,
     kind: "terminal" | "agent",
-    location: TerminalLocation
+    location: PanelLocation
   ): void {
     try {
       const { scrollbackLines } = useScrollbackStore.getState();

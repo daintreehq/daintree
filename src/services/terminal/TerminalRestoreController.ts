@@ -28,6 +28,7 @@ export class TerminalRestoreController {
         return true;
       }
 
+      const restoreGeneration = ++managed.restoreGeneration;
       managed.isSerializedRestoreInProgress = true;
 
       const scrollBackOffset = managed.isUserScrolledBack
@@ -37,7 +38,7 @@ export class TerminalRestoreController {
       managed.terminal.reset();
       managed.terminal.write(serializedState, () => {
         const current = this.deps.getInstance(id);
-        if (current !== managed) return;
+        if (current !== managed || managed.restoreGeneration !== restoreGeneration) return;
 
         if (scrollBackOffset > 0) {
           const newBaseY = current.terminal.buffer.active.baseY;
@@ -100,18 +101,23 @@ export class TerminalRestoreController {
           const chunk = serializedState.substring(offset, offset + chunkSize);
           offset += chunkSize;
 
-          await Promise.race([
-            new Promise<void>((resolve, reject) => {
-              try {
-                managed.terminal.write(chunk, () => resolve());
-              } catch (err) {
-                reject(err);
-              }
-            }),
-            new Promise<void>((_, reject) =>
-              setTimeout(() => reject(new Error("Write timeout")), 5000)
-            ),
-          ]);
+          let timeoutHandle!: ReturnType<typeof setTimeout>;
+          try {
+            await Promise.race([
+              new Promise<void>((resolve, reject) => {
+                try {
+                  managed.terminal.write(chunk, () => resolve());
+                } catch (err) {
+                  reject(err);
+                }
+              }),
+              new Promise<void>((_, reject) => {
+                timeoutHandle = setTimeout(() => reject(new Error("Write timeout")), 5000);
+              }),
+            ]);
+          } finally {
+            clearTimeout(timeoutHandle);
+          }
 
           if (offset < total) {
             await this.yieldToUI();
@@ -168,10 +174,33 @@ export class TerminalRestoreController {
   }
 
   async fetchAndRestore(id: string): Promise<boolean> {
+    const managed = this.deps.getInstance(id);
+    if (!managed) {
+      logWarn(`Cannot fetch-and-restore: terminal ${id} not found`);
+      return false;
+    }
+
+    const restoreGeneration = managed.restoreGeneration;
+    managed.isSerializedRestoreInProgress = true;
+
     try {
       const serializedState = await terminalClient.getSerializedState(id);
-      return await this.restoreFetchedState(id, serializedState);
+
+      // Check staleness after IPC round-trip
+      const current = this.deps.getInstance(id);
+      if (current !== managed || managed.restoreGeneration !== restoreGeneration) {
+        managed.isSerializedRestoreInProgress = false;
+        return false;
+      }
+
+      // restoreFetchedState will take over the isSerializedRestoreInProgress flag
+      const result = await this.restoreFetchedState(id, serializedState);
+      if (!result) {
+        managed.isSerializedRestoreInProgress = false;
+      }
+      return result;
     } catch (error) {
+      managed.isSerializedRestoreInProgress = false;
       logError(`Failed to fetch state for terminal ${id}`, error);
       return false;
     }

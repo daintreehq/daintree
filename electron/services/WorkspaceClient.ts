@@ -1,31 +1,27 @@
 /**
- * WorkspaceClient - Main process stub for workspace management.
+ * WorkspaceClient - Per-project workspace host process manager.
  *
- * This class provides a drop-in replacement for WorktreeService in the Main process.
- * It forwards all operations to the Workspace Host (UtilityProcess) via IPC,
- * keeping the Main thread responsive.
- *
- * Interface matches WorktreeService for seamless integration with existing code.
+ * Manages one UtilityProcess per active project path, with refcounting
+ * for windows sharing the same project. Replaces the former singleton
+ * host pattern that caused cross-project contamination.
  */
 
-import { utilityProcess, UtilityProcess, dialog, app, BrowserWindow } from "electron";
+import { MessageChannelMain, type WebContents } from "electron";
 import { EventEmitter } from "events";
 import path from "path";
-import os from "os";
 import crypto from "crypto";
-import { fileURLToPath } from "url";
 import { events } from "./events.js";
 import { CHANNELS } from "../ipc/channels.js";
+
+import { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
 import type {
-  WorkspaceHostRequest,
-  WorkspaceHostEvent,
   WorkspaceClientConfig,
   WorktreeSnapshot,
   MonitorConfig,
   CreateWorktreeOptions,
   BranchInfo,
+  WorkspaceHostEvent,
 } from "../../shared/types/workspace-host.js";
-import type { Worktree } from "../../shared/types/worktree.js";
 import type {
   CopyTreeOptions,
   CopyTreeProgress,
@@ -33,411 +29,135 @@ import type {
   FileTreeNode,
 } from "../../shared/types/ipc.js";
 import type { ProjectPulse, PulseRangeDays } from "../../shared/types/pulse.js";
-import { GitHubAuth } from "./github/GitHubAuth.js";
 
 export type CopyTreeProgressCallback = (progress: CopyTreeProgress) => void;
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const CLEANUP_GRACE_MS = 180_000; // 3 minutes
+const MAX_WARM_ENTRIES = 3;
 
-/** Default configuration */
 const DEFAULT_CONFIG: Required<WorkspaceClientConfig> = {
   maxRestartAttempts: 3,
   healthCheckIntervalMs: 60000,
   showCrashDialog: true,
 };
 
+interface ProcessEntry {
+  host: WorkspaceHostProcess;
+  refCount: number;
+  initPromise: Promise<void>;
+  cleanupTimeout: NodeJS.Timeout | null;
+  windowIds: Set<number>;
+  projectPath: string;
+  /** WebContents with direct MessagePort connections to this host */
+  directPortViews: Map<number, WebContents>;
+}
+
 export class WorkspaceClient extends EventEmitter {
-  private child: UtilityProcess | null = null;
   private config: Required<WorkspaceClientConfig>;
-  private isInitialized = false;
   private isDisposed = false;
-  private healthCheckInterval: NodeJS.Timeout | null = null;
-  private restartTimer: NodeJS.Timeout | null = null;
-  private restartAttempts = 0;
-  private isHealthCheckPaused = false;
-  private isWaitingForHandshake = false;
-  private handshakeTimeout: NodeJS.Timeout | null = null;
 
-  /** Watchdog: Track missed heartbeat responses to detect deadlocks */
-  private missedHeartbeats = 0;
-  private readonly MAX_MISSED_HEARTBEATS = 3;
+  private entries = new Map<string, ProcessEntry>();
+  private windowToProject = new Map<number, string>();
 
-  // Callback maps for request/response correlation
-  private pendingRequests = new Map<
-    string,
-    {
-      resolve: (value: any) => void;
-      reject: (error: Error) => void;
-      timeout: NodeJS.Timeout;
-    }
-  >();
+  // Reverse map: worktree path → project path (populated from worktree-update events)
+  private worktreePathToProject = new Map<string, string>();
 
-  // CopyTree progress callbacks by operationId
+  // CopyTree progress callbacks by operationId (manager-level)
   private copyTreeProgressCallbacks = new Map<string, CopyTreeProgressCallback>();
-  // Track active CopyTree operations: operationId -> requestId
   private activeCopyTreeOperations = new Map<string, string>();
 
-  // Ready promise
-  private readyPromise: Promise<void>;
-  private readyResolve: (() => void) | null = null;
-  private readyReject: ((error: Error) => void) | null = null;
-
-  // Cached state
-  private currentRootPath: string | null = null;
-  private currentProjectScopeId: string | null = null;
-  private lastScopeMismatchWarnAt = 0;
-  private loadProjectGeneration = 0;
+  private readonly _statesInflight = new Map<string, Promise<WorktreeSnapshot[]>>();
 
   constructor(config: WorkspaceClientConfig = {}) {
     super();
     this.config = { ...DEFAULT_CONFIG, ...config };
-
-    this.readyPromise = new Promise((resolve, reject) => {
-      this.readyResolve = resolve;
-      this.readyReject = reject;
-    });
-
-    this.startHost();
   }
 
-  /** Wait for the host to be ready */
   async waitForReady(): Promise<void> {
-    return this.readyPromise;
+    const promises = [...this.entries.values()].map((e) => e.initPromise);
+    if (promises.length === 0) return;
+    await Promise.all(promises);
   }
 
-  private startHealthCheckInterval(): void {
-    if (this.healthCheckInterval) {
-      clearInterval(this.healthCheckInterval);
-      this.healthCheckInterval = null;
-    }
+  private normalizeProjectPath(p: string): string {
+    return path.resolve(p);
+  }
 
-    if (this.isHealthCheckPaused || !this.child) {
-      return;
-    }
+  private resolveEntryForWindow(windowId: number): ProcessEntry | undefined {
+    const projectPath = this.windowToProject.get(windowId);
+    if (!projectPath) return undefined;
+    return this.entries.get(projectPath);
+  }
 
-    this.missedHeartbeats = 0;
+  private resolveHostForWindow(windowId: number): WorkspaceHostProcess | undefined {
+    return this.resolveEntryForWindow(windowId)?.host;
+  }
 
-    this.healthCheckInterval = setInterval(() => {
-      if (!this.isInitialized || !this.child || this.isHealthCheckPaused) return;
+  getHostForProject(projectPath: string): WorkspaceHostProcess | undefined {
+    const normalized = this.normalizeProjectPath(projectPath);
+    return this.entries.get(normalized)?.host;
+  }
 
-      if (this.missedHeartbeats >= this.MAX_MISSED_HEARTBEATS) {
-        const missedMs = this.missedHeartbeats * this.config.healthCheckIntervalMs;
-        console.error(
-          `[WorkspaceClient] Watchdog: Host unresponsive for ${this.missedHeartbeats} checks (${missedMs}ms). Force killing.`
-        );
+  getHostForWindow(windowId: number): WorkspaceHostProcess | undefined {
+    return this.resolveHostForWindow(windowId);
+  }
 
-        if (this.child.pid) {
-          try {
-            process.kill(this.child.pid, "SIGKILL");
-          } catch {
-            // Process may have already exited between pid check and kill
-          }
-        }
-        this.missedHeartbeats = 0;
-        return;
+  private sendToEntryWindows(entry: ProcessEntry, channel: string, ...args: unknown[]): void {
+    // Target this project's specific webContents via directPortViews rather
+    // than using getAppWebContents(win), which returns the *active* view for
+    // a window.  In multi-view mode the active view may belong to a different
+    // project, causing cross-project worktree contamination.
+    for (const [wcId, wc] of entry.directPortViews) {
+      if (wc.isDestroyed()) {
+        entry.directPortViews.delete(wcId);
+        continue;
       }
-
-      this.missedHeartbeats++;
-      this.send({ type: "health-check" });
-    }, this.config.healthCheckIntervalMs);
-
-    console.log("[WorkspaceClient] Health check interval started (watchdog enabled)");
+      try {
+        wc.send(channel, ...args);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
   }
 
-  private startHost(): void {
-    if (this.isDisposed) {
-      console.warn("[WorkspaceClient] Cannot start host - already disposed");
-      return;
-    }
+  private wireHostEvents(entry: ProcessEntry): void {
+    const host = entry.host;
 
-    if (this.restartTimer) {
-      clearTimeout(this.restartTimer);
-      this.restartTimer = null;
-    }
-
-    // Reject previous ready promise only if host is restarting (not on initial boot)
-    // Check isInitialized to identify restart vs first start
-    if (this.readyReject && this.isInitialized) {
-      this.readyReject(new Error("Workspace Host restarting"));
-    }
-
-    this.isInitialized = false;
-    this.readyPromise = new Promise((resolve, reject) => {
-      this.readyResolve = resolve;
-      this.readyReject = reject;
+    host.on("host-event", (event: WorkspaceHostEvent) => {
+      this.routeHostEvent(entry, event);
     });
 
-    const electronDir = path.basename(__dirname) === "chunks" ? path.dirname(__dirname) : __dirname;
-    const hostPath = path.join(electronDir, "workspace-host.js");
-    console.log(`[WorkspaceClient] Starting Workspace Host from: ${hostPath}`);
+    host.on("host-crash", (code: number) => {
+      this.emit("host-crash", code);
+    });
 
-    try {
-      this.child = utilityProcess.fork(hostPath, [], {
-        serviceName: "canopy-workspace-host",
-        stdio: "inherit",
-        cwd: os.homedir(),
-        env: {
-          ...(process.env as Record<string, string>),
-          CANOPY_USER_DATA: app.getPath("userData"),
-        },
+    host.on("restarted", () => {
+      this.reloadProjectAfterRestart(entry).catch((err) => {
+        console.error(`[WorkspaceClient] Failed to reload project after host restart:`, err);
       });
-    } catch (error) {
-      console.error("[WorkspaceClient] Failed to fork Workspace Host:", error);
-      // Reject ready promise so waitForReady() doesn't hang indefinitely
-      if (this.readyReject) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        this.readyReject(new Error(`Workspace host failed to fork (${hostPath}): ${errorMessage}`));
-        this.readyReject = null;
-      }
-      this.emit("host-crash", -1);
-      return;
-    }
-
-    this.child.on("message", (msg: WorkspaceHostEvent) => {
-      this.handleHostEvent(msg);
     });
-
-    this.child.on("error", (error) => {
-      console.error("[WorkspaceClient] Workspace Host error event:", error);
-      if (this.readyReject) {
-        this.readyReject(new Error(`Workspace host error: ${String(error)}`));
-        this.readyReject = null;
-      }
-      this.emit("host-crash", -1);
-    });
-
-    this.child.on("exit", (code) => {
-      console.error(`[WorkspaceClient] Workspace Host exited with code ${code}`);
-
-      if (this.healthCheckInterval) {
-        clearInterval(this.healthCheckInterval);
-        this.healthCheckInterval = null;
-      }
-      if (this.handshakeTimeout) {
-        clearTimeout(this.handshakeTimeout);
-        this.handshakeTimeout = null;
-      }
-      this.isWaitingForHandshake = false;
-      this.missedHeartbeats = 0;
-
-      this.isInitialized = false;
-      this.child = null;
-
-      // Reject all pending requests and clear their timeouts
-      for (const [, { reject, timeout }] of this.pendingRequests) {
-        clearTimeout(timeout);
-        reject(new Error("Workspace Host crashed"));
-      }
-      this.pendingRequests.clear();
-
-      // Reject ready promise for any waiters
-      if (this.readyReject) {
-        this.readyReject(new Error(`Workspace Host crashed (exit code ${code})`));
-        this.readyReject = null;
-      }
-
-      if (this.isDisposed) {
-        return;
-      }
-
-      if (this.restartAttempts < this.config.maxRestartAttempts) {
-        this.restartAttempts++;
-        const delay = Math.min(1000 * Math.pow(2, this.restartAttempts), 10000);
-        console.log(
-          `[WorkspaceClient] Restarting Host in ${delay}ms (attempt ${this.restartAttempts}/${this.config.maxRestartAttempts})`
-        );
-
-        if (this.restartTimer) {
-          clearTimeout(this.restartTimer);
-        }
-        this.restartTimer = setTimeout(() => {
-          this.restartTimer = null;
-          this.startHost();
-          // Re-load project if we had one, preserving the existing scope ID
-          // so that events from the restarted host still match the client's scope.
-          // Wait for the host to be ready before sending loadProject to avoid
-          // racing with the 'ready' handshake (token-order contract).
-          if (this.currentRootPath) {
-            const rootPath = this.currentRootPath;
-            const preservedScopeId = this.currentProjectScopeId ?? undefined;
-            const generationAtRestart = this.loadProjectGeneration;
-            void this.waitForReady()
-              .then(() => {
-                if (generationAtRestart !== this.loadProjectGeneration) return;
-                return this.loadProject(rootPath, preservedScopeId);
-              })
-              .catch((err) => {
-                console.error(
-                  "[WorkspaceClient] Failed to reload project after host restart:",
-                  err
-                );
-              });
-          }
-        }, delay);
-      } else {
-        console.error("[WorkspaceClient] Max restart attempts reached, giving up");
-        this.emit("host-crash", code);
-
-        if (this.config.showCrashDialog) {
-          dialog
-            .showMessageBox({
-              type: "error",
-              title: "Workspace Service Crashed",
-              message: `The workspace backend crashed (code ${code}). Worktree monitoring may need to be restarted.`,
-              buttons: ["OK"],
-            })
-            .catch(console.error);
-        }
-      }
-    });
-
-    this.startHealthCheckInterval();
-
-    console.log("[WorkspaceClient] Workspace Host started");
   }
 
-  private isCurrentProjectEvent(eventScopeId: string): boolean {
-    if (!this.currentProjectScopeId || !eventScopeId) {
-      return false;
-    }
-    const isMatch = eventScopeId === this.currentProjectScopeId;
-    if (!isMatch) {
-      const now = Date.now();
-      if (now - this.lastScopeMismatchWarnAt > 5000) {
-        this.lastScopeMismatchWarnAt = now;
-        console.warn(
-          "[WorkspaceClient] Event scope mismatch (further mismatches suppressed for 5s)",
-          {
-            eventScopeId,
-            currentScopeId: this.currentProjectScopeId,
-            currentPath: this.currentRootPath,
-          }
-        );
-      }
-    }
-    return isMatch;
-  }
+  private routeHostEvent(entry: ProcessEntry, event: WorkspaceHostEvent): void {
+    if (this.isDisposed) return;
 
-  private handleHostEvent(event: WorkspaceHostEvent): void {
-    try {
-      this.processHostEvent(event);
-    } catch (error) {
-      const eventType = (event as { type?: string })?.type ?? "unknown";
-      console.error(`[WorkspaceClient] Error processing event "${eventType}":`, error);
-
-      // Try to reject any pending request associated with this event
-      const requestId = (event as { requestId?: string })?.requestId;
-      if (requestId) {
-        const pending = this.pendingRequests.get(requestId);
-        if (pending) {
-          clearTimeout(pending.timeout);
-          this.pendingRequests.delete(requestId);
-          pending.reject(
-            error instanceof Error ? error : new Error(`Event processing failed: ${eventType}`)
-          );
-        }
-      }
-    }
-  }
-
-  private processHostEvent(event: WorkspaceHostEvent): void {
-    // Skip processing if disposed to avoid sending to destroyed renderer frames
-    if (this.isDisposed) {
-      return;
-    }
+    // IPC relay targets each entry's directPortViews — the same webContents
+    // that hold the direct MessagePort.  Views receive events twice (port +
+    // IPC); stores handle dedup via equality checks.
 
     switch (event.type) {
-      case "ready": {
-        // Guard against accepting ready after child has exited
-        if (!this.child) {
-          console.warn("[WorkspaceClient] Ignoring ready event - child already exited");
-          return;
-        }
-
-        this.isInitialized = true;
-        this.restartAttempts = 0;
-
-        // Send GitHub token BEFORE resolving ready promise
-        // This ensures the token is available before loadProject() runs
-        const token = GitHubAuth.getToken();
-        if (token) {
-          this.send({ type: "update-github-token", token });
-          console.log("[WorkspaceClient] Sent GitHub token to host");
-        }
-
-        if (this.readyResolve) {
-          this.readyResolve();
-          this.readyResolve = null;
-        }
-        this.startHealthCheckInterval();
-        console.log("[WorkspaceClient] Workspace Host is ready");
-        break;
-      }
-
-      case "pong":
-        this.missedHeartbeats = 0;
-        if (this.isWaitingForHandshake) {
-          this.isWaitingForHandshake = false;
-          if (this.handshakeTimeout) {
-            clearTimeout(this.handshakeTimeout);
-            this.handshakeTimeout = null;
-          }
-          console.log("[WorkspaceClient] Handshake successful - resuming health checks");
-          this.startHealthCheckInterval();
-        }
-        break;
-
-      case "error":
-        console.error("[WorkspaceClient] Host error:", event.error);
-        if (event.requestId) {
-          const pending = this.pendingRequests.get(event.requestId);
-          if (pending) {
-            clearTimeout(pending.timeout);
-            this.pendingRequests.delete(event.requestId);
-            pending.reject(new Error(event.error));
-          }
-        }
-        break;
-
-      // Handle responses to requests
-      case "load-project-result":
-      case "sync-result":
-      case "project-switch-result":
-      case "set-active-result":
-      case "refresh-result":
-      case "refresh-prs-result":
-      case "get-pr-status-result":
-      case "reset-pr-state-result":
-      case "create-worktree-result":
-      case "delete-worktree-result":
-        this.handleRequestResult(event);
-        break;
-
-      case "all-states":
-        this.handleRequestResult(this.toResult(event, true));
-        break;
-
-      case "monitor":
-        this.handleRequestResult(this.toResult(event, true));
-        break;
-
-      case "list-branches-result":
-        this.handleRequestResult(this.toResult(event));
-        break;
-
-      case "get-file-diff-result":
-        this.handleRequestResult(this.toResult(event));
-        break;
-
-      // Handle spontaneous events (forward to renderer)
       case "worktree-update": {
-        if (!this.isCurrentProjectEvent(event.projectScopeId)) {
-          return;
-        }
         const worktree = event.worktree;
-        this.sendToRenderer(CHANNELS.WORKTREE_UPDATE, worktree);
-        // Emit to internal event bus with explicit object construction
+        // Populate reverse map for path-based routing
+        if (worktree.path) {
+          this.worktreePathToProject.set(
+            this.normalizeProjectPath(worktree.path),
+            entry.projectPath
+          );
+        }
+        this.sendToEntryWindows(entry, CHANNELS.WORKTREE_UPDATE, {
+          worktree,
+        });
         events.emit("sys:worktree:update", {
           id: worktree.id,
           path: worktree.path,
@@ -466,16 +186,12 @@ export class WorkspaceClient extends EventEmitter {
       }
 
       case "worktree-removed":
-        if (!this.isCurrentProjectEvent(event.projectScopeId)) {
-          return;
-        }
-        this.sendToRenderer(CHANNELS.WORKTREE_REMOVE, { worktreeId: event.worktreeId });
+        this.sendToEntryWindows(entry, CHANNELS.WORKTREE_REMOVE, {
+          worktreeId: event.worktreeId,
+        });
         break;
 
       case "pr-detected": {
-        if (!this.isCurrentProjectEvent(event.projectScopeId)) {
-          return;
-        }
         const prPayload = {
           worktreeId: event.worktreeId,
           prNumber: event.prNumber,
@@ -487,373 +203,610 @@ export class WorkspaceClient extends EventEmitter {
           timestamp: Date.now(),
         };
         events.emit("sys:pr:detected", prPayload);
-        this.sendToRenderer(CHANNELS.PR_DETECTED, prPayload);
+        this.sendToEntryWindows(entry, CHANNELS.PR_DETECTED, prPayload);
         break;
       }
 
       case "pr-cleared": {
-        if (!this.isCurrentProjectEvent(event.projectScopeId)) {
-          return;
-        }
         const clearPayload = { worktreeId: event.worktreeId, timestamp: Date.now() };
         events.emit("sys:pr:cleared", clearPayload);
-        this.sendToRenderer(CHANNELS.PR_CLEARED, clearPayload);
+        this.sendToEntryWindows(entry, CHANNELS.PR_CLEARED, clearPayload);
         break;
       }
 
       case "issue-detected": {
-        if (!this.isCurrentProjectEvent(event.projectScopeId)) {
-          return;
-        }
         const issuePayload = {
           worktreeId: event.worktreeId,
           issueNumber: event.issueNumber,
           issueTitle: event.issueTitle,
         };
         events.emit("sys:issue:detected", { ...issuePayload, timestamp: Date.now() });
-        this.sendToRenderer(CHANNELS.ISSUE_DETECTED, issuePayload);
+        this.sendToEntryWindows(entry, CHANNELS.ISSUE_DETECTED, issuePayload);
         break;
       }
 
       case "issue-not-found": {
-        if (!this.isCurrentProjectEvent(event.projectScopeId)) {
-          return;
-        }
         const notFoundPayload = {
           worktreeId: event.worktreeId,
           issueNumber: event.issueNumber,
           timestamp: Date.now(),
         };
         events.emit("sys:issue:not-found", notFoundPayload);
-        this.sendToRenderer(CHANNELS.ISSUE_NOT_FOUND, notFoundPayload);
+        this.sendToEntryWindows(entry, CHANNELS.ISSUE_NOT_FOUND, notFoundPayload);
         break;
       }
 
-      // CopyTree events
       case "copytree:progress": {
         const callback = this.copyTreeProgressCallbacks.get(event.operationId);
         callback?.(event.progress);
         break;
       }
-
-      case "copytree:complete":
-        this.handleRequestResult(this.toResult(event, true));
-        break;
-
-      case "copytree:error":
-        this.handleRequestResult({
-          requestId: event.requestId,
-          success: false,
-          error: event.error,
-        });
-        break;
-
-      case "copytree:test-config-result":
-        this.handleRequestResult(this.toResult(event, true));
-        break;
-
-      // File tree events
-      case "file-tree-result":
-        this.handleRequestResult(this.toResult(event));
-        break;
-
-      // Project Pulse events
-      case "git:project-pulse":
-        this.handleRequestResult(this.toResult(event, true));
-        break;
-
-      case "git:project-pulse-error":
-        this.handleRequestResult(this.toResult(event, false));
-        break;
-
-      default:
-        console.warn("[WorkspaceClient] Unknown event type:", (event as { type: string }).type);
     }
   }
 
-  private handleRequestResult(event: {
-    requestId: string;
-    success?: boolean;
-    error?: string;
-  }): void {
-    const requestId = event.requestId;
-    const pending = this.pendingRequests.get(requestId);
-    if (pending) {
-      clearTimeout(pending.timeout);
-      this.pendingRequests.delete(requestId);
-      if (event.success === false || event.error) {
-        pending.reject(new Error(event.error || "Operation failed"));
-      } else {
-        pending.resolve(event);
+  private async reloadProjectAfterRestart(entry: ProcessEntry): Promise<void> {
+    const host = entry.host;
+    await host.waitForReady();
+
+    const requestId = host.generateRequestId();
+    await host.sendWithResponse({
+      type: "load-project",
+      requestId,
+      rootPath: entry.projectPath,
+    });
+
+    // Re-establish direct renderer ports after host restart
+    for (const [wcId, wc] of entry.directPortViews) {
+      if (wc.isDestroyed()) {
+        entry.directPortViews.delete(wcId);
+        continue;
       }
+      this.createDirectPortForEntry(entry, wc);
+    }
+
+    // Notify listeners (e.g. WorktreePortBroker) so they can re-broker ports
+    this.emit("host-restarted", {
+      projectPath: entry.projectPath,
+      host,
+    });
+  }
+
+  private evictEntry(projectPath: string, entry: ProcessEntry): void {
+    if (entry.cleanupTimeout) {
+      clearTimeout(entry.cleanupTimeout);
+      entry.cleanupTimeout = null;
+    }
+    entry.host.dispose();
+    this.entries.delete(projectPath);
+  }
+
+  private enforceDormantCap(): void {
+    let dormantCount = 0;
+    for (const entry of this.entries.values()) {
+      if (entry.refCount <= 0 && entry.cleanupTimeout !== null) {
+        dormantCount++;
+      }
+    }
+
+    while (dormantCount > MAX_WARM_ENTRIES) {
+      // Find the LRU dormant entry (first in iteration order with refCount <= 0)
+      for (const [path, entry] of this.entries) {
+        if (entry.refCount <= 0 && entry.cleanupTimeout !== null) {
+          this.evictEntry(path, entry);
+          dormantCount--;
+          break;
+        }
+      }
+    }
+  }
+
+  private scheduleDormantCleanup(projectPath: string, entry: ProcessEntry): void {
+    if (entry.cleanupTimeout) {
+      clearTimeout(entry.cleanupTimeout);
+    }
+    entry.cleanupTimeout = setTimeout(() => {
+      entry.host.dispose();
+      this.entries.delete(projectPath);
+    }, CLEANUP_GRACE_MS);
+    this.enforceDormantCap();
+  }
+
+  private releaseWindow(windowId: number): void {
+    const projectPath = this.windowToProject.get(windowId);
+    if (!projectPath) return;
+
+    this.windowToProject.delete(windowId);
+    const entry = this.entries.get(projectPath);
+    if (!entry) return;
+
+    entry.windowIds.delete(windowId);
+    entry.refCount--;
+
+    // Clean up any direct port views for this window's webContents
+    for (const [wcId, wc] of entry.directPortViews) {
+      if (wc.isDestroyed()) {
+        entry.directPortViews.delete(wcId);
+      }
+    }
+
+    if (entry.refCount <= 0) {
+      this.scheduleDormantCleanup(projectPath, entry);
+    }
+  }
+
+  // ── Public API ──
+
+  async loadProject(rootPath: string, windowId: number): Promise<void> {
+    if (this.isDisposed) {
+      throw new Error("WorkspaceClient disposed");
+    }
+
+    const normalizedPath = this.normalizeProjectPath(rootPath);
+    const oldProjectPath = this.windowToProject.get(windowId);
+    const isSwitching = oldProjectPath !== undefined && oldProjectPath !== normalizedPath;
+
+    const existingEntry = this.entries.get(normalizedPath);
+    if (existingEntry) {
+      // Check if this entry has a failed initPromise (poisoned by prior crash)
+      const isInitFailed = await existingEntry.initPromise.then(
+        () => false,
+        () => true
+      );
+      if (isInitFailed) {
+        existingEntry.host.dispose();
+        this.entries.delete(normalizedPath);
+      } else {
+        // Existing healthy entry — promote to MRU and attach window
+        this.entries.delete(normalizedPath);
+        this.entries.set(normalizedPath, existingEntry);
+
+        if (!existingEntry.windowIds.has(windowId)) {
+          existingEntry.refCount++;
+          existingEntry.windowIds.add(windowId);
+        }
+        if (existingEntry.cleanupTimeout) {
+          clearTimeout(existingEntry.cleanupTimeout);
+          existingEntry.cleanupTimeout = null;
+        }
+        this.windowToProject.set(windowId, normalizedPath);
+
+        if (isSwitching) {
+          this._statesInflight.delete(`w:${windowId}`);
+          this.releaseOldProject(windowId, oldProjectPath);
+        }
+        return;
+      }
+    }
+
+    // Create new per-project host
+    const host = new WorkspaceHostProcess(normalizedPath, this.config);
+
+    const initPromise = (async () => {
+      await host.waitForReady();
+      const requestId = host.generateRequestId();
+      await host.sendWithResponse({
+        type: "load-project",
+        requestId,
+        rootPath: normalizedPath,
+      });
+    })();
+
+    const newEntry: ProcessEntry = {
+      host,
+      refCount: 1,
+      initPromise,
+      cleanupTimeout: null,
+      windowIds: new Set([windowId]),
+      projectPath: normalizedPath,
+      directPortViews: new Map(),
+    };
+
+    this.entries.set(normalizedPath, newEntry);
+    this.wireHostEvents(newEntry);
+
+    try {
+      await initPromise;
+    } catch (error) {
+      // Clean up failed entry so subsequent calls create a fresh host
+      if (this.entries.get(normalizedPath) === newEntry) {
+        this.entries.delete(normalizedPath);
+        newEntry.windowIds.delete(windowId);
+        newEntry.refCount--;
+        newEntry.host.dispose();
+      }
+      throw error;
+    }
+
+    if (this.isDisposed) {
+      if (newEntry.refCount <= 0 && this.entries.get(normalizedPath) === newEntry) {
+        newEntry.host.dispose();
+        this.entries.delete(normalizedPath);
+      }
+      return;
+    }
+
+    this.windowToProject.set(windowId, normalizedPath);
+
+    if (isSwitching) {
+      this._statesInflight.delete(`w:${windowId}`);
+      this.releaseOldProject(windowId, oldProjectPath);
+    }
+  }
+
+  prewarmProject(rootPath: string): void {
+    if (this.isDisposed) return;
+
+    const normalizedPath = this.normalizeProjectPath(rootPath);
+
+    if (this.entries.has(normalizedPath)) return;
+
+    const host = new WorkspaceHostProcess(normalizedPath, this.config);
+
+    const initPromise = (async () => {
+      await host.waitForReady();
+      const requestId = host.generateRequestId();
+      await host.sendWithResponse({
+        type: "load-project",
+        requestId,
+        rootPath: normalizedPath,
+      });
+    })();
+
+    const entry: ProcessEntry = {
+      host,
+      refCount: 0,
+      initPromise,
+      cleanupTimeout: null,
+      windowIds: new Set(),
+      projectPath: normalizedPath,
+      directPortViews: new Map(),
+    };
+
+    this.entries.set(normalizedPath, entry);
+    this.wireHostEvents(entry);
+    this.scheduleDormantCleanup(normalizedPath, entry);
+
+    initPromise.catch(() => {
+      if (this.entries.get(normalizedPath) === entry) {
+        this.entries.delete(normalizedPath);
+        entry.host.dispose();
+      }
+    });
+  }
+
+  private releaseOldProject(windowId: number, oldProjectPath: string): void {
+    const oldEntry = this.entries.get(oldProjectPath);
+    if (!oldEntry) return;
+
+    oldEntry.windowIds.delete(windowId);
+    oldEntry.refCount--;
+
+    if (oldEntry.refCount <= 0) {
+      this.scheduleDormantCleanup(oldProjectPath, oldEntry);
     }
   }
 
   /**
-   * Convert an event to a result format expected by handleRequestResult.
-   * This helper avoids repetitive type casting throughout processHostEvent.
-   * Spreads all event properties to preserve data (worktrees, branches, etc.).
+   * Create a direct MessagePort channel between a workspace host and a renderer view.
+   * Spontaneous events (worktree updates, PR/issue events) bypass the main-process relay.
    */
-  private toResult<T extends { requestId: string; error?: string }>(
-    event: T,
-    success?: boolean
-  ): T & { success: boolean } {
-    return {
-      ...event,
-      success: success ?? !event.error,
-    };
-  }
-
-  private send(request: WorkspaceHostRequest): boolean {
-    if (!this.child) {
-      console.warn("[WorkspaceClient] Cannot send - host not running");
-      return false;
-    }
-    try {
-      this.child.postMessage(request);
-      return true;
-    } catch (error) {
-      console.error("[WorkspaceClient] Failed to send message to host:", error);
-      return false;
-    }
-  }
-
-  private sendWithResponse<T>(
-    request: WorkspaceHostRequest & { requestId: string },
-    timeoutMs: number = 30000
-  ): Promise<T> {
-    if (this.isDisposed) {
-      return Promise.reject(new Error("WorkspaceClient disposed"));
-    }
-    if (!this.child) {
-      return Promise.reject(new Error("Workspace Host not running"));
-    }
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        if (this.pendingRequests.has(request.requestId)) {
-          this.pendingRequests.delete(request.requestId);
-          reject(new Error("Request timeout"));
-        }
-      }, timeoutMs);
-
-      this.pendingRequests.set(request.requestId, { resolve, reject, timeout });
-      try {
-        if (!this.child) {
-          throw new Error("Workspace Host not running");
-        }
-        this.child.postMessage(request);
-      } catch (error) {
-        clearTimeout(timeout);
-        this.pendingRequests.delete(request.requestId);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-  }
-
-  private generateRequestId(): string {
-    return `req-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-  }
-
-  private sendToRenderer(channel: string, ...args: unknown[]): void {
-    const windows = BrowserWindow.getAllWindows();
-    for (const win of windows) {
-      if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
-        try {
-          win.webContents.send(channel, ...args);
-        } catch {
-          // Silently ignore send failures during window initialization/disposal.
-          // The render frame may be in a transitional state where it exists but
-          // cannot receive messages (e.g., during startup or reload).
-        }
-      }
-    }
-  }
-
-  // Public API - matches WorktreeService interface
-
-  async loadProject(rootPath: string, scopeId?: string): Promise<void> {
-    const generation = ++this.loadProjectGeneration;
-
-    this.currentRootPath = rootPath;
-    this.currentProjectScopeId = scopeId ?? crypto.randomUUID();
-    const requestId = this.generateRequestId();
-
-    await this.sendWithResponse({
-      type: "load-project",
-      requestId,
-      rootPath,
-      projectScopeId: this.currentProjectScopeId,
-    });
-
-    if (generation !== this.loadProjectGeneration) {
+  attachDirectPort(windowId: number, webContents: WebContents): void {
+    const entry = this.resolveEntryForWindow(windowId);
+    if (!entry) {
+      console.warn("[WorkspaceClient] No entry for window, cannot attach direct port");
       return;
+    }
+    this.createDirectPortForEntry(entry, webContents);
+  }
+
+  private createDirectPortForEntry(entry: ProcessEntry, webContents: WebContents): void {
+    if (webContents.isDestroyed()) return;
+
+    const { port1, port2 } = new MessageChannelMain();
+
+    // port1 → workspace host UtilityProcess
+    const attached = entry.host.attachRendererPort(port1);
+    if (!attached) {
+      port1.close();
+      port2.close();
+      return;
+    }
+
+    // port2 → renderer view
+    webContents.postMessage("workspace-port", null, [port2]);
+    entry.directPortViews.set(webContents.id, webContents);
+  }
+
+  /**
+   * Remove a direct port mapping when a view is evicted/destroyed.
+   * Called by ProjectViewManager.onViewEvicted callback.
+   */
+  removeDirectPort(webContentsId: number): void {
+    for (const entry of this.entries.values()) {
+      entry.directPortViews.delete(webContentsId);
     }
   }
 
   async sync(
-    worktrees: Worktree[],
+    worktrees: import("../../shared/types/worktree.js").Worktree[],
     activeWorktreeId: string | null = null,
     mainBranch: string = "main",
     monitorConfig?: MonitorConfig
   ): Promise<void> {
-    const requestId = this.generateRequestId();
-
-    await this.sendWithResponse({
-      type: "sync",
-      requestId,
-      worktrees,
-      activeWorktreeId,
-      mainBranch,
-      monitorConfig,
-    });
+    // Fan out to all hosts
+    for (const entry of this.entries.values()) {
+      const requestId = entry.host.generateRequestId();
+      await entry.host.sendWithResponse({
+        type: "sync",
+        requestId,
+        worktrees,
+        activeWorktreeId,
+        mainBranch,
+        monitorConfig,
+      });
+    }
   }
 
-  async getAllStatesAsync(): Promise<WorktreeSnapshot[]> {
-    const scopeAtStart = this.currentProjectScopeId;
-    const requestId = this.generateRequestId();
+  getAllStatesAsync(windowId?: number): Promise<WorktreeSnapshot[]> {
+    const key = windowId !== undefined ? `w:${windowId}` : "all";
+    const existing = this._statesInflight.get(key);
+    if (existing) return existing;
 
-    const result = await this.sendWithResponse<{ states: WorktreeSnapshot[] }>({
-      type: "get-all-states",
-      requestId,
-    });
+    const promise = this._doGetAllStates(windowId).then(
+      (result) => {
+        setTimeout(() => this._statesInflight.delete(key), 150);
+        return result;
+      },
+      (error) => {
+        this._statesInflight.delete(key);
+        throw error;
+      }
+    );
+    this._statesInflight.set(key, promise);
+    return promise;
+  }
 
-    if (scopeAtStart === null || scopeAtStart !== this.currentProjectScopeId) {
-      console.warn(
-        "[WorkspaceClient] Discarding stale getAllStatesAsync response - project scope changed"
-      );
-      return [];
+  private async _doGetAllStates(windowId?: number): Promise<WorktreeSnapshot[]> {
+    if (windowId !== undefined) {
+      const host = this.resolveHostForWindow(windowId);
+      if (!host) return [];
+      const requestId = host.generateRequestId();
+      const result = await host.sendWithResponse<{ states: WorktreeSnapshot[] }>({
+        type: "get-all-states",
+        requestId,
+      });
+      return result.states;
     }
 
-    return result.states;
+    // No windowId — fan out to all hosts in parallel
+    const entries = [...this.entries.values()];
+    const results = await Promise.allSettled(
+      entries.map((entry) => {
+        const requestId = entry.host.generateRequestId();
+        return entry.host.sendWithResponse<{ states: WorktreeSnapshot[] }>({
+          type: "get-all-states",
+          requestId,
+        });
+      })
+    );
+    return results
+      .filter(
+        (r): r is PromiseFulfilledResult<{ states: WorktreeSnapshot[] }> => r.status === "fulfilled"
+      )
+      .flatMap((r) => r.value.states);
   }
 
   async getMonitorAsync(worktreeId: string): Promise<WorktreeSnapshot | null> {
-    const requestId = this.generateRequestId();
-
-    const result = await this.sendWithResponse<{ state: WorktreeSnapshot | null }>({
-      type: "get-monitor",
-      requestId,
-      worktreeId,
-    });
-
-    return result.state;
+    // Fan out — only one host will have this worktree
+    for (const entry of this.entries.values()) {
+      try {
+        const requestId = entry.host.generateRequestId();
+        const result = await entry.host.sendWithResponse<{ state: WorktreeSnapshot | null }>({
+          type: "get-monitor",
+          requestId,
+          worktreeId,
+        });
+        if (result.state) return result.state;
+      } catch {
+        // Try next host
+      }
+    }
+    return null;
   }
 
-  async setActiveWorktree(worktreeId: string, options?: { silent?: boolean }): Promise<void> {
-    const requestId = this.generateRequestId();
-    const scopeAtStart = this.currentProjectScopeId;
+  async setActiveWorktree(
+    worktreeId: string,
+    windowId?: number,
+    options?: { silent?: boolean }
+  ): Promise<void> {
+    // Route to the window's host or fan out
+    const hosts =
+      windowId !== undefined
+        ? ([this.resolveHostForWindow(windowId)].filter(Boolean) as WorkspaceHostProcess[])
+        : [...this.entries.values()].map((e) => e.host);
 
-    await this.sendWithResponse({
-      type: "set-active",
-      requestId,
-      worktreeId,
-    });
+    let accepted = false;
+    for (const host of hosts) {
+      try {
+        const requestId = host.generateRequestId();
+        await host.sendWithResponse({
+          type: "set-active",
+          requestId,
+          worktreeId,
+        });
+        accepted = true;
+        break; // Only one host needs to handle it
+      } catch {
+        // Try next
+      }
+    }
 
-    // Only notify the renderer if the project hasn't changed since we started the call
-    // and the caller hasn't opted out (renderer-initiated activations pass silent: true
-    // to avoid an echo loop where the renderer re-selects the worktree it just activated).
-    if (!options?.silent && scopeAtStart !== null && scopeAtStart === this.currentProjectScopeId) {
-      this.sendToRenderer(CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
+    if (accepted && !options?.silent) {
+      if (windowId !== undefined) {
+        const entry = this.resolveEntryForWindow(windowId);
+        if (entry) {
+          this.sendToEntryWindows(entry, CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
+        }
+      } else {
+        // Broadcast to all entries' views (no windowId → fan out)
+        for (const entry of this.entries.values()) {
+          this.sendToEntryWindows(entry, CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
+        }
+      }
     }
   }
 
   async refresh(worktreeId?: string): Promise<void> {
-    const requestId = this.generateRequestId();
-
-    await this.sendWithResponse({
-      type: "refresh",
-      requestId,
-      worktreeId,
-    });
+    // Fan out to all hosts
+    for (const entry of this.entries.values()) {
+      try {
+        const requestId = entry.host.generateRequestId();
+        await entry.host.sendWithResponse({
+          type: "refresh",
+          requestId,
+          worktreeId,
+        });
+      } catch {
+        // Host may be crashed
+      }
+    }
   }
 
   async refreshPullRequests(): Promise<void> {
-    const requestId = this.generateRequestId();
-
-    await this.sendWithResponse({
-      type: "refresh-prs",
-      requestId,
-    });
+    for (const entry of this.entries.values()) {
+      try {
+        const requestId = entry.host.generateRequestId();
+        await entry.host.sendWithResponse({
+          type: "refresh-prs",
+          requestId,
+        });
+      } catch {
+        // Host may be crashed
+      }
+    }
   }
 
   async getPRStatus(): Promise<
     import("../../shared/types/workspace-host.js").PRServiceStatus | null
   > {
-    const requestId = this.generateRequestId();
-
-    const result = await this.sendWithResponse<{
-      status: import("../../shared/types/workspace-host.js").PRServiceStatus | null;
-    }>({
-      type: "get-pr-status",
-      requestId,
-    });
-
-    return result.status;
+    // Return status from the first available host
+    for (const entry of this.entries.values()) {
+      try {
+        const requestId = entry.host.generateRequestId();
+        const result = await entry.host.sendWithResponse<{
+          status: import("../../shared/types/workspace-host.js").PRServiceStatus | null;
+        }>({
+          type: "get-pr-status",
+          requestId,
+        });
+        return result.status;
+      } catch {
+        // Try next
+      }
+    }
+    return null;
   }
 
   async resetPRState(): Promise<void> {
-    const requestId = this.generateRequestId();
-
-    await this.sendWithResponse({
-      type: "reset-pr-state",
-      requestId,
-    });
+    for (const entry of this.entries.values()) {
+      try {
+        const requestId = entry.host.generateRequestId();
+        await entry.host.sendWithResponse({
+          type: "reset-pr-state",
+          requestId,
+        });
+      } catch {
+        // ignore
+      }
+    }
   }
 
   updateGitHubToken(token: string | null): void {
-    this.send({ type: "update-github-token", token });
+    for (const entry of this.entries.values()) {
+      entry.host.send({ type: "update-github-token", token });
+    }
   }
 
   setPollingEnabled(enabled: boolean): void {
-    this.send({ type: "set-polling-enabled", enabled });
+    for (const entry of this.entries.values()) {
+      entry.host.send({ type: "set-polling-enabled", enabled });
+    }
   }
 
-  async onProjectSwitch(): Promise<void> {
-    this.currentProjectScopeId = null;
-    this.currentRootPath = null;
-    const requestId = this.generateRequestId();
+  pauseProject(projectPath: string): void {
+    const normalized = this.normalizeProjectPath(projectPath);
+    const entry = this.entries.get(normalized);
+    if (entry) {
+      entry.host.send({ type: "background" });
+    }
+  }
 
-    await this.sendWithResponse({
-      type: "project-switch",
-      requestId,
-    });
+  resumeProject(projectPath: string): void {
+    const normalized = this.normalizeProjectPath(projectPath);
+    const entry = this.entries.get(normalized);
+    if (entry) {
+      entry.host.send({ type: "foreground" });
+    }
+  }
+
+  updateMonitorConfig(config: MonitorConfig): void {
+    for (const entry of this.entries.values()) {
+      const requestId = entry.host.generateRequestId();
+      entry.host.send({ type: "update-monitor-config", requestId, config });
+    }
+  }
+
+  unregisterWindow(windowId: number): void {
+    this.releaseWindow(windowId);
   }
 
   async listBranches(rootPath: string): Promise<BranchInfo[]> {
-    const requestId = this.generateRequestId();
-
-    const result = await this.sendWithResponse<{ branches: BranchInfo[] }>({
+    const host = this.resolveHostForPath(rootPath);
+    if (!host) return [];
+    const requestId = host.generateRequestId();
+    const result = await host.sendWithResponse<{ branches: BranchInfo[] }>({
       type: "list-branches",
       requestId,
       rootPath,
     });
-
     return result.branches;
   }
 
   async getRecentBranches(rootPath: string): Promise<string[]> {
-    const requestId = this.generateRequestId();
-
-    const result = await this.sendWithResponse<{ branches: string[] }>({
+    const host = this.resolveHostForPath(rootPath);
+    if (!host) return [];
+    const requestId = host.generateRequestId();
+    const result = await host.sendWithResponse<{ branches: string[] }>({
       type: "get-recent-branches",
       requestId,
       rootPath,
     });
-
     return result.branches;
   }
 
-  async createWorktree(rootPath: string, options: CreateWorktreeOptions): Promise<string> {
-    const requestId = this.generateRequestId();
+  async fetchPRBranch(rootPath: string, prNumber: number, headRefName: string): Promise<void> {
+    const host = this.resolveHostForPath(rootPath);
+    if (!host) throw new Error("No workspace host for project");
+    const requestId = host.generateRequestId();
+    await host.sendWithResponse({
+      type: "fetch-pr-branch",
+      requestId,
+      rootPath,
+      prNumber,
+      headRefName,
+    });
+  }
 
-    const result = await this.sendWithResponse<{ worktreeId?: string }>({
+  async createWorktree(rootPath: string, options: CreateWorktreeOptions): Promise<string> {
+    const host = this.resolveHostForPath(rootPath);
+    if (!host) throw new Error("No workspace host for project");
+    const requestId = host.generateRequestId();
+    const result = await host.sendWithResponse<{ worktreeId?: string }>({
       type: "create-worktree",
       requestId,
       rootPath,
       options,
     });
-
     return result.worktreeId ?? options.path;
   }
 
@@ -862,28 +815,38 @@ export class WorkspaceClient extends EventEmitter {
     force: boolean = false,
     deleteBranch: boolean = false
   ): Promise<void> {
-    const requestId = this.generateRequestId();
-
-    await this.sendWithResponse({
-      type: "delete-worktree",
-      requestId,
-      worktreeId,
-      force,
-      deleteBranch,
-    });
+    // Fan out — only one host will have this worktree
+    let lastError: Error | undefined;
+    for (const entry of this.entries.values()) {
+      try {
+        const requestId = entry.host.generateRequestId();
+        await entry.host.sendWithResponse({
+          type: "delete-worktree",
+          requestId,
+          worktreeId,
+          force,
+          deleteBranch,
+        });
+        return;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+    throw lastError ?? new Error(`Worktree not found: ${worktreeId}`);
   }
 
   async getFileDiff(cwd: string, filePath: string, status: string): Promise<string> {
-    const requestId = this.generateRequestId();
-
-    const result = await this.sendWithResponse<{ diff: string }>({
+    // Route by cwd path
+    const host = this.resolveHostForPath(cwd);
+    if (!host) throw new Error("No workspace host for path");
+    const requestId = host.generateRequestId();
+    const result = await host.sendWithResponse<{ diff: string }>({
       type: "get-file-diff",
       requestId,
       cwd,
       filePath,
       status,
     });
-
     return result.diff;
   }
 
@@ -894,17 +857,19 @@ export class WorkspaceClient extends EventEmitter {
     options?: CopyTreeOptions,
     onProgress?: CopyTreeProgressCallback
   ): Promise<CopyTreeResult> {
-    const requestId = this.generateRequestId();
+    const host = this.resolveHostForPath(rootPath);
+    if (!host) throw new Error("No workspace host for path");
+
+    const requestId = host.generateRequestId();
     const operationId = crypto.randomUUID();
 
     if (onProgress) {
       this.copyTreeProgressCallbacks.set(operationId, onProgress);
     }
-
     this.activeCopyTreeOperations.set(operationId, requestId);
 
     try {
-      const result = await this.sendWithResponse<{ result: CopyTreeResult }>(
+      const result = await host.sendWithResponse<{ result: CopyTreeResult }>(
         {
           type: "copytree:generate",
           requestId,
@@ -914,7 +879,6 @@ export class WorkspaceClient extends EventEmitter {
         },
         120000
       );
-
       return result.result;
     } finally {
       this.copyTreeProgressCallbacks.delete(operationId);
@@ -923,16 +887,15 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   cancelContext(operationId: string): void {
-    this.send({ type: "copytree:cancel", operationId });
+    for (const entry of this.entries.values()) {
+      entry.host.send({ type: "copytree:cancel", operationId });
+    }
 
     const requestId = this.activeCopyTreeOperations.get(operationId);
     if (requestId) {
-      const pending = this.pendingRequests.get(requestId);
-      if (pending) {
-        clearTimeout(pending.timeout);
-        this.pendingRequests.delete(requestId);
-        pending.reject(new Error("Context generation cancelled"));
-      }
+      // We can't easily resolve the pending request from here since it's
+      // in the host's pendingRequests map. The cancel message to the host
+      // will cause it to send a copytree:error which resolves the request.
     }
 
     this.copyTreeProgressCallbacks.delete(operationId);
@@ -943,10 +906,19 @@ export class WorkspaceClient extends EventEmitter {
     rootPath: string,
     options?: CopyTreeOptions
   ): Promise<import("../../shared/types/index.js").CopyTreeTestConfigResult> {
-    const requestId = this.generateRequestId();
+    const host = this.resolveHostForPath(rootPath);
+    if (!host) {
+      return {
+        includedFiles: 0,
+        includedSize: 0,
+        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
+        error: "No workspace host for path",
+      };
+    }
 
+    const requestId = host.generateRequestId();
     try {
-      const result = await this.sendWithResponse<{
+      const result = await host.sendWithResponse<{
         result: import("../../shared/types/index.js").CopyTreeTestConfigResult;
       }>(
         {
@@ -957,7 +929,6 @@ export class WorkspaceClient extends EventEmitter {
         },
         120000
       );
-
       return result.result;
     } catch (error) {
       return {
@@ -971,19 +942,10 @@ export class WorkspaceClient extends EventEmitter {
 
   cancelAllContext(): void {
     for (const operationId of this.activeCopyTreeOperations.keys()) {
-      this.send({ type: "copytree:cancel", operationId });
-
-      const requestId = this.activeCopyTreeOperations.get(operationId);
-      if (requestId) {
-        const pending = this.pendingRequests.get(requestId);
-        if (pending) {
-          clearTimeout(pending.timeout);
-          this.pendingRequests.delete(requestId);
-          pending.reject(new Error("Context generation cancelled"));
-        }
+      for (const entry of this.entries.values()) {
+        entry.host.send({ type: "copytree:cancel", operationId });
       }
     }
-
     this.copyTreeProgressCallbacks.clear();
     this.activeCopyTreeOperations.clear();
   }
@@ -997,9 +959,11 @@ export class WorkspaceClient extends EventEmitter {
     rangeDays: PulseRangeDays,
     options?: { includeDelta?: boolean; includeRecentCommits?: boolean; forceRefresh?: boolean }
   ): Promise<ProjectPulse> {
-    const requestId = this.generateRequestId();
+    const host = this.resolveHostForPath(worktreePath);
+    if (!host) throw new Error("No workspace host for path");
 
-    const result = await this.sendWithResponse<{ data: ProjectPulse }>(
+    const requestId = host.generateRequestId();
+    const result = await host.sendWithResponse<{ data: ProjectPulse }>(
       {
         type: "git:get-project-pulse",
         requestId,
@@ -1013,16 +977,17 @@ export class WorkspaceClient extends EventEmitter {
       },
       30000
     );
-
     return result.data;
   }
 
   // File tree methods
 
   async getFileTree(worktreePath: string, dirPath?: string): Promise<FileTreeNode[]> {
-    const requestId = this.generateRequestId();
+    const host = this.resolveHostForPath(worktreePath);
+    if (!host) throw new Error("No workspace host for path");
 
-    const result = await this.sendWithResponse<{ nodes: FileTreeNode[]; error?: string }>(
+    const requestId = host.generateRequestId();
+    const result = await host.sendWithResponse<{ nodes: FileTreeNode[]; error?: string }>(
       {
         type: "get-file-tree",
         requestId,
@@ -1035,117 +1000,88 @@ export class WorkspaceClient extends EventEmitter {
     if (result.error) {
       throw new Error(result.error);
     }
-
     return result.nodes;
   }
 
-  /** Pause health check during system sleep */
+  // Broadcast lifecycle methods
+
   pauseHealthCheck(): void {
-    if (this.isHealthCheckPaused) return;
-    this.isHealthCheckPaused = true;
-    if (this.healthCheckInterval) {
-      clearInterval(this.healthCheckInterval);
-      this.healthCheckInterval = null;
+    for (const entry of this.entries.values()) {
+      entry.host.pauseHealthCheck();
     }
-    if (this.handshakeTimeout) {
-      clearTimeout(this.handshakeTimeout);
-      this.handshakeTimeout = null;
-    }
-    this.isWaitingForHandshake = false;
-    console.log("[WorkspaceClient] Health check paused");
   }
 
-  /** Resume health check after system wake with handshake verification */
   resumeHealthCheck(): void {
-    if (!this.isHealthCheckPaused) return;
-    if (!this.isInitialized || !this.child) {
-      console.warn("[WorkspaceClient] Cannot resume health check - host not ready");
-      this.isHealthCheckPaused = false;
-      return;
+    for (const entry of this.entries.values()) {
+      entry.host.resumeHealthCheck();
     }
-
-    this.isHealthCheckPaused = false;
-
-    if (this.healthCheckInterval) {
-      clearInterval(this.healthCheckInterval);
-      this.healthCheckInterval = null;
-    }
-
-    if (this.handshakeTimeout) {
-      clearTimeout(this.handshakeTimeout);
-      this.handshakeTimeout = null;
-    }
-
-    console.log("[WorkspaceClient] System resumed. Initiating handshake...");
-    this.isWaitingForHandshake = true;
-    this.send({ type: "health-check" });
-
-    this.handshakeTimeout = setTimeout(() => {
-      if (this.isWaitingForHandshake) {
-        console.warn("[WorkspaceClient] Handshake timeout - forcing health check resume");
-        this.isWaitingForHandshake = false;
-        this.handshakeTimeout = null;
-        this.startHealthCheckInterval();
-      }
-    }, 5000);
   }
 
   dispose(): void {
     if (this.isDisposed) return;
     this.isDisposed = true;
 
-    console.log("[WorkspaceClient] Disposing...");
-
-    if (this.healthCheckInterval) {
-      clearInterval(this.healthCheckInterval);
-      this.healthCheckInterval = null;
+    for (const entry of this.entries.values()) {
+      if (entry.cleanupTimeout) {
+        clearTimeout(entry.cleanupTimeout);
+      }
+      entry.host.dispose();
     }
-
-    if (this.restartTimer) {
-      clearTimeout(this.restartTimer);
-      this.restartTimer = null;
-    }
-
-    if (this.handshakeTimeout) {
-      clearTimeout(this.handshakeTimeout);
-      this.handshakeTimeout = null;
-    }
-    this.isWaitingForHandshake = false;
-
-    if (this.readyReject) {
-      this.readyReject(new Error("WorkspaceClient disposed"));
-      this.readyReject = null;
-      this.readyResolve = null;
-    }
-
-    // Reject all pending requests and clear their timeouts
-    for (const [, { reject, timeout }] of this.pendingRequests) {
-      clearTimeout(timeout);
-      reject(new Error("WorkspaceClient disposed"));
-    }
-    this.pendingRequests.clear();
-
-    if (this.child) {
-      this.send({ type: "dispose" });
-      setTimeout(() => {
-        if (this.child) {
-          try {
-            this.child.kill();
-          } catch (error) {
-            console.warn("[WorkspaceClient] Failed to kill host process during dispose:", error);
-          } finally {
-            this.child = null;
-          }
-        }
-      }, 1000);
-    }
-
+    this.entries.clear();
+    this.windowToProject.clear();
+    this.worktreePathToProject.clear();
+    this.copyTreeProgressCallbacks.clear();
+    this.activeCopyTreeOperations.clear();
+    this._statesInflight.clear();
     this.removeAllListeners();
-    console.log("[WorkspaceClient] Disposed");
   }
 
   isReady(): boolean {
-    return this.isInitialized && this.child !== null;
+    if (this.entries.size === 0) return !this.isDisposed;
+    for (const entry of this.entries.values()) {
+      if (entry.host.isReady()) return true;
+    }
+    return false;
+  }
+
+  // ── Private helpers ──
+
+  private resolveHostForPath(targetPath: string): WorkspaceHostProcess | undefined {
+    const normalized = this.normalizeProjectPath(targetPath);
+
+    // Try exact match on project path
+    const exactEntry = this.entries.get(normalized);
+    if (exactEntry) return exactEntry.host;
+
+    // Try finding an entry whose project path is a parent of the target
+    for (const entry of this.entries.values()) {
+      if (normalized.startsWith(entry.projectPath + path.sep) || normalized === entry.projectPath) {
+        return entry.host;
+      }
+    }
+
+    // Check reverse map: worktree path → project path (for sibling worktrees)
+    const projectPath = this.worktreePathToProject.get(normalized);
+    if (projectPath) {
+      const entry = this.entries.get(projectPath);
+      if (entry) return entry.host;
+    }
+
+    // Try matching target as a child of a known worktree path
+    for (const [wtPath, projPath] of this.worktreePathToProject) {
+      if (normalized.startsWith(wtPath + path.sep)) {
+        const entry = this.entries.get(projPath);
+        if (entry) return entry.host;
+      }
+    }
+
+    // Only fall back to single-host case (avoids cross-project routing)
+    if (this.entries.size === 1) {
+      const [entry] = this.entries.values();
+      if (entry.host.isReady()) return entry.host;
+    }
+
+    return undefined;
   }
 }
 

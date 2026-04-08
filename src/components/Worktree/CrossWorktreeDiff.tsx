@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { GitCompare, FileIcon, Loader2, AlertCircle } from "lucide-react";
+import { GitCompare, FileIcon, AlertCircle } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { AppDialog } from "@/components/ui/AppDialog";
 import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "@shared/types/ipc/git";
 import { DiffViewer } from "./DiffViewer";
@@ -32,7 +33,7 @@ function statusLabel(status: string): { label: string; className: string } {
 }
 
 export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossWorktreeDiffProps) {
-  const worktreeMap = useWorktreeDataStore((state) => state.worktrees);
+  const worktreeMap = useWorktreeStore((state) => state.worktrees);
   const worktrees = useMemo(() => sortWorktreesForComparison(worktreeMap.values()), [worktreeMap]);
 
   const [leftId, setLeftId] = useState<string | null>(null);
@@ -153,7 +154,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
       maxHeight="h-[80vh]"
       className="max-h-[800px] overflow-hidden"
     >
-      <AppDialog.Header className="px-4 py-3 border-b border-border-subtle bg-transparent">
+      <AppDialog.Header className="px-4 py-3 border-b border-border-subtle !bg-transparent">
         <AppDialog.Title
           icon={<GitCompare className="w-4 h-4 text-text-muted" />}
           className="text-sm font-semibold text-text-primary"
@@ -198,7 +199,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           <div className="flex-1 overflow-y-auto">
             {loading && (
               <div className="flex items-center justify-center gap-2 p-6 text-text-muted text-sm">
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <Spinner size="md" />
                 Comparing…
               </div>
             )}
@@ -233,7 +234,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                   </span>
                   <FileIcon className="w-3 h-3 shrink-0 text-text-muted" />
                   <span className="text-text-secondary truncate min-w-0" title={file.path}>
-                    {file.path.split("/").pop()}
+                    {file.path.split(/[/\\]/).filter(Boolean).pop()}
                   </span>
                 </button>
               );
@@ -250,7 +251,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           )}
           {selectedFile && fileDiffLoading && (
             <div className="flex items-center justify-center gap-2 h-full text-text-muted text-sm">
-              <Loader2 className="w-4 h-4 animate-spin" />
+              <Spinner size="md" />
               Loading diff…
             </div>
           )}

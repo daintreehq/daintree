@@ -19,9 +19,9 @@ const DEV_CSP = [
   `script-src 'self' ${devServerOrigins.join(" ")} 'unsafe-eval'`,
   `style-src 'self' ${devServerOrigins.join(" ")} 'unsafe-inline'`,
   "font-src 'self' data:",
-  `connect-src 'self' ${devServerOrigins.join(" ")} ${devServerWebSocketOrigins.join(" ")}`,
+  `connect-src 'self' ${devServerOrigins.join(" ")} ${devServerWebSocketOrigins.join(" ")} canopy-file:`,
   `img-src 'self' ${devServerOrigins.join(" ")} https://avatars.githubusercontent.com canopy-file: data:`,
-  "frame-src 'self' https://www.youtube.com http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
+  "frame-src 'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
 ].join("; ");
 
 const PROD_CSP = [
@@ -29,9 +29,9 @@ const PROD_CSP = [
   "script-src 'self' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
-  "connect-src 'self'",
+  "connect-src 'self' canopy-file:",
   "img-src 'self' https://avatars.githubusercontent.com canopy-file: data: blob:",
-  "frame-src 'self' https://www.youtube.com http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
+  "frame-src 'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
   "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",
@@ -65,7 +65,7 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     babel({
-      presets: [reactCompilerPreset({ compilationMode: "annotation" })],
+      presets: [reactCompilerPreset({ compilationMode: "infer" })],
     }),
     tailwindcss(),
     cspTransformPlugin(),

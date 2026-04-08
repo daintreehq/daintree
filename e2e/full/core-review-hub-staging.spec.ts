@@ -31,7 +31,7 @@ test.describe.serial("Core: Review Hub Staging Edge Cases", () => {
       writeFileSync(path.join(fixtureDir, "extra-b.txt"), "Extra file B\n");
 
       ctx = await launchApp();
-      await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Staging Test");
+      ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Staging Test");
 
       // Open Review Hub
       const reviewBtn = ctx.window.locator(SEL.worktree.reviewHubButton);
@@ -200,7 +200,7 @@ test.describe.serial("Core: Review Hub Staging Edge Cases", () => {
       writeFileSync(path.join(fixtureDir, "extra-b.txt"), "Extra file B\n");
 
       ctx = await launchApp();
-      await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Commit Test");
+      ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Commit Test");
 
       // Open Review Hub
       const reviewBtn = ctx.window.locator(SEL.worktree.reviewHubButton);

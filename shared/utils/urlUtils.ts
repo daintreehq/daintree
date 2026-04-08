@@ -1,12 +1,12 @@
 /* eslint-disable no-control-regex */
 const ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1"];
 const ALLOWED_PROTOCOLS = ["http:", "https:"];
-const LOCALHOST_HINTS = ["localhost", "127.0.0.1", "0.0.0.0", "::1"] as const;
+const LOCALHOST_HINTS = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"] as const;
 // Exclude C0 controls (\x00-\x1f), DEL (\x7f), and C1 controls (\x80-\x9f) from the URL
 // path character class, preventing BEL/ESC/8-bit OSC escape bytes from being captured
 // as part of the URL when terminals use OSC 8 hyperlinks.
 const LOCALHOST_URL_REGEX =
-  /https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|::1)(:\d+)?([^\s"'<>)\x00-\x1f\x7f\x80-\x9f]*)?/gi;
+  /https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|::1)(:\d+)?([^\s"'<>)\x00-\x1f\x7f\x80-\x9f]*)?/gi;
 
 export interface NormalizeResult {
   url?: string;
@@ -38,7 +38,7 @@ export function normalizeBrowserUrl(input: string): NormalizeResult {
     return { error: `Protocol "${parsed.protocol}" not allowed. Use http: or https:` };
   }
 
-  const hostname = parsed.hostname.toLowerCase();
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (!ALLOWED_HOSTS.includes(hostname)) {
     return { error: `Only localhost URLs are allowed (got "${hostname}")` };
   }
@@ -52,8 +52,17 @@ export function normalizeBrowserUrl(input: string): NormalizeResult {
 export function isLocalhostUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    const hostname = parsed.hostname.toLowerCase();
+    const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
     return ALLOWED_HOSTS.includes(hostname) && ALLOWED_PROTOCOLS.includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+export function isSafeNavigationUrl(url: string): boolean {
+  try {
+    const protocol = new URL(url.trim()).protocol;
+    return protocol === "http:" || protocol === "https:";
   } catch {
     return false;
   }
@@ -113,4 +122,19 @@ export function extractLocalhostUrls(text: string): string[] {
   }
 
   return [...new Set(normalized)];
+}
+
+export function looksLikeOAuthUrl(url: string): boolean {
+  try {
+    const params = new URL(url).searchParams;
+    const hasClientId = params.has("client_id");
+    const hasResponseType = params.has("response_type");
+    const hasRedirectUri = params.has("redirect_uri");
+    const hasCodeChallenge = params.has("code_challenge");
+    return (
+      hasClientId && (hasResponseType || hasRedirectUri) && (hasResponseType || hasCodeChallenge)
+    );
+  } catch {
+    return false;
+  }
 }

@@ -4,7 +4,6 @@ import {
   stateFilePath,
   settingsFilePath,
   recipesFilePath,
-  workflowsFilePath,
   UTF8_BOM,
 } from "../projectStorePaths.js";
 
@@ -29,16 +28,10 @@ describe("projectStorePaths", () => {
       expect(result).toBe(path.join(BASE, validId, "recipes.json"));
     });
 
-    it("workflowsFilePath returns correct path for valid ID", () => {
-      const result = workflowsFilePath(BASE, validId);
-      expect(result).toBe(path.join(BASE, validId, "workflows.json"));
-    });
-
     it("all return null for invalid ID", () => {
       expect(stateFilePath(BASE, "invalid")).toBeNull();
       expect(settingsFilePath(BASE, "invalid")).toBeNull();
       expect(recipesFilePath(BASE, "invalid")).toBeNull();
-      expect(workflowsFilePath(BASE, "invalid")).toBeNull();
     });
   });
 

@@ -12,6 +12,10 @@ import type { HandlerDependencies } from "../../types.js";
 import type { TerminalSpawnOptions } from "../../../types/index.js";
 import { TerminalSpawnOptionsSchema } from "../../../schemas/ipc.js";
 import { getDefaultShell } from "../../../services/pty/terminalShell.js";
+import {
+  listAgentSessions,
+  clearAgentSessions,
+} from "../../../services/pty/agentSessionHistory.js";
 
 export const COMMAND_DELAY_MS = 100;
 
@@ -109,6 +113,19 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           // ignore
         }
       }
+
+      if (worktreeId && deps.worktreeService) {
+        try {
+          const snapshot = await deps.worktreeService.getMonitorAsync(worktreeId);
+          if (snapshot?.path && path.isAbsolute(snapshot.path)) {
+            await fs.promises.access(snapshot.path);
+            return snapshot.path;
+          }
+        } catch {
+          // ignore — worktree path inaccessible or service unavailable
+        }
+      }
+
       return os.homedir();
     };
 
@@ -241,6 +258,18 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   ipcMain.handle(CHANNELS.TERMINAL_KILL, handleTerminalKill);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_KILL));
 
+  const handleTerminalGracefulKill = async (
+    _event: Electron.IpcMainInvokeEvent,
+    id: string
+  ): Promise<string | null> => {
+    if (typeof id !== "string") {
+      throw new Error("Invalid terminal ID: must be a string");
+    }
+    return ptyClient.gracefulKill(id);
+  };
+  ipcMain.handle(CHANNELS.TERMINAL_GRACEFUL_KILL, handleTerminalGracefulKill);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_GRACEFUL_KILL));
+
   const handleTerminalTrash = async (_event: Electron.IpcMainInvokeEvent, id: string) => {
     try {
       if (typeof id !== "string") {
@@ -277,6 +306,26 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   };
   ipcMain.handle(CHANNELS.TERMINAL_RESTART_SERVICE, handleTerminalRestartService);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_RESTART_SERVICE));
+
+  const handleAgentSessionList = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { worktreeId?: string }
+  ) => {
+    const { app } = await import("electron");
+    return listAgentSessions(payload?.worktreeId, app.getPath("userData"));
+  };
+  ipcMain.handle(CHANNELS.AGENT_SESSION_LIST, handleAgentSessionList);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_SESSION_LIST));
+
+  const handleAgentSessionClear = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { worktreeId?: string }
+  ) => {
+    const { app } = await import("electron");
+    await clearAgentSessions(payload?.worktreeId, app.getPath("userData"));
+  };
+  ipcMain.handle(CHANNELS.AGENT_SESSION_CLEAR, handleAgentSessionClear);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_SESSION_CLEAR));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

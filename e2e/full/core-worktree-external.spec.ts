@@ -29,7 +29,7 @@ test.describe.serial("Core: External Worktree Detection", () => {
     externalWorktreePath = path.join(worktreesDir, "feature-external-added");
 
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Worktree External");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Worktree External");
   });
 
   test.afterAll(async () => {

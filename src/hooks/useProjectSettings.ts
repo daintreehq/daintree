@@ -93,11 +93,9 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
     if (useGlobalStore) {
       // Check if store has correct data
       if (storeProjectId !== targetId && !storeIsLoading) {
-        // Store is for a different project, trigger a load
         void loadSettings(targetId);
       }
     } else {
-      // Using local state for different project
       void fetchLocalSettings();
     }
   }, [targetId, useGlobalStore, storeProjectId, storeIsLoading, loadSettings, fetchLocalSettings]);

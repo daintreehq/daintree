@@ -1,5 +1,5 @@
 import { useShallow } from "zustand/react/shallow";
-import { useTerminalStore, useWorktreeSelectionStore, useDockStore } from "@/store";
+import { usePanelStore, useWorktreeSelectionStore, useDockStore } from "@/store";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
 import { isAgentTerminal } from "@/utils/terminalType";
@@ -28,27 +28,30 @@ export function useDockRenderState(): DockRenderState & {
     }))
   );
 
-  const dockTerminals = useTerminalStore(
+  const dockTerminals = usePanelStore(
     useShallow((state) =>
-      state.terminals.filter(
-        (t) =>
-          t.location === "dock" &&
-          // Show terminals that match active worktree OR have no worktree (global terminals)
-          (t.worktreeId == null || t.worktreeId === activeWorktreeId)
-      )
+      state.panelIds
+        .map((id) => state.panelsById[id])
+        .filter(
+          (t) =>
+            t &&
+            t.location === "dock" &&
+            // Show terminals that match active worktree OR have no worktree (global terminals)
+            (t.worktreeId == null || t.worktreeId === activeWorktreeId)
+        )
     )
   );
 
-  const trashedCount = useTerminalStore(useShallow((state) => state.trashedTerminals.size));
+  const trashedCount = usePanelStore(useShallow((state) => state.trashedTerminals.size));
 
   const { waitingCount } = useTerminalNotificationCounts();
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
 
-  const shouldFadeForInput = useTerminalStore(
+  const shouldFadeForInput = usePanelStore(
     useShallow((state) => {
       if (!hybridInputEnabled) return false;
-      const focusedTerminal = state.terminals.find((t) => t.id === state.focusedId);
+      const focusedTerminal = state.focusedId ? state.panelsById[state.focusedId] : undefined;
       if (!focusedTerminal) return false;
       return isAgentTerminal(focusedTerminal.kind ?? focusedTerminal.type, focusedTerminal.agentId);
     })

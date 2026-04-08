@@ -42,7 +42,7 @@ vi.mock("@/clients/appClient", () => ({
 }));
 
 import { useLayoutUndoStore } from "../layoutUndoStore";
-import { useTerminalStore } from "../terminalStore";
+import { usePanelStore } from "../panelStore";
 import { useLayoutConfigStore } from "../layoutConfigStore";
 import type { TerminalInstance } from "@shared/types";
 
@@ -55,14 +55,32 @@ function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstan
   } as TerminalInstance;
 }
 
+function setTerminals(terminals: TerminalInstance[]) {
+  usePanelStore.setState({
+    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    panelIds: terminals.map((t) => t.id),
+  });
+}
+
 function seedTerminals(terminals: TerminalInstance[]) {
-  useTerminalStore.setState({
-    terminals,
+  usePanelStore.setState({
+    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    panelIds: terminals.map((t) => t.id),
     tabGroups: new Map(),
     focusedId: terminals[0]?.id ?? null,
     maximizedId: null,
     activeDockTerminalId: null,
   });
+}
+
+function getTerminals() {
+  const state = usePanelStore.getState();
+  return state.panelIds.map((id) => state.panelsById[id]);
+}
+
+function firstTerminal() {
+  const s = usePanelStore.getState();
+  return s.panelsById[s.panelIds[0]];
 }
 
 describe("layoutUndoStore", () => {
@@ -73,8 +91,9 @@ describe("layoutUndoStore", () => {
       canUndo: false,
       canRedo: false,
     });
-    useTerminalStore.setState({
-      terminals: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       tabGroups: new Map(),
       focusedId: null,
       maximizedId: null,
@@ -105,24 +124,19 @@ describe("layoutUndoStore", () => {
     const t2 = makeTerminal({ id: "t2", location: "grid" });
     seedTerminals([t1, t2]);
 
-    // Capture original layout
     useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-    // Mutate layout - move t1 to dock
-    useTerminalStore.setState({
-      terminals: [
-        { ...t1, location: "dock" },
-        { ...t2, location: "grid" },
-      ],
-      focusedId: "t2",
-    });
+    setTerminals([
+      { ...t1, location: "dock" },
+      { ...t2, location: "grid" },
+    ]);
+    usePanelStore.setState({ focusedId: "t2" });
 
-    // Undo
     useLayoutUndoStore.getState().undo();
 
-    const state = useTerminalStore.getState();
-    expect(state.terminals[0].location).toBe("grid");
-    expect(state.terminals[1].location).toBe("grid");
+    const state = usePanelStore.getState();
+    expect(state.panelsById[state.panelIds[0]].location).toBe("grid");
+    expect(state.panelsById[state.panelIds[1]].location).toBe("grid");
     expect(state.focusedId).toBe("t1");
   });
 
@@ -132,17 +146,14 @@ describe("layoutUndoStore", () => {
 
     useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-    // Mutate
-    useTerminalStore.setState({
-      terminals: [{ ...t1, location: "dock" }],
-      focusedId: null,
-    });
+    setTerminals([{ ...t1, location: "dock" }]);
+    usePanelStore.setState({ focusedId: null });
 
     useLayoutUndoStore.getState().undo();
-    expect(useTerminalStore.getState().terminals[0].location).toBe("grid");
+    expect(firstTerminal().location).toBe("grid");
 
     useLayoutUndoStore.getState().redo();
-    expect(useTerminalStore.getState().terminals[0].location).toBe("dock");
+    expect(firstTerminal().location).toBe("dock");
   });
 
   it("new push clears redo stack", () => {
@@ -150,12 +161,11 @@ describe("layoutUndoStore", () => {
     seedTerminals([t1]);
 
     useLayoutUndoStore.getState().pushLayoutSnapshot();
-    useTerminalStore.setState({ terminals: [{ ...t1, location: "dock" }] });
+    setTerminals([{ ...t1, location: "dock" }]);
     useLayoutUndoStore.getState().undo();
 
     expect(useLayoutUndoStore.getState().canRedo).toBe(true);
 
-    // New push should clear redo
     useLayoutUndoStore.getState().pushLayoutSnapshot();
     expect(useLayoutUndoStore.getState().canRedo).toBe(false);
     expect(useLayoutUndoStore.getState().redoStack).toHaveLength(0);
@@ -177,21 +187,14 @@ describe("layoutUndoStore", () => {
     const t2 = makeTerminal({ id: "t2", location: "grid" });
     seedTerminals([t1, t2]);
 
-    // Snapshot with both terminals
     useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-    // Remove t2
-    useTerminalStore.setState({
-      terminals: [{ ...t1, location: "dock" }],
-    });
+    setTerminals([{ ...t1, location: "dock" }]);
 
-    // Undo should not apply since t2 is missing
     useLayoutUndoStore.getState().undo();
 
-    // Layout should remain unchanged (t1 in dock)
-    expect(useTerminalStore.getState().terminals[0].location).toBe("dock");
+    expect(firstTerminal().location).toBe("dock");
 
-    // History should be unmodified — undo entry preserved, no redo created
     const undoState = useLayoutUndoStore.getState();
     expect(undoState.undoStack).toHaveLength(1);
     expect(undoState.redoStack).toHaveLength(0);
@@ -204,7 +207,7 @@ describe("layoutUndoStore", () => {
     seedTerminals([t1]);
 
     useLayoutUndoStore.getState().pushLayoutSnapshot();
-    useTerminalStore.setState({ terminals: [{ ...t1, location: "dock" }] });
+    setTerminals([{ ...t1, location: "dock" }]);
     useLayoutUndoStore.getState().undo();
 
     expect(useLayoutUndoStore.getState().canUndo).toBe(false);
@@ -245,11 +248,10 @@ describe("layoutUndoStore", () => {
       activeTabId: "t1",
       panelIds: ["t1"],
     });
-    useTerminalStore.setState({ tabGroups });
+    usePanelStore.setState({ tabGroups });
 
     useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-    // Mutate original tabGroups
     tabGroups.set("g2", {
       id: "g2",
       location: "dock",
@@ -257,7 +259,6 @@ describe("layoutUndoStore", () => {
       panelIds: ["t1"],
     });
 
-    // Snapshot should not be affected
     const snapshot = useLayoutUndoStore.getState().undoStack[0];
     expect(snapshot.tabGroups.has("g2")).toBe(false);
     expect(snapshot.tabGroups.size).toBe(1);
@@ -271,18 +272,15 @@ describe("layoutUndoStore", () => {
 
     useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-    // Reorder: t3, t1, t2
-    useTerminalStore.setState({
-      terminals: [
-        { ...t3, location: "grid" },
-        { ...t1, location: "grid" },
-        { ...t2, location: "grid" },
-      ],
-    });
+    setTerminals([
+      { ...t3, location: "grid" },
+      { ...t1, location: "grid" },
+      { ...t2, location: "grid" },
+    ]);
 
     useLayoutUndoStore.getState().undo();
 
-    const ids = useTerminalStore.getState().terminals.map((t) => t.id);
+    const ids = usePanelStore.getState().panelIds;
     expect(ids).toEqual(["t1", "t2", "t3"]);
   });
 
@@ -292,8 +290,7 @@ describe("layoutUndoStore", () => {
 
     useLayoutUndoStore.getState().undo();
 
-    // State should be unchanged
-    expect(useTerminalStore.getState().terminals[0].location).toBe("dock");
+    expect(firstTerminal().location).toBe("dock");
   });
 
   it("redo does nothing when stack is empty", () => {
@@ -302,7 +299,7 @@ describe("layoutUndoStore", () => {
 
     useLayoutUndoStore.getState().redo();
 
-    expect(useTerminalStore.getState().terminals[0].location).toBe("grid");
+    expect(firstTerminal().location).toBe("grid");
   });
 
   it("filters out trashed terminals from snapshots", () => {
@@ -330,8 +327,9 @@ describe("layoutUndoStore", () => {
       panelIds: ["t1"],
     });
 
-    useTerminalStore.setState({
-      terminals: [t1, t2],
+    usePanelStore.setState({
+      panelsById: Object.fromEntries([t1, t2].map((t) => [t.id, t])),
+      panelIds: [t1, t2].map((t) => t.id),
       tabGroups,
       focusedId: "t1",
       maximizedId: "t1",
@@ -340,12 +338,13 @@ describe("layoutUndoStore", () => {
 
     useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-    // Mutate everything
-    useTerminalStore.setState({
-      terminals: [
-        { ...t1, location: "dock", worktreeId: "w2" },
-        { ...t2, location: "grid", worktreeId: "w2" },
-      ],
+    const mutated = [
+      { ...t1, location: "dock" as const, worktreeId: "w2" },
+      { ...t2, location: "grid" as const, worktreeId: "w2" },
+    ];
+    usePanelStore.setState({
+      panelsById: Object.fromEntries(mutated.map((t) => [t.id, t])),
+      panelIds: mutated.map((t) => t.id),
       tabGroups: new Map(),
       focusedId: "t2",
       maximizedId: null,
@@ -354,11 +353,11 @@ describe("layoutUndoStore", () => {
 
     useLayoutUndoStore.getState().undo();
 
-    const state = useTerminalStore.getState();
-    expect(state.terminals[0].location).toBe("grid");
-    expect(state.terminals[0].worktreeId).toBe("w1");
-    expect(state.terminals[1].location).toBe("dock");
-    expect(state.terminals[1].worktreeId).toBe("w1");
+    const state = usePanelStore.getState();
+    expect(state.panelsById[state.panelIds[0]].location).toBe("grid");
+    expect(state.panelsById[state.panelIds[0]].worktreeId).toBe("w1");
+    expect(state.panelsById[state.panelIds[1]].location).toBe("dock");
+    expect(state.panelsById[state.panelIds[1]].worktreeId).toBe("w1");
     expect(state.focusedId).toBe("t1");
     expect(state.maximizedId).toBe("t1");
     expect(state.activeDockTerminalId).toBe("t2");
@@ -370,34 +369,27 @@ describe("layoutUndoStore", () => {
     const t1 = makeTerminal({ id: "t1", location: "grid" });
     seedTerminals([t1]);
 
-    // State A: grid
     useLayoutUndoStore.getState().pushLayoutSnapshot();
-    useTerminalStore.setState({ terminals: [{ ...t1, location: "dock" }] });
+    setTerminals([{ ...t1, location: "dock" }]);
 
-    // State B: dock
     useLayoutUndoStore.getState().pushLayoutSnapshot();
-    useTerminalStore.setState({ terminals: [{ ...t1, location: "grid", worktreeId: "w2" }] });
+    setTerminals([{ ...t1, location: "grid", worktreeId: "w2" }]);
 
-    // State C: grid+w2
     expect(useLayoutUndoStore.getState().undoStack).toHaveLength(2);
 
-    // Undo C→B
     useLayoutUndoStore.getState().undo();
-    expect(useTerminalStore.getState().terminals[0].location).toBe("dock");
+    expect(firstTerminal().location).toBe("dock");
 
-    // Undo B→A
     useLayoutUndoStore.getState().undo();
-    expect(useTerminalStore.getState().terminals[0].location).toBe("grid");
-    expect(useTerminalStore.getState().terminals[0].worktreeId).toBeUndefined();
+    expect(firstTerminal().location).toBe("grid");
+    expect(firstTerminal().worktreeId).toBeUndefined();
 
-    // Redo A→B
     useLayoutUndoStore.getState().redo();
-    expect(useTerminalStore.getState().terminals[0].location).toBe("dock");
+    expect(firstTerminal().location).toBe("dock");
 
-    // Redo B→C
     useLayoutUndoStore.getState().redo();
-    expect(useTerminalStore.getState().terminals[0].location).toBe("grid");
-    expect(useTerminalStore.getState().terminals[0].worktreeId).toBe("w2");
+    expect(firstTerminal().location).toBe("grid");
+    expect(firstTerminal().worktreeId).toBe("w2");
 
     expect(useLayoutUndoStore.getState().canRedo).toBe(false);
     expect(useLayoutUndoStore.getState().canUndo).toBe(true);
@@ -415,14 +407,11 @@ describe("layoutUndoStore", () => {
 
     useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-    // Mutate layout only
-    useTerminalStore.setState({
-      terminals: [{ ...t1, location: "dock" }],
-    });
+    setTerminals([{ ...t1, location: "dock" }]);
 
     useLayoutUndoStore.getState().undo();
 
-    const restored = useTerminalStore.getState().terminals[0];
+    const restored = firstTerminal();
     expect(restored.location).toBe("grid");
     expect(restored.title).toBe("My Terminal");
     expect(restored.pid).toBe(12345);
@@ -435,58 +424,47 @@ describe("layoutUndoStore", () => {
 
     useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-    // Add a new terminal and move t1
     const t2 = makeTerminal({ id: "t2", location: "dock" });
-    useTerminalStore.setState({
-      terminals: [{ ...t1, location: "dock" }, t2],
-    });
+    setTerminals([{ ...t1, location: "dock" }, t2]);
 
     useLayoutUndoStore.getState().undo();
 
-    const terminals = useTerminalStore.getState().terminals;
-    // t1 should be restored to grid, t2 appended at end
-    expect(terminals).toHaveLength(2);
-    expect(terminals[0].id).toBe("t1");
-    expect(terminals[0].location).toBe("grid");
-    expect(terminals[1].id).toBe("t2");
-    expect(terminals[1].location).toBe("dock");
+    const allTerminals = getTerminals();
+    expect(allTerminals).toHaveLength(2);
+    expect(allTerminals[0].id).toBe("t1");
+    expect(allTerminals[0].location).toBe("grid");
+    expect(allTerminals[1].id).toBe("t2");
+    expect(allTerminals[1].location).toBe("dock");
   });
 
   describe("grid capacity clamping", () => {
     it("undo clamps grid panels to current capacity", () => {
-      // Set up 6 grid terminals in one worktree
       const terminals = Array.from({ length: 6 }, (_, i) =>
         makeTerminal({ id: `t${i}`, location: "grid", worktreeId: "w1" })
       );
       seedTerminals(terminals);
       useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-      // Move all to dock (simulating a layout change)
-      useTerminalStore.setState({
-        terminals: terminals.map((t) => ({ ...t, location: "dock" })),
-      });
+      setTerminals(terminals.map((t) => ({ ...t, location: "dock" })));
 
-      // Shrink grid: 800x400 gives capacity of 2 (2 cols × 2 rows)
       useLayoutConfigStore.setState({ gridDimensions: { width: 800, height: 400 } });
 
       useLayoutUndoStore.getState().undo();
 
-      const state = useTerminalStore.getState();
-      const gridCount = state.terminals.filter((t) => t.location === "grid").length;
-      const dockCount = state.terminals.filter((t) => t.location === "dock").length;
+      const state = usePanelStore.getState();
+      const allTerms = state.panelIds.map((id) => state.panelsById[id]);
+      const gridCount = allTerms.filter((t) => t.location === "grid").length;
+      const dockCount = allTerms.filter((t) => t.location === "dock").length;
 
-      // Capacity at 800x400: cols=2, rows=1 → capacity=2
       expect(gridCount).toBe(2);
       expect(dockCount).toBe(4);
 
-      // First 2 terminals stay in grid, last 4 overflow to dock
-      expect(state.terminals[0].location).toBe("grid");
-      expect(state.terminals[1].location).toBe("grid");
-      expect(state.terminals[2].location).toBe("dock");
+      expect(state.panelsById[state.panelIds[0]].location).toBe("grid");
+      expect(state.panelsById[state.panelIds[1]].location).toBe("grid");
+      expect(state.panelsById[state.panelIds[2]].location).toBe("dock");
     });
 
     it("undo respects per-worktree capacity", () => {
-      // w1 has 4 grid panels, w2 has 2 grid panels
       const w1Terminals = Array.from({ length: 4 }, (_, i) =>
         makeTerminal({ id: `w1-t${i}`, location: "grid", worktreeId: "w1" })
       );
@@ -496,28 +474,24 @@ describe("layoutUndoStore", () => {
       seedTerminals([...w1Terminals, ...w2Terminals]);
       useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-      // Move all to dock
-      useTerminalStore.setState({
-        terminals: [...w1Terminals, ...w2Terminals].map((t) => ({ ...t, location: "dock" })),
-      });
+      setTerminals([...w1Terminals, ...w2Terminals].map((t) => ({ ...t, location: "dock" })));
 
-      // Capacity = 2 per worktree
       useLayoutConfigStore.setState({ gridDimensions: { width: 800, height: 400 } });
 
       useLayoutUndoStore.getState().undo();
 
-      const state = useTerminalStore.getState();
-      const w1Grid = state.terminals.filter((t) => t.worktreeId === "w1" && t.location === "grid");
-      const w1Dock = state.terminals.filter((t) => t.worktreeId === "w1" && t.location === "dock");
-      const w2Grid = state.terminals.filter((t) => t.worktreeId === "w2" && t.location === "grid");
+      const state = usePanelStore.getState();
+      const allTerms = state.panelIds.map((id) => state.panelsById[id]);
+      const w1Grid = allTerms.filter((t) => t.worktreeId === "w1" && t.location === "grid");
+      const w1Dock = allTerms.filter((t) => t.worktreeId === "w1" && t.location === "dock");
+      const w2Grid = allTerms.filter((t) => t.worktreeId === "w2" && t.location === "grid");
 
       expect(w1Grid).toHaveLength(2);
       expect(w1Dock).toHaveLength(2);
-      expect(w2Grid).toHaveLength(2); // w2 fits within capacity
+      expect(w2Grid).toHaveLength(2);
     });
 
     it("undo clamps tab groups as whole units", () => {
-      // 3 ungrouped panels + 1 tab group with 2 panels = 4 slots total
       const t1 = makeTerminal({ id: "t1", location: "grid", worktreeId: "w1" });
       const t2 = makeTerminal({ id: "t2", location: "grid", worktreeId: "w1" });
       const t3 = makeTerminal({ id: "t3", location: "grid", worktreeId: "w1" });
@@ -533,8 +507,10 @@ describe("layoutUndoStore", () => {
         panelIds: ["tg1", "tg2"],
       });
 
-      useTerminalStore.setState({
-        terminals: [t1, t2, t3, tg1, tg2],
+      const allTerms = [t1, t2, t3, tg1, tg2];
+      usePanelStore.setState({
+        panelsById: Object.fromEntries(allTerms.map((t) => [t.id, t])),
+        panelIds: allTerms.map((t) => t.id),
         tabGroups,
         focusedId: "t1",
         maximizedId: null,
@@ -543,27 +519,24 @@ describe("layoutUndoStore", () => {
 
       useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-      // Move all to dock
-      useTerminalStore.setState({
-        terminals: [t1, t2, t3, tg1, tg2].map((t) => ({ ...t, location: "dock" })),
+      const docked = allTerms.map((t) => ({ ...t, location: "dock" as const }));
+      usePanelStore.setState({
+        panelsById: Object.fromEntries(docked.map((t) => [t.id, t])),
+        panelIds: docked.map((t) => t.id),
         tabGroups: new Map(),
       });
 
-      // Capacity = 2 → only 2 of 4 slots fit
       useLayoutConfigStore.setState({ gridDimensions: { width: 800, height: 400 } });
 
       useLayoutUndoStore.getState().undo();
 
-      const state = useTerminalStore.getState();
+      const state = usePanelStore.getState();
 
-      // First 2 slots are t1 and t2 (ungrouped). t3 and g1 overflow.
-      expect(state.terminals.find((t) => t.id === "t1")?.location).toBe("grid");
-      expect(state.terminals.find((t) => t.id === "t2")?.location).toBe("grid");
-      expect(state.terminals.find((t) => t.id === "t3")?.location).toBe("dock");
-      // Both panels in the tab group should be docked together
-      expect(state.terminals.find((t) => t.id === "tg1")?.location).toBe("dock");
-      expect(state.terminals.find((t) => t.id === "tg2")?.location).toBe("dock");
-      // Tab group location should be updated to dock
+      expect(state.panelsById["t1"]?.location).toBe("grid");
+      expect(state.panelsById["t2"]?.location).toBe("grid");
+      expect(state.panelsById["t3"]?.location).toBe("dock");
+      expect(state.panelsById["tg1"]?.location).toBe("dock");
+      expect(state.panelsById["tg2"]?.location).toBe("dock");
       expect(state.tabGroups.get("g1")?.location).toBe("dock");
     });
 
@@ -573,66 +546,55 @@ describe("layoutUndoStore", () => {
       seedTerminals([t1, t2]);
       useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-      useTerminalStore.setState({
-        terminals: [
-          { ...t1, location: "dock" },
-          { ...t2, location: "dock" },
-        ],
-      });
+      setTerminals([
+        { ...t1, location: "dock" },
+        { ...t2, location: "dock" },
+      ]);
 
-      // Large grid: capacity >> 2
       useLayoutConfigStore.setState({ gridDimensions: { width: 2000, height: 1200 } });
 
       useLayoutUndoStore.getState().undo();
 
-      const state = useTerminalStore.getState();
-      expect(state.terminals[0].location).toBe("grid");
-      expect(state.terminals[1].location).toBe("grid");
+      const state = usePanelStore.getState();
+      expect(state.panelsById[state.panelIds[0]].location).toBe("grid");
+      expect(state.panelsById[state.panelIds[1]].location).toBe("grid");
     });
 
     it("undo with null gridDimensions uses absolute max", () => {
-      // null dimensions → ABSOLUTE_MAX_GRID_TERMINALS (16)
       const terminals = Array.from({ length: 10 }, (_, i) =>
         makeTerminal({ id: `t${i}`, location: "grid", worktreeId: "w1" })
       );
       seedTerminals(terminals);
       useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-      useTerminalStore.setState({
-        terminals: terminals.map((t) => ({ ...t, location: "dock" })),
-      });
+      setTerminals(terminals.map((t) => ({ ...t, location: "dock" })));
 
-      // gridDimensions is null (default)
       useLayoutUndoStore.getState().undo();
 
-      const state = useTerminalStore.getState();
-      const gridCount = state.terminals.filter((t) => t.location === "grid").length;
-      expect(gridCount).toBe(10); // All fit within capacity 16
+      const state = usePanelStore.getState();
+      const gridCount = state.panelIds
+        .map((id) => state.panelsById[id])
+        .filter((t) => t.location === "grid").length;
+      expect(gridCount).toBe(10);
     });
 
     it("post-snapshot grid terminals are clamped during undo", () => {
-      // Snapshot with t1 in grid
       const t1 = makeTerminal({ id: "t1", location: "grid", worktreeId: "w1" });
       seedTerminals([t1]);
       useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-      // After snapshot, add t2 and t3 to grid
       const t2 = makeTerminal({ id: "t2", location: "grid", worktreeId: "w1" });
       const t3 = makeTerminal({ id: "t3", location: "grid", worktreeId: "w1" });
-      useTerminalStore.setState({
-        terminals: [{ ...t1, location: "dock" }, t2, t3],
-      });
+      setTerminals([{ ...t1, location: "dock" }, t2, t3]);
 
-      // Capacity = 2 → snapshot has t1 in grid, post-snapshot has t2+t3 in grid = 3 slots
       useLayoutConfigStore.setState({ gridDimensions: { width: 800, height: 400 } });
 
       useLayoutUndoStore.getState().undo();
 
-      const state = useTerminalStore.getState();
-      // t1 (from snapshot) gets priority, t2 is second, t3 overflows
-      expect(state.terminals.find((t) => t.id === "t1")?.location).toBe("grid");
-      expect(state.terminals.find((t) => t.id === "t2")?.location).toBe("grid");
-      expect(state.terminals.find((t) => t.id === "t3")?.location).toBe("dock");
+      const state = usePanelStore.getState();
+      expect(state.panelsById["t1"]?.location).toBe("grid");
+      expect(state.panelsById["t2"]?.location).toBe("grid");
+      expect(state.panelsById["t3"]?.location).toBe("dock");
     });
   });
 });

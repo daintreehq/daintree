@@ -1,6 +1,8 @@
-import { useState, useCallback, useMemo, useEffect, useDeferredValue } from "react";
-import Fuse, { type IFuseOptions } from "fuse.js";
+import { useState, useCallback, useMemo, useEffect, useRef, useDeferredValue } from "react";
+import Fuse, { type IFuseOptions, type FuseResultMatch } from "fuse.js";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
+
+export type { FuseResultMatch };
 
 export interface UseSearchablePaletteOptions<T> {
   items: T[];
@@ -13,6 +15,10 @@ export interface UseSearchablePaletteOptions<T> {
   resetOnResultsChange?: boolean;
   /** Palette ID for mutual exclusion. When set, isOpen is derived from the palette store. */
   paletteId?: PaletteId;
+  /** When true, populates matchesById with Fuse match ranges (requires fuseOptions). */
+  includeMatches?: boolean;
+  /** Extract a unique ID from an item for the matchesById map. Defaults to `(item as any).id`. */
+  getItemId?: (item: T) => string;
 }
 
 export interface UseSearchablePaletteReturn<T> {
@@ -22,6 +28,7 @@ export interface UseSearchablePaletteReturn<T> {
   totalResults: number;
   selectedIndex: number;
   isStale: boolean;
+  matchesById: Map<string, readonly FuseResultMatch[]>;
   open: () => void;
   close: () => void;
   toggle: () => void;
@@ -32,6 +39,8 @@ export interface UseSearchablePaletteReturn<T> {
 }
 
 const DEFAULT_MAX_RESULTS = 20;
+
+const defaultGetItemId = <T>(item: T): string => (item as Record<string, unknown>).id as string;
 
 export function useSearchablePalette<T>(
   options: UseSearchablePaletteOptions<T>
@@ -44,6 +53,8 @@ export function useSearchablePalette<T>(
     canNavigate,
     resetOnResultsChange = true,
     paletteId,
+    includeMatches = false,
+    getItemId = defaultGetItemId,
   } = options;
 
   const storeIsOpen = usePaletteStore(
@@ -56,13 +67,20 @@ export function useSearchablePalette<T>(
   const [selectedIndex, setSelectedIndex] = useState(0);
   const deferredQuery = useDeferredValue(query);
 
-  const fuse = useMemo(() => {
+  const effectiveFuseOptions = useMemo(() => {
     if (!fuseOptions) return null;
-    return new Fuse(items, fuseOptions);
-  }, [items, fuseOptions]);
+    if (includeMatches) return { ...fuseOptions, includeMatches: true };
+    return fuseOptions;
+  }, [fuseOptions, includeMatches]);
 
-  const { results, totalResults } = useMemo(() => {
+  const fuse = useMemo(() => {
+    if (!effectiveFuseOptions) return null;
+    return new Fuse(items, effectiveFuseOptions);
+  }, [items, effectiveFuseOptions]);
+
+  const { results, totalResults, matchesById } = useMemo(() => {
     let filtered: T[];
+    const matches = new Map<string, readonly FuseResultMatch[]>();
 
     if (filterFn) {
       filtered = filterFn(items, deferredQuery);
@@ -71,12 +89,23 @@ export function useSearchablePalette<T>(
     } else if (fuse) {
       const fuseResults = fuse.search(deferredQuery);
       filtered = fuseResults.map((r) => r.item);
+      if (includeMatches) {
+        for (const r of fuseResults) {
+          if (r.matches?.length) {
+            matches.set(getItemId(r.item), r.matches);
+          }
+        }
+      }
     } else {
       filtered = items;
     }
 
-    return { results: filtered.slice(0, maxResults), totalResults: filtered.length };
-  }, [deferredQuery, items, fuse, filterFn, maxResults]);
+    return {
+      results: filtered.slice(0, maxResults),
+      totalResults: filtered.length,
+      matchesById: matches,
+    };
+  }, [deferredQuery, items, fuse, filterFn, maxResults, includeMatches, getItemId]);
 
   const findNavigable = useCallback(
     (startIndex: number, direction: 1 | -1): number => {
@@ -100,16 +129,34 @@ export function useSearchablePalette<T>(
     [results, canNavigate]
   );
 
+  // Track the previous results to avoid resetting selectedIndex when the
+  // useMemo produces a new array reference with identical content.  Without
+  // this guard, unstable memo dependencies (e.g. an inline filterFn) cause
+  // the reset to fire on every render, clobbering ArrowDown navigation.
+  const prevResultsRef = useRef<{ ids: string; length: number }>({ ids: "", length: 0 });
   useEffect(() => {
-    if (resetOnResultsChange) {
-      if (canNavigate && results.length > 0) {
-        const firstNavigable = findNavigable(0, 1);
-        setSelectedIndex(firstNavigable);
-      } else {
-        setSelectedIndex(0);
-      }
+    if (!resetOnResultsChange) return;
+
+    // Build a lightweight fingerprint of the results to detect real changes
+    // without doing a full deep comparison.
+    const length = results.length;
+    const ids =
+      length === 0
+        ? ""
+        : length <= 3
+          ? results.map(getItemId).join(",")
+          : `${getItemId(results[0])},${getItemId(results[Math.floor(length / 2)])},${getItemId(results[length - 1])}`;
+    const prev = prevResultsRef.current;
+    if (ids === prev.ids && length === prev.length) return;
+    prevResultsRef.current = { ids, length };
+
+    if (canNavigate && length > 0) {
+      const firstNavigable = findNavigable(0, 1);
+      setSelectedIndex(firstNavigable);
+    } else {
+      setSelectedIndex(0);
     }
-  }, [results, resetOnResultsChange, canNavigate, findNavigable]);
+  }, [results, resetOnResultsChange, canNavigate, findNavigable, getItemId]);
 
   const open = useCallback(() => {
     if (paletteId != null) {
@@ -118,8 +165,11 @@ export function useSearchablePalette<T>(
       setLocalIsOpen(true);
     }
     setQuery("");
-    setSelectedIndex(0);
-  }, [paletteId]);
+    // Reset to the first navigable item (not blindly 0) so that
+    // palettes with disabled leading items start on the correct row.
+    const firstNav = canNavigate && results.length > 0 ? findNavigable(0, 1) : 0;
+    setSelectedIndex(firstNav);
+  }, [paletteId, canNavigate, results.length, findNavigable]);
 
   const close = useCallback(() => {
     if (paletteId != null) {
@@ -164,6 +214,7 @@ export function useSearchablePalette<T>(
     totalResults,
     selectedIndex,
     isStale,
+    matchesById,
     open,
     close,
     toggle,

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { RotateCcw, X, Layers, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useTerminalStore, type TerminalInstance } from "@/store";
+import { usePanelStore, type TerminalInstance } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -25,9 +25,9 @@ export function TrashGroupItem({
   worktreeName,
   earliestExpiry,
 }: TrashGroupItemProps) {
-  const restoreTrashedGroup = useTerminalStore((s) => s.restoreTrashedGroup);
-  const restoreTerminal = useTerminalStore((s) => s.restoreTerminal);
-  const removeTerminal = useTerminalStore((s) => s.removeTerminal);
+  const restoreTrashedGroup = usePanelStore((s) => s.restoreTrashedGroup);
+  const restoreTerminal = usePanelStore((s) => s.restoreTerminal);
+  const removePanel = usePanelStore((s) => s.removePanel);
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
 
   const [isExpanded, setIsExpanded] = useState(false);
@@ -64,9 +64,9 @@ export function TrashGroupItem({
 
   const handleRemoveAll = useCallback(() => {
     for (const { terminal } of terminals) {
-      removeTerminal(terminal.id);
+      removePanel(terminal.id);
     }
-  }, [removeTerminal, terminals]);
+  }, [removePanel, terminals]);
 
   const tabCount = terminals.length;
   const groupName = `Tab Group (${tabCount} ${tabCount === 1 ? "tab" : "tabs"})`;
@@ -230,7 +230,7 @@ export function TrashGroupItem({
                             variant="ghost-danger"
                             size="icon-sm"
                             className="h-4 w-4"
-                            onClick={() => removeTerminal(terminal.id)}
+                            onClick={() => removePanel(terminal.id)}
                             aria-label={`Remove ${terminalName} permanently`}
                           >
                             <X className="w-2.5 h-2.5" aria-hidden="true" />

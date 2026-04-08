@@ -8,3 +8,6 @@ export { TerminalRecipeIcon } from "./TerminalRecipeIcon";
 export { WatchAlertIcon } from "./WatchAlertIcon";
 export { WorktreeOverviewIcon } from "./WorktreeOverviewIcon";
 export { WorktreeIcon } from "./WorktreeIcon";
+export { ProjectPulseIcon } from "./ProjectPulseIcon";
+export { McpServerIcon } from "./McpServerIcon";
+export { BroadcastTerminalIcon } from "./BroadcastTerminalIcon";

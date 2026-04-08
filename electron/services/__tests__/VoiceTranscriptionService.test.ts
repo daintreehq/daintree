@@ -83,6 +83,7 @@ const BASE_SETTINGS: VoiceInputSettings = {
   correctionModel: "gpt-5-mini",
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
+  resolveFileLinks: true,
 };
 
 function makeTranscriptEvent(

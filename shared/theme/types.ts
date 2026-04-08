@@ -209,6 +209,9 @@ export interface AppThemeConfig {
   colorSchemeId: string;
   customSchemes?: string;
   colorVisionMode?: ColorVisionMode;
+  followSystem?: boolean;
+  preferredDarkSchemeId?: string;
+  preferredLightSchemeId?: string;
 }
 
 export interface AppThemeValidationWarning {

@@ -1,5 +1,5 @@
 /**
- * Shared types for Canopy Command Center
+ * Shared types for Canopy
  *
  * This module provides a single source of truth for type definitions
  * used across the main process, renderer process, and preload script.
@@ -28,13 +28,7 @@ export type {
 export type { NotificationType, Notification, NotificationPayload } from "./notification.js";
 
 // Agent types
-export type {
-  AgentState,
-  TaskState,
-  RunRecord,
-  LegacyAgentType,
-  AgentStateChangeTrigger,
-} from "./agent.js";
+export type { AgentState, TaskState, RunRecord, AgentStateChangeTrigger } from "./agent.js";
 
 // Panel types
 export type {
@@ -44,9 +38,7 @@ export type {
   PanelInstance,
   TabGroupLocation,
   TabGroup,
-  TerminalKind,
   TerminalType,
-  TerminalLocation,
   TerminalRestartError,
   TerminalReconnectError,
   TerminalRuntimeStatus,
@@ -61,6 +53,18 @@ export type {
 
 // Panel type guards and enums (value exports)
 export { isBuiltInPanelKind, isPtyPanelKind, TerminalRefreshTier } from "./panel.js";
+
+// Panel creation options (discriminated union)
+export type {
+  AddPanelOptionsBase,
+  TerminalPanelOptions,
+  AgentPanelOptions,
+  BrowserPanelOptions,
+  NotesPanelOptions,
+  DevPreviewPanelOptions,
+  ExtensionPanelOptions,
+  AddPanelOptions,
+} from "./addPanelOptions.js";
 
 // Browser types
 export type { BrowserHistory } from "./browser.js";
@@ -137,6 +141,8 @@ export type {
   ProjectStats,
   BulkProjectStatsEntry,
   BulkProjectStats,
+  ProjectStatusEntry,
+  ProjectStatusMap,
   // GitHub IPC types
   RepositoryStats,
   ProjectHealthData,
@@ -240,7 +246,7 @@ export type {
 } from "./config.js";
 
 // Keymap types - keyboard shortcuts
-export type { KeyAction, KeymapPreset, KeyMapConfig } from "./keymap.js";
+export type { BuiltInKeyAction, KeyAction, KeymapPreset, KeyMapConfig } from "./keymap.js";
 
 // Agent settings types - AI agent CLI configuration
 export type {
@@ -355,12 +361,13 @@ export type {
 export type { MenuItemOption, ShowContextMenuPayload } from "./menu.js";
 
 // Slash command discovery
-export type { SlashCommand, SlashCommandListRequest, SlashCommandScope } from "./slashCommands.js";
-export {
-  CLAUDE_BUILTIN_SLASH_COMMANDS,
-  GEMINI_BUILTIN_SLASH_COMMANDS,
-  CODEX_BUILTIN_SLASH_COMMANDS,
+export type {
+  SlashCommand,
+  SlashCommandListRequest,
+  SlashCommandScope,
+  BuiltinSlashCommandEntry,
 } from "./slashCommands.js";
+export { BUILTIN_SLASH_COMMANDS, getBuiltinSlashCommands } from "./slashCommands.js";
 
 // Action system types - unified action dispatch and introspection
 export type {
@@ -368,6 +375,7 @@ export type {
   ActionKind,
   ActionDanger,
   ActionScope,
+  BuiltInActionId,
   ActionId,
   ActionContext,
   ActionDefinition,
@@ -427,52 +435,6 @@ export type {
   DagValidationResult,
   TaskStateChangePayload,
 } from "./task.js";
-
-// Workflow types - declarative workflow definitions
-export type {
-  WorkflowConditionOp,
-  WorkflowCondition,
-  WorkflowNodeType,
-  WorkflowActionConfig,
-  WorkflowApprovalConfig,
-  WorkflowLoopConfig,
-  ActionNode,
-  ApprovalNode,
-  LoopNode,
-  WorkflowNode,
-  WorkflowDefinition,
-  WorkflowValidationResult,
-  WorkflowValidationError,
-  LoadedWorkflow,
-  WorkflowSource,
-  WorkflowSummary,
-} from "./workflow.js";
-
-export {
-  WorkflowConditionOpSchema,
-  WorkflowConditionSchema,
-  WorkflowNodeTypeSchema,
-  WorkflowActionConfigSchema,
-  WorkflowApprovalConfigSchema,
-  WorkflowLoopConfigSchema,
-  WorkflowActionNodeSchema,
-  WorkflowApprovalNodeSchema,
-  WorkflowLoopNodeSchema,
-  WorkflowNodeSchema,
-  WorkflowDefinitionSchema,
-} from "./workflow.js";
-
-// Workflow Run types - runtime execution state
-export type {
-  WorkflowRunStatus,
-  NodeStatus,
-  NodeState,
-  ApprovalDecision,
-  PendingWorkflowApproval,
-  LoopNodeState,
-  EvaluatedCondition,
-  WorkflowRun,
-} from "./workflowRun.js";
 
 // Editor integration types - external editor configuration and discovery
 export type {

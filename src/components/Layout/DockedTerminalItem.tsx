@@ -6,7 +6,7 @@ import { cn, getBaseTitle } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import {
   useTerminalInputStore,
-  useTerminalStore,
+  usePanelStore,
   usePortalStore,
   useFocusStore,
   type TerminalInstance,
@@ -22,7 +22,7 @@ import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
 import { useDockBlockedState } from "./useDockBlockedState";
-import { handleDockInteractOutside } from "./dockPopoverGuard";
+import { handleDockInteractOutside, handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { usePreferencesStore } from "@/store";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -31,11 +31,11 @@ interface DockedTerminalItemProps {
 }
 
 export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
-  const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
-  const openDockTerminal = useTerminalStore((s) => s.openDockTerminal);
-  const closeDockTerminal = useTerminalStore((s) => s.closeDockTerminal);
-  const moveTerminalToGrid = useTerminalStore((s) => s.moveTerminalToGrid);
-  const backendStatus = useTerminalStore((s) => s.backendStatus);
+  const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
+  const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
+  const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
+  const moveTerminalToGrid = usePanelStore((s) => s.moveTerminalToGrid);
+  const backendStatus = usePanelStore((s) => s.backendStatus);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
 
@@ -192,12 +192,14 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   // Use shortened title without command summary for dock items
   const displayTitle = getBaseTitle(terminal.title);
   // Only show icon for non-idle, non-completed states (reduce noise)
-  const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
+  const showStateIcon =
+    agentState && agentState !== "idle" && agentState !== "completed" && agentState !== "exited";
   const StateIcon = showStateIcon
     ? getEffectiveStateIcon(agentState, terminal.waitingReason)
     : null;
   const isDeprioritized =
-    !isOpen && (!agentState || agentState === "idle" || agentState === "completed");
+    !isOpen &&
+    (!agentState || agentState === "idle" || agentState === "completed" || agentState === "exited");
 
   return (
     <Popover open={isOpen} onOpenChange={handleOpenChange}>
@@ -205,7 +207,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         <PopoverTrigger asChild>
           <button
             className={cn(
-              "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition-all duration-150 max-w-[280px]",
+              "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
               "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-canopy-text/70",
               "hover:text-canopy-text hover:bg-[var(--dock-item-bg-hover)]",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
@@ -219,11 +221,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               isDeprioritized && "opacity-50"
             )}
             onClick={(e) => {
-              // Explicitly toggle popover state on click
-              // This ensures the click always works, even if dnd-kit listeners
-              // interfere with Radix Popover's default trigger behavior
               e.preventDefault();
               e.stopPropagation();
+              if (e.detail >= 2) return;
               if (isOpen) {
                 closeDockTerminal();
               } else {
@@ -233,8 +233,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             onDoubleClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              moveTerminalToGrid(terminal.id);
-              closeDockTerminal();
+              const moved = moveTerminalToGrid(terminal.id);
+              if (moved) closeDockTerminal();
             }}
             aria-label={`${terminal.title} - Click to preview, double-click to move to grid, drag to reorder`}
           >
@@ -304,6 +304,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         sideOffset={10}
         collisionPadding={collisionPadding}
         onInteractOutside={(e) => handleDockInteractOutside(e, portalContainer)}
+        onEscapeKeyDown={(e) => handleDockEscapeKeyDown(e, portalContainer)}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           const focusTarget = getTerminalFocusTarget({

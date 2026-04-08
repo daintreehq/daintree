@@ -79,7 +79,7 @@ export function ColorVisionPicker() {
         value={colorVisionMode}
         onChange={(e) => handleChange(e.target.value)}
         className={cn(
-          "bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+          "bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
         )}
         aria-label="Color vision mode"
       >

@@ -2,44 +2,54 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getBulkStatsMock, useProjectStoreMock, notifyMock, projectState } = vi.hoisted(() => {
-  const getBulkStatsMock = vi.fn();
+const { getBulkStatsMock, useProjectStoreMock, notifyMock, projectState, projectStatsState } =
+  vi.hoisted(() => {
+    const getBulkStatsMock = vi.fn();
 
-  const projectState = {
-    projects: [
-      {
-        id: "project-1",
-        name: "Project One",
-        path: "/repo/one",
-        emoji: "🌲",
-        color: "#00aa00",
-        lastOpened: 123,
-        status: "active" as const,
-      },
-    ],
-    currentProject: null as { id: string } | null,
-    switchProject: vi.fn().mockResolvedValue(undefined),
-    reopenProject: vi.fn().mockResolvedValue(undefined),
-    loadProjects: vi.fn().mockResolvedValue(undefined),
-    addProject: vi.fn().mockResolvedValue(undefined),
-    closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
-    closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
-    removeProject: vi.fn().mockResolvedValue(undefined),
-    locateProject: vi.fn().mockResolvedValue(undefined),
-  };
+    const projectStatsState = {
+      stats: {} as Record<
+        string,
+        { activeAgentCount: number; waitingAgentCount: number; processCount: number }
+      >,
+    };
 
-  const useProjectStoreMock = vi.fn((selector: (state: typeof projectState) => unknown) =>
-    selector(projectState)
-  );
-  const notifyMock = vi.fn().mockReturnValue("");
+    const projectState = {
+      projects: [
+        {
+          id: "project-1",
+          name: "Project One",
+          path: "/repo/one",
+          emoji: "🌲",
+          color: "#00aa00",
+          lastOpened: 123,
+          frecencyScore: 3.0,
+          status: "active" as const,
+        },
+      ],
+      currentProject: null as { id: string } | null,
+      switchProject: vi.fn().mockResolvedValue(undefined),
+      reopenProject: vi.fn().mockResolvedValue(undefined),
+      loadProjects: vi.fn().mockResolvedValue(undefined),
+      addProject: vi.fn().mockResolvedValue(undefined),
+      closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
+      closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
+      removeProject: vi.fn().mockResolvedValue(undefined),
+      locateProject: vi.fn().mockResolvedValue(undefined),
+    };
 
-  return {
-    getBulkStatsMock,
-    useProjectStoreMock,
-    notifyMock,
-    projectState,
-  };
-});
+    const useProjectStoreMock = vi.fn((selector: (state: typeof projectState) => unknown) =>
+      selector(projectState)
+    );
+    const notifyMock = vi.fn().mockReturnValue("");
+
+    return {
+      getBulkStatsMock,
+      useProjectStoreMock,
+      notifyMock,
+      projectState,
+      projectStatsState,
+    };
+  });
 
 vi.mock("@/clients", () => ({
   projectClient: {
@@ -49,6 +59,12 @@ vi.mock("@/clients", () => ({
 
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: useProjectStoreMock,
+}));
+
+vi.mock("@/store/projectStatsStore", () => ({
+  useProjectStatsStore: vi.fn((selector: (state: typeof projectStatsState) => unknown) =>
+    selector(projectStatsState)
+  ),
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -89,11 +105,14 @@ describe("useProjectSwitcherPalette", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     projectState.currentProject = null;
+    projectStatsState.stats = {};
     usePaletteStore.setState({ activePaletteId: null });
   });
 
-  it("uses bulk stats endpoint to fetch project stats", async () => {
-    getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
+  it("reads project stats from the push-based store", async () => {
+    projectStatsState.stats = {
+      "project-1": { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+    };
 
     const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -106,8 +125,6 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.results[0]?.activeAgentCount).toBe(0);
       expect(result.current.results[0]?.waitingAgentCount).toBe(0);
     });
-
-    expect(getBulkStatsMock).toHaveBeenCalledWith(["project-1"]);
   });
 
   it("does not leak unhandled rejections when project loading fails", async () => {
@@ -126,18 +143,14 @@ describe("useProjectSwitcherPalette", () => {
     });
   });
 
-  it("populates agent counts from bulk stats", async () => {
-    getBulkStatsMock.mockResolvedValue({
+  it("populates agent counts from push-based stats store", async () => {
+    projectStatsState.stats = {
       "project-1": {
         processCount: 3,
-        terminalCount: 3,
-        estimatedMemoryMB: 150,
-        terminalTypes: { terminal: 1, agent: 2 },
-        processIds: [1, 2, 3],
         activeAgentCount: 1,
         waitingAgentCount: 1,
       },
-    });
+    };
 
     const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -162,6 +175,7 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌲",
         color: "#00aa00",
         lastOpened: 300,
+        frecencyScore: 10.0,
         status: "active" as const,
       },
       {
@@ -171,6 +185,7 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌿",
         color: "#00bb00",
         lastOpened: 200,
+        frecencyScore: 7.0,
         status: "active" as const,
       },
       {
@@ -180,11 +195,12 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌴",
         color: "#00cc00",
         lastOpened: 100,
+        frecencyScore: 3.0,
         status: "active" as const,
       },
     ];
 
-    it("defaults to index 1 when 2+ projects exist", async () => {
+    it("defaults to index 1 (active project at index 0) when 2+ projects exist", async () => {
       projectState.projects = multipleProjects;
       projectState.currentProject = { id: "project-1" };
       getBulkStatsMock.mockResolvedValue(emptyBulkStats(multipleProjects.map((p) => p.id)));
@@ -200,6 +216,10 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       expect(result.current.selectedIndex).toBe(1);
+      expect(result.current.results[0].id).toBe("project-1");
+      expect(result.current.results[0].isActive).toBe(true);
+      expect(result.current.results[1].id).toBe("project-2");
+      expect(result.current.results[2].id).toBe("project-3");
     });
 
     it("defaults to index 0 when only 1 project exists", async () => {
@@ -238,7 +258,7 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.selectedIndex).toBe(0);
     });
 
-    it("defaults to index 1 with exactly 2 projects", async () => {
+    it("defaults to index 1 with exactly 2 projects (active first)", async () => {
       projectState.projects = [multipleProjects[0], multipleProjects[1]];
       projectState.currentProject = { id: "project-1" };
       getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1", "project-2"]));
@@ -254,7 +274,53 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       expect(result.current.selectedIndex).toBe(1);
+      expect(result.current.results[0].id).toBe("project-1");
       expect(result.current.results[1].id).toBe("project-2");
+    });
+
+    it("sorts by lastOpened, ignoring frecencyScore", async () => {
+      const projectsWithMismatchedScores = [
+        {
+          id: "project-a",
+          name: "High Frecency",
+          path: "/repo/a",
+          emoji: "🌲",
+          color: "#00aa00",
+          lastOpened: 100,
+          frecencyScore: 50.0,
+          status: "active" as const,
+        },
+        {
+          id: "project-b",
+          name: "Low Frecency",
+          path: "/repo/b",
+          emoji: "🌿",
+          color: "#00bb00",
+          lastOpened: 300,
+          frecencyScore: 1.0,
+          status: "active" as const,
+        },
+      ];
+
+      projectState.projects = projectsWithMismatchedScores;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(
+        emptyBulkStats(projectsWithMismatchedScores.map((p) => p.id))
+      );
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+
+      // project-b has lower frecency but higher lastOpened — should come first
+      expect(result.current.results[0].id).toBe("project-b");
+      expect(result.current.results[1].id).toBe("project-a");
     });
   });
 
@@ -266,6 +332,7 @@ describe("useProjectSwitcherPalette", () => {
       emoji: "🌲",
       color: "#00aa00",
       lastOpened: 300,
+      frecencyScore: 8.0,
       status: "active" as const,
     };
     const inactiveProject = {
@@ -275,6 +342,7 @@ describe("useProjectSwitcherPalette", () => {
       emoji: "🌿",
       color: "#00bb00",
       lastOpened: 200,
+      frecencyScore: 5.0,
       status: "active" as const,
     };
 
@@ -407,6 +475,113 @@ describe("useProjectSwitcherPalette", () => {
     });
   });
 
+  describe("search behavior", () => {
+    const searchProjects = [
+      {
+        id: "project-1",
+        name: "canopy-app",
+        path: "/repos/canopy-app",
+        emoji: "🌲",
+        color: "#00aa00",
+        lastOpened: 300,
+        frecencyScore: 10.0,
+        status: "active" as const,
+      },
+      {
+        id: "project-2",
+        name: "other-service",
+        path: "/repos/other-service",
+        emoji: "🌿",
+        color: "#00bb00",
+        lastOpened: 200,
+        frecencyScore: 7.0,
+        status: "active" as const,
+      },
+      {
+        id: "project-3",
+        name: "my-canopy-tools",
+        path: "/repos/my-canopy-tools",
+        emoji: "🌴",
+        color: "#00cc00",
+        lastOpened: 100,
+        frecencyScore: 3.0,
+        status: "active" as const,
+      },
+    ];
+
+    it("filters results synchronously with zero debounce", async () => {
+      projectState.projects = searchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(searchProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+
+      act(() => {
+        result.current.setQuery("canopy");
+      });
+
+      // Results should be available immediately — no waitFor needed
+      expect(result.current.results.length).toBeGreaterThanOrEqual(2);
+      expect(result.current.results[0].name).toContain("canopy");
+    });
+
+    it("returns empty results for non-matching query", async () => {
+      projectState.projects = searchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(searchProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+
+      act(() => {
+        result.current.setQuery("zzzzz");
+      });
+
+      expect(result.current.results).toHaveLength(0);
+    });
+
+    it("restores browse results when query is cleared", async () => {
+      projectState.projects = searchProjects;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(searchProjects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+
+      act(() => {
+        result.current.setQuery("canopy");
+      });
+      expect(result.current.results.length).toBeLessThan(3);
+
+      act(() => {
+        result.current.setQuery("");
+      });
+      expect(result.current.results).toHaveLength(3);
+    });
+  });
+
   describe("toggle advances selection", () => {
     const threeProjects = [
       {
@@ -416,6 +591,7 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌲",
         color: "#00aa00",
         lastOpened: 300,
+        frecencyScore: 10.0,
         status: "active" as const,
       },
       {
@@ -425,6 +601,7 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌿",
         color: "#00bb00",
         lastOpened: 200,
+        frecencyScore: 7.0,
         status: "active" as const,
       },
       {
@@ -434,6 +611,7 @@ describe("useProjectSwitcherPalette", () => {
         emoji: "🌴",
         color: "#00cc00",
         lastOpened: 100,
+        frecencyScore: 3.0,
         status: "active" as const,
       },
     ];
@@ -464,7 +642,7 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.selectedIndex).toBe(2);
     });
 
-    it("wraps to index 1 at end of list (skipping current project)", async () => {
+    it("wraps to index 0 at end of list", async () => {
       projectState.projects = threeProjects;
       projectState.currentProject = { id: "project-1" };
       getBulkStatsMock.mockResolvedValue(emptyBulkStats(threeProjects.map((p) => p.id)));
@@ -488,7 +666,7 @@ describe("useProjectSwitcherPalette", () => {
       await act(async () => {
         result.current.toggle();
       });
-      expect(result.current.selectedIndex).toBe(1);
+      expect(result.current.selectedIndex).toBe(0);
     });
 
     it("is a no-op with only 1 project", async () => {
@@ -515,7 +693,7 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.selectedIndex).toBe(0);
     });
 
-    it("wraps to first non-active project when active project not at index 0", async () => {
+    it("cycles through all projects in MRU order", async () => {
       const projectsWithActiveNotFirst = [
         {
           id: "project-1",
@@ -524,6 +702,7 @@ describe("useProjectSwitcherPalette", () => {
           emoji: "🌴",
           color: "#00cc00",
           lastOpened: 100,
+          frecencyScore: 3.0,
           status: "active" as const,
         },
         {
@@ -533,6 +712,7 @@ describe("useProjectSwitcherPalette", () => {
           emoji: "🌲",
           color: "#00aa00",
           lastOpened: 300,
+          frecencyScore: 10.0,
           status: "active" as const,
         },
         {
@@ -542,6 +722,7 @@ describe("useProjectSwitcherPalette", () => {
           emoji: "🌿",
           color: "#00bb00",
           lastOpened: 200,
+          frecencyScore: 7.0,
           status: "active" as const,
         },
       ];
@@ -562,8 +743,14 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.results).toHaveLength(3);
       });
 
+      // MRU order: active (project-2, lastOpened:300) first, then by lastOpened
+      expect(result.current.results[0].id).toBe("project-2");
+      expect(result.current.results[0].isActive).toBe(true);
+      expect(result.current.results[1].id).toBe("project-3");
+      expect(result.current.results[2].id).toBe("project-1");
       expect(result.current.selectedIndex).toBe(1);
 
+      // Toggle cycle: 1 → 2 → 0 → 1
       await act(async () => {
         result.current.toggle();
       });
@@ -572,9 +759,12 @@ describe("useProjectSwitcherPalette", () => {
       await act(async () => {
         result.current.toggle();
       });
+      expect(result.current.selectedIndex).toBe(0);
 
-      const firstNonActive = result.current.results.findIndex((p) => !p.isActive);
-      expect(result.current.selectedIndex).toBe(firstNonActive);
+      await act(async () => {
+        result.current.toggle();
+      });
+      expect(result.current.selectedIndex).toBe(1);
     });
   });
 });

@@ -40,7 +40,7 @@ describe("AgentHelpService", () => {
 
       expect(mockedExecFile).toHaveBeenCalledWith(
         "claude",
-        ["--help"],
+        [],
         expect.objectContaining({
           timeout: 5000,
           maxBuffer: 256 * 1024,
@@ -61,7 +61,7 @@ describe("AgentHelpService", () => {
 
       expect(mockedExecFile).toHaveBeenCalledWith(
         "claude",
-        ["--help"],
+        [],
         expect.any(Object),
         expect.any(Function)
       );

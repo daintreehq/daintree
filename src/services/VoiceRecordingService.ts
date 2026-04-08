@@ -1,9 +1,9 @@
 import { useProjectStore } from "@/store/projectStore";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { isActiveVoiceSession } from "@shared/types";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
 import { logDebug, logWarn, logError } from "@/utils/logger";
@@ -277,6 +277,33 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
+      voiceInput.onFileTokenResolved(({ description, replacement }) => {
+        logDebug(`${LOG_PREFIX} Received file token resolved`, { description, replacement });
+        const voiceState = useVoiceRecordingStore.getState();
+        const currentTarget = voiceState.activeTarget;
+        if (!currentTarget) return;
+
+        const { panelId, projectId } = currentTarget;
+        const inputStore = useTerminalInputStore.getState();
+        const draft = inputStore.getDraftInput(panelId, projectId);
+
+        // Best-effort replacement: search for the description text in the draft
+        const idx = draft.lastIndexOf(description);
+        if (idx >= 0) {
+          const before = draft.slice(0, idx);
+          const after = draft.slice(idx + description.length);
+          inputStore.setDraftInput(panelId, before + replacement + after, projectId);
+          inputStore.bumpVoiceDraftRevision();
+        } else {
+          logDebug(`${LOG_PREFIX} File token description not found in draft, discarding`, {
+            description,
+            replacement,
+          });
+        }
+      })
+    );
+
+    this.unsubscribers.push(
       voiceInput.onParagraphBoundary(({ rawText, correctionId }) => {
         logDebug(`${LOG_PREFIX} Received paragraph boundary from Deepgram`, {
           rawText,
@@ -365,22 +392,17 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      useTerminalStore.subscribe((state) => {
+      usePanelStore.subscribe((state) => {
         const activeTarget = useVoiceRecordingStore.getState().activeTarget;
         if (!activeTarget) return;
-
-        // Don't stop recording during a project switch — terminals are
-        // temporarily cleared and will be rehydrated in the new project.
-        if (useProjectStore.getState().isSwitching) return;
 
         // If the recording target belongs to a different project than the
         // one currently loaded, the panel's absence is expected.
         const currentProjectId = useProjectStore.getState().currentProject?.id;
         if (activeTarget.projectId && currentProjectId !== activeTarget.projectId) return;
 
-        const panel = state.terminals.find(
-          (terminal) => terminal.id === activeTarget.panelId && terminal.location !== "trash"
-        );
+        const found = state.panelsById[activeTarget.panelId];
+        const panel = found && found.location !== "trash" ? found : undefined;
 
         if (!panel) {
           const panelId = activeTarget.panelId;
@@ -747,32 +769,28 @@ class VoiceRecordingService {
 
     await this.waitForPanel(target.panelId);
 
-    const panel = useTerminalStore
-      .getState()
-      .terminals.find(
-        (terminal) => terminal.id === target.panelId && terminal.location !== "trash"
-      );
-    if (!panel) {
+    const foundPanel = usePanelStore.getState().panelsById[target.panelId];
+    if (!foundPanel || foundPanel.location === "trash") {
       return false;
     }
+    const panel = foundPanel;
 
-    useTerminalStore.getState().activateTerminal(panel.id);
+    usePanelStore.getState().activateTerminal(panel.id);
     return true;
   }
 
   private getFocusedPanelTarget(): VoiceRecordingTarget | null {
-    const terminalState = useTerminalStore.getState();
+    const terminalState = usePanelStore.getState();
     const panelId = terminalState.focusedId;
     if (!panelId) return null;
 
-    const panel = terminalState.terminals.find(
-      (terminal) => terminal.id === panelId && terminal.location !== "trash"
-    );
-    if (!panel) return null;
+    const foundPanel = terminalState.panelsById[panelId];
+    if (!foundPanel || foundPanel.location === "trash") return null;
+    const panel = foundPanel;
 
     const currentProject = useProjectStore.getState().currentProject;
     const worktree = panel.worktreeId
-      ? useWorktreeDataStore.getState().worktrees.get(panel.worktreeId)
+      ? getCurrentViewStore().getState().worktrees.get(panel.worktreeId)
       : undefined;
 
     return {
@@ -786,10 +804,8 @@ class VoiceRecordingService {
   }
 
   private async waitForPanel(panelId: string, timeoutMs = 5000): Promise<void> {
-    const existing = useTerminalStore
-      .getState()
-      .terminals.some((terminal) => terminal.id === panelId && terminal.location !== "trash");
-    if (existing) return;
+    const existingPanel = usePanelStore.getState().panelsById[panelId];
+    if (existingPanel && existingPanel.location !== "trash") return;
 
     await new Promise<void>((resolve) => {
       let settled = false;
@@ -800,11 +816,9 @@ class VoiceRecordingService {
         resolve();
       }, timeoutMs);
 
-      const unsubscribe = useTerminalStore.subscribe((state) => {
-        const found = state.terminals.some(
-          (terminal) => terminal.id === panelId && terminal.location !== "trash"
-        );
-        if (!found || settled) return;
+      const unsubscribe = usePanelStore.subscribe((state) => {
+        const found = state.panelsById[panelId];
+        if (!found || found.location === "trash" || settled) return;
         settled = true;
         clearTimeout(timeout);
         unsubscribe();

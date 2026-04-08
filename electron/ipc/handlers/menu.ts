@@ -1,4 +1,5 @@
-import { BrowserWindow, Menu, ipcMain } from "electron";
+import { Menu, ipcMain } from "electron";
+import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import type { MenuItemOption, ShowContextMenuPayload } from "../../../shared/types/menu.js";
@@ -95,7 +96,7 @@ export function registerMenuHandlers(_deps: HandlerDependencies): () => void {
     const sanitized = sanitizeShowContextMenuPayload(payload);
     if (!sanitized || sanitized.template.length === 0) return null;
 
-    const win = BrowserWindow.fromWebContents(event.sender);
+    const win = getWindowForWebContents(event.sender);
     if (!win || win.isDestroyed()) return null;
 
     return new Promise((resolve) => {

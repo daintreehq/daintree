@@ -53,18 +53,13 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
       await keybindingService.loadOverrides();
       onImportComplete();
 
-      const parts: string[] = [];
-      if (result.applied > 0) {
-        parts.push(`Applied ${result.applied} shortcut${result.applied !== 1 ? "s" : ""}`);
-      }
-      if (result.skipped > 0) {
-        parts.push(`skipped ${result.skipped} unknown action${result.skipped !== 1 ? "s" : ""}`);
-      }
-
       notify({
         type: "success",
         title: "Shortcuts imported",
-        message: parts.length > 0 ? parts.join(", ") + "." : "No shortcuts were applied.",
+        message:
+          result.applied > 0
+            ? `Applied ${result.applied} shortcut${result.applied !== 1 ? "s" : ""}.`
+            : "No shortcuts were applied.",
       });
     } catch {
       notify({

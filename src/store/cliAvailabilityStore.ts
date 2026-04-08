@@ -10,6 +10,7 @@ interface CliAvailabilityState {
   isRefreshing: boolean;
   error: string | null;
   isInitialized: boolean;
+  lastCheckedAt: number | null;
 }
 
 interface CliAvailabilityActions {
@@ -33,6 +34,7 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()((set, get)
   isRefreshing: false,
   error: null,
   isInitialized: false,
+  lastCheckedAt: null,
 
   initialize: () => {
     if (get().isInitialized) return Promise.resolve();
@@ -49,7 +51,7 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()((set, get)
         set({ isLoading: true, error: null });
         const availability = await cliAvailabilityClient.refresh();
         if (epoch === myEpoch) {
-          set({ availability, isLoading: false, isInitialized: true });
+          set({ availability, isLoading: false, isInitialized: true, lastCheckedAt: Date.now() });
         }
       } catch (e) {
         if (epoch === myEpoch) {
@@ -82,7 +84,7 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()((set, get)
         set({ isRefreshing: true, error: null });
         const availability = await cliAvailabilityClient.refresh();
         if (epoch === myEpoch) {
-          set({ availability, isRefreshing: false, error: null });
+          set({ availability, isRefreshing: false, error: null, lastCheckedAt: Date.now() });
         }
       } catch (e) {
         if (epoch === myEpoch) {
@@ -113,5 +115,6 @@ export function cleanupCliAvailabilityStore() {
     isRefreshing: false,
     error: null,
     isInitialized: false,
+    lastCheckedAt: null,
   });
 }

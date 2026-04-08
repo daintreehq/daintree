@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { ChevronsUpDown, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
@@ -9,12 +9,14 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { useProjectSwitcherPalette } from "@/hooks";
 import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
 import { ProjectSwitcherPalette } from "./ProjectSwitcherPalette";
+import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 
 const renderIcon = (emoji: string, color?: string, sizeClass = "h-9 w-9 text-lg") => (
   <div
     className={cn(
-      "flex items-center justify-center rounded-[var(--radius-xl)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)] shrink-0 transition-all duration-200",
+      "flex items-center justify-center rounded-[var(--radius-xl)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)] shrink-0 transition duration-200",
       sizeClass
     )}
     style={{
@@ -45,6 +47,10 @@ export function ProjectSwitcher() {
     projectSwitcher.close();
     openCreateFolderDialog();
   }, [projectSwitcher, openCreateFolderDialog]);
+
+  const handleCloneRepo = useCallback(() => {
+    projectSwitcher.cloneRepo();
+  }, [projectSwitcher]);
 
   const handleOpenSettings = useCallback(() => {
     projectSwitcher.close();
@@ -78,6 +84,48 @@ export function ProjectSwitcher() {
     },
     [projectSwitcher]
   );
+
+  const handleCopyPath = useCallback((path: string) => {
+    void navigator.clipboard.writeText(path);
+    notify({ type: "info", title: "Path copied", message: path, duration: 2000 });
+  }, []);
+
+  const handleSelectBackground = useCallback(
+    (project: SearchableProject) => {
+      if (project.isActive || project.isMissing) return;
+      projectSwitcher.close();
+      notify({
+        type: "info",
+        title: "Background open",
+        message: "Background open is not yet available — coming soon",
+        duration: 3000,
+      });
+    },
+    [projectSwitcher]
+  );
+
+  const handleSelectNewWindow = useCallback(
+    (project: SearchableProject) => {
+      if (project.isMissing) return;
+      projectSwitcher.close();
+      void actionService.dispatch(
+        "app.newWindow",
+        { projectPath: project.path },
+        { source: "user" }
+      );
+    },
+    [projectSwitcher]
+  );
+
+  const badgeStatus = useMemo(() => {
+    const bgProjects = projectSwitcher.results.filter((p) => !p.isActive);
+    const totalWaiting = bgProjects.reduce((sum, p) => sum + p.waitingAgentCount, 0);
+    const totalActive = bgProjects.reduce((sum, p) => sum + p.activeAgentCount, 0);
+
+    if (totalWaiting > 0) return { color: "bg-state-waiting", pulse: false, count: totalWaiting };
+    if (totalActive > 0) return { color: "bg-canopy-accent", pulse: true, count: totalActive };
+    return null;
+  }, [projectSwitcher.results]);
 
   const stopDialog = (
     <ConfirmDialog
@@ -113,23 +161,19 @@ export function ProjectSwitcher() {
             onSelect={projectSwitcher.selectProject}
             onClose={handleDropdownClose}
             onAddProject={projectSwitcher.addProject}
+            onCloneRepo={handleCloneRepo}
             onCreateFolder={handleCreateFolder}
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
             onLocateProject={handleLocateProject}
             onTogglePinProject={handleTogglePinProject}
+            onCopyPath={handleCopyPath}
+            onSelectBackground={handleSelectBackground}
+            onSelectNewWindow={handleSelectNewWindow}
             removeConfirmProject={projectSwitcher.removeConfirmProject}
             onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
             onConfirmRemove={projectSwitcher.confirmRemoveProject}
             isRemovingProject={projectSwitcher.isRemovingProject}
-            groups={projectSwitcher.groups}
-            onCreateGroup={projectSwitcher.createGroup}
-            onAssignProjectToGroup={projectSwitcher.assignProjectToGroup}
-            onRemoveProjectFromGroup={projectSwitcher.removeProjectFromGroup}
-            onRenameGroup={projectSwitcher.renameGroup}
-            onDeleteGroup={projectSwitcher.deleteGroup}
-            onMoveGroupUp={projectSwitcher.moveGroupUp}
-            onMoveGroupDown={projectSwitcher.moveGroupDown}
           >
             <Button
               variant="outline"
@@ -176,23 +220,19 @@ export function ProjectSwitcher() {
         onSelect={projectSwitcher.selectProject}
         onClose={handleDropdownClose}
         onAddProject={projectSwitcher.addProject}
+        onCloneRepo={handleCloneRepo}
         onCreateFolder={handleCreateFolder}
         onStopProject={handleStopProject}
         onCloseProject={handleCloseProject}
         onLocateProject={handleLocateProject}
+        onTogglePinProject={handleTogglePinProject}
         onOpenProjectSettings={handleOpenSettings}
+        onCopyPath={handleCopyPath}
+        onSelectBackground={handleSelectBackground}
         removeConfirmProject={projectSwitcher.removeConfirmProject}
         onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
         onConfirmRemove={projectSwitcher.confirmRemoveProject}
         isRemovingProject={projectSwitcher.isRemovingProject}
-        groups={projectSwitcher.groups}
-        onCreateGroup={projectSwitcher.createGroup}
-        onAssignProjectToGroup={projectSwitcher.assignProjectToGroup}
-        onRemoveProjectFromGroup={projectSwitcher.removeProjectFromGroup}
-        onRenameGroup={projectSwitcher.renameGroup}
-        onDeleteGroup={projectSwitcher.deleteGroup}
-        onMoveGroupUp={projectSwitcher.moveGroupUp}
-        onMoveGroupDown={projectSwitcher.moveGroupDown}
       >
         <TooltipProvider>
           <Tooltip>
@@ -227,11 +267,15 @@ export function ProjectSwitcher() {
                   </div>
                 </div>
                 <ChevronsUpDown className="shrink-0 text-text-muted transition-colors group-hover:text-text-secondary" />
-                {projectSwitcher.backgroundWaitingCount > 0 && (
+                {badgeStatus && (
                   <span
                     role="status"
-                    aria-label={`${projectSwitcher.backgroundWaitingCount} background project${projectSwitcher.backgroundWaitingCount === 1 ? "" : "s"} waiting`}
-                    className="absolute top-1 right-1 h-2 w-2 rounded-full bg-state-waiting ring-2 ring-[var(--color-surface-panel-elevated)]"
+                    aria-label={`${badgeStatus.count} background agent${badgeStatus.count === 1 ? "" : "s"} ${badgeStatus.pulse ? "working" : "waiting"}`}
+                    className={cn(
+                      "absolute top-1 right-1 h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-panel-elevated)]",
+                      badgeStatus.color,
+                      badgeStatus.pulse && "animate-agent-pulse"
+                    )}
                   />
                 )}
               </Button>

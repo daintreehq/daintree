@@ -13,6 +13,8 @@ import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 import { CONFIDENCE_TAG_THRESHOLD } from "../../../shared/config/voiceCorrection.js";
 import { logDebug, logWarn } from "../../utils/logger.js";
 import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
+import { getAppWebContents } from "../../window/webContentsRegistry.js";
+import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
 
 let service: VoiceTranscriptionService | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
@@ -181,6 +183,7 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   correctionModel: "gpt-5-mini",
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
+  resolveFileLinks: true,
 };
 
 /** Read voiceInput settings with defaults for fields added after initial store creation. */
@@ -386,7 +389,7 @@ function fireMicroCorrection(
 
   // Notify renderer that a correction is pending
   if (!win.isDestroyed()) {
-    win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_QUEUED, {
+    getAppWebContents(win).send(CHANNELS.VOICE_INPUT_CORRECTION_QUEUED, {
       correctionId,
       rawText: rawSpan,
       reason: "streaming",
@@ -420,7 +423,7 @@ function fireMicroCorrection(
     const edits = computeCompactCorrectionEdits(rawSpan, result.confirmedText);
 
     if (!win.isDestroyed()) {
-      win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
+      getAppWebContents(win).send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
         correctionId,
         correctedText: result.confirmedText,
         action: result.action,
@@ -488,12 +491,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (!win || win.isDestroyed()) return;
 
       if (voiceEvent.type === "delta") {
-        win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, voiceEvent.text);
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, voiceEvent.text);
       } else if (voiceEvent.type === "complete") {
         const rawText = voiceEvent.text.trim();
 
         // Notify the renderer so it can finalize the utterance in the draft.
-        win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
           text: rawText,
           willCorrect: false,
         });
@@ -514,15 +517,48 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             fireMicroCorrection(cluster, win, correctionService);
           }
         }
+
+        // File link detection: scan the complete utterance for file-reference voice commands
+        if (
+          correctionEnabled &&
+          liveSettings.resolveFileLinks &&
+          correctionService &&
+          correctionPool &&
+          rawText.length > 0
+        ) {
+          const projectPath = sessionProjectInfo.path;
+          const apiKey = liveSettings.correctionApiKey;
+          if (projectPath && apiKey) {
+            correctionPool.add(async () => {
+              if (!correctionService) return;
+              const tokens = await correctionService.detectFileLinkTokens(rawText, { apiKey });
+              for (const { description } of tokens) {
+                const resolved = await voiceFileLinkResolver.resolve({
+                  cwd: projectPath,
+                  description,
+                  apiKey,
+                });
+                const replacement = resolved ? `@${resolved}` : `@?${description}`;
+                if (!win.isDestroyed()) {
+                  getAppWebContents(win).send(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, {
+                    description,
+                    replacement,
+                    resolved: !!resolved,
+                  });
+                }
+              }
+            });
+          }
+        }
       } else if (voiceEvent.type === "paragraph_boundary") {
-        win.webContents.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
           rawText: null,
           correctionId: null,
         });
       } else if (voiceEvent.type === "error") {
-        win.webContents.send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);
       } else if (voiceEvent.type === "status") {
-        win.webContents.send(CHANNELS.VOICE_INPUT_STATUS, voiceEvent.status);
+        getAppWebContents(win).send(CHANNELS.VOICE_INPUT_STATUS, voiceEvent.status);
       }
     });
 

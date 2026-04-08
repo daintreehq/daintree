@@ -46,6 +46,7 @@ export function EditorIntegrationTab() {
   const activeProjectId = useProjectStore((s) => s.currentProject?.id);
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
     };
@@ -157,7 +158,7 @@ export function EditorIntegrationTab() {
               <select
                 value={selectedId}
                 onChange={(e) => setSelectedId(e.target.value as KnownEditorId)}
-                className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
+                className="flex-1 bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
               >
                 {ORDERED_KNOWN_IDS.map((id) => {
                   const disc = availabilityMap.get(id);
@@ -183,7 +184,7 @@ export function EditorIntegrationTab() {
 
           {selectedId !== "custom" && (
             <div className="space-y-1">
-              <p className="text-xs text-canopy-text/50">Detected editors:</p>
+              <p className="text-xs text-canopy-text/50 select-text">Detected editors:</p>
               <div className="space-y-1">
                 {discoveredEditors.map((d) => (
                   <div key={d.id} className="flex items-center gap-2 text-xs text-canopy-text/60">
@@ -215,7 +216,7 @@ export function EditorIntegrationTab() {
                   value={customCommand}
                   onChange={(e) => setCustomCommand(e.target.value)}
                   placeholder="e.g. code, nvim, subl"
-                  className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors font-mono"
+                  className="w-full bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors font-mono"
                 />
               </div>
               <div className="space-y-1">
@@ -225,9 +226,9 @@ export function EditorIntegrationTab() {
                   value={customTemplate}
                   onChange={(e) => setCustomTemplate(e.target.value)}
                   placeholder="{file}:{line}:{col}"
-                  className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors font-mono"
+                  className="w-full bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors font-mono"
                 />
-                <p className="text-xs text-canopy-text/40">
+                <p className="text-xs text-canopy-text/40 select-text">
                   Use <code className="font-mono">{"{file}"}</code>,{" "}
                   <code className="font-mono">{"{line}"}</code>,{" "}
                   <code className="font-mono">{"{col}"}</code> as placeholders.

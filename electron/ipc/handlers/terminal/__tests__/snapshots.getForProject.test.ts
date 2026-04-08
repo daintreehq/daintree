@@ -7,6 +7,14 @@ vi.mock("electron", () => ({
   },
 }));
 
+const mockIsHelpTerminal = vi.fn((_id: string) => false);
+
+vi.mock("../../../../services/AgentAvailabilityStore.js", () => ({
+  getAgentAvailabilityStore: () => ({
+    isHelpTerminal: mockIsHelpTerminal,
+  }),
+}));
+
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../../channels.js";
 import { registerTerminalSnapshotHandlers } from "../snapshots.js";
@@ -134,5 +142,40 @@ describe("terminal:get-for-project handler", () => {
 
     expect(willExpire.isTrashed).toBe(false);
     expect(willExpire.trashExpiresAt).toBe(expiresAt);
+  });
+
+  it("excludes help-marked terminals from getForProject results", async () => {
+    mockIsHelpTerminal.mockImplementation((id: string) => id === "t-help");
+
+    const ptyClient = {
+      getTerminalsForProjectAsync: vi.fn(async () => ["t-visible", "t-help", "t-dev-preview"]),
+      getTerminalAsync: vi.fn(async (id: string) => ({
+        id,
+        kind: id === "t-dev-preview" ? "dev-preview" : "agent",
+        type: "terminal",
+        cwd: "/tmp",
+        spawnedAt: Date.now(),
+      })),
+    };
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalSnapshotHandlers(deps);
+
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const getForProjectCall = calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_FOR_PROJECT);
+    expect(getForProjectCall).toBeTruthy();
+
+    const handler = getForProjectCall?.[1] as unknown as (
+      event: unknown,
+      projectId: string
+    ) => Promise<unknown[]>;
+
+    const result = await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-1");
+
+    expect(result).toHaveLength(1);
+    expect((result[0] as { id: string }).id).toBe("t-visible");
+
+    mockIsHelpTerminal.mockImplementation(() => false);
   });
 });

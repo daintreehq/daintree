@@ -440,12 +440,14 @@ export class CrashRecoveryService {
       capturedAt: Date.now(),
       appState: store.get("appState"),
       windowState: store.get("windowState"),
+      windowStates: store.get("windowStates"),
     };
   }
 
   private applySessionSnapshot(snapshot: SessionSnapshot): void {
     if (snapshot.appState) store.set("appState", snapshot.appState);
     if (snapshot.windowState) store.set("windowState", snapshot.windowState);
+    if (snapshot.windowStates) store.set("windowStates", snapshot.windowStates);
   }
 
   private pruneOldLogs(): void {
@@ -508,6 +510,7 @@ interface SessionSnapshot {
   capturedAt: number;
   appState?: unknown;
   windowState?: unknown;
+  windowStates?: unknown;
 }
 
 function isValidMarker(value: unknown): value is MarkerFile {

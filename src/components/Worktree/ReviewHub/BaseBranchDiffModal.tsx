@@ -44,7 +44,8 @@ export function BaseBranchDiffModal({
         setDiff("NO_CHANGES");
       }
     } catch {
-      // Fall through — FileViewerModal shows file in View mode
+      if (requestRef.current !== requestId) return;
+      setDiff("NO_CHANGES");
     }
   }, [worktreePath, mainBranch, currentBranch, filePath]);
 

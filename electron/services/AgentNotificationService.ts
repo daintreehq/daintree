@@ -1,21 +1,32 @@
-import path from "path";
-import { fileURLToPath } from "url";
-import { existsSync } from "fs";
 import { events } from "./events.js";
 import { notificationService, type WatchNotificationContext } from "./NotificationService.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
-import { playSound, type SoundHandle } from "../utils/soundPlayer.js";
+import { soundService } from "./SoundService.js";
 import { CHANNELS } from "../ipc/channels.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// AgentNotificationService lives in electron/services/; sounds are in electron/resources/sounds/
-const SOUNDS_DIR = path.join(__dirname, "..", "resources", "sounds");
 
 const COMPLETION_DEBOUNCE_MS = 2000;
 const NOTIFICATION_STAGGER_MS = 500;
+const BURST_WINDOW_MS = 200;
+const WORKING_PULSE_INITIAL_DELAY_MS = 10_000;
+const WORKING_PULSE_MIN_INTERVAL_MS = 8_000;
+const WORKING_PULSE_MAX_INTERVAL_MS = 10_000;
+const ALL_CLEAR_DEBOUNCE_MS = 500;
+const ACTIVE_AGENT_STATES = new Set(["working", "running", "directing"]);
+
+/**
+ * Grace period after spawn during which waiting sounds are suppressed.
+ * Agents that initialize and immediately enter waiting (without doing real work)
+ * should not trigger notification sounds.
+ */
+const SPAWN_GRACE_PERIOD_MS = 5_000;
+
+/**
+ * Grace period after service initialization during which all agent sounds are
+ * suppressed. On app startup, restored terminals re-emit spawn and state events
+ * which would otherwise produce unwanted notification sounds.
+ */
+const BOOT_GRACE_PERIOD_MS = 8_000;
 
 interface PendingNotification {
   title: string;
@@ -26,25 +37,77 @@ interface PendingNotification {
   triggerSound: boolean;
 }
 
+interface BurstWaitingEntry {
+  worktreeId?: string;
+  terminalId?: string;
+  agentId?: string;
+  soundFile: string;
+  soundEnabled: boolean;
+}
+
 class AgentNotificationService {
   private completionTimers = new Map<string, NodeJS.Timeout>();
   private waitingEscalationTimers = new Map<string, NodeJS.Timeout>();
+  private workingPulseDelayTimers = new Map<string, NodeJS.Timeout>();
+  private workingPulseIntervalTimers = new Map<string, NodeJS.Timeout>();
   private notificationQueue: PendingNotification[] = [];
   private staggerTimer: NodeJS.Timeout | null = null;
-  private lastSoundHandle: SoundHandle | null = null;
   private unsubscribers: Array<() => void> = [];
   private watchedTerminals = new Set<string>();
+  private hasEverGoneWorking = false;
+  private peakConcurrentWorking = 0;
+  private allClearTimer: NodeJS.Timeout | null = null;
+
+  private waitingBurstBuffer: BurstWaitingEntry[] = [];
+  private waitingBurstTimer: NodeJS.Timeout | null = null;
+  private completionBurstBuffer: PendingNotification[] = [];
+  private completionBurstTimer: NodeJS.Timeout | null = null;
+  private completionBurstSoundFile: string | undefined;
+  private waitingTerminalIds = new Set<string>();
+  /** Tracks when each agent spawned to suppress sounds during the grace period */
+  private agentSpawnTimestamps = new Map<string, number>();
+  /** Timestamp when the service was initialized — sounds are suppressed during boot */
+  private initializedAt = 0;
 
   syncWatchedPanels(panelIds: string[]): void {
     this.watchedTerminals = new Set(panelIds);
   }
 
   initialize(): void {
+    this.initializedAt = Date.now();
+
     const unsubStateChanged = events.on("agent:state-changed", (payload) => {
       this.handleStateChanged(payload);
     });
 
-    this.unsubscribers.push(unsubStateChanged);
+    const unsubSpawned = events.on("agent:spawned", (payload) => {
+      const agentKey = payload.agentId ?? payload.terminalId;
+      if (agentKey) {
+        this.agentSpawnTimestamps.set(agentKey, Date.now());
+      }
+      if (store.get("notificationSettings").uiFeedbackSoundEnabled && !this.isWithinBootGrace()) {
+        soundService.play("agent-spawned");
+      }
+    });
+
+    this.unsubscribers.push(unsubStateChanged, unsubSpawned);
+  }
+
+  private isWithinBootGrace(): boolean {
+    return Date.now() - this.initializedAt < BOOT_GRACE_PERIOD_MS;
+  }
+
+  private isWithinSpawnGrace(agentId?: string, terminalId?: string): boolean {
+    const key = agentId ?? terminalId;
+    if (!key) return false;
+    const spawnTime = this.agentSpawnTimestamps.get(key);
+    if (spawnTime === undefined) return false;
+    const elapsed = Date.now() - spawnTime;
+    if (elapsed >= SPAWN_GRACE_PERIOD_MS) {
+      this.agentSpawnTimestamps.delete(key);
+      return false;
+    }
+    return true;
   }
 
   private handleStateChanged(payload: {
@@ -59,6 +122,16 @@ class AgentNotificationService {
     const { state, previousState, worktreeId, terminalId, agentId, waitingReason } = payload;
     const settings = projectStore.getEffectiveNotificationSettings();
 
+    // Clear spawn grace tracking once the agent starts doing real work
+    // (waiting→working means the user gave input, so future waiting sounds are legitimate)
+    if (state === "working" && previousState === "waiting") {
+      const key = agentId ?? terminalId;
+      if (key) this.agentSpawnTimestamps.delete(key);
+    }
+
+    // All-clear tracking runs regardless of notification settings
+    this.checkAllClear(state, previousState);
+
     // Allow same-state transitions for waitingReason changes (e.g., prompt -> question)
     if (state === previousState && !(state === "waiting" && waitingReason !== undefined)) return;
 
@@ -66,7 +139,11 @@ class AgentNotificationService {
 
     // Cancel any pending completion timer for this agent when it leaves "completed"
     // (must run even when master toggle is off to prevent stale timers)
-    if (previousState === "completed" && state !== "completed") {
+    if (
+      (previousState === "completed" || previousState === "exited") &&
+      state !== "completed" &&
+      state !== "exited"
+    ) {
       const timer = this.completionTimers.get(key);
       if (timer) {
         clearTimeout(timer);
@@ -74,17 +151,35 @@ class AgentNotificationService {
       }
     }
 
+    // Track currently-waiting terminal IDs for escalation grouping
+    if (state === "waiting" && terminalId) {
+      this.waitingTerminalIds.add(terminalId);
+    }
+
     // Cancel waiting escalation when agent leaves "waiting"
     if (previousState === "waiting" && state !== "waiting" && terminalId) {
+      this.waitingTerminalIds.delete(terminalId);
       this.clearWaitingEscalation(terminalId);
+    }
+
+    // Cancel working pulse when agent leaves "working"
+    if (previousState === "working" && state !== "working" && terminalId) {
+      this.clearWorkingPulse(terminalId);
     }
 
     // Master toggle — skip all notifications when disabled
     if (settings.enabled === false) return;
 
     // Schedule waiting escalation for docked agents (independent of watched status)
-    if (state === "waiting" && terminalId) {
+    // Suppress during spawn grace period — agents that initialize directly into waiting
+    // should not trigger escalation sounds.
+    if (state === "waiting" && terminalId && !this.isWithinSpawnGrace(agentId, terminalId)) {
       this.scheduleWaitingEscalation(terminalId, worktreeId, agentId);
+    }
+
+    // Schedule working pulse for watched/docked agents entering working state
+    if (state === "working" && previousState !== "working" && terminalId) {
+      this.scheduleWorkingPulse(terminalId, worktreeId, agentId);
     }
 
     // Skip if all OS notification types are disabled (off by default).
@@ -99,21 +194,82 @@ class AgentNotificationService {
     const isWatched = terminalId !== undefined && this.watchedTerminals.has(terminalId);
     if (!isWatched) return;
 
-    if (state === "completed" && settings.completedEnabled) {
+    if ((state === "completed" || state === "exited") && settings.completedEnabled) {
       this.scheduleCompletionNotification(key, worktreeId, terminalId, agentId);
-    } else if (state === "waiting" && settings.waitingEnabled) {
-      // Waiting (permission request) is urgent — show immediately, bypass queue stagger
-      const label = this.getLabel(agentId, worktreeId);
-      const context = this.makeContext(terminalId, agentId, worktreeId);
-      this.playNotificationSound(settings.soundEnabled);
-      notificationService.showWatchNotification(
-        "Agent waiting",
-        `${label} is waiting for input`,
-        context,
-        CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-        true
-      );
+    } else if (
+      state === "waiting" &&
+      settings.waitingEnabled &&
+      !this.isWithinSpawnGrace(agentId, terminalId)
+    ) {
+      this.waitingBurstBuffer.push({
+        worktreeId,
+        terminalId,
+        agentId,
+        soundFile: settings.waitingSoundFile,
+        soundEnabled: settings.soundEnabled,
+      });
+      if (this.waitingBurstTimer === null) {
+        this.waitingBurstTimer = setTimeout(() => this.flushWaitingBurst(), BURST_WINDOW_MS);
+      }
     }
+  }
+
+  private countActiveAgents(): number {
+    const terminals = store.get("appState").terminals;
+    return terminals.filter(
+      (t: { agentState?: string }) => t.agentState && ACTIVE_AGENT_STATES.has(t.agentState)
+    ).length;
+  }
+
+  private checkAllClear(state: string, previousState: string): void {
+    const wasActive = ACTIVE_AGENT_STATES.has(previousState);
+    const isActive = ACTIVE_AGENT_STATES.has(state);
+
+    // Track when agents start working
+    if (!wasActive && isActive) {
+      this.hasEverGoneWorking = true;
+      const activeCount = this.countActiveAgents();
+      this.peakConcurrentWorking = Math.max(this.peakConcurrentWorking, activeCount);
+
+      // Cancel any pending all-clear — a new agent just started
+      if (this.allClearTimer) {
+        clearTimeout(this.allClearTimer);
+        this.allClearTimer = null;
+      }
+      return;
+    }
+
+    // Only consider transitions OUT of active states
+    if (!wasActive || isActive) return;
+
+    const activeCount = this.countActiveAgents();
+
+    // All conditions must hold to schedule the all-clear
+    if (!this.hasEverGoneWorking || this.peakConcurrentWorking < 2 || activeCount > 0) return;
+
+    // Cancel any existing timer (rapid succession of completions)
+    if (this.allClearTimer) {
+      clearTimeout(this.allClearTimer);
+    }
+
+    this.allClearTimer = setTimeout(() => {
+      this.allClearTimer = null;
+
+      // Re-check after debounce — an agent may have started during the window
+      const currentActive = this.countActiveAgents();
+      if (currentActive > 0) return;
+
+      // Fire the all-clear
+      const settings = projectStore.getEffectiveNotificationSettings();
+      if (settings.enabled !== false && settings.soundEnabled) {
+        soundService.play("all-clear");
+      }
+      events.emit("agent:all-clear", { timestamp: Date.now() });
+
+      // Reset for next multi-agent session
+      this.peakConcurrentWorking = 0;
+      this.hasEverGoneWorking = false;
+    }, ALL_CLEAR_DEBOUNCE_MS);
   }
 
   private scheduleCompletionNotification(
@@ -131,20 +287,79 @@ class AgentNotificationService {
       const settings = projectStore.getEffectiveNotificationSettings();
       if (settings.enabled === false || !settings.completedEnabled) return;
       const label = this.getLabel(agentId, worktreeId);
-      this.enqueue(
-        {
-          title: "Agent completed",
-          body: `${label} finished its task`,
-          worktreeId,
-          terminalId,
-          agentId,
-          triggerSound: settings.soundEnabled,
-        },
-        true
-      );
+      this.completionBurstBuffer.push({
+        title: "Agent completed",
+        body: `${label} finished its task`,
+        worktreeId,
+        terminalId,
+        agentId,
+        triggerSound: settings.soundEnabled,
+      });
+      if (!this.completionBurstSoundFile) {
+        this.completionBurstSoundFile = settings.completedSoundFile;
+      }
+      if (this.completionBurstTimer === null) {
+        this.completionBurstTimer = setTimeout(() => this.flushCompletionBurst(), 0);
+      }
     }, COMPLETION_DEBOUNCE_MS);
 
     this.completionTimers.set(key, timer);
+  }
+
+  private flushWaitingBurst(): void {
+    this.waitingBurstTimer = null;
+    const items = this.waitingBurstBuffer.splice(0);
+    if (items.length === 0) return;
+
+    const first = items[0];
+    this.playNotificationSound(first.soundEnabled, first.soundFile);
+
+    if (items.length === 1) {
+      const label = this.getLabel(first.agentId, first.worktreeId);
+      const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
+      notificationService.showWatchNotification(
+        "Agent waiting",
+        `${label} is waiting for input`,
+        context,
+        CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
+        true
+      );
+    } else {
+      const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
+      notificationService.showWatchNotification(
+        "Agents waiting",
+        `${items.length} agents waiting for input`,
+        context,
+        CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
+        true
+      );
+    }
+  }
+
+  private flushCompletionBurst(): void {
+    this.completionBurstTimer = null;
+    const items = this.completionBurstBuffer.splice(0);
+    const soundFile = this.completionBurstSoundFile;
+    this.completionBurstSoundFile = undefined;
+    if (items.length === 0) return;
+
+    if (items.length === 1) {
+      this.enqueue(items[0], true, soundFile);
+    } else {
+      const first = items[0];
+      this.enqueue(
+        {
+          title: "Agents completed",
+          body: `${items.length} agents finished their tasks`,
+          worktreeId: first.worktreeId,
+          terminalId: first.terminalId,
+          agentId: first.agentId,
+          triggerSound: first.triggerSound,
+        },
+        true,
+        soundFile
+      );
+    }
   }
 
   private scheduleWaitingEscalation(
@@ -175,12 +390,31 @@ class AgentNotificationService {
       const currentTerminal = currentTerminals.find((t) => t.id === terminalId);
       if (!currentTerminal || currentTerminal.location !== "dock") return;
 
-      const label = currentTerminal.title || this.getLabel(agentId, worktreeId);
-      this.playNotificationSound(currentSettings.soundEnabled);
-      notificationService.showNativeNotification(
-        "Agent still waiting",
-        `${label} has been waiting for input`
-      );
+      // Count all dock terminals currently waiting (for grouped escalation)
+      const waitingDockTerminalIds = currentTerminals
+        .filter((t) => t.location === "dock" && this.waitingTerminalIds.has(t.id))
+        .map((t) => t.id);
+
+      this.playNotificationSound(currentSettings.soundEnabled, currentSettings.escalationSoundFile);
+
+      if (waitingDockTerminalIds.length > 1) {
+        // Cancel sibling escalation timers so only one grouped notification fires
+        for (const siblingId of waitingDockTerminalIds) {
+          if (siblingId !== terminalId) {
+            this.clearWaitingEscalation(siblingId);
+          }
+        }
+        notificationService.showNativeNotification(
+          "Agents still waiting",
+          `${waitingDockTerminalIds.length} agents have been waiting for input`
+        );
+      } else {
+        const label = currentTerminal.title || this.getLabel(agentId, worktreeId);
+        notificationService.showNativeNotification(
+          "Agent still waiting",
+          `${label} has been waiting for input`
+        );
+      }
     }, settings.waitingEscalationDelayMs);
 
     this.waitingEscalationTimers.set(terminalId, timer);
@@ -198,17 +432,77 @@ class AgentNotificationService {
     this.clearWaitingEscalation(terminalId);
   }
 
+  acknowledgeWorkingPulse(terminalId: string): void {
+    this.clearWorkingPulse(terminalId);
+  }
+
+  private scheduleWorkingPulse(terminalId: string, _worktreeId?: string, _agentId?: string): void {
+    this.clearWorkingPulse(terminalId);
+
+    const settings = projectStore.getEffectiveNotificationSettings();
+    if (!settings.workingPulseEnabled || !settings.soundEnabled) return;
+
+    // Eligibility: watched OR (docked + escalation enabled)
+    const isWatched = this.watchedTerminals.has(terminalId);
+    if (!isWatched) {
+      const terminals = store.get("appState").terminals;
+      const terminal = terminals.find((t) => t.id === terminalId);
+      if (!terminal || terminal.location !== "dock" || !settings.waitingEscalationEnabled) return;
+    }
+
+    const delayTimer = setTimeout(() => {
+      this.workingPulseDelayTimers.delete(terminalId);
+      this.startPulseInterval(terminalId);
+    }, WORKING_PULSE_INITIAL_DELAY_MS);
+
+    this.workingPulseDelayTimers.set(terminalId, delayTimer);
+  }
+
+  private startPulseInterval(terminalId: string): void {
+    const tick = () => {
+      const currentSettings = projectStore.getEffectiveNotificationSettings();
+      if (!currentSettings.workingPulseEnabled || !currentSettings.soundEnabled) {
+        this.clearWorkingPulse(terminalId);
+        return;
+      }
+      soundService.playPulse(currentSettings.workingPulseSoundFile);
+
+      const jitter =
+        WORKING_PULSE_MIN_INTERVAL_MS +
+        Math.random() * (WORKING_PULSE_MAX_INTERVAL_MS - WORKING_PULSE_MIN_INTERVAL_MS);
+      const nextTimer = setTimeout(tick, jitter);
+      this.workingPulseIntervalTimers.set(terminalId, nextTimer);
+    };
+    tick();
+  }
+
+  private clearWorkingPulse(terminalId: string): void {
+    const delayTimer = this.workingPulseDelayTimers.get(terminalId);
+    if (delayTimer) {
+      clearTimeout(delayTimer);
+      this.workingPulseDelayTimers.delete(terminalId);
+    }
+    const intervalTimer = this.workingPulseIntervalTimers.get(terminalId);
+    if (intervalTimer) {
+      clearTimeout(intervalTimer);
+      this.workingPulseIntervalTimers.delete(terminalId);
+    }
+    soundService.cancelPulse();
+  }
+
   private enqueue(
     notification: PendingNotification,
     bypassFocusCheck = false,
-    soundOverride?: string
+    soundFile?: string
   ): void {
     if (!bypassFocusCheck && this.isFocusedOnWorktree(notification.worktreeId)) {
       return;
     }
 
     this.notificationQueue.push({ ...notification });
-    this.playNotificationSound(notification.triggerSound, soundOverride);
+    if (soundFile) {
+      this.playNotificationSound(notification.triggerSound, soundFile);
+    }
 
     if (!this.staggerTimer) {
       this.drainQueue();
@@ -270,27 +564,13 @@ class AgentNotificationService {
     };
   }
 
-  private playNotificationSound(enabled: boolean, fileOverride?: string): void {
+  private playNotificationSound(enabled: boolean, soundFile: string): void {
     if (!enabled) return;
-
-    const settings = projectStore.getEffectiveNotificationSettings();
-    const soundFile = fileOverride ?? settings.soundFile;
-    const soundPath = path.join(SOUNDS_DIR, soundFile);
-
-    if (!existsSync(soundPath)) return;
-
-    if (this.lastSoundHandle) {
-      this.lastSoundHandle.cancel();
-    }
-    this.lastSoundHandle = playSound(soundPath);
+    soundService.playFile(soundFile);
   }
 
   playSoundPreview(soundFile: string): void {
-    const soundPath = path.join(SOUNDS_DIR, soundFile);
-    if (this.lastSoundHandle) {
-      this.lastSoundHandle.cancel();
-    }
-    this.lastSoundHandle = playSound(soundPath);
+    soundService.previewFile(soundFile);
   }
 
   dispose(): void {
@@ -309,17 +589,47 @@ class AgentNotificationService {
     }
     this.waitingEscalationTimers.clear();
 
+    for (const timer of this.workingPulseDelayTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.workingPulseDelayTimers.clear();
+
+    for (const timer of this.workingPulseIntervalTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.workingPulseIntervalTimers.clear();
+
+    if (this.allClearTimer) {
+      clearTimeout(this.allClearTimer);
+      this.allClearTimer = null;
+    }
+
     if (this.staggerTimer) {
       clearTimeout(this.staggerTimer);
       this.staggerTimer = null;
     }
 
-    this.notificationQueue = [];
-
-    if (this.lastSoundHandle) {
-      this.lastSoundHandle.cancel();
-      this.lastSoundHandle = null;
+    if (this.waitingBurstTimer) {
+      clearTimeout(this.waitingBurstTimer);
+      this.waitingBurstTimer = null;
     }
+    this.waitingBurstBuffer = [];
+
+    if (this.completionBurstTimer) {
+      clearTimeout(this.completionBurstTimer);
+      this.completionBurstTimer = null;
+    }
+    this.completionBurstBuffer = [];
+    this.completionBurstSoundFile = undefined;
+
+    this.waitingTerminalIds.clear();
+    this.agentSpawnTimestamps.clear();
+    this.notificationQueue = [];
+    this.hasEverGoneWorking = false;
+    this.peakConcurrentWorking = 0;
+
+    soundService.cancel();
+    soundService.cancelPulse();
   }
 }
 

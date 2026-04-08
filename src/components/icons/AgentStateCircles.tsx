@@ -76,3 +76,54 @@ export function InteractingCircle({ className, ...props }: CircleProps) {
     </svg>
   );
 }
+
+export function PromptCircle({ className, ...props }: CircleProps) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" className={className} {...props}>
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" />
+      <line
+        x1="8"
+        y1="5"
+        x2="8"
+        y2="8.5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <circle cx="8" cy="11" r="1" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function ExitedCircle({ className, ...props }: CircleProps) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" className={className} {...props}>
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" />
+      <line
+        x1="5"
+        y1="8"
+        x2="11"
+        y2="8"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+export function QuestionCircle({ className, ...props }: CircleProps) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" className={className} {...props}>
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" />
+      <path
+        d="M6.5 6.5a1.5 1.5 0 0 1 2.83.7c0 1-1.33 1.3-1.33 1.3"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="8" cy="11" r="1" fill="currentColor" />
+    </svg>
+  );
+}

@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/Spinner";
 import { AgentSetupStep } from "./AgentSetupStep";
 import { EmbeddedTerminal } from "./EmbeddedTerminal";
 import { SystemHealthCheckStep } from "./SystemHealthCheckStep";
 import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { useAgentSettingsStore } from "@/store";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { cliAvailabilityClient } from "@/clients";
 import { isCanopyEnvEnabled } from "@/utils/env";
 import type { CliAvailability } from "@shared/types";
@@ -17,60 +20,164 @@ const POLL_INTERVAL = 3000;
 
 const SKIP_FIRST_RUN_DIALOGS = isCanopyEnvEnabled("CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS");
 
+const AGENT_DESCRIPTIONS: Record<string, string> = {
+  claude: "Deep refactoring, architecture, and complex reasoning",
+  gemini: "Quick exploration and broad knowledge lookup",
+  codex: "Careful, methodical runs with sandboxed execution",
+  opencode: "Provider-agnostic, open-source flexibility",
+};
+
+// --- Wizard state machine ---
+
+type WizardStep =
+  | { type: "health" }
+  | { type: "selection" }
+  | { type: "agent"; agentId: string }
+  | { type: "complete" };
+
+interface WizardState {
+  step: WizardStep;
+  history: WizardStep[];
+  availability: CliAvailability;
+  selections: Record<string, boolean>;
+  agentQueue: string[];
+  selectionsInitialized: boolean;
+}
+
+type WizardAction =
+  | { type: "HEALTH_CONTINUE" }
+  | { type: "SELECTION_CONTINUE" }
+  | { type: "AGENT_NEXT" }
+  | { type: "BACK" }
+  | { type: "SET_AVAILABILITY"; payload: CliAvailability }
+  | { type: "INIT_SELECTIONS"; payload: Record<string, boolean> }
+  | { type: "TOGGLE_SELECTION"; agentId: string; checked: boolean }
+  | { type: "RESET"; availability: CliAvailability };
+
+function buildInitialState(availability: CliAvailability, skipHealth: boolean): WizardState {
+  return {
+    step: skipHealth ? { type: "selection" } : { type: "health" },
+    history: [],
+    availability,
+    selections: {},
+    agentQueue: [],
+    selectionsInitialized: false,
+  };
+}
+
+function wizardReducer(state: WizardState, action: WizardAction): WizardState {
+  switch (action.type) {
+    case "HEALTH_CONTINUE":
+      return {
+        ...state,
+        step: { type: "selection" },
+        history: [...state.history, state.step],
+      };
+
+    case "SELECTION_CONTINUE": {
+      const queue = AGENT_ORDER.filter(
+        (id) => state.selections[id] && state.availability[id] !== true
+      );
+      const nextStep: WizardStep =
+        queue.length > 0 ? { type: "agent", agentId: queue[0] } : { type: "complete" };
+      return {
+        ...state,
+        step: nextStep,
+        history: [...state.history, state.step],
+        agentQueue: queue,
+      };
+    }
+
+    case "AGENT_NEXT": {
+      if (state.step.type !== "agent") return state;
+      const idx = state.agentQueue.indexOf(state.step.agentId);
+      const nextStep: WizardStep =
+        idx < state.agentQueue.length - 1
+          ? { type: "agent", agentId: state.agentQueue[idx + 1] }
+          : { type: "complete" };
+      return {
+        ...state,
+        step: nextStep,
+        history: [...state.history, state.step],
+      };
+    }
+
+    case "BACK": {
+      if (state.history.length === 0) return state;
+      const newHistory = [...state.history];
+      const prevStep = newHistory.pop()!;
+      return {
+        ...state,
+        step: prevStep,
+        history: newHistory,
+      };
+    }
+
+    case "SET_AVAILABILITY":
+      return { ...state, availability: action.payload };
+
+    case "INIT_SELECTIONS":
+      return {
+        ...state,
+        selections: action.payload,
+        selectionsInitialized: true,
+      };
+
+    case "TOGGLE_SELECTION":
+      return {
+        ...state,
+        selections: { ...state.selections, [action.agentId]: action.checked },
+      };
+
+    case "RESET":
+      return buildInitialState(action.availability, SKIP_FIRST_RUN_DIALOGS);
+
+    default:
+      return state;
+  }
+}
+
+// --- Component ---
+
 interface AgentSetupWizardProps {
   isOpen: boolean;
   onClose: () => void;
   initialAvailability?: CliAvailability;
-  agentIds?: readonly string[];
 }
 
-type WizardStep = "health" | "welcome" | "agent" | "complete";
-
-export function AgentSetupWizard({
-  isOpen,
-  onClose,
-  initialAvailability,
-  agentIds,
-}: AgentSetupWizardProps) {
-  const effectiveAgentOrder = useMemo(() => {
-    if (!agentIds || agentIds.length === 0) return AGENT_ORDER;
-    const filtered = AGENT_ORDER.filter((id) => agentIds.includes(id));
-    return filtered.length > 0 ? filtered : AGENT_ORDER;
-  }, [agentIds]);
-
-  const [step, setStep] = useState<WizardStep>(SKIP_FIRST_RUN_DIALOGS ? "welcome" : "health");
-  const [agentIndex, setAgentIndex] = useState(0);
-  const [availability, setAvailability] = useState<CliAvailability>(
-    initialAvailability ?? ({} as CliAvailability)
+export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: AgentSetupWizardProps) {
+  const [state, dispatch] = useReducer(
+    wizardReducer,
+    initialAvailability ?? ({} as CliAvailability),
+    (avail) => buildInitialState(avail, SKIP_FIRST_RUN_DIALOGS)
   );
+
+  const { setAgentSelected } = useAgentSettingsStore();
+  const isAvailabilityLoading = useCliAvailabilityStore((s) => s.isLoading || s.isRefreshing);
+  const [isSaving, setIsSaving] = useState(false);
+
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isOpenRef = useRef(isOpen);
+  const initRef = useRef(false);
+
   useEffect(() => {
     isOpenRef.current = isOpen;
   }, [isOpen]);
-
-  const currentAgentId = effectiveAgentOrder[agentIndex];
-  const currentAgent = useMemo(
-    () => (currentAgentId ? getAgentConfig(currentAgentId) : undefined),
-    [currentAgentId]
-  );
-  const isCurrentAvailable = currentAgentId ? availability[currentAgentId] === true : false;
-
-  const installedAgents = useMemo(
-    () => effectiveAgentOrder.filter((id) => availability[id] === true),
-    [effectiveAgentOrder, availability]
-  );
 
   // Reset wizard state when reopened
   const prevIsOpenRef = useRef(false);
   useEffect(() => {
     if (isOpen && !prevIsOpenRef.current) {
-      setStep(SKIP_FIRST_RUN_DIALOGS ? "welcome" : "health");
-      setAgentIndex(0);
+      dispatch({
+        type: "RESET",
+        availability: initialAvailability ?? ({} as CliAvailability),
+      });
+      initRef.current = false;
     }
     prevIsOpenRef.current = isOpen;
-  }, [isOpen]);
+  }, [isOpen, initialAvailability]);
 
+  // Poll availability
   useEffect(() => {
     if (!isOpen) return;
 
@@ -78,7 +185,9 @@ export function AgentSetupWizard({
       cliAvailabilityClient
         .refresh()
         .then((result) => {
-          if (isOpenRef.current) setAvailability(result);
+          if (isOpenRef.current) {
+            dispatch({ type: "SET_AVAILABILITY", payload: result });
+          }
         })
         .catch(console.error);
     };
@@ -94,35 +203,82 @@ export function AgentSetupWizard({
     };
   }, [isOpen]);
 
-  const handleNext = useCallback(() => {
-    if (step === "health") {
-      setStep("welcome");
-    } else if (step === "welcome") {
-      setStep("agent");
-      setAgentIndex(0);
-    } else if (step === "agent") {
-      if (agentIndex < effectiveAgentOrder.length - 1) {
-        setAgentIndex((i) => i + 1);
-      } else {
-        setStep("complete");
-      }
+  // Initialize selections once when availability is ready
+  useEffect(() => {
+    if (!isOpen || initRef.current || state.selectionsInitialized) return;
+    if (isAvailabilityLoading) return;
+
+    initRef.current = true;
+    const initial: Record<string, boolean> = {};
+    for (const agentId of AGENT_ORDER) {
+      initial[agentId] = state.availability[agentId] === true;
     }
-  }, [step, agentIndex, effectiveAgentOrder]);
+    dispatch({ type: "INIT_SELECTIONS", payload: initial });
+  }, [isOpen, isAvailabilityLoading, state.availability, state.selectionsInitialized]);
+
+  const currentAgentId = state.step.type === "agent" ? state.step.agentId : undefined;
+  const currentAgent = useMemo(
+    () => (currentAgentId ? getAgentConfig(currentAgentId) : undefined),
+    [currentAgentId]
+  );
+  const isCurrentAvailable = currentAgentId ? state.availability[currentAgentId] === true : false;
+
+  const installedAgents = useMemo(
+    () => AGENT_ORDER.filter((id) => state.availability[id] === true),
+    [state.availability]
+  );
+
+  const selectedAgentIds = useMemo(
+    () =>
+      Object.entries(state.selections)
+        .filter(([, sel]) => sel)
+        .map(([id]) => id),
+    [state.selections]
+  );
+
+  // Step numbering
+  const totalSteps = 2 + state.agentQueue.length + 1; // health + selection + N agents + complete
+  const stepNumber = (() => {
+    switch (state.step.type) {
+      case "health":
+        return 0;
+      case "selection":
+        return 1;
+      case "agent": {
+        const idx = state.agentQueue.indexOf(state.step.agentId);
+        return 2 + (idx >= 0 ? idx : 0);
+      }
+      case "complete":
+        return 2 + state.agentQueue.length;
+    }
+  })();
+
+  const handleNext = useCallback(() => {
+    switch (state.step.type) {
+      case "health":
+        dispatch({ type: "HEALTH_CONTINUE" });
+        break;
+      case "agent":
+        dispatch({ type: "AGENT_NEXT" });
+        break;
+    }
+  }, [state.step.type]);
+
+  const handleSelectionContinue = useCallback(async () => {
+    setIsSaving(true);
+    try {
+      for (const [agentId, selected] of Object.entries(state.selections)) {
+        await setAgentSelected(agentId, selected);
+      }
+      dispatch({ type: "SELECTION_CONTINUE" });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [state.selections, setAgentSelected]);
 
   const handleBack = useCallback(() => {
-    if (step === "welcome") {
-      setStep("health");
-    } else if (step === "agent") {
-      if (agentIndex > 0) {
-        setAgentIndex((i) => i - 1);
-      } else {
-        setStep("welcome");
-      }
-    } else if (step === "complete") {
-      setStep("agent");
-      setAgentIndex(effectiveAgentOrder.length - 1);
-    }
-  }, [step, agentIndex, effectiveAgentOrder]);
+    dispatch({ type: "BACK" });
+  }, []);
 
   const handleSkip = useCallback(() => {
     handleNext();
@@ -132,18 +288,14 @@ export function AgentSetupWizard({
     onClose();
   }, [onClose]);
 
-  const stepNumber =
-    step === "health"
-      ? 0
-      : step === "welcome"
-        ? 1
-        : step === "agent"
-          ? agentIndex + 2
-          : effectiveAgentOrder.length + 2;
-  const totalSteps = effectiveAgentOrder.length + 3;
+  const handleSelectionSkip = useCallback(() => {
+    onClose();
+  }, [onClose]);
+
+  const showLoadingSelections = !state.selectionsInitialized && isAvailabilityLoading;
 
   return (
-    <AppDialog isOpen={isOpen} onClose={handleFinish} size="lg" dismissible={true}>
+    <AppDialog isOpen={isOpen} onClose={handleFinish} size="lg" dismissible={!isSaving}>
       <AppDialog.Header>
         <AppDialog.Title icon={<CanopyAgentIcon className="w-5 h-5 text-canopy-accent" />}>
           Agent Setup
@@ -157,13 +309,19 @@ export function AgentSetupWizard({
       </AppDialog.Header>
 
       <AppDialog.Body>
-        {step === "health" && (
-          <SystemHealthCheckStep onSkip={handleNext} agentIds={effectiveAgentOrder} />
+        {state.step.type === "health" && (
+          <SystemHealthCheckStep onSkip={handleNext} agentIds={AGENT_ORDER} />
         )}
-        {step === "welcome" && (
-          <WelcomeStep availability={availability} agentOrder={effectiveAgentOrder} />
+        {state.step.type === "selection" && (
+          <SelectionStep
+            availability={state.availability}
+            selections={state.selections}
+            isLoading={showLoadingSelections}
+            isSaving={isSaving}
+            onToggle={(id, checked) => dispatch({ type: "TOGGLE_SELECTION", agentId: id, checked })}
+          />
         )}
-        {step === "agent" && currentAgent && (
+        {state.step.type === "agent" && currentAgent && (
           <div className="space-y-5">
             <AgentSetupStep
               agent={currentAgent}
@@ -181,7 +339,7 @@ export function AgentSetupWizard({
             </div>
           </div>
         )}
-        {step === "complete" && <CompleteStep installedAgents={installedAgents} />}
+        {state.step.type === "complete" && <CompleteStep installedAgents={installedAgents} />}
       </AppDialog.Body>
 
       <AppDialog.Footer>
@@ -201,37 +359,55 @@ export function AgentSetupWizard({
             ))}
           </div>
           <div className="flex items-center gap-2">
-            {step !== "health" && (
-              <Button variant="ghost" onClick={handleBack} className="text-canopy-text/70">
+            {state.step.type !== "health" && state.step.type !== "complete" && (
+              <Button
+                variant="ghost"
+                onClick={handleBack}
+                className="text-canopy-text/70"
+                disabled={isSaving}
+              >
                 <ChevronLeft className="w-4 h-4" />
                 Back
               </Button>
             )}
-            {step === "health" && (
+            {state.step.type === "health" && (
               <Button onClick={handleNext}>
                 Continue
                 <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
             )}
-            {step === "welcome" && (
-              <Button onClick={handleNext}>
-                Get Started
-                <ArrowRight className="w-4 h-4 ml-1" />
-              </Button>
+            {state.step.type === "selection" && (
+              <>
+                <Button
+                  variant="ghost"
+                  onClick={handleSelectionSkip}
+                  disabled={isSaving}
+                  className="text-canopy-text/60"
+                >
+                  Skip
+                </Button>
+                <Button
+                  onClick={handleSelectionContinue}
+                  disabled={selectedAgentIds.length === 0 || isSaving}
+                >
+                  Continue
+                  <ArrowRight className="w-4 h-4 ml-1" />
+                </Button>
+              </>
             )}
-            {step === "agent" && !isCurrentAvailable && (
+            {state.step.type === "agent" && !isCurrentAvailable && (
               <Button variant="ghost" onClick={handleSkip} className="text-canopy-text/60">
                 <SkipForward className="w-4 h-4" />
                 Skip
               </Button>
             )}
-            {step === "agent" && (
+            {state.step.type === "agent" && (
               <Button onClick={handleNext}>
                 {isCurrentAvailable ? "Continue" : "Next"}
                 <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
             )}
-            {step === "complete" && <Button onClick={handleFinish}>Finish Setup</Button>}
+            {state.step.type === "complete" && <Button onClick={handleFinish}>Finish Setup</Button>}
           </div>
         </div>
       </AppDialog.Footer>
@@ -239,61 +415,87 @@ export function AgentSetupWizard({
   );
 }
 
-function WelcomeStep({
+// --- Selection step (merged from AgentSelectionStep) ---
+
+function SelectionStep({
   availability,
-  agentOrder,
+  selections,
+  isLoading,
+  isSaving,
+  onToggle,
 }: {
   availability: CliAvailability;
-  agentOrder: readonly string[];
+  selections: Record<string, boolean>;
+  isLoading: boolean;
+  isSaving: boolean;
+  onToggle: (agentId: string, checked: boolean) => void;
 }) {
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div>
-        <h3 className="text-base font-semibold text-canopy-text mb-2">
-          Get started with AI agents
-        </h3>
+        <h3 className="text-base font-semibold text-canopy-text mb-2">Choose your AI agents</h3>
         <p className="text-sm text-canopy-text/60">
-          Canopy orchestrates multiple AI coding agents. This wizard will help you install the CLI
-          tools you need. Each agent is optional — install the ones you want to use.
+          Select the agents you want in your workflow. Already-installed agents are pre-selected.
+          You can change this anytime from{" "}
+          <span className="text-canopy-text/80">Settings &gt; Agents</span>.
         </p>
       </div>
 
-      <div className="space-y-2">
-        {agentOrder.map((id) => {
-          const agent = AGENT_REGISTRY[id];
-          if (!agent) return null;
-          const isInstalled = availability[id] === true;
-          const Icon = agent.icon;
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Spinner size="lg" className="text-canopy-text/40" />
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {AGENT_ORDER.map((agentId) => {
+            const config = AGENT_REGISTRY[agentId];
+            if (!config) return null;
+            const isInstalled = availability[agentId] === true;
+            const isChecked = selections[agentId] ?? false;
+            const Icon = config.icon;
+            const description = AGENT_DESCRIPTIONS[agentId] ?? config.tooltip ?? "";
 
-          return (
-            <div
-              key={id}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30"
-            >
-              <div
-                className="w-8 h-8 rounded-[var(--radius-sm)] flex items-center justify-center"
-                style={{ backgroundColor: `${agent.color}15` }}
+            return (
+              <label
+                key={agentId}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30 cursor-pointer hover:bg-canopy-bg/60 transition-colors"
               >
-                <Icon size={18} brandColor={agent.color} />
-              </div>
-              <div className="flex-1">
-                <div className="text-sm font-medium text-canopy-text">{agent.name}</div>
-                {agent.tooltip && (
-                  <div className="text-[11px] text-canopy-text/40">{agent.tooltip}</div>
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-canopy-accent shrink-0"
+                  checked={isChecked}
+                  onChange={(e) => onToggle(agentId, e.target.checked)}
+                  disabled={isSaving}
+                />
+                <div
+                  className="w-8 h-8 rounded-[var(--radius-sm)] flex items-center justify-center shrink-0"
+                  style={{ backgroundColor: `${config.color}15` }}
+                >
+                  <Icon size={18} brandColor={config.color} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-canopy-text">{config.name}</div>
+                  {description && (
+                    <div className="text-[11px] text-canopy-text/40 truncate">{description}</div>
+                  )}
+                </div>
+                {isInstalled ? (
+                  <span className="text-[11px] text-status-success font-medium shrink-0">
+                    Installed
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-canopy-text/30 shrink-0">Not installed</span>
                 )}
-              </div>
-              {isInstalled ? (
-                <span className="text-[11px] text-status-success font-medium">Installed</span>
-              ) : (
-                <span className="text-[11px] text-canopy-text/30">Not installed</span>
-              )}
-            </div>
-          );
-        })}
-      </div>
+              </label>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
+
+// --- Complete step ---
 
 function CompleteStep({ installedAgents }: { installedAgents: string[] }) {
   return (

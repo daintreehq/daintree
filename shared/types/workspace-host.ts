@@ -96,6 +96,12 @@ export interface WorktreeSnapshot {
 
   /** Relative path to the detected plan file (e.g. "TODO.md") */
   planFilePath?: string;
+
+  /** Number of commits ahead of the upstream tracking branch */
+  aheadCount?: number;
+
+  /** Number of commits behind the upstream tracking branch */
+  behindCount?: number;
 }
 
 /** Monitor configuration for polling intervals */
@@ -116,7 +122,7 @@ export interface MonitorConfig {
  */
 export type WorkspaceHostRequest =
   // Project lifecycle
-  | { type: "load-project"; requestId: string; rootPath: string; projectScopeId: string }
+  | { type: "load-project"; requestId: string; rootPath: string }
   | {
       type: "sync";
       requestId: string;
@@ -151,6 +157,13 @@ export type WorkspaceHostRequest =
   // Branch operations
   | { type: "list-branches"; requestId: string; rootPath: string }
   | { type: "get-recent-branches"; requestId: string; rootPath: string }
+  | {
+      type: "fetch-pr-branch";
+      requestId: string;
+      rootPath: string;
+      prNumber: number;
+      headRefName: string;
+    }
   // Git operations
   | {
       type: "get-file-diff";
@@ -161,6 +174,9 @@ export type WorkspaceHostRequest =
     }
   // Polling control
   | { type: "set-polling-enabled"; enabled: boolean }
+  // Background/foreground lifecycle
+  | { type: "background" }
+  | { type: "foreground" }
   // Health check
   | { type: "health-check" }
   // Lifecycle
@@ -180,6 +196,10 @@ export type WorkspaceHostRequest =
       rootPath: string;
       options?: CopyTreeOptions;
     }
+  // Resource profile config update
+  | { type: "update-monitor-config"; requestId: string; config: MonitorConfig }
+  // Direct renderer port attachment (port transferred via postMessage transfer list)
+  | { type: "attach-renderer-port" }
   // GitHub token propagation
   | { type: "update-github-token"; token: string | null }
   // File tree operations
@@ -214,6 +234,7 @@ export type WorkspaceHostEvent =
   // Project lifecycle responses
   | { type: "load-project-result"; requestId: string; success: boolean; error?: string }
   | { type: "sync-result"; requestId: string; success: boolean; error?: string }
+  | { type: "update-monitor-config-result"; requestId: string; success: boolean; error?: string }
   | { type: "project-switch-result"; requestId: string; success: boolean }
   // Worktree query responses
   | { type: "all-states"; requestId: string; states: WorktreeSnapshot[] }
@@ -235,12 +256,12 @@ export type WorkspaceHostEvent =
   // Branch operation responses
   | { type: "list-branches-result"; requestId: string; branches: BranchInfo[]; error?: string }
   | { type: "get-recent-branches-result"; requestId: string; branches: string[]; error?: string }
+  | { type: "fetch-pr-branch-result"; requestId: string; success: boolean; error?: string }
   // Git operation responses
   | { type: "get-file-diff-result"; requestId: string; diff: string; error?: string }
   // Spontaneous updates (no requestId - these are pushed events)
-  // Project scope filtering: events include projectScopeId to prevent cross-project pollution
-  | { type: "worktree-update"; worktree: WorktreeSnapshot; projectScopeId: string }
-  | { type: "worktree-removed"; worktreeId: string; projectScopeId: string }
+  | { type: "worktree-update"; worktree: WorktreeSnapshot }
+  | { type: "worktree-removed"; worktreeId: string }
   // PR events
   | {
       type: "pr-detected";
@@ -251,22 +272,19 @@ export type WorkspaceHostEvent =
       prTitle?: string;
       issueNumber?: number;
       issueTitle?: string;
-      projectScopeId: string;
     }
-  | { type: "pr-cleared"; worktreeId: string; projectScopeId: string }
+  | { type: "pr-cleared"; worktreeId: string }
   // Issue events
   | {
       type: "issue-detected";
       worktreeId: string;
       issueNumber: number;
       issueTitle: string;
-      projectScopeId: string;
     }
   | {
       type: "issue-not-found";
       worktreeId: string;
       issueNumber: number;
-      projectScopeId: string;
     }
   // CopyTree events
   | { type: "copytree:progress"; operationId: string; progress: CopyTreeProgress }

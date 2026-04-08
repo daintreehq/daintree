@@ -1,4 +1,6 @@
-import type { PanelKind, BuiltInPanelKind } from "../types/panel.js";
+import type { PanelKind, BuiltInPanelKind, TerminalInstance } from "../types/panel.js";
+import type { TerminalSnapshot } from "../types/project.js";
+import type { AddPanelOptions } from "../types/addPanelOptions.js";
 import { getAgentConfig } from "./agentRegistry.js";
 import { PANEL_KIND_BRAND_COLORS } from "../theme/index.js";
 
@@ -31,11 +33,24 @@ export interface PanelKindConfig {
   extensionId?: string;
   /** Keyboard shortcut (optional) */
   shortcut?: string;
+  /** Search aliases for fuzzy matching in the panel palette */
+  searchAliases?: string[];
+  /** Serialize kind-specific fields from a panel instance into a snapshot fragment */
+  serialize?: (panel: TerminalInstance) => Partial<TerminalSnapshot>;
+  /**
+   * Factory that returns kind-specific fields for a new panel instance.
+   * Common fields (id, title, location, worktreeId, isVisible, runtimeStatus, extensionState)
+   * are injected by addTerminal — this only returns the kind-specific diff.
+   * Optional: unregistered/extension kinds fall back to getExtensionFallbackDefaults.
+   */
+  createDefaults?: (options: AddPanelOptions) => Partial<TerminalInstance>;
 }
 
 /**
  * Registry of panel kind configurations.
- * Built-in kinds are registered at startup.
+ * Built-in kinds are registered at startup with metadata only.
+ * Serialize and createDefaults hooks are injected by the renderer
+ * via initBuiltInPanelKinds() in src/panels/registry.tsx.
  * Extensions can register additional kinds at runtime.
  */
 const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
@@ -48,7 +63,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     canRestart: true,
     canConvert: true,
     keepAliveOnProjectSwitch: true,
-    showInPalette: false, // Has dedicated spawn action
+    showInPalette: false,
   },
   agent: {
     id: "agent",
@@ -59,7 +74,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     canRestart: true,
     canConvert: true,
     keepAliveOnProjectSwitch: true,
-    showInPalette: false, // Has dedicated spawn action
+    showInPalette: false,
   },
   browser: {
     id: "browser",
@@ -71,6 +86,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     canConvert: false,
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
+    searchAliases: ["web", "chrome", "internet", "www"],
   },
   notes: {
     id: "notes",
@@ -82,20 +98,34 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     canConvert: false,
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
+    searchAliases: ["md", "markdown", "text", "memo"],
   },
   "dev-preview": {
     id: "dev-preview",
     name: "Dev Preview",
     iconId: "monitor",
     color: PANEL_KIND_BRAND_COLORS["dev-preview"],
-    hasPty: false, // Dev-preview panels manage their own ephemeral PTYs via useDevServer hook
-    canRestart: false, // Restart is handled internally by the dev-preview component
+    hasPty: false,
+    canRestart: false,
     canConvert: false,
-    usesTerminalUi: false, // Uses custom browser-based UI, not xterm.js
+    usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
     showInPalette: true,
+    searchAliases: ["localhost", "server", "preview", "port"],
   },
 };
+
+/**
+ * Default fields for extension panel kinds that don't provide a createDefaults factory.
+ */
+export function getExtensionFallbackDefaults(): Partial<TerminalInstance> {
+  return {
+    type: "terminal" as const,
+    cwd: "",
+    cols: 80,
+    rows: 24,
+  };
+}
 
 /**
  * Register a new panel kind configuration.

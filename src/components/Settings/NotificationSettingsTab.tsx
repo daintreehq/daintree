@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { Play, Bell, BellOff, Volume2 } from "lucide-react";
+import { Play, Bell, BellOff, Volume2, AudioLines } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsCheckbox } from "./SettingsCheckbox";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -7,11 +8,12 @@ import type { NotificationSettings } from "@shared/types";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 
 const AVAILABLE_SOUNDS: { file: string; label: string }[] = [
-  { file: "chime.wav", label: "Chime (default)" },
+  { file: "chime.wav", label: "Chime" },
   { file: "ping.wav", label: "Ping" },
   { file: "complete.wav", label: "Complete" },
   { file: "waiting.wav", label: "Waiting" },
   { file: "error.wav", label: "Error" },
+  { file: "pulse.wav", label: "Pulse" },
 ];
 
 const ESCALATION_DELAY_OPTIONS: { value: number; label: string }[] = [
@@ -24,11 +26,16 @@ const ESCALATION_DELAY_OPTIONS: { value: number; label: string }[] = [
 const DEFAULT_SETTINGS: NotificationSettings = {
   enabled: true,
   completedEnabled: false,
-  waitingEnabled: false,
-  soundEnabled: false,
-  soundFile: "chime.wav",
-  waitingEscalationEnabled: true,
+  waitingEnabled: true,
+  soundEnabled: true,
+  completedSoundFile: "complete.wav",
+  waitingSoundFile: "waiting.wav",
+  escalationSoundFile: "ping.wav",
+  waitingEscalationEnabled: false,
   waitingEscalationDelayMs: 180_000,
+  workingPulseEnabled: false,
+  workingPulseSoundFile: "pulse.wav",
+  uiFeedbackSoundEnabled: false,
 };
 
 type LoadState = "loading" | "ready" | "error";
@@ -77,8 +84,8 @@ export function NotificationSettingsTab() {
     }
   };
 
-  const handlePreview = () => {
-    window.electron?.notification?.playSound(settings.soundFile).catch(() => {});
+  const handlePreview = (soundFile: string) => {
+    window.electron?.notification?.playSound(soundFile).catch(() => {});
   };
 
   if (loadState === "loading") {
@@ -105,7 +112,7 @@ export function NotificationSettingsTab() {
         icon={settings.enabled ? Bell : BellOff}
       />
 
-      <div className={settings.enabled ? undefined : "opacity-50 pointer-events-none"}>
+      <div className={cn("space-y-6", !settings.enabled && "opacity-50 pointer-events-none")}>
         <SettingsSection
           icon={Bell}
           title="Agent Notifications"
@@ -143,7 +150,7 @@ export function NotificationSettingsTab() {
                     <select
                       value={settings.waitingEscalationDelayMs}
                       onChange={(e) => update({ waitingEscalationDelayMs: Number(e.target.value) })}
-                      className="px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                      className="px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
                     >
                       {ESCALATION_DELAY_OPTIONS.map(({ value, label }) => (
                         <option key={value} value={value}>
@@ -155,6 +162,13 @@ export function NotificationSettingsTab() {
                 )}
               </div>
             )}
+            <SettingsCheckbox
+              id="notif-working-pulse"
+              label="Working pulse"
+              description="Play a quiet periodic sound while a watched or docked agent is working in the background"
+              checked={settings.workingPulseEnabled}
+              onChange={(v) => update({ workingPulseEnabled: v })}
+            />
           </div>
         </SettingsSection>
 
@@ -174,32 +188,70 @@ export function NotificationSettingsTab() {
             />
 
             {settings.soundEnabled && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-canopy-text block">Sound</label>
-                <div className="flex items-center gap-2">
-                  <select
-                    value={settings.soundFile}
-                    onChange={(e) => update({ soundFile: e.target.value })}
-                    className="flex-1 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
-                  >
-                    {AVAILABLE_SOUNDS.map(({ file, label }) => (
-                      <option key={file} value={file}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={handlePreview}
-                    title="Preview sound"
-                    className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text hover:bg-tint/[0.06] transition-colors"
-                  >
-                    <Play className="h-3.5 w-3.5" />
-                    Preview
-                  </button>
-                </div>
+              <div className="space-y-4">
+                {(
+                  [
+                    {
+                      label: "Completed sound",
+                      field: "completedSoundFile" as const,
+                    },
+                    {
+                      label: "Waiting sound",
+                      field: "waitingSoundFile" as const,
+                    },
+                    {
+                      label: "Escalation sound",
+                      field: "escalationSoundFile" as const,
+                    },
+                    {
+                      label: "Working pulse sound",
+                      field: "workingPulseSoundFile" as const,
+                    },
+                  ] as const
+                ).map(({ label, field }) => (
+                  <div key={field} className="space-y-1">
+                    <label className="text-sm font-medium text-canopy-text block">{label}</label>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={settings[field]}
+                        onChange={(e) => update({ [field]: e.target.value })}
+                        className="flex-1 px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                      >
+                        {AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => (
+                          <option key={file} value={file}>
+                            {soundLabel}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => handlePreview(settings[field])}
+                        title={`Preview ${label.toLowerCase()}`}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text hover:bg-tint/[0.06] transition-colors"
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                        Preview
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
+        </SettingsSection>
+
+        <SettingsSection
+          icon={AudioLines}
+          title="UI Feedback Sounds"
+          description="Play subtle audio cues for git operations, worktree lifecycle, agent spawning, and context injection. These sounds are independent of agent notification sounds above."
+        >
+          <SettingsSwitchCard
+            variant="compact"
+            title="Enable UI feedback sounds"
+            subtitle="Short audio cues for git commit, push, worktree create/delete, agent spawn, and context injection"
+            isEnabled={settings.uiFeedbackSoundEnabled}
+            onChange={() => update({ uiFeedbackSoundEnabled: !settings.uiFeedbackSoundEnabled })}
+            ariaLabel="Enable UI feedback sounds"
+          />
         </SettingsSection>
       </div>
     </div>

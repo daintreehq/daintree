@@ -15,10 +15,9 @@ export const SettingsTabSchema = z.enum([
   "github",
   "portal",
   "toolbar",
-  "editor",
-  "imageViewer",
+  "integrations",
   "notifications",
-  "voice",
+
   "mcp",
   "troubleshooting",
 ]);
@@ -31,7 +30,7 @@ export const SettingsNavTargetSchema = z.object({
 
 export const TerminalTypeSchema = z.enum(BUILT_IN_TERMINAL_TYPES);
 
-export const LegacyAgentTypeSchema = z.enum(BUILT_IN_AGENT_IDS);
+export const BuiltInAgentIdSchema = z.enum(BUILT_IN_AGENT_IDS);
 
 export const GitStatusSchema = z.enum([
   "modified",

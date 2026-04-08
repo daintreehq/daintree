@@ -325,7 +325,12 @@ test.describe.serial("Core: Crash Recovery — Panel Restoration", () => {
 
     // Session 1: Launch, onboard project, close — establishes project in DB
     const setupCtx = await launchApp({ userDataDir });
-    await openAndOnboardProject(setupCtx.app, setupCtx.window, fixtureDir, "Restore Test");
+    setupCtx.window = await openAndOnboardProject(
+      setupCtx.app,
+      setupCtx.window,
+      fixtureDir,
+      "Restore Test"
+    );
     const setupPid = setupCtx.app.process().pid!;
     await closeApp(setupCtx.app);
     await waitForProcessExit(setupPid);

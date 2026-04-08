@@ -32,24 +32,6 @@ const CREATE_TABLES_SQL = `
   CREATE INDEX IF NOT EXISTS tasks_project_idx ON tasks(project_id);
   CREATE INDEX IF NOT EXISTS tasks_project_status_idx ON tasks(project_id, status);
 
-  CREATE TABLE IF NOT EXISTS workflow_runs (
-    run_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    workflow_id TEXT NOT NULL,
-    workflow_version TEXT NOT NULL,
-    status TEXT NOT NULL,
-    started_at INTEGER NOT NULL,
-    completed_at INTEGER,
-    definition TEXT NOT NULL,
-    node_states TEXT NOT NULL DEFAULT '{}',
-    task_mapping TEXT NOT NULL DEFAULT '{}',
-    scheduled_nodes TEXT NOT NULL DEFAULT '[]',
-    evaluated_conditions TEXT NOT NULL DEFAULT '[]'
-  );
-
-  CREATE INDEX IF NOT EXISTS workflow_runs_project_idx ON workflow_runs(project_id);
-  CREATE INDEX IF NOT EXISTS workflow_runs_project_status_idx ON workflow_runs(project_id, status);
-
   CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
     path TEXT NOT NULL,
@@ -59,7 +41,10 @@ const CREATE_TABLES_SQL = `
     color TEXT,
     status TEXT,
     canopy_config_present INTEGER,
-    in_repo_settings INTEGER
+    in_repo_settings INTEGER,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    frecency_score REAL NOT NULL DEFAULT 3.0,
+    last_accessed_at INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS app_state (
@@ -101,6 +86,22 @@ export function openDb(dbPath: string): { sqlite: Database.Database; db: AppDb }
   if (!cols.some((c) => c.name === "pinned")) {
     sqlite.prepare("ALTER TABLE projects ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0").run();
   }
+
+  // Migrate: add frecency columns to projects table
+  if (!cols.some((c) => c.name === "frecency_score")) {
+    sqlite
+      .prepare("ALTER TABLE projects ADD COLUMN frecency_score REAL NOT NULL DEFAULT 3.0")
+      .run();
+  }
+  if (!cols.some((c) => c.name === "last_accessed_at")) {
+    sqlite
+      .prepare("ALTER TABLE projects ADD COLUMN last_accessed_at INTEGER NOT NULL DEFAULT 0")
+      .run();
+  }
+  // Backfill: set last_accessed_at to now for migrated rows to prevent first-access decay collapse
+  sqlite
+    .prepare("UPDATE projects SET last_accessed_at = ? WHERE last_accessed_at = 0")
+    .run(Date.now());
 
   const db = drizzle(sqlite, { schema });
   return { sqlite, db };

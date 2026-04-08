@@ -3,8 +3,9 @@
  * Issue #1861: Ensure tabGroups are cleared on project switch
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TabGroup } from "@/types";
+import type { TerminalInstance } from "@shared/types";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -42,17 +43,30 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-const { useTerminalStore } = await import("../terminalStore");
+const { usePanelStore } = await import("../panelStore");
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 const { terminalClient } = await import("@/clients");
+
+type MockTerminal = Partial<TerminalInstance> & { id: string };
+
+function setTerminals(terminals: MockTerminal[]) {
+  usePanelStore.setState({
+    panelsById: Object.fromEntries(terminals.map((t) => [t.id, t])) as Record<
+      string,
+      TerminalInstance
+    >,
+    panelIds: terminals.map((t) => t.id),
+  });
+}
 
 describe("resetWithoutKilling", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
-    const { reset } = useTerminalStore.getState();
+    const { reset } = usePanelStore.getState();
     await reset();
-    useTerminalStore.setState({
-      terminals: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -83,149 +97,143 @@ describe("resetWithoutKilling", () => {
       location: "dock",
     };
 
-    useTerminalStore.setState({
-      terminals: [
-        {
-          id: "term-1",
-          type: "terminal",
-          title: "Shell 1",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-        {
-          id: "term-2",
-          type: "terminal",
-          title: "Shell 2",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-        {
-          id: "term-3",
-          type: "terminal",
-          title: "Shell 3",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "dock",
-        },
-        {
-          id: "term-4",
-          type: "terminal",
-          title: "Shell 4",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "dock",
-        },
-      ],
+    setTerminals([
+      {
+        id: "term-1",
+        type: "terminal",
+        title: "Shell 1",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+      {
+        id: "term-2",
+        type: "terminal",
+        title: "Shell 2",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+      {
+        id: "term-3",
+        type: "terminal",
+        title: "Shell 3",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "dock",
+      },
+      {
+        id: "term-4",
+        type: "terminal",
+        title: "Shell 4",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "dock",
+      },
+    ]);
+    usePanelStore.setState({
       tabGroups: new Map([
         ["group-1", group1],
         ["group-2", group2],
       ]),
     });
 
-    expect(useTerminalStore.getState().tabGroups.size).toBe(2);
+    expect(usePanelStore.getState().tabGroups.size).toBe(2);
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
-    const state = useTerminalStore.getState();
+    const state = usePanelStore.getState();
     expect(state.tabGroups.size).toBe(0);
   });
 
-  it("should clear terminals array", async () => {
-    useTerminalStore.setState({
-      terminals: [
-        {
-          id: "term-1",
-          type: "terminal",
-          title: "Shell 1",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-        {
-          id: "term-2",
-          type: "terminal",
-          title: "Shell 2",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      ],
-      tabGroups: new Map(),
-    });
+  it("should clear terminals", async () => {
+    setTerminals([
+      {
+        id: "term-1",
+        type: "terminal",
+        title: "Shell 1",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+      {
+        id: "term-2",
+        type: "terminal",
+        title: "Shell 2",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+    ]);
+    usePanelStore.setState({ tabGroups: new Map() });
 
-    expect(useTerminalStore.getState().terminals.length).toBe(2);
+    expect(usePanelStore.getState().panelIds.length).toBe(2);
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
-    const state = useTerminalStore.getState();
-    expect(state.terminals.length).toBe(0);
+    const state = usePanelStore.getState();
+    expect(state.panelIds.length).toBe(0);
   });
 
   it("should NOT kill backend processes", async () => {
-    useTerminalStore.setState({
-      terminals: [
-        {
-          id: "term-1",
-          type: "terminal",
-          title: "Shell 1",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-        {
-          id: "term-2",
-          type: "terminal",
-          title: "Shell 2",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      ],
-      tabGroups: new Map(),
-    });
+    setTerminals([
+      {
+        id: "term-1",
+        type: "terminal",
+        title: "Shell 1",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+      {
+        id: "term-2",
+        type: "terminal",
+        title: "Shell 2",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+    ]);
+    usePanelStore.setState({ tabGroups: new Map() });
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
     // Should NOT call terminalClient.kill for any terminal
     expect(terminalClient.kill).not.toHaveBeenCalled();
   });
 
   it("should detach xterm.js instances instead of destroying them", async () => {
-    useTerminalStore.setState({
-      terminals: [
-        {
-          id: "term-1",
-          type: "terminal",
-          title: "Shell 1",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-        {
-          id: "term-2",
-          type: "terminal",
-          title: "Shell 2",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      ],
-      tabGroups: new Map(),
-    });
+    setTerminals([
+      {
+        id: "term-1",
+        type: "terminal",
+        title: "Shell 1",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+      {
+        id: "term-2",
+        type: "terminal",
+        title: "Shell 2",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+    ]);
+    usePanelStore.setState({ tabGroups: new Map() });
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
     // Should detach xterm.js instances (keep alive) instead of destroying
     expect(terminalInstanceService.detachForProjectSwitch).toHaveBeenCalledWith("term-1");
@@ -234,31 +242,29 @@ describe("resetWithoutKilling", () => {
   });
 
   it("suppresses terminal resizes for the full project-switch window", async () => {
-    useTerminalStore.setState({
-      terminals: [
-        {
-          id: "term-1",
-          type: "terminal",
-          title: "Shell 1",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-        {
-          id: "term-2",
-          type: "terminal",
-          title: "Shell 2",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      ],
-      tabGroups: new Map(),
-    });
+    setTerminals([
+      {
+        id: "term-1",
+        type: "terminal",
+        title: "Shell 1",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+      {
+        id: "term-2",
+        type: "terminal",
+        title: "Shell 2",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+    ]);
+    usePanelStore.setState({ tabGroups: new Map() });
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
     expect(terminalInstanceService.suppressResizesDuringProjectSwitch).toHaveBeenCalledWith(
       ["term-1", "term-2"],
@@ -267,31 +273,29 @@ describe("resetWithoutKilling", () => {
   });
 
   it("detaches all terminal instances during project switch regardless of preserve list", async () => {
-    useTerminalStore.setState({
-      terminals: [
-        {
-          id: "term-keep",
-          type: "terminal",
-          title: "Keep",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-        {
-          id: "term-drop",
-          type: "terminal",
-          title: "Drop",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      ],
-      tabGroups: new Map(),
-    });
+    setTerminals([
+      {
+        id: "term-keep",
+        type: "terminal",
+        title: "Keep",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+      {
+        id: "term-drop",
+        type: "terminal",
+        title: "Drop",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+    ]);
+    usePanelStore.setState({ tabGroups: new Map() });
 
-    await useTerminalStore.getState().resetWithoutKilling({
+    await usePanelStore.getState().resetWithoutKilling({
       preserveTerminalIds: new Set(["term-keep"]),
     });
 
@@ -302,8 +306,9 @@ describe("resetWithoutKilling", () => {
   });
 
   it("should clear trashedTerminals", async () => {
-    useTerminalStore.setState({
-      terminals: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map([
         [
@@ -325,54 +330,54 @@ describe("resetWithoutKilling", () => {
       ]),
     });
 
-    expect(useTerminalStore.getState().trashedTerminals.size).toBe(2);
+    expect(usePanelStore.getState().trashedTerminals.size).toBe(2);
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
-    const state = useTerminalStore.getState();
+    const state = usePanelStore.getState();
     expect(state.trashedTerminals.size).toBe(0);
   });
 
   it("should clear focus state", async () => {
-    useTerminalStore.setState({
-      terminals: [
-        {
-          id: "term-1",
-          type: "terminal",
-          title: "Shell 1",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      ],
+    setTerminals([
+      {
+        id: "term-1",
+        type: "terminal",
+        title: "Shell 1",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+    ]);
+    usePanelStore.setState({
       tabGroups: new Map(),
       focusedId: "term-1",
       maximizedId: "term-1",
       activeDockTerminalId: "term-2",
     });
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
-    const state = useTerminalStore.getState();
+    const state = usePanelStore.getState();
     expect(state.focusedId).toBeNull();
     expect(state.maximizedId).toBeNull();
     expect(state.activeDockTerminalId).toBeNull();
   });
 
   it("should clear command queue", async () => {
-    useTerminalStore.setState({
-      terminals: [
-        {
-          id: "term-1",
-          type: "terminal",
-          title: "Shell 1",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      ],
+    setTerminals([
+      {
+        id: "term-1",
+        type: "terminal",
+        title: "Shell 1",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+    ]);
+    usePanelStore.setState({
       tabGroups: new Map(),
       commandQueue: [
         {
@@ -394,9 +399,9 @@ describe("resetWithoutKilling", () => {
       ],
     });
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
-    const state = useTerminalStore.getState();
+    const state = usePanelStore.getState();
     expect(state.commandQueue.length).toBe(0);
   });
 
@@ -408,36 +413,36 @@ describe("resetWithoutKilling", () => {
       location: "grid",
     };
 
-    useTerminalStore.setState({
-      terminals: [
-        {
-          id: "term-1",
-          type: "terminal",
-          title: "Shell 1",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-        {
-          id: "term-2",
-          type: "terminal",
-          title: "Shell 2",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-        {
-          id: "term-3",
-          type: "terminal",
-          title: "Shell 3",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "dock",
-        },
-      ],
+    setTerminals([
+      {
+        id: "term-1",
+        type: "terminal",
+        title: "Shell 1",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+      {
+        id: "term-2",
+        type: "terminal",
+        title: "Shell 2",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+      {
+        id: "term-3",
+        type: "terminal",
+        title: "Shell 3",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "dock",
+      },
+    ]);
+    usePanelStore.setState({
       tabGroups: new Map([["group-1", group]]),
       trashedTerminals: new Map([
         [
@@ -464,12 +469,13 @@ describe("resetWithoutKilling", () => {
       ],
     });
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
-    const state = useTerminalStore.getState();
+    const state = usePanelStore.getState();
 
     // All state should be reset
-    expect(state.terminals).toEqual([]);
+    expect(state.panelIds).toEqual([]);
+    expect(Object.keys(state.panelsById)).toEqual([]);
     expect(state.tabGroups.size).toBe(0);
     expect(state.trashedTerminals.size).toBe(0);
     expect(state.focusedId).toBeNull();
@@ -479,18 +485,18 @@ describe("resetWithoutKilling", () => {
   });
 
   it("should reset all state fields including pingedId and preMaximizeLayout", async () => {
-    useTerminalStore.setState({
-      terminals: [
-        {
-          id: "term-1",
-          type: "terminal",
-          title: "Shell 1",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      ],
+    setTerminals([
+      {
+        id: "term-1",
+        type: "terminal",
+        title: "Shell 1",
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+      },
+    ]);
+    usePanelStore.setState({
       tabGroups: new Map(),
       pingedId: "term-1",
       preMaximizeLayout: {
@@ -502,9 +508,9 @@ describe("resetWithoutKilling", () => {
       lastCrashType: "OUT_OF_MEMORY" as const,
     });
 
-    await useTerminalStore.getState().resetWithoutKilling();
+    await usePanelStore.getState().resetWithoutKilling();
 
-    const state = useTerminalStore.getState();
+    const state = usePanelStore.getState();
     expect(state.pingedId).toBeNull();
     expect(state.preMaximizeLayout).toBeNull();
     expect(state.backendStatus).toBe("connected");

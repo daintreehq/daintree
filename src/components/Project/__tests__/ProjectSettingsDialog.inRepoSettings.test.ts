@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { GITIGNORE_SNIPPET } from "../ProjectSettingsDialog";
+import { GITIGNORE_SNIPPET } from "../projectSettingsConstants";
 
 describe("GITIGNORE_SNIPPET", () => {
   it("includes project.json path as safe to commit", () => {

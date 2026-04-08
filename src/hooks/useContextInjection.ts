@@ -1,10 +1,11 @@
 import { useCallback, useState, useEffect, useRef, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useErrorStore } from "@/store/errorStore";
 import type { AgentState, CopyTreeProgress } from "@/types";
 import { copyTreeClient } from "@/clients";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
+import { logDebug, logError } from "@/utils/logger";
 
 export type InjectionStatus = "idle" | "waiting" | "injecting";
 
@@ -84,8 +85,8 @@ const globalInjectionState = {
 
 export function useContextInjection(targetTerminalId?: string): UseContextInjectionReturn {
   const [error, setError] = useState<string | null>(null);
-  const focusedId = useTerminalStore((state) => state.focusedId);
-  const terminals = useTerminalStore(useShallow((state) => state.terminals));
+  const focusedId = usePanelStore((state) => state.focusedId);
+  const panelsById = usePanelStore(useShallow((state) => state.panelsById));
   const addError = useErrorStore((state) => state.addError);
   const removeError = useErrorStore((state) => state.removeError);
 
@@ -149,12 +150,12 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
 
   // Subscribe to terminal store to detect agent state changes for pending injections
   useEffect(() => {
-    const unsubscribe = useTerminalStore.subscribe((state, prevState) => {
+    const unsubscribe = usePanelStore.subscribe((state, prevState) => {
       const pending = globalInjectionState.pendingInjection;
       if (!pending) return;
 
-      const terminal = state.terminals.find((t) => t.id === pending.terminalId);
-      const prevTerminal = prevState.terminals.find((t) => t.id === pending.terminalId);
+      const terminal = state.panelsById[pending.terminalId];
+      const prevTerminal = prevState.panelsById[pending.terminalId];
 
       // Handle terminal deletion while waiting
       if (!terminal && prevTerminal) {
@@ -198,7 +199,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         return;
       }
 
-      let terminal = terminals.find((t: TerminalInstance) => t.id === activeTerminal);
+      let terminal = panelsById[activeTerminal];
       if (!terminal) {
         setError(`Terminal not found: ${activeTerminal}`);
         return;
@@ -214,9 +215,9 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
       // Gate injection for agent terminals that are not ready
       // Non-agent terminals (agentState undefined) inject immediately
       if (terminal.agentId && !isAgentReady(terminal.agentState)) {
-        console.log(
-          `Agent is not ready (state: ${terminal.agentState}), waiting for idle/waiting state`
-        );
+        logDebug("[useContextInjection] Agent not ready, waiting for idle", {
+          agentState: terminal.agentState,
+        });
 
         // Cancel any existing pending injection (regardless of terminal)
         // to prevent promise leaks
@@ -248,9 +249,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
             };
 
             // Immediately re-check if agent became ready between initial check and pending setup
-            const currentTerminal = useTerminalStore
-              .getState()
-              .terminals.find((t) => t.id === activeTerminal);
+            const currentTerminal = usePanelStore.getState().panelsById[activeTerminal];
             if (currentTerminal && isAgentReady(currentTerminal.agentState)) {
               resolve();
               globalInjectionState.pendingInjection = null;
@@ -269,9 +268,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         }
 
         // Re-fetch terminal state after waiting (it may have changed)
-        const updatedTerminal = useTerminalStore
-          .getState()
-          .terminals.find((t) => t.id === activeTerminal);
+        const updatedTerminal = usePanelStore.getState().panelsById[activeTerminal];
         if (!updatedTerminal) {
           setError(`Terminal no longer exists: ${activeTerminal}`);
           return;
@@ -279,9 +276,9 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
 
         // Verify agent is still ready (could have changed during race)
         if (updatedTerminal.agentId && !isAgentReady(updatedTerminal.agentState)) {
-          console.log(
-            `Agent state changed to ${updatedTerminal.agentState} while waiting, aborting injection`
-          );
+          logDebug("[useContextInjection] Agent state changed while waiting, aborting injection", {
+            agentState: updatedTerminal.agentState,
+          });
           setError("Agent became busy again, injection aborted");
           // Clear stale progress on early abort
           localProgressRef.current = null;
@@ -291,7 +288,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         // Use updatedTerminal for subsequent operations (not the stale terminal reference)
         terminal = updatedTerminal;
 
-        console.log("Agent is now idle, proceeding with context injection");
+        logDebug("[useContextInjection] Agent is now idle, proceeding with context injection");
       }
 
       // Generate a unique ID for this injection operation (for per-operation cancellation)
@@ -337,9 +334,11 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           selectedPaths && selectedPaths.length > 0
             ? ` from ${selectedPaths.length} selected ${selectedPaths.length === 1 ? "path" : "paths"}`
             : "";
-        console.log(
-          `Context injected (${result.fileCount} files as ${DEFAULT_COPYTREE_FORMAT.toUpperCase()}${pathInfo})`
-        );
+        logDebug("[useContextInjection] Context injected", {
+          fileCount: result.fileCount,
+          format: DEFAULT_COPYTREE_FORMAT,
+          pathInfo,
+        });
 
         try {
           localStorage.setItem("canopy:context-injected-once", "true");
@@ -347,6 +346,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           // silently fail
         }
         window.dispatchEvent(new CustomEvent("canopy:context-injected"));
+        window.electron?.notification?.playUiEvent?.("context-injected").catch(() => {});
 
         if (currentErrorIdRef.current) {
           removeError(currentErrorIdRef.current);
@@ -380,7 +380,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
 
         currentErrorIdRef.current = errorId;
 
-        console.error("Context injection failed:", message);
+        logError("[useContextInjection] Context injection failed", undefined, { message });
       } finally {
         // Only clear global state if we own this injection (prevent cross-run interference)
         if (globalInjectionState.injectionId === currentInjectionId) {
@@ -393,7 +393,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         }
       }
     },
-    [focusedId, terminals, addError, removeError]
+    [focusedId, panelsById, addError, removeError]
   );
 
   const cancel = useCallback(() => {
@@ -405,9 +405,11 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
     if (injectionUuid) {
       try {
         const cancelResult = copyTreeClient.cancel(injectionUuid);
-        void Promise.resolve(cancelResult).catch(console.error);
+        void Promise.resolve(cancelResult).catch((err) =>
+          logError("[useContextInjection] Cancel failed", err)
+        );
       } catch (error) {
-        console.error(error);
+        logError("[useContextInjection] Cancel error", error);
       }
     }
 

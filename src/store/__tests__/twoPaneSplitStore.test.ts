@@ -191,15 +191,19 @@ describe("resolveEffectiveRatio", () => {
     expect(resolveEffectiveRatio(entry(0.35, [null, null]), "b", "a")).toBe(0.35);
   });
 
-  it("returns raw ratio when only left panel is null", () => {
-    expect(resolveEffectiveRatio(entry(0.35, [null, "b"]), "b", "a")).toBe(0.35);
+  it("returns undefined when only left panel is null (partial-null)", () => {
+    expect(resolveEffectiveRatio(entry(0.35, [null, "b"]), "b", "a")).toBeUndefined();
   });
 
-  it("returns raw ratio when panels are completely different (stale IDs)", () => {
-    expect(resolveEffectiveRatio(entry(0.35, ["x", "y"]), "a", "b")).toBe(0.35);
+  it("returns undefined when panels are completely different (stale IDs)", () => {
+    expect(resolveEffectiveRatio(entry(0.35, ["x", "y"]), "a", "b")).toBeUndefined();
   });
 
-  it("returns raw ratio when only one panel matches (partial match)", () => {
-    expect(resolveEffectiveRatio(entry(0.35, ["a", "x"]), "b", "a")).toBe(0.35);
+  it("returns undefined when only one panel matches (partial match)", () => {
+    expect(resolveEffectiveRatio(entry(0.35, ["a", "x"]), "b", "a")).toBeUndefined();
+  });
+
+  it("returns undefined when one panel is replaced (partial ID reuse)", () => {
+    expect(resolveEffectiveRatio(entry(0.6, ["a", "b"]), "a", "c")).toBeUndefined();
   });
 });

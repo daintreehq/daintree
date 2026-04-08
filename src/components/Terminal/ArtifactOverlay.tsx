@@ -109,7 +109,7 @@ function ArtifactItem({
         className={cn(
           "w-full flex items-center justify-between px-3 py-2 text-left",
           colorClass.split(" ")[1],
-          "hover:brightness-110 transition-all"
+          "hover:brightness-110 transition"
         )}
       >
         <div className="flex items-center gap-2 min-w-0">
@@ -153,7 +153,7 @@ function ArtifactItem({
               disabled={isProcessing}
               className={cn(
                 "px-3 py-1 text-xs rounded transition-colors",
-                "bg-canopy-border hover:bg-[color-mix(in_oklab,var(--color-canopy-border)_100%,white_20%)] text-text-inverse",
+                "bg-canopy-border hover:bg-[color-mix(in_oklab,var(--color-canopy-border)_100%,white_20%)] text-canopy-text",
                 "disabled:opacity-50 disabled:cursor-not-allowed"
               )}
             >
@@ -327,7 +327,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
           className={cn(
             "px-3 py-2 rounded-[var(--radius-md)] shadow-lg",
             "border border-status-info/30 text-status-info hover:bg-status-info/10",
-            "text-sm font-medium transition-all",
+            "text-sm font-medium transition-colors",
             "flex items-center gap-2"
           )}
         >
@@ -400,7 +400,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                               className={cn(
                                 "px-2 py-1 text-xs rounded transition-colors",
                                 includeAllTypes
-                                  ? "bg-canopy-border text-text-inverse"
+                                  ? "bg-canopy-border text-canopy-text"
                                   : "bg-canopy-sidebar text-canopy-text/60",
                                 "hover:brightness-110",
                                 "disabled:opacity-50 disabled:cursor-not-allowed"
@@ -424,7 +424,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     disabled={isBulkActionRunning}
                     className={cn(
                       "px-3 py-1 text-xs rounded transition-colors",
-                      "bg-canopy-border hover:bg-[color-mix(in_oklab,var(--color-canopy-border)_100%,white_20%)] text-text-inverse",
+                      "bg-canopy-border hover:bg-[color-mix(in_oklab,var(--color-canopy-border)_100%,white_20%)] text-canopy-text",
                       "disabled:opacity-50 disabled:cursor-not-allowed"
                     )}
                   >

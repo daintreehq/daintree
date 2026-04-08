@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useId, createContext, useContext } from
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { useOverlayState, useEscapeStack } from "@/hooks";
 import { usePortalStore } from "@/store";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
@@ -12,7 +13,8 @@ import {
   UI_EXIT_EASING,
   getUiTransitionDuration,
 } from "@/lib/animationUtils";
-import { X, Loader2 } from "lucide-react";
+import { X } from "lucide-react";
+import { Spinner } from "./Spinner";
 import { Button } from "./button";
 
 type DialogSize = "sm" | "md" | "lg" | "xl" | "2xl" | "4xl" | "6xl";
@@ -263,7 +265,7 @@ AppDialog.Header = function AppDialogHeader({ children, className }: AppDialogHe
   return (
     <div
       className={cn(
-        "px-6 py-4 border-b border-canopy-border bg-overlay-soft flex items-center justify-between shrink-0",
+        "px-6 py-4 border-b border-canopy-border dialog-header flex items-center justify-between shrink-0",
         className
       )}
     >
@@ -319,7 +321,11 @@ interface AppDialogBodyProps {
 }
 
 AppDialog.Body = function AppDialogBody({ children, className }: AppDialogBodyProps) {
-  return <div className={cn("flex-1 overflow-y-auto min-h-0 p-6", className)}>{children}</div>;
+  return (
+    <ScrollShadow className={cn("flex-1 min-h-0", className)} scrollClassName="p-6">
+      {children}
+    </ScrollShadow>
+  );
 };
 
 interface AppDialogBodyScrollProps {
@@ -380,7 +386,7 @@ AppDialog.Footer = function AppDialogFooter({
           disabled={secondaryAction.disabled || secondaryAction.loading}
           className="text-canopy-text/70 hover:text-canopy-text"
         >
-          {secondaryAction.loading && <Loader2 className="animate-spin" />}
+          {secondaryAction.loading && <Spinner />}
           {secondaryAction.label}
         </Button>
       )}
@@ -390,7 +396,7 @@ AppDialog.Footer = function AppDialogFooter({
           onClick={primaryAction.onClick}
           disabled={primaryAction.disabled || primaryAction.loading}
         >
-          {primaryAction.loading && <Loader2 className="animate-spin" />}
+          {primaryAction.loading && <Spinner />}
           {primaryAction.label}
         </Button>
       )}

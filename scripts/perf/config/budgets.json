@@ -36,6 +36,27 @@
     "PERF-051": { "p95Ms": 1800, "maxRegressionPct": 15 },
     "PERF-052": { "p95Ms": 2400, "maxRegressionPct": 50 },
 
+    "PERF-070": {
+      "p95Ms": 1200,
+      "maxRegressionPct": 15,
+      "maxMetricValues": { "serializeMs": 5, "totalMs": 10 }
+    },
+    "PERF-071": {
+      "p95Ms": 1500,
+      "maxRegressionPct": 15,
+      "maxMetricValues": { "serializeMs": 8, "totalMs": 15 }
+    },
+    "PERF-072": {
+      "p95Ms": 1800,
+      "maxRegressionPct": 15,
+      "maxMetricValues": { "serializeMs": 12, "totalMs": 25 }
+    },
+    "PERF-073": {
+      "p95Ms": 2600,
+      "maxRegressionPct": 20,
+      "maxMetricValues": { "serializeTotalMs": 25 }
+    },
+
     "PERF-060": {
       "p95Ms": 5000,
       "maxRegressionPct": 50,

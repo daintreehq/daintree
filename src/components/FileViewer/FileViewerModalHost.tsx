@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { useProjectStore } from "@/store";
 import { useBranchForPath } from "@/hooks/useBranchForPath";
 
@@ -46,7 +46,7 @@ export function FileViewerModalHost() {
     <Suspense
       fallback={
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim-medium">
-          <Loader2 className="h-6 w-6 animate-spin text-text-inverse" />
+          <Spinner size="xl" className="text-text-inverse" />
         </div>
       }
     >

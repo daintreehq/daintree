@@ -9,7 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
-import { useTerminalStore, useWorktreeSelectionStore, type TerminalInstance } from "@/store";
+import { usePanelStore, useWorktreeSelectionStore, type TerminalInstance } from "@/store";
 import { DockedPanel } from "@/components/Terminal/DockedPanel";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 
@@ -40,25 +40,32 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
   const [, forceUpdate] = useState(0);
 
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
-  const dockTerminals = useTerminalStore(
-    useShallow((s) =>
-      s.terminals.filter(
-        (t) =>
+  const dockTerminals = usePanelStore(
+    useShallow((s) => {
+      const result: TerminalInstance[] = [];
+      for (const id of s.panelIds) {
+        const t = s.panelsById[id];
+        if (
+          t &&
           t.location === "dock" &&
           // Show terminals that match active worktree OR have no worktree (global terminals)
           (t.worktreeId == null || t.worktreeId === activeWorktreeId)
-      )
-    )
+        ) {
+          result.push(t);
+        }
+      }
+      return result;
+    })
   );
 
-  const closeDockTerminal = useTerminalStore((s) => s.closeDockTerminal);
-  const addTerminal = useTerminalStore((s) => s.addTerminal);
-  const getPanelGroup = useTerminalStore((s) => s.getPanelGroup);
-  const createTabGroup = useTerminalStore((s) => s.createTabGroup);
-  const addPanelToGroup = useTerminalStore((s) => s.addPanelToGroup);
-  const deleteTabGroup = useTerminalStore((s) => s.deleteTabGroup);
-  const setActiveTab = useTerminalStore((s) => s.setActiveTab);
-  const openDockTerminal = useTerminalStore((s) => s.openDockTerminal);
+  const closeDockTerminal = usePanelStore((s) => s.closeDockTerminal);
+  const addPanel = usePanelStore((s) => s.addPanel);
+  const getPanelGroup = usePanelStore((s) => s.getPanelGroup);
+  const createTabGroup = usePanelStore((s) => s.createTabGroup);
+  const addPanelToGroup = usePanelStore((s) => s.addPanelToGroup);
+  const deleteTabGroup = usePanelStore((s) => s.deleteTabGroup);
+  const setActiveTab = usePanelStore((s) => s.setActiveTab);
+  const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
 
   const handlePopoverClose = useCallback(() => {
     closeDockTerminal();
@@ -80,7 +87,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
         }
 
         const options = await buildPanelDuplicateOptions(panel, "dock");
-        const newPanelId = await addTerminal(options);
+        const newPanelId = await addPanel(options);
         if (!newPanelId) {
           if (createdNewGroup && groupId!) deleteTabGroup(groupId);
           return;
@@ -101,7 +108,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
       createTabGroup,
       addPanelToGroup,
       deleteTabGroup,
-      addTerminal,
+      addPanel,
       setActiveTab,
       openDockTerminal,
     ]

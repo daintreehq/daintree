@@ -3,11 +3,13 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, act } from "@testing-library/react";
-import type { GitHubIssue } from "@shared/types/github";
+import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 
 const mockWorktreeCreate = vi.fn();
 const mockGetAvailableBranch = vi.fn();
 const mockGetDefaultPath = vi.fn();
+const mockListBranches = vi.fn();
+const mockFetchPRBranch = vi.fn();
 const mockAssignIssue = vi.fn();
 
 vi.mock("@/clients", () => ({
@@ -15,6 +17,8 @@ vi.mock("@/clients", () => ({
     create: (...args: unknown[]) => mockWorktreeCreate(...args),
     getAvailableBranch: (...args: unknown[]) => mockGetAvailableBranch(...args),
     getDefaultPath: (...args: unknown[]) => mockGetDefaultPath(...args),
+    listBranches: (...args: unknown[]) => mockListBranches(...args),
+    fetchPRBranch: (...args: unknown[]) => mockFetchPRBranch(...args),
   },
   githubClient: {
     assignIssue: (...args: unknown[]) => mockAssignIssue(...args),
@@ -27,6 +31,7 @@ vi.mock("@/store/recipeStore", () => ({
     getState: () => ({
       runRecipeWithResults: mockRunRecipeWithResults,
       getRecipeById: () => null,
+      generateRecipeFromActiveTerminals: () => [],
     }),
   }),
 }));
@@ -74,18 +79,25 @@ vi.mock("@/store/projectStore", () => ({
     selector({ currentProject: { id: "test-project", path: "/test/root" } }),
 }));
 
-const mockWorktreeDataMap = new Map();
-mockWorktreeDataMap.set("main-wt", {
+const worktreeDataHolder: { map: Map<string, unknown> } = {
+  map: new Map(),
+};
+worktreeDataHolder.map.set("main-wt", {
   worktreeId: "main-wt",
   branch: "main",
   path: "/test/root",
   isMainWorktree: true,
 });
 
-vi.mock("@/store/worktreeDataStore", () => ({
-  useWorktreeDataStore: {
-    getState: () => ({ worktrees: mockWorktreeDataMap }),
-  },
+vi.mock("@/store/createWorktreeStore", () => ({
+  getCurrentViewStore: () => ({
+    getState: () => ({ worktrees: worktreeDataHolder.map }),
+  }),
+}));
+
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
+    selector({ worktrees: worktreeDataHolder.map }),
 }));
 
 const mockSetPendingWorktree = vi.fn();
@@ -93,6 +105,7 @@ const mockSelectWorktree = vi.fn();
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: {
     getState: () => ({
+      activeWorktreeId: "source-wt",
       setPendingWorktree: mockSetPendingWorktree,
       selectWorktree: mockSelectWorktree,
     }),
@@ -100,23 +113,29 @@ vi.mock("@/store/worktreeStore", () => ({
 }));
 
 let mockTerminals: Array<{ id: string; exitCode?: number }> = [];
-vi.mock("@/store/terminalStore", () => ({
-  useTerminalStore: {
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: {
     getState: () => ({
-      terminals: mockTerminals,
+      panelsById: Object.fromEntries(mockTerminals.map((t) => [t.id, t])),
+      panelIds: mockTerminals.map((t) => t.id),
+      addPanel: vi.fn().mockResolvedValue("clone-terminal-id"),
     }),
   },
 }));
 
 let mockSelectedRecipeId: string | null = null;
 vi.mock("@/components/Worktree/hooks/useRecipePicker", () => ({
+  CLONE_LAYOUT_ID: "__clone_layout__",
   useRecipePicker: () => ({
     selectedRecipeId: mockSelectedRecipeId,
     setSelectedRecipeId: vi.fn(),
     recipePickerOpen: false,
     setRecipePickerOpen: vi.fn(),
     recipeSelectionTouchedRef: { current: false },
-    selectedRecipe: mockSelectedRecipeId ? { name: "Test Recipe", terminals: [{}] } : null,
+    selectedRecipe:
+      mockSelectedRecipeId && mockSelectedRecipeId !== "__clone_layout__"
+        ? { name: "Test Recipe", terminals: [{}] }
+        : null,
   }),
 }));
 
@@ -195,7 +214,22 @@ function setupWorktreeCreateMocks() {
     callIndex++;
     return Promise.resolve(`wt-${callIndex}`);
   });
+  mockListBranches.mockResolvedValue([
+    { name: "main", current: true, remote: false },
+    { name: "origin/main", current: false, remote: true },
+  ]);
 }
+
+const makePR = (n: number, title?: string, headRefName?: string): GitHubPR => ({
+  number: n,
+  title: title ?? `PR ${n}`,
+  url: `https://github.com/test/repo/pull/${n}`,
+  state: "OPEN",
+  isDraft: false,
+  updatedAt: "2026-01-01",
+  author: { login: "user", avatarUrl: "" },
+  headRefName: headRefName ?? `feature/pr-${n}`,
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -214,7 +248,9 @@ describe("BulkCreateWorktreeDialog", () => {
   const defaultProps = {
     isOpen: true,
     onClose: vi.fn(),
+    mode: "issue" as const,
     selectedIssues: [makeIssue(1), makeIssue(2), makeIssue(3)],
+    selectedPRs: [] as GitHubPR[],
     onComplete: vi.fn(),
   };
 
@@ -382,7 +418,7 @@ describe("BulkCreateWorktreeDialog", () => {
     // itself fails). Let's check the retry scenario where worktree was already found.
 
     // For this test, add the failed issue's worktree to the data store
-    mockWorktreeDataMap.set("existing-wt", {
+    worktreeDataHolder.map.set("existing-wt", {
       worktreeId: "existing-wt",
       branch: "feature/issue-2-issue-2",
       path: "/worktrees/feature/issue-2-issue-2",
@@ -402,7 +438,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
 
     // Clean up
-    mockWorktreeDataMap.delete("existing-wt");
+    worktreeDataHolder.map.delete("existing-wt");
   });
 
   it("auto-retries transient errors with backoff", async () => {
@@ -500,7 +536,7 @@ describe("BulkCreateWorktreeDialog", () => {
   it("second run after Done does not show 0 of N created", async () => {
     const onComplete = vi.fn();
     const onClose = vi.fn();
-    render(
+    const { rerender } = render(
       <BulkCreateWorktreeDialog {...defaultProps} onComplete={onComplete} onClose={onClose} />
     );
 
@@ -511,15 +547,29 @@ describe("BulkCreateWorktreeDialog", () => {
     await advanceTimersGradually(5000);
     expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
 
-    // Click Done to reset the dialog
+    // Click Done — state preserved during close
     await act(async () => {
       screen.getByTestId("bulk-create-done-button").click();
     });
 
-    // Second run: create again (component stays mounted, isOpen still true via mock)
-    // Reset mock call count for clarity
+    // Simulate dialog close/reopen cycle (useLayoutEffect resets on false→true)
+    await act(async () => {
+      rerender(
+        <BulkCreateWorktreeDialog
+          {...defaultProps}
+          isOpen={false}
+          onComplete={onComplete}
+          onClose={onClose}
+        />
+      );
+    });
     mockWorktreeCreate.mockClear();
     setupWorktreeCreateMocks();
+    await act(async () => {
+      rerender(
+        <BulkCreateWorktreeDialog {...defaultProps} onComplete={onComplete} onClose={onClose} />
+      );
+    });
 
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
@@ -540,7 +590,8 @@ describe("BulkCreateWorktreeDialog", () => {
         })
     );
 
-    render(<BulkCreateWorktreeDialog {...defaultProps} />);
+    const onClose = vi.fn();
+    const { rerender } = render(<BulkCreateWorktreeDialog {...defaultProps} onClose={onClose} />);
 
     // Start the batch
     await act(async () => {
@@ -555,9 +606,18 @@ describe("BulkCreateWorktreeDialog", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
+    // Simulate dialog close/reopen cycle (useLayoutEffect resets on false→true)
+    await act(async () => {
+      rerender(<BulkCreateWorktreeDialog {...defaultProps} isOpen={false} onClose={onClose} />);
+    });
+
     // Reset mocks for the second run
     mockWorktreeCreate.mockClear();
     setupWorktreeCreateMocks();
+
+    await act(async () => {
+      rerender(<BulkCreateWorktreeDialog {...defaultProps} onClose={onClose} />);
+    });
 
     // Create should work again — guard was released by handleClose
     await act(async () => {
@@ -646,7 +706,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/1 failed/)).toBeTruthy();
 
     // Set up retry — issue 2's worktree exists now
-    mockWorktreeDataMap.set("retry-wt", {
+    worktreeDataHolder.map.set("retry-wt", {
       worktreeId: "retry-wt",
       branch: "feature/issue-2-issue-2",
       path: "/worktrees/feature/issue-2-issue-2",
@@ -662,7 +722,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/2 of 2 created/)).toBeTruthy();
     expect(screen.queryByText(/failed/)).toBeNull();
 
-    mockWorktreeDataMap.delete("retry-wt");
+    worktreeDataHolder.map.delete("retry-wt");
   });
 
   it("crashed terminal during retry does not demote prior successes", async () => {
@@ -698,7 +758,7 @@ describe("BulkCreateWorktreeDialog", () => {
     mockTerminals = [{ id: "t-ok", exitCode: 1 }];
 
     // Set up retry for issue 2
-    mockWorktreeDataMap.set("retry-wt-2", {
+    worktreeDataHolder.map.set("retry-wt-2", {
       worktreeId: "retry-wt-2",
       branch: "feature/issue-2-issue-2",
       path: "/worktrees/feature/issue-2-issue-2",
@@ -719,7 +779,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/2 of 2 created/)).toBeTruthy();
     expect(screen.queryByText(/failed/)).toBeNull();
 
-    mockWorktreeDataMap.delete("retry-wt-2");
+    worktreeDataHolder.map.delete("retry-wt-2");
   });
 
   it("mixed healthy and crashed terminals across multiple items", async () => {
@@ -870,7 +930,7 @@ describe("BulkCreateWorktreeDialog", () => {
       onComplete,
       onClose,
     };
-    render(<BulkCreateWorktreeDialog {...props} />);
+    const { rerender } = render(<BulkCreateWorktreeDialog {...props} />);
 
     // First run with recipe
     await act(async () => {
@@ -884,6 +944,11 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-done-button").click();
     });
 
+    // Simulate dialog close/reopen cycle (useLayoutEffect resets on false→true)
+    await act(async () => {
+      rerender(<BulkCreateWorktreeDialog {...props} isOpen={false} />);
+    });
+
     // Second run — crash terminal from first run to prove tracking was reset
     mockTerminals = [
       { id: "t-run1", exitCode: 1 },
@@ -895,6 +960,10 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     mockWorktreeCreate.mockClear();
     setupWorktreeCreateMocks();
+
+    await act(async () => {
+      rerender(<BulkCreateWorktreeDialog {...props} isOpen={true} />);
+    });
 
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
@@ -944,5 +1013,225 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     expect(screen.queryByTestId("bulk-create-done-button")).toBeNull();
+  });
+
+  it("keeps completed items visible after worktreeMap updates during execution", async () => {
+    const resolvers: Array<(value: string) => void> = [];
+    mockWorktreeCreate.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
+
+    const { rerender } = render(<BulkCreateWorktreeDialog {...defaultProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    // Advance to let the first two items start (concurrency = 2)
+    await advanceTimersGradually(400);
+
+    // Resolve the first item
+    await act(async () => {
+      resolvers[0]?.("wt-1");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // Simulate worktreeMap updating with the newly created worktree (issue #1)
+    // Replace the Map reference so useMemo's dependency triggers recomputation
+    const updatedMap = new Map(worktreeDataHolder.map);
+    updatedMap.set("wt-1", {
+      worktreeId: "wt-1",
+      branch: "feature/issue-1",
+      path: "/worktrees/feature/issue-1",
+      isMainWorktree: false,
+      issueNumber: 1,
+    });
+    worktreeDataHolder.map = updatedMap;
+
+    // Trigger re-render to simulate Zustand subscription update
+    await act(async () => {
+      rerender(<BulkCreateWorktreeDialog {...defaultProps} />);
+    });
+
+    // Issue #1 must still be visible in the progress list despite worktreeMap update
+    expect(screen.getByText("Issue 1")).toBeTruthy();
+    expect(screen.getByText("#1")).toBeTruthy();
+
+    // Resolve remaining items and verify final state
+    await advanceTimersGradually(400);
+    await act(async () => {
+      resolvers[1]?.("wt-2");
+      resolvers[2]?.("wt-3");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await advanceTimersGradually(1000);
+
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+    // All three items should be visible
+    expect(screen.getByText("Issue 1")).toBeTruthy();
+    expect(screen.getByText("Issue 2")).toBeTruthy();
+    expect(screen.getByText("Issue 3")).toBeTruthy();
+
+    // Restore the original map without the test entry
+    const cleanMap = new Map(worktreeDataHolder.map);
+    cleanMap.delete("wt-1");
+    worktreeDataHolder.map = cleanMap;
+  });
+
+  it("does not flash empty state when Done is clicked", async () => {
+    const onComplete = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <BulkCreateWorktreeDialog {...defaultProps} onComplete={onComplete} onClose={onClose} />
+    );
+
+    // Complete a full batch run
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+
+    // Click Done — state should NOT reset while dialog is still mounted
+    await act(async () => {
+      screen.getByTestId("bulk-create-done-button").click();
+    });
+
+    // The completion text should still be visible (no RESET before close)
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+    expect(onComplete).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("BulkCreateWorktreeDialog — PR mode", () => {
+  const prProps = {
+    isOpen: true,
+    onClose: vi.fn(),
+    mode: "pr" as const,
+    selectedIssues: [] as GitHubIssue[],
+    selectedPRs: [makePR(10), makePR(20), makePR(30)],
+    onComplete: vi.fn(),
+  };
+
+  it("renders PR list with branch names in idle state", () => {
+    mockListBranches.mockResolvedValue([
+      { name: "origin/feature/pr-10", current: false, remote: true },
+      { name: "origin/feature/pr-20", current: false, remote: true },
+      { name: "origin/feature/pr-30", current: false, remote: true },
+    ]);
+
+    render(<BulkCreateWorktreeDialog {...prProps} />);
+    expect(screen.getByText("#10")).toBeTruthy();
+    expect(screen.getByText("#20")).toBeTruthy();
+    expect(screen.getByText("#30")).toBeTruthy();
+    expect(screen.getByText("feature/pr-10")).toBeTruthy();
+    expect(screen.getByTestId("bulk-create-confirm-button")).toBeTruthy();
+  });
+
+  it("creates worktrees from remote PR branches", async () => {
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: true, remote: false },
+      { name: "origin/feature/pr-10", current: false, remote: true },
+      { name: "origin/feature/pr-20", current: false, remote: true },
+      { name: "origin/feature/pr-30", current: false, remote: true },
+    ]);
+
+    render(<BulkCreateWorktreeDialog {...prProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    await advanceTimersGradually(5000);
+
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+
+    // Should have called create with fromRemote: true
+    const createCalls = mockWorktreeCreate.mock.calls;
+    expect(createCalls.length).toBe(3);
+    expect(createCalls[0][0].fromRemote).toBe(true);
+    expect(createCalls[0][0].baseBranch).toBe("origin/feature/pr-10");
+    expect(createCalls[0][0].newBranch).toBe("feature/pr-10");
+  });
+
+  it("includes fork PRs in plan", () => {
+    const forkPR: GitHubPR = {
+      ...makePR(99),
+      isFork: true,
+    };
+    const props = { ...prProps, selectedPRs: [forkPR] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    expect(screen.queryByText("Fork PR")).toBeNull();
+    expect(screen.getByTestId("bulk-create-confirm-button").hasAttribute("disabled")).toBe(false);
+  });
+
+  it("skips merged PRs with reason", () => {
+    const mergedPR: GitHubPR = {
+      ...makePR(99),
+      state: "MERGED",
+    };
+    const props = { ...prProps, selectedPRs: [mergedPR] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    expect(screen.getByText("Merged")).toBeTruthy();
+  });
+
+  it("skips PRs without headRefName", () => {
+    const noRefPR: GitHubPR = {
+      ...makePR(99),
+      headRefName: undefined,
+    };
+    const props = { ...prProps, selectedPRs: [noRefPR] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    expect(screen.getByText("No branch info")).toBeTruthy();
+  });
+
+  it("does not show assign-to-self toggle in PR mode", () => {
+    render(<BulkCreateWorktreeDialog {...prProps} />);
+    expect(screen.queryByText("Assign to me")).toBeNull();
+  });
+
+  it("falls back to local branch when remote not found", async () => {
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: true, remote: false },
+      { name: "feature/pr-10", current: false, remote: false },
+    ]);
+
+    const props = { ...prProps, selectedPRs: [makePR(10)] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    await advanceTimersGradually(5000);
+
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    const createCalls = mockWorktreeCreate.mock.calls;
+    expect(createCalls[0][0].useExistingBranch).toBe(true);
+    expect(createCalls[0][0].fromRemote).toBe(false);
+  });
+
+  it("fails when branch cannot be fetched from remote", async () => {
+    mockListBranches.mockResolvedValue([{ name: "main", current: true, remote: false }]);
+    mockFetchPRBranch.mockRejectedValue(new Error("fatal: couldn't find remote ref pull/10/head"));
+
+    const props = { ...prProps, selectedPRs: [makePR(10)] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    await advanceTimersGradually(5000);
+
+    expect(screen.getByText(/couldn't find remote ref/)).toBeTruthy();
+    expect(screen.getByText(/1 failed/)).toBeTruthy();
   });
 });

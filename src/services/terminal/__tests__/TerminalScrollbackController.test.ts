@@ -122,7 +122,7 @@ describe("TerminalScrollbackController", () => {
       managed.terminal.options.scrollback = 500;
 
       restoreScrollback(managed);
-      expect(managed.terminal.options.scrollback).toBe(1000);
+      expect(managed.terminal.options.scrollback).toBe(1500);
     });
 
     it("uses project-level scrollback override for non-agent terminals", () => {
@@ -131,7 +131,7 @@ describe("TerminalScrollbackController", () => {
       managed.terminal.options.scrollback = 100;
 
       restoreScrollback(managed);
-      expect(managed.terminal.options.scrollback).toBe(400);
+      expect(managed.terminal.options.scrollback).toBe(600);
     });
 
     it("ignores project override for agent terminals", () => {

@@ -21,8 +21,10 @@ export interface ProjectSettingsSnapshot {
   commandOverrides: CommandOverride[];
   copyTreeSettings: CopyTreeSettings;
   branchPrefixMode: "none" | "username" | "custom";
+  color: string | undefined;
   branchPrefixCustom: string;
 
+  githubRemote: string | undefined;
   worktreePathPattern: string;
   terminalSettings: ProjectTerminalSettings | undefined;
   notificationOverrides: Partial<NotificationSettings> | undefined;
@@ -58,9 +60,11 @@ export function createProjectSettingsSnapshot(
   branchPrefixMode: "none" | "username" | "custom" = "none",
   branchPrefixCustom: string = "",
   devServerLoadTimeout: number | undefined = undefined,
+  githubRemote: string | undefined = undefined,
   worktreePathPattern: string = "",
   terminalSettings: ProjectTerminalSettings | undefined = undefined,
-  notificationOverrides: Partial<NotificationSettings> | undefined = undefined
+  notificationOverrides: Partial<NotificationSettings> | undefined = undefined,
+  color: string | undefined = undefined
 ): ProjectSettingsSnapshot {
   const envVarRecord: Record<string, string> = {};
   const seenKeys = new Map<string, number>();
@@ -135,8 +139,10 @@ export function createProjectSettingsSnapshot(
     defaultWorktreeRecipeId,
     commandOverrides: sortedCommandOverrides,
     copyTreeSettings: normalizedCopyTreeSettings,
+    color: color?.trim() || undefined,
     branchPrefixMode: normalizedMode,
     branchPrefixCustom: normalizedMode === "custom" ? trimmedCustom : "",
+    githubRemote,
     worktreePathPattern: worktreePathPattern.trim(),
     terminalSettings: normalizeTerminalSettings(terminalSettings),
     notificationOverrides: normalizeNotificationOverrides(notificationOverrides),
@@ -165,7 +171,12 @@ function normalizeNotificationOverrides(
     result.completedEnabled = overrides.completedEnabled;
   if (overrides.waitingEnabled !== undefined) result.waitingEnabled = overrides.waitingEnabled;
   if (overrides.soundEnabled !== undefined) result.soundEnabled = overrides.soundEnabled;
-  if (overrides.soundFile !== undefined) result.soundFile = overrides.soundFile;
+  if (overrides.completedSoundFile !== undefined)
+    result.completedSoundFile = overrides.completedSoundFile;
+  if (overrides.waitingSoundFile !== undefined)
+    result.waitingSoundFile = overrides.waitingSoundFile;
+  if (overrides.escalationSoundFile !== undefined)
+    result.escalationSoundFile = overrides.escalationSoundFile;
   if (overrides.waitingEscalationEnabled !== undefined)
     result.waitingEscalationEnabled = overrides.waitingEscalationEnabled;
   if (overrides.waitingEscalationDelayMs !== undefined)
@@ -186,6 +197,7 @@ function areStringArraysEqual(a: string[] | undefined, b: string[] | undefined):
 export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettingsSnapshot): boolean {
   if (a.name !== b.name) return false;
   if (a.emoji !== b.emoji) return false;
+  if (a.color !== b.color) return false;
   if (a.devServerCommand !== b.devServerCommand) return false;
   if (a.devServerLoadTimeout !== b.devServerLoadTimeout) return false;
   if (a.projectIconSvg !== b.projectIconSvg) return false;
@@ -252,6 +264,7 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
   if (a.branchPrefixMode !== b.branchPrefixMode) return false;
   if (a.branchPrefixCustom !== b.branchPrefixCustom) return false;
 
+  if (a.githubRemote !== b.githubRemote) return false;
   if (a.worktreePathPattern !== b.worktreePathPattern) return false;
 
   // Terminal settings comparison
@@ -279,7 +292,9 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
     if (aNotif.completedEnabled !== bNotif.completedEnabled) return false;
     if (aNotif.waitingEnabled !== bNotif.waitingEnabled) return false;
     if (aNotif.soundEnabled !== bNotif.soundEnabled) return false;
-    if (aNotif.soundFile !== bNotif.soundFile) return false;
+    if (aNotif.completedSoundFile !== bNotif.completedSoundFile) return false;
+    if (aNotif.waitingSoundFile !== bNotif.waitingSoundFile) return false;
+    if (aNotif.escalationSoundFile !== bNotif.escalationSoundFile) return false;
     if (aNotif.waitingEscalationEnabled !== bNotif.waitingEscalationEnabled) return false;
     if (aNotif.waitingEscalationDelayMs !== bNotif.waitingEscalationDelayMs) return false;
   }

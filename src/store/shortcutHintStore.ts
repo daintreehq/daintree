@@ -1,6 +1,7 @@
 import { createStore } from "zustand/vanilla";
 
-const MAX_HINT_COUNT = 3;
+/** Invocation counts at which a shortcut hint is shown. Encodes the lifetime cap (set size). */
+export const HINT_MILESTONES = new Set([1, 2, 3, 10, 20, 30, 50, 75, 100, 150]);
 const POINTER_STALE_MS = 2000;
 
 export interface ShortcutHintState {
@@ -38,7 +39,7 @@ export const shortcutHintStore = createStore<ShortcutHintStore>((set, get) => ({
     const { pointer, counts } = get();
     if (!pointer) return false;
     if (Date.now() - pointer.ts > POINTER_STALE_MS) return false;
-    if ((counts[actionId] ?? 0) >= MAX_HINT_COUNT) return false;
+    if (!HINT_MILESTONES.has(counts[actionId] ?? 0)) return false;
 
     set({ activeHint: { actionId, displayCombo, x: pointer.x, y: pointer.y } });
     return true;

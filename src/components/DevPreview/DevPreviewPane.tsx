@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { AlertTriangle, RotateCw, ExternalLink, Settings, WandSparkles } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { Button } from "@/components/ui/button";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { BrowserHistory } from "@shared/types/browser";
@@ -37,6 +38,125 @@ export function _resetScrollCacheForTests(): void {
   scrollCache.clear();
 }
 
+import { looksLikeOAuthUrl } from "@shared/utils/urlUtils";
+
+type SessionStorageEntry = [string, string];
+
+async function captureWebviewSessionStorage(
+  webviewElement: Electron.WebviewTag | null
+): Promise<SessionStorageEntry[]> {
+  if (!webviewElement) return [];
+
+  try {
+    const snapshot = await webviewElement.executeJavaScript(
+      `(() => {
+        try {
+          return Object.entries(sessionStorage).filter(
+            (entry) =>
+              Array.isArray(entry) &&
+              entry.length === 2 &&
+              typeof entry[0] === "string" &&
+              typeof entry[1] === "string"
+          );
+        } catch {
+          return [];
+        }
+      })()`
+    );
+
+    if (!Array.isArray(snapshot)) return [];
+    return snapshot.filter(
+      (entry): entry is SessionStorageEntry =>
+        Array.isArray(entry) &&
+        entry.length === 2 &&
+        typeof entry[0] === "string" &&
+        typeof entry[1] === "string"
+    );
+  } catch {
+    return [];
+  }
+}
+
+function BlockedNavBanner({
+  blockedNav,
+  panelId,
+  webviewElement,
+  onDismiss,
+}: {
+  blockedNav: {
+    url: string;
+    canOpenExternal: boolean;
+    sessionStorageSnapshot: SessionStorageEntry[];
+  };
+  panelId: string;
+  webviewElement: Electron.WebviewTag | null;
+  onDismiss: () => void;
+}) {
+  const isOAuth = looksLikeOAuthUrl(blockedNav.url);
+  const hostname = (() => {
+    try {
+      return new URL(blockedNav.url).hostname;
+    } catch {
+      return blockedNav.url;
+    }
+  })();
+
+  return (
+    <div className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-canopy-text/80">
+      <ExternalLink className="h-3.5 w-3.5 shrink-0 text-status-warning" />
+      <span className="truncate flex-1">Navigation to external site blocked: {hostname}</span>
+      {isOAuth ? (
+        <button
+          type="button"
+          onClick={async () => {
+            const url = blockedNav.url;
+            onDismiss();
+            // Get webContentsId for CDP interception of the token exchange
+            let wcId: number | undefined;
+            try {
+              wcId = (
+                webviewElement as unknown as { getWebContentsId(): number }
+              )?.getWebContentsId();
+            } catch {
+              /* webview not ready */
+            }
+            if (wcId != null) {
+              await window.electron.webview.startOAuthLoopback(
+                url,
+                panelId,
+                wcId,
+                blockedNav.sessionStorageSnapshot
+              );
+            }
+          }}
+          className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-canopy-text/90 transition-colors"
+        >
+          Sign in via Browser
+        </button>
+      ) : blockedNav.canOpenExternal ? (
+        <button
+          type="button"
+          onClick={() => {
+            void window.electron.system.openExternal(blockedNav.url);
+            onDismiss();
+          }}
+          className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-canopy-text/90 transition-colors"
+        >
+          Open in External Browser
+        </button>
+      ) : null}
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="shrink-0 text-canopy-text/40 hover:text-canopy-text/70 transition-colors"
+        aria-label="Dismiss"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
 export interface DevPreviewPaneProps extends BasePanelProps {
   cwd: string;
   worktreeId?: string;
@@ -67,16 +187,16 @@ export function DevPreviewPane({
 }: DevPreviewPaneProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
   const [webviewElement, setWebviewElement] = useState<Electron.WebviewTag | null>(null);
-  const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
-  const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
-  const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
-  const setDevPreviewConsoleOpen = useTerminalStore((state) => state.setDevPreviewConsoleOpen);
+  const setBrowserUrl = usePanelStore((state) => state.setBrowserUrl);
+  const setBrowserHistory = usePanelStore((state) => state.setBrowserHistory);
+  const setBrowserZoom = usePanelStore((state) => state.setBrowserZoom);
+  const setDevPreviewConsoleOpen = usePanelStore((state) => state.setDevPreviewConsoleOpen);
   const currentProjectId = useProjectStore((state) => state.currentProject?.id);
   const projectSettings = useProjectSettingsStore((state) => state.settings);
   const projectEnv = projectSettings?.environmentVariables;
   const isDragging = useIsDragging();
 
-  const terminal = useTerminalStore((state) => state.getTerminal(id));
+  const terminal = usePanelStore((state) => state.getTerminal(id));
   const devCommand =
     terminal?.devCommand?.trim() || projectSettings?.devServerCommand?.trim() || "";
 
@@ -106,6 +226,12 @@ export function DevPreviewPane({
   });
 
   const [isLoading, setIsLoading] = useState(false);
+  const [blockedNav, setBlockedNav] = useState<{
+    url: string;
+    canOpenExternal: boolean;
+    sessionStorageSnapshot: SessionStorageEntry[];
+  } | null>(null);
+  const blockedNavTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastSetUrlRef = useRef<string>("");
   const [isWebviewReady, setIsWebviewReady] = useState(false);
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
@@ -113,6 +239,7 @@ export function DevPreviewPane({
   const failLoadRetryRef = useRef<NodeJS.Timeout | null>(null);
   const failLoadRetryCountRef = useRef<number>(0);
   const isConsoleOpen = terminal?.devPreviewConsoleOpen ?? false;
+  const [webviewLoadError, setWebviewLoadError] = useState<string | null>(null);
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
   const { saveSettings } = useProjectSettings();
   const allDetectedRunners = useProjectSettingsStore((state) => state.allDetectedRunners);
@@ -127,7 +254,21 @@ export function DevPreviewPane({
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
-  const isUnconfigured = Boolean(currentProjectId) && !isSettingsLoading && !devCommand;
+  const isUnconfigured =
+    Boolean(currentProjectId) && !isSettingsLoading && projectSettings !== null && !devCommand;
+
+  useEffect(() => {
+    if (!isUnconfigured) return;
+    setHistory(initializeBrowserHistory(undefined, ""));
+    setBrowserUrl(id, "");
+    lastSetUrlRef.current = "";
+    setWebviewLoadError(null);
+    if (failLoadRetryRef.current) {
+      clearTimeout(failLoadRetryRef.current);
+      failLoadRetryRef.current = null;
+    }
+    failLoadRetryCountRef.current = 0;
+  }, [isUnconfigured, id, setBrowserUrl]);
 
   const { isEvicted, evictingRef } = useWebviewEviction(id, location);
 
@@ -166,6 +307,7 @@ export function DevPreviewPane({
   );
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
     };
@@ -199,17 +341,19 @@ export function DevPreviewPane({
   }, [terminalId]);
 
   useEffect(() => {
+    if (isUnconfigured) return;
     if (url && shouldAdoptDetectedDevServerUrl(url, currentUrl)) {
       setHistory((prev) => pushBrowserHistory(prev, url));
       lastSetUrlRef.current = url;
     }
-  }, [url, currentUrl]);
+  }, [url, currentUrl, isUnconfigured]);
 
   useEffect(() => {
+    if (isUnconfigured) return;
     if (currentUrl) {
       setBrowserUrl(id, currentUrl);
     }
-  }, [id, currentUrl, setBrowserUrl]);
+  }, [id, currentUrl, setBrowserUrl, isUnconfigured]);
 
   useEffect(() => {
     setBrowserHistory(id, history);
@@ -271,6 +415,7 @@ export function DevPreviewPane({
     lastSetUrlRef.current = "";
     setIsLoading(false);
     setIsWebviewReady(false);
+    setWebviewLoadError(null);
     void restart();
   }, [id, restart, setBrowserUrl]);
 
@@ -343,6 +488,7 @@ export function DevPreviewPane({
 
     const handleDidFinishLoad = () => {
       setIsLoading(false);
+      setWebviewLoadError(null);
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
@@ -371,7 +517,11 @@ export function DevPreviewPane({
       ) {
         const MAX_RETRIES = 5;
         const retryCount = failLoadRetryCountRef.current;
-        if (retryCount < MAX_RETRIES) {
+        if (retryCount >= MAX_RETRIES) {
+          setWebviewLoadError(
+            "Unable to connect to dev server. The server may be on a different port."
+          );
+        } else if (retryCount < MAX_RETRIES) {
           failLoadRetryCountRef.current += 1;
           // Capture URL at fail-time so the retry loads the same page even if
           // the webview navigates elsewhere during the backoff window.
@@ -399,6 +549,8 @@ export function DevPreviewPane({
       const navigatedUrl = e.url;
       // Suppress about:blank navigations triggered by eviction
       if (navigatedUrl === "about:blank" && evictingRef.current) return;
+      setBlockedNav(null);
+      setWebviewLoadError(null);
       // A confirmed new main-frame navigation means we're past any previous failure;
       // reset the retry budget so stale exhaustion doesn't block future attempts.
       failLoadRetryCountRef.current = 0;
@@ -414,6 +566,7 @@ export function DevPreviewPane({
 
     const handleDidNavigateInPage = (e: Electron.DidNavigateInPageEvent) => {
       if (!e.isMainFrame) return;
+      setBlockedNav(null);
       const navigatedUrl = e.url;
       if (navigatedUrl !== lastSetUrlRef.current) {
         setHistory((prev) => pushBrowserHistory(prev, navigatedUrl));
@@ -565,6 +718,43 @@ export function DevPreviewPane({
     isFocused
   );
 
+  // Listen for blocked navigation events from main process
+  useEffect(() => {
+    const cleanup = window.electron.webview.onNavigationBlocked((data) => {
+      if (data.panelId !== id) return;
+      const sessionStorageSnapshotPromise = looksLikeOAuthUrl(data.url)
+        ? captureWebviewSessionStorage(webviewElement)
+        : Promise.resolve<SessionStorageEntry[]>([]);
+      if (blockedNavTimerRef.current) {
+        clearTimeout(blockedNavTimerRef.current);
+      }
+      blockedNavTimerRef.current = setTimeout(() => {
+        void sessionStorageSnapshotPromise.then((sessionStorageSnapshot) => {
+          setBlockedNav({
+            url: data.url,
+            canOpenExternal: data.canOpenExternal,
+            sessionStorageSnapshot,
+          });
+          blockedNavTimerRef.current = null;
+        });
+      }, 150);
+    });
+    return () => {
+      cleanup();
+      if (blockedNavTimerRef.current) {
+        clearTimeout(blockedNavTimerRef.current);
+        blockedNavTimerRef.current = null;
+      }
+    };
+  }, [id, webviewElement]);
+
+  // Auto-dismiss blocked navigation notification after 10 seconds
+  useEffect(() => {
+    if (!blockedNav) return;
+    const timer = setTimeout(() => setBlockedNav(null), 10_000);
+    return () => clearTimeout(timer);
+  }, [blockedNav]);
+
   return (
     <ContentPanel
       id={id}
@@ -601,7 +791,7 @@ export function DevPreviewPane({
         <div className="relative flex-1 min-h-0 bg-surface-canvas">
           {isRestarting || status === "starting" || status === "installing" ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg">
-              <div className="w-12 h-12 border-2 border-status-info border-t-transparent rounded-full animate-spin mb-4" />
+              <Spinner size="2xl" className="text-status-info mb-4" />
               <p className="text-sm text-canopy-text/60">
                 {isRestarting ? "Restarting" : status === "installing" ? "Installing" : "Starting"}
                 ...
@@ -701,6 +891,34 @@ export function DevPreviewPane({
             </div>
           ) : (
             <>
+              {webviewLoadError && (
+                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
+                  <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
+                  <h3 className="text-sm font-medium text-canopy-text/70 mb-1">
+                    Dev Server Unreachable
+                  </h3>
+                  <p className="text-xs text-canopy-text/50 text-center mb-3 max-w-md">
+                    {webviewLoadError}
+                  </p>
+                  <Button
+                    onClick={handleHardRestart}
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 px-2.5 py-1.5 group text-canopy-accent/70 hover:text-canopy-accent"
+                  >
+                    <RotateCw className="h-3.5 w-3.5" />
+                    <span className="text-xs">Hard Restart</span>
+                  </Button>
+                </div>
+              )}
+              {blockedNav && (
+                <BlockedNavBanner
+                  blockedNav={blockedNav}
+                  panelId={id}
+                  webviewElement={webviewElement}
+                  onDismiss={() => setBlockedNav(null)}
+                />
+              )}
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
               {findInPage.isOpen && <FindBar find={findInPage} />}
               <webview

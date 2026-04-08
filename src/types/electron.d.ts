@@ -24,6 +24,7 @@ declare global {
     __CANOPY_E2E_IPC__?: {
       getRendererListenerCount: (channel: string) => number;
     };
+    __CANOPY_E2E_MODE__?: boolean;
   }
 }
 

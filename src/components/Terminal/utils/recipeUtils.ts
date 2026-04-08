@@ -1,22 +1,6 @@
 import type { RecipeTerminal } from "@/types";
 import { getAgentConfig } from "@/config/agents";
 
-export function getRecipeGridClasses(recipeCount: number): string {
-  if (recipeCount === 1) {
-    return "grid grid-cols-1 max-w-md mx-auto gap-3";
-  }
-  if (recipeCount === 2) {
-    return "grid grid-cols-1 sm:grid-cols-2 gap-3";
-  }
-  if (recipeCount === 3) {
-    return "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3";
-  }
-  if (recipeCount === 4) {
-    return "grid grid-cols-1 sm:grid-cols-2 gap-3";
-  }
-  return "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3";
-}
-
 export function getRecipeTerminalSummary(terminals: RecipeTerminal[]): string {
   const MAX_DISPLAY = 4;
 

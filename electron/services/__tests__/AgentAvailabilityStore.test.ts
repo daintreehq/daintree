@@ -440,6 +440,69 @@ describe("AgentAvailabilityStore", () => {
     });
   });
 
+  describe("help terminal tracking", () => {
+    it("isHelpTerminal returns false for unknown terminal", () => {
+      expect(store.isHelpTerminal("unknown-term")).toBe(false);
+    });
+
+    it("isHelpTerminal returns true after markAsHelp", () => {
+      store.markAsHelp("term-help");
+      expect(store.isHelpTerminal("term-help")).toBe(true);
+    });
+
+    it("isHelpTerminal returns false after unmarkAsHelp", () => {
+      store.markAsHelp("term-help");
+      store.unmarkAsHelp("term-help");
+      expect(store.isHelpTerminal("term-help")).toBe(false);
+    });
+
+    it("excludes help agents from getAgentsByAvailability", () => {
+      store.registerAgent("agent-help", "idle");
+      events.emit("agent:spawned", {
+        agentId: "agent-help",
+        terminalId: "term-help",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+      store.markAsHelp("term-help");
+
+      expect(
+        store.getAgentsByAvailability().find((a) => a.agentId === "agent-help")
+      ).toBeUndefined();
+    });
+
+    it("markAsHelp before agent:spawned still marks agent when spawn arrives", () => {
+      store.registerAgent("agent-help", "idle");
+      store.markAsHelp("term-help");
+
+      events.emit("agent:spawned", {
+        agentId: "agent-help",
+        terminalId: "term-help",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      expect(store.isHelpTerminal("term-help")).toBe(true);
+      expect(
+        store.getAgentsByAvailability().find((a) => a.agentId === "agent-help")
+      ).toBeUndefined();
+    });
+
+    it("unregisterAgent clears help membership", () => {
+      store.registerAgent("agent-help", "idle");
+      events.emit("agent:spawned", {
+        agentId: "agent-help",
+        terminalId: "term-help",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+      store.markAsHelp("term-help");
+      store.unregisterAgent("agent-help");
+
+      expect(store.isHelpTerminal("term-help")).toBe(false);
+    });
+  });
+
   describe("dispose", () => {
     it("stops listening to events after dispose", () => {
       store.registerAgent("agent-1", "idle");

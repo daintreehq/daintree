@@ -24,7 +24,7 @@ export function SettingsSection({
   const headingId = useId();
 
   return (
-    <div className="space-y-6" id={id} role="group" aria-labelledby={headingId}>
+    <div className="flex flex-col gap-3" id={id} role="group" aria-labelledby={headingId}>
       <div>
         <h4
           id={headingId}
@@ -38,7 +38,7 @@ export function SettingsSection({
             </span>
           )}
         </h4>
-        <p className="text-xs text-canopy-text/50">{description}</p>
+        <p className="text-xs text-canopy-text/50 select-text">{description}</p>
       </div>
       {children}
     </div>

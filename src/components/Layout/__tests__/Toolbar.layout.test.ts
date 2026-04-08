@@ -94,7 +94,7 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
 
     it("uses renderLeftButtons for the left button group", () => {
-      expect(source).toContain("renderLeftButtons(toolbarLayout.leftButtons");
+      expect(source).toContain("renderLeftButtons(effectiveLeftButtons");
     });
 
     it("divider element has aria-hidden for accessibility", () => {

@@ -71,9 +71,9 @@ describe("createActionDefinitions", () => {
     const actionsFileUrl = new URL("../../../../shared/types/actions.ts", import.meta.url);
     const contents = await fs.readFile(actionsFileUrl, "utf8");
 
-    const start = contents.indexOf("export type ActionId");
+    const start = contents.indexOf("export type BuiltInActionId");
     expect(start).toBeGreaterThan(-1);
-    const end = contents.indexOf("export interface ActionContext", start);
+    const end = contents.indexOf("export type ActionId = BuiltInActionId", start);
     expect(end).toBeGreaterThan(start);
     const section = contents.slice(start, end);
 

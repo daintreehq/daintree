@@ -162,7 +162,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-online-results-${{ matrix.name }}-${{ github.sha }}
           path: |
@@ -180,7 +180,7 @@ jobs:
 
     steps:
       - name: Create or update failure issue
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const title = `[Nightly E2E] Online tests failed on ${new Date().toISOString().split('T')[0]}`;

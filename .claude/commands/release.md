@@ -72,6 +72,7 @@ Run ALL of these checks. If any fail, stop and report the problem.
 - [ ] Working tree is clean (`git status --porcelain` returns empty)
 - [ ] On the correct starting branch (see branching logic below)
 - [ ] `npm run check` passes (typecheck + lint + format) — run this and if it fails, stop
+- [ ] Unit tests pass (`npx vitest run`) — run this and if any fail, stop and fix before proceeding
 - [ ] No open PRs targeting `main` that should be merged first — check with `gh pr list --base main --state open`
 - [ ] Remote is reachable (`git fetch origin`)
 - [ ] E2E core tests pass locally — build the app (`npm run build`) then run the core E2E suite (`npx playwright test e2e/core/`). This catches render crashes and settings regressions that typecheck cannot detect. If any tests fail, stop and fix before proceeding.
@@ -85,6 +86,7 @@ After running all checks, present the results to the user using `AskUserQuestion
 > - Working tree: ✅ Clean
 > - Branch: ✅ On `develop`, up to date with origin
 > - Code checks: ✅ typecheck + lint + format passed
+> - Unit tests: ✅ All passed
 > - Open PRs to main: ✅ None
 > - Remote: ✅ Reachable
 >

@@ -38,8 +38,8 @@ describe("Appearance tab search index subtab metadata", () => {
     (e) => e.tab === "terminalAppearance" && !e.id.startsWith("tab-nav-")
   );
 
-  it("has exactly 5 appearance field entries", () => {
-    expect(appearanceFieldEntries).toHaveLength(5);
+  it("has exactly 6 appearance field entries", () => {
+    expect(appearanceFieldEntries).toHaveLength(6);
   });
 
   it("all Appearance field entries have valid subtab metadata", () => {
@@ -58,7 +58,7 @@ describe("Appearance tab search index subtab metadata", () => {
   });
 
   it("app entries map to app subtab", () => {
-    const appIds = ["appearance-theme", "appearance-color-vision"];
+    const appIds = ["appearance-theme", "appearance-color-vision", "appearance-dock-density"];
     for (const id of appIds) {
       const entry = SETTINGS_SEARCH_INDEX.find((e) => e.id === id);
       expect(entry?.subtab).toBe("app");
@@ -67,12 +67,8 @@ describe("Appearance tab search index subtab metadata", () => {
   });
 
   it("terminal entries map to terminal subtab", () => {
-    const terminalIds = [
-      "appearance-color-scheme",
-      "appearance-font-size",
-      "appearance-font-family",
-    ];
-    for (const id of terminalIds) {
+    const panelIds = ["appearance-color-scheme", "appearance-font-size", "appearance-font-family"];
+    for (const id of panelIds) {
       const entry = SETTINGS_SEARCH_INDEX.find((e) => e.id === id);
       expect(entry?.subtab).toBe("terminal");
       expect(entry?.subtabLabel).toBe("Terminal");

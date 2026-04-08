@@ -12,7 +12,12 @@ test.describe.serial("Core: Settings Advanced", () => {
   test.beforeAll(async () => {
     ctx = await launchApp();
     const fixtureDir = createFixtureRepo({ name: "settings-advanced" });
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Settings Advanced Test");
+    ctx.window = await openAndOnboardProject(
+      ctx.app,
+      ctx.window,
+      fixtureDir,
+      "Settings Advanced Test"
+    );
   });
 
   test.afterAll(async () => {

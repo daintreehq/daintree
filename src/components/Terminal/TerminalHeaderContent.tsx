@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Pause, Lock } from "lucide-react";
 import type { TerminalType, AgentState, PanelKind, AgentStateChangeTrigger } from "@/types";
 import { cn } from "@/lib/utils";
@@ -6,13 +6,16 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import {
   getEffectiveStateIcon,
   getEffectiveStateColor,
+  getEffectiveStateLabel,
 } from "@/components/Worktree/terminalStateConfig";
 import type { ActivityState } from "./TerminalPane";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
+import { formatTokenCount } from "@/utils/formatTokenCount";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
+import { useErrorStore } from "@/store/errorStore";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
@@ -87,9 +90,11 @@ function TerminalHeaderContentComponent({
     stateChangeTrigger,
     stateChangeConfidence,
     waitingReason,
-  } = useTerminalStore(
+    sessionCost,
+    sessionTokens,
+  } = usePanelStore(
     useShallow((state) => {
-      const t = state.terminals.find((t) => t.id === id);
+      const t = state.panelsById[id];
       return {
         isInputLocked: t?.isInputLocked ?? false,
         startedAt: t?.startedAt,
@@ -97,9 +102,30 @@ function TerminalHeaderContentComponent({
         stateChangeTrigger: t?.stateChangeTrigger,
         stateChangeConfidence: t?.stateChangeConfidence,
         waitingReason: t?.waitingReason,
+        sessionCost: t?.sessionCost,
+        sessionTokens: t?.sessionTokens,
       };
     })
   );
+
+  const errorCount = useErrorStore(
+    useCallback(
+      (s) => s.errors.filter((e) => e.context?.terminalId === id && !e.dismissed).length,
+      [id]
+    )
+  );
+
+  const [tick, setTick] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setTick(Date.now()), 30_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const showStateDuration =
+    (agentState === "working" || agentState === "waiting" || agentState === "directing") &&
+    lastStateChange != null &&
+    lastStateChange > 0 &&
+    tick - lastStateChange > 10_000;
 
   // Show command pill only for plain terminals (not agent terminals)
   // Use kind to distinguish - agent panels have kind="agent"
@@ -107,12 +133,19 @@ function TerminalHeaderContentComponent({
   const showCommandPill = isPlainTerminal && agentState === "running" && !!lastCommand;
 
   const renderAgentStateChip = () => {
-    if (!agentState || agentState === "idle" || agentState === "completed") {
+    if (!agentState || agentState === "idle") {
+      return null;
+    }
+
+    // Show completed/exited chip only when there's a cost to display
+    if ((agentState === "completed" || agentState === "exited") && sessionCost == null) {
       return null;
     }
 
     const StateIcon = getEffectiveStateIcon(agentState, waitingReason);
     if (!StateIcon) return null;
+
+    const effectiveColor = getEffectiveStateColor(agentState, waitingReason);
 
     const chipStyle =
       agentState === "working"
@@ -121,32 +154,58 @@ function TerminalHeaderContentComponent({
           ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
           : agentState === "running"
             ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-status-info/40"
-            : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
+            : agentState === "completed"
+              ? "bg-[color-mix(in_oklab,var(--color-status-success)_15%,transparent)] border-status-success/40"
+              : agentState === "exited"
+                ? "bg-overlay-soft border-divider"
+                : agentState === "waiting" && waitingReason === "prompt"
+                  ? "bg-[color-mix(in_oklab,var(--color-status-warning)_15%,transparent)] border-status-warning/40"
+                  : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
 
     const headline = activity?.headline?.trim() || `Agent ${agentState}`;
     const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
+    const stateLabel = getEffectiveStateLabel(agentState, waitingReason);
 
     return (
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
-            <div
-              className={cn(
-                "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
-                chipStyle,
-                getEffectiveStateColor(agentState, waitingReason)
-              )}
-              role="status"
-              aria-label={`Agent state: ${agentState}`}
-            >
-              <StateIcon
-                className={cn(
-                  "w-3 h-3",
-                  agentState === "working" && "animate-spin-slow",
-                  "motion-reduce:animate-none"
+            <div className="inline-flex items-center gap-1.5 shrink-0">
+              <div className="relative inline-flex items-center shrink-0">
+                <div
+                  className={cn(
+                    "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
+                    chipStyle,
+                    effectiveColor
+                  )}
+                  role="status"
+                  aria-label={`Agent state: ${stateLabel}`}
+                >
+                  <StateIcon
+                    className={cn(
+                      "w-3 h-3",
+                      agentState === "working" && "animate-spin-slow",
+                      "motion-reduce:animate-none"
+                    )}
+                    aria-hidden="true"
+                  />
+                </div>
+                {errorCount > 0 && (
+                  <span
+                    className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-error"
+                    aria-label={`${errorCount} error${errorCount > 1 ? "s" : ""}`}
+                  />
                 )}
-                aria-hidden="true"
-              />
+              </div>
+              {(agentState === "completed" || agentState === "exited") && sessionCost != null && (
+                <span
+                  className="text-[11px] text-canopy-text/50 font-mono shrink-0"
+                  style={{ fontVariantNumeric: "tabular-nums" }}
+                >
+                  ${sessionCost.toFixed(2)}
+                  {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)}`}
+                </span>
+              )}
             </div>
           </TooltipTrigger>
           <TooltipContent side="bottom" className="max-w-xs">
@@ -159,12 +218,24 @@ function TerminalHeaderContentComponent({
                 <span className="text-status-error tabular-nums">Exit code: {exitCode}</span>
               )}
               <span>
-                State: {agentState}
+                State: {stateLabel}
+                {showStateDuration && <> · {formatElapsedDuration(tick - lastStateChange!)}</>}
                 {stateChangeTrigger && <> · {TRIGGER_LABELS[stateChangeTrigger]}</>}
                 {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
               </span>
               {lastStateChange != null && lastStateChange > 0 && (
                 <span className="text-canopy-text/60">Since: {formatTimeAgo(lastStateChange)}</span>
+              )}
+              {sessionCost != null && (
+                <span className="text-canopy-text/60 tabular-nums">
+                  Cost: ${sessionCost.toFixed(2)}
+                  {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)} tokens`}
+                </span>
+              )}
+              {errorCount > 0 && (
+                <span className="text-status-error">
+                  {errorCount} error{errorCount > 1 ? "s" : ""}
+                </span>
               )}
             </div>
           </TooltipContent>

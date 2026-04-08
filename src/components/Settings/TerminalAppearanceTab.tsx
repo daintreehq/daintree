@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { Palette, Type, CaseSensitive, Eye } from "lucide-react";
+import { Palette, Type, CaseSensitive, Eye, PanelBottom } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTerminalFontStore } from "@/store";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
@@ -10,6 +10,7 @@ import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { ColorSchemePicker } from "./ColorSchemePicker";
 import { AppThemePicker } from "./AppThemePicker";
 import { ColorVisionPicker } from "./ColorVisionPicker";
+import { DockDensityPicker } from "./DockDensityPicker";
 
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 24;
@@ -148,6 +149,14 @@ export function TerminalAppearanceTab({
             >
               <ColorVisionPicker />
             </SettingsSection>
+
+            <SettingsSection
+              icon={PanelBottom}
+              title="Dock Density"
+              description="Control the height and spacing of items in the dock bar."
+            >
+              <DockDensityPicker />
+            </SettingsSection>
           </>
         )}
 
@@ -179,7 +188,7 @@ export function TerminalAppearanceTab({
                     }
                   }}
                   onBlur={handleFontSizeBlur}
-                  className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-24 focus:border-canopy-accent focus:outline-none transition-colors"
+                  className="bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-24 focus:border-canopy-accent focus:outline-none transition-colors"
                   aria-label="Terminal font size"
                   aria-invalid={fontSizeError != null || undefined}
                   aria-describedby={fontSizeError ? fontSizeErrorId : undefined}
@@ -205,7 +214,7 @@ export function TerminalAppearanceTab({
                 value={selectedFontFamilyId}
                 onChange={(e) => handleFontFamilyChange(e.target.value)}
                 className={cn(
-                  "bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+                  "bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
                 )}
                 aria-label="Terminal font family"
               >

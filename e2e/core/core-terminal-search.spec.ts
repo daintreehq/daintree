@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { launchApp, closeApp, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openProject, dismissTelemetryConsent } from "../helpers/project";
 import { waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
@@ -43,6 +43,10 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       await expect(heading).not.toBeVisible({ timeout: T_MEDIUM });
 
       await dismissTelemetryConsent(window);
+
+      // After onboarding, the ProjectViewManager creates a new WebContentsView.
+      // Re-acquire the active page so subsequent tests use the correct view.
+      ctx.window = await getActiveAppWindow(ctx.app);
     });
 
     test("worktree dashboard appears", async () => {

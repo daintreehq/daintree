@@ -163,6 +163,16 @@ export class TerminalResizeController {
       const cellDims = getXtermCellDimensions(managed.terminal);
 
       if (!cellDims || cellDims.width === 0 || cellDims.height === 0) {
+        // Check if fitAddon can produce valid dimensions before mutating state.
+        // When the container is zero-sized (e.g. Ubuntu compositor hasn't committed
+        // layout yet), proposeDimensions() returns undefined and fit() would be a
+        // no-op. Updating lastWidth/lastHeight here would suppress the later
+        // corrective resize via the dedup guard above.
+        const proposal = managed.fitAddon.proposeDimensions?.();
+        if (!proposal || proposal.cols <= 1 || proposal.rows <= 1) {
+          return null;
+        }
+
         managed.fitAddon.fit();
         const cols = managed.terminal.cols;
         const rows = managed.terminal.rows;

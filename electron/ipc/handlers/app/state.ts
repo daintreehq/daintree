@@ -12,6 +12,7 @@ import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.
 import { isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
 import { isGpuDisabledByFlag } from "../../../services/GpuCrashMonitorService.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
+import { inferKind } from "../../../../shared/utils/inferPanelKind.js";
 
 export function registerAppStateHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -45,24 +46,11 @@ export function registerAppStateHandlers(): () => void {
         // Filter out trashed terminals, infer missing kind, and normalize location
         terminalsToUse = validatedTerminals
           .filter((t) => t.location !== "trash")
-          .map((t) => {
-            // Infer kind if missing (defense-in-depth for legacy per-project data)
-            let kind = t.kind;
-            if (!kind) {
-              if (t.browserUrl !== undefined) {
-                kind = "browser";
-              } else if (t.notePath !== undefined || t.noteId !== undefined) {
-                kind = "notes";
-              } else {
-                kind = "terminal";
-              }
-            }
-            return {
-              ...t,
-              kind,
-              location: t.location as "grid" | "dock",
-            };
-          });
+          .map((t) => ({
+            ...t,
+            kind: inferKind(t),
+            location: t.location as "grid" | "dock",
+          }));
         terminalsSource = "per-project";
 
         // Use per-project active worktree if it has been set
@@ -101,27 +89,14 @@ export function registerAppStateHandlers(): () => void {
 
         // Migrate terminals to per-project state with kind inference
         if (terminalsToUse.length > 0) {
-          const migratedTerminals = terminalsToUse.map((t) => {
-            // Infer kind if missing (for backward compatibility)
-            let kind = t.kind;
-            if (!kind) {
-              if (t.browserUrl !== undefined) {
-                kind = "browser";
-              } else if (t.notePath !== undefined || t.noteId !== undefined) {
-                kind = "notes";
-              } else if (t.devCommand !== undefined) {
-                kind = "dev-preview";
-              } else {
-                kind = "terminal";
-              }
-            }
-
-            return {
-              ...t,
-              kind,
-              cwd: t.cwd || currentProject?.path || "",
-            } as import("../../../../shared/types/project.js").TerminalSnapshot;
-          });
+          const migratedTerminals = terminalsToUse.map(
+            (t) =>
+              ({
+                ...t,
+                kind: inferKind(t),
+                cwd: t.cwd || currentProject?.path || "",
+              }) as import("../../../../shared/types/project.js").TerminalSnapshot
+          );
 
           // Normalize legacy focusPanelState (may have logsOpen/eventInspectorOpen instead of diagnosticsOpen)
           const normalizedFocusPanelState = globalAppState.focusPanelState

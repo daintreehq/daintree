@@ -104,6 +104,12 @@ export class ActivityHeadlineGenerator {
           status: "success",
           type: "idle",
         };
+      case "exited":
+        return {
+          headline: "Exited",
+          status: "success",
+          type: "idle",
+        };
       case "idle":
       default:
         return {

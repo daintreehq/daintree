@@ -7,6 +7,7 @@ import type { BrowserWindow } from "electron";
 import type { ProjectState, TerminalSnapshot } from "../types/index.js";
 import type { PtyClient } from "./PtyClient.js";
 import { projectStore } from "./ProjectStore.js";
+import { getAppWebContents } from "../window/webContentsRegistry.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -71,6 +72,7 @@ interface SmokeRendererCheckResult {
 }
 
 async function runSmokeRendererChecks(window: BrowserWindow): Promise<void> {
+  const appWc = getAppWebContents(window);
   const script = `(async () => {
     const root = document.getElementById("root");
     const hasRoot = Boolean(root);
@@ -104,7 +106,7 @@ async function runSmokeRendererChecks(window: BrowserWindow): Promise<void> {
   })()`;
 
   const result = (await withTimeout(
-    window.webContents.executeJavaScript(script, true) as Promise<unknown>,
+    appWc.executeJavaScript(script, true) as Promise<unknown>,
     SMOKE_RENDERER_TIMEOUT_MS,
     "[SMOKE] Renderer + IPC checks timed out"
   )) as SmokeRendererCheckResult;
@@ -251,8 +253,9 @@ async function runSmokeProjectPersistenceChecks(window: BrowserWindow): Promise<
     const projectIdJson = JSON.stringify(project.id);
     const terminalsJson = JSON.stringify([rendererSnapshot]);
 
+    const appWc = getAppWebContents(window);
     const rendererResult = (await withTimeout(
-      window.webContents.executeJavaScript(
+      appWc.executeJavaScript(
         `(async () => {
           const projectId = ${projectIdJson};
           const terminals = ${terminalsJson};
@@ -394,7 +397,10 @@ export async function runSmokeFunctionalChecks(
           throw new Error("renderer became unresponsive");
         }
         const readyState = await withTimeout(
-          mainWindow.webContents.executeJavaScript("document.readyState", true) as Promise<unknown>,
+          getAppWebContents(mainWindow).executeJavaScript(
+            "document.readyState",
+            true
+          ) as Promise<unknown>,
           5_000,
           "[SMOKE] Renderer readiness probe timed out during soak"
         );

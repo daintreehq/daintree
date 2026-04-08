@@ -1,0 +1,136 @@
+name: Pattern Discovery
+
+on:
+  schedule:
+    # https://crontab.guru/#0_3_*_*_1
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      agents:
+        description: "Comma-separated agent IDs to analyze (default: all)"
+        type: string
+        default: "claude,gemini,codex,opencode"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  discover:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: develop
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild node-pty for Node.js
+        run: npx electron-rebuild -f -w node-pty --runtime node --target $(node --version | sed 's/v//')
+
+      - name: Install agent CLIs
+        continue-on-error: true
+        run: |
+          npm install -g @anthropic-ai/claude-code || echo "::warning::Claude CLI install failed"
+          npm install -g @google/gemini-cli || echo "::warning::Gemini CLI install failed"
+          npm install -g @openai/codex || echo "::warning::Codex CLI install failed"
+
+      - name: Run session runner per agent
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          IFS=',' read -ra AGENTS <<< "${{ inputs.agents || 'claude,gemini,codex,opencode' }}"
+          for agent in "${AGENTS[@]}"; do
+            echo "::group::Running session for $agent"
+            npx tsx scripts/pattern-discovery/runner.ts --agent "$agent" --out .tmp/corpus --timeout 90000 || echo "::warning::Session runner failed for $agent"
+            echo "::endgroup::"
+          done
+
+      - name: Run pattern analyzer
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_PATTERN_ANALYSIS }}
+        run: |
+          IFS=',' read -ra AGENTS <<< "${{ inputs.agents || 'claude,gemini,codex,opencode' }}"
+          for agent in "${AGENTS[@]}"; do
+            if ls .tmp/corpus/${agent}_*.jsonl 1>/dev/null 2>&1; then
+              echo "::group::Analyzing $agent"
+              npx tsx scripts/pattern-discovery/analyzer.ts --agent "$agent" --corpus .tmp/corpus --out .tmp/analysis || echo "::warning::Analyzer failed for $agent"
+              echo "::endgroup::"
+            else
+              echo "::notice::No corpus data for $agent, skipping analysis"
+            fi
+          done
+
+      - name: Update registry with discovered patterns
+        run: |
+          CHANGED=false
+          for analysis in .tmp/analysis/*_patterns.json; do
+            [ -f "$analysis" ] || continue
+            echo "::group::Updating registry from $analysis"
+            npx tsx scripts/pattern-discovery/update-registry.ts --analysis "$analysis" --min-accuracy 0.9 || echo "::warning::Registry update failed for $analysis"
+            echo "::endgroup::"
+            CHANGED=true
+          done
+          echo "PATTERNS_CHANGED=$CHANGED" >> "$GITHUB_ENV"
+
+      - name: Validate with tests
+        if: env.PATTERNS_CHANGED == 'true'
+        run: npx vitest run scripts/pattern-discovery/__tests__/corpus-replay.test.ts
+
+      - name: Create PR if patterns changed
+        if: env.PATTERNS_CHANGED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DATE=$(date +%Y%m%d)
+          BRANCH="pattern-discovery/update-${DATE}"
+
+          if git diff --quiet shared/config/agentRegistry.ts; then
+            echo "No changes to agentRegistry.ts, skipping PR"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add shared/config/agentRegistry.ts
+          git commit -m "chore(patterns): auto-update agent detection patterns"
+          git push origin "$BRANCH"
+
+          BODY="## Summary\n\nAutomated weekly pattern discovery run.\n\n"
+          BODY+="## Test plan\n\n- [ ] Corpus replay tests pass\n- [ ] AgentPatternDetector tests pass"
+          gh pr create \
+            --title "chore(patterns): weekly pattern discovery update ($DATE)" \
+            --base develop \
+            --body "$(printf '%b' "$BODY")"
+
+      - name: Upload corpus artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pattern-discovery-corpus
+          path: .tmp/corpus/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload analysis artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pattern-discovery-analysis
+          path: .tmp/analysis/
+          retention-days: 14
+          if-no-files-found: ignore

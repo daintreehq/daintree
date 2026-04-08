@@ -1,9 +1,10 @@
 import { ipcMain, clipboard } from "electron";
+import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import crypto from "crypto";
 import path from "path";
 import { pathToFileURL } from "url";
 import { CHANNELS } from "../channels.js";
-import { sendToRenderer, checkRateLimit } from "../utils.js";
+import { broadcastToRenderer, checkRateLimit, sendToRenderer } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   CopyTreeGeneratePayload,
@@ -146,15 +147,16 @@ async function getCurrentProjectSettings(): Promise<
 }
 
 export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void {
-  const { mainWindow } = deps;
+  // copyTree progress is broadcast to all windows
   const handlers: Array<() => void> = [];
 
   const handleCopyTreeGenerate = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: CopyTreeGeneratePayload
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_GENERATE, 5, 10_000);
     const traceId = crypto.randomUUID();
+    const senderWindow = getWindowForWebContents(event.sender);
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(`[${traceId}] CopyTree generate started for worktree ${requestedWorktreeId}`);
 
@@ -178,7 +180,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
-    const states = await deps.worktreeService.getAllStatesAsync();
+    const states = await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
     const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
     if (!worktree) {
@@ -190,7 +192,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     const onProgress = (progress: CopyTreeProgress) => {
-      sendToRenderer(mainWindow, CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
+      const progressPayload = { ...progress, traceId };
+      if (senderWindow && !senderWindow.isDestroyed()) {
+        sendToRenderer(senderWindow, CHANNELS.COPYTREE_PROGRESS, progressPayload);
+      } else {
+        broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, progressPayload);
+      }
     };
 
     // Merge project settings with runtime options
@@ -203,11 +210,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_GENERATE));
 
   const handleCopyTreeGenerateAndCopyFile = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: CopyTreeGenerateAndCopyFilePayload
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, 5, 10_000);
     const traceId = crypto.randomUUID();
+    const senderWindow = getWindowForWebContents(event.sender);
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(
       `[${traceId}] CopyTree generate-and-copy-file started for worktree ${requestedWorktreeId}`
@@ -236,7 +244,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
-    const states = await deps.worktreeService.getAllStatesAsync();
+    const states = await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
     const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
     if (!worktree) {
@@ -248,7 +256,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     const onProgress = (progress: CopyTreeProgress) => {
-      sendToRenderer(mainWindow, CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
+      const progressPayload = { ...progress, traceId };
+      if (senderWindow && !senderWindow.isDestroyed()) {
+        sendToRenderer(senderWindow, CHANNELS.COPYTREE_PROGRESS, progressPayload);
+      } else {
+        broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, progressPayload);
+      }
     };
 
     // Merge project settings with runtime options
@@ -328,11 +341,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE));
 
   const handleCopyTreeInject = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: CopyTreeInjectPayload
   ): Promise<CopyTreeResult> => {
     checkRateLimit(CHANNELS.COPYTREE_INJECT, 5, 10_000);
     const traceId = crypto.randomUUID();
+    const senderWindow = getWindowForWebContents(event.sender);
     const requestedTerminalId = getStringField(payload, "terminalId") ?? "unknown";
     const requestedWorktreeId = getStringField(payload, "worktreeId") ?? "unknown";
     console.log(
@@ -371,7 +385,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     contextInjectionTracker.beginInjection(validated.terminalId, injectionId);
 
     try {
-      const states = await deps.worktreeService.getAllStatesAsync();
+      const states = await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
       const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
       if (!worktree) {
@@ -391,7 +405,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       }
 
       const onProgress = (progress: CopyTreeProgress) => {
-        sendToRenderer(mainWindow, CHANNELS.COPYTREE_PROGRESS, { ...progress, traceId });
+        const progressPayload = { ...progress, traceId };
+        if (senderWindow && !senderWindow.isDestroyed()) {
+          sendToRenderer(senderWindow, CHANNELS.COPYTREE_PROGRESS, progressPayload);
+        } else {
+          broadcastToRenderer(CHANNELS.COPYTREE_PROGRESS, progressPayload);
+        }
       };
 
       // Merge project settings with runtime options
@@ -521,7 +540,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   handlers.push(() => ipcMain.removeHandler(CHANNELS.COPYTREE_GET_FILE_TREE));
 
   const handleCopyTreeTestConfig = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     payload: import("../../types/index.js").CopyTreeTestConfigPayload
   ): Promise<import("../../types/index.js").CopyTreeTestConfigResult> => {
     checkRateLimit(CHANNELS.COPYTREE_TEST_CONFIG, 5, 10_000);
@@ -555,7 +574,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
-    const states = await deps.worktreeService.getAllStatesAsync();
+    const senderWindowTestConfig = getWindowForWebContents(event.sender);
+    const states = await deps.worktreeService.getAllStatesAsync(senderWindowTestConfig?.id);
     const worktree = states.find((wt) => wt.id === validated.worktreeId);
 
     if (!worktree) {

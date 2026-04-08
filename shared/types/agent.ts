@@ -1,7 +1,12 @@
-import type { BuiltInAgentId } from "../config/agentIds.js";
-
-/** Agent lifecycle state: idle | working | running | waiting | directing | completed */
-export type AgentState = "idle" | "working" | "running" | "waiting" | "directing" | "completed";
+/** Agent lifecycle state: idle | working | running | waiting | directing | completed | exited */
+export type AgentState =
+  | "idle"
+  | "working"
+  | "running"
+  | "waiting"
+  | "directing"
+  | "completed"
+  | "exited";
 
 /** Classification of why an agent is in the "waiting" state */
 export type WaitingReason = "prompt" | "question";
@@ -35,8 +40,6 @@ export interface RunRecord {
 }
 
 export type AgentId = string;
-/** @deprecated Use BuiltInAgentId from shared/config/agentIds.ts instead */
-export type LegacyAgentType = BuiltInAgentId;
 
 /** Valid triggers for agent state changes */
 export type AgentStateChangeTrigger =

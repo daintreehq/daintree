@@ -1,6 +1,6 @@
 import Fuse, { type IFuseOptions } from "fuse.js";
 import type { BranchInfo } from "@/types/electron";
-import type { WorktreeState } from "@shared/types";
+import type { WorktreeSnapshot } from "@shared/types";
 
 export interface BranchOption {
   name: string;
@@ -21,7 +21,7 @@ export interface BranchSearchResult extends BranchOption {
   matchRanges: BranchMatchRange[];
   isRecent: boolean;
   recentRank: number;
-  inUseWorktree: WorktreeState | null;
+  inUseWorktree: WorktreeSnapshot | null;
 }
 
 export type BranchPickerRow =
@@ -31,7 +31,7 @@ export type BranchPickerRow =
 export interface FilterBranchesOptions {
   query: string;
   recentBranchNames: string[];
-  worktreeByBranch: Map<string, WorktreeState>;
+  worktreeByBranch: Map<string, WorktreeSnapshot>;
   emptyQueryLimit?: number;
 }
 
@@ -117,7 +117,7 @@ function buildEmptyQueryRows(
   branches: readonly BranchOption[],
   recentSet: Set<string>,
   recentRankMap: Map<string, number>,
-  worktreeByBranch: Map<string, WorktreeState>,
+  worktreeByBranch: Map<string, WorktreeSnapshot>,
   limit: number
 ): BranchPickerRow[] {
   const rows: BranchPickerRow[] = [];
@@ -165,7 +165,7 @@ function buildFuzzyQueryRows(
   query: string,
   recentSet: Set<string>,
   recentRankMap: Map<string, number>,
-  worktreeByBranch: Map<string, WorktreeState>
+  worktreeByBranch: Map<string, WorktreeSnapshot>
 ): BranchPickerRow[] {
   const fuse = getFuse(branches);
   const results = fuse.search(query, { limit: 200 });

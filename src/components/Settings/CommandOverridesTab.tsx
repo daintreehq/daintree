@@ -260,7 +260,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
     <div className="space-y-2">
       <div className="mb-4">
         <h3 className="text-sm font-semibold text-canopy-text/80 mb-2">Command Overrides</h3>
-        <p className="text-xs text-canopy-text/60">
+        <p className="text-xs text-canopy-text/60 select-text">
           Customize command behavior for this project. Set default argument values, define custom
           prompts, or disable commands entirely.
         </p>
@@ -280,7 +280,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
             placeholder="Search commands..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-canopy-bg border border-canopy-border rounded text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent"
+            className="w-full pl-9 pr-3 py-2 bg-canopy-bg border border-border-strong rounded text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent"
             aria-label="Search commands"
           />
         </div>
@@ -366,7 +366,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                   </div>
                   <p
                     className={cn(
-                      "text-xs mt-0.5",
+                      "text-xs mt-0.5 select-text",
                       isDisabled ? "text-canopy-text/30" : "text-canopy-text/60"
                     )}
                   >
@@ -457,7 +457,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                     {/* Default Values Mode */}
                     {currentMode === "defaults" && hasArgs && (
                       <div className="space-y-3">
-                        <p className="text-xs text-canopy-text/60">
+                        <p className="text-xs text-canopy-text/60 select-text">
                           Set default values for command arguments. These values will be used when
                           the argument is not provided.
                         </p>
@@ -491,13 +491,15 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                 onChange={(e) =>
                                   updateDefault(command.id, arg.name, e.target.value)
                                 }
-                                className="w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1.5 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                                className="w-full bg-canopy-sidebar border border-border-strong rounded px-2 py-1.5 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
                                 placeholder={
                                   arg.default ? `Default: ${arg.default}` : `Enter ${arg.name}`
                                 }
                               />
                               {arg.description && (
-                                <p className="text-xs text-canopy-text/50">{arg.description}</p>
+                                <p className="text-xs text-canopy-text/50 select-text">
+                                  {arg.description}
+                                </p>
                               )}
                             </div>
                           );
@@ -548,7 +550,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
   return (
     <div className="space-y-3">
       <div>
-        <p className="text-xs text-canopy-text/60 mb-2">
+        <p className="text-xs text-canopy-text/60 mb-2 select-text">
           Define a custom prompt to send to the agent instead of executing the default command
           behavior. Use template variables like{" "}
           <code className="text-canopy-accent">
@@ -602,7 +604,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
             "w-full bg-canopy-sidebar border rounded px-2 py-1.5 text-sm text-canopy-text font-mono focus:outline-none focus:ring-1 min-h-[120px] resize-y",
             validation && !validation.valid
               ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
-              : "border-canopy-border focus:border-canopy-accent focus:ring-canopy-accent/30"
+              : "border-border-strong focus:border-canopy-accent focus:ring-canopy-accent/30"
           )}
           placeholder={`Example: Work on issue {issueNumber}...\n\nUse {variableName} to include argument values.`}
         />
@@ -616,7 +618,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
       )}
 
       {value.trim() && (
-        <p className="text-xs text-canopy-text/50">
+        <p className="text-xs text-canopy-text/50 select-text">
           When this command is executed, the custom prompt will be sent to the agent instead of
           running the default command logic.
         </p>

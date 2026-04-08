@@ -8,7 +8,7 @@ import {
   WorktreeTerminalSection,
   type WorktreeTerminalSectionProps,
 } from "../WorktreeTerminalSection";
-import type { TerminalInstance } from "@/store/terminalStore";
+import type { TerminalInstance } from "@/store/panelStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 vi.mock("react-dom", async () => {
@@ -66,7 +66,7 @@ function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstan
 
 const baseCounts: WorktreeTerminalSectionProps["counts"] = {
   total: 2,
-  byState: { idle: 2, working: 0, running: 0, waiting: 0, directing: 0, completed: 0 },
+  byState: { idle: 2, working: 0, running: 0, waiting: 0, directing: 0, completed: 0, exited: 0 },
 };
 
 function renderSection(overrides: Partial<WorktreeTerminalSectionProps> = {}) {

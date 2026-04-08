@@ -77,14 +77,14 @@ describe("computeOverflow", () => {
   });
 
   it("within same priority, removes later items first", () => {
-    const ordered: ToolbarButtonId[] = ["terminal", "browser", "dev-server"];
-    // All priority 3. Within same priority, later index removed first.
+    const ordered: ToolbarButtonId[] = ["terminal", "browser"];
+    // Both priority 3. Within same priority, later index removed first.
     const widths = makeWidths(ordered, 50);
-    // Total 150, container 60, target = 60 - 0 - 8 = 52. Need to remove 98.
-    // dev-server removed first (index 2): 100, then browser (index 1): 50 ≤ 52
+    // Total 100, container 60, target = 60 - 0 - 8 = 52. Need to remove 48.
+    // browser removed first (index 1): 50 ≤ 52
     const result = computeOverflow(60, widths, ordered, TOOLBAR_BUTTON_PRIORITIES);
     // overflowIds preserves orderedIds order
-    expect(result.overflowIds).toEqual(["browser", "dev-server"]);
+    expect(result.overflowIds).toEqual(["browser"]);
     expect(result.visibleIds).toEqual(["terminal"]);
   });
 });

@@ -112,6 +112,12 @@ export interface Worktree {
 
   /** Relative path to the detected plan file (e.g. "TODO.md") */
   planFilePath?: string;
+
+  /** Number of commits ahead of the upstream tracking branch */
+  aheadCount?: number;
+
+  /** Number of commits behind the upstream tracking branch */
+  behindCount?: number;
 }
 
 /** Runtime worktree state (internal to WorktreeService) */

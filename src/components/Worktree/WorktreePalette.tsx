@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
+import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import type { WorktreeState } from "@/types";
 
 interface WorktreeListItemProps {
@@ -73,6 +74,8 @@ export function WorktreePalette({
   onConfirm,
   onClose,
 }: WorktreePaletteProps) {
+  const createWorktreeShortcut = useKeybindingDisplay("worktree.createDialog.open");
+
   return (
     <SearchablePalette<WorktreeState>
       isOpen={isOpen}
@@ -101,9 +104,24 @@ export function WorktreePalette({
       searchAriaLabel="Search worktrees"
       listId="worktree-palette-list"
       itemIdPrefix="worktree-option"
-      emptyMessage="No worktrees available"
+      emptyMessage="No worktrees yet"
       noMatchMessage={`No worktrees match "${query}"`}
       totalResults={totalResults}
+      emptyContent={
+        <p className="mt-2 text-xs text-canopy-text/40">
+          {createWorktreeShortcut ? (
+            <>
+              Press{" "}
+              <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+                {createWorktreeShortcut}
+              </kbd>{" "}
+              to create a worktree.
+            </>
+          ) : (
+            "Create a worktree to get started."
+          )}
+        </p>
+      }
     />
   );
 }

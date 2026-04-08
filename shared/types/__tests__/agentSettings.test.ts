@@ -185,3 +185,62 @@ describe("generateAgentCommand with modelId", () => {
     expect(modelIdx).toBeLessThan(promptIdx);
   });
 });
+
+describe("generateAgentCommand with recipeArgs", () => {
+  it("includes single flag from recipeArgs", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      recipeArgs: "--model sonnet",
+    });
+    expect(cmd).toContain("--model");
+    expect(cmd).toContain("sonnet");
+  });
+
+  it("includes multiple tokens from recipeArgs", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      recipeArgs: "--model opus --verbose",
+    });
+    expect(cmd).toContain("--model");
+    expect(cmd).toContain("opus");
+    expect(cmd).toContain("--verbose");
+  });
+
+  it("produces no change for empty or whitespace-only recipeArgs", () => {
+    const base = generateAgentCommand("claude", {}, "claude");
+    const withEmpty = generateAgentCommand("claude", {}, "claude", { recipeArgs: "" });
+    const withSpaces = generateAgentCommand("claude", {}, "claude", { recipeArgs: "   " });
+    expect(withEmpty).toBe(base);
+    expect(withSpaces).toBe(base);
+  });
+
+  it("escapes non-flag tokens in recipeArgs", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      recipeArgs: "--model some value",
+    });
+    // "some" and "value" don't start with "-", so they should be shell-escaped
+    expect(cmd).toContain("--model");
+    // Non-flag values should be quoted (not raw)
+    expect(cmd).not.toMatch(/\s+some\s+/);
+  });
+
+  it("places recipeArgs after --model and before customFlags", () => {
+    const cmd = generateAgentCommand("claude", { customFlags: "--custom-flag" }, "claude", {
+      modelId: "claude-opus-4-6",
+      recipeArgs: "--recipe-flag",
+    });
+    const modelIdx = cmd.indexOf("--model");
+    const recipeIdx = cmd.indexOf("--recipe-flag");
+    const customIdx = cmd.indexOf("--custom-flag");
+    expect(modelIdx).toBeLessThan(recipeIdx);
+    expect(recipeIdx).toBeLessThan(customIdx);
+  });
+
+  it("places recipeArgs before initial prompt", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      recipeArgs: "--recipe-flag",
+      initialPrompt: "Do the thing",
+    });
+    const recipeIdx = cmd.indexOf("--recipe-flag");
+    const promptIdx = cmd.indexOf("Do the thing");
+    expect(recipeIdx).toBeLessThan(promptIdx);
+  });
+});

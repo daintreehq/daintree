@@ -2,6 +2,43 @@ const path = require("path");
 const fs = require("fs");
 
 /**
+ * Validate that better_sqlite3.node was compiled for Electron's ABI, not Node's.
+ *
+ * better-sqlite3 uses the raw V8/NAN C++ API (not N-API), so the compiled
+ * binary is ABI-specific. A binary compiled for Node.js will load successfully
+ * under Node (which runs afterPack), but crash at Electron runtime with a
+ * NODE_MODULE_VERSION mismatch. We exploit this: if dlopen succeeds here
+ * (under Node), the binary is wrong; if it fails with an ABI mismatch error,
+ * the binary was correctly compiled for Electron.
+ */
+function validateBetterSqliteAbi(nativeBinaryPath) {
+  const testModule = { exports: {} };
+  try {
+    process.dlopen(testModule, nativeBinaryPath);
+    // Loaded under Node.js — this means it was compiled for Node ABI, not Electron
+    throw new Error(
+      `[afterPack] CRITICAL: better_sqlite3.node was compiled for Node.js ABI (MODULE_VERSION ${process.versions.modules}), not Electron. ` +
+        'Run "npm run rebuild" to recompile for Electron. Path: ' +
+        nativeBinaryPath
+    );
+  } catch (err) {
+    const msg = err.message || "";
+    if (msg.includes("compiled for Node.js ABI")) throw err;
+    if (
+      msg.includes("NODE_MODULE_VERSION") ||
+      msg.includes("was compiled against a different Node.js version") ||
+      msg.includes("invalid ELF header") ||
+      msg.includes("not a valid Win32 application")
+    ) {
+      console.log("[afterPack] better-sqlite3 ABI check passed (compiled for Electron, not Node)");
+      return;
+    }
+    // Unknown error — warn but don't fail (e.g. missing DLL dependency on Windows)
+    console.warn(`[afterPack] Warning: better-sqlite3 ABI probe inconclusive: ${msg}`);
+  }
+}
+
+/**
  * Get the path to unpacked resources for the platform
  */
 function getUnpackedResourcesPath(appOutDir, electronPlatformName, appName) {
@@ -140,6 +177,8 @@ exports.default = async function afterPack(context) {
         'Run "npm run rebuild" to build the native module.'
     );
   }
+
+  validateBetterSqliteAbi(betterSqliteNative);
 
   console.log(`[afterPack] better-sqlite3 verified: ${betterSqliteNative}`);
 

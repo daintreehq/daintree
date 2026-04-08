@@ -148,6 +148,44 @@ describe("TerminalRestoreController", () => {
       expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred2");
     });
 
+    it("does not apply callback when destroyed mid-write", async () => {
+      const managed = makeManagedTerminal({
+        deferredOutput: ["should-not-flush"],
+      });
+      instances.set("t1", managed);
+
+      controller.restoreFromSerialized("t1", "small-state");
+
+      // Destroy between write() and callback firing
+      controller.destroy("t1");
+      await flushMicrotasks();
+
+      expect(writeDataSpy).not.toHaveBeenCalled();
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+      expect(mockTerminal.scrollToLine).not.toHaveBeenCalled();
+    });
+
+    it("does not apply first callback when a second restore starts before callback fires", async () => {
+      const managed = makeManagedTerminal({
+        deferredOutput: ["first-deferred"],
+      });
+      instances.set("t1", managed);
+
+      // First restore — callback queued but not yet fired
+      controller.restoreFromSerialized("t1", "first-state");
+
+      // Second restore before first callback fires
+      managed.deferredOutput = ["second-deferred"];
+      controller.restoreFromSerialized("t1", "second-state");
+
+      await flushMicrotasks();
+
+      // Only the second restore's deferred output should have been flushed
+      expect(writeDataSpy).toHaveBeenCalledTimes(1);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "second-deferred");
+      expect(managed.restoreGeneration).toBe(2);
+    });
+
     it("preserves scroll position when user is scrolled back", async () => {
       const managed = makeManagedTerminal({ isUserScrolledBack: true });
       instances.set("t1", managed);
@@ -253,6 +291,22 @@ describe("TerminalRestoreController", () => {
       expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred-data");
     });
 
+    it("clears all timeout handles after successful multi-chunk restore", async () => {
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+      const data = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 3);
+
+      const promise = controller.restoreFromSerializedIncremental("t1", data);
+      await flushMicrotasks();
+
+      for (let i = 0; i < 10; i++) {
+        await flushPostTasks();
+      }
+      await promise;
+
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
     it("falls back to setTimeout when scheduler is unavailable", async () => {
       (global as any).scheduler = undefined;
 
@@ -290,6 +344,75 @@ describe("TerminalRestoreController", () => {
       const result = await controller.restoreFetchedState("t1", "small");
       expect(result).toBe(true);
       expect(mockTerminal.reset).toHaveBeenCalled();
+    });
+  });
+
+  describe("fetchAndRestore", () => {
+    it("sets isSerializedRestoreInProgress before IPC fetch resolves", async () => {
+      const { terminalClient } = await import("@/clients");
+      let resolveFetch!: (value: string | null) => void;
+      vi.mocked(terminalClient.getSerializedState).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = resolve;
+          })
+      );
+
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.fetchAndRestore("t1");
+      await flushMicrotasks();
+
+      // Flag should be set BEFORE the IPC call resolves
+      expect(managed.isSerializedRestoreInProgress).toBe(true);
+
+      resolveFetch("small-state");
+      await flushMicrotasks();
+      await promise;
+    });
+
+    it("returns false and clears flag when terminal becomes stale during fetch", async () => {
+      const { terminalClient } = await import("@/clients");
+      let resolveFetch!: (value: string | null) => void;
+      vi.mocked(terminalClient.getSerializedState).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = resolve;
+          })
+      );
+
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.fetchAndRestore("t1");
+      await flushMicrotasks();
+
+      // Simulate terminal being destroyed during fetch
+      controller.destroy("t1");
+
+      resolveFetch("state-data");
+      const result = await promise;
+
+      expect(result).toBe(false);
+    });
+
+    it("returns false for unknown terminal", async () => {
+      const result = await controller.fetchAndRestore("nonexistent");
+      expect(result).toBe(false);
+    });
+
+    it("clears isSerializedRestoreInProgress when serialized state is null", async () => {
+      const { terminalClient } = await import("@/clients");
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(null as unknown as string);
+
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const result = await controller.fetchAndRestore("t1");
+
+      expect(result).toBe(false);
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
     });
   });
 

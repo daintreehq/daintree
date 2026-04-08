@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Key, Check, AlertCircle, Loader2, FlaskConical, ExternalLink, Github } from "lucide-react";
+import { Key, Check, AlertCircle, FlaskConical, ExternalLink, Github } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { useGitHubConfigStore } from "@/store";
 import { actionService } from "@/services/ActionService";
 import { SettingsSection } from "./SettingsSection";
@@ -209,7 +210,7 @@ export function GitHubSettingsTab() {
               }
               aria-label="GitHub personal access token"
               autoComplete="new-password"
-              className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors"
+              className="flex-1 bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors"
               disabled={isValidating || isTesting}
             />
             <Button
@@ -222,7 +223,7 @@ export function GitHubSettingsTab() {
               className="min-w-[70px] text-canopy-text border-canopy-border hover:bg-canopy-border"
             >
               {isTesting ? (
-                <Loader2 className="animate-spin" aria-hidden="true" />
+                <Spinner />
               ) : (
                 <>
                   <FlaskConical aria-hidden="true" />
@@ -238,7 +239,7 @@ export function GitHubSettingsTab() {
               aria-busy={isValidating}
               className="min-w-[70px]"
             >
-              {isValidating ? <Loader2 className="animate-spin" aria-hidden="true" /> : "Save"}
+              {isValidating ? <Spinner /> : "Save"}
             </Button>
             {githubConfig?.hasToken && (
               <Button

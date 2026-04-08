@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { randomUUID } from "crypto";
 import { PtyManager } from "../PtyManager.js";
 import { cleanupPtyManager, sleep } from "./helpers/ptyTestUtils.js";
-import type { TerminalType, TerminalKind } from "../../../shared/types/panel.js";
+import type { TerminalType, PanelKind } from "../../../shared/types/panel.js";
 
 describe("Agent Classification Matrix", () => {
   let manager: PtyManager;
@@ -22,7 +22,7 @@ describe("Agent Classification Matrix", () => {
         cwd: process.cwd(),
         cols: 80,
         rows: 24,
-        kind: "agent" as TerminalKind,
+        kind: "agent" as PanelKind,
         type: "terminal" as TerminalType,
       });
 
@@ -125,7 +125,7 @@ describe("Agent Classification Matrix", () => {
         cwd: process.cwd(),
         cols: 80,
         rows: 24,
-        kind: "terminal" as TerminalKind,
+        kind: "terminal" as PanelKind,
         type: "claude" as TerminalType,
       });
 
@@ -143,7 +143,7 @@ describe("Agent Classification Matrix", () => {
         cwd: process.cwd(),
         cols: 80,
         rows: 24,
-        kind: "agent" as TerminalKind,
+        kind: "agent" as PanelKind,
         agentId: "claude",
       });
 
@@ -162,7 +162,7 @@ describe("Agent Classification Matrix", () => {
         cwd: process.cwd(),
         cols: 80,
         rows: 24,
-        kind: "terminal" as TerminalKind,
+        kind: "terminal" as PanelKind,
         type: "terminal" as TerminalType,
         agentId: "gemini",
       });
@@ -201,7 +201,7 @@ describe("Agent Classification Matrix", () => {
         cwd: process.cwd(),
         cols: 80,
         rows: 24,
-        kind: "terminal" as TerminalKind,
+        kind: "terminal" as PanelKind,
         type: "terminal" as TerminalType,
       });
 

@@ -5,9 +5,9 @@ import {
   type ActionCallbacks,
 } from "@/services/actions/actionDefinitions";
 import type { ActionContext } from "@shared/types/actions";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 export type { ActionCallbacks };
@@ -65,15 +65,13 @@ export function useActionRegistry(options: ActionCallbacks): void {
 
     actionService.setContextProvider((): ActionContext => {
       const project = useProjectStore.getState().currentProject;
-      const terminalState = useTerminalStore.getState();
+      const terminalState = usePanelStore.getState();
       const focusedId = terminalState.focusedId;
-      const focusedTerminal = focusedId
-        ? terminalState.terminals.find((t) => t.id === focusedId)
-        : null;
+      const focusedTerminal = focusedId ? terminalState.panelsById[focusedId] : null;
 
       const activeWorktreeId = callbacksRef.current.getActiveWorktreeId() ?? undefined;
       const activeWorktree = activeWorktreeId
-        ? useWorktreeDataStore.getState().worktrees.get(activeWorktreeId)
+        ? getCurrentViewStore().getState().worktrees.get(activeWorktreeId)
         : undefined;
 
       return {

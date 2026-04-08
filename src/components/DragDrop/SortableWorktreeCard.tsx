@@ -89,6 +89,10 @@ export const SortableWorktreeCard = React.memo(function SortableWorktreeCard({
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
+    ...(!isDragging && {
+      contentVisibility: "auto",
+      containIntrinsicSize: "auto 180px",
+    }),
   };
 
   const { role: _role, "aria-roledescription": _ariaRoleDesc, ...filteredAttributes } = attributes;

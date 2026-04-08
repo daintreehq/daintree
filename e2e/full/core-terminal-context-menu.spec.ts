@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openProject, dismissTelemetryConsent } from "../helpers/project";
+import { refreshActiveWindow } from "../helpers/launch";
 import {
   waitForTerminalText,
   runTerminalCommand,
@@ -41,6 +42,8 @@ test.describe.serial("Core: Terminal Context Menu", () => {
       await expect(heading).not.toBeVisible({ timeout: T_MEDIUM });
 
       await dismissTelemetryConsent(ctx.window);
+
+      ctx.window = await refreshActiveWindow(ctx.app, ctx.window);
     });
 
     test("worktree dashboard appears", async () => {

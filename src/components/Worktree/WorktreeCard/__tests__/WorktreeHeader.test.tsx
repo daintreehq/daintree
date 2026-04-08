@@ -252,6 +252,119 @@ describe("WorktreeHeader issue title headline", () => {
   });
 });
 
+describe("WorktreeHeader primary worktree standard branch layout", () => {
+  const mainWorktree: WorktreeState = {
+    ...baseWorktree,
+    isMainWorktree: true,
+    name: "canopy-app",
+    branch: "main",
+  };
+
+  it("renders project name as headline when isMainOnStandardBranch and no issue title", () => {
+    renderHeader({
+      worktree: mainWorktree,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      branchLabel: "main",
+    });
+    const projectName = screen.getByTestId("primary-worktree-project-name");
+    expect(projectName.textContent).toBe("canopy-app");
+  });
+
+  it("renders branch label in secondary row", () => {
+    renderHeader({
+      worktree: mainWorktree,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      branchLabel: "main",
+    });
+    expect(screen.getByTestId("primary-worktree-project-name")).toBeDefined();
+    expect(screen.getByText("main")).toBeDefined();
+  });
+
+  it("applies active styling to project name when isActive", () => {
+    renderHeader({
+      worktree: mainWorktree,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      isActive: true,
+      branchLabel: "main",
+    });
+    const projectName = screen.getByTestId("primary-worktree-project-name");
+    expect(projectName.className).toContain("text-text-primary/90");
+  });
+
+  it("applies inactive styling to project name when not active", () => {
+    renderHeader({
+      worktree: mainWorktree,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      isActive: false,
+      branchLabel: "main",
+    });
+    const projectName = screen.getByTestId("primary-worktree-project-name");
+    expect(projectName.className).toContain("text-text-secondary");
+  });
+
+  it("falls back to BranchLabel when isMainOnStandardBranch is false", () => {
+    renderHeader({
+      worktree: { ...mainWorktree, branch: "feature/test" },
+      isMainWorktree: true,
+      isMainOnStandardBranch: false,
+      branchLabel: "feature/test",
+    });
+    expect(screen.queryByTestId("primary-worktree-project-name")).toBeNull();
+    expect(screen.getByText(/test/)).toBeDefined();
+  });
+
+  it("uses issue title as headline even when isMainOnStandardBranch if issue exists", () => {
+    renderHeader({
+      worktree: { ...mainWorktree, issueNumber: 100, issueTitle: "Some issue" },
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      branchLabel: "main",
+    });
+    expect(screen.queryByTestId("primary-worktree-project-name")).toBeNull();
+    expect(screen.getByText("Some issue")).toBeDefined();
+  });
+
+  it("applies muted styling to project name when isMuted", () => {
+    renderHeader({
+      worktree: mainWorktree,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      isActive: false,
+      isMuted: true,
+      branchLabel: "main",
+    });
+    const projectName = screen.getByTestId("primary-worktree-project-name");
+    expect(projectName.className).toContain("text-text-muted");
+  });
+
+  it("falls back to BranchLabel when isMainOnStandardBranch is undefined", () => {
+    renderHeader({
+      worktree: mainWorktree,
+      isMainWorktree: true,
+      branchLabel: "main",
+    });
+    expect(screen.queryByTestId("primary-worktree-project-name")).toBeNull();
+  });
+
+  it("hides secondary branch row when collapsed", () => {
+    renderHeader({
+      worktree: mainWorktree,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      isCollapsed: true,
+      branchLabel: "main",
+    });
+    expect(screen.getByTestId("primary-worktree-project-name")).toBeDefined();
+    // The branch "main" should only appear as the project name row, not a separate secondary element
+    const allText = screen.getByTestId("primary-worktree-project-name").textContent;
+    expect(allText).toBe("canopy-app");
+  });
+});
+
 describe("WorktreeHeader plan file badge", () => {
   it("renders plan badge when hasPlanFile is true and onOpenPlan is provided", () => {
     const onOpenPlan = vi.fn();
@@ -284,16 +397,30 @@ describe("WorktreeHeader plan file badge", () => {
     expect(screen.queryByRole("button", { name: /View agent plan file/ })).toBeNull();
   });
 
-  it("calls onOpenPlan when plan badge is clicked", async () => {
+  it("calls onOpenPlan when plan badge is clicked on active card", async () => {
     const onOpenPlan = vi.fn();
     renderHeader({
       worktree: { ...baseWorktree, hasPlanFile: true, planFilePath: "TASKS.md" },
       badges: { onOpenPlan },
+      isActive: true,
     });
 
     const planButton = screen.getByRole("button", { name: /View agent plan file/ });
     planButton.click();
     expect(onOpenPlan).toHaveBeenCalledOnce();
+  });
+
+  it("does not call onOpenPlan when plan badge is clicked on inactive card", async () => {
+    const onOpenPlan = vi.fn();
+    renderHeader({
+      worktree: { ...baseWorktree, hasPlanFile: true, planFilePath: "TASKS.md" },
+      badges: { onOpenPlan },
+      isActive: false,
+    });
+
+    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    planButton.click();
+    expect(onOpenPlan).not.toHaveBeenCalled();
   });
 });
 
@@ -319,11 +446,26 @@ describe("WorktreeHeader click bubbling", () => {
     return { ...result, onParentClick };
   }
 
-  it("issue badge click bubbles to parent (card selection)", () => {
+  it("issue badge click on inactive card bubbles to parent but does NOT call onOpenIssue", () => {
     const onOpenIssue = vi.fn();
     const { onParentClick } = renderHeaderInWrapper({
       worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
       badges: { onOpenIssue },
+      isActive: false,
+    });
+
+    const issueButton = screen.getByRole("button", { name: /Open issue #42/ });
+    fireEvent.click(issueButton);
+    expect(onOpenIssue).not.toHaveBeenCalled();
+    expect(onParentClick).toHaveBeenCalledOnce();
+  });
+
+  it("issue badge click on active card calls onOpenIssue and bubbles to parent", () => {
+    const onOpenIssue = vi.fn();
+    const { onParentClick } = renderHeaderInWrapper({
+      worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
+      badges: { onOpenIssue },
+      isActive: true,
     });
 
     const issueButton = screen.getByRole("button", { name: /Open issue #42/ });
@@ -332,11 +474,26 @@ describe("WorktreeHeader click bubbling", () => {
     expect(onParentClick).toHaveBeenCalledOnce();
   });
 
-  it("PR badge click bubbles to parent (card selection)", () => {
+  it("PR badge click on inactive card bubbles to parent but does NOT call onOpenPR", () => {
     const onOpenPR = vi.fn();
     const { onParentClick } = renderHeaderInWrapper({
       worktree: { ...baseWorktree, prNumber: 101, prState: "open" },
       badges: { onOpenPR },
+      isActive: false,
+    });
+
+    const prButton = screen.getByRole("button", { name: /pull request #101/ });
+    fireEvent.click(prButton);
+    expect(onOpenPR).not.toHaveBeenCalled();
+    expect(onParentClick).toHaveBeenCalledOnce();
+  });
+
+  it("PR badge click on active card calls onOpenPR and bubbles to parent", () => {
+    const onOpenPR = vi.fn();
+    const { onParentClick } = renderHeaderInWrapper({
+      worktree: { ...baseWorktree, prNumber: 101, prState: "open" },
+      badges: { onOpenPR },
+      isActive: true,
     });
 
     const prButton = screen.getByRole("button", { name: /pull request #101/ });
@@ -345,17 +502,78 @@ describe("WorktreeHeader click bubbling", () => {
     expect(onParentClick).toHaveBeenCalledOnce();
   });
 
-  it("plan badge click bubbles to parent (card selection)", () => {
+  it("plan badge click on inactive card bubbles to parent but does NOT call onOpenPlan", () => {
     const onOpenPlan = vi.fn();
     const { onParentClick } = renderHeaderInWrapper({
       worktree: { ...baseWorktree, hasPlanFile: true, planFilePath: "TODO.md" },
       badges: { onOpenPlan },
+      isActive: false,
+    });
+
+    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    fireEvent.click(planButton);
+    expect(onOpenPlan).not.toHaveBeenCalled();
+    expect(onParentClick).toHaveBeenCalledOnce();
+  });
+
+  it("plan badge click on active card calls onOpenPlan and bubbles to parent", () => {
+    const onOpenPlan = vi.fn();
+    const { onParentClick } = renderHeaderInWrapper({
+      worktree: { ...baseWorktree, hasPlanFile: true, planFilePath: "TODO.md" },
+      badges: { onOpenPlan },
+      isActive: true,
     });
 
     const planButton = screen.getByRole("button", { name: /View agent plan file/ });
     fireEvent.click(planButton);
     expect(onOpenPlan).toHaveBeenCalledOnce();
     expect(onParentClick).toHaveBeenCalledOnce();
+  });
+
+  it("inactive badges have aria-disabled attribute", () => {
+    renderHeaderInWrapper({
+      worktree: {
+        ...baseWorktree,
+        issueNumber: 42,
+        issueTitle: "Test issue",
+        prNumber: 101,
+        prState: "open",
+        hasPlanFile: true,
+        planFilePath: "TODO.md",
+      },
+      badges: { onOpenIssue: vi.fn(), onOpenPR: vi.fn(), onOpenPlan: vi.fn() },
+      isActive: false,
+    });
+
+    const issueButton = screen.getByRole("button", { name: /Open issue #42/ });
+    const prButton = screen.getByRole("button", { name: /pull request #101/ });
+    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    expect(issueButton.getAttribute("aria-disabled")).toBe("true");
+    expect(prButton.getAttribute("aria-disabled")).toBe("true");
+    expect(planButton.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("active badges do not have aria-disabled attribute", () => {
+    renderHeaderInWrapper({
+      worktree: {
+        ...baseWorktree,
+        issueNumber: 42,
+        issueTitle: "Test issue",
+        prNumber: 101,
+        prState: "open",
+        hasPlanFile: true,
+        planFilePath: "TODO.md",
+      },
+      badges: { onOpenIssue: vi.fn(), onOpenPR: vi.fn(), onOpenPlan: vi.fn() },
+      isActive: true,
+    });
+
+    const issueButton = screen.getByRole("button", { name: /Open issue #42/ });
+    const prButton = screen.getByRole("button", { name: /pull request #101/ });
+    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    expect(issueButton.getAttribute("aria-disabled")).toBeNull();
+    expect(prButton.getAttribute("aria-disabled")).toBeNull();
+    expect(planButton.getAttribute("aria-disabled")).toBeNull();
   });
 
   it("more actions button click does NOT bubble to parent", () => {
@@ -441,6 +659,7 @@ const allZeroStates = {
   directing: 0,
   idle: 0,
   completed: 0,
+  exited: 0,
 } as const;
 
 describe("WorktreeHeader collapsed session indicators", () => {

@@ -31,7 +31,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-const { useTerminalStore } = await import("../terminalStore");
+const { usePanelStore } = await import("../panelStore");
 const { useWorktreeSelectionStore } = await import("../worktreeStore");
 
 function makeTerminal(
@@ -54,13 +54,14 @@ function makeTerminal(
   };
 }
 
-describe("trashTerminal agent-aware focus", () => {
+describe("trashPanel agent-aware focus", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    const { reset } = useTerminalStore.getState();
+    const { reset } = usePanelStore.getState();
     reset();
-    useTerminalStore.setState({
-      terminals: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -76,88 +77,97 @@ describe("trashTerminal agent-aware focus", () => {
   });
 
   it("should focus next agent when trashing an agent terminal", () => {
-    useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude"),
-        makeTerminal("shell-1", "terminal"),
-        makeTerminal("agent-2", "agent", "gemini"),
-        makeTerminal("shell-2", "terminal"),
-      ],
+    usePanelStore.setState({
+      panelsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "shell-1": makeTerminal("shell-1", "terminal"),
+        "agent-2": makeTerminal("agent-2", "agent", "gemini"),
+        "shell-2": makeTerminal("shell-2", "terminal"),
+      },
+      panelIds: ["agent-1", "shell-1", "agent-2", "shell-2"],
       focusedId: "agent-1",
     });
 
-    useTerminalStore.getState().trashTerminal("agent-1");
+    usePanelStore.getState().trashPanel("agent-1");
 
-    expect(useTerminalStore.getState().focusedId).toBe("agent-2");
+    expect(usePanelStore.getState().focusedId).toBe("agent-2");
   });
 
   it("should fall back to any grid terminal when last agent is trashed", () => {
-    useTerminalStore.setState({
-      terminals: [makeTerminal("agent-1", "agent", "claude"), makeTerminal("shell-1", "terminal")],
+    usePanelStore.setState({
+      panelsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "shell-1": makeTerminal("shell-1", "terminal"),
+      },
+      panelIds: ["agent-1", "shell-1"],
       focusedId: "agent-1",
     });
 
-    useTerminalStore.getState().trashTerminal("agent-1");
+    usePanelStore.getState().trashPanel("agent-1");
 
-    expect(useTerminalStore.getState().focusedId).toBe("shell-1");
+    expect(usePanelStore.getState().focusedId).toBe("shell-1");
   });
 
   it("should support rapid sequential agent close", () => {
-    useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude"),
-        makeTerminal("agent-2", "agent", "gemini"),
-        makeTerminal("agent-3", "agent", "codex"),
-        makeTerminal("shell-1", "terminal"),
-      ],
+    usePanelStore.setState({
+      panelsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "agent-2": makeTerminal("agent-2", "agent", "gemini"),
+        "agent-3": makeTerminal("agent-3", "agent", "codex"),
+        "shell-1": makeTerminal("shell-1", "terminal"),
+      },
+      panelIds: ["agent-1", "agent-2", "agent-3", "shell-1"],
       focusedId: "agent-1",
     });
 
-    useTerminalStore.getState().trashTerminal("agent-1");
-    expect(useTerminalStore.getState().focusedId).toBe("agent-2");
+    usePanelStore.getState().trashPanel("agent-1");
+    expect(usePanelStore.getState().focusedId).toBe("agent-2");
 
-    useTerminalStore.getState().trashTerminal("agent-2");
-    expect(useTerminalStore.getState().focusedId).toBe("agent-3");
+    usePanelStore.getState().trashPanel("agent-2");
+    expect(usePanelStore.getState().focusedId).toBe("agent-3");
 
-    useTerminalStore.getState().trashTerminal("agent-3");
-    expect(useTerminalStore.getState().focusedId).toBe("shell-1");
+    usePanelStore.getState().trashPanel("agent-3");
+    expect(usePanelStore.getState().focusedId).toBe("shell-1");
   });
 
   it("should not change behavior when trashing a non-agent terminal", () => {
-    useTerminalStore.setState({
-      terminals: [
-        makeTerminal("shell-1", "terminal"),
-        makeTerminal("agent-1", "agent", "claude"),
-        makeTerminal("shell-2", "terminal"),
-      ],
+    usePanelStore.setState({
+      panelsById: {
+        "shell-1": makeTerminal("shell-1", "terminal"),
+        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "shell-2": makeTerminal("shell-2", "terminal"),
+      },
+      panelIds: ["shell-1", "agent-1", "shell-2"],
       focusedId: "shell-1",
     });
 
-    useTerminalStore.getState().trashTerminal("shell-1");
+    usePanelStore.getState().trashPanel("shell-1");
 
     // Should pick first remaining grid terminal (agent-1), same as before
-    expect(useTerminalStore.getState().focusedId).toBe("agent-1");
+    expect(usePanelStore.getState().focusedId).toBe("agent-1");
   });
 
   it("should set focusedId to null when no grid terminals remain", () => {
-    useTerminalStore.setState({
-      terminals: [makeTerminal("agent-1", "agent", "claude")],
+    usePanelStore.setState({
+      panelsById: { "agent-1": makeTerminal("agent-1", "agent", "claude") },
+      panelIds: ["agent-1"],
       focusedId: "agent-1",
     });
 
-    useTerminalStore.getState().trashTerminal("agent-1");
+    usePanelStore.getState().trashPanel("agent-1");
 
-    expect(useTerminalStore.getState().focusedId).toBeNull();
+    expect(usePanelStore.getState().focusedId).toBeNull();
   });
 });
 
 describe("trashPanelGroup agent-aware focus", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    const { reset } = useTerminalStore.getState();
+    const { reset } = usePanelStore.getState();
     reset();
-    useTerminalStore.setState({
-      terminals: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -173,13 +183,14 @@ describe("trashPanelGroup agent-aware focus", () => {
   });
 
   it("should focus next agent when trashing a group with focused agent", () => {
-    useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude"),
-        makeTerminal("agent-2", "agent", "gemini"),
-        makeTerminal("agent-3", "agent", "codex"),
-        makeTerminal("shell-1", "terminal"),
-      ],
+    usePanelStore.setState({
+      panelsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "agent-2": makeTerminal("agent-2", "agent", "gemini"),
+        "agent-3": makeTerminal("agent-3", "agent", "codex"),
+        "shell-1": makeTerminal("shell-1", "terminal"),
+      },
+      panelIds: ["agent-1", "agent-2", "agent-3", "shell-1"],
       tabGroups: new Map([
         [
           "group-1",
@@ -194,18 +205,19 @@ describe("trashPanelGroup agent-aware focus", () => {
       focusedId: "agent-1",
     });
 
-    useTerminalStore.getState().trashPanelGroup("agent-1");
+    usePanelStore.getState().trashPanelGroup("agent-1");
 
-    expect(useTerminalStore.getState().focusedId).toBe("agent-3");
+    expect(usePanelStore.getState().focusedId).toBe("agent-3");
   });
 
   it("should fall back to non-agent when no agents remain after group trash", () => {
-    useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude"),
-        makeTerminal("agent-2", "agent", "gemini"),
-        makeTerminal("shell-1", "terminal"),
-      ],
+    usePanelStore.setState({
+      panelsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "agent-2": makeTerminal("agent-2", "agent", "gemini"),
+        "shell-1": makeTerminal("shell-1", "terminal"),
+      },
+      panelIds: ["agent-1", "agent-2", "shell-1"],
       tabGroups: new Map([
         [
           "group-1",
@@ -220,19 +232,20 @@ describe("trashPanelGroup agent-aware focus", () => {
       focusedId: "agent-1",
     });
 
-    useTerminalStore.getState().trashPanelGroup("agent-1");
+    usePanelStore.getState().trashPanelGroup("agent-1");
 
-    expect(useTerminalStore.getState().focusedId).toBe("shell-1");
+    expect(usePanelStore.getState().focusedId).toBe("shell-1");
   });
 });
 
 describe("worktree-scoped focus fallback (#4327)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    const { reset } = useTerminalStore.getState();
+    const { reset } = usePanelStore.getState();
     reset();
-    useTerminalStore.setState({
-      terminals: [],
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
       backgroundedTerminals: new Map(),
@@ -248,95 +261,101 @@ describe("worktree-scoped focus fallback (#4327)", () => {
     vi.useRealTimers();
   });
 
-  it("trashTerminal: should prefer same-worktree terminal over cross-worktree", () => {
+  it("trashPanel: should prefer same-worktree terminal over cross-worktree", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
-    useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude", "wt-1"),
-        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
-        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
-      ],
+    usePanelStore.setState({
+      panelsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude", "wt-1"),
+        "shell-other": makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+        "shell-same": makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      },
+      panelIds: ["agent-1", "shell-other", "shell-same"],
       focusedId: "agent-1",
     });
 
-    useTerminalStore.getState().trashTerminal("agent-1");
+    usePanelStore.getState().trashPanel("agent-1");
 
-    expect(useTerminalStore.getState().focusedId).toBe("shell-same");
+    expect(usePanelStore.getState().focusedId).toBe("shell-same");
   });
 
-  it("trashTerminal: should fall back to null when no same-worktree grid terminals remain", () => {
+  it("trashPanel: should fall back to null when no same-worktree grid terminals remain", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
-    useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude", "wt-1"),
-        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
-      ],
+    usePanelStore.setState({
+      panelsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude", "wt-1"),
+        "shell-other": makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+      },
+      panelIds: ["agent-1", "shell-other"],
       focusedId: "agent-1",
     });
 
-    useTerminalStore.getState().trashTerminal("agent-1");
+    usePanelStore.getState().trashPanel("agent-1");
 
-    expect(useTerminalStore.getState().focusedId).toBeNull();
+    expect(usePanelStore.getState().focusedId).toBeNull();
   });
 
-  it("trashTerminal: should prefer same-worktree agent when trashing an agent", () => {
+  it("trashPanel: should prefer same-worktree agent when trashing an agent", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
-    useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude", "wt-1"),
-        makeTerminal("agent-other", "agent", "gemini", "wt-2"),
-        makeTerminal("agent-same", "agent", "codex", "wt-1"),
-        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
-      ],
+    usePanelStore.setState({
+      panelsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude", "wt-1"),
+        "agent-other": makeTerminal("agent-other", "agent", "gemini", "wt-2"),
+        "agent-same": makeTerminal("agent-same", "agent", "codex", "wt-1"),
+        "shell-same": makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      },
+      panelIds: ["agent-1", "agent-other", "agent-same", "shell-same"],
       focusedId: "agent-1",
     });
 
-    useTerminalStore.getState().trashTerminal("agent-1");
+    usePanelStore.getState().trashPanel("agent-1");
 
-    expect(useTerminalStore.getState().focusedId).toBe("agent-same");
+    expect(usePanelStore.getState().focusedId).toBe("agent-same");
   });
 
-  it("trashTerminal: root worktree (null activeWorktreeId) matches undefined worktreeId", () => {
+  it("trashPanel: root worktree (null activeWorktreeId) matches undefined worktreeId", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: null });
-    useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude"),
-        makeTerminal("shell-root", "terminal"),
-        makeTerminal("shell-wt", "terminal", undefined, "wt-1"),
-      ],
+    usePanelStore.setState({
+      panelsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude"),
+        "shell-root": makeTerminal("shell-root", "terminal"),
+        "shell-wt": makeTerminal("shell-wt", "terminal", undefined, "wt-1"),
+      },
+      panelIds: ["agent-1", "shell-root", "shell-wt"],
       focusedId: "agent-1",
     });
 
-    useTerminalStore.getState().trashTerminal("agent-1");
+    usePanelStore.getState().trashPanel("agent-1");
 
-    expect(useTerminalStore.getState().focusedId).toBe("shell-root");
+    expect(usePanelStore.getState().focusedId).toBe("shell-root");
   });
 
   it("moveTerminalToDock: should prefer same-worktree terminal", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
-    useTerminalStore.setState({
-      terminals: [
-        makeTerminal("panel-1", "terminal", undefined, "wt-1"),
-        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
-        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
-      ],
+    usePanelStore.setState({
+      panelsById: {
+        "panel-1": makeTerminal("panel-1", "terminal", undefined, "wt-1"),
+        "shell-other": makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+        "shell-same": makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      },
+      panelIds: ["panel-1", "shell-other", "shell-same"],
       focusedId: "panel-1",
     });
 
-    useTerminalStore.getState().moveTerminalToDock("panel-1");
+    usePanelStore.getState().moveTerminalToDock("panel-1");
 
-    expect(useTerminalStore.getState().focusedId).toBe("shell-same");
+    expect(usePanelStore.getState().focusedId).toBe("shell-same");
   });
 
   it("trashPanelGroup: should prefer same-worktree terminal", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
-    useTerminalStore.setState({
-      terminals: [
-        makeTerminal("agent-1", "agent", "claude", "wt-1"),
-        makeTerminal("agent-2", "agent", "gemini", "wt-1"),
-        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
-        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
-      ],
+    usePanelStore.setState({
+      panelsById: {
+        "agent-1": makeTerminal("agent-1", "agent", "claude", "wt-1"),
+        "agent-2": makeTerminal("agent-2", "agent", "gemini", "wt-1"),
+        "shell-other": makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+        "shell-same": makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      },
+      panelIds: ["agent-1", "agent-2", "shell-other", "shell-same"],
       tabGroups: new Map([
         [
           "group-1",
@@ -351,24 +370,151 @@ describe("worktree-scoped focus fallback (#4327)", () => {
       focusedId: "agent-1",
     });
 
-    useTerminalStore.getState().trashPanelGroup("agent-1");
+    usePanelStore.getState().trashPanelGroup("agent-1");
 
-    expect(useTerminalStore.getState().focusedId).toBe("shell-same");
+    expect(usePanelStore.getState().focusedId).toBe("shell-same");
   });
 
   it("moveTerminalToPosition to dock: should prefer same-worktree terminal", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
-    useTerminalStore.setState({
-      terminals: [
-        makeTerminal("panel-1", "terminal", undefined, "wt-1"),
-        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
-        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
-      ],
+    usePanelStore.setState({
+      panelsById: {
+        "panel-1": makeTerminal("panel-1", "terminal", undefined, "wt-1"),
+        "shell-other": makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+        "shell-same": makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      },
+      panelIds: ["panel-1", "shell-other", "shell-same"],
       focusedId: "panel-1",
     });
 
-    useTerminalStore.getState().moveTerminalToPosition("panel-1", 0, "dock");
+    usePanelStore.getState().moveTerminalToPosition("panel-1", 0, "dock");
 
-    expect(useTerminalStore.getState().focusedId).toBe("shell-same");
+    expect(usePanelStore.getState().focusedId).toBe("shell-same");
+  });
+});
+
+describe("lastClosedConfig snapshot (#4717)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    const { reset } = usePanelStore.getState();
+    reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+      lastClosedConfig: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("captures lastClosedConfig when trashing a terminal", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "agent-1": {
+          ...makeTerminal("agent-1", "agent", "claude", "wt-1"),
+          command: "claude --interactive",
+          agentModelId: "opus",
+          agentLaunchFlags: ["--verbose"],
+          cwd: "/projects/app",
+        },
+      },
+      panelIds: ["agent-1"],
+      focusedId: "agent-1",
+    });
+
+    usePanelStore.getState().trashPanel("agent-1");
+
+    const config = usePanelStore.getState().lastClosedConfig;
+    expect(config).not.toBeNull();
+    expect(config!.agentId).toBe("claude");
+    expect(config!.worktreeId).toBe("wt-1");
+    expect(config!.command).toBe("claude --interactive");
+    expect(config!.agentModelId).toBe("opus");
+    expect(config!.agentLaunchFlags).toEqual(["--verbose"]);
+    expect(config!.cwd).toBe("/projects/app");
+  });
+
+  it("overwrites lastClosedConfig on each close", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "shell-1": makeTerminal("shell-1", "terminal"),
+        "shell-2": { ...makeTerminal("shell-2", "terminal"), command: "zsh" },
+      },
+      panelIds: ["shell-1", "shell-2"],
+      focusedId: "shell-1",
+    });
+
+    usePanelStore.getState().trashPanel("shell-1");
+    expect(usePanelStore.getState().lastClosedConfig!.type).toBe("terminal");
+
+    usePanelStore.getState().trashPanel("shell-2");
+    expect(usePanelStore.getState().lastClosedConfig!.command).toBe("zsh");
+  });
+
+  it("captures lastClosedConfig when trashing a panel group", () => {
+    usePanelStore.setState({
+      panelsById: {
+        "agent-1": { ...makeTerminal("agent-1", "agent", "claude"), command: "claude-cmd" },
+        "agent-2": makeTerminal("agent-2", "agent", "gemini"),
+        "shell-1": makeTerminal("shell-1", "terminal"),
+      },
+      panelIds: ["agent-1", "agent-2", "shell-1"],
+      tabGroups: new Map([
+        [
+          "group-1",
+          {
+            id: "group-1",
+            panelIds: ["agent-1", "agent-2"],
+            activeTabId: "agent-1",
+            location: "grid" as const,
+          },
+        ],
+      ]),
+      focusedId: "agent-1",
+    });
+
+    usePanelStore.getState().trashPanelGroup("agent-1");
+
+    const config = usePanelStore.getState().lastClosedConfig;
+    expect(config).not.toBeNull();
+    expect(config!.agentId).toBe("claude");
+    expect(config!.command).toBe("claude-cmd");
+  });
+
+  it("clears lastClosedConfig on reset", async () => {
+    usePanelStore.setState({
+      panelsById: { "shell-1": makeTerminal("shell-1", "terminal") },
+      panelIds: ["shell-1"],
+      focusedId: "shell-1",
+    });
+
+    usePanelStore.getState().trashPanel("shell-1");
+    expect(usePanelStore.getState().lastClosedConfig).not.toBeNull();
+
+    await usePanelStore.getState().reset();
+    expect(usePanelStore.getState().lastClosedConfig).toBeNull();
+  });
+
+  it("clears lastClosedConfig on clearTerminalStoreForSwitch", () => {
+    usePanelStore.setState({
+      panelsById: { "shell-1": makeTerminal("shell-1", "terminal") },
+      panelIds: ["shell-1"],
+      focusedId: "shell-1",
+    });
+
+    usePanelStore.getState().trashPanel("shell-1");
+    expect(usePanelStore.getState().lastClosedConfig).not.toBeNull();
+
+    usePanelStore.getState().clearTerminalStoreForSwitch();
+    expect(usePanelStore.getState().lastClosedConfig).toBeNull();
   });
 });

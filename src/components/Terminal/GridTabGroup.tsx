@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useEffect, useRef } from "react";
-import { useTerminalStore, type TerminalInstance } from "@/store";
+import { usePanelStore, type TerminalInstance } from "@/store";
 import { GridPanel } from "./GridPanel";
 import type { TabGroup } from "@/types";
 import type { TabInfo } from "@/components/Panel/TabButton";
@@ -108,17 +108,17 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   gridCols,
   isMaximized = false,
 }: GridTabGroupProps) {
-  const setFocused = useTerminalStore((state) => state.setFocused);
-  const setActiveTab = useTerminalStore((state) => state.setActiveTab);
-  const setMaximizedId = useTerminalStore((state) => state.setMaximizedId);
-  const trashTerminal = useTerminalStore((state) => state.trashTerminal);
-  const addTerminal = useTerminalStore((state) => state.addTerminal);
-  const addPanelToGroup = useTerminalStore((state) => state.addPanelToGroup);
-  const reorderPanelsInGroup = useTerminalStore((state) => state.reorderPanelsInGroup);
-  const updateTitle = useTerminalStore((state) => state.updateTitle);
+  const setFocused = usePanelStore((state) => state.setFocused);
+  const setActiveTab = usePanelStore((state) => state.setActiveTab);
+  const setMaximizedId = usePanelStore((state) => state.setMaximizedId);
+  const trashPanel = usePanelStore((state) => state.trashPanel);
+  const addPanel = usePanelStore((state) => state.addPanel);
+  const addPanelToGroup = usePanelStore((state) => state.addPanelToGroup);
+  const reorderPanelsInGroup = usePanelStore((state) => state.reorderPanelsInGroup);
+  const updateTitle = usePanelStore((state) => state.updateTitle);
 
   // Subscribe to registry's active tab for reactive updates
-  const storedActiveTabId = useTerminalStore(
+  const storedActiveTabId = usePanelStore(
     (state) => state.tabGroups.get(group.id)?.activeTabId ?? null
   );
 
@@ -183,7 +183,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
     prevActiveTabIdRef.current = activeTabId;
     if (!activeTabId || !isGroupFocused) return;
     const rafId = requestAnimationFrame(() => {
-      const currentFocusedId = useTerminalStore.getState().focusedId;
+      const currentFocusedId = usePanelStore.getState().focusedId;
       if (!currentFocusedId || !panelIdsRef.current.has(currentFocusedId)) return;
       focusPanelInput(activeTabId);
     });
@@ -230,9 +230,9 @@ export const GridTabGroup = React.memo(function GridTabGroup({
         }
       }
       // Trash the terminal (store auto-removes from group)
-      trashTerminal(tabId);
+      trashPanel(tabId);
     },
-    [activeTabId, panels, group.id, setActiveTab, setFocused, trashTerminal]
+    [activeTabId, panels, group.id, setActiveTab, setFocused, trashPanel]
   );
 
   // Handle tab reorder - update group panel order
@@ -249,7 +249,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
 
     try {
       const options = await buildPanelDuplicateOptions(activePanel, "grid");
-      const newPanelId = await addTerminal(options);
+      const newPanelId = await addPanel(options);
       if (!newPanelId) return;
 
       addPanelToGroup(group.id, newPanelId);
@@ -258,7 +258,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
     } catch (error) {
       console.error("Failed to add tab:", error);
     }
-  }, [activePanel, group.id, addTerminal, addPanelToGroup, setActiveTab, setFocused]);
+  }, [activePanel, group.id, addPanel, addPanelToGroup, setActiveTab, setFocused]);
 
   if (!activePanel) {
     return null;

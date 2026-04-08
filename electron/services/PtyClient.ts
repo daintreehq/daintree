@@ -25,7 +25,7 @@
  * - Multiple services need to interact (composition root in main.ts)
  */
 
-import { utilityProcess, UtilityProcess, dialog, app, MessagePortMain } from "electron";
+import { utilityProcess, UtilityProcess, app, MessagePortMain } from "electron";
 import { EventEmitter } from "events";
 import path from "path";
 import os from "os";
@@ -49,7 +49,8 @@ import type {
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId } from "../../shared/types/agent.js";
-import type { TerminalType, TerminalKind } from "../../shared/types/panel.js";
+import type { TerminalType, PanelKind } from "../../shared/types/panel.js";
+import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,7 +58,7 @@ const __dirname = path.dirname(__filename);
 interface TerminalInfoResponse {
   id: string;
   projectId?: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: AgentId;
   title?: string;
@@ -123,29 +124,6 @@ function classifyCrash(code: number | null, signal: string | null): CrashType {
   return "CLEAN_EXIT";
 }
 
-function getCrashMessage(crashType: CrashType, code: number | null): string {
-  switch (crashType) {
-    case "OUT_OF_MEMORY":
-      return (
-        `The terminal backend crashed due to memory exhaustion (code ${code}). ` +
-        `This can happen with high-throughput terminal output. ` +
-        `Consider reducing output volume or splitting tasks.`
-      );
-    case "ASSERTION_FAILURE":
-      return (
-        `The terminal backend crashed due to an internal assertion failure (code ${code}). ` +
-        `This may indicate a bug. Please report this issue.`
-      );
-    case "SIGNAL_TERMINATED":
-      return (
-        `The terminal backend was terminated by a signal (code ${code}). ` +
-        `Terminals may need to be restarted.`
-      );
-    default:
-      return `The terminal backend crashed (code ${code}). Terminals may need to be restarted.`;
-  }
-}
-
 export class PtyClient extends EventEmitter {
   private child: UtilityProcess | null = null;
   private config: Required<PtyClientConfig>;
@@ -162,9 +140,12 @@ export class PtyClient extends EventEmitter {
   private pendingKillCount: Map<string, number> = new Map();
   private needsRespawn = false;
   private activeProjectId: string | null = null;
-  private projectContextMode: "active" | "switch" = "active";
+  private windowProjectContexts = new Map<
+    number,
+    { projectId: string | null; mode: "active" | "switch" }
+  >();
   private shouldResyncProjectContext = false;
-  private pendingMessagePort: MessagePortMain | null = null;
+  private pendingMessagePorts = new Map<number, MessagePortMain>();
   private terminalPids: Map<string, number> = new Map();
   private resourceMonitoringEnabled = false;
   private sessionPersistSuppressed = false;
@@ -306,7 +287,7 @@ export class PtyClient extends EventEmitter {
     });
 
     const electronDir = path.basename(__dirname) === "chunks" ? path.dirname(__dirname) : __dirname;
-    const hostPath = path.join(electronDir, "pty-host.js");
+    const hostPath = path.join(electronDir, "pty-host-bootstrap.js");
 
     console.log(`[PtyClient] Starting Pty Host from: ${hostPath}`);
 
@@ -408,18 +389,6 @@ export class PtyClient extends EventEmitter {
       } else {
         console.error("[PtyClient] Max restart attempts reached, giving up");
         this.emit("host-crash", code);
-
-        if (this.config.showCrashDialog) {
-          const crashMessage = getCrashMessage(crashType, code);
-          dialog
-            .showMessageBox({
-              type: "error",
-              title: "Terminal Service Crashed",
-              message: crashMessage,
-              buttons: ["OK"],
-            })
-            .catch(console.error);
-        }
       }
     });
 
@@ -482,7 +451,7 @@ export class PtyClient extends EventEmitter {
           this.shouldResyncProjectContext = false;
           this.syncProjectContext();
         }
-        this.flushPendingMessagePort();
+        this.flushPendingMessagePorts();
         break;
 
       case "data":
@@ -707,14 +676,14 @@ export class PtyClient extends EventEmitter {
   private respawnPending(): void {
     // Notify that ports need refresh after host restart
     if (this.onPortRefresh) {
-      if (this.pendingMessagePort) {
+      for (const port of this.pendingMessagePorts.values()) {
         try {
-          this.pendingMessagePort.close();
+          port.close();
         } catch {
           // ignore
         }
-        this.pendingMessagePort = null;
       }
+      this.pendingMessagePorts.clear();
       this.onPortRefresh();
     }
 
@@ -794,42 +763,62 @@ export class PtyClient extends EventEmitter {
     this.onPortRefresh = callback;
   }
 
-  private flushPendingMessagePort(): void {
-    if (!this.child || !this.pendingMessagePort) {
+  private flushPendingMessagePorts(): void {
+    if (!this.child || this.pendingMessagePorts.size === 0) {
       return;
     }
 
-    const port = this.pendingMessagePort;
-    this.pendingMessagePort = null;
-    this.connectMessagePort(port);
+    const pending = new Map(this.pendingMessagePorts);
+    this.pendingMessagePorts.clear();
+    for (const [windowId, port] of pending) {
+      this.connectMessagePort(windowId, port);
+    }
   }
 
   /** Forward MessagePort to Pty Host for direct Renderer↔PtyHost communication */
-  connectMessagePort(port: MessagePortMain): void {
-    if (this.pendingMessagePort && this.pendingMessagePort !== port) {
+  connectMessagePort(windowId: number, port: MessagePortMain): void {
+    const existingPending = this.pendingMessagePorts.get(windowId);
+    if (existingPending && existingPending !== port) {
       try {
-        this.pendingMessagePort.close();
+        existingPending.close();
       } catch {
         // ignore
       }
-      this.pendingMessagePort = null;
+      this.pendingMessagePorts.delete(windowId);
     }
 
     if (!this.child) {
       console.warn("[PtyClient] Cannot connect MessagePort - host not running, will retry");
-      this.pendingMessagePort = port;
+      this.pendingMessagePorts.set(windowId, port);
       return;
     }
 
     try {
-      this.child.postMessage({ type: "connect-port" }, [port]);
+      this.child.postMessage({ type: "connect-port", windowId }, [port]);
       if (process.env.CANOPY_VERBOSE) {
-        console.log("[PtyClient] MessagePort forwarded to Pty Host");
+        console.log(`[PtyClient] MessagePort forwarded to Pty Host for window ${windowId}`);
+      }
+      // Re-send project context for this window (handles page reload case where
+      // disconnectWindow in the host clears windowProjectMap on port-replace)
+      const ctx = this.windowProjectContexts.get(windowId);
+      if (ctx) {
+        if (ctx.mode === "switch" && ctx.projectId !== null) {
+          this.send({ type: "project-switch", windowId, projectId: ctx.projectId });
+        } else {
+          this.send({ type: "set-active-project", windowId, projectId: ctx.projectId });
+        }
       }
     } catch (error) {
       console.error("[PtyClient] Failed to forward MessagePort to Pty Host:", error);
-      this.pendingMessagePort = port;
+      this.pendingMessagePorts.set(windowId, port);
     }
+  }
+
+  /** Notify Pty Host that a window's MessagePort should be disconnected */
+  disconnectMessagePort(windowId: number): void {
+    this.pendingMessagePorts.delete(windowId);
+    this.windowProjectContexts.delete(windowId);
+    this.send({ type: "disconnect-port", windowId });
   }
 
   private resolveKeySequence(key: string): string | null {
@@ -948,6 +937,14 @@ export class PtyClient extends EventEmitter {
     this.send({ type: "set-resource-monitoring", enabled });
   }
 
+  setResourceProfile(profile: ResourceProfile): void {
+    this.send({ type: "set-resource-profile", profile });
+  }
+
+  setProcessTreePollInterval(ms: number): void {
+    this.send({ type: "set-process-tree-poll-interval", ms });
+  }
+
   /**
    * Enable/disable IPC data mirroring for a terminal.
    * When enabled, PTY data is always sent via IPC in addition to SharedArrayBuffer,
@@ -975,41 +972,37 @@ export class PtyClient extends EventEmitter {
       return;
     }
 
-    if (!this.activeProjectId) {
-      this.send({ type: "set-active-project", projectId: null });
-      return;
+    for (const [windowId, ctx] of this.windowProjectContexts) {
+      if (ctx.mode === "switch" && ctx.projectId !== null) {
+        this.send({ type: "project-switch", windowId, projectId: ctx.projectId });
+      } else {
+        this.send({ type: "set-active-project", windowId, projectId: ctx.projectId });
+      }
     }
-
-    if (this.projectContextMode === "switch") {
-      this.send({ type: "project-switch", projectId: this.activeProjectId });
-      return;
-    }
-
-    this.send({ type: "set-active-project", projectId: this.activeProjectId });
   }
 
-  setActiveProject(projectId: string | null): void {
+  setActiveProject(windowId: number, projectId: string | null): void {
     this.activeProjectId = projectId;
-    this.projectContextMode = "active";
+    this.windowProjectContexts.set(windowId, { projectId, mode: "active" });
 
     if (!this.child) {
       this.shouldResyncProjectContext = true;
       return;
     }
 
-    this.send({ type: "set-active-project", projectId });
+    this.send({ type: "set-active-project", windowId, projectId });
   }
 
-  onProjectSwitch(projectId: string): void {
+  onProjectSwitch(windowId: number, projectId: string): void {
     this.activeProjectId = projectId;
-    this.projectContextMode = "switch";
+    this.windowProjectContexts.set(windowId, { projectId, mode: "switch" });
 
     if (!this.child) {
       this.shouldResyncProjectContext = true;
       return;
     }
 
-    this.send({ type: "project-switch", projectId });
+    this.send({ type: "project-switch", windowId, projectId });
   }
 
   async gracefulKill(id: string): Promise<string | null> {
@@ -1402,14 +1395,14 @@ export class PtyClient extends EventEmitter {
     }
     this.isWaitingForHandshake = false;
 
-    if (this.pendingMessagePort) {
+    for (const port of this.pendingMessagePorts.values()) {
       try {
-        this.pendingMessagePort.close();
+        port.close();
       } catch {
         // ignore
       }
-      this.pendingMessagePort = null;
     }
+    this.pendingMessagePorts.clear();
 
     if (this.child) {
       this.send({ type: "dispose" });
@@ -1437,6 +1430,7 @@ export class PtyClient extends EventEmitter {
 
     this.pendingSpawns.clear();
     this.pendingKillCount.clear();
+    this.windowProjectContexts.clear();
     this.ipcDataMirrorIds.clear();
     this.terminalPids.clear();
     this.snapshotCallbacks.clear();

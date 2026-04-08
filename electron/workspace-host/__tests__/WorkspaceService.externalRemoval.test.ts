@@ -151,7 +151,6 @@ describe("WorkspaceService external worktree removal", () => {
     WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
 
     service["projectRootPath"] = "/test/root";
-    service["projectScopeId"] = "test-scope";
     service["git"] = mockSimpleGit as any;
   });
 
@@ -159,10 +158,7 @@ describe("WorkspaceService external worktree removal", () => {
     vi.restoreAllMocks();
   });
 
-  function createAndRegisterMonitor(
-    overrides: Partial<Worktree> = {},
-    scopeId = "test-scope"
-  ): WorktreeMonitor {
+  function createAndRegisterMonitor(overrides: Partial<Worktree> = {}): WorktreeMonitor {
     const wt = createTestWorktree(overrides);
     const monitor = new WorktreeMonitorClass(
       wt,
@@ -176,7 +172,6 @@ describe("WorkspaceService external worktree removal", () => {
       { onUpdate: vi.fn() },
       "main"
     );
-    monitor.setProjectScopeId(scopeId);
     service["monitors"].set(wt.id, monitor);
     return monitor;
   }
@@ -191,7 +186,6 @@ describe("WorkspaceService external worktree removal", () => {
         expect.objectContaining({
           type: "worktree-removed",
           worktreeId: "/test/worktree",
-          projectScopeId: "test-scope",
         })
       );
       expect(service["monitors"].has("/test/worktree")).toBe(false);
@@ -206,38 +200,6 @@ describe("WorkspaceService external worktree removal", () => {
       expect(mockSendEvent).not.toHaveBeenCalledWith(
         expect.objectContaining({ type: "worktree-removed" })
       );
-    });
-
-    it("emits removal event even when monitor scope differs from service scope", () => {
-      createAndRegisterMonitor({}, "old-scope");
-
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      service["handleExternalWorktreeRemoval"]("/test/worktree");
-
-      expect(mockSendEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "worktree-removed",
-          worktreeId: "/test/worktree",
-          projectScopeId: "test-scope",
-        })
-      );
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Scope ID mismatch"));
-      expect(service["monitors"].has("/test/worktree")).toBe(false);
-
-      warnSpy.mockRestore();
-    });
-
-    it("does not emit removal event when service projectScopeId is null", () => {
-      service["projectScopeId"] = null;
-      createAndRegisterMonitor({}, null as any);
-
-      service["handleExternalWorktreeRemoval"]("/test/worktree");
-
-      expect(mockSendEvent).not.toHaveBeenCalledWith(
-        expect.objectContaining({ type: "worktree-removed" })
-      );
-      expect(service["monitors"].has("/test/worktree")).toBe(false);
     });
   });
 });

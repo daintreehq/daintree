@@ -1,5 +1,5 @@
 import { notify } from "@/lib/notify";
-import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useUIStore } from "@/store/uiStore";
 
 export function fireWatchNotification(
@@ -8,9 +8,28 @@ export function fireWatchNotification(
   agentState: string
 ): void {
   const label = panelTitle || panelId;
-  const isWaiting = agentState === "waiting";
 
-  if (isWaiting) {
+  if (agentState === "exited") {
+    notify({
+      type: "info",
+      priority: "high",
+      title: "Process exited",
+      message: `${label} process has exited`,
+      duration: 5000,
+      correlationId: panelId,
+      action: {
+        label: "Go to terminal",
+        onClick: () => {
+          usePanelStore.getState().setFocused(panelId, true);
+        },
+        actionId: "panel.focus",
+        actionArgs: { panelId },
+      },
+    });
+    return;
+  }
+
+  if (agentState === "waiting") {
     notify({
       type: "warning",
       priority: "high",
@@ -21,7 +40,7 @@ export function fireWatchNotification(
       action: {
         label: "Go to terminal",
         onClick: () => {
-          useTerminalStore.getState().setFocused(panelId, true);
+          usePanelStore.getState().setFocused(panelId, true);
         },
         actionId: "panel.focus",
         actionArgs: { panelId },
@@ -40,7 +59,7 @@ export function fireWatchNotification(
     action: {
       label: "Go to terminal",
       onClick: () => {
-        useTerminalStore.getState().setFocused(panelId, true);
+        usePanelStore.getState().setFocused(panelId, true);
       },
       actionId: "panel.focus",
       actionArgs: { panelId },

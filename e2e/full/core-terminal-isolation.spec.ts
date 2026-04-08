@@ -34,7 +34,12 @@ test.describe.serial("Core: Terminal Isolation", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "terminal-isolation" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Terminal Isolation Test");
+    ctx.window = await openAndOnboardProject(
+      ctx.app,
+      ctx.window,
+      fixtureDir,
+      "Terminal Isolation Test"
+    );
   });
 
   test.afterAll(async () => {

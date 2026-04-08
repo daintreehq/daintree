@@ -1,26 +1,53 @@
 import { ipcMain, dialog } from "electron";
+import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
+import { distributePortsToView } from "../../window/portDistribution.js";
 import path from "path";
 import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { runCommandDetector } from "../../services/RunCommandDetector.js";
 import { ProjectSwitchService } from "../../services/ProjectSwitchService.js";
-import { sendToRenderer } from "../utils.js";
-import { randomUUID } from "crypto";
+import { broadcastToRenderer, sendToRenderer } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type { Project, ProjectSettings } from "../../types/index.js";
-import type { BulkProjectStats, BulkProjectStatsEntry } from "../../../shared/types/ipc/project.js";
+import type {
+  BulkProjectStats,
+  ProjectSwitchOutgoingState,
+} from "../../../shared/types/ipc/project.js";
+import { sanitizeTerminals, sanitizeTerminalSizes, sanitizeDraftInputs } from "./terminalLayout.js";
+import { sanitizeTabGroups } from "../../schemas/index.js";
+import type { TabGroup } from "../../../shared/types/panel.js";
+import { ProjectStatsService } from "../../services/ProjectStatsService.js";
 import type {
   GitInitOptions,
   GitInitResult,
   GitInitProgressEvent,
 } from "../../../shared/types/ipc/gitInit.js";
-import { createHardenedGit } from "../../utils/hardenedGit.js";
+import type {
+  CloneRepoOptions,
+  CloneRepoResult,
+  CloneRepoProgressEvent,
+} from "../../../shared/types/ipc/gitClone.js";
+import { createHardenedGit, createAuthenticatedGit } from "../../utils/hardenedGit.js";
+
+let projectStatsServiceInstance: ProjectStatsService | null = null;
+
+export function getProjectStatsService(): ProjectStatsService | null {
+  return projectStatsServiceInstance;
+}
 
 export function registerProjectCrudHandlers(deps: HandlerDependencies): () => void {
-  const { mainWindow } = deps;
+  const mainWindow = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
   const handlers: Array<() => void> = [];
 
   const projectSwitchService = deps.projectSwitchService ?? new ProjectSwitchService(deps);
+
+  const projectStatsService = new ProjectStatsService(deps.ptyClient);
+  projectStatsServiceInstance = projectStatsService;
+  projectStatsService.start();
+  handlers.push(() => {
+    projectStatsService.stop();
+    projectStatsServiceInstance = null;
+  });
 
   const handleProjectGetAll = async () => {
     return projectStore.getAllProjects();
@@ -28,12 +55,31 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
   ipcMain.handle(CHANNELS.PROJECT_GET_ALL, handleProjectGetAll);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_ALL));
 
-  const handleProjectGetCurrent = async () => {
+  const handleProjectGetCurrent = async (event: Electron.IpcMainInvokeEvent) => {
+    // Multi-view: resolve the project from the sender's view
+    const senderWinForPvm = getWindowForWebContents(event.sender);
+    const pvmCtx = senderWinForPvm
+      ? deps.windowRegistry?.getByWindowId(senderWinForPvm.id)
+      : undefined;
+    const pvm = pvmCtx?.services?.projectViewManager ?? deps.projectViewManager;
+    if (pvm) {
+      const viewProjectId = pvm.getProjectIdForWebContents(event.sender.id);
+      if (viewProjectId) {
+        const project = projectStore.getProjectById(viewProjectId);
+        if (project) return project;
+      }
+    }
+
+    // Fallback: global current project
     const currentProject = projectStore.getCurrentProject();
 
     if (currentProject && deps.worktreeService) {
+      const senderWindow = getWindowForWebContents(event.sender);
+      const windowId = senderWindow?.id ?? deps.mainWindow?.id;
       try {
-        await deps.worktreeService.loadProject(currentProject.path);
+        if (windowId !== undefined) {
+          await deps.worktreeService.loadProject(currentProject.path, windowId);
+        }
       } catch (err) {
         console.error("Failed to load worktrees for current project:", err);
       }
@@ -51,7 +97,10 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     if (!path.isAbsolute(projectPath)) {
       throw new Error("Project path must be absolute");
     }
-    return await projectStore.addProject(projectPath);
+    const project = await projectStore.addProject(projectPath);
+    // Notify all renderers so the project list stays in sync across views.
+    broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
+    return project;
   };
   ipcMain.handle(CHANNELS.PROJECT_ADD, handleProjectAdd);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_ADD));
@@ -68,6 +117,8 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     }
 
     await projectStore.removeProject(projectId);
+    // Notify all renderers so the project list stays in sync across views.
+    broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
   };
   ipcMain.handle(CHANNELS.PROJECT_REMOVE, handleProjectRemove);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_REMOVE));
@@ -83,12 +134,21 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     if (typeof updates !== "object" || updates === null) {
       throw new Error("Invalid updates object");
     }
-    // Strip control-plane fields — use project:enable/disable-in-repo-settings instead
-    const { inRepoSettings: _inRepo, ...safeUpdates } = updates;
+    // Strip control-plane and internal scoring fields
+    const {
+      inRepoSettings: _inRepo,
+      frecencyScore: _fs,
+      lastAccessedAt: _lat,
+      ...safeUpdates
+    } = updates;
     const updated = projectStore.updateProject(projectId, safeUpdates);
+    // Notify all renderers so other project views (e.g., a newly-created
+    // project view while the onboarding wizard is still running in the
+    // originating welcome view) refresh their cached project data.
+    broadcastToRenderer(CHANNELS.PROJECT_UPDATED, updated);
     if (
       updated.inRepoSettings &&
-      (updates.name !== undefined || updates.emoji !== undefined || updates.color !== undefined)
+      (updates.name !== undefined || updates.emoji !== undefined || "color" in updates)
     ) {
       projectStore
         .writeInRepoProjectIdentity(updated.path, {
@@ -108,21 +168,140 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
   ipcMain.handle(CHANNELS.PROJECT_UPDATE, handleProjectUpdate);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_UPDATE));
 
-  const handleProjectSwitch = async (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
+  const handleProjectSwitch = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    outgoingState?: ProjectSwitchOutgoingState
+  ) => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
 
+    const project = projectStore.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    // Pre-apply the renderer's outgoing terminal state to the current project's
+    // persisted state BEFORE the switch runs.
+    const previousProjectId = projectStore.getCurrentProjectId();
+    if (outgoingState && previousProjectId) {
+      const validTerminals = outgoingState.terminals
+        ? sanitizeTerminals(
+            outgoingState.terminals,
+            `project:switch/pre-apply(${previousProjectId})`
+          )
+        : undefined;
+      const validSizes = outgoingState.terminalSizes
+        ? sanitizeTerminalSizes(outgoingState.terminalSizes as Record<string, unknown>)
+        : undefined;
+      const validDrafts = outgoingState.draftInputs
+        ? sanitizeDraftInputs(outgoingState.draftInputs as Record<string, unknown>)
+        : undefined;
+      const validTabGroups =
+        outgoingState.tabGroups !== undefined
+          ? (sanitizeTabGroups(
+              outgoingState.tabGroups,
+              `project:switch/pre-apply(${previousProjectId})`
+            ) as TabGroup[])
+          : undefined;
+      const existing = await projectStore.getProjectState(previousProjectId);
+      await projectStore.saveProjectState(previousProjectId, {
+        ...(existing ?? { projectId: previousProjectId, sidebarWidth: 350, terminals: [] }),
+        projectId: previousProjectId,
+        ...(validTerminals !== undefined && { terminals: validTerminals }),
+        ...(validSizes !== undefined && { terminalSizes: validSizes }),
+        ...(validDrafts !== undefined && { draftInputs: validDrafts }),
+        ...(validTabGroups !== undefined && { tabGroups: validTabGroups }),
+        activeWorktreeId: outgoingState.activeWorktreeId,
+      });
+    }
+
+    const senderWindowForPvm = getWindowForWebContents(_event.sender);
+    const pvmCtx = senderWindowForPvm
+      ? deps.windowRegistry?.getByWindowId(senderWindowForPvm.id)
+      : undefined;
+    const pvm = pvmCtx?.services?.projectViewManager ?? deps.projectViewManager;
+    if (pvm) {
+      // Multi-view path: swap WebContentsViews instead of resetting stores
+      const { view, isNew } = await pvm.switchTo(projectId, project.path);
+
+      // Update the main process global state
+      await projectStore.setCurrentProject(projectId);
+
+      // Always call loadProject so the WorkspaceClient's windowToProject
+      // mapping points to the correct project.  Without this, reactivating a
+      // cached view leaves the mapping pointing at the *previous* project,
+      // causing sendToEntryWindows to route the old project's IPC events to
+      // the newly-active view (cross-project worktree contamination).
+      if (deps.worktreeService) {
+        const senderWindow = getWindowForWebContents(_event.sender);
+        const windowId = senderWindow?.id ?? deps.mainWindow?.id;
+        if (windowId !== undefined) {
+          try {
+            await deps.worktreeService.loadProject(project.path, windowId);
+
+            // Always attach a direct MessagePort.  For new views this is the
+            // first port; for cached views it re-establishes the relay after a
+            // potential host recreation (CLEANUP_GRACE_MS expiry).
+            if (!view.webContents.isDestroyed()) {
+              deps.worktreeService.attachDirectPort(windowId, view.webContents);
+
+              // Broker new worktree port (Phase 1)
+              const host = deps.worktreeService.getHostForProject(project.path);
+              if (host && deps.worktreePortBroker) {
+                deps.worktreePortBroker.brokerPort(host, view.webContents);
+              }
+            }
+          } catch (err) {
+            console.error("[ProjectSwitch] Failed to load worktrees:", err);
+          }
+        }
+
+        // Register the new view's webContents in WindowRegistry
+        if (isNew && deps.windowRegistry && senderWindow) {
+          deps.windowRegistry.registerAppViewWebContents(senderWindow.id, view.webContents.id);
+        }
+      }
+
+      // Notify PTY host of the active project and distribute a fresh
+      // MessagePort to the new/reactivated view so terminal data flows.
+      {
+        const senderWindow = getWindowForWebContents(_event.sender);
+        const windowId = senderWindow?.id ?? deps.mainWindow?.id;
+        if (windowId !== undefined) {
+          if (deps.ptyClient) {
+            deps.ptyClient.onProjectSwitch(windowId, projectId);
+          }
+
+          // Distribute PTY MessagePort to the switched-to view
+          const win = senderWindow ?? deps.mainWindow;
+          if (win && deps.windowRegistry && !view.webContents.isDestroyed()) {
+            const ctx = deps.windowRegistry.getByWindowId(win.id);
+            if (ctx) {
+              distributePortsToView(win, ctx, view.webContents, deps.ptyClient ?? null);
+            }
+          }
+        }
+      }
+
+      return project;
+    }
+
+    // Fallback: legacy single-view switch path
     return await projectSwitchService.switchProject(projectId);
   };
   ipcMain.handle(CHANNELS.PROJECT_SWITCH, handleProjectSwitch);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_SWITCH));
 
   const handleProjectOpenDialog = async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ["openDirectory", "createDirectory"],
+    const dialogOpts = {
+      properties: ["openDirectory" as const, "createDirectory" as const],
       title: "Open Git Repository",
-    });
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, dialogOpts)
+      : await dialog.showOpenDialog(dialogOpts);
 
     if (result.canceled || result.filePaths.length === 0) {
       return null;
@@ -159,10 +338,15 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     if (!settings || typeof settings !== "object") {
       throw new Error("Invalid settings object");
     }
+    const previousSettings = await projectStore.getProjectSettings(projectId);
     await projectStore.saveProjectSettings(projectId, settings);
     const project = projectStore.getProjectById(projectId);
     if (project?.inRepoSettings) {
       await projectStore.writeInRepoSettings(project.path, settings);
+    }
+    if (settings.githubRemote !== previousSettings.githubRemote) {
+      const { clearGitHubCaches } = await import("../../services/GitHubService.js");
+      clearGitHubCaches();
     }
   };
   ipcMain.handle(CHANNELS.PROJECT_SAVE_SETTINGS, handleProjectSaveSettings);
@@ -240,6 +424,9 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
         };
       } else {
         projectStore.updateProjectStatus(projectId, "background");
+        if (deps.worktreeService) {
+          deps.worktreeService.pauseProject(project.path);
+        }
 
         console.log(
           `[IPC] project:close: Backgrounded project with ${ptyStats.terminalCount} running terminals`
@@ -264,7 +451,11 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
   ipcMain.handle(CHANNELS.PROJECT_CLOSE, handleProjectClose);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CLOSE));
 
-  const handleProjectReopen = async (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
+  const handleProjectReopen = async (
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    outgoingState?: ProjectSwitchOutgoingState
+  ) => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
@@ -276,24 +467,115 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    if (project.status === "active") {
-      console.log(
-        `[IPC] project:reopen: Project ${projectId} already active, emitting switch event`
+    if (project.status !== "background" && project.status !== "active") {
+      throw new Error(
+        `Cannot reopen project ${projectId} unless status is "background" or "active" (current: ${project.status ?? "unset"})`
       );
-      const switchId = randomUUID();
-      sendToRenderer(mainWindow, CHANNELS.PROJECT_ON_SWITCH, {
-        project,
-        switchId,
+    }
+
+    // Pre-apply outgoing terminal state
+    const previousProjectId = projectStore.getCurrentProjectId();
+    if (outgoingState && previousProjectId && previousProjectId !== projectId) {
+      const validTerminals = outgoingState.terminals
+        ? sanitizeTerminals(
+            outgoingState.terminals,
+            `project:reopen/pre-apply(${previousProjectId})`
+          )
+        : undefined;
+      const validSizes = outgoingState.terminalSizes
+        ? sanitizeTerminalSizes(outgoingState.terminalSizes as Record<string, unknown>)
+        : undefined;
+      const validDrafts = outgoingState.draftInputs
+        ? sanitizeDraftInputs(outgoingState.draftInputs as Record<string, unknown>)
+        : undefined;
+      const validTabGroups =
+        outgoingState.tabGroups !== undefined
+          ? (sanitizeTabGroups(
+              outgoingState.tabGroups,
+              `project:reopen/pre-apply(${previousProjectId})`
+            ) as TabGroup[])
+          : undefined;
+      const existing = await projectStore.getProjectState(previousProjectId);
+      await projectStore.saveProjectState(previousProjectId, {
+        ...(existing ?? { projectId: previousProjectId, sidebarWidth: 350, terminals: [] }),
+        projectId: previousProjectId,
+        ...(validTerminals !== undefined && { terminals: validTerminals }),
+        ...(validSizes !== undefined && { terminalSizes: validSizes }),
+        ...(validDrafts !== undefined && { draftInputs: validDrafts }),
+        ...(validTabGroups !== undefined && { tabGroups: validTabGroups }),
+        activeWorktreeId: outgoingState.activeWorktreeId,
       });
+    }
+
+    const senderWindowForPvm = getWindowForWebContents(event.sender);
+    const pvmCtx = senderWindowForPvm
+      ? deps.windowRegistry?.getByWindowId(senderWindowForPvm.id)
+      : undefined;
+    const pvm = pvmCtx?.services?.projectViewManager ?? deps.projectViewManager;
+    if (pvm) {
+      // Multi-view path: swap views
+      const { view, isNew } = await pvm.switchTo(projectId, project.path);
+      await projectStore.setCurrentProject(projectId);
+      projectStore.updateProjectStatus(projectId, "active");
+
+      // Resume workspace host before loading project
+      if (deps.worktreeService) {
+        deps.worktreeService.resumeProject(project.path);
+      }
+
+      // Always call loadProject — see comment in handleProjectSwitch above.
+      if (deps.worktreeService) {
+        const senderWindow = getWindowForWebContents(event.sender);
+        const windowId = senderWindow?.id ?? deps.mainWindow?.id;
+        if (windowId !== undefined) {
+          try {
+            await deps.worktreeService.loadProject(project.path, windowId);
+
+            if (!view.webContents.isDestroyed()) {
+              deps.worktreeService.attachDirectPort(windowId, view.webContents);
+
+              // Broker new worktree port (Phase 1)
+              const host = deps.worktreeService.getHostForProject(project.path);
+              if (host && deps.worktreePortBroker) {
+                deps.worktreePortBroker.brokerPort(host, view.webContents);
+              }
+            }
+          } catch (err) {
+            console.error("[ProjectReopen] Failed to load worktrees:", err);
+          }
+        }
+
+        if (isNew && deps.windowRegistry && senderWindow) {
+          deps.windowRegistry.registerAppViewWebContents(senderWindow.id, view.webContents.id);
+        }
+      }
+
+      // Notify PTY host of the active project and distribute a fresh MessagePort
+      {
+        const senderWindow = getWindowForWebContents(event.sender);
+        const windowId = senderWindow?.id ?? deps.mainWindow?.id;
+        if (windowId !== undefined) {
+          if (deps.ptyClient) {
+            deps.ptyClient.onProjectSwitch(windowId, projectId);
+          }
+
+          const win = senderWindow ?? deps.mainWindow;
+          if (win && deps.windowRegistry && !view.webContents.isDestroyed()) {
+            const ctx = deps.windowRegistry.getByWindowId(win.id);
+            if (ctx) {
+              distributePortsToView(win, ctx, view.webContents, deps.ptyClient ?? null);
+            }
+          }
+        }
+      }
+
       return project;
     }
 
-    if (project.status !== "background") {
-      throw new Error(
-        `Cannot reopen project ${projectId} unless status is "background" (current: ${project.status ?? "unset"})`
-      );
+    // Fallback: legacy single-view path
+    if (deps.worktreeService) {
+      deps.worktreeService.resumeProject(project.path);
     }
-
     return await projectSwitchService.reopenProject(projectId);
   };
   ipcMain.handle(CHANNELS.PROJECT_REOPEN, handleProjectReopen);
@@ -332,55 +614,49 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     const uniqueIds = [...new Set(projectIds.filter((id) => typeof id === "string" && id))];
     const MEMORY_PER_TERMINAL_MB = 50;
 
-    const entries = await Promise.allSettled(
-      uniqueIds.map(async (projectId): Promise<[string, BulkProjectStatsEntry]> => {
-        const [ptyStats, terminalIds] = await Promise.all([
-          deps.ptyClient!.getProjectStats(projectId),
-          deps.ptyClient!.getTerminalsForProjectAsync(projectId),
-        ]);
+    // Fetch all terminals once and per-project stats in parallel (eliminates N+1 per-terminal IPC)
+    const [allTerminals, statsResults] = await Promise.all([
+      deps.ptyClient!.getAllTerminalsAsync(),
+      Promise.allSettled(
+        uniqueIds.map((id) => deps.ptyClient!.getProjectStats(id).then((s) => [id, s] as const))
+      ),
+    ]);
 
-        let activeAgentCount = 0;
-        let waitingAgentCount = 0;
+    // Group agent counts by projectId from the bulk terminal list
+    const agentCounts = new Map<string, { active: number; waiting: number }>();
+    for (const id of uniqueIds) {
+      agentCounts.set(id, { active: 0, waiting: 0 });
+    }
+    for (const terminal of allTerminals) {
+      if (!terminal.projectId) continue;
+      const counts = agentCounts.get(terminal.projectId);
+      if (!counts) continue;
+      if (terminal.isTrashed) continue;
+      if (terminal.kind === "dev-preview") continue;
+      if (terminal.hasPty === false) continue;
+      if (terminal.kind !== "agent" && !terminal.agentId) continue;
 
-        const terminalInfos = await Promise.all(
-          terminalIds.map((id) => deps.ptyClient!.getTerminalAsync(id))
-        );
-
-        for (const terminal of terminalInfos) {
-          if (!terminal) continue;
-          if (terminal.kind === "dev-preview") continue;
-          if (terminal.hasPty === false) continue;
-
-          const isAgent = terminal.kind === "agent" || !!terminal.agentId;
-          if (!isAgent) continue;
-
-          if (terminal.agentState === "waiting") {
-            waitingAgentCount += 1;
-          } else if (terminal.agentState === "working" || terminal.agentState === "running") {
-            activeAgentCount += 1;
-          }
-        }
-
-        return [
-          projectId,
-          {
-            processCount: ptyStats.terminalCount,
-            terminalCount: ptyStats.terminalCount,
-            estimatedMemoryMB: ptyStats.terminalCount * MEMORY_PER_TERMINAL_MB,
-            terminalTypes: ptyStats.terminalTypes,
-            processIds: ptyStats.processIds,
-            activeAgentCount,
-            waitingAgentCount,
-          },
-        ];
-      })
-    );
+      if (terminal.agentState === "waiting") {
+        counts.waiting += 1;
+      } else if (terminal.agentState === "working" || terminal.agentState === "running") {
+        counts.active += 1;
+      }
+    }
 
     const result: BulkProjectStats = {};
-    for (const entry of entries) {
+    for (const entry of statsResults) {
       if (entry.status === "fulfilled") {
-        const [id, stats] = entry.value;
-        result[id] = stats;
+        const [id, ptyStats] = entry.value;
+        const counts = agentCounts.get(id) ?? { active: 0, waiting: 0 };
+        result[id] = {
+          processCount: ptyStats.terminalCount,
+          terminalCount: ptyStats.terminalCount,
+          estimatedMemoryMB: ptyStats.terminalCount * MEMORY_PER_TERMINAL_MB,
+          terminalTypes: ptyStats.terminalTypes,
+          processIds: ptyStats.processIds,
+          activeAgentCount: counts.active,
+          waitingAgentCount: counts.waiting,
+        };
       }
     }
     return result;
@@ -479,12 +755,14 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_INIT_GIT));
 
   const handleProjectInitGitGuided = async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     options: GitInitOptions
   ): Promise<GitInitResult> => {
     if (!options || typeof options !== "object") {
       throw new Error("Invalid options object");
     }
+
+    const senderWindow = getWindowForWebContents(event.sender);
 
     const {
       directoryPath,
@@ -509,17 +787,18 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       message: string,
       error?: string
     ) => {
-      if (mainWindow.isDestroyed()) {
-        return;
-      }
-      const event: GitInitProgressEvent = {
+      const progressEvent: GitInitProgressEvent = {
         step,
         status,
         message,
         error,
         timestamp: Date.now(),
       };
-      mainWindow.webContents.send(CHANNELS.PROJECT_INIT_GIT_PROGRESS, event);
+      if (senderWindow && !senderWindow.isDestroyed()) {
+        sendToRenderer(senderWindow, CHANNELS.PROJECT_INIT_GIT_PROGRESS, progressEvent);
+      } else {
+        broadcastToRenderer(CHANNELS.PROJECT_INIT_GIT_PROGRESS, progressEvent);
+      }
     };
 
     try {
@@ -690,6 +969,146 @@ Thumbs.db
   ipcMain.handle(CHANNELS.PROJECT_INIT_GIT_GUIDED, handleProjectInitGitGuided);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_INIT_GIT_GUIDED));
 
+  let cloneAbortController: AbortController | null = null;
+
+  const handleProjectCloneRepo = async (
+    event: Electron.IpcMainInvokeEvent,
+    options: CloneRepoOptions
+  ): Promise<CloneRepoResult> => {
+    if (!options || typeof options !== "object") {
+      throw new Error("Invalid options object");
+    }
+
+    const senderWindow = getWindowForWebContents(event.sender);
+
+    const { url, parentPath, folderName, shallowClone } = options;
+
+    if (typeof url !== "string" || !url.trim()) {
+      throw new Error("Repository URL is required");
+    }
+    if (!/^https?:\/\//i.test(url) && !/^git@/i.test(url)) {
+      throw new Error("Only HTTP(S) and SSH (git@) URLs are supported");
+    }
+    if (typeof parentPath !== "string" || !parentPath.trim()) {
+      throw new Error("Parent path is required");
+    }
+    if (!path.isAbsolute(parentPath)) {
+      throw new Error("Parent path must be absolute");
+    }
+    if (typeof folderName !== "string" || !folderName.trim()) {
+      throw new Error("Folder name is required");
+    }
+
+    const trimmedFolder = folderName.trim();
+    if (
+      trimmedFolder.includes("/") ||
+      trimmedFolder.includes("\\") ||
+      trimmedFolder === ".." ||
+      trimmedFolder === "."
+    ) {
+      throw new Error("Folder name must not contain path separators or dot segments");
+    }
+
+    const targetPath = path.join(parentPath, trimmedFolder);
+    const normalizedParent = path.resolve(parentPath);
+    const normalizedTarget = path.resolve(targetPath);
+    if (!normalizedTarget.startsWith(normalizedParent + path.sep)) {
+      throw new Error("Folder name resolves outside of the parent directory");
+    }
+
+    const fs = await import("fs");
+
+    try {
+      const parentStat = await fs.promises.stat(parentPath);
+      if (!parentStat.isDirectory()) {
+        throw new Error("Parent path is not a directory");
+      }
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        throw new Error("Parent directory does not exist", { cause: err });
+      }
+      throw err;
+    }
+
+    const targetExists = await fs.promises
+      .access(targetPath)
+      .then(() => true)
+      .catch(() => false);
+    if (targetExists) {
+      throw new Error(`Folder "${trimmedFolder}" already exists in this location`);
+    }
+
+    const emitProgress = (stage: string, progress: number, message: string) => {
+      const progressEvent: CloneRepoProgressEvent = {
+        stage,
+        progress,
+        message,
+        timestamp: Date.now(),
+      };
+      if (senderWindow && !senderWindow.isDestroyed()) {
+        sendToRenderer(senderWindow, CHANNELS.PROJECT_CLONE_PROGRESS, progressEvent);
+      } else {
+        broadcastToRenderer(CHANNELS.PROJECT_CLONE_PROGRESS, progressEvent);
+      }
+    };
+
+    cloneAbortController = new AbortController();
+
+    try {
+      emitProgress("starting", 0, "Starting clone...");
+
+      const git = createAuthenticatedGit(parentPath, {
+        signal: cloneAbortController.signal,
+        progress({ stage, progress }) {
+          emitProgress(stage, progress, `${stage}: ${progress}%`);
+        },
+        extraConfig: ["transfer.bundleURI=false"],
+      });
+
+      git.env({ ...process.env, GIT_TERMINAL_PROMPT: "0" });
+
+      await git.clone(url, trimmedFolder, shallowClone ? ["--depth", "1"] : []);
+
+      emitProgress("complete", 100, "Clone complete");
+      return { success: true, clonedPath: targetPath };
+    } catch (error) {
+      const wasCancelled =
+        cloneAbortController?.signal.aborted ||
+        (error instanceof Error && (error.name === "AbortError" || /abort/i.test(error.message)));
+
+      // Clean up partial clone
+      const partialExists = await fs.promises
+        .access(targetPath)
+        .then(() => true)
+        .catch(() => false);
+      if (partialExists) {
+        await fs.promises.rm(targetPath, { recursive: true, force: true }).catch(() => {});
+      }
+
+      if (wasCancelled) {
+        emitProgress("cancelled", 0, "Clone cancelled");
+        return { success: false, cancelled: true, error: "Clone cancelled" };
+      }
+
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      emitProgress("error", 0, `Clone failed: ${errorMessage}`);
+      return { success: false, error: errorMessage };
+    } finally {
+      cloneAbortController = null;
+    }
+  };
+  ipcMain.handle(CHANNELS.PROJECT_CLONE_REPO, handleProjectCloneRepo);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CLONE_REPO));
+
+  const handleProjectCloneCancel = async (_event: Electron.IpcMainInvokeEvent): Promise<void> => {
+    if (cloneAbortController) {
+      cloneAbortController.abort();
+    }
+  };
+  ipcMain.handle(CHANNELS.PROJECT_CLONE_CANCEL, handleProjectCloneCancel);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CLONE_CANCEL));
+
   const handleProjectCheckMissing = async (
     _event: Electron.IpcMainInvokeEvent
   ): Promise<string[]> => {
@@ -710,11 +1129,15 @@ Thumbs.db
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    const result = await dialog.showOpenDialog({
+    const senderWindow = getWindowForWebContents(_event.sender);
+    const openOpts: Electron.OpenDialogOptions = {
       title: `Locate "${project.name}"`,
       properties: ["openDirectory"],
       defaultPath: path.dirname(project.path),
-    });
+    };
+    const result = senderWindow
+      ? await dialog.showOpenDialog(senderWindow, openOpts)
+      : await dialog.showOpenDialog(openOpts);
 
     if (result.canceled || result.filePaths.length === 0) {
       return null;

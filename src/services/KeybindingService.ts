@@ -1,8 +1,7 @@
-import type { KeyAction } from "../../shared/types/keymap.js";
-
 import type { KeyScope, KeybindingConfig, KeybindingResolutionResult } from "./keybindingUtils";
 import { normalizeKeyForBinding, parseCombo } from "./keybindingUtils";
 import { DEFAULT_KEYBINDINGS } from "./defaultKeybindings";
+import { isMac } from "@/lib/platform";
 
 export * from "./keybindingUtils";
 export * from "./defaultKeybindings";
@@ -39,7 +38,7 @@ class KeybindingService {
 
   async setOverride(actionId: string, combo: string[]): Promise<void> {
     if (typeof window !== "undefined" && window.electron?.keybinding) {
-      await window.electron.keybinding.setOverride(actionId as KeyAction, combo);
+      await window.electron.keybinding.setOverride(actionId, combo);
       this.overrides.set(actionId, combo);
       this.notifyListeners();
     }
@@ -47,7 +46,7 @@ class KeybindingService {
 
   async removeOverride(actionId: string): Promise<void> {
     if (typeof window !== "undefined" && window.electron?.keybinding) {
-      await window.electron.keybinding.removeOverride(actionId as KeyAction);
+      await window.electron.keybinding.removeOverride(actionId);
       this.overrides.delete(actionId);
       this.notifyListeners();
     }
@@ -152,11 +151,8 @@ class KeybindingService {
     // Handle Cmd vs Ctrl based on platform
     // On macOS, Cmd (metaKey) is the primary modifier
     // On Windows/Linux, Ctrl is the primary modifier
-    const isMac =
-      typeof navigator !== "undefined" &&
-      navigator.platform &&
-      navigator.platform.toUpperCase().indexOf("MAC") >= 0;
-    const hasCmd = isMac ? event.metaKey : event.ctrlKey;
+    const mac = isMac();
+    const hasCmd = mac ? event.metaKey : event.ctrlKey;
 
     // Check modifiers
     if (parsed.cmd && !hasCmd) return false;
@@ -170,9 +166,9 @@ class KeybindingService {
     if (!parsed.shift && event.shiftKey) return false;
     if (!parsed.alt && event.altKey) return false;
     // Ctrl check is more nuanced due to Cmd/Ctrl swap
-    if (!parsed.cmd && !parsed.ctrl && event.ctrlKey && !isMac) return false;
+    if (!parsed.cmd && !parsed.ctrl && event.ctrlKey && !mac) return false;
     // On macOS, reject unexpected Ctrl when not explicitly required
-    if (isMac && !parsed.ctrl && event.ctrlKey) return false;
+    if (mac && !parsed.ctrl && event.ctrlKey) return false;
 
     // Check key - use normalizeKeyForBinding to handle Alt-modified characters
     const eventKey = normalizeKeyForBinding(event);
@@ -231,13 +227,10 @@ class KeybindingService {
 
   private eventToCombo(event: KeyboardEvent): string {
     const parts: string[] = [];
-    const isMac =
-      typeof navigator !== "undefined" &&
-      navigator.platform &&
-      navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+    const mac = isMac();
 
-    if (isMac && event.metaKey) parts.push("Cmd");
-    if (!isMac && event.ctrlKey) parts.push("Cmd");
+    if (mac && event.metaKey) parts.push("Cmd");
+    if (!mac && event.ctrlKey) parts.push("Cmd");
     if (event.shiftKey) parts.push("Shift");
     if (event.altKey) parts.push("Alt");
     // Use normalizeKeyForBinding to handle Alt-modified characters on macOS
@@ -345,13 +338,10 @@ class KeybindingService {
   }
 
   formatComboForDisplay(combo: string): string {
-    const isMac =
-      typeof navigator !== "undefined" &&
-      navigator.platform &&
-      navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+    const mac = isMac();
 
     let display = combo;
-    if (isMac) {
+    if (mac) {
       display = display.replace(/Cmd\+/gi, "⌘");
       display = display.replace(/Ctrl\+/gi, "⌃");
       display = display.replace(/Shift\+/gi, "⇧");

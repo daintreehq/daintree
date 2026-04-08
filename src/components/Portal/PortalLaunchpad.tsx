@@ -1,7 +1,7 @@
 import { Globe } from "lucide-react";
-import { useMemo } from "react";
 import type { PortalLink } from "@shared/types";
 import { PortalIcon } from "./PortalIcon";
+import { isMac } from "@/lib/platform";
 
 interface PortalLaunchpadProps {
   links: PortalLink[];
@@ -9,7 +9,7 @@ interface PortalLaunchpadProps {
 }
 
 export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
-  const isMac = useMemo(() => navigator.platform.toUpperCase().includes("MAC"), []);
+  const mac = isMac();
   if (links.length === 0) {
     return (
       <div className="flex-1 flex flex-col items-center justify-start pt-8 text-muted-foreground px-6">
@@ -29,7 +29,7 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
               key={link.id}
               type="button"
               onClick={(e) => {
-                const modifierBackground = isMac ? e.metaKey : e.ctrlKey;
+                const modifierBackground = mac ? e.metaKey : e.ctrlKey;
                 onOpenUrl(link.url, link.title, modifierBackground);
               }}
               onAuxClick={(e) => {
@@ -39,13 +39,13 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
                   onOpenUrl(link.url, link.title, true);
                 }
               }}
-              className="flex items-center gap-4 p-4 rounded-[var(--radius-xl)] bg-canopy-border hover:bg-canopy-border/80 border border-canopy-border hover:border-canopy-border transition-all group focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+              className="flex items-center gap-4 p-4 rounded-[var(--radius-xl)] bg-canopy-border hover:bg-canopy-border/80 border border-canopy-border hover:border-canopy-border transition-colors group focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
             >
-              <div className="w-8 h-8 flex items-center justify-center text-foreground group-hover:text-text-inverse transition-colors">
+              <div className="w-8 h-8 flex items-center justify-center text-foreground group-hover:text-canopy-text transition-colors">
                 <PortalIcon icon={link.icon} size="launchpad" url={link.url} type={link.type} />
               </div>
               <div className="text-left">
-                <div className="font-medium text-foreground group-hover:text-text-inverse transition-colors">
+                <div className="font-medium text-foreground group-hover:text-canopy-text transition-colors">
                   {link.title}
                 </div>
                 <div className="text-xs text-canopy-text/70">Open web client</div>

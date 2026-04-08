@@ -11,6 +11,9 @@ export function useAppThemeConfig() {
   const setSelectedSchemeId = useAppThemeStore((state) => state.setSelectedSchemeId);
   const addCustomScheme = useAppThemeStore((state) => state.addCustomScheme);
   const setColorVisionMode = useAppThemeStore((state) => state.setColorVisionMode);
+  const setFollowSystem = useAppThemeStore((state) => state.setFollowSystem);
+  const setPreferredDarkSchemeId = useAppThemeStore((state) => state.setPreferredDarkSchemeId);
+  const setPreferredLightSchemeId = useAppThemeStore((state) => state.setPreferredLightSchemeId);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,6 +46,22 @@ export function useAppThemeConfig() {
         ) {
           setColorVisionMode(config.colorVisionMode as ColorVisionMode);
         }
+
+        if (typeof config.followSystem === "boolean") {
+          setFollowSystem(config.followSystem);
+        }
+        if (
+          typeof config.preferredDarkSchemeId === "string" &&
+          config.preferredDarkSchemeId.trim()
+        ) {
+          setPreferredDarkSchemeId(config.preferredDarkSchemeId.trim());
+        }
+        if (
+          typeof config.preferredLightSchemeId === "string" &&
+          config.preferredLightSchemeId.trim()
+        ) {
+          setPreferredLightSchemeId(config.preferredLightSchemeId.trim());
+        }
       })
       .catch((error) => {
         console.error("Failed to load app theme config:", error);
@@ -51,5 +70,18 @@ export function useAppThemeConfig() {
     return () => {
       cancelled = true;
     };
-  }, [setSelectedSchemeId, addCustomScheme, setColorVisionMode]);
+  }, [
+    setSelectedSchemeId,
+    addCustomScheme,
+    setColorVisionMode,
+    setFollowSystem,
+    setPreferredDarkSchemeId,
+    setPreferredLightSchemeId,
+  ]);
+
+  useEffect(() => {
+    return window.electron.appTheme.onSystemAppearanceChanged(({ schemeId }) => {
+      setSelectedSchemeId(schemeId);
+    });
+  }, [setSelectedSchemeId]);
 }

@@ -12,7 +12,7 @@ test.describe.serial("Core: Project Pulse", () => {
   test.beforeAll(async () => {
     ctx = await launchApp();
     const dir = createFixtureRepo({ name: "pulse-test", withSpreadCommits: true });
-    await openAndOnboardProject(ctx.app, ctx.window, dir, "Pulse Test");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir, "Pulse Test");
   });
 
   test.afterAll(async () => {
@@ -93,7 +93,7 @@ test.describe.serial("Core: Project Pulse — minimal repo", () => {
   test.beforeAll(async () => {
     ctx = await launchApp();
     const dir = createFixtureRepo({ name: "pulse-minimal" });
-    await openAndOnboardProject(ctx.app, ctx.window, dir, "Pulse Minimal");
+    ctx.window = await openAndOnboardProject(ctx.app, ctx.window, dir, "Pulse Minimal");
   });
 
   test.afterAll(async () => {

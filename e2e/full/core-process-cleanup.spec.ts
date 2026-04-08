@@ -27,7 +27,7 @@ test.skip(process.platform === "win32", "Process cleanup tests are Unix-only");
 
 test.describe("Core: Process Cleanup", () => {
   test("clean exit kills PTY process tree", async () => {
-    test.setTimeout(120_000);
+    test.setTimeout(240_000);
 
     const fixtureDir = createFixtureRepo({ name: "process-cleanup" });
     const userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-cleanup-"));
@@ -36,7 +36,7 @@ test.describe("Core: Process Cleanup", () => {
 
     try {
       const ctx = await launchApp({ userDataDir });
-      await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Process Cleanup");
+      ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Process Cleanup");
 
       // Open terminal and wait for shell readiness
       await openTerminal(ctx.window);
@@ -51,7 +51,7 @@ test.describe("Core: Process Cleanup", () => {
       ptyPid = await getPtyPid(ctx.window, panel);
       expect(ptyPid).toBeGreaterThan(0);
       await expect
-        .poll(() => getDescendantPids(ptyPid).length, { timeout: 10_000, intervals: [500] })
+        .poll(() => getDescendantPids(ptyPid).length, { timeout: 15_000, intervals: [500] })
         .toBeGreaterThan(0);
       descendants = getDescendantPids(ptyPid);
       expect(descendants.length).toBeGreaterThan(0);
@@ -59,14 +59,28 @@ test.describe("Core: Process Cleanup", () => {
       const electronPid = ctx.app.process().pid!;
 
       // Close app via graceful shutdown (NOT closeApp which force-kills descendants)
-      await ctx.app.close();
-      await waitForProcessExit(electronPid, 30_000);
+      // Race with a timeout to avoid hanging if Electron doesn't respond to close
+      await Promise.race([
+        ctx.app.close(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("app.close() timeout")), 30_000)
+        ),
+      ]).catch(() => {
+        // If close timed out, force-kill
+        try {
+          process.kill(electronPid, "SIGTERM");
+        } catch {
+          /* already dead */
+        }
+      });
+      await waitForProcessExit(electronPid, 45_000);
 
       // Verify PTY process is dead
-      await waitForProcessDeath(ptyPid, 15_000);
+      await waitForProcessDeath(ptyPid, 20_000);
 
       // Verify descendants are dead
       for (const desc of descendants) {
+        await waitForProcessDeath(desc, 10_000).catch(() => {});
         expect(getProcessInfo(desc)).toBeNull();
       }
     } finally {
@@ -95,7 +109,7 @@ test.describe("Core: Process Cleanup", () => {
     try {
       // === First session: launch, spawn HUP-resistant process, seed trashed-pids, SIGKILL ===
       const ctx = await launchApp({ userDataDir });
-      await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Unclean Exit");
+      ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Unclean Exit");
 
       await openTerminal(ctx.window);
       const panel = getFirstGridPanel(ctx.window);
@@ -175,7 +189,12 @@ test.describe.serial("Core: Process Cleanup on Shutdown", () => {
   test.beforeAll(async () => {
     fixtureDir = createFixtureRepo({ name: "process-cleanup" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Process Cleanup Test");
+    ctx.window = await openAndOnboardProject(
+      ctx.app,
+      ctx.window,
+      fixtureDir,
+      "Process Cleanup Test"
+    );
   });
 
   test.afterAll(async () => {

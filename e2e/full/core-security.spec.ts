@@ -23,14 +23,15 @@ test.describe.serial("Core: Security", () => {
   });
 
   test("main window uses secure webPreferences", async () => {
+    // After WebContentsView migration, the test page is the inner
+    // WebContentsView, not the BrowserWindow's main webContents. Look it up
+    // by URL across all alive webContents to verify *its* preferences.
     const prefs = await ctx.app.evaluate(
-      ({ BrowserWindow }, { pageTitle }) => {
-        const win = BrowserWindow.getAllWindows().find(
-          (w) => w.webContents.getTitle() === pageTitle
-        );
-        return win?.webContents.getLastWebPreferences() ?? null;
+      ({ webContents }, { pageUrl }) => {
+        const wc = webContents.getAllWebContents().find((c) => c.getURL() === pageUrl);
+        return wc?.getLastWebPreferences() ?? null;
       },
-      { pageTitle: await ctx.window.title() }
+      { pageUrl: ctx.window.url() }
     );
     expect(prefs).not.toBeNull();
     expect(prefs!.contextIsolation).toBe(true);

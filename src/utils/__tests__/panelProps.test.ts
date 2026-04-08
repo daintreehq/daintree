@@ -161,3 +161,16 @@ describe("buildPanelProps activity stabilization", () => {
     expect(b).toEqual({ headline: "Now active", status: "working", type: "interactive" });
   });
 });
+
+describe("buildPanelProps extensionState", () => {
+  it("forwards extensionState from terminal to props", () => {
+    const extState = { activeTab: "overview", zoom: 1.5 };
+    const result = build(makeTerminal({ extensionState: extState }));
+    expect(result.extensionState).toEqual(extState);
+  });
+
+  it("passes undefined extensionState when not set", () => {
+    const result = build(makeTerminal({}));
+    expect(result.extensionState).toBeUndefined();
+  });
+});

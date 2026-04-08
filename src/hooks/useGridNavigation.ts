@@ -1,5 +1,5 @@
 import { useMemo, useCallback, useRef, useEffect, useState } from "react";
-import { useTerminalStore, useLayoutConfigStore, useWorktreeSelectionStore } from "@/store";
+import { usePanelStore, useLayoutConfigStore, useWorktreeSelectionStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { computeGridColumns } from "@/lib/terminalLayout";
 
@@ -18,9 +18,10 @@ interface UseGridNavigationOptions {
 export function useGridNavigation(options: UseGridNavigationOptions = {}) {
   const { containerSelector = "#panel-grid" } = options;
 
-  const { terminals, focusedId, tabGroups, getTabGroups } = useTerminalStore(
+  const { panelIds, panelsById, focusedId, tabGroups, getTabGroups } = usePanelStore(
     useShallow((state) => ({
-      terminals: state.terminals,
+      panelIds: state.panelIds,
+      panelsById: state.panelsById,
       focusedId: state.focusedId,
       tabGroups: state.tabGroups,
       getTabGroups: state.getTabGroups,
@@ -32,21 +33,28 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
 
   const gridTerminals = useMemo(
     () =>
-      terminals.filter(
-        (t) =>
-          (t.location === "grid" || t.location === undefined) &&
-          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      ),
-    [terminals, activeWorktreeId]
+      panelIds
+        .map((id) => panelsById[id])
+        .filter(
+          (t) =>
+            t &&
+            (t.location === "grid" || t.location === undefined) &&
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+        ),
+    [panelIds, panelsById, activeWorktreeId]
   );
 
   const dockTerminals = useMemo(
     () =>
-      terminals.filter(
-        (t) =>
-          t.location === "dock" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
-      ),
-    [terminals, activeWorktreeId]
+      panelIds
+        .map((id) => panelsById[id])
+        .filter(
+          (t) =>
+            t &&
+            t.location === "dock" &&
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+        ),
+    [panelIds, panelsById, activeWorktreeId]
   );
 
   const directionCache = useRef(new Map<string, string | null>());
@@ -86,7 +94,8 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
   // tabGroups + terminals are intentional deps: getTabGroups reads both internally.
   const gridGroups = useMemo(
     () => getTabGroups("grid", activeWorktreeId ?? undefined),
-    [getTabGroups, activeWorktreeId, tabGroups, terminals]
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tabGroups/panelIds/panelsById are intentional trigger deps; getTabGroups reads them internally
+    [getTabGroups, activeWorktreeId, tabGroups, panelIds, panelsById]
   );
 
   // Compute gridCols using visual group count, matching ContentGrid's gridItemCount
@@ -221,7 +230,8 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
         : group.panelIds[0];
       return resolvedId ? [resolvedId] : [];
     });
-  }, [getTabGroups, activeWorktreeId, tabGroups, terminals]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional trigger deps for getTabGroups
+  }, [getTabGroups, activeWorktreeId, tabGroups, panelIds, panelsById]);
 
   const findByIndex = useCallback(
     (index: number): string | null => {
@@ -248,10 +258,10 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
 
   const getCurrentLocation = useCallback((): "grid" | "dock" | null => {
     if (!focusedId) return null;
-    const terminal = terminals.find((t) => t.id === focusedId);
+    const terminal = panelsById[focusedId];
     if (!terminal) return null;
     return terminal.location === "dock" ? "dock" : "grid";
-  }, [focusedId, terminals]);
+  }, [focusedId, panelsById]);
 
   return {
     gridLayout,

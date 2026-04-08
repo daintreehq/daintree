@@ -1,0 +1,14 @@
+{"time":0.0,"chunk":"Welcome to Gemini CLI\ntype your message","detectedState":"initializing","confidence":0.9,"agentId":"gemini","agentVersion":"1.0.0"}
+{"time":0.5,"chunk":"> ","detectedState":"waiting","confidence":0.85,"agentId":"gemini","agentVersion":"1.0.0"}
+{"time":1.0,"chunk":"⠼ Unpacking Project Details (esc to cancel, 14s)","detectedState":"working","confidence":0.95,"agentId":"gemini","agentVersion":"1.0.0"}
+{"time":3.0,"chunk":"⠋ Analyzing code structure (esc to cancel, 2s)","detectedState":"working","confidence":0.95,"agentId":"gemini","agentVersion":"1.0.0"}
+{"time":5.0,"chunk":"⠙ Processing request (esc to cancel, 5s)","detectedState":"working","confidence":0.95,"agentId":"gemini","agentVersion":"1.0.0"}
+{"time":7.0,"chunk":"⠹ Running analysis (esc to cancel, 7s)","detectedState":"working","confidence":0.95,"agentId":"gemini","agentVersion":"1.0.0"}
+{"time":8.0,"chunk":"⠙ Processing","detectedState":"working","confidence":0.7,"agentId":"gemini","agentVersion":"1.0.0"}
+{"time":9.0,"chunk":"⠸ Evaluating options","detectedState":"working","confidence":0.7,"agentId":"gemini","agentVersion":"1.0.0"}
+{"time":10.0,"chunk":"Response complete. Here are the results.","detectedState":"completed","confidence":0.9,"agentId":"gemini","agentVersion":"1.0.0"}
+{"time":11.0,"chunk":"type your message","detectedState":"waiting","confidence":0.85,"agentId":"gemini","agentVersion":"1.0.0"}
+{"time":12.0,"chunk":"Task completed. What else can I help with?","detectedState":"waiting","confidence":0.0,"agentId":"gemini","agentVersion":"1.0.0"}
+{"time":13.0,"chunk":"(14s, esc to cancel)","detectedState":"working","confidence":0.95,"agentId":"gemini","agentVersion":"1.0.0"}
+{"time":14.0,"chunk":"⠦ Building tool call (esc to cancel, 3s)","detectedState":"working","confidence":0.95,"agentId":"gemini","agentVersion":"1.0.0"}
+{"time":15.0,"chunk":"⠧ Waiting for results","detectedState":"working","confidence":0.7,"agentId":"gemini","agentVersion":"1.0.0"}

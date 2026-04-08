@@ -58,6 +58,19 @@ describe("GitService", () => {
     expect(diff).toContain("+line one");
   });
 
+  it("allows Next.js catch-all route filenames with [...slug]", async () => {
+    const dir = path.join(tempDir, "pages");
+    await fs.mkdir(dir, { recursive: true });
+    const filePath = path.join(dir, "[...slug].tsx");
+    await fs.writeFile(filePath, "export default function Page() {}", "utf8");
+
+    const service = new GitService(tempDir);
+    const diff = await service.getFileDiff("pages/[...slug].tsx", "untracked");
+
+    expect(diff).toContain("+++ b/pages/[...slug].tsx");
+    expect(diff).toContain("+export default function Page() {}");
+  });
+
   it("rejects traversal paths in getFileDiff", async () => {
     const service = new GitService(tempDir);
 

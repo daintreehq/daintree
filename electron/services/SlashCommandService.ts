@@ -2,12 +2,7 @@ import type { FileHandle } from "fs/promises";
 import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
-import {
-  CLAUDE_BUILTIN_SLASH_COMMANDS,
-  CODEX_BUILTIN_SLASH_COMMANDS,
-  GEMINI_BUILTIN_SLASH_COMMANDS,
-  type SlashCommand,
-} from "../../shared/types/index.js";
+import { getBuiltinSlashCommands, type SlashCommand } from "../../shared/types/index.js";
 
 const FRONTMATTER_MAX_BYTES = 8 * 1024;
 const TOML_MAX_BYTES = 16 * 1024;
@@ -609,7 +604,7 @@ export class SlashCommandService {
     const priority = ["global", "user", "project"] as const;
 
     if (agentId === "claude") {
-      for (const cmd of CLAUDE_BUILTIN_SLASH_COMMANDS) mergedByLabel.set(cmd.label, cmd);
+      for (const cmd of getBuiltinSlashCommands(agentId)) mergedByLabel.set(cmd.label, cmd);
 
       const commandPaths = getClaudeCommandSearchPaths(effectiveProjectPath);
       const skillPaths = getClaudeSkillSearchPaths(effectiveProjectPath);
@@ -642,7 +637,7 @@ export class SlashCommandService {
     }
 
     if (agentId === "gemini") {
-      for (const cmd of GEMINI_BUILTIN_SLASH_COMMANDS) mergedByLabel.set(cmd.label, cmd);
+      for (const cmd of getBuiltinSlashCommands(agentId)) mergedByLabel.set(cmd.label, cmd);
 
       const searchPaths = getGeminiCommandSearchPaths(effectiveProjectPath);
       const scanned = await Promise.all(
@@ -662,7 +657,7 @@ export class SlashCommandService {
     }
 
     if (agentId === "codex") {
-      for (const cmd of CODEX_BUILTIN_SLASH_COMMANDS) mergedByLabel.set(cmd.label, cmd);
+      for (const cmd of getBuiltinSlashCommands(agentId)) mergedByLabel.set(cmd.label, cmd);
 
       const searchPaths = getCodexCommandSearchPaths(effectiveProjectPath);
       const scanned = await Promise.all(

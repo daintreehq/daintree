@@ -53,10 +53,11 @@ test("capture Bondi — sidebar, terminal, full app", async () => {
   });
 
   const ctx = await launchApp();
-  const { app, window: page } = ctx;
+  const { app } = ctx;
+  let page = ctx.window;
 
   try {
-    await openAndOnboardProject(app, page, repoDir, "Bondi Review");
+    page = await openAndOnboardProject(app, page, repoDir, "Bondi Review");
     await page.locator('aside[aria-label="Sidebar"]').waitFor({ state: "visible" });
     await page.waitForTimeout(1500);
 

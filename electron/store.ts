@@ -23,6 +23,7 @@ export interface StoreSchema {
     width: number;
     height: number;
     isMaximized: boolean;
+    isFullScreen?: boolean;
   };
   terminalConfig: {
     scrollbackLines: number; // 100-10000 (user-configurable)
@@ -31,6 +32,9 @@ export interface StoreSchema {
     hybridInputAutoFocus?: boolean;
     screenReaderMode?: "auto" | "on" | "off";
     resourceMonitoringEnabled?: boolean;
+    memoryLeakDetectionEnabled?: boolean;
+    memoryLeakAutoRestartThresholdMb?: number;
+    cachedProjectViews?: number;
   };
   hibernation: {
     enabled: boolean;
@@ -108,9 +112,14 @@ export interface StoreSchema {
     completedEnabled: boolean;
     waitingEnabled: boolean;
     soundEnabled: boolean;
-    soundFile: string;
+    completedSoundFile: string;
+    waitingSoundFile: string;
+    escalationSoundFile: string;
     waitingEscalationEnabled: boolean;
     waitingEscalationDelayMs: number;
+    workingPulseEnabled: boolean;
+    workingPulseSoundFile: string;
+    uiFeedbackSoundEnabled: boolean;
   };
   userAgentRegistry: UserAgentRegistry;
   agentUpdateSettings: AgentUpdateSettings;
@@ -119,6 +128,17 @@ export interface StoreSchema {
   };
   projectEnv: Record<string, string>;
   appAgentConfig: AppAgentConfig;
+  windowStates: Record<
+    string,
+    {
+      x?: number;
+      y?: number;
+      width: number;
+      height: number;
+      isMaximized: boolean;
+      isFullScreen?: boolean;
+    }
+  >;
   worktreeIssueMap: Record<string, IssueAssociation>;
   appTheme: Partial<AppThemeConfig>;
   telemetry: {
@@ -159,6 +179,7 @@ export interface StoreSchema {
     agentSetupIds: string[];
     firstRunToastSeen: boolean;
     newsletterPromptSeen: boolean;
+    waitingNudgeSeen: boolean;
     migratedFromLocalStorage: boolean;
     checklist: {
       dismissed: boolean;
@@ -167,10 +188,13 @@ export interface StoreSchema {
         openedProject: boolean;
         launchedAgent: boolean;
         createdWorktree: boolean;
+        subscribedNewsletter: boolean;
       };
     };
   };
+  orchestrationMilestones: Record<string, boolean>;
   shortcutHintCounts: Record<string, number>;
+  updateChannel: "stable" | "nightly";
 }
 
 const storeOptions = {
@@ -210,11 +234,16 @@ const storeOptions = {
     notificationSettings: {
       enabled: true,
       completedEnabled: false,
-      waitingEnabled: false,
-      soundEnabled: false,
-      soundFile: "chime.wav",
-      waitingEscalationEnabled: true,
+      waitingEnabled: true,
+      soundEnabled: true,
+      completedSoundFile: "complete.wav",
+      waitingSoundFile: "waiting.wav",
+      escalationSoundFile: "ping.wav",
+      waitingEscalationEnabled: false,
       waitingEscalationDelayMs: 180_000,
+      workingPulseEnabled: false,
+      workingPulseSoundFile: "pulse.wav",
+      uiFeedbackSoundEnabled: false,
     },
     userAgentRegistry: {},
     agentUpdateSettings: {
@@ -227,6 +256,7 @@ const storeOptions = {
     },
     projectEnv: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
+    windowStates: {},
     worktreeIssueMap: {},
     appTheme: {},
     telemetry: {
@@ -267,6 +297,7 @@ const storeOptions = {
       agentSetupIds: [],
       firstRunToastSeen: false,
       newsletterPromptSeen: false,
+      waitingNudgeSeen: false,
       migratedFromLocalStorage: false,
       checklist: {
         dismissed: false,
@@ -275,10 +306,13 @@ const storeOptions = {
           openedProject: false,
           launchedAgent: false,
           createdWorktree: false,
+          subscribedNewsletter: false,
         },
       },
     },
+    orchestrationMilestones: {},
     shortcutHintCounts: {},
+    updateChannel: "stable" as const,
   },
   cwd: process.env.CANOPY_USER_DATA,
 };

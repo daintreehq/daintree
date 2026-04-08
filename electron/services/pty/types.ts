@@ -2,7 +2,7 @@ import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/agent.js";
-import type { TerminalType, TerminalKind } from "../../../shared/types/panel.js";
+import type { TerminalType, PanelKind } from "../../../shared/types/panel.js";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
 
@@ -22,7 +22,7 @@ export interface TerminalPublicState {
   projectId?: string;
   cwd: string;
   shell: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: AgentId;
   title?: string;
@@ -114,7 +114,7 @@ export interface TerminalSnapshot {
   lastInputTime: number;
   lastOutputTime: number;
   lastCheckTime: number;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   worktreeId?: string;
   agentId?: AgentId;
@@ -153,3 +153,7 @@ export const IPC_MAX_QUEUE_BYTES = 8 * 1024 * 1024; // 8MB max per terminal
 export const IPC_HIGH_WATERMARK_PERCENT = 95; // Pause PTY at 95% full
 export const IPC_LOW_WATERMARK_PERCENT = 60; // Resume PTY when drops to 60%
 export const IPC_MAX_PAUSE_MS = 5000; // Force resume after 5 seconds to prevent indefinite pause
+
+// MessagePort adaptive batching configuration
+export const PORT_BATCH_THRESHOLD_BYTES = 64 * 1024; // 64KB — sync-flush when buffered data exceeds this
+export const PORT_BATCH_THROUGHPUT_DELAY_MS = 16; // ~60Hz frame — setTimeout window in throughput mode

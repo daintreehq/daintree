@@ -25,10 +25,14 @@ const storeMock = vi.hoisted(() => ({
   },
 }));
 
+const allWindowsMock = vi.hoisted(() => vi.fn((): unknown[] => []));
+
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   shell: shellMock,
-  BrowserWindow: class {},
+  BrowserWindow: {
+    getAllWindows: allWindowsMock,
+  },
 }));
 
 vi.mock("node:timers/promises", () => ({
@@ -51,13 +55,15 @@ function createNonTransientError(message: string): Error {
 }
 
 function createMockWindow(options: { destroyed?: boolean } = {}) {
-  return {
+  const win = {
     isDestroyed: () => options.destroyed ?? false,
     webContents: {
       isDestroyed: () => false,
       send: vi.fn(),
     },
   };
+  allWindowsMock.mockReturnValue([win]);
+  return win;
 }
 
 describe("errorHandlers", () => {
@@ -109,7 +115,7 @@ describe("errorHandlers", () => {
 
   it("registers retry/cancel/open-log/get-pending handlers and removes them on cleanup", async () => {
     const CHANNELS = await getChannels();
-    const cleanup = registerErrorHandlers(createMockWindow() as never, null, null);
+    const cleanup = registerErrorHandlers(null, null);
 
     expect(ipcMainMock.handle).toHaveBeenCalledWith(CHANNELS.ERROR_RETRY, expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith(CHANNELS.ERROR_OPEN_LOGS, expect.any(Function));
@@ -133,7 +139,8 @@ describe("errorHandlers", () => {
   it("retries terminal spawn with default cols/rows", async () => {
     const CHANNELS = await getChannels();
     const spawn = vi.fn();
-    registerErrorHandlers(createMockWindow() as never, null, { spawn } as never);
+    createMockWindow();
+    registerErrorHandlers(null, { spawn } as never);
 
     const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
     await retryHandler(
@@ -147,7 +154,8 @@ describe("errorHandlers", () => {
   it("sanitizes invalid terminal dimensions in retry args", async () => {
     const CHANNELS = await getChannels();
     const spawn = vi.fn();
-    registerErrorHandlers(createMockWindow() as never, null, { spawn } as never);
+    createMockWindow();
+    registerErrorHandlers(null, { spawn } as never);
 
     const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
     await retryHandler(
@@ -169,13 +177,10 @@ describe("errorHandlers", () => {
       throw expectedError;
     });
 
-    registerErrorHandlers(
-      {
-        isDestroyed: () => false,
-      } as never,
-      null,
-      { spawn } as never
-    );
+    allWindowsMock.mockReturnValue([
+      { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: vi.fn() } },
+    ]);
+    registerErrorHandlers(null, { spawn } as never);
 
     const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
     await expect(
@@ -189,7 +194,7 @@ describe("errorHandlers", () => {
   it("rejects malformed retry payload and reports it safely", async () => {
     const CHANNELS = await getChannels();
     const mockWindow = createMockWindow();
-    registerErrorHandlers(mockWindow as never, null, { spawn: vi.fn() } as never);
+    registerErrorHandlers(null, { spawn: vi.fn() } as never);
 
     const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
     await expect(retryHandler({} as never, undefined as never)).rejects.toThrow(
@@ -208,7 +213,7 @@ describe("errorHandlers", () => {
   it("generates a correlationId on every error and logs it", async () => {
     const CHANNELS = await getChannels();
     const mockWindow = createMockWindow();
-    registerErrorHandlers(mockWindow as never, null, null);
+    registerErrorHandlers(null, null);
 
     const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
     await retryHandler({} as never, undefined as never).catch(() => {});
@@ -231,14 +236,14 @@ describe("errorHandlers", () => {
   describe("exponential backoff and retry limits", () => {
     it("retries transient terminal errors up to 3 times with backoff", async () => {
       const CHANNELS = await getChannels();
-      const mockWindow = createMockWindow();
+      createMockWindow();
       let callCount = 0;
       const spawn = vi.fn(() => {
         callCount++;
         if (callCount < 3) throw createTransientError("EBUSY");
       });
 
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
 
       await retryHandler(
@@ -254,12 +259,12 @@ describe("errorHandlers", () => {
 
     it("exhausts max terminal attempts (3) and rethrows", async () => {
       const CHANNELS = await getChannels();
-      const mockWindow = createMockWindow();
+      createMockWindow();
       const spawn = vi.fn(() => {
         throw createTransientError("EBUSY");
       });
 
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
 
       await expect(
@@ -275,10 +280,10 @@ describe("errorHandlers", () => {
 
     it("exhausts max worktree attempts (5) and rethrows", async () => {
       const CHANNELS = await getChannels();
-      const mockWindow = createMockWindow();
+      createMockWindow();
       const refresh = vi.fn().mockRejectedValue(createTransientError("ETIMEDOUT"));
 
-      registerErrorHandlers(mockWindow as never, { refresh } as never, null);
+      registerErrorHandlers({ refresh } as never, null);
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
 
       await expect(
@@ -291,12 +296,12 @@ describe("errorHandlers", () => {
 
     it("aborts immediately on non-transient error without sleeping", async () => {
       const CHANNELS = await getChannels();
-      const mockWindow = createMockWindow();
+      createMockWindow();
       const spawn = vi.fn(() => {
         throw createNonTransientError("File not found");
       });
 
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
 
       await expect(
@@ -312,7 +317,7 @@ describe("errorHandlers", () => {
 
     it("stops retrying when a transient error becomes non-transient mid-loop", async () => {
       const CHANNELS = await getChannels();
-      const mockWindow = createMockWindow();
+      createMockWindow();
       let callCount = 0;
       const spawn = vi.fn(() => {
         callCount++;
@@ -320,7 +325,7 @@ describe("errorHandlers", () => {
         throw createNonTransientError("ENOENT");
       });
 
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
 
       await expect(
@@ -343,7 +348,7 @@ describe("errorHandlers", () => {
         if (callCount < 3) throw createTransientError("EBUSY");
       });
 
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
 
       await retryHandler(
@@ -372,7 +377,7 @@ describe("errorHandlers", () => {
       const abortError = new DOMException("The operation was aborted", "AbortError");
       sleepMock.mockRejectedValueOnce(abortError);
 
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
 
       await expect(
@@ -391,7 +396,7 @@ describe("errorHandlers", () => {
 
     it("cancellation via cancel handler aborts in-progress retry", async () => {
       const CHANNELS = await getChannels();
-      const mockWindow = createMockWindow();
+      createMockWindow();
       const spawn = vi.fn(() => {
         throw createTransientError("EBUSY");
       });
@@ -409,7 +414,7 @@ describe("errorHandlers", () => {
         }
       );
 
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
 
       await expect(
@@ -425,12 +430,12 @@ describe("errorHandlers", () => {
 
     it("computes backoff delay with jitter correctly", async () => {
       const CHANNELS = await getChannels();
-      const mockWindow = createMockWindow();
+      createMockWindow();
       const spawn = vi.fn(() => {
         throw createTransientError("EBUSY");
       });
 
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
 
       await retryHandler(
@@ -451,7 +456,7 @@ describe("errorHandlers", () => {
     it("buffers errors when window is destroyed instead of sending", async () => {
       const CHANNELS = await getChannels();
       const destroyedWindow = createMockWindow({ destroyed: true });
-      registerErrorHandlers(destroyedWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       // Trigger an error via the retry handler with invalid payload
       // This causes notifyError -> sendError -> bufferError
@@ -463,7 +468,7 @@ describe("errorHandlers", () => {
 
       // Now re-initialize with a good window and flush
       const goodWindow = createMockWindow();
-      registerErrorHandlers(goodWindow as never, null, null);
+      registerErrorHandlers(null, null);
       flushPendingErrors();
 
       // Buffered error should now be delivered
@@ -481,15 +486,15 @@ describe("errorHandlers", () => {
 
       // Import error types to create typed errors
       const { ConfigError } = await import("../../utils/errorTypes.js");
-      const destroyedWindow = createMockWindow({ destroyed: true });
-      registerErrorHandlers(destroyedWindow as never, null, null);
+      createMockWindow({ destroyed: true });
+      registerErrorHandlers(null, null);
 
       // Trigger a retry that uses a ptyClient spawn which throws a ConfigError
       const spawn = vi.fn(() => {
         throw new ConfigError("Bad config", { key: "config-key" });
       });
       // Re-register with spawn
-      registerErrorHandlers(destroyedWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -511,14 +516,14 @@ describe("errorHandlers", () => {
 
     it("preserves correlationId through buffer and flush", async () => {
       const CHANNELS = await getChannels();
-      const destroyedWindow = createMockWindow({ destroyed: true });
-      registerErrorHandlers(destroyedWindow as never, null, null);
+      createMockWindow({ destroyed: true });
+      registerErrorHandlers(null, null);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, undefined as never).catch(() => {});
 
       const goodWindow = createMockWindow();
-      registerErrorHandlers(goodWindow as never, null, null);
+      registerErrorHandlers(null, null);
       flushPendingErrors();
 
       const sentError = goodWindow.webContents.send.mock.calls.find(
@@ -531,8 +536,8 @@ describe("errorHandlers", () => {
 
     it("does not persist transient or non-critical errors to disk", async () => {
       const CHANNELS = await getChannels();
-      const destroyedWindow = createMockWindow({ destroyed: true });
-      registerErrorHandlers(destroyedWindow as never, null, null);
+      createMockWindow({ destroyed: true });
+      registerErrorHandlers(null, null);
 
       // Trigger an error (invalid retry payload creates an "unknown" type error)
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
@@ -546,8 +551,8 @@ describe("errorHandlers", () => {
   describe("flushPendingErrors", () => {
     it("delivers buffered errors and clears persisted store on flush", async () => {
       const CHANNELS = await getChannels();
-      const destroyedWindow = createMockWindow({ destroyed: true });
-      registerErrorHandlers(destroyedWindow as never, null, null);
+      createMockWindow({ destroyed: true });
+      registerErrorHandlers(null, null);
 
       // Buffer some errors
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
@@ -558,7 +563,7 @@ describe("errorHandlers", () => {
 
       // Re-initialize with good window and flush
       const goodWindow = createMockWindow();
-      registerErrorHandlers(goodWindow as never, null, null);
+      registerErrorHandlers(null, null);
       flushPendingErrors();
 
       // Errors delivered
@@ -573,7 +578,7 @@ describe("errorHandlers", () => {
 
     it("is a no-op when buffer is empty", () => {
       const goodWindow = createMockWindow();
-      registerErrorHandlers(goodWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       flushPendingErrors();
 
@@ -583,14 +588,14 @@ describe("errorHandlers", () => {
 
     it("prevents double delivery after flush", async () => {
       const CHANNELS = await getChannels();
-      const destroyedWindow = createMockWindow({ destroyed: true });
-      registerErrorHandlers(destroyedWindow as never, null, null);
+      createMockWindow({ destroyed: true });
+      registerErrorHandlers(null, null);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, undefined as never).catch(() => {});
 
       const goodWindow = createMockWindow();
-      registerErrorHandlers(goodWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       // First flush delivers
       flushPendingErrors();
@@ -607,7 +612,7 @@ describe("errorHandlers", () => {
     it("returns permissions hint for EACCES with file syscall", async () => {
       const CHANNELS = await getChannels();
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
@@ -615,7 +620,7 @@ describe("errorHandlers", () => {
         err.syscall = "open";
         throw err;
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -633,7 +638,7 @@ describe("errorHandlers", () => {
     it("returns executable hint for EACCES with spawn syscall", async () => {
       const CHANNELS = await getChannels();
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
@@ -641,7 +646,7 @@ describe("errorHandlers", () => {
         err.syscall = "spawn git";
         throw err;
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -659,7 +664,7 @@ describe("errorHandlers", () => {
     it("returns PATH hint for ENOENT with spawn syscall", async () => {
       const CHANNELS = await getChannels();
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         const err = new Error("ENOENT") as NodeJS.ErrnoException;
@@ -667,7 +672,7 @@ describe("errorHandlers", () => {
         err.syscall = "spawn npm";
         throw err;
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -685,7 +690,7 @@ describe("errorHandlers", () => {
     it("returns file path hint for ENOENT without spawn", async () => {
       const CHANNELS = await getChannels();
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         const err = new Error("ENOENT: no such file") as NodeJS.ErrnoException;
@@ -693,7 +698,7 @@ describe("errorHandlers", () => {
         err.syscall = "open";
         throw err;
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -711,12 +716,12 @@ describe("errorHandlers", () => {
     it("returns PATH hint for posix_spawnp message", async () => {
       const CHANNELS = await getChannels();
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         throw new Error("posix_spawnp: No such file or directory");
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -734,14 +739,14 @@ describe("errorHandlers", () => {
     it("returns DNS hint for ENOTFOUND", async () => {
       const CHANNELS = await getChannels();
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         const err = new Error("getaddrinfo ENOTFOUND") as NodeJS.ErrnoException;
         err.code = "ENOTFOUND";
         throw err;
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -759,14 +764,14 @@ describe("errorHandlers", () => {
     it("returns server hint for ECONNREFUSED", async () => {
       const CHANNELS = await getChannels();
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         const err = new Error("connect ECONNREFUSED") as NodeJS.ErrnoException;
         err.code = "ECONNREFUSED";
         throw err;
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -784,14 +789,14 @@ describe("errorHandlers", () => {
     it("returns network hint for ETIMEDOUT", async () => {
       const CHANNELS = await getChannels();
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         const err = new Error("connect ETIMEDOUT") as NodeJS.ErrnoException;
         err.code = "ETIMEDOUT";
         throw err;
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -810,12 +815,12 @@ describe("errorHandlers", () => {
       const CHANNELS = await getChannels();
       const { GitError } = await import("../../utils/errorTypes.js");
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         throw new GitError("fatal: not a git repository");
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -834,12 +839,12 @@ describe("errorHandlers", () => {
       const CHANNELS = await getChannels();
       const { GitError } = await import("../../utils/errorTypes.js");
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         throw new GitError("Authentication failed for repo");
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -858,12 +863,12 @@ describe("errorHandlers", () => {
       const CHANNELS = await getChannels();
       const { ConfigError } = await import("../../utils/errorTypes.js");
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         throw new ConfigError("bad config");
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -882,12 +887,12 @@ describe("errorHandlers", () => {
       const CHANNELS = await getChannels();
       const { ProcessError } = await import("../../utils/errorTypes.js");
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         throw new ProcessError("pty failed");
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -906,7 +911,7 @@ describe("errorHandlers", () => {
       const CHANNELS = await getChannels();
       const { GitError } = await import("../../utils/errorTypes.js");
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         throw new GitError(
@@ -915,7 +920,7 @@ describe("errorHandlers", () => {
           new Error("fatal: not a git repository (or any parent up to mount point /)")
         );
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -934,12 +939,12 @@ describe("errorHandlers", () => {
       const CHANNELS = await getChannels();
       const { GitError } = await import("../../utils/errorTypes.js");
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         throw new GitError("Git operation failed: merge");
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -957,14 +962,14 @@ describe("errorHandlers", () => {
     it("returns reset hint for ECONNRESET", async () => {
       const CHANNELS = await getChannels();
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         const err = new Error("read ECONNRESET") as NodeJS.ErrnoException;
         err.code = "ECONNRESET";
         throw err;
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -982,14 +987,14 @@ describe("errorHandlers", () => {
     it("returns busy hint for EBUSY", async () => {
       const CHANNELS = await getChannels();
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         const err = new Error("EBUSY: resource busy") as NodeJS.ErrnoException;
         err.code = "EBUSY";
         throw err;
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -1007,14 +1012,14 @@ describe("errorHandlers", () => {
     it("returns system busy hint for EAGAIN", async () => {
       const CHANNELS = await getChannels();
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const spawn = vi.fn(() => {
         const err = new Error("EAGAIN") as NodeJS.ErrnoException;
         err.code = "EAGAIN";
         throw err;
       });
-      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      registerErrorHandlers(null, { spawn } as never);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, {
@@ -1032,7 +1037,7 @@ describe("errorHandlers", () => {
     it("returns undefined recoveryHint for generic unknown error", async () => {
       const CHANNELS = await getChannels();
       const mockWindow = createMockWindow();
-      registerErrorHandlers(mockWindow as never, null, null);
+      registerErrorHandlers(null, null);
 
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
       await retryHandler({} as never, undefined as never).catch(() => {});
@@ -1060,7 +1065,7 @@ describe("errorHandlers", () => {
       ];
       storeMock.store.get.mockReturnValue(persistedErrors);
 
-      registerErrorHandlers(createMockWindow() as never, null, null);
+      registerErrorHandlers(null, null);
       const handler = getInvokeHandler(CHANNELS.ERROR_GET_PENDING);
       const result = handler({} as never);
 
@@ -1087,7 +1092,7 @@ describe("errorHandlers", () => {
         },
       ]);
 
-      registerErrorHandlers(createMockWindow() as never, null, null);
+      registerErrorHandlers(null, null);
       const handler = getInvokeHandler(CHANNELS.ERROR_GET_PENDING);
       handler({} as never);
 
@@ -1098,7 +1103,7 @@ describe("errorHandlers", () => {
       const CHANNELS = await getChannels();
       storeMock.store.get.mockReturnValue([]);
 
-      registerErrorHandlers(createMockWindow() as never, null, null);
+      registerErrorHandlers(null, null);
       const handler = getInvokeHandler(CHANNELS.ERROR_GET_PENDING);
       const result = handler({} as never);
 
@@ -1109,7 +1114,7 @@ describe("errorHandlers", () => {
       const CHANNELS = await getChannels();
       storeMock.store.get.mockReturnValue(undefined as unknown as unknown[]);
 
-      registerErrorHandlers(createMockWindow() as never, null, null);
+      registerErrorHandlers(null, null);
       const handler = getInvokeHandler(CHANNELS.ERROR_GET_PENDING);
       const result = handler({} as never);
 
@@ -1118,8 +1123,8 @@ describe("errorHandlers", () => {
 
     it("does not return fromPreviousSession on same-session flushed errors", async () => {
       const CHANNELS = await getChannels();
-      const destroyedWindow = createMockWindow({ destroyed: true });
-      registerErrorHandlers(destroyedWindow as never, null, null);
+      createMockWindow({ destroyed: true });
+      registerErrorHandlers(null, null);
 
       // Buffer an error
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
@@ -1127,7 +1132,7 @@ describe("errorHandlers", () => {
 
       // Flush to a good window
       const goodWindow = createMockWindow();
-      registerErrorHandlers(goodWindow as never, null, null);
+      registerErrorHandlers(null, null);
       flushPendingErrors();
 
       // Same-session flushed errors should NOT have fromPreviousSession

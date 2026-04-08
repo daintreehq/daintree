@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useTerminalStore } from "@/store";
+import { usePanelStore } from "@/store";
 
 /**
  * Tracks whether a panel's webview should be evicted (destroyed) due to
@@ -13,7 +13,7 @@ export function useWebviewEviction(
 ): { isEvicted: boolean; evictingRef: React.RefObject<boolean> } {
   const [isEvicted, setIsEvicted] = useState(false);
   const evictingRef = useRef(false);
-  const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
+  const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
 
   // Auto-clear eviction when this panel becomes visible (dock panel activated)
   useEffect(() => {

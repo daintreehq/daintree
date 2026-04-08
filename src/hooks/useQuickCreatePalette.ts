@@ -153,12 +153,17 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
             const assignMsg =
               wasAssigned && issueNumber ? ` · assigned #${issueNumber} to you` : "";
 
+            const worktreeMsg = `${branch}${assignMsg}`;
             notify({
               type: "success",
               title: "Worktree Created",
-              message: `${branch}${assignMsg}`,
-              priority: "low",
+              message: worktreeMsg,
+              priority: "high",
               countable: false,
+              combo: {
+                key: "worktree:create",
+                tiers: [worktreeMsg, "Branching out", "It's a tree farm"],
+              },
               action: {
                 label: "Undo",
                 onClick: () => {},

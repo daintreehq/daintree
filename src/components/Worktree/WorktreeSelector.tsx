@@ -1,9 +1,9 @@
 import { WorktreeIcon } from "@/components/icons";
-import type { WorktreeState } from "@/types";
+import type { WorktreeSnapshot } from "@/types";
 
 interface WorktreeSelectorProps {
   label: string;
-  worktrees: WorktreeState[];
+  worktrees: WorktreeSnapshot[];
   selectedId: string | null;
   disabledId?: string | null;
   onChange: (worktreeId: string) => void;

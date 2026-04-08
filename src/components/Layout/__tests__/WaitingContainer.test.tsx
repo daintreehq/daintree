@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render } from "@testing-library/react";
 import { WaitingContainer } from "../WaitingContainer";
-import type { TerminalInstance } from "@/store/terminalStore";
+import type { TerminalInstance } from "@/store/panelStore";
 
 const mockWaiting: TerminalInstance[] = [
   {
@@ -19,13 +19,13 @@ vi.mock("@/hooks/useTerminalSelectors", () => ({
   useWaitingTerminals: () => mockWaiting,
 }));
 
-vi.mock("@/store/terminalStore", async () => {
+vi.mock("@/store/panelStore", async () => {
   const { create } = await import("zustand");
   const store = create(() => ({
     activateTerminal: vi.fn(),
     pingTerminal: vi.fn(),
   }));
-  return { useTerminalStore: store };
+  return { usePanelStore: store };
 });
 
 vi.mock("@/store/worktreeStore", async () => {

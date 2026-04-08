@@ -1,4 +1,5 @@
-import { BrowserWindow, Menu, ipcMain } from "electron";
+import { Menu, ipcMain } from "electron";
+import { getWindowForWebContents, getAppWebContents } from "../../window/webContentsRegistry.js";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
@@ -86,7 +87,7 @@ export function registerPortalHandlers(deps: HandlerDependencies): () => void {
     if (!payload || typeof payload !== "object" || typeof payload.tabId !== "string") {
       return;
     }
-    deps.portalManager.closeTab(payload.tabId);
+    await deps.portalManager.closeTab(payload.tabId);
   };
   ipcMain.handle(CHANNELS.PORTAL_CLOSE_TAB, handlePortalCloseTab);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PORTAL_CLOSE_TAB));
@@ -166,7 +167,7 @@ export function registerPortalHandlers(deps: HandlerDependencies): () => void {
       )
       .map((l) => ({ title: l.title.trim(), url: l.url.trim() }));
 
-    const win = BrowserWindow.fromWebContents(event.sender);
+    const win = getWindowForWebContents(event.sender);
     if (!win || win.isDestroyed()) return;
 
     const sendAction = (action: PortalNewTabMenuAction) => {
@@ -204,13 +205,13 @@ export function registerPortalHandlers(deps: HandlerDependencies): () => void {
           ...(links.length > 0 ? [{ type: "separator" as const }] : []),
           {
             label: "Manage Portal Settings...",
-            click: () => win.webContents.send(CHANNELS.MENU_ACTION, "open-settings:portal"),
+            click: () => getAppWebContents(win).send(CHANNELS.MENU_ACTION, "open-settings:portal"),
           },
         ],
       },
       {
         label: "Manage Portal Settings...",
-        click: () => win.webContents.send(CHANNELS.MENU_ACTION, "open-settings:portal"),
+        click: () => getAppWebContents(win).send(CHANNELS.MENU_ACTION, "open-settings:portal"),
       },
     ]);
 

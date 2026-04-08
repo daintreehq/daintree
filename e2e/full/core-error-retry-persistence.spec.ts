@@ -53,9 +53,12 @@ async function emitError(
   overrides: Partial<ErrorPayload> = {}
 ): Promise<ErrorPayload> {
   const payload = buildError(overrides);
-  await app.evaluate(({ BrowserWindow }, err) => {
-    const win = BrowserWindow.getAllWindows()[0];
-    if (win) win.webContents.send("error:notify", err);
+  // The renderer lives in a WebContentsView since the migration, so dispatch
+  // to every alive webContents instead of just the BrowserWindow's main one.
+  await app.evaluate(({ webContents }, err) => {
+    for (const wc of webContents.getAllWebContents()) {
+      if (!wc.isDestroyed()) wc.send("error:notify", err);
+    }
   }, payload);
   return payload;
 }
@@ -64,9 +67,10 @@ async function emitRetryProgress(
   app: ElectronApplication,
   progress: { id: string; attempt: number; maxAttempts: number }
 ) {
-  await app.evaluate(({ BrowserWindow }, p) => {
-    const win = BrowserWindow.getAllWindows()[0];
-    if (win) win.webContents.send("error:retry-progress", p);
+  await app.evaluate(({ webContents }, p) => {
+    for (const wc of webContents.getAllWebContents()) {
+      if (!wc.isDestroyed()) wc.send("error:retry-progress", p);
+    }
   }, progress);
 }
 

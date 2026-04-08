@@ -8,7 +8,8 @@
  */
 
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
-import type { TerminalType, TerminalKind, TerminalFlowStatus } from "./panel.js";
+import type { TerminalType, PanelKind, TerminalFlowStatus } from "./panel.js";
+import type { ResourceProfile } from "./resourceProfile.js";
 
 export type { TerminalFlowStatus };
 
@@ -20,7 +21,7 @@ export interface PtyHostSpawnOptions {
   env?: Record<string, string>;
   cols: number;
   rows: number;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: AgentId;
   title?: string;
@@ -50,8 +51,9 @@ export type PtyHostRequest =
   | { type: "restore"; id: string }
   | { type: "set-activity-tier"; id: string; tier: PtyHostActivityTier }
   | { type: "wake-terminal"; id: string; requestId: string }
-  | { type: "set-active-project"; projectId: string | null }
-  | { type: "project-switch"; projectId: string }
+  | { type: "set-active-project"; windowId: number; projectId: string | null }
+  | { type: "project-switch"; windowId: number; projectId: string }
+  | { type: "disconnect-port"; windowId: number }
   | { type: "kill-by-project"; projectId: string; requestId: string }
   | { type: "get-project-stats"; projectId: string; requestId: string }
   | { type: "get-snapshot"; id: string; requestId: string }
@@ -80,7 +82,7 @@ export type PtyHostRequest =
       analysisBuffer: SharedArrayBuffer;
       visualSignalBuffer: SharedArrayBuffer;
     }
-  | { type: "connect-port" }
+  | { type: "connect-port"; windowId: number }
   | { type: "get-terminal-info"; id: string; requestId: string }
   | { type: "force-resume"; id: string }
   | { type: "acknowledge-data"; id: string; charCount: number }
@@ -93,7 +95,9 @@ export type PtyHostRequest =
   | { type: "graceful-kill-by-project"; projectId: string; requestId: string }
   | { type: "trim-state"; targetLines: number }
   | { type: "set-resource-monitoring"; enabled: boolean }
-  | { type: "set-session-persist-suppressed"; suppressed: boolean };
+  | { type: "set-session-persist-suppressed"; suppressed: boolean }
+  | { type: "set-resource-profile"; profile: ResourceProfile }
+  | { type: "set-process-tree-poll-interval"; ms: number };
 
 /**
  * Terminal snapshot data sent from Host → Main for state queries.
@@ -104,7 +108,7 @@ export interface PtyHostTerminalSnapshot {
   lastInputTime: number;
   lastOutputTime: number;
   lastCheckTime: number;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   worktreeId?: string;
   agentId?: AgentId;
@@ -147,6 +151,8 @@ export type PtyHostEvent =
       confidence: number;
       worktreeId?: string;
       waitingReason?: WaitingReason;
+      sessionCost?: number;
+      sessionTokens?: number;
     }
   | {
       type: "agent-detected";
@@ -231,7 +237,7 @@ export type PtyHostEvent =
 export interface PtyHostTerminalInfo {
   id: string;
   projectId?: string;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   type?: TerminalType;
   agentId?: AgentId;
   title?: string;
@@ -386,13 +392,14 @@ export interface TerminalReliabilityMetricPayload {
  */
 export type RendererToPtyHostMessage =
   | { type: "write"; id: string; data: string; traceId?: string }
-  | { type: "resize"; id: string; cols: number; rows: number };
+  | { type: "resize"; id: string; cols: number; rows: number }
+  | { type: "ack"; id: string; bytes: number };
 
 /**
  * Messages sent from Pty Host → Renderer via MessagePort (direct channel).
  * These bypass the Main process for low-latency terminal output.
  */
-export type PtyHostToRendererMessage = { type: "data"; id: string; data: string };
+export type PtyHostToRendererMessage = { type: "data"; id: string; data: string; bytes: number };
 
 /** Per-process resource breakdown entry */
 export interface TerminalResourceProcess {

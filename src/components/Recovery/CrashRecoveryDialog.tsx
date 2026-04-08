@@ -7,8 +7,8 @@ import {
   FileText,
   SquareTerminal,
   Globe,
-  Leaf,
   Monitor,
+  StickyNote,
 } from "lucide-react";
 import { CanopyAgentIcon } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
@@ -36,7 +36,7 @@ function getPanelIcon(kind: string) {
     case "browser":
       return <Globe className="h-3.5 w-3.5" />;
     case "notes":
-      return <Leaf className="h-3.5 w-3.5" />;
+      return <StickyNote className="h-3.5 w-3.5" />;
     case "dev-preview":
       return <Monitor className="h-3.5 w-3.5" />;
     default:

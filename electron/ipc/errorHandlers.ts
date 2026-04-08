@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { ipcMain, BrowserWindow, shell } from "electron";
 import { CHANNELS } from "./channels.js";
 import { getLogFilePath, logError as logErrorUtil } from "../utils/logger.js";
+import { broadcastToRenderer } from "./utils.js";
 import {
   GitError,
   ProcessError,
@@ -200,29 +201,21 @@ function isAbortError(error: unknown): boolean {
 }
 
 class ErrorService {
-  private mainWindow: BrowserWindow | null = null;
   private worktreeService: WorkspaceClient | null = null;
   private ptyClient: PtyClient | null = null;
   private pendingQueue: AppError[] = [];
   private isFlushing = false;
   private activeRetries = new Map<string, AbortController>();
 
-  initialize(
-    mainWindow: BrowserWindow,
-    worktreeService: WorkspaceClient | null,
-    ptyClient: PtyClient | null
-  ) {
-    this.mainWindow = mainWindow;
+  initialize(worktreeService: WorkspaceClient | null, ptyClient: PtyClient | null) {
     this.worktreeService = worktreeService;
     this.ptyClient = ptyClient;
   }
 
   private canSendToRenderer(): boolean {
-    if (!this.mainWindow || this.mainWindow.isDestroyed()) return false;
-    const webContents = this.mainWindow.webContents;
-    if (!webContents || typeof webContents.send !== "function") return false;
-    if (typeof webContents.isDestroyed === "function" && webContents.isDestroyed()) return false;
-    return true;
+    return BrowserWindow.getAllWindows().some(
+      (w) => !w.isDestroyed() && w.webContents && !w.webContents.isDestroyed()
+    );
   }
 
   private bufferError(error: AppError): void {
@@ -260,7 +253,7 @@ class ErrorService {
       return;
     }
 
-    this.mainWindow!.webContents.send(CHANNELS.ERROR_NOTIFY, error);
+    broadcastToRenderer(CHANNELS.ERROR_NOTIFY, error);
   }
 
   notifyError(error: unknown, options: Parameters<typeof createAppError>[1] = {}) {
@@ -282,10 +275,9 @@ class ErrorService {
     this.isFlushing = true;
     try {
       const errors = this.pendingQueue.splice(0);
-      const webContents = this.mainWindow!.webContents;
       for (const error of errors) {
         try {
-          webContents.send(CHANNELS.ERROR_NOTIFY, error);
+          broadcastToRenderer(CHANNELS.ERROR_NOTIFY, error);
         } catch {
           // Window may have been destroyed mid-flush; re-buffer remaining
         }
@@ -308,7 +300,7 @@ class ErrorService {
 
   private sendRetryProgress(errorId: string, attempt: number, maxAttempts: number): void {
     if (!this.canSendToRenderer()) return;
-    this.mainWindow!.webContents.send(CHANNELS.ERROR_RETRY_PROGRESS, {
+    broadcastToRenderer(CHANNELS.ERROR_RETRY_PROGRESS, {
       id: errorId,
       attempt,
       maxAttempts,
@@ -417,14 +409,20 @@ export function flushPendingErrors(): void {
   errorService.flushPendingErrors();
 }
 
+export function notifyError(
+  error: unknown,
+  options: Parameters<typeof createAppError>[1] = {}
+): AppError {
+  return errorService.notifyError(error, options);
+}
+
 export function registerErrorHandlers(
-  mainWindow: BrowserWindow,
   worktreeService: WorkspaceClient | null,
   ptyClient: PtyClient | null
 ): () => void {
   const handlers: Array<() => void> = [];
 
-  errorService.initialize(mainWindow, worktreeService, ptyClient);
+  errorService.initialize(worktreeService, ptyClient);
 
   const handleRetry = async (_event: Electron.IpcMainInvokeEvent, payload: unknown) => {
     let actionForError: RetryAction | undefined;

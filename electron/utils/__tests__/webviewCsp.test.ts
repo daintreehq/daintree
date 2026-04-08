@@ -49,6 +49,15 @@ describe("webviewCsp", () => {
       expect(classifyPartition("persist:dev-preview-foo-bar-baz")).toBe("dev-preview");
     });
 
+    it("identifies shared canopy-app partition as project", () => {
+      expect(classifyPartition("persist:canopy-app")).toBe("project");
+    });
+
+    it("identifies legacy per-project partitions as project", () => {
+      expect(classifyPartition("persist:project-abc123")).toBe("project");
+      expect(classifyPartition("persist:project-some-uuid")).toBe("project");
+    });
+
     it("rejects malformed dev-preview partitions as unknown", () => {
       expect(classifyPartition("persist:dev-previewevil")).toBe("unknown");
     });
@@ -71,10 +80,16 @@ describe("webviewCsp", () => {
       expect(csp).toContain("base-uri 'self'");
     });
 
-    it("does not include unsafe-eval in script-src", () => {
+    it("includes unsafe-eval in script-src for framework compatibility", () => {
       const csp = getLocalhostDevCSP();
+      const directives = Object.fromEntries(
+        csp.split("; ").map((d) => {
+          const [name, ...rest] = d.split(" ");
+          return [name, rest.join(" ")];
+        })
+      );
 
-      expect(csp).not.toContain("'unsafe-eval'");
+      expect(directives["script-src"]).toContain("'unsafe-eval'");
     });
 
     it("includes secure localhost support (https and wss)", () => {
@@ -84,6 +99,15 @@ describe("webviewCsp", () => {
       expect(csp).toContain("https://127.0.0.1:*");
       expect(csp).toContain("wss://localhost:*");
       expect(csp).toContain("wss://127.0.0.1:*");
+    });
+
+    it("includes IPv6 localhost origins", () => {
+      const csp = getLocalhostDevCSP();
+
+      expect(csp).toContain("http://[::1]:*");
+      expect(csp).toContain("https://[::1]:*");
+      expect(csp).toContain("ws://[::1]:*");
+      expect(csp).toContain("wss://[::1]:*");
     });
 
     it("does not allow external origins in script-src or default-src", () => {

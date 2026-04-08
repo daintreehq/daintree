@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, index } from "drizzle-orm/sqlite-core";
 
 export const tasks = sqliteTable(
   "tasks",
@@ -28,28 +28,6 @@ export const tasks = sqliteTable(
   ]
 );
 
-export const workflowRuns = sqliteTable(
-  "workflow_runs",
-  {
-    runId: text("run_id").primaryKey(),
-    projectId: text("project_id").notNull(),
-    workflowId: text("workflow_id").notNull(),
-    workflowVersion: text("workflow_version").notNull(),
-    status: text("status").notNull(),
-    startedAt: integer("started_at").notNull(),
-    completedAt: integer("completed_at"),
-    definition: text("definition").notNull(),
-    nodeStates: text("node_states").notNull().default("{}"),
-    taskMapping: text("task_mapping").notNull().default("{}"),
-    scheduledNodes: text("scheduled_nodes").notNull().default("[]"),
-    evaluatedConditions: text("evaluated_conditions").notNull().default("[]"),
-  },
-  (t) => [
-    index("workflow_runs_project_idx").on(t.projectId),
-    index("workflow_runs_project_status_idx").on(t.projectId, t.status),
-  ]
-);
-
 export const projects = sqliteTable("projects", {
   id: text("id").primaryKey(),
   path: text("path").notNull(),
@@ -61,6 +39,8 @@ export const projects = sqliteTable("projects", {
   canopyConfigPresent: integer("canopy_config_present", { mode: "boolean" }),
   inRepoSettings: integer("in_repo_settings", { mode: "boolean" }),
   pinned: integer("pinned").notNull().default(0),
+  frecencyScore: real("frecency_score").notNull().default(3.0),
+  lastAccessedAt: integer("last_accessed_at").notNull().default(0),
 });
 
 export const appState = sqliteTable("app_state", {
@@ -69,6 +49,6 @@ export const appState = sqliteTable("app_state", {
 });
 
 export type TaskRow = typeof tasks.$inferInsert;
-export type WorkflowRunRow = typeof workflowRuns.$inferInsert;
+
 export type ProjectRow = typeof projects.$inferSelect;
 export type ProjectInsertRow = typeof projects.$inferInsert;

@@ -4,16 +4,19 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { ImageAddon } from "@xterm/addon-image";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { TerminalRefreshTier, TerminalType, TerminalKind, AgentState } from "@/types";
+
+import { TerminalRefreshTier, TerminalType, PanelKind, AgentState } from "@/types";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
 export type AgentStateCallback = (state: AgentState) => void;
 
+export type PostCompleteHook = (output: string) => void | Promise<void>;
+
 export interface ManagedTerminal {
   terminal: Terminal;
   type: TerminalType;
-  kind?: TerminalKind;
+  kind?: PanelKind;
   agentId?: string;
   agentState?: AgentState;
   agentStateSubscribers: Set<AgentStateCallback>;
@@ -58,6 +61,10 @@ export interface ManagedTerminal {
   // Last activity marker for scroll-to-last-activity
   lastActivityMarker?: IMarker;
 
+  // Post-complete hook: one-shot callback fired on working → waiting transition
+  postCompleteHook?: PostCompleteHook;
+  postCompleteMarker?: IMarker;
+
   // Project-switch resize suppression
   resizeSuppressionTimer?: number;
   isResizeSuppressed?: boolean;
@@ -86,11 +93,18 @@ export interface ManagedTerminal {
   // Input lock state (read-only monitor mode)
   isInputLocked?: boolean;
 
+  // Caller-supplied input callback (stored for reinstallation after hibernation wake)
+  onInput?: (data: string) => void;
+
   // Incremental restore state
   writeChain: Promise<void>;
   restoreGeneration: number;
   isSerializedRestoreInProgress: boolean;
   deferredOutput: Array<string | Uint8Array>;
+
+  // Deferred scrollback restore state — prevents double-restore and tracks lifecycle
+  scrollbackRestoreState: "none" | "pending" | "in-progress" | "done";
+  scrollbackRestoreDisposable?: { dispose: () => void };
 
   // Alternate screen buffer state (tracked via xterm.js onBufferChange).
   // Used to adapt UI (remove padding) and resize strategy for TUI applications.
@@ -99,6 +113,10 @@ export interface ManagedTerminal {
 
   // Project-switch detach state: instance is alive but not in any visible container
   isDetached?: boolean;
+
+  // Attach generation: monotonic counter incremented on each attach().
+  // Used to detect stale unmount cleanup from a previous mount site.
+  attachGeneration: number;
 
   // Attach-reveal: hide terminal during reparent, reveal after render
   attachRevealToken: number;

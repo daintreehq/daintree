@@ -54,23 +54,40 @@ describe("parseNotificationOverrides", () => {
     expect(parseNotificationOverrides({})).toBeUndefined();
   });
 
-  it("parses valid notification overrides", () => {
+  it("parses valid notification overrides with per-event sound fields", () => {
     const result = parseNotificationOverrides({
       completedEnabled: true,
       waitingEnabled: false,
       soundEnabled: true,
-      soundFile: "chime.wav",
+      completedSoundFile: "chime.wav",
+      waitingSoundFile: "waiting.wav",
+      escalationSoundFile: "ping.wav",
     });
     expect(result).toEqual({
       completedEnabled: true,
       waitingEnabled: false,
       soundEnabled: true,
-      soundFile: "chime.wav",
+      completedSoundFile: "chime.wav",
+      waitingSoundFile: "waiting.wav",
+      escalationSoundFile: "ping.wav",
     });
   });
 
-  it("rejects invalid soundFile values", () => {
-    const result = parseNotificationOverrides({ soundFile: "malicious.wav" });
+  it("maps legacy soundFile to completedSoundFile for backwards compat", () => {
+    const result = parseNotificationOverrides({ soundFile: "chime.wav" });
+    expect(result).toEqual({ completedSoundFile: "chime.wav" });
+  });
+
+  it("prefers completedSoundFile over legacy soundFile", () => {
+    const result = parseNotificationOverrides({
+      completedSoundFile: "ping.wav",
+      soundFile: "chime.wav",
+    });
+    expect(result).toEqual({ completedSoundFile: "ping.wav" });
+  });
+
+  it("rejects invalid sound file values", () => {
+    const result = parseNotificationOverrides({ completedSoundFile: "malicious.wav" });
     expect(result).toBeUndefined();
   });
 

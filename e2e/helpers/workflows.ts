@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import type { ElectronApplication, Locator, Page } from "@playwright/test";
-import { mockOpenDialog } from "./launch";
+import { mockOpenDialog, refreshActiveWindow } from "./launch";
 import { completeOnboarding } from "./project";
 import { waitForTerminalText } from "./terminal";
 import { getGridPanelCount, openTerminal } from "./panels";
@@ -12,7 +12,7 @@ export async function addAndSwitchToProject(
   window: Page,
   projectPath: string,
   projectName: string
-): Promise<void> {
+): Promise<Page> {
   await test.step(
     `Add and switch to project "${projectName}"`,
     async () => {
@@ -30,8 +30,17 @@ export async function addAndSwitchToProject(
     },
     { box: true }
   );
+  return await refreshActiveWindow(app, window);
 }
 
+/**
+ * Click an existing project in the project switcher palette.
+ *
+ * After WebContentsView migration, switching projects creates/activates a
+ * different WebContentsView, which means the caller's `Page` reference
+ * becomes stale. Callers that need the new active page should use
+ * {@link selectExistingProjectAndRefresh} instead.
+ */
 export async function selectExistingProject(window: Page, projectName: string): Promise<void> {
   await test.step(
     `Switch to existing project "${projectName}"`,
@@ -40,11 +49,34 @@ export async function selectExistingProject(window: Page, projectName: string): 
       const palette = window.locator(SEL.projectSwitcher.palette);
       await expect(palette).toBeVisible({ timeout: T_MEDIUM });
 
-      await palette.locator(`text="${projectName}"`).click();
-      await expect(palette).not.toBeVisible({ timeout: T_MEDIUM });
+      await palette.getByText(projectName, { exact: true }).first().click();
+      // After WebContentsView migration the palette is rendered in the
+      // outgoing project's view, which is hidden (not destroyed) once the
+      // switch lands — so the close-after-click assertion can race with the
+      // view swap. Best-effort wait, but don't fail if the prior view never
+      // gets a chance to close the palette in its own React tree.
+      await expect(palette)
+        .not.toBeVisible({ timeout: T_MEDIUM })
+        .catch(() => undefined);
     },
     { box: true }
   );
+}
+
+/**
+ * Click an existing project in the project switcher palette and return the
+ * new active project view page. Use this when the caller needs to interact
+ * with the project after switching — the prior `Page` reference will be
+ * pointing at the now-cached previous project's WebContentsView and most
+ * locator queries will return stale or zero results.
+ */
+export async function selectExistingProjectAndRefresh(
+  app: ElectronApplication,
+  window: Page,
+  projectName: string
+): Promise<Page> {
+  await selectExistingProject(window, projectName);
+  return await refreshActiveWindow(app, window);
 }
 
 export async function spawnTerminalAndVerify(

@@ -9,14 +9,14 @@ vi.mock("electron", () => ({
 
 const MOCK_START_TIME =
   process.platform === "win32"
-    ? "CreationDate=20260101000000.000000+000\n"
+    ? "2026-01-01T00:00:00.0000000+00:00\n"
     : "Thu Jan  1 00:00:00 2026\n";
 
 const MOCK_START_TIME_PARSED =
-  process.platform === "win32" ? "20260101000000.000000+000" : "Thu Jan  1 00:00:00 2026";
+  process.platform === "win32" ? "2026-01-01T00:00:00.0000000+00:00" : "Thu Jan  1 00:00:00 2026";
 
 vi.mock("node:child_process", () => ({
-  execFileSync: vi.fn(() => Buffer.from(MOCK_START_TIME)),
+  execFileSync: vi.fn(() => MOCK_START_TIME),
   spawnSync: vi.fn(() => ({ status: 0 })),
 }));
 

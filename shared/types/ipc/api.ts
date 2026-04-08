@@ -1,4 +1,5 @@
 import type { GitStatus, StagingStatus } from "../git.js";
+import type { SnapshotInfo, SnapshotRevertResult } from "./git.js";
 import type { AgentId } from "../agent.js";
 import type { TabGroup } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
@@ -13,36 +14,7 @@ import type { OnboardingState, ChecklistState, ChecklistItemId } from "./maps.js
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { VoiceInputStatus } from "../voice.js";
 export type { VoiceInputStatus };
-import type { WorkflowRun } from "../workflowRun.js";
-import type { WorkflowSummary } from "../workflow.js";
-
-export type WorkflowRunIpc = Omit<WorkflowRun, "scheduledNodes"> & {
-  scheduledNodes: string[];
-};
-
-export interface WorkflowStartedPayload {
-  runId: string;
-  workflowId: string;
-  workflowVersion: string;
-  timestamp: number;
-}
-
-export interface WorkflowCompletedPayload {
-  runId: string;
-  workflowId: string;
-  workflowVersion: string;
-  duration: number;
-  timestamp: number;
-}
-
-export interface WorkflowFailedPayload {
-  runId: string;
-  workflowId: string;
-  workflowVersion: string;
-  error: string;
-  timestamp: number;
-}
-
+import type { ResourceProfilePayload } from "../resourceProfile.js";
 import type {
   CreateWorktreeOptions,
   BranchInfo,
@@ -71,6 +43,7 @@ import type {
   AgentHelpRequest,
   AgentHelpResult,
 } from "./agent.js";
+import type { AgentSessionRecord } from "./agentSessionHistory.js";
 import type {
   DemoScreenshotResult,
   DemoStartCapturePayload,
@@ -80,6 +53,7 @@ import type {
   DemoEncodePayload,
   DemoEncodeProgressEvent,
   DemoEncodeResult,
+  DemoAnnotateResult,
 } from "./demo.js";
 import type {
   CopyTreeResult,
@@ -96,13 +70,22 @@ import type {
   StartAgentUpdatePayload,
   StartAgentUpdateResult,
   SystemHealthCheckResult,
+  PrerequisiteSpec,
+  PrerequisiteCheckResult,
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
 import type { RetryAction, AppError, RetryProgressPayload } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
-import type { ProjectCloseResult, ProjectStats, BulkProjectStats } from "./project.js";
+import type {
+  ProjectCloseResult,
+  ProjectStats,
+  ProjectStatusMap,
+  BulkProjectStats,
+  ProjectSwitchOutgoingState,
+} from "./project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
+import type { CloneRepoOptions, CloneRepoResult, CloneRepoProgressEvent } from "./gitClone.js";
 import type {
   RepositoryStats,
   ProjectHealthData,
@@ -165,9 +148,14 @@ export interface NotificationSettings {
   completedEnabled: boolean;
   waitingEnabled: boolean;
   soundEnabled: boolean;
-  soundFile: string;
+  completedSoundFile: string;
+  waitingSoundFile: string;
+  escalationSoundFile: string;
   waitingEscalationEnabled: boolean;
   waitingEscalationDelayMs: number;
+  workingPulseEnabled: boolean;
+  workingPulseSoundFile: string;
+  uiFeedbackSoundEnabled: boolean;
 }
 
 // ElectronAPI Type (exposed via preload)
@@ -182,6 +170,7 @@ export interface ElectronAPI {
     setActive(worktreeId: string): Promise<void>;
     create(options: CreateWorktreeOptions, rootPath: string): Promise<string>;
     listBranches(rootPath: string): Promise<BranchInfo[]>;
+    fetchPRBranch(rootPath: string, prNumber: number, headRefName: string): Promise<void>;
     getRecentBranches(rootPath: string): Promise<string[]>;
     getDefaultPath(rootPath: string, branchName: string): Promise<string>;
     getAvailableBranch(rootPath: string, branchName: string): Promise<string>;
@@ -212,12 +201,20 @@ export interface ElectronAPI {
     onRemove(callback: (data: { worktreeId: string }) => void): () => void;
     onActivated(callback: (data: { worktreeId: string }) => void): () => void;
   };
+  worktreePort: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    request(action: string, payload?: Record<string, unknown>): Promise<any>;
+    onEvent(type: string, callback: (data: unknown) => void): () => void;
+    isReady(): boolean;
+    onReady(callback: () => void): () => void;
+  };
   terminal: {
     spawn(options: TerminalSpawnOptions): Promise<string>;
     write(id: string, data: string): void;
     submit(id: string, text: string): Promise<void>;
     resize(id: string, cols: number, rows: number): void;
     kill(id: string): Promise<void>;
+    gracefulKill(id: string): Promise<string | null>;
     trash(id: string): Promise<void>;
     restore(id: string): Promise<boolean>;
     setActivityTier(id: string, tier: PtyHostActivityTier): void;
@@ -242,6 +239,7 @@ export interface ElectronAPI {
     onAgentStateChanged(callback: (data: AgentStateChangePayload) => void): () => void;
     onAgentDetected(callback: (data: AgentDetectedPayload) => void): () => void;
     onAgentExited(callback: (data: AgentExitedPayload) => void): () => void;
+    onAllAgentsClear(callback: (data: { timestamp: number }) => void): () => void;
     onActivity(callback: (data: TerminalActivityPayload) => void): () => void;
     onTrashed(callback: (data: { id: string; expiresAt: number }) => void): () => void;
     onRestored(callback: (data: { id: string }) => void): () => void;
@@ -267,6 +265,7 @@ export interface ElectronAPI {
     ): () => void;
     onRestoreScrollback(callback: (data: { terminalIds: string[] }) => void): () => void;
     restartService(): Promise<void>;
+    onReclaimMemory(callback: () => void): () => void;
   };
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;
@@ -319,10 +318,16 @@ export interface ElectronAPI {
     setAgentUpdateSettings(settings: AgentUpdateSettings): Promise<void>;
     startAgentUpdate(payload: StartAgentUpdatePayload): Promise<StartAgentUpdateResult>;
     healthCheck(agentIds?: string[]): Promise<SystemHealthCheckResult>;
+    getHealthCheckSpecs(agentIds?: string[]): Promise<PrerequisiteSpec[]>;
+    checkTool(spec: PrerequisiteSpec): Promise<PrerequisiteCheckResult>;
     downloadDiagnostics(): Promise<boolean>;
     getAppMetrics(): Promise<import("./system.js").AppMetricsSummary>;
     getHardwareInfo(): Promise<import("./system.js").HardwareInfo>;
+    getProcessMetrics(): Promise<import("./system.js").ProcessMetricEntry[]>;
+    getHeapStats(): Promise<import("./system.js").HeapStats>;
+    getDiagnosticsInfo(): Promise<import("./system.js").DiagnosticsInfo>;
     onWake(callback: (data: SystemWakePayload) => void): () => void;
+    onResourceProfileChanged(callback: (payload: ResourceProfilePayload) => void): () => void;
   };
   app: {
     getState(): Promise<AppState>;
@@ -332,6 +337,8 @@ export interface ElectronAPI {
     quit(): Promise<void>;
     forceQuit(): Promise<void>;
     onMenuAction(callback: (action: string) => void): () => void;
+    reloadConfig(): Promise<{ success: boolean }>;
+    onConfigReloaded(callback: () => void): () => void;
   };
   menu: {
     showContext(payload: ShowContextMenuPayload): Promise<string | null>;
@@ -366,6 +373,7 @@ export interface ElectronAPI {
     subscribe(): void;
     unsubscribe(): void;
     onEvent(callback: (event: EventRecord) => void): () => void;
+    onEventBatch(callback: (events: EventRecord[]) => void): () => void;
   };
   events: {
     emit(eventType: string, payload: unknown): Promise<void>;
@@ -376,15 +384,18 @@ export interface ElectronAPI {
     add(path: string): Promise<Project>;
     remove(projectId: string): Promise<void>;
     update(projectId: string, updates: Partial<Project>): Promise<Project>;
-    switch(projectId: string): Promise<Project>;
+    switch(projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project>;
     openDialog(): Promise<string | null>;
     onSwitch(
       callback: (payload: {
         project: Project;
         switchId: string;
         worktreeLoadError?: string;
+        hydrateResult?: import("./app.js").HydrateResult;
       }) => void
     ): () => void;
+    onUpdated(callback: (project: Project) => void): () => void;
+    onRemoved(callback: (projectId: string) => void): () => void;
     getSettings(projectId: string): Promise<ProjectSettings>;
     saveSettings(projectId: string, settings: ProjectSettings): Promise<void>;
     detectRunners(projectId: string): Promise<RunCommand[]>;
@@ -398,15 +409,22 @@ export interface ElectronAPI {
      * Reopen a background project, making it the active project.
      * Terminals that were running in the background will be reconnected.
      */
-    reopen(projectId: string): Promise<Project>;
+    reopen(projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project>;
     getStats(projectId: string): Promise<ProjectStats>;
     getBulkStats(projectIds: string[]): Promise<BulkProjectStats>;
+    onStatsUpdated(callback: (stats: ProjectStatusMap) => void): () => void;
     createFolder(parentPath: string, folderName: string): Promise<string>;
     initGit(directoryPath: string): Promise<void>;
     /** Initialize git repository with progress events */
     initGitGuided(options: GitInitOptions): Promise<GitInitResult>;
     /** Subscribe to git init progress events */
     onInitGitProgress(callback: (event: GitInitProgressEvent) => void): () => void;
+    /** Clone a git repository from a URL */
+    cloneRepo(options: CloneRepoOptions): Promise<CloneRepoResult>;
+    /** Subscribe to clone progress events */
+    onCloneProgress(callback: (event: CloneRepoProgressEvent) => void): () => void;
+    /** Cancel an in-progress clone operation */
+    cancelClone(): Promise<void>;
     getRecipes(projectId: string): Promise<TerminalRecipe[]>;
     saveRecipes(projectId: string, recipes: TerminalRecipe[]): Promise<void>;
     addRecipe(projectId: string, recipe: TerminalRecipe): Promise<void>;
@@ -416,6 +434,16 @@ export interface ElectronAPI {
       updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
     ): Promise<void>;
     deleteRecipe(projectId: string, recipeId: string): Promise<void>;
+    exportRecipeToFile(name: string, json: string): Promise<boolean>;
+    importRecipeFromFile(): Promise<string | null>;
+    getInRepoRecipes(projectId: string): Promise<TerminalRecipe[]>;
+    syncInRepoRecipes(projectId: string, recipes: TerminalRecipe[]): Promise<void>;
+    updateInRepoRecipe(
+      projectId: string,
+      recipe: TerminalRecipe,
+      previousName?: string
+    ): Promise<void>;
+    deleteInRepoRecipe(projectId: string, recipeName: string): Promise<void>;
     /**
      * Get saved terminal snapshots for a project (per-project panel state).
      * Used for restoring panel layout when switching projects.
@@ -439,6 +467,16 @@ export interface ElectronAPI {
       projectId: string,
       terminalSizes: Record<string, { cols: number; rows: number }>
     ): Promise<void>;
+    /**
+     * Get draft inputs for a project.
+     * Used for restoring hybrid input bar drafts when switching to a project.
+     */
+    getDraftInputs(projectId: string): Promise<Record<string, string>>;
+    /**
+     * Save draft inputs for a project.
+     * Used for preserving hybrid input bar drafts when switching away from a project.
+     */
+    setDraftInputs(projectId: string, draftInputs: Record<string, string>): Promise<void>;
     /**
      * Get tab groups for a project.
      * Used for restoring tab groups when switching to a project.
@@ -491,6 +529,15 @@ export interface ElectronAPI {
      * Returns the updated Project, or null if the user cancelled.
      */
     locate(projectId: string): Promise<Project | null>;
+  };
+  globalRecipes: {
+    getRecipes(): Promise<TerminalRecipe[]>;
+    addRecipe(recipe: TerminalRecipe): Promise<void>;
+    updateRecipe(
+      recipeId: string,
+      updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
+    ): Promise<void>;
+    deleteRecipe(recipeId: string): Promise<void>;
   };
   agentSettings: {
     get(): Promise<AgentSettings>;
@@ -555,6 +602,7 @@ export interface ElectronAPI {
       issueNumber: number
     ): Promise<import("../github.js").GitHubIssue | null>;
     getPRByNumber(cwd: string, prNumber: number): Promise<import("../github.js").GitHubPR | null>;
+    listRemotes(cwd: string): Promise<import("./github.js").RemoteInfo[]>;
     onPRDetected(callback: (data: PRDetectedPayload) => void): () => void;
     onPRCleared(callback: (data: PRClearedPayload) => void): () => void;
     onIssueDetected(callback: (data: IssueDetectedPayload) => void): () => void;
@@ -653,12 +701,6 @@ export interface ElectronAPI {
     getState(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState>;
     onStateChanged(callback: (data: DevPreviewStateChangedPayload) => void): () => void;
   };
-  globalDevServers: {
-    get(): Promise<import("./globalDevServers.js").GlobalDevServersGetResult>;
-    onChanged(
-      callback: (data: import("./globalDevServers.js").GlobalDevServersChangedPayload) => void
-    ): () => void;
-  };
   git: {
     getFileDiff(cwd: string, filePath: string, status: GitStatus): Promise<string>;
     getProjectPulse(options: {
@@ -691,6 +733,10 @@ export interface ElectronAPI {
     ): Promise<import("./git.js").CrossWorktreeDiffResult | string>;
     getUsername(cwd: string): Promise<string | null>;
     getWorkingDiff(cwd: string, type: "unstaged" | "staged" | "head"): Promise<string>;
+    snapshotGet(worktreeId: string): Promise<SnapshotInfo | null>;
+    snapshotList(): Promise<SnapshotInfo[]>;
+    snapshotRevert(worktreeId: string): Promise<SnapshotRevertResult>;
+    snapshotDelete(worktreeId: string): Promise<void>;
   };
   terminalConfig: {
     get(): Promise<TerminalConfig>;
@@ -716,6 +762,9 @@ export interface ElectronAPI {
     >;
     setScreenReaderMode(mode: "auto" | "on" | "off"): Promise<void>;
     setResourceMonitoring(enabled: boolean): Promise<void>;
+    setMemoryLeakDetection(enabled: boolean): Promise<void>;
+    setMemoryLeakAutoRestartThresholdMb(thresholdMb: number): Promise<void>;
+    setCachedProjectViews(cachedProjectViews: number): Promise<void>;
   };
   accessibility: {
     getEnabled(): Promise<boolean>;
@@ -762,6 +811,17 @@ export interface ElectronAPI {
     onFindShortcut(
       callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
     ): () => void;
+    /** Subscribe to blocked cross-origin navigation events from webview guests */
+    onNavigationBlocked(
+      callback: (payload: { panelId: string; url: string; canOpenExternal: boolean }) => void
+    ): () => void;
+    /** Start OAuth loopback flow: system browser for IdP, ephemeral server for callback, CDP for token exchange */
+    startOAuthLoopback(
+      authUrl: string,
+      panelId: string,
+      webContentsId: number,
+      sessionStorageSnapshot?: Array<[string, string]>
+    ): Promise<{ success: boolean; error?: string } | null>;
     /** Start CDP console capture for a webview panel */
     startConsoleCapture(webContentsId: number, paneId: string): Promise<void>;
     /** Stop CDP console capture for a webview panel */
@@ -842,6 +902,8 @@ export interface ElectronAPI {
     getZoomFactor(): number;
     /** Close window */
     close(): Promise<void>;
+    /** Open a new window, optionally for a specific project path */
+    openNew(projectPath?: string): Promise<void>;
     /** Subscribe to hidden webview destruction events from memory pressure */
     onDestroyHiddenWebviews(callback: (payload: { tier: 1 | 2 }) => void): () => void;
     /** Subscribe to disk space status changes */
@@ -868,6 +930,8 @@ export interface ElectronAPI {
     setSettings(settings: Partial<NotificationSettings>): Promise<void>;
     /** Play a sound file by name for preview */
     playSound(soundFile: string): Promise<void>;
+    /** Play a UI feedback event sound by ID (routed to SoundService with variant selection) */
+    playUiEvent(soundId: string): Promise<void>;
     /** Show a simple native OS notification with no navigation context */
     showNative(payload: { title: string; body: string }): void;
     /** Show a high-priority watch notification unconditionally (no focus suppression) */
@@ -878,6 +942,10 @@ export interface ElectronAPI {
       panelTitle: string;
       worktreeId?: string;
     }): void;
+    /** Subscribe to toast notifications pushed from the main process */
+    onShowToast(
+      callback: (payload: import("./maps.js").MainProcessToastPayload) => void
+    ): () => void;
     /** Subscribe to watch notification click → navigate events from main process */
     onWatchNavigate(
       callback: (context: { panelId: string; panelTitle: string; worktreeId?: string }) => void
@@ -886,6 +954,16 @@ export interface ElectronAPI {
     syncWatchedPanels(panelIds: string[]): void;
     /** Acknowledge a waiting agent escalation (cancels pending escalation timer) */
     acknowledgeWaiting(terminalId: string): void;
+    /** Acknowledge working pulse (cancels periodic pulse sound for the terminal) */
+    acknowledgeWorkingPulse(terminalId: string): void;
+  };
+  sound: {
+    /** Listen for sound trigger events from main process */
+    onTrigger(callback: (payload: { soundFile: string }) => void): () => void;
+    /** Listen for sound cancel events from main process */
+    onCancel(callback: () => void): () => void;
+    /** Get the absolute path to the sounds directory */
+    getSoundDir(): Promise<string>;
   };
   update: {
     onUpdateAvailable(callback: (info: { version: string }) => void): () => void;
@@ -893,6 +971,8 @@ export interface ElectronAPI {
     onUpdateDownloaded(callback: (info: { version: string }) => void): () => void;
     quitAndInstall(): Promise<void>;
     checkForUpdates(): Promise<void>;
+    getChannel(): Promise<"stable" | "nightly">;
+    setChannel(channel: "stable" | "nightly"): Promise<"stable" | "nightly">;
   };
   gemini: {
     /** Get Gemini config status (exists, alternate buffer enabled) */
@@ -959,6 +1039,10 @@ export interface ElectronAPI {
     /** Check if agent is enabled/available */
     isAgentEnabled(agentId: string): Promise<boolean>;
   };
+  agentSessionHistory: {
+    list(worktreeId?: string): Promise<AgentSessionRecord[]>;
+    clear(worktreeId?: string): Promise<void>;
+  };
   clipboard: {
     saveImage(): Promise<
       { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
@@ -968,6 +1052,7 @@ export interface ElectronAPI {
     ): Promise<
       { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
     >;
+    writeImage(pngData: Uint8Array): Promise<{ ok: true } | { ok: false; error: string }>;
   };
   webUtils: {
     getPathForFile(file: File): string;
@@ -977,7 +1062,14 @@ export interface ElectronAPI {
     setColorScheme(schemeId: string): Promise<void>;
     setCustomSchemes(schemesJson: string): Promise<void>;
     importTheme(): Promise<import("../appTheme.js").AppThemeImportResult>;
+    exportTheme(scheme: import("../appTheme.js").AppColorScheme): Promise<boolean>;
     setColorVisionMode(mode: import("../appTheme.js").ColorVisionMode): Promise<void>;
+    setFollowSystem(enabled: boolean): Promise<void>;
+    setPreferredDarkScheme(schemeId: string): Promise<void>;
+    setPreferredLightScheme(schemeId: string): Promise<void>;
+    onSystemAppearanceChanged(
+      callback: (payload: { isDark: boolean; schemeId: string }) => void
+    ): () => void;
   };
   telemetry: {
     get(): Promise<{ enabled: boolean; hasSeenPrompt: boolean }>;
@@ -1013,10 +1105,15 @@ export interface ElectronAPI {
     complete(): Promise<void>;
     markToastSeen(): Promise<void>;
     markNewsletterSeen(): Promise<void>;
+    markWaitingNudgeSeen(): Promise<void>;
     getChecklist(): Promise<ChecklistState>;
     dismissChecklist(): Promise<void>;
     markChecklistItem(item: ChecklistItemId): Promise<void>;
     markChecklistCelebrationShown(): Promise<void>;
+  };
+  milestones: {
+    get(): Promise<Record<string, boolean>>;
+    markShown(id: string): Promise<void>;
   };
   shortcutHints: {
     getCounts(): Promise<Record<string, number>>;
@@ -1065,6 +1162,9 @@ export interface ElectronAPI {
     openMicSettings(): Promise<void>;
     validateApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
     validateCorrectionApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
+    onFileTokenResolved(
+      callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
+    ): () => void;
   };
   mcpServer: {
     /** Get current MCP server status and configuration */
@@ -1100,49 +1200,6 @@ export interface ElectronAPI {
     /** Get the JSON config snippet to paste into an MCP client config */
     getConfigSnippet(): Promise<string>;
   };
-  workflow: {
-    listWorkflows(): Promise<WorkflowSummary[]>;
-    startWorkflow(workflowId: string): Promise<string>;
-    cancelWorkflow(runId: string): Promise<void>;
-    getWorkflowRun(runId: string): Promise<WorkflowRunIpc | null>;
-    listRuns(): Promise<WorkflowRunIpc[]>;
-    onStarted(callback: (data: WorkflowStartedPayload) => void): () => void;
-    onCompleted(callback: (data: WorkflowCompletedPayload) => void): () => void;
-    onFailed(callback: (data: WorkflowFailedPayload) => void): () => void;
-    listPendingApprovals(): Promise<
-      Array<{
-        runId: string;
-        nodeId: string;
-        workflowId: string;
-        workflowName: string;
-        prompt: string;
-        requestedAt: number;
-        timeoutMs?: number;
-        timeoutAt?: number;
-      }>
-    >;
-    resolveApproval(payload: {
-      runId: string;
-      nodeId: string;
-      approved: boolean;
-      feedback?: string;
-    }): Promise<void>;
-    onApprovalRequested(
-      callback: (payload: {
-        runId: string;
-        nodeId: string;
-        workflowId: string;
-        workflowName: string;
-        prompt: string;
-        requestedAt: number;
-        timeoutMs?: number;
-        timeoutAt?: number;
-      }) => void
-    ): () => void;
-    onApprovalCleared(
-      callback: (payload: { runId: string; nodeId: string; reason: string }) => void
-    ): () => void;
-  };
   mcpBridge: {
     /** Listen for manifest requests from main process */
     onGetManifestRequest(callback: (requestId: string) => void): () => void;
@@ -1166,6 +1223,20 @@ export interface ElectronAPI {
       result: import("../actions.js").ActionDispatchResult;
     }): void;
   };
+  plugin: {
+    list(): Promise<import("../plugin.js").LoadedPluginInfo[]>;
+    invoke(pluginId: string, channel: string, ...args: unknown[]): Promise<unknown>;
+    on(pluginId: string, channel: string, callback: (payload: unknown) => void): () => void;
+    toolbarButtons(): Promise<
+      import("../../config/toolbarButtonRegistry.js").ToolbarButtonConfig[]
+    >;
+    menuItems(): Promise<
+      Array<{
+        pluginId: string;
+        item: import("../plugin.js").MenuItemContribution;
+      }>
+    >;
+  };
   crashRecovery: {
     getPending(): Promise<import("./crashRecovery.js").PendingCrash | null>;
     resolve(action: import("./crashRecovery.js").CrashRecoveryAction): Promise<void>;
@@ -1174,11 +1245,19 @@ export interface ElectronAPI {
       config: Partial<import("./crashRecovery.js").CrashRecoveryConfig>
     ): Promise<import("./crashRecovery.js").CrashRecoveryConfig>;
   };
+  help: {
+    getFolderPath(): Promise<string | null>;
+    markTerminal(terminalId: string): Promise<void>;
+    unmarkTerminal(terminalId: string): Promise<void>;
+  };
+  perf: {
+    flushMarks(payload: import("../../perf/marks.js").RendererPerfFlushPayload): void;
+  };
   demo?: {
-    moveTo(x: number, y: number, durationMs: number): Promise<void>;
+    moveTo(x: number, y: number, durationMs?: number): Promise<void>;
     moveToSelector(
       selector: string,
-      durationMs: number,
+      durationMs?: number,
       offsetX?: number,
       offsetY?: number
     ): Promise<void>;
@@ -1190,6 +1269,24 @@ export interface ElectronAPI {
     pause(): Promise<void>;
     resume(): Promise<void>;
     sleep(durationMs: number): Promise<void>;
+    scroll(selector: string): Promise<void>;
+    drag(fromSelector: string, toSelector: string, durationMs?: number): Promise<void>;
+    pressKey(
+      key: string,
+      code?: string,
+      modifiers?: Array<"mod" | "ctrl" | "shift" | "alt" | "meta">,
+      selector?: string
+    ): Promise<void>;
+    spotlight(selector: string, padding?: number): Promise<void>;
+    dismissSpotlight(): Promise<void>;
+    annotate(
+      selector: string,
+      text: string,
+      position?: "top" | "bottom" | "left" | "right",
+      id?: string
+    ): Promise<DemoAnnotateResult>;
+    dismissAnnotation(id?: string): Promise<void>;
+    waitForIdle(settleMs?: number, timeoutMs?: number): Promise<void>;
     startCapture(payload: DemoStartCapturePayload): Promise<DemoStartCaptureResult>;
     stopCapture(): Promise<DemoStopCaptureResult>;
     getCaptureStatus(): Promise<DemoCaptureStatus>;
@@ -1247,4 +1344,6 @@ export interface VoiceInputSettings {
   correctionCustomInstructions: string;
   /** Controls how paragraph breaks are inserted during dictation. Defaults to "spoken-command". */
   paragraphingStrategy: VoiceParagraphingStrategy;
+  /** When enabled, voice commands like "link to X" resolve to @file references. Defaults to true. */
+  resolveFileLinks: boolean;
 }
