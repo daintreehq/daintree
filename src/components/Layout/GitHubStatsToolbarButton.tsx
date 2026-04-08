@@ -121,6 +121,14 @@ export const GitHubStatsToolbarButton = memo(
       return `${days}d ago`;
     }, []);
 
+    const openSettingsForToken = useCallback(() => {
+      void actionService.dispatch(
+        "app.settings.openTab",
+        { tab: "github", sectionId: "github-token" },
+        { source: "user" }
+      );
+    }, []);
+
     useImperativeHandle(
       ref,
       () => ({
@@ -129,12 +137,24 @@ export const GitHubStatsToolbarButton = memo(
           setPrsOpen(false);
           setCommitsOpen(false);
         },
-        openIssues: () => setIssuesOpen((p) => !p),
-        openPrs: () => setPrsOpen((p) => !p),
+        openIssues: () => {
+          if (isTokenError) {
+            openSettingsForToken();
+            return;
+          }
+          setIssuesOpen((p) => !p);
+        },
+        openPrs: () => {
+          if (isTokenError) {
+            openSettingsForToken();
+            return;
+          }
+          setPrsOpen((p) => !p);
+        },
         openCommits: () => setCommitsOpen((p) => !p),
         stats,
       }),
-      [stats]
+      [stats, isTokenError, openSettingsForToken]
     );
 
     if (!currentProject) return null;
@@ -177,7 +197,7 @@ export const GitHubStatsToolbarButton = memo(
                   "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
                   isTokenError && "opacity-40",
                   !isTokenError && stats?.issueCount === 0 && "opacity-50",
-                  isStale && "opacity-60",
+                  !isTokenError && isStale && "opacity-60",
                   issuesOpen &&
                     "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-github-open/20"
                 )}
@@ -267,7 +287,7 @@ export const GitHubStatsToolbarButton = memo(
                   "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
                   isTokenError && "opacity-40",
                   !isTokenError && stats?.prCount === 0 && "opacity-50",
-                  isStale && "opacity-60",
+                  !isTokenError && isStale && "opacity-60",
                   prsOpen &&
                     "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-github-merged/20"
                 )}
