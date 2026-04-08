@@ -4,6 +4,7 @@ export { GeminiIcon } from "./GeminiIcon";
 export { CodexIcon } from "./CodexIcon";
 export { OpenCodeIcon } from "./OpenCodeIcon";
 export { CursorIcon } from "./CursorIcon";
+export { KiroIcon } from "./KiroIcon";
 
 // JavaScript ecosystem
 export { NpmIcon } from "./NpmIcon";

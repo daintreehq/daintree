@@ -17,7 +17,9 @@ export const SlashCommandTooltipContent = memo(function SlashCommandTooltipConte
         ? "text-cat-blue"
         : command.agentId === "gemini"
           ? "text-cat-violet"
-          : "text-cat-green";
+          : command.agentId === "kiro"
+            ? "text-cat-pink"
+            : "text-cat-green";
 
   return (
     <div className="space-y-1.5 max-w-[280px]">
