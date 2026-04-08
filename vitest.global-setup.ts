@@ -13,8 +13,10 @@ import { createRequire } from "module";
 export function setup(): void {
   const nativeRequire = createRequire(import.meta.url);
   try {
-    // Force load the native addon — this will throw if compiled for wrong ABI
-    nativeRequire("better-sqlite3");
+    // require() only loads the JS wrapper; instantiate to force-load the native addon
+    const Database = nativeRequire("better-sqlite3");
+    const db = new Database(":memory:");
+    db.close();
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes("NODE_MODULE_VERSION") || message.includes("was compiled against")) {
