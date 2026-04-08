@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { buildInitialState, wizardReducer } from "../AgentSetupWizard";
+import type { CliAvailability } from "@shared/types";
 
 describe("AgentSetupWizard reducer", () => {
-  const emptyAvail: Record<string, string> = {};
-  const partialAvail: Record<string, string> = {
+  const emptyAvail = {} as CliAvailability;
+  const partialAvail = {
     claude: "ready",
     gemini: "missing",
     codex: "missing",
-  };
+  } as CliAvailability;
 
   it("starts at health step by default", () => {
     const state = buildInitialState(emptyAvail, false);
@@ -39,7 +40,7 @@ describe("AgentSetupWizard reducer", () => {
   });
 
   it("advances from selection to cli even when all agents installed", () => {
-    const allInstalled: Record<string, string> = { claude: "ready", gemini: "ready" };
+    const allInstalled = { claude: "ready", gemini: "ready" } as CliAvailability;
     let state = buildInitialState(allInstalled, true);
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
@@ -124,7 +125,7 @@ describe("AgentSetupWizard reducer", () => {
     });
     state = wizardReducer(state, {
       type: "SET_AVAILABILITY",
-      payload: { claude: "ready" },
+      payload: { claude: "ready" } as CliAvailability,
     });
     expect(state.availability.claude).toBe("ready");
     expect(state.selections.claude).toBe(false); // selections unchanged
