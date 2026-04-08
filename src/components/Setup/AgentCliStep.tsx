@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CircleCheck, CircleDashed, Loader2, RotateCw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { systemClient } from "@/clients";
@@ -58,7 +58,7 @@ export function AgentCliStep({
   isSaving,
   onToggle,
 }: AgentCliStepProps) {
-  const [specs, setSpecs] = useState<PrerequisiteSpec[]>([]);
+  const [, setSpecs] = useState<PrerequisiteSpec[]>([]);
   const [checkStates, setCheckStates] = useState<Record<string, CheckState>>({});
   const [isChecking, setIsChecking] = useState(false);
   const activeRef = useRef(true);
