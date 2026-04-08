@@ -129,6 +129,52 @@ describe("Toolbar Suspense skeleton fallbacks — issue #3593", () => {
   });
 });
 
+describe("Toolbar GitHub token error UX — issue #5024", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(GITHUB_STATS_PATH, "utf-8");
+  });
+
+  it("consumes isTokenError from useRepositoryStats", () => {
+    expect(source).toContain("isTokenError");
+    expect(source).toContain("useRepositoryStats");
+  });
+
+  it("redirects to GitHub settings on token error click", () => {
+    expect(source).toContain("app.settings.openTab");
+    expect(source).toContain("github-token");
+  });
+
+  it("dims Issues and PR buttons with opacity-40 on token error", () => {
+    const issuesButton = source.slice(
+      source.indexOf("ref={issuesButtonRef}"),
+      source.indexOf("ref={issuesButtonRef}") + 1500
+    );
+    expect(issuesButton).toContain("isTokenError");
+    expect(issuesButton).toContain("opacity-40");
+
+    const prsButton = source.slice(
+      source.indexOf("ref={prsButtonRef}"),
+      source.indexOf("ref={prsButtonRef}") + 1500
+    );
+    expect(prsButton).toContain("isTokenError");
+    expect(prsButton).toContain("opacity-40");
+  });
+
+  it("does not apply token error handling to the Commits button", () => {
+    const commitsButton = source.slice(
+      source.indexOf("ref={commitsButtonRef}"),
+      source.indexOf("ref={commitsButtonRef}") + 500
+    );
+    expect(commitsButton).not.toContain("isTokenError");
+  });
+
+  it("suppresses error indicator status for token errors", () => {
+    expect(source).toContain("statsError && !isTokenError");
+  });
+});
+
 describe("Toolbar persistThroughChildOverlays — issue #3556", () => {
   let source: string;
 

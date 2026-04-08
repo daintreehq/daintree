@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { RepositoryStats } from "../types";
 import { githubClient, projectClient } from "@/clients";
+import { isTokenRelatedError } from "@/lib/githubErrors";
 
 const ACTIVE_POLL_INTERVAL = 30 * 1000;
 const IDLE_POLL_INTERVAL = 5 * 60 * 1000;
@@ -10,6 +11,7 @@ export interface UseRepositoryStatsReturn {
   stats: RepositoryStats | null;
   loading: boolean;
   error: string | null;
+  isTokenError: boolean;
   isStale: boolean;
   lastUpdated: number | null;
   refresh: (options?: { force?: boolean }) => Promise<void>;
@@ -291,10 +293,13 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     return cleanup;
   }, [fetchStats, scheduleNextPoll]);
 
+  const isTokenError = isTokenRelatedError(error);
+
   return {
     stats,
     loading,
     error,
+    isTokenError,
     isStale,
     lastUpdated,
     refresh,

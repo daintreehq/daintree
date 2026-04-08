@@ -14,6 +14,7 @@ import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import { CircleDot, GitPullRequest, GitCommit } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { actionService } from "@/services/ActionService";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useGitHubFilterStore } from "@/store/githubFilterStore";
@@ -57,6 +58,7 @@ export const GitHubStatsToolbarButton = memo(
       stats,
       loading: statsLoading,
       error: statsError,
+      isTokenError,
       refresh: refreshStats,
       isStale,
       lastUpdated,
@@ -95,10 +97,10 @@ export const GitHubStatsToolbarButton = memo(
 
     const getGitHubIndicatorStatus = useCallback((): GitHubStatusIndicatorStatus => {
       if (statsLoading) return "loading";
-      if (statsError) return "error";
+      if (statsError && !isTokenError) return "error";
       if (statsJustUpdated) return "success";
       return "idle";
-    }, [statsLoading, statsError, statsJustUpdated]);
+    }, [statsLoading, statsError, isTokenError, statsJustUpdated]);
 
     const handleGitHubStatusTransitionEnd = useCallback(() => {
       setStatsJustUpdated(false);
@@ -156,6 +158,16 @@ export const GitHubStatsToolbarButton = memo(
                   setPrsOpen(false);
                   setPrSearchQuery("");
                   setCommitsOpen(false);
+                  if (isTokenError) {
+                    setIssuesOpen(false);
+                    setIssueSearchQuery("");
+                    void actionService.dispatch(
+                      "app.settings.openTab",
+                      { tab: "github", sectionId: "github-token" },
+                      { source: "user" }
+                    );
+                    return;
+                  }
                   const willOpen = !issuesOpen;
                   setIssuesOpen(willOpen);
                   if (!willOpen) setIssueSearchQuery("");
@@ -163,23 +175,35 @@ export const GitHubStatsToolbarButton = memo(
                 }}
                 className={cn(
                   "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
-                  stats?.issueCount === 0 && "opacity-50",
+                  isTokenError && "opacity-40",
+                  !isTokenError && stats?.issueCount === 0 && "opacity-50",
                   isStale && "opacity-60",
                   issuesOpen &&
                     "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-github-open/20"
                 )}
-                aria-label={`${stats?.issueCount ?? "\u2014"} open issues${isStale ? " (cached)" : ""}`}
+                aria-label={
+                  isTokenError
+                    ? "Configure GitHub token to see issues"
+                    : `${stats?.issueCount ?? "\u2014"} open issues${isStale ? " (cached)" : ""}`
+                }
               >
-                <CircleDot className="h-4 w-4 text-github-open" />
+                <CircleDot
+                  className={cn(
+                    "h-4 w-4",
+                    isTokenError ? "text-muted-foreground" : "text-github-open"
+                  )}
+                />
                 <span className="text-xs font-medium tabular-nums">
                   {stats?.issueCount ?? "\u2014"}
                 </span>
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {isStale
-                ? `${stats?.issueCount ?? "\u2014"} open issues (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
-                : "Browse GitHub Issues"}
+              {isTokenError
+                ? "Configure GitHub token to see issues"
+                : isStale
+                  ? `${stats?.issueCount ?? "\u2014"} open issues (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
+                  : "Browse GitHub Issues"}
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -224,6 +248,16 @@ export const GitHubStatsToolbarButton = memo(
                   setIssuesOpen(false);
                   setIssueSearchQuery("");
                   setCommitsOpen(false);
+                  if (isTokenError) {
+                    setPrsOpen(false);
+                    setPrSearchQuery("");
+                    void actionService.dispatch(
+                      "app.settings.openTab",
+                      { tab: "github", sectionId: "github-token" },
+                      { source: "user" }
+                    );
+                    return;
+                  }
                   const willOpen = !prsOpen;
                   setPrsOpen(willOpen);
                   if (!willOpen) setPrSearchQuery("");
@@ -231,23 +265,35 @@ export const GitHubStatsToolbarButton = memo(
                 }}
                 className={cn(
                   "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
-                  stats?.prCount === 0 && "opacity-50",
+                  isTokenError && "opacity-40",
+                  !isTokenError && stats?.prCount === 0 && "opacity-50",
                   isStale && "opacity-60",
                   prsOpen &&
                     "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-github-merged/20"
                 )}
-                aria-label={`${stats?.prCount ?? "\u2014"} open pull requests${isStale ? " (cached)" : ""}`}
+                aria-label={
+                  isTokenError
+                    ? "Configure GitHub token to see pull requests"
+                    : `${stats?.prCount ?? "\u2014"} open pull requests${isStale ? " (cached)" : ""}`
+                }
               >
-                <GitPullRequest className="h-4 w-4 text-github-merged" />
+                <GitPullRequest
+                  className={cn(
+                    "h-4 w-4",
+                    isTokenError ? "text-muted-foreground" : "text-github-merged"
+                  )}
+                />
                 <span className="text-xs font-medium tabular-nums">
                   {stats?.prCount ?? "\u2014"}
                 </span>
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {isStale
-                ? `${stats?.prCount ?? "\u2014"} open PRs (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
-                : "Browse GitHub Pull Requests"}
+              {isTokenError
+                ? "Configure GitHub token to see pull requests"
+                : isStale
+                  ? `${stats?.prCount ?? "\u2014"} open PRs (last updated ${getTimeSinceUpdate(lastUpdated)} - offline)`
+                  : "Browse GitHub Pull Requests"}
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
