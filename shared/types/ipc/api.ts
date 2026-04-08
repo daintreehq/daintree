@@ -326,6 +326,14 @@ export interface ElectronAPI {
     getProcessMetrics(): Promise<import("./system.js").ProcessMetricEntry[]>;
     getHeapStats(): Promise<import("./system.js").HeapStats>;
     getDiagnosticsInfo(): Promise<import("./system.js").DiagnosticsInfo>;
+    installAgent(payload: {
+      agentId: string;
+      methodIndex?: number;
+      jobId: string;
+    }): Promise<import("./system.js").AgentInstallResult>;
+    onAgentInstallProgress(
+      callback: (event: import("./system.js").AgentInstallProgressEvent) => void
+    ): () => void;
     onWake(callback: (data: SystemWakePayload) => void): () => void;
     onResourceProfileChanged(callback: (payload: ResourceProfilePayload) => void): () => void;
   };

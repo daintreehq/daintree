@@ -402,4 +402,80 @@ describe("agentInstall", () => {
       expect(getInstallCommand({ label: "steps-only", steps: ["Do something"] })).toBeNull();
     });
   });
+
+  describe("isManualOnlyCommand", () => {
+    it("should detect curl | bash as manual", async () => {
+      const { isManualOnlyCommand } = await import("../agentInstall");
+      expect(isManualOnlyCommand("curl -fsSL https://example.com/install | bash")).toBe(true);
+    });
+
+    it("should detect curl | sh as manual", async () => {
+      const { isManualOnlyCommand } = await import("../agentInstall");
+      expect(isManualOnlyCommand("curl https://example.com/install.sh | sh")).toBe(true);
+    });
+
+    it("should detect iex pipe as manual", async () => {
+      const { isManualOnlyCommand } = await import("../agentInstall");
+      expect(isManualOnlyCommand("irm 'https://example.com/install?win32=true' | iex")).toBe(true);
+    });
+
+    it("should NOT flag npm install as manual", async () => {
+      const { isManualOnlyCommand } = await import("../agentInstall");
+      expect(isManualOnlyCommand("npm install -g @anthropic-ai/claude-code")).toBe(false);
+    });
+
+    it("should NOT flag brew install as manual", async () => {
+      const { isManualOnlyCommand } = await import("../agentInstall");
+      expect(isManualOnlyCommand("brew install opencode")).toBe(false);
+    });
+
+    it("should NOT flag scoop install as manual", async () => {
+      const { isManualOnlyCommand } = await import("../agentInstall");
+      expect(isManualOnlyCommand("scoop install extras/opencode")).toBe(false);
+    });
+  });
+
+  describe("isBlockExecutable", () => {
+    it("should return true for npm-only blocks", async () => {
+      const { isBlockExecutable } = await import("../agentInstall");
+      expect(isBlockExecutable({ commands: ["npm install -g test"] })).toBe(true);
+    });
+
+    it("should return true for multi-command non-pipe blocks", async () => {
+      const { isBlockExecutable } = await import("../agentInstall");
+      expect(
+        isBlockExecutable({
+          commands: ["scoop bucket add extras", "scoop install extras/opencode"],
+        })
+      ).toBe(true);
+    });
+
+    it("should return false for curl pipe blocks", async () => {
+      const { isBlockExecutable } = await import("../agentInstall");
+      expect(
+        isBlockExecutable({
+          commands: ["curl -fsSL https://opencode.ai/install | bash"],
+        })
+      ).toBe(false);
+    });
+
+    it("should return false if any command in block is manual", async () => {
+      const { isBlockExecutable } = await import("../agentInstall");
+      expect(
+        isBlockExecutable({
+          commands: ["npm install -g test", "curl https://example.com | bash"],
+        })
+      ).toBe(false);
+    });
+
+    it("should return false for empty commands", async () => {
+      const { isBlockExecutable } = await import("../agentInstall");
+      expect(isBlockExecutable({ commands: [] })).toBe(false);
+    });
+
+    it("should return false for undefined commands", async () => {
+      const { isBlockExecutable } = await import("../agentInstall");
+      expect(isBlockExecutable({ label: "no-commands" })).toBe(false);
+    });
+  });
 });
