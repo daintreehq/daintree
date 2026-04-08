@@ -169,6 +169,22 @@ describe("AgentSetupWizard reducer", () => {
     expect(state.history).toEqual([]);
   });
 
+  it("goes to cli when availability changes after init to mark agent uninstalled", () => {
+    const allInstalled: Record<string, boolean> = { claude: true, gemini: true };
+    let state = buildInitialState(allInstalled, true);
+    state = wizardReducer(state, {
+      type: "INIT_SELECTIONS",
+      payload: { claude: true, gemini: true },
+    });
+    // Availability changes: gemini becomes unavailable
+    state = wizardReducer(state, {
+      type: "SET_AVAILABILITY",
+      payload: { claude: true, gemini: false },
+    });
+    state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
+    expect(state.step).toEqual({ type: "cli" });
+  });
+
   it("advances from cli to complete", () => {
     let state = buildInitialState(emptyAvail, true);
     state = wizardReducer(state, {
