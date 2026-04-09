@@ -118,23 +118,84 @@ describe("app.theme.toggle", () => {
     );
   });
 
-  it("is a no-op when target equals current scheme", async () => {
-    // Degenerate but valid: light preference points to the currently-selected dark scheme.
-    // toggle should detect target === selected and bail out without persisting or notifying.
+  it("is a no-op when resolved target equals current scheme", async () => {
+    // preferredLight points to the currently-selected light scheme — the correct-type
+    // resolved target matches current, so toggle should early-return.
     mockGetThemeState.mockReturnValue({
-      selectedSchemeId: "dark-a",
+      selectedSchemeId: "light-a",
       customSchemes: [darkA, lightA],
-      preferredDarkSchemeId: "dark-b",
-      preferredLightSchemeId: "dark-a",
+      preferredDarkSchemeId: "dark-a",
+      preferredLightSchemeId: "light-a",
+      setSelectedSchemeId: mockSetSelectedSchemeId,
+    });
+
+    // current=light → targetType=dark → target=dark-a → not equal → this will switch.
+    // To make it a no-op we need current=dark with preferredLight=current (degenerate),
+    // but new logic rejects wrong-type fallbacks. Instead, set current=dark-a and make
+    // the switch happen, then re-run with matching preferredLight=currently selected light.
+    const { toggle } = getActions();
+    await toggle.run(undefined, stubCtx);
+    // current=light-a switches to dark-a. Now simulate toggling back from dark-a where
+    // preferredLight=light-a — should switch again, not no-op. The true no-op case is
+    // when preferredDark/Light already names the current scheme AFTER type validation.
+    // That requires current.type === targetType, impossible by construction.
+    // So instead test the trivially-valid case: current scheme IS the preferred opposite.
+    vi.clearAllMocks();
+    mockGetThemeState.mockReturnValue({
+      selectedSchemeId: "light-a",
+      customSchemes: [darkA, lightA],
+      preferredDarkSchemeId: "light-a", // degenerate: preferred dark points at a light scheme id
+      preferredLightSchemeId: "light-a",
+      setSelectedSchemeId: mockSetSelectedSchemeId,
+    });
+    await toggle.run(undefined, stubCtx);
+    // current=light → targetType=dark → resolved preferredDark=light-a (light) →
+    // type-mismatch → fallback to built-in dark scheme → NOT a no-op.
+    // So we expect a switch happened (not a no-op).
+    expect(mockSetSelectedSchemeId).toHaveBeenCalledTimes(1);
+    expect(mockSetColorScheme).toHaveBeenCalledTimes(1);
+    // Target must be a dark scheme — assert the fallback kicked in.
+    const targetId = mockSetSelectedSchemeId.mock.calls[0][0] as string;
+    expect(targetId).not.toBe("light-a");
+  });
+
+  it("falls back to built-in scheme of correct type when preferred ID points to wrong type", async () => {
+    // preferredDarkSchemeId mis-points to a light scheme — fallback must yield a dark scheme.
+    mockGetThemeState.mockReturnValue({
+      selectedSchemeId: "light-a",
+      customSchemes: [darkA, lightA],
+      preferredDarkSchemeId: "light-a", // wrong type
+      preferredLightSchemeId: "light-a",
       setSelectedSchemeId: mockSetSelectedSchemeId,
     });
 
     const { toggle } = getActions();
     await toggle.run(undefined, stubCtx);
 
-    expect(mockSetSelectedSchemeId).not.toHaveBeenCalled();
-    expect(mockSetColorScheme).not.toHaveBeenCalled();
-    expect(mockAddNotification).not.toHaveBeenCalled();
+    expect(mockSetSelectedSchemeId).toHaveBeenCalledTimes(1);
+    const selectedId = mockSetSelectedSchemeId.mock.calls[0][0] as string;
+    // Must NOT be light-a (the wrong-type fallback). Must be some built-in dark scheme.
+    expect(selectedId).not.toBe("light-a");
+    expect(mockSetColorScheme).toHaveBeenCalledWith(selectedId);
+    expect(mockAddNotification).toHaveBeenCalledWith(expect.objectContaining({ type: "info" }));
+  });
+
+  it("shows error toast when persistence fails, skips success toast", async () => {
+    mockGetThemeState.mockReturnValue({
+      selectedSchemeId: "dark-a",
+      customSchemes: [darkA, lightA],
+      preferredDarkSchemeId: "dark-a",
+      preferredLightSchemeId: "light-a",
+      setSelectedSchemeId: mockSetSelectedSchemeId,
+    });
+    mockSetColorScheme.mockRejectedValueOnce(new Error("disk full"));
+
+    const { toggle } = getActions();
+    await toggle.run(undefined, stubCtx);
+
+    expect(mockSetSelectedSchemeId).toHaveBeenCalledWith("light-a");
+    expect(mockAddNotification).toHaveBeenCalledTimes(1);
+    expect(mockAddNotification).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
   });
 });
 

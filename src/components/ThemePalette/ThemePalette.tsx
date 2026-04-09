@@ -86,6 +86,11 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       originalSchemeIdRef.current = useAppThemeStore.getState().selectedSchemeId;
       committedRef.current = false;
       wasOpenRef.current = true;
+      // Reset search state: the palette is opened via paletteStore.openPalette
+      // (from the canopy:open-theme-palette event), bypassing useSearchablePalette's
+      // own open() which resets query + selectedIndex. Clearing query triggers the
+      // hook's built-in results-change effect which resets selectedIndex to 0.
+      setQuery("");
       return;
     }
     if (!isOpen && wasOpenRef.current) {
@@ -99,7 +104,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       originalSchemeIdRef.current = null;
       committedRef.current = false;
     }
-  }, [isOpen]);
+  }, [isOpen, setQuery]);
 
   // Live preview: inject the focused scheme's CSS variables directly (no store commit).
   useEffect(() => {

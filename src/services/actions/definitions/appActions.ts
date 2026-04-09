@@ -10,7 +10,7 @@ import { useAppThemeStore } from "@/store/appThemeStore";
 import { useNotificationStore } from "@/store/notificationStore";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
-import { resolveAppTheme } from "@shared/theme";
+import { getBuiltInAppSchemeForType, resolveAppTheme } from "@shared/theme";
 
 async function refreshRendererConfig(): Promise<void> {
   await Promise.all([
@@ -125,14 +125,29 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
         setSelectedSchemeId,
       } = useAppThemeStore.getState();
       const current = resolveAppTheme(selectedSchemeId, customSchemes);
-      const targetId = current.type === "light" ? preferredDarkSchemeId : preferredLightSchemeId;
-      if (targetId === selectedSchemeId) return;
-      const target = resolveAppTheme(targetId, customSchemes);
+      const targetType: "dark" | "light" = current.type === "light" ? "dark" : "light";
+      const preferredTargetId =
+        targetType === "dark" ? preferredDarkSchemeId : preferredLightSchemeId;
+      let target = resolveAppTheme(preferredTargetId, customSchemes);
+      // resolveAppTheme silently falls back to BUILT_IN_APP_SCHEMES[0] when the
+      // preferred ID points to a deleted scheme, which may be the wrong type.
+      // Guarantee we always land on a scheme of the opposite type.
+      if (target.type !== targetType) {
+        target = getBuiltInAppSchemeForType(targetType);
+      }
+      if (target.id === selectedSchemeId) return;
       setSelectedSchemeId(target.id);
       try {
         await appThemeClient.setColorScheme(target.id);
       } catch (error) {
         console.error("Failed to persist theme toggle:", error);
+        useNotificationStore.getState().addNotification({
+          type: "error",
+          priority: "low",
+          message: `Failed to save theme: ${target.name}`,
+          duration: 3000,
+        });
+        return;
       }
       useNotificationStore.getState().addNotification({
         type: "info",
