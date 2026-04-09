@@ -104,6 +104,7 @@ describe("AppThemePicker shuffle button", () => {
       setSelectedSchemeId: vi.fn(),
       commitSchemeSelection: vi.fn(),
       setSelectedSchemeIdSilent: vi.fn(),
+      injectTheme: vi.fn(),
       setFollowSystem: vi.fn(),
       setPreferredDarkSchemeId: vi.fn(),
       setPreferredLightSchemeId: vi.fn(),

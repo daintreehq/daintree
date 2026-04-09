@@ -1,4 +1,4 @@
-import { useRef, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Search } from "lucide-react";
 
@@ -16,6 +16,12 @@ interface ThemeSelectorCommon<T extends { id: string }> {
   columns?: 2 | 3;
   className?: string;
   id?: string;
+  /** Called when pointer enters or focus lands on a card. Receives the card id. */
+  onPreviewItem?: (id: string) => void;
+  /** Called after pointer leaves or focus blurs a card, on the next animation frame. */
+  onPreviewEnd?: () => void;
+  /** Text announced via a polite aria-live region as the previewed item changes. */
+  previewAnnouncement?: string;
 }
 
 export type ThemeSelectorProps<T extends { id: string }> =
@@ -33,10 +39,44 @@ export function ThemeSelector<T extends { id: string }>({
   columns = 2,
   className,
   id,
+  onPreviewItem,
+  onPreviewEnd,
+  previewAnnouncement,
 }: ThemeSelectorProps<T>) {
   const [query, setQuery] = useState("");
   const getNameRef = useRef(getName);
   getNameRef.current = getName;
+
+  // Single rAF handle shared across all cards so rapid pointer moves between
+  // cards cancel any pending revert before the next preview fires.
+  const revertRafRef = useRef<number | null>(null);
+  const onPreviewEndRef = useRef(onPreviewEnd);
+  onPreviewEndRef.current = onPreviewEnd;
+
+  const cancelPendingRevert = () => {
+    if (revertRafRef.current !== null) {
+      cancelAnimationFrame(revertRafRef.current);
+      revertRafRef.current = null;
+    }
+  };
+
+  const scheduleRevert = () => {
+    cancelPendingRevert();
+    revertRafRef.current = requestAnimationFrame(() => {
+      revertRafRef.current = null;
+      onPreviewEndRef.current?.();
+    });
+  };
+
+  useEffect(
+    () => () => {
+      if (revertRafRef.current !== null) {
+        cancelAnimationFrame(revertRafRef.current);
+        revertRafRef.current = null;
+      }
+    },
+    []
+  );
 
   const filteredGroups = useMemo(() => {
     if (!groups) return null;
@@ -63,14 +103,30 @@ export function ThemeSelector<T extends { id: string }>({
 
   const colsClass = columns === 3 ? "grid-cols-3" : "grid-cols-2";
 
+  const handlePreviewEnter = (itemId: string) => {
+    if (!onPreviewItem) return;
+    cancelPendingRevert();
+    onPreviewItem(itemId);
+  };
+
+  const handlePreviewLeave = () => {
+    if (!onPreviewItem && !onPreviewEnd) return;
+    scheduleRevert();
+  };
+
   const renderCard = (item: T) => (
     <button
       key={item.id}
       role="option"
       aria-selected={item.id === selectedId}
       onClick={(e) => onSelect(item.id, { x: e.clientX, y: e.clientY })}
+      onPointerEnter={() => handlePreviewEnter(item.id)}
+      onPointerLeave={handlePreviewLeave}
+      onFocus={() => handlePreviewEnter(item.id)}
+      onBlur={handlePreviewLeave}
       className={cn(
         "flex flex-col gap-1.5 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
+        "[&>*]:pointer-events-none",
         item.id === selectedId
           ? "border-canopy-accent bg-canopy-accent/10"
           : "border-canopy-border bg-canopy-bg hover:border-canopy-text/30"
@@ -125,6 +181,10 @@ export function ThemeSelector<T extends { id: string }>({
           {filteredItems?.map(renderCard)}
         </div>
       )}
+
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {previewAnnouncement ?? ""}
+      </div>
     </div>
   );
 }

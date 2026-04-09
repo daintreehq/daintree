@@ -60,7 +60,10 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     }
 
     await targetOption.click();
-    // Theme modal closes on selection — verify trigger now shows the selected theme name
+    // Theme modal stays open on selection so users can keep browsing. Close it
+    // explicitly before asserting the trigger reflects the committed theme.
+    await expect(themeDialog).toBeVisible({ timeout: T_SHORT });
+    await window.keyboard.press("Escape");
     await expect(themeDialog).not.toBeVisible({ timeout: T_SHORT });
     if (targetName) {
       await expect(themeTrigger).toContainText(targetName, { timeout: T_SHORT });

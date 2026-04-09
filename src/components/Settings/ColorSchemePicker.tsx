@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BUILT_IN_SCHEMES,
   DEFAULT_SCHEME_ID,
@@ -72,9 +72,11 @@ export function ColorSchemePicker() {
   const selectedSchemeId = useTerminalColorSchemeStore((s) => s.selectedSchemeId);
   const customSchemes = useTerminalColorSchemeStore((s) => s.customSchemes);
   const setSelectedSchemeId = useTerminalColorSchemeStore((s) => s.setSelectedSchemeId);
+  const setPreviewSchemeId = useTerminalColorSchemeStore((s) => s.setPreviewSchemeId);
   const addCustomScheme = useTerminalColorSchemeStore((s) => s.addCustomScheme);
   const recentSchemeIds = useTerminalColorSchemeStore((s) => s.recentSchemeIds);
   const appThemeId = useAppThemeStore((s) => s.selectedSchemeId);
+  const [previewAnnouncement, setPreviewAnnouncement] = useState("");
 
   const allSchemes = useMemo(() => [...BUILT_IN_SCHEMES, ...customSchemes], [customSchemes]);
   const recentSchemes = useMemo(
@@ -90,9 +92,37 @@ export function ColorSchemePicker() {
     [allSchemes, recentIdSet]
   );
 
+  const handlePreviewItem = useCallback(
+    (id: string) => {
+      setPreviewSchemeId(id);
+      const scheme = allSchemes.find((s) => s.id === id);
+      if (scheme) {
+        setPreviewAnnouncement(`Previewing: ${scheme.name}`);
+      }
+    },
+    [setPreviewSchemeId, allSchemes]
+  );
+
+  const handlePreviewEnd = useCallback(() => {
+    setPreviewSchemeId(null);
+    setPreviewAnnouncement("");
+  }, [setPreviewSchemeId]);
+
+  // Clear any preview override when the picker unmounts so the committed theme
+  // is restored unconditionally.
+  useEffect(() => {
+    return () => {
+      setPreviewSchemeId(null);
+    };
+  }, [setPreviewSchemeId]);
+
   const handleSelect = useCallback(
     async (id: string) => {
       setSelectedSchemeId(id);
+      // Clearing any active preview override ensures the committed selection
+      // wins immediately instead of being masked by the hover preview state.
+      setPreviewSchemeId(null);
+      setPreviewAnnouncement("");
       try {
         await terminalConfigClient.setColorScheme(id);
         await terminalConfigClient.setRecentSchemeIds(
@@ -102,7 +132,7 @@ export function ColorSchemePicker() {
         console.error("Failed to persist color scheme:", error);
       }
     },
-    [setSelectedSchemeId]
+    [setSelectedSchemeId, setPreviewSchemeId]
   );
 
   const handleImport = useCallback(async () => {
@@ -133,6 +163,9 @@ export function ColorSchemePicker() {
           ]}
           selectedId={selectedSchemeId}
           onSelect={handleSelect}
+          onPreviewItem={handlePreviewItem}
+          onPreviewEnd={handlePreviewEnd}
+          previewAnnouncement={previewAnnouncement}
           renderPreview={(scheme) => (
             <SchemePreview scheme={resolveSchemeForPreview(scheme, appThemeId)} />
           )}
@@ -154,6 +187,9 @@ export function ColorSchemePicker() {
           items={allSchemes}
           selectedId={selectedSchemeId}
           onSelect={handleSelect}
+          onPreviewItem={handlePreviewItem}
+          onPreviewEnd={handlePreviewEnd}
+          previewAnnouncement={previewAnnouncement}
           renderPreview={(scheme) => (
             <SchemePreview scheme={resolveSchemeForPreview(scheme, appThemeId)} />
           )}

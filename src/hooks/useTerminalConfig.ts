@@ -16,6 +16,7 @@ export function useTerminalConfig() {
   const setFontFamily = useTerminalFontStore((state) => state.setFontFamily);
 
   const selectedSchemeId = useTerminalColorSchemeStore((state) => state.selectedSchemeId);
+  const previewSchemeId = useTerminalColorSchemeStore((state) => state.previewSchemeId);
   const customSchemes = useTerminalColorSchemeStore((state) => state.customSchemes);
   const addCustomScheme = useTerminalColorSchemeStore((state) => state.addCustomScheme);
   const setRecentSchemeIds = useTerminalColorSchemeStore((state) => state.setRecentSchemeIds);
@@ -109,6 +110,7 @@ export function useTerminalConfig() {
     // screenReaderEnabled in deps ensures terminals update when screen reader mode changes
   }, [
     selectedSchemeId,
+    previewSchemeId,
     customSchemes,
     fontSize,
     fontFamily,

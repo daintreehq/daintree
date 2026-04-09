@@ -8,7 +8,11 @@ import {
   type TerminalColorScheme,
 } from "@/config/terminalColorSchemes";
 import { useAppThemeStore } from "../appThemeStore";
-import { selectWrapperBackground, useTerminalColorSchemeStore } from "../terminalColorSchemeStore";
+import {
+  selectEffectiveTheme,
+  selectWrapperBackground,
+  useTerminalColorSchemeStore,
+} from "../terminalColorSchemeStore";
 
 const CUSTOM_SCHEME: TerminalColorScheme = {
   id: "custom-test",
@@ -47,6 +51,7 @@ describe("terminalColorSchemeStore", () => {
       selectedSchemeId: DEFAULT_SCHEME_ID,
       customSchemes: [],
       recentSchemeIds: [],
+      previewSchemeId: null,
     });
     useAppThemeStore.setState({
       selectedSchemeId: "daintree",
@@ -147,6 +152,131 @@ describe("terminalColorSchemeStore", () => {
     expect(theme).toEqual({
       ...CUSTOM_SCHEME.colors,
       ...getTerminalScrollbarDefaults(CUSTOM_SCHEME.type),
+    });
+  });
+
+  describe("previewSchemeId override", () => {
+    it("previewSchemeId overrides selectedSchemeId in getEffectiveTheme", () => {
+      const store = useTerminalColorSchemeStore.getState();
+      store.setSelectedSchemeId("dracula");
+      store.setPreviewSchemeId("solarized-dark");
+
+      const solarized = getSchemeById("solarized-dark");
+      const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
+
+      expect(theme).toEqual({
+        ...solarized!.colors,
+        ...getTerminalScrollbarDefaults(solarized!.type),
+      });
+    });
+
+    it("clearing previewSchemeId restores the committed theme", () => {
+      const store = useTerminalColorSchemeStore.getState();
+      store.setSelectedSchemeId("dracula");
+      store.setPreviewSchemeId("solarized-dark");
+      store.setPreviewSchemeId(null);
+
+      const dracula = getSchemeById("dracula");
+      const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
+
+      expect(theme).toEqual({
+        ...dracula!.colors,
+        ...getTerminalScrollbarDefaults(dracula!.type),
+      });
+    });
+
+    it("does not mutate selectedSchemeId or recentSchemeIds during preview", () => {
+      const store = useTerminalColorSchemeStore.getState();
+      store.setSelectedSchemeId("dracula");
+      store.setPreviewSchemeId("solarized-dark");
+
+      const state = useTerminalColorSchemeStore.getState();
+      expect(state.selectedSchemeId).toBe("dracula");
+      expect(state.recentSchemeIds).not.toContain("solarized-dark");
+    });
+
+    it("selectEffectiveTheme cache invalidates when only previewSchemeId changes", () => {
+      const store = useTerminalColorSchemeStore.getState();
+      store.setSelectedSchemeId("dracula");
+      const first = selectEffectiveTheme(useTerminalColorSchemeStore.getState());
+
+      store.setPreviewSchemeId("solarized-dark");
+      const second = selectEffectiveTheme(useTerminalColorSchemeStore.getState());
+
+      const solarized = getSchemeById("solarized-dark");
+      expect(first).not.toEqual(second);
+      expect(second).toEqual({
+        ...solarized!.colors,
+        ...getTerminalScrollbarDefaults(solarized!.type),
+      });
+    });
+
+    it("previewing the default app-linked scheme derives from the app theme", () => {
+      useAppThemeStore.setState({ selectedSchemeId: "bondi" });
+      const store = useTerminalColorSchemeStore.getState();
+      store.setSelectedSchemeId("dracula");
+      store.setPreviewSchemeId(DEFAULT_SCHEME_ID);
+
+      const mapped = getMappedTerminalScheme("bondi");
+      expect(mapped).toBeDefined();
+
+      const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
+      expect(theme).toEqual({
+        ...mapped!.colors,
+        ...getTerminalScrollbarDefaults(mapped!.type),
+      });
+    });
+
+    it("invalidates the cache correctly across a null → dracula → null → default → null walk", () => {
+      const store = useTerminalColorSchemeStore.getState();
+      store.setSelectedSchemeId("solarized-dark");
+
+      const solarized = getSchemeById("solarized-dark")!;
+      const dracula = getSchemeById("dracula")!;
+      const mapped = getMappedTerminalScheme("daintree")!;
+
+      const expectSolarized = () =>
+        expect(selectEffectiveTheme(useTerminalColorSchemeStore.getState())).toEqual({
+          ...solarized.colors,
+          ...getTerminalScrollbarDefaults(solarized.type),
+        });
+      const expectDracula = () =>
+        expect(selectEffectiveTheme(useTerminalColorSchemeStore.getState())).toEqual({
+          ...dracula.colors,
+          ...getTerminalScrollbarDefaults(dracula.type),
+        });
+      const expectMapped = () =>
+        expect(selectEffectiveTheme(useTerminalColorSchemeStore.getState())).toEqual({
+          ...mapped.colors,
+          ...getTerminalScrollbarDefaults(mapped.type),
+        });
+
+      // Start: previewSchemeId null → committed is solarized-dark.
+      expectSolarized();
+
+      // Hop 1: preview dracula.
+      store.setPreviewSchemeId("dracula");
+      expectDracula();
+
+      // Hop 2: clear preview → back to solarized.
+      store.setPreviewSchemeId(null);
+      expectSolarized();
+
+      // Hop 3: preview the default app-linked scheme → reflects app theme mapping.
+      store.setPreviewSchemeId(DEFAULT_SCHEME_ID);
+      expectMapped();
+
+      // Hop 4: clear again → back to solarized.
+      store.setPreviewSchemeId(null);
+      expectSolarized();
+    });
+
+    it("removeCustomScheme clears a dangling previewSchemeId pointing at it", () => {
+      const store = useTerminalColorSchemeStore.getState();
+      store.addCustomScheme(CUSTOM_SCHEME);
+      store.setPreviewSchemeId("custom-test");
+      store.removeCustomScheme("custom-test");
+      expect(useTerminalColorSchemeStore.getState().previewSchemeId).toBeNull();
     });
   });
 
@@ -288,6 +418,33 @@ describe("terminalColorSchemeStore", () => {
 
       expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(
         "var(--theme-surface-canvas)"
+      );
+    });
+
+    it("honors previewSchemeId when selecting the wrapper background", () => {
+      const dracula = getSchemeById("dracula");
+      expect(dracula).toBeDefined();
+      useTerminalColorSchemeStore.getState().setPreviewSchemeId("dracula");
+
+      expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(
+        dracula!.colors.background
+      );
+    });
+
+    it("falls back to the committed selection when previewSchemeId is cleared", () => {
+      const store = useTerminalColorSchemeStore.getState();
+      store.setSelectedSchemeId("dracula");
+      store.setPreviewSchemeId("solarized-dark");
+
+      const solarized = getSchemeById("solarized-dark");
+      expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(
+        solarized!.colors.background
+      );
+
+      useTerminalColorSchemeStore.getState().setPreviewSchemeId(null);
+      const dracula = getSchemeById("dracula");
+      expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(
+        dracula!.colors.background
       );
     });
 
