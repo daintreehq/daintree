@@ -1,6 +1,87 @@
 import { describe, expect, it } from "vitest";
-import { buildInitialState, wizardReducer } from "../AgentSetupWizard";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import {
+  buildInitialState,
+  FEATURED_AGENT_IDS,
+  MORE_AGENT_IDS,
+  sortTierByInstalled,
+  wizardReducer,
+} from "../AgentSetupWizard";
 import type { CliAvailability } from "@shared/types";
+
+describe("sortTierByInstalled", () => {
+  const tier = ["claude", "gemini", "codex"] as const;
+
+  it("preserves original order when all uninstalled", () => {
+    const result = sortTierByInstalled(tier, {} as CliAvailability);
+    expect(result).toEqual(["claude", "gemini", "codex"]);
+  });
+
+  it("preserves original order when all installed", () => {
+    const result = sortTierByInstalled(tier, {
+      claude: "ready",
+      gemini: "ready",
+      codex: "ready",
+    } as CliAvailability);
+    expect(result).toEqual(["claude", "gemini", "codex"]);
+  });
+
+  it("floats installed agents to the front, preserving relative order", () => {
+    const result = sortTierByInstalled(tier, {
+      claude: "missing",
+      gemini: "ready",
+      codex: "installed",
+    } as CliAvailability);
+    expect(result).toEqual(["gemini", "codex", "claude"]);
+  });
+
+  it("handles single installed agent", () => {
+    const result = sortTierByInstalled(tier, { codex: "ready" } as CliAvailability);
+    expect(result).toEqual(["codex", "claude", "gemini"]);
+  });
+
+  it("treats missing and undefined availability the same", () => {
+    const withMissing = sortTierByInstalled(tier, {
+      claude: "missing",
+      gemini: "ready",
+      codex: "missing",
+    } as CliAvailability);
+    const withUndefined = sortTierByInstalled(tier, { gemini: "ready" } as CliAvailability);
+    expect(withMissing).toEqual(withUndefined);
+  });
+
+  it("works with the more-agents tier", () => {
+    const moreTier = ["opencode", "cursor", "kiro"] as const;
+    const result = sortTierByInstalled(moreTier, {
+      cursor: "installed",
+      kiro: "missing",
+    } as CliAvailability);
+    expect(result).toEqual(["cursor", "opencode", "kiro"]);
+  });
+
+  it("returns empty array for empty input", () => {
+    expect(sortTierByInstalled([], {} as CliAvailability)).toEqual([]);
+  });
+
+  it("ignores extra availability keys not in the tier", () => {
+    const result = sortTierByInstalled(
+      ["claude"] as const,
+      { claude: "ready", gemini: "ready" } as CliAvailability
+    );
+    expect(result).toEqual(["claude"]);
+  });
+});
+
+describe("tier partition completeness", () => {
+  it("FEATURED + MORE covers all BUILT_IN_AGENT_IDS with no overlap", () => {
+    const combined = [...FEATURED_AGENT_IDS, ...MORE_AGENT_IDS].sort();
+    const expected = [...BUILT_IN_AGENT_IDS].sort();
+    expect(combined).toEqual(expected);
+
+    const overlap = FEATURED_AGENT_IDS.filter((id) => MORE_AGENT_IDS.includes(id));
+    expect(overlap).toEqual([]);
+  });
+});
 
 describe("AgentSetupWizard reducer", () => {
   const emptyAvail = {} as CliAvailability;
