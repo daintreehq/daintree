@@ -218,7 +218,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     subtabLabel: "Overview",
     section: "System Status",
     title: "System Status",
-    description: "CLI agent availability — Claude, Gemini, Codex, OpenCode, Cursor status",
+    description: "Installed agents and their operational status",
     keywords: ["agents", "cli", "available", "status", "check", "ready"],
   },
   {
