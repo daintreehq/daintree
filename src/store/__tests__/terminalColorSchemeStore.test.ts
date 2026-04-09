@@ -211,7 +211,7 @@ describe("terminalColorSchemeStore", () => {
       ]);
     });
 
-    it("removing a custom scheme does not eagerly scrub its id from the recents list", () => {
+    it("removing a custom scheme strips its id from the recents list", () => {
       const store = useTerminalColorSchemeStore.getState();
       store.addCustomScheme(CUSTOM_SCHEME);
       store.setSelectedSchemeId("custom-test");
@@ -219,8 +219,8 @@ describe("terminalColorSchemeStore", () => {
       expect(useTerminalColorSchemeStore.getState().recentSchemeIds).toContain("custom-test");
 
       useTerminalColorSchemeStore.getState().removeCustomScheme("custom-test");
-      // Stale id is preserved — UI filters via .find().filter(Boolean)
-      expect(useTerminalColorSchemeStore.getState().recentSchemeIds).toContain("custom-test");
+      expect(useTerminalColorSchemeStore.getState().recentSchemeIds).not.toContain("custom-test");
+      expect(useTerminalColorSchemeStore.getState().recentSchemeIds).toEqual(["dracula"]);
     });
   });
 

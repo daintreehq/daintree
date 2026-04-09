@@ -191,14 +191,12 @@ export function AppThemePicker() {
 
       try {
         await appThemeClient.setColorScheme(id);
+        // Only persist the updated recents once the selection itself was saved.
+        // Read back from the store so we capture the post-LRU-update state.
+        await appThemeClient.setRecentSchemeIds(useAppThemeStore.getState().recentSchemeIds);
       } catch (error) {
         console.error("Failed to persist app theme:", error);
       }
-
-      // Persist the updated recently-used list (read from store after the LRU update)
-      appThemeClient
-        .setRecentSchemeIds(useAppThemeStore.getState().recentSchemeIds)
-        .catch((error) => console.error("Failed to persist recent themes:", error));
 
       const scheme = allSchemes.find((s) => s.id === id);
       if (scheme?.heroVideo && id !== prev && !prefersReducedMotion()) {

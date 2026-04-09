@@ -162,10 +162,10 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
       console.warn("Invalid terminal recentSchemeIds:", ids);
       return;
     }
-    const sanitized = ids
+    const trimmed = ids
       .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
-      .map((id) => id.trim())
-      .slice(0, 5);
+      .map((id) => id.trim());
+    const sanitized = Array.from(new Set(trimmed)).slice(0, 5);
     const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, recentSchemeIds: sanitized });
   };

@@ -210,10 +210,10 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
       console.warn("Invalid app theme recentSchemeIds:", ids);
       return;
     }
-    const sanitized = ids
+    const trimmed = ids
       .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
-      .map((id) => id.trim())
-      .slice(0, 5);
+      .map((id) => id.trim());
+    const sanitized = Array.from(new Set(trimmed)).slice(0, 5);
     const current = getAppThemeConfig();
     store.set("appTheme", {
       ...current,

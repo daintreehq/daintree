@@ -112,9 +112,11 @@ export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((s
     set((state) => ({
       customSchemes: state.customSchemes.filter((s) => s.id !== id),
       selectedSchemeId: state.selectedSchemeId === id ? DEFAULT_SCHEME_ID : state.selectedSchemeId,
+      recentSchemeIds: state.recentSchemeIds.filter((x) => x !== id),
     })),
 
-  setRecentSchemeIds: (ids) => set({ recentSchemeIds: ids.slice(0, RECENT_SCHEMES_LIMIT) }),
+  setRecentSchemeIds: (ids) =>
+    set({ recentSchemeIds: Array.from(new Set(ids)).slice(0, RECENT_SCHEMES_LIMIT) }),
 
   getEffectiveTheme: (): ITheme => {
     const { selectedSchemeId, customSchemes } = get();

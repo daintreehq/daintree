@@ -95,12 +95,12 @@ export function ColorSchemePicker() {
       setSelectedSchemeId(id);
       try {
         await terminalConfigClient.setColorScheme(id);
+        await terminalConfigClient.setRecentSchemeIds(
+          useTerminalColorSchemeStore.getState().recentSchemeIds
+        );
       } catch (error) {
         console.error("Failed to persist color scheme:", error);
       }
-      terminalConfigClient
-        .setRecentSchemeIds(useTerminalColorSchemeStore.getState().recentSchemeIds)
-        .catch((error) => console.error("Failed to persist recent terminal schemes:", error));
     },
     [setSelectedSchemeId]
   );

@@ -80,6 +80,7 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     set((state) => ({
       customSchemes: state.customSchemes.filter((s) => s.id !== id),
       selectedSchemeId: needsFallback ? DEFAULT_APP_SCHEME_ID : state.selectedSchemeId,
+      recentSchemeIds: state.recentSchemeIds.filter((x) => x !== id),
     }));
     if (needsFallback) {
       const defaultScheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === DEFAULT_APP_SCHEME_ID)!;
@@ -99,7 +100,8 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
   setFollowSystem: (enabled) => set({ followSystem: enabled }),
   setPreferredDarkSchemeId: (id) => set({ preferredDarkSchemeId: id }),
   setPreferredLightSchemeId: (id) => set({ preferredLightSchemeId: id }),
-  setRecentSchemeIds: (ids) => set({ recentSchemeIds: ids.slice(0, RECENT_SCHEMES_LIMIT) }),
+  setRecentSchemeIds: (ids) =>
+    set({ recentSchemeIds: Array.from(new Set(ids)).slice(0, RECENT_SCHEMES_LIMIT) }),
 }));
 
 export { injectSchemeToDOM };

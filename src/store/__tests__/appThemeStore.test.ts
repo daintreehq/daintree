@@ -86,4 +86,25 @@ describe("appThemeStore.recentSchemeIds LRU", () => {
     useAppThemeStore.getState().setRecentSchemeIds(["a", "b", "c", "d", "e", "f", "g"]);
     expect(useAppThemeStore.getState().recentSchemeIds).toEqual(["a", "b", "c", "d", "e"]);
   });
+
+  it("setRecentSchemeIds deduplicates incoming entries", () => {
+    useAppThemeStore.getState().setRecentSchemeIds(["a", "b", "a", "c", "b", "d"]);
+    expect(useAppThemeStore.getState().recentSchemeIds).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("removeCustomScheme strips the removed id from recentSchemeIds", () => {
+    const customScheme = {
+      id: "custom-app-theme",
+      name: "Custom",
+      type: "dark" as const,
+      tokens: {} as never,
+    };
+    useAppThemeStore.getState().addCustomScheme(customScheme);
+    useAppThemeStore.getState().setSelectedSchemeId("custom-app-theme");
+    useAppThemeStore.getState().setSelectedSchemeId("svalbard");
+    expect(useAppThemeStore.getState().recentSchemeIds).toContain("custom-app-theme");
+
+    useAppThemeStore.getState().removeCustomScheme("custom-app-theme");
+    expect(useAppThemeStore.getState().recentSchemeIds).not.toContain("custom-app-theme");
+  });
 });
