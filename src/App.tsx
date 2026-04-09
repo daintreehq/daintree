@@ -92,6 +92,7 @@ import { BulkCommandPalette } from "./components/BulkCommandCenter";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { PanelLimitConfirmDialog } from "./components/Terminal/PanelLimitConfirmDialog";
 import { NotesPalette } from "./components/Notes";
+import { ThemePalette } from "./components/ThemePalette";
 
 function preloadSettingsDialog() {
   return import("./components/Settings/SettingsDialog");
@@ -254,6 +255,7 @@ function App() {
   }, [isSettingsOpen]);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const isNotesPaletteOpen = usePaletteStore((state) => state.activePaletteId === "notes");
+  const isThemePaletteOpen = usePaletteStore((state) => state.activePaletteId === "theme");
   const {
     isWorktreeOverviewOpen,
     toggleWorktreeOverview,
@@ -340,6 +342,10 @@ function App() {
 
   const closeNotesPalette = useCallback(() => {
     usePaletteStore.getState().closePalette("notes");
+  }, []);
+
+  const closeThemePalette = useCallback(() => {
+    usePaletteStore.getState().closePalette("theme");
   }, []);
 
   const overviewWorktreeActions = useWorktreeActions({ launchAgent });
@@ -663,6 +669,8 @@ function App() {
       />
 
       <NotesPalette isOpen={isNotesPaletteOpen} onClose={closeNotesPalette} />
+
+      <ThemePalette isOpen={isThemePaletteOpen} onClose={closeThemePalette} />
 
       <ActionPalette
         isOpen={actionPalette.isOpen}

@@ -656,6 +656,14 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Notes",
   },
   {
+    actionId: "app.theme.pick",
+    combo: "Cmd+K T",
+    scope: "global",
+    priority: 0,
+    description: "Open theme palette",
+    category: "App",
+  },
+  {
     actionId: "help.shortcuts",
     combo: "Cmd+K Cmd+S",
     scope: "global",

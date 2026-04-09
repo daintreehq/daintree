@@ -3,10 +3,14 @@ import type { SettingsNavTarget } from "@/components/Settings";
 import { SettingsNavTargetSchema } from "./schemas";
 import { z } from "zod";
 import { appClient } from "@/clients";
+import { appThemeClient } from "@/clients/appThemeClient";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useAppThemeStore } from "@/store/appThemeStore";
+import { useNotificationStore } from "@/store/notificationStore";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
+import { resolveAppTheme } from "@shared/theme";
 
 async function refreshRendererConfig(): Promise<void> {
   await Promise.all([
@@ -90,6 +94,54 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
       }
     });
   }
+
+  actions.set("app.theme.pick", () => ({
+    id: "app.theme.pick",
+    title: "Pick Theme...",
+    description: "Open the theme palette to browse and preview themes",
+    category: "app",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      window.dispatchEvent(new CustomEvent("canopy:open-theme-palette"));
+    },
+  }));
+
+  actions.set("app.theme.toggle", () => ({
+    id: "app.theme.toggle",
+    title: "Toggle Dark/Light Theme",
+    description: "Switch between preferred dark and light themes",
+    category: "app",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const {
+        selectedSchemeId,
+        customSchemes,
+        preferredDarkSchemeId,
+        preferredLightSchemeId,
+        setSelectedSchemeId,
+      } = useAppThemeStore.getState();
+      const current = resolveAppTheme(selectedSchemeId, customSchemes);
+      const targetId = current.type === "light" ? preferredDarkSchemeId : preferredLightSchemeId;
+      if (targetId === selectedSchemeId) return;
+      const target = resolveAppTheme(targetId, customSchemes);
+      setSelectedSchemeId(target.id);
+      try {
+        await appThemeClient.setColorScheme(target.id);
+      } catch (error) {
+        console.error("Failed to persist theme toggle:", error);
+      }
+      useNotificationStore.getState().addNotification({
+        type: "info",
+        priority: "low",
+        message: `Theme: ${target.name}`,
+        duration: 2000,
+      });
+    },
+  }));
 
   actions.set("app.developerMode.set", () => ({
     id: "app.developerMode.set",

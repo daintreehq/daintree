@@ -165,6 +165,8 @@ export type BuiltInKeyAction =
   | "help.launchAgent"
   | "help.togglePanel"
   | "app.settings"
+  | "app.theme.toggle"
+  | "app.theme.pick"
 
   // Voice input
   | "voiceInput.toggle"
@@ -314,6 +316,8 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "help.launchAgent",
   "help.togglePanel",
   "app.settings",
+  "app.theme.toggle",
+  "app.theme.pick",
   "voiceInput.toggle",
   "layout.undo",
   "layout.redo",
