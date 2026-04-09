@@ -14,6 +14,14 @@ describe("Toolbar — agent registry zero-touch guarantee (issue #5070)", () => 
     source = await fs.readFile(TOOLBAR_PATH, "utf-8");
   });
 
+  describe("BUILT_IN_AGENT_IDS invariants", () => {
+    it("contains no duplicate ids", () => {
+      // A duplicate would silently collapse in Object.fromEntries and cause
+      // React key collisions in the dynamic toolbar maps.
+      expect(new Set(BUILT_IN_AGENT_IDS).size).toBe(BUILT_IN_AGENT_IDS.length);
+    });
+  });
+
   describe("OVERFLOW_MENU_META", () => {
     it("has an entry for every built-in agent", () => {
       for (const id of BUILT_IN_AGENT_IDS) {
