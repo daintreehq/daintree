@@ -3,13 +3,12 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { AgentCliStep } from "./AgentCliStep";
-import { SystemToolsStep } from "./SystemToolsStep";
+import { SystemRequirementsSection } from "./SystemRequirementsSection";
 import { AGENT_REGISTRY } from "@/config/agents";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { useAgentSettingsStore } from "@/store";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { cliAvailabilityClient } from "@/clients";
-import { isCanopyEnvEnabled } from "@/utils/env";
 import type { CliAvailability } from "@shared/types";
 import { isAgentInstalled, isAgentReady } from "../../../shared/utils/agentAvailability";
 import { Sparkles, ChevronLeft, ChevronRight, ArrowRight } from "lucide-react";
@@ -19,8 +18,6 @@ import { UI_ENTER_DURATION, UI_EXIT_DURATION } from "@/lib/animationUtils";
 
 const AGENT_ORDER = BUILT_IN_AGENT_IDS;
 const POLL_INTERVAL = 3000;
-
-const SKIP_FIRST_RUN_DIALOGS = isCanopyEnvEnabled("CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS");
 
 // Tier arrays for the selection step — featured agents get prominent display,
 // the rest fall into "More agents". New built-in agents automatically land in MORE_AGENT_IDS.
@@ -81,11 +78,7 @@ const reducedStepVariants: Variants = {
 
 // --- Wizard state machine ---
 
-export type WizardStep =
-  | { type: "health" }
-  | { type: "selection" }
-  | { type: "cli" }
-  | { type: "complete" };
+export type WizardStep = { type: "selection" } | { type: "cli" } | { type: "complete" };
 
 export interface WizardState {
   step: WizardStep;
@@ -96,7 +89,6 @@ export interface WizardState {
 }
 
 export type WizardAction =
-  | { type: "HEALTH_CONTINUE" }
   | { type: "SELECTION_CONTINUE" }
   | { type: "CLI_CONTINUE" }
   | { type: "BACK" }
@@ -105,11 +97,11 @@ export type WizardAction =
   | { type: "TOGGLE_SELECTION"; agentId: string; checked: boolean }
   | { type: "RESET"; availability: CliAvailability };
 
-const TOTAL_STEPS = 4; // health, selection, cli, complete
+const TOTAL_STEPS = 3; // selection, cli, complete
 
-export function buildInitialState(availability: CliAvailability, skipHealth: boolean): WizardState {
+export function buildInitialState(availability: CliAvailability): WizardState {
   return {
-    step: skipHealth ? { type: "selection" } : { type: "health" },
+    step: { type: "selection" },
     history: [],
     availability,
     selections: {},
@@ -119,13 +111,6 @@ export function buildInitialState(availability: CliAvailability, skipHealth: boo
 
 export function wizardReducer(state: WizardState, action: WizardAction): WizardState {
   switch (action.type) {
-    case "HEALTH_CONTINUE":
-      return {
-        ...state,
-        step: { type: "selection" },
-        history: [...state.history, state.step],
-      };
-
     case "SELECTION_CONTINUE": {
       const selectedIds = Object.keys(state.selections).filter((id) => state.selections[id]);
       const allSelectedInstalled =
@@ -172,7 +157,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       };
 
     case "RESET":
-      return buildInitialState(action.availability, SKIP_FIRST_RUN_DIALOGS);
+      return buildInitialState(action.availability);
 
     default:
       return state;
@@ -191,8 +176,11 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
   const [state, dispatch] = useReducer(
     wizardReducer,
     initialAvailability ?? ({} as CliAvailability),
-    (avail) => buildInitialState(avail, SKIP_FIRST_RUN_DIALOGS)
+    (avail) => buildInitialState(avail)
   );
+
+  const [hasFatalHealthFailure, setHasFatalHealthFailure] = useState(false);
+  const [isHealthChecking, setIsHealthChecking] = useState(true);
 
   const { setAgentSelected } = useAgentSettingsStore();
   const isAvailabilityLoading = useCliAvailabilityStore((s) => s.isLoading || s.isRefreshing);
@@ -277,21 +265,14 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
 
   const stepNumber = (() => {
     switch (state.step.type) {
-      case "health":
-        return 0;
       case "selection":
-        return 1;
+        return 0;
       case "cli":
-        return 2;
+        return 1;
       case "complete":
-        return 3;
+        return 2;
     }
   })();
-
-  const handleHealthContinue = useCallback(() => {
-    directionRef.current = 1;
-    dispatch({ type: "HEALTH_CONTINUE" });
-  }, []);
 
   const handleSelectionContinue = useCallback(async () => {
     directionRef.current = 1;
@@ -351,7 +332,6 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
               animate="animate"
               exit="exit"
             >
-              {state.step.type === "health" && <SystemToolsStep onSkip={handleHealthContinue} />}
               {state.step.type === "selection" && (
                 <SelectionStep
                   availability={state.availability}
@@ -361,6 +341,8 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
                   onToggle={(id, checked) =>
                     dispatch({ type: "TOGGLE_SELECTION", agentId: id, checked })
                   }
+                  onFatalFailureChange={setHasFatalHealthFailure}
+                  onCheckingChange={setIsHealthChecking}
                 />
               )}
               {state.step.type === "cli" && (
@@ -399,7 +381,7 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
             ))}
           </div>
           <div className="flex items-center gap-2">
-            {state.step.type !== "health" && state.step.type !== "complete" && (
+            {state.step.type !== "selection" && state.step.type !== "complete" && (
               <Button
                 variant="ghost"
                 onClick={handleBack}
@@ -408,12 +390,6 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
               >
                 <ChevronLeft className="w-4 h-4" />
                 Back
-              </Button>
-            )}
-            {state.step.type === "health" && (
-              <Button onClick={handleHealthContinue}>
-                Continue
-                <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
             )}
             {state.step.type === "selection" && (
@@ -428,7 +404,12 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
                 </Button>
                 <Button
                   onClick={handleSelectionContinue}
-                  disabled={selectedAgentIds.length === 0 || isSaving}
+                  disabled={
+                    selectedAgentIds.length === 0 ||
+                    isSaving ||
+                    hasFatalHealthFailure ||
+                    isHealthChecking
+                  }
                 >
                   Continue
                   <ArrowRight className="w-4 h-4 ml-1" />
@@ -511,12 +492,16 @@ function SelectionStep({
   isLoading,
   isSaving,
   onToggle,
+  onFatalFailureChange,
+  onCheckingChange,
 }: {
   availability: CliAvailability;
   selections: Record<string, boolean>;
   isLoading: boolean;
   isSaving: boolean;
   onToggle: (agentId: string, checked: boolean) => void;
+  onFatalFailureChange: (hasFatal: boolean) => void;
+  onCheckingChange: (checking: boolean) => void;
 }) {
   const featuredAgents = useMemo(
     () => sortTierByInstalled(FEATURED_AGENT_IDS, availability),
@@ -529,6 +514,11 @@ function SelectionStep({
 
   return (
     <div className="space-y-4">
+      <SystemRequirementsSection
+        onFatalFailureChange={onFatalFailureChange}
+        onCheckingChange={onCheckingChange}
+      />
+
       <div>
         <h3 className="text-base font-semibold text-canopy-text mb-2">Choose your AI agents</h3>
         <p className="text-sm text-canopy-text/60">

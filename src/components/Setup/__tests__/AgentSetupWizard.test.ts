@@ -91,27 +91,14 @@ describe("AgentSetupWizard reducer", () => {
     codex: "missing",
   } as CliAvailability;
 
-  it("starts at health step by default", () => {
-    const state = buildInitialState(emptyAvail, false);
-    expect(state.step).toEqual({ type: "health" });
+  it("always starts at selection step", () => {
+    const state = buildInitialState(emptyAvail);
+    expect(state.step).toEqual({ type: "selection" });
     expect(state.history).toEqual([]);
   });
 
-  it("starts at selection step when skipHealth is true", () => {
-    const state = buildInitialState(emptyAvail, true);
-    expect(state.step).toEqual({ type: "selection" });
-  });
-
-  it("advances from health to selection", () => {
-    const state = buildInitialState(emptyAvail, false);
-    const next = wizardReducer(state, { type: "HEALTH_CONTINUE" });
-    expect(next.step).toEqual({ type: "selection" });
-    expect(next.history).toEqual([{ type: "health" }]);
-  });
-
-  it("advances from selection to cli step", () => {
-    let state = buildInitialState(partialAvail, false);
-    state = wizardReducer(state, { type: "HEALTH_CONTINUE" });
+  it("advances from selection to cli step when not all installed", () => {
+    let state = buildInitialState(partialAvail);
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: true, gemini: true, codex: true },
@@ -122,7 +109,7 @@ describe("AgentSetupWizard reducer", () => {
 
   it("skips to complete when all selected agents are installed", () => {
     const allInstalled = { claude: "ready", gemini: "ready" } as CliAvailability;
-    let state = buildInitialState(allInstalled, true);
+    let state = buildInitialState(allInstalled);
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: true, gemini: true },
@@ -134,7 +121,7 @@ describe("AgentSetupWizard reducer", () => {
 
   it("goes to cli when at least one selected agent is not installed", () => {
     const partial = { claude: "ready", gemini: "missing" } as CliAvailability;
-    let state = buildInitialState(partial, true);
+    let state = buildInitialState(partial);
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: true, gemini: true },
@@ -145,7 +132,7 @@ describe("AgentSetupWizard reducer", () => {
 
   it("skips to complete when only selected agents are installed (unselected missing)", () => {
     const avail = { claude: "ready", gemini: "missing" } as CliAvailability;
-    let state = buildInitialState(avail, true);
+    let state = buildInitialState(avail);
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: true, gemini: false },
@@ -156,7 +143,7 @@ describe("AgentSetupWizard reducer", () => {
 
   it("BACK from complete (after skip) returns to selection, not cli", () => {
     const allInstalled = { claude: "ready", gemini: "ready" } as CliAvailability;
-    let state = buildInitialState(allInstalled, true);
+    let state = buildInitialState(allInstalled);
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: true, gemini: true },
@@ -171,12 +158,11 @@ describe("AgentSetupWizard reducer", () => {
 
   it("goes to cli when availability changes after init to mark agent uninstalled", () => {
     const allInstalled = { claude: "ready", gemini: "ready" } as CliAvailability;
-    let state = buildInitialState(allInstalled, true);
+    let state = buildInitialState(allInstalled);
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: true, gemini: true },
     });
-    // Availability changes: gemini becomes unavailable
     state = wizardReducer(state, {
       type: "SET_AVAILABILITY",
       payload: { claude: "ready", gemini: "missing" } as CliAvailability,
@@ -186,7 +172,7 @@ describe("AgentSetupWizard reducer", () => {
   });
 
   it("advances from cli to complete", () => {
-    let state = buildInitialState(emptyAvail, true);
+    let state = buildInitialState(emptyAvail);
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: true },
@@ -198,11 +184,8 @@ describe("AgentSetupWizard reducer", () => {
     expect(state.step).toEqual({ type: "complete" });
   });
 
-  it("follows full wizard flow: health -> selection -> cli -> complete", () => {
-    let state = buildInitialState(emptyAvail, false);
-
-    state = wizardReducer(state, { type: "HEALTH_CONTINUE" });
-    expect(state.step).toEqual({ type: "selection" });
+  it("follows full wizard flow: selection -> cli -> complete", () => {
+    let state = buildInitialState(emptyAvail);
 
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
@@ -214,12 +197,11 @@ describe("AgentSetupWizard reducer", () => {
     state = wizardReducer(state, { type: "CLI_CONTINUE" });
     expect(state.step).toEqual({ type: "complete" });
 
-    expect(state.history).toEqual([{ type: "health" }, { type: "selection" }, { type: "cli" }]);
+    expect(state.history).toEqual([{ type: "selection" }, { type: "cli" }]);
   });
 
   it("navigates back through history", () => {
-    let state = buildInitialState(emptyAvail, false);
-    state = wizardReducer(state, { type: "HEALTH_CONTINUE" });
+    let state = buildInitialState(emptyAvail);
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: true },
@@ -230,16 +212,13 @@ describe("AgentSetupWizard reducer", () => {
     state = wizardReducer(state, { type: "BACK" });
     expect(state.step).toEqual({ type: "selection" });
 
-    state = wizardReducer(state, { type: "BACK" });
-    expect(state.step).toEqual({ type: "health" });
-
-    // Back from health does nothing
+    // Back from selection does nothing (empty history)
     const unchanged = wizardReducer(state, { type: "BACK" });
-    expect(unchanged.step).toEqual({ type: "health" });
+    expect(unchanged.step).toEqual({ type: "selection" });
   });
 
   it("toggles agent selection", () => {
-    let state = buildInitialState(emptyAvail, true);
+    let state = buildInitialState(emptyAvail);
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: false, gemini: false },
@@ -253,7 +232,7 @@ describe("AgentSetupWizard reducer", () => {
   });
 
   it("updates availability without changing selections", () => {
-    let state = buildInitialState(emptyAvail, true);
+    let state = buildInitialState(emptyAvail);
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: false },
@@ -263,26 +242,26 @@ describe("AgentSetupWizard reducer", () => {
       payload: { claude: "ready" } as CliAvailability,
     });
     expect(state.availability.claude).toBe("ready");
-    expect(state.selections.claude).toBe(false); // selections unchanged
+    expect(state.selections.claude).toBe(false);
   });
 
   it("resets to initial state", () => {
-    let state = buildInitialState(emptyAvail, false);
-    state = wizardReducer(state, { type: "HEALTH_CONTINUE" });
+    let state = buildInitialState(emptyAvail);
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: true },
     });
+    state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
 
     const reset = wizardReducer(state, { type: "RESET", availability: partialAvail });
-    expect(reset.step).toEqual({ type: "health" });
+    expect(reset.step).toEqual({ type: "selection" });
     expect(reset.history).toEqual([]);
     expect(reset.selections).toEqual({});
     expect(reset.availability).toBe(partialAvail);
   });
 
   it("navigates back from cli to selection and re-confirms", () => {
-    let state = buildInitialState(emptyAvail, true);
+    let state = buildInitialState(emptyAvail);
     state = wizardReducer(state, {
       type: "INIT_SELECTIONS",
       payload: { claude: true, gemini: true },
@@ -290,11 +269,9 @@ describe("AgentSetupWizard reducer", () => {
     state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
     expect(state.step).toEqual({ type: "cli" });
 
-    // Go back to selection
     state = wizardReducer(state, { type: "BACK" });
     expect(state.step).toEqual({ type: "selection" });
 
-    // Change selections and re-confirm
     state = wizardReducer(state, { type: "TOGGLE_SELECTION", agentId: "gemini", checked: false });
     state = wizardReducer(state, { type: "SELECTION_CONTINUE" });
     expect(state.step).toEqual({ type: "cli" });

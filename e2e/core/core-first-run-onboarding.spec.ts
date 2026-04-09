@@ -38,11 +38,8 @@ test.describe.serial("First-run onboarding flow", () => {
     await expect(window.locator(SEL.firstRun.welcomeTitle)).toBeVisible({ timeout: T_MEDIUM });
     await window.locator('button:has-text("Continue")').click();
 
-    // Step 2: Agent setup wizard — health check then selection
+    // Step 2: Agent setup wizard — selection step (system health check is inline)
     await expect(window.locator(SEL.firstRun.agentSetupTitle)).toBeVisible({ timeout: T_MEDIUM });
-    // Advance past health check step
-    await window.locator('button:has-text("Continue")').click();
-    // Selection step — verify and skip
     await expect(window.locator(SEL.firstRun.agentTitle)).toBeVisible({ timeout: T_MEDIUM });
     await window.locator('button:has-text("Skip")').click();
 
