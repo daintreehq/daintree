@@ -71,6 +71,83 @@ describe("FixedDropdown overlay-count dismiss behavior", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("captures baseline at open time and closes on later rise above baseline", () => {
+    mockOverlayCount = 1;
+    const { rerender } = render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    // Baseline captured as 1; rising to 2 should close.
+    mockOverlayCount = 2;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("does NOT close when open and overlayCount rise in the same commit (issue #5084 cold-start race)", () => {
+    // Dropdown starts closed with no overlays.
+    const { rerender } = render(
+      <FixedDropdown open={false} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    // Simulates cold-start race: an in-flight modal mounts in the same
+    // commit where the user opens the dropdown. `useLayoutEffect` captures
+    // the snapshot at the open transition before sibling passive effects
+    // fire, so the snapshot should capture the already-incremented count.
+    mockOverlayCount = 1;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("resets baseline snapshot on reopen", () => {
+    const { rerender } = render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    // Close the dropdown.
+    rerender(
+      <FixedDropdown open={false} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    // Reopen while overlayCount is now 2 — new baseline captured at 2.
+    mockOverlayCount = 2;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    // Rising above the new baseline should close.
+    mockOverlayCount = 3;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
   it("does NOT close when overlayCount increases with persistThroughChildOverlays", () => {
     const { rerender } = render(
       <FixedDropdown

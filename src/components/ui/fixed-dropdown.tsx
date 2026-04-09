@@ -39,7 +39,14 @@ export function FixedDropdown({
     animationDuration: getUiTransitionDuration("exit"),
   });
   const overlayCount = useUIStore((state) => state.overlayCount);
-  const prevOverlayCountRef = useRef<number>(overlayCount);
+  const openSnapshotRef = useRef<number>(overlayCount);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- overlayCount intentionally omitted: snapshot captured only at open transition, before sibling useOverlayState passive effects can pushOverlay
+  useLayoutEffect(() => {
+    if (open) {
+      openSnapshotRef.current = overlayCount;
+    }
+  }, [open]);
 
   useEffect(() => setMounted(true), []);
 
@@ -86,15 +93,9 @@ export function FixedDropdown({
   }, [open, onOpenChange, anchorRef, persistThroughChildOverlays, overlayCount]);
 
   useEffect(() => {
-    if (
-      !persistThroughChildOverlays &&
-      open &&
-      overlayCount > prevOverlayCountRef.current &&
-      overlayCount > 0
-    ) {
+    if (!persistThroughChildOverlays && open && overlayCount > openSnapshotRef.current) {
       onOpenChange(false);
     }
-    prevOverlayCountRef.current = overlayCount;
   }, [open, overlayCount, onOpenChange, persistThroughChildOverlays]);
 
   if (!shouldRender || !mounted || !position) return null;
