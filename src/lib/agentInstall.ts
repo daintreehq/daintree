@@ -41,3 +41,12 @@ export function getInstallCommand(block: AgentInstallBlock): string | null {
   if (!block.commands || block.commands.length === 0) return null;
   return block.commands.join("\n");
 }
+
+export function isManualOnlyCommand(command: string): boolean {
+  return /\|\s*(bash|sh|zsh)\b/.test(command) || /\|\s*iex\b/.test(command);
+}
+
+export function isBlockExecutable(block: AgentInstallBlock): boolean {
+  if (!block.commands || block.commands.length === 0) return false;
+  return block.commands.every((cmd) => !isManualOnlyCommand(cmd));
+}

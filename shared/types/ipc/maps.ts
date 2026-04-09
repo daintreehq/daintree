@@ -75,6 +75,9 @@ import type {
   ProcessMetricEntry,
   HeapStats,
   DiagnosticsInfo,
+  AgentInstallPayload,
+  AgentInstallResult,
+  AgentInstallProgressEvent,
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
@@ -477,6 +480,11 @@ export interface IpcInvokeMap {
     args: [StartAgentUpdatePayload];
     result: StartAgentUpdateResult;
   };
+  "setup:agent-install": {
+    args: [payload: AgentInstallPayload];
+    result: AgentInstallResult;
+  };
+
   "system:health-check": {
     args: [agentIds?: string[]];
     result: SystemHealthCheckResult;
@@ -1830,6 +1838,9 @@ export interface IpcEventMap {
   "project:stats-updated": ProjectStatusMap;
   "project:updated": Project;
   "project:removed": string;
+
+  // Agent install progress events
+  "setup:agent-install-progress": AgentInstallProgressEvent;
 
   // System events
   "system:wake": SystemWakePayload;

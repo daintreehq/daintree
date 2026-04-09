@@ -160,6 +160,29 @@ export interface DiagnosticsInfo {
   eventLoopP99Ms: number;
 }
 
+/** Payload for starting an agent install via setup wizard */
+export interface AgentInstallPayload {
+  agentId: string;
+  /** Index of the install method to use (defaults to 0) */
+  methodIndex?: number;
+  /** Unique job identifier for progress correlation */
+  jobId: string;
+}
+
+/** Result of an agent install job */
+export interface AgentInstallResult {
+  success: boolean;
+  exitCode: number | null;
+  error?: string;
+}
+
+/** Progress event streamed during agent install */
+export interface AgentInstallProgressEvent {
+  jobId: string;
+  chunk: string;
+  stream: "stdout" | "stderr";
+}
+
 /** Status of the installed Canopy CLI tool */
 export interface CliInstallStatus {
   /** Whether the CLI script is installed */

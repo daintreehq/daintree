@@ -496,6 +496,9 @@ const CHANNELS = {
   SYSTEM_GET_AGENT_UPDATE_SETTINGS: "system:get-agent-update-settings",
   SYSTEM_SET_AGENT_UPDATE_SETTINGS: "system:set-agent-update-settings",
   SYSTEM_START_AGENT_UPDATE: "system:start-agent-update",
+  SETUP_AGENT_INSTALL: "setup:agent-install",
+  SETUP_AGENT_INSTALL_PROGRESS: "setup:agent-install-progress",
+
   SYSTEM_HEALTH_CHECK: "system:health-check",
   SYSTEM_HEALTH_CHECK_SPECS: "system:health-check-specs",
   SYSTEM_CHECK_TOOL: "system:check-tool",
@@ -1379,6 +1382,13 @@ const api: ElectronAPI = {
       ipcRenderer.on(CHANNELS.SYSTEM_WAKE, handler);
       return () => ipcRenderer.removeListener(CHANNELS.SYSTEM_WAKE, handler);
     },
+
+    installAgent: (payload: { agentId: string; methodIndex?: number; jobId: string }) =>
+      _unwrappingInvoke(CHANNELS.SETUP_AGENT_INSTALL, payload),
+
+    onAgentInstallProgress: (
+      callback: (event: { jobId: string; chunk: string; stream: "stdout" | "stderr" }) => void
+    ) => _typedOn(CHANNELS.SETUP_AGENT_INSTALL_PROGRESS, callback),
 
     onResourceProfileChanged: (callback: (payload: ResourceProfilePayload) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: ResourceProfilePayload) =>

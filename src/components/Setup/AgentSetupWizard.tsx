@@ -288,7 +288,17 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
           />
         )}
         {state.step.type === "cli" && (
-          <AgentCliStep availability={state.availability} selections={state.selections} />
+          <AgentCliStep
+            availability={state.availability}
+            selections={state.selections}
+            onInstallComplete={() => {
+              cliAvailabilityClient.refresh().then((result) => {
+                if (isOpenRef.current) {
+                  dispatch({ type: "SET_AVAILABILITY", payload: result });
+                }
+              });
+            }}
+          />
         )}
         {state.step.type === "complete" && <CompleteStep installedAgents={installedAgents} />}
       </AppDialog.Body>
