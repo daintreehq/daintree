@@ -58,6 +58,10 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
   const hostElement = document.createElement("div");
   const termEl = document.createElement("div");
   hostElement.appendChild(termEl);
+  // maybeReflowTerminal short-circuits if element.isConnected is false, so
+  // attach to the document by default. Individual tests can detach the host
+  // to assert the disconnected-short-circuit path.
+  document.body.appendChild(hostElement);
   // Force offsetHeight to be readable (jsdom returns 0, but the read still
   // forces layout — we observe the side-effect via paddingTop jitter).
   const paddingTopHistory: string[] = [];
@@ -140,6 +144,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
   afterEach(() => {
     service.instances.clear();
+    document.body.innerHTML = "";
   });
 
   it("reflows a visible standard terminal and records lastReflowAt", () => {
@@ -215,13 +220,23 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(managed.lastReflowAt).toBe(0);
   });
 
-  it("resetRenderer calls forceXtermReflow on the terminal element", () => {
+  it("skips — and does not stamp throttle — when element is detached", () => {
     const managed = makeManaged();
-    // resetRenderer requires connected host element with clientWidth/Height >= 50
-    document.body.appendChild(managed.hostElement);
+    // Disconnect from document
+    managed.hostElement.remove();
+    expect((managed.terminal.element as HTMLElement).isConnected).toBe(false);
+
+    service.maybeReflowTerminal(managed);
+    // Throttle must NOT be stamped — otherwise the next legitimate reflow
+    // after reattachment would be suppressed for 250ms.
+    expect(managed.lastReflowAt).toBe(0);
+    expect(paddingHistory(managed).length).toBe(0);
+  });
+
+  it("resetRenderer calls forceXtermReflow and clears the throttle", () => {
+    const managed = makeManaged({ lastReflowAt: 99999 });
     Object.defineProperty(managed.hostElement, "clientWidth", { value: 200, configurable: true });
     Object.defineProperty(managed.hostElement, "clientHeight", { value: 200, configurable: true });
-    // Augment mock terminal with the methods resetRenderer needs
     const term = managed.terminal as unknown as {
       element: HTMLElement;
       rows: number;
@@ -232,7 +247,6 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     term.clearTextureAtlas = vi.fn();
     term.refresh = vi.fn();
     service.instances.set("t1", managed);
-    // Stub fit to avoid jsdom's missing checkVisibility.
     vi.spyOn(service.resizeController, "fit").mockImplementation(() => null);
 
     service.resetRenderer("t1");
@@ -240,5 +254,32 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(term.clearTextureAtlas).toHaveBeenCalled();
     expect(term.refresh).toHaveBeenCalledWith(0, 23);
     expect(paddingHistory(managed)).toContain("0.01px");
+    // Throttle is cleared so the next onWriteParsed/heartbeat tick
+    // reflows immediately.
+    expect(managed.lastReflowAt).toBe(0);
+  });
+
+  it("resetRenderer still runs forceXtermReflow when fit() throws", () => {
+    const managed = makeManaged();
+    Object.defineProperty(managed.hostElement, "clientWidth", { value: 200, configurable: true });
+    Object.defineProperty(managed.hostElement, "clientHeight", { value: 200, configurable: true });
+    const term = managed.terminal as unknown as {
+      element: HTMLElement;
+      rows: number;
+      clearTextureAtlas: () => void;
+      refresh: (a: number, b: number) => void;
+    };
+    term.rows = 24;
+    term.clearTextureAtlas = vi.fn();
+    term.refresh = vi.fn();
+    service.instances.set("t1", managed);
+    vi.spyOn(service.resizeController, "fit").mockImplementation(() => {
+      throw new Error("fit boom");
+    });
+
+    expect(() => service.resetRenderer("t1")).not.toThrow();
+    // The escape hatch — forceXtermReflow — must still run even if fit throws.
+    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(managed.lastReflowAt).toBe(0);
   });
 });

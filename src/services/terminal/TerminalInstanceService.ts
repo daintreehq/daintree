@@ -305,6 +305,10 @@ class TerminalInstanceService {
     if (managed.isAltBuffer) return;
     const element = managed.terminal.element;
     if (!element) return;
+    // A transiently-detached element can't be unpaused by a reflow, and
+    // stamping lastReflowAt here would throttle away the next legitimate
+    // reflow once it's reattached.
+    if (!element.isConnected) return;
 
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     if (now - (managed.lastReflowAt ?? 0) < REFLOW_THROTTLE_MS) return;
@@ -1355,6 +1359,11 @@ class TerminalInstanceService {
       if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
         this.resizeController.sendPtyResize(id, cols, rows);
       }
+      // Clear throttle so any subsequent write triggers an immediate reflow;
+      // settled-strategy agents are WebGL so maybeReflowTerminal itself is a
+      // no-op, but the clear is cheap and keeps the post-wake contract
+      // uniform across paths.
+      managed.lastReflowAt = 0;
       return;
     }
 
@@ -1362,10 +1371,17 @@ class TerminalInstanceService {
     // reflect the current window size rather than pre-hibernation cache.
     // fit() already guards against offscreen/small terminals (returns null).
     const fitResult = this.resizeController.fit(id);
-    if (fitResult) return;
+    if (!fitResult) {
+      // Fallback: fit() returned null (terminal offscreen or container too small).
+      this.resizeController.forceImmediateResize(id);
+    }
 
-    // Fallback: fit() returned null (terminal offscreen or container too small).
-    this.resizeController.forceImmediateResize(id);
+    // Kick the IO unpause path for standard terminals that just woke up —
+    // without this, a renderer that was paused pre-hibernation can stay
+    // blank until the next write or the 3s heartbeat. Throttle is cleared
+    // first so this runs unconditionally.
+    managed.lastReflowAt = 0;
+    this.maybeReflowTerminal(managed);
   }
 
   private getResizeStrategyForTerminal(managed: ManagedTerminal): "default" | "settled" {
@@ -1530,20 +1546,28 @@ class TerminalInstanceService {
       managed.terminal.clearTextureAtlas();
       managed.terminal.refresh(0, managed.terminal.rows - 1);
 
-      this.resizeController.fit(id);
-
-      // Force IO re-evaluation so a DOM-renderer terminal that got stuck
-      // with _isPaused=true actually resumes drawing. Without this, redraw
-      // only clears the atlas and refreshes rows — a paused renderer still
-      // renders nothing. This makes `terminal.redraw` a reliable user
-      // escape hatch for the IO pause bug.
-      const termEl = managed.terminal.element;
-      if (termEl) {
-        forceXtermReflow(termEl);
-        managed.lastReflowAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+      try {
+        this.resizeController.fit(id);
+      } catch (error) {
+        logError(`resetRenderer fit failed for ${id}`, error);
       }
     } catch (error) {
       logError(`resetRenderer failed for ${id}`, error);
+    }
+
+    // Force IO re-evaluation so a DOM-renderer terminal that got stuck
+    // with _isPaused=true actually resumes drawing. Runs independently of
+    // the refresh/fit block so the user-invokable escape hatch works even
+    // when fit() throws. Clear the throttle so any follow-up automatic
+    // reflow (onWriteParsed, heartbeat, focus) fires immediately.
+    const termEl = managed.terminal.element;
+    if (termEl) {
+      try {
+        forceXtermReflow(termEl);
+      } catch (error) {
+        logWarn(`forceXtermReflow failed for ${id}`, { error });
+      }
+      managed.lastReflowAt = 0;
     }
   }
 
