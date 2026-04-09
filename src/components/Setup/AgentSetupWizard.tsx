@@ -13,7 +13,9 @@ import { isCanopyEnvEnabled } from "@/utils/env";
 import type { CliAvailability } from "@shared/types";
 import { isAgentInstalled, isAgentReady } from "../../../shared/utils/agentAvailability";
 import { Sparkles, ChevronLeft, ChevronRight, ArrowRight } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion, type Variants } from "framer-motion";
 import { CanopyAgentIcon } from "@/components/icons";
+import { UI_ENTER_DURATION, UI_EXIT_DURATION } from "@/lib/animationUtils";
 
 const AGENT_ORDER = BUILT_IN_AGENT_IDS;
 const POLL_INTERVAL = 3000;
@@ -50,6 +52,31 @@ export const AGENT_DESCRIPTIONS: Record<string, string> = {
   opencode: "Provider-agnostic, open-source flexibility",
   cursor: "Cursor's agentic coding assistant",
   kiro: "Spec-driven development with autonomous execution",
+};
+
+// --- Step transition variants ---
+
+const stepVariants: Variants = {
+  initial: (direction: number) => ({
+    x: `${direction * 30}%`,
+    opacity: 0,
+  }),
+  animate: {
+    x: 0,
+    opacity: 1,
+    transition: { duration: UI_ENTER_DURATION / 1000, ease: [0.16, 1, 0.3, 1] },
+  },
+  exit: (direction: number) => ({
+    x: `${direction * -30}%`,
+    opacity: 0,
+    transition: { duration: UI_EXIT_DURATION / 1000, ease: [0.2, 0, 0.7, 0] },
+  }),
+};
+
+const reducedStepVariants: Variants = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1, transition: { duration: 0.15 } },
+  exit: { opacity: 0, transition: { duration: 0.1 } },
 };
 
 // --- Wizard state machine ---
@@ -174,6 +201,8 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isOpenRef = useRef(isOpen);
   const initRef = useRef(false);
+  const directionRef = useRef<1 | -1>(1);
+  const prefersReducedMotion = useReducedMotion();
 
   useEffect(() => {
     isOpenRef.current = isOpen;
@@ -189,6 +218,7 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
       });
       initRef.current = false;
       void useAgentSettingsStore.getState().initialize();
+      directionRef.current = 1;
     }
     prevIsOpenRef.current = isOpen;
   }, [isOpen, initialAvailability]);
@@ -259,10 +289,12 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
   })();
 
   const handleHealthContinue = useCallback(() => {
+    directionRef.current = 1;
     dispatch({ type: "HEALTH_CONTINUE" });
   }, []);
 
   const handleSelectionContinue = useCallback(async () => {
+    directionRef.current = 1;
     setIsSaving(true);
     try {
       for (const [agentId, selected] of Object.entries(state.selections)) {
@@ -275,10 +307,12 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
   }, [state.selections, setAgentSelected]);
 
   const handleCliContinue = useCallback(() => {
+    directionRef.current = 1;
     dispatch({ type: "CLI_CONTINUE" });
   }, []);
 
   const handleBack = useCallback(() => {
+    directionRef.current = -1;
     dispatch({ type: "BACK" });
   }, []);
 
@@ -307,30 +341,45 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
       </AppDialog.Header>
 
       <AppDialog.Body>
-        {state.step.type === "health" && <SystemToolsStep onSkip={handleHealthContinue} />}
-        {state.step.type === "selection" && (
-          <SelectionStep
-            availability={state.availability}
-            selections={state.selections}
-            isLoading={showLoadingSelections}
-            isSaving={isSaving}
-            onToggle={(id, checked) => dispatch({ type: "TOGGLE_SELECTION", agentId: id, checked })}
-          />
-        )}
-        {state.step.type === "cli" && (
-          <AgentCliStep
-            availability={state.availability}
-            selections={state.selections}
-            onInstallComplete={() => {
-              cliAvailabilityClient.refresh().then((result) => {
-                if (isOpenRef.current) {
-                  dispatch({ type: "SET_AVAILABILITY", payload: result });
-                }
-              });
-            }}
-          />
-        )}
-        {state.step.type === "complete" && <CompleteStep installedAgents={installedAgents} />}
+        <div className="relative overflow-hidden">
+          <AnimatePresence mode="wait" custom={directionRef.current}>
+            <motion.div
+              key={state.step.type}
+              custom={directionRef.current}
+              variants={prefersReducedMotion ? reducedStepVariants : stepVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+            >
+              {state.step.type === "health" && <SystemToolsStep onSkip={handleHealthContinue} />}
+              {state.step.type === "selection" && (
+                <SelectionStep
+                  availability={state.availability}
+                  selections={state.selections}
+                  isLoading={showLoadingSelections}
+                  isSaving={isSaving}
+                  onToggle={(id, checked) =>
+                    dispatch({ type: "TOGGLE_SELECTION", agentId: id, checked })
+                  }
+                />
+              )}
+              {state.step.type === "cli" && (
+                <AgentCliStep
+                  availability={state.availability}
+                  selections={state.selections}
+                  onInstallComplete={() => {
+                    cliAvailabilityClient.refresh().then((result) => {
+                      if (isOpenRef.current) {
+                        dispatch({ type: "SET_AVAILABILITY", payload: result });
+                      }
+                    });
+                  }}
+                />
+              )}
+              {state.step.type === "complete" && <CompleteStep installedAgents={installedAgents} />}
+            </motion.div>
+          </AnimatePresence>
+        </div>
       </AppDialog.Body>
 
       <AppDialog.Footer>
