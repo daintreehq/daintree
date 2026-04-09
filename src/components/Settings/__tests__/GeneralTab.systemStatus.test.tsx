@@ -117,7 +117,13 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
 
   it("renders only installed, enabled agents (hides uninstalled)", async () => {
     setupDispatchMock(
-      { claude: "ready", gemini: "ready", codex: "missing", opencode: "missing", cursor: "missing" },
+      {
+        claude: "ready",
+        gemini: "ready",
+        codex: "missing",
+        opencode: "missing",
+        cursor: "missing",
+      },
       { agents: {} } as unknown as AgentSettings
     );
 
@@ -153,7 +159,13 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
 
   it("shows summary for hidden agents with correct count and pluralization", async () => {
     setupDispatchMock(
-      { claude: "ready", gemini: "ready", codex: "missing", opencode: "missing", cursor: "missing" },
+      {
+        claude: "ready",
+        gemini: "ready",
+        codex: "missing",
+        opencode: "missing",
+        cursor: "missing",
+      },
       { agents: {} } as unknown as AgentSettings
     );
 
@@ -194,7 +206,13 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
 
   it("shows 'Needs setup' label for installed-but-not-ready agents", async () => {
     setupDispatchMock(
-      { claude: "installed", gemini: "ready", codex: "missing", opencode: "missing", cursor: "missing" },
+      {
+        claude: "installed",
+        gemini: "ready",
+        codex: "missing",
+        opencode: "missing",
+        cursor: "missing",
+      },
       { agents: {} } as unknown as AgentSettings
     );
 
@@ -211,7 +229,13 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
 
   it("renders empty-state CTA when no agents installed", async () => {
     setupDispatchMock(
-      { claude: "missing", gemini: "missing", codex: "missing", opencode: "missing", cursor: "missing" },
+      {
+        claude: "missing",
+        gemini: "missing",
+        codex: "missing",
+        opencode: "missing",
+        cursor: "missing",
+      },
       { agents: {} } as unknown as AgentSettings
     );
 
@@ -229,7 +253,13 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
 
   it("setup wizard button dispatches canopy:open-agent-setup-wizard CustomEvent", async () => {
     setupDispatchMock(
-      { claude: "missing", gemini: "missing", codex: "missing", opencode: "missing", cursor: "missing" },
+      {
+        claude: "missing",
+        gemini: "missing",
+        codex: "missing",
+        opencode: "missing",
+        cursor: "missing",
+      },
       { agents: {} } as unknown as AgentSettings
     );
 
@@ -253,7 +283,13 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
 
   it("summary link calls onNavigateToAgents without an agent id", async () => {
     setupDispatchMock(
-      { claude: "ready", gemini: "ready", codex: "missing", opencode: "missing", cursor: "missing" },
+      {
+        claude: "ready",
+        gemini: "ready",
+        codex: "missing",
+        opencode: "missing",
+        cursor: "missing",
+      },
       { agents: {} } as unknown as AgentSettings
     );
 
@@ -278,7 +314,13 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
 
   it("shows neutral section description, not dependency-check framing", async () => {
     setupDispatchMock(
-      { claude: "ready", gemini: "ready", codex: "missing", opencode: "missing", cursor: "missing" },
+      {
+        claude: "ready",
+        gemini: "ready",
+        codex: "missing",
+        opencode: "missing",
+        cursor: "missing",
+      },
       { agents: {} } as unknown as AgentSettings
     );
 
