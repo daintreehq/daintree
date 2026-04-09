@@ -663,7 +663,13 @@ describe("WorktreeHeader hover:underline on badges", () => {
 
   it("grid variant: badges keep hover:underline regardless of active state", () => {
     const { container, unmount } = renderHeader({
-      worktree: { ...issueWt, prNumber: 101, prState: "open", hasPlanFile: true, planFilePath: "TODO.md" },
+      worktree: {
+        ...issueWt,
+        prNumber: 101,
+        prState: "open",
+        hasPlanFile: true,
+        planFilePath: "TODO.md",
+      },
       badges: { onOpenIssue: noop, onOpenPR: noop, onOpenPlan: noop },
       variant: "grid",
     });
@@ -673,7 +679,13 @@ describe("WorktreeHeader hover:underline on badges", () => {
     unmount();
 
     const { container: activeContainer } = renderHeader({
-      worktree: { ...issueWt, prNumber: 101, prState: "open", hasPlanFile: true, planFilePath: "TODO.md" },
+      worktree: {
+        ...issueWt,
+        prNumber: 101,
+        prState: "open",
+        hasPlanFile: true,
+        planFilePath: "TODO.md",
+      },
       badges: { onOpenIssue: noop, onOpenPR: noop, onOpenPlan: noop },
       variant: "grid",
       isActive: true,
