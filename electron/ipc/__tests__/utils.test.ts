@@ -502,6 +502,31 @@ describe("waitForRateLimitSlot (leaky bucket, 2-arg)", () => {
     expect(Date.now()).toBe(before);
   });
 
+  it("drainRateLimitQueues rejects in-flight leaky bucket waiters", async () => {
+    const INTERVAL = 5_000;
+    // First caller consumes the immediate slot.
+    await waitForRateLimitSlot("lb-drain-reject", INTERVAL);
+    // Second caller will sleep ~INTERVAL ms waiting for its reserved slot.
+    const pending = waitForRateLimitSlot("lb-drain-reject", INTERVAL);
+
+    // Drain before the timer fires — the waiter must be rejected, not
+    // silently resumed (otherwise shutdown races real IPC work).
+    drainRateLimitQueues();
+
+    await expect(pending).rejects.toThrow("App is shutting down");
+
+    // Even if we advance past the original sleep, the rejected promise
+    // stays rejected and does not leak a second resolve.
+    await vi.advanceTimersByTimeAsync(INTERVAL * 2);
+  });
+
+  it("treats intervalMs <= 0 as a no-op (defensive guard)", async () => {
+    const before = Date.now();
+    await waitForRateLimitSlot("lb-zero", 0);
+    await waitForRateLimitSlot("lb-zero", -100);
+    expect(Date.now()).toBe(before);
+  });
+
   it("_resetRateLimitQueuesForTest clears leaky bucket state", async () => {
     await waitForRateLimitSlot("lb-reset", 5_000);
     _resetRateLimitQueuesForTest();

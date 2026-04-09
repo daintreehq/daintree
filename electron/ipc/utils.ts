@@ -58,9 +58,15 @@ interface RateLimitState {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+interface LeakyBucketWaiter {
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 interface LeakyBucketState {
   nextAvailableMs: number;
   pendingCount: number;
+  waiters: Set<LeakyBucketWaiter>;
 }
 
 const MAX_QUEUE_DEPTH = 50;
@@ -99,7 +105,7 @@ function getOrCreateState(key: string): RateLimitState {
 function getOrCreateLeakyState(key: string): LeakyBucketState {
   let state = leakyBucketQueues.get(key);
   if (!state) {
-    state = { nextAvailableMs: 0, pendingCount: 0 };
+    state = { nextAvailableMs: 0, pendingCount: 0, waiters: new Set() };
     leakyBucketQueues.set(key, state);
   }
   return state;
@@ -166,6 +172,8 @@ export async function waitForRateLimitSlot(
 }
 
 async function waitForLeakyBucketSlot(key: string, intervalMs: number): Promise<void> {
+  if (intervalMs <= 0) return;
+
   const state = getOrCreateLeakyState(key);
 
   if (state.pendingCount >= MAX_QUEUE_DEPTH) {
@@ -185,7 +193,16 @@ async function waitForLeakyBucketSlot(key: string, intervalMs: number): Promise<
 
   state.pendingCount++;
   try {
-    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    await new Promise<void>((resolve, reject) => {
+      const waiter: LeakyBucketWaiter = {
+        reject,
+        timer: setTimeout(() => {
+          state.waiters.delete(waiter);
+          resolve();
+        }, waitMs),
+      };
+      state.waiters.add(waiter);
+    });
   } finally {
     state.pendingCount--;
   }
@@ -227,9 +244,17 @@ export function drainRateLimitQueues(): void {
     }
   }
   rateLimitQueues.clear();
-  // Leaky-bucket in-flight sleeps cannot be cancelled — they will resolve
-  // harmlessly after shutdown. Clearing state ensures fresh callers on the
-  // same key after a drain are not blocked by stale `nextAvailableMs`.
+  // Cancel all in-flight leaky-bucket waiters. Matching the sliding-window
+  // semantics is important: without this, waiters resume after drain and
+  // their callers proceed past the await into real work (e.g. creating
+  // worktrees) during shutdown, racing workspace-client teardown.
+  for (const [, state] of leakyBucketQueues) {
+    for (const waiter of state.waiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error("App is shutting down"));
+    }
+    state.waiters.clear();
+  }
   leakyBucketQueues.clear();
 }
 
