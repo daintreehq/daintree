@@ -278,8 +278,8 @@ export function PortalSettingsTab() {
           >
             <div
               className={cn(
-                "absolute top-0.5 w-4 h-4 rounded-full bg-text-inverse transition-transform",
-                link.enabled ? "translate-x-5" : "translate-x-0.5"
+                "absolute top-0.5 w-4 h-4 rounded-full transition-transform",
+                link.enabled ? "translate-x-5 bg-text-inverse" : "translate-x-0.5 bg-canopy-text"
               )}
             />
           </button>

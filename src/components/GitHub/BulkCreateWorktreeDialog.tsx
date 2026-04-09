@@ -1069,11 +1069,11 @@ export function BulkCreateWorktreeDialog({
                       "w-9 h-5 rounded-full transition-colors",
                       "peer-focus-visible:ring-2 peer-focus-visible:ring-canopy-accent",
                       "after:content-[''] after:absolute after:top-0.5 after:left-0.5",
-                      "after:bg-white after:rounded-full after:h-4 after:w-4",
+                      "after:rounded-full after:h-4 after:w-4",
                       "after:transition-transform after:duration-200",
                       assignWorktreeToSelf
-                        ? "bg-canopy-accent after:translate-x-4"
-                        : "bg-canopy-border after:translate-x-0"
+                        ? "bg-canopy-accent after:translate-x-4 after:bg-text-inverse"
+                        : "bg-canopy-border after:translate-x-0 after:bg-canopy-text"
                     )}
                   />
                 </label>

@@ -108,8 +108,8 @@ export function SettingsSwitchCard({
       >
         <div
           className={cn(
-            "absolute top-1 w-4 h-4 rounded-full bg-text-inverse transition-transform",
-            isEnabled ? "translate-x-6" : "translate-x-1"
+            "absolute top-1 w-4 h-4 rounded-full transition-transform",
+            isEnabled ? "translate-x-6 bg-text-inverse" : "translate-x-1 bg-canopy-text"
           )}
         />
       </div>

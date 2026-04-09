@@ -837,8 +837,10 @@ function SelectionStep({
           >
             <span
               className={cn(
-                "pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform mt-0.5",
-                telemetryEnabled ? "translate-x-4 ml-0.5" : "translate-x-0 ml-0.5"
+                "pointer-events-none inline-block h-4 w-4 rounded-full shadow transform transition-transform mt-0.5",
+                telemetryEnabled
+                  ? "translate-x-4 ml-0.5 bg-text-inverse"
+                  : "translate-x-0 ml-0.5 bg-canopy-text"
               )}
             />
           </button>

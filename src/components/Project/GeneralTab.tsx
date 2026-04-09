@@ -569,8 +569,10 @@ export function GeneralTab({
           >
             <div
               className={cn(
-                "absolute top-1 w-4 h-4 rounded-full bg-text-inverse transition-transform",
-                currentProject?.inRepoSettings ? "translate-x-6" : "translate-x-1"
+                "absolute top-1 w-4 h-4 rounded-full transition-transform",
+                currentProject?.inRepoSettings
+                  ? "translate-x-6 bg-text-inverse"
+                  : "translate-x-1 bg-canopy-text"
               )}
             />
           </div>
