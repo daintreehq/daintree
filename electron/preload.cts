@@ -2556,6 +2556,9 @@ const api: ElectronAPI = {
     setRecentSchemeIds: (ids: string[]) =>
       _unwrappingInvoke(CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS, ids),
 
+    setAccentColorOverride: (color: string | null) =>
+      _unwrappingInvoke(CHANNELS.APP_THEME_SET_ACCENT_COLOR_OVERRIDE, color),
+
     onSystemAppearanceChanged: (
       callback: (payload: { isDark: boolean; schemeId: string }) => void
     ) => _typedOn(CHANNELS.APP_THEME_SYSTEM_APPEARANCE_CHANGED, callback),

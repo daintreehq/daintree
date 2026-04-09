@@ -37,6 +37,7 @@ vi.mock("@shared/theme", () => ({
     background: "--canopy-bg",
   },
   getAppThemeWarnings: () => [],
+  applyAccentOverrideToScheme: (scheme: unknown) => scheme,
   resolveAppTheme: (id: string, customSchemes: { id: string }[]) => {
     const map: Record<string, { id: string; name: string; type: string; tokens: object }> = {
       "theme-a": { id: "theme-a", name: "Theme A", type: "dark", tokens: {} },
@@ -110,6 +111,8 @@ describe("AppThemePicker shuffle button", () => {
       setPreferredLightSchemeId: vi.fn(),
       setRecentSchemeIds: vi.fn(),
       addCustomScheme: vi.fn(),
+      accentColorOverride: null,
+      setAccentColorOverride: vi.fn(),
     });
   });
 

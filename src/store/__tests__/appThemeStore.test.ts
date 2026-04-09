@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
+import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
 import { useAppThemeStore } from "../appThemeStore";
 
 describe("appThemeStore.recentSchemeIds LRU", () => {
@@ -13,6 +13,7 @@ describe("appThemeStore.recentSchemeIds LRU", () => {
       preferredDarkSchemeId: "daintree",
       preferredLightSchemeId: "bondi",
       recentSchemeIds: [],
+      accentColorOverride: null,
     });
   });
 
@@ -90,6 +91,57 @@ describe("appThemeStore.recentSchemeIds LRU", () => {
   it("setRecentSchemeIds deduplicates incoming entries", () => {
     useAppThemeStore.getState().setRecentSchemeIds(["a", "b", "a", "c", "b", "d"]);
     expect(useAppThemeStore.getState().recentSchemeIds).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("setAccentColorOverride patches the CSS variables on :root", () => {
+    // Start from a known dark built-in so base accent is a predictable hex.
+    useAppThemeStore.getState().setSelectedSchemeIdSilent("daintree");
+    const baseAccent = document.documentElement.style.getPropertyValue("--theme-accent-primary");
+    expect(baseAccent).toBeTruthy();
+
+    useAppThemeStore.getState().setAccentColorOverride("#ff00aa");
+    expect(useAppThemeStore.getState().accentColorOverride).toBe("#ff00aa");
+    const overridden = document.documentElement.style.getPropertyValue("--theme-accent-primary");
+    expect(overridden).toBe("#ff00aa");
+    expect(document.documentElement.style.getPropertyValue("--theme-accent-rgb")).toBe(
+      "255, 0, 170"
+    );
+    // Non-accent tokens should be unchanged from the base theme.
+    const daintree = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
+    expect(document.documentElement.style.getPropertyValue("--theme-surface-canvas")).toBe(
+      daintree.tokens["surface-canvas"]
+    );
+  });
+
+  it("setAccentColorOverride(null) clears the override and restores theme accent", () => {
+    useAppThemeStore.getState().setSelectedSchemeIdSilent("daintree");
+    const daintree = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
+
+    useAppThemeStore.getState().setAccentColorOverride("#112233");
+    expect(document.documentElement.style.getPropertyValue("--theme-accent-primary")).toBe(
+      "#112233"
+    );
+
+    useAppThemeStore.getState().setAccentColorOverride(null);
+    expect(useAppThemeStore.getState().accentColorOverride).toBeNull();
+    expect(document.documentElement.style.getPropertyValue("--theme-accent-primary")).toBe(
+      daintree.tokens["accent-primary"]
+    );
+  });
+
+  it("override survives a subsequent setSelectedSchemeId (theme switch)", () => {
+    useAppThemeStore.getState().setAccentColorOverride("#abcdef");
+    // Switch to a different theme — the override must still be applied.
+    useAppThemeStore.getState().setSelectedSchemeId("bondi");
+    expect(useAppThemeStore.getState().accentColorOverride).toBe("#abcdef");
+    expect(document.documentElement.style.getPropertyValue("--theme-accent-primary")).toBe(
+      "#abcdef"
+    );
+    // And setSelectedSchemeIdSilent (follow-system, hydration) path too.
+    useAppThemeStore.getState().setSelectedSchemeIdSilent("daintree");
+    expect(document.documentElement.style.getPropertyValue("--theme-accent-primary")).toBe(
+      "#abcdef"
+    );
   });
 
   it("removeCustomScheme strips the removed id from recentSchemeIds", () => {

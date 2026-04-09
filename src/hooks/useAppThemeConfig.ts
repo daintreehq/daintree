@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
-import { normalizeAppColorScheme } from "@shared/theme";
+import { normalizeAccentHex, normalizeAppColorScheme } from "@shared/theme";
 import type { AppColorScheme } from "@shared/types/appTheme";
 import type { ColorVisionMode } from "@shared/types";
 
@@ -35,6 +35,15 @@ export function useAppThemeConfig() {
           } catch {
             // ignore malformed custom schemes
           }
+        }
+
+        // Seed accent override before scheme injection so the first injection
+        // already reflects the persisted override. Use the raw Zustand setter
+        // (not setAccentColorOverride) to avoid a redundant DOM inject — the
+        // subsequent setSelectedSchemeIdSilent call below performs it once.
+        const normalizedAccent = normalizeAccentHex(config.accentColorOverride);
+        if (normalizedAccent || config.accentColorOverride === null) {
+          useAppThemeStore.setState({ accentColorOverride: normalizedAccent });
         }
 
         if (typeof config.colorSchemeId === "string" && config.colorSchemeId.trim()) {

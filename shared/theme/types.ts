@@ -214,6 +214,11 @@ export interface AppThemeConfig {
   preferredLightSchemeId?: string;
   /** IDs of the most recently selected themes (LRU, newest first, capped at 5) */
   recentSchemeIds?: string[];
+  /**
+   * User-chosen accent color (canonical #rrggbb) that overrides the active
+   * theme's accent token family. Cleared when set to null/undefined.
+   */
+  accentColorOverride?: string | null;
 }
 
 export interface AppThemeValidationWarning {
