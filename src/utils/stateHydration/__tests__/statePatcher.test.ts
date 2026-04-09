@@ -206,6 +206,24 @@ describe("buildArgsForBackendTerminal", () => {
     expect(result.agentId).toBe("claude");
     expect(result.kind).toBe("agent");
   });
+
+  it("prefers saved title over backend title to preserve user renames", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", kind: "terminal", title: "Shell" },
+      { id: "t1", location: "grid", title: "My Custom Name" },
+      "/p"
+    );
+    expect(result.title).toBe("My Custom Name");
+  });
+
+  it("falls back to backend title when saved title is missing", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", kind: "terminal", title: "Shell" },
+      { id: "t1", location: "grid" },
+      "/p"
+    );
+    expect(result.title).toBe("Shell");
+  });
 });
 
 describe("buildArgsForReconnectedFallback", () => {

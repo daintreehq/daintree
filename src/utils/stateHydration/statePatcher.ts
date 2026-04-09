@@ -157,7 +157,7 @@ export function buildArgsForBackendTerminal(
     kind: backendTerminal.kind ?? (agentId ? "agent" : "terminal"),
     type: backendTerminal.type,
     agentId,
-    title: backendTerminal.title,
+    title: saved.title ?? backendTerminal.title,
     cwd,
     worktreeId: backendTerminal.worktreeId,
     location,
