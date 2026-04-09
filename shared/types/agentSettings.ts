@@ -291,6 +291,15 @@ export function generateAgentCommand(
         parts.push(escapedPrompt);
         break;
 
+      case "copilot":
+        // Copilot: -i flag for initial prompt injection (interactive mode)
+        if (interactive) {
+          parts.push("-i", escapedPrompt);
+        } else {
+          parts.push(escapedPrompt);
+        }
+        break;
+
       default:
         // Generic agent: just append the prompt
         parts.push(escapedPrompt);

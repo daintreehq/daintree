@@ -50,4 +50,5 @@ export const AGENT_DESCRIPTIONS: Record<string, string> = {
   opencode: "Provider-agnostic, open-source flexibility",
   cursor: "Cursor's agentic coding assistant",
   kiro: "Spec-driven development with autonomous execution",
+  copilot: "GitHub's AI assistant with broad model choice",
 };

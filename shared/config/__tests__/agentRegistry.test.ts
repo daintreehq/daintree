@@ -34,6 +34,7 @@ describe("agentRegistry", () => {
       expect(ids).toContain("opencode");
       expect(ids).toContain("cursor");
       expect(ids).toContain("kiro");
+      expect(ids).toContain("copilot");
     });
 
     it("kiro only has macOS and Linux install blocks (no Windows)", () => {
@@ -417,6 +418,81 @@ describe("AgentDomainWeightsSchema", () => {
   });
 });
 
+describe("copilot configuration", () => {
+  it("has 160k context window", () => {
+    expect(getAgentConfig("copilot")?.contextWindow).toBe(160_000);
+  });
+
+  it("has models with claude-sonnet-4.6 as first (default)", () => {
+    const config = getAgentConfig("copilot");
+    expect(config?.models).toBeDefined();
+    expect(config!.models![0].id).toBe("claude-sonnet-4.6");
+    const modelIds = config!.models!.map((m) => m.id);
+    expect(modelIds).toContain("gpt-5.4");
+    expect(modelIds).toContain("gemini-2.5-pro");
+  });
+
+  it("produces --resume=id args (equals concatenation)", () => {
+    const config = getAgentConfig("copilot");
+    expect(config?.resume?.args("abc-def-123")).toEqual(["--resume=abc-def-123"]);
+  });
+
+  it("has npm install for all platforms including Windows", () => {
+    const config = getAgentConfig("copilot");
+    for (const os of ["macos", "linux", "windows"] as const) {
+      const commands = config?.install?.byOs?.[os]?.[0]?.commands;
+      expect(commands).toContain("npm install -g @github/copilot");
+    }
+  });
+
+  it("uses blockMouseReporting and settled resize for alt-screen TUI", () => {
+    const config = getAgentConfig("copilot");
+    expect(config?.capabilities?.blockMouseReporting).toBe(true);
+    expect(config?.capabilities?.resizeStrategy).toBe("settled");
+    expect(config?.capabilities?.blockAltScreen).toBeUndefined();
+  });
+
+  it("has correct npm package and GitHub repo", () => {
+    const config = getAgentConfig("copilot");
+    expect(config?.version?.npmPackage).toBe("@github/copilot");
+    expect(config?.version?.githubRepo).toBe("github/copilot-cli");
+  });
+});
+
+describe("copilot detection patterns", () => {
+  function compilePatterns(key: string): RegExp[] {
+    const config = getAgentConfig("copilot");
+    const patterns = config?.detection?.[key as keyof typeof config.detection] as
+      | string[]
+      | undefined;
+    return (patterns ?? []).map((p: string) => new RegExp(p, "im"));
+  }
+
+  it("matches (Esc to cancel) primary pattern", () => {
+    const patterns = compilePatterns("primaryPatterns");
+    expect(patterns.some((p) => p.test("Thinking (Esc to cancel)"))).toBe(true);
+    expect(patterns.some((p) => p.test("(Esc to cancel)"))).toBe(true);
+  });
+
+  it("matches spinner with Esc to cancel", () => {
+    const patterns = compilePatterns("primaryPatterns");
+    expect(patterns.some((p) => p.test("◉ Analyzing code (Esc to cancel)"))).toBe(true);
+    expect(patterns.some((p) => p.test("∙ Reading files (Esc to cancel)"))).toBe(true);
+  });
+
+  it("matches fallback spinner patterns", () => {
+    const patterns = compilePatterns("fallbackPatterns");
+    expect(patterns.some((p) => p.test("◎ Processing"))).toBe(true);
+    expect(patterns.some((p) => p.test("∘ Working"))).toBe(true);
+  });
+
+  it("matches prompt patterns", () => {
+    const patterns = compilePatterns("promptPatterns");
+    expect(patterns.some((p) => p.test("> "))).toBe(true);
+    expect(patterns.some((p) => p.test(">"))).toBe(true);
+  });
+});
+
 describe("opencode TUI environment", () => {
   it("sets COLORFGBG to bypass termenv OSC 11 background color query", () => {
     const config = getAgentConfig("opencode");
@@ -556,6 +632,11 @@ describe("resume configuration", () => {
     const args = config?.resume?.args("abc-123");
     expect(args).toEqual(["resume", "abc-123"]);
     expect(args?.[0]).not.toMatch(/^-/);
+  });
+
+  it("copilot produces --resume= flag args (equals concatenation)", () => {
+    const config = getAgentConfig("copilot");
+    expect(config?.resume?.args("abc-123")).toEqual(["--resume=abc-123"]);
   });
 
   it("opencode produces -s flag args", () => {
@@ -743,7 +824,7 @@ describe("cursor install metadata", () => {
 });
 
 describe("all built-in agents have Windows or generic install", () => {
-  it.each(["claude", "gemini", "codex", "opencode", "cursor"])(
+  it.each(["claude", "gemini", "codex", "opencode", "cursor", "copilot"])(
     "%s has windows or generic install block",
     (agentId) => {
       const config = getAgentConfig(agentId);

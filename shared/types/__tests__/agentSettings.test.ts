@@ -24,6 +24,12 @@ describe("buildResumeCommand", () => {
     expect(buildResumeCommand("opencode", "ses_abc")).toBe("opencode -s ses_abc");
   });
 
+  it("builds copilot resume command with --resume= (equals concatenation)", () => {
+    const cmd = buildResumeCommand("copilot", "abc-def-123");
+    expect(cmd).toBe("copilot --resume=abc-def-123");
+    expect(cmd).toContain("--resume=");
+  });
+
   it("returns undefined for unknown agent", () => {
     expect(buildResumeCommand("unknown-agent", "abc")).toBeUndefined();
   });
@@ -152,6 +158,25 @@ describe("buildAgentLaunchFlags", () => {
   it("does not include --model flag when options is undefined", () => {
     const flags = buildAgentLaunchFlags({}, "claude", undefined);
     expect(flags).not.toContain("--model");
+  });
+});
+
+describe("generateAgentCommand copilot prompt injection", () => {
+  it("uses -i flag for interactive prompt", () => {
+    const cmd = generateAgentCommand("copilot", {}, "copilot", {
+      initialPrompt: "Fix the bug",
+    });
+    expect(cmd).toContain("-i");
+    expect(cmd).toContain("Fix the bug");
+  });
+
+  it("does not use -i for non-interactive mode", () => {
+    const cmd = generateAgentCommand("copilot", {}, "copilot", {
+      initialPrompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(cmd).not.toContain("-i");
+    expect(cmd).toContain("Fix the bug");
   });
 });
 
