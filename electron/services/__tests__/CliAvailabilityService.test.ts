@@ -479,7 +479,7 @@ describe("CliAvailabilityService", () => {
       const result = await service.checkAvailability();
       expect(result.copilot).toBe("installed");
 
-      const copilotLogs = consoleLogSpy.mock.calls.filter((call) =>
+      const copilotLogs = consoleLogSpy.mock.calls.filter((call: unknown[]) =>
         String(call[0]).includes("GitHub Copilot: binary found, auth check fell through")
       );
       // Must fire exactly once — guards against the Promise.race leak where
@@ -499,7 +499,7 @@ describe("CliAvailabilityService", () => {
 
       await service.checkAvailability();
 
-      const kiroLog = consoleLogSpy.mock.calls.find((call) =>
+      const kiroLog = consoleLogSpy.mock.calls.find((call: unknown[]) =>
         String(call[0]).includes("Kiro")
       );
       expect(kiroLog).toBeDefined();
@@ -517,7 +517,7 @@ describe("CliAvailabilityService", () => {
       const result = await service.checkAvailability();
       expect(result.codex).toBe("ready");
 
-      const codexLog = consoleLogSpy.mock.calls.find((call) =>
+      const codexLog = consoleLogSpy.mock.calls.find((call: unknown[]) =>
         String(call[0]).includes("Codex")
       );
       expect(codexLog).toBeUndefined();
@@ -543,7 +543,7 @@ describe("CliAvailabilityService", () => {
 
         expect(result.copilot).toBe("installed");
 
-        const copilotLogs = consoleLogSpy.mock.calls.filter((call) =>
+        const copilotLogs = consoleLogSpy.mock.calls.filter((call: unknown[]) =>
           String(call[0]).includes("GitHub Copilot: binary found, auth check fell through")
         );
         // No fallback log should fire — the timeout decided the state.
@@ -565,7 +565,7 @@ describe("CliAvailabilityService", () => {
 
       await service.checkAvailability();
 
-      const copilotLog = consoleLogSpy.mock.calls.find((call) =>
+      const copilotLog = consoleLogSpy.mock.calls.find((call: unknown[]) =>
         String(call[0]).includes("GitHub Copilot: binary found, auth check fell through")
       );
       expect(copilotLog).toBeUndefined();
