@@ -9,7 +9,7 @@ interface ThemeSelectorGroup<T> {
 
 interface ThemeSelectorCommon<T extends { id: string }> {
   selectedId: string;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, origin?: { x: number; y: number }) => void;
   renderPreview: (item: T) => ReactNode;
   renderMeta?: (item: T) => ReactNode;
   getName: (item: T) => string;
@@ -68,7 +68,7 @@ export function ThemeSelector<T extends { id: string }>({
       key={item.id}
       role="option"
       aria-selected={item.id === selectedId}
-      onClick={() => onSelect(item.id)}
+      onClick={(e) => onSelect(item.id, { x: e.clientX, y: e.clientY })}
       className={cn(
         "flex flex-col gap-1.5 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
         item.id === selectedId

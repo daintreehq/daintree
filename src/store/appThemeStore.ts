@@ -16,6 +16,13 @@ interface AppThemeState {
   recentSchemeIds: string[];
   setSelectedSchemeId: (id: string) => void;
   /**
+   * Updates Zustand state for a deliberate scheme selection (selectedSchemeId
+   * + recentSchemeIds LRU) WITHOUT touching the DOM. The caller is responsible
+   * for invoking `injectSchemeToDOM` separately — this split exists so the DOM
+   * mutation can be wrapped in a View Transition (see `runThemeReveal`).
+   */
+  commitSchemeSelection: (id: string) => void;
+  /**
    * Like setSelectedSchemeId, but does NOT update recentSchemeIds. Used for
    * OS-driven follow-system changes and startup hydration, where the change
    * does not reflect direct user intent.
@@ -60,6 +67,18 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
       ),
     }));
     injectSchemeToDOM(scheme);
+  },
+
+  commitSchemeSelection: (id) => {
+    const { customSchemes } = useAppThemeStore.getState();
+    const scheme = resolveAppTheme(id, customSchemes);
+    set((state) => ({
+      selectedSchemeId: scheme.id,
+      recentSchemeIds: [scheme.id, ...state.recentSchemeIds.filter((x) => x !== scheme.id)].slice(
+        0,
+        RECENT_SCHEMES_LIMIT
+      ),
+    }));
   },
 
   setSelectedSchemeIdSilent: (id) => {

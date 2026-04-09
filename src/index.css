@@ -1983,3 +1983,31 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     pointer-events: none !important;
   }
 }
+
+/* Circular reveal for app theme switches (issue #5073).
+   The picker/shuffle click captures the origin (clientX/Y) and animates the
+   new root snapshot via WAAPI with a clip-path: circle() expand. Here we
+   disable the UA default cross-fade so the old snapshot stays fully opaque
+   beneath the expanding new snapshot. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  z-index: 1;
+}
+
+::view-transition-new(root) {
+  z-index: 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-image-pair(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}

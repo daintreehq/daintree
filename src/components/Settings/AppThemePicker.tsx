@@ -1,10 +1,12 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type MouseEvent } from "react";
 import { AlertTriangle, Monitor, Palette, Shuffle } from "lucide-react";
 import { ThemeSelector } from "./ThemeSelector";
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
-import { useAppThemeStore } from "@/store/appThemeStore";
+import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
+import { prefersReducedMotion, runThemeReveal } from "@/lib/appThemeViewTransition";
+import { resolveAppTheme } from "@shared/theme";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { APP_THEME_PREVIEW_KEYS, getAppThemeWarnings } from "@shared/theme";
@@ -36,14 +38,6 @@ function HeroImage({ scheme, size }: { scheme: AppColorScheme; size: number }) {
     >
       <PaletteStrip scheme={scheme} />
     </div>
-  );
-}
-
-function prefersReducedMotion(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
-  return (
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
-    document.body.dataset.performanceMode === "true"
   );
 }
 
@@ -105,7 +99,7 @@ function PreferredSchemePicker({
 export function AppThemePicker() {
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
   const customSchemes = useAppThemeStore((s) => s.customSchemes);
-  const setSelectedSchemeId = useAppThemeStore((s) => s.setSelectedSchemeId);
+  const commitSchemeSelection = useAppThemeStore((s) => s.commitSchemeSelection);
   const addCustomScheme = useAppThemeStore((s) => s.addCustomScheme);
   const recentSchemeIds = useAppThemeStore((s) => s.recentSchemeIds);
   const followSystem = useAppThemeStore((s) => s.followSystem);
@@ -154,7 +148,7 @@ export function AppThemePicker() {
   );
 
   const handleSelect = useCallback(
-    async (id: string) => {
+    async (id: string, origin?: { x: number; y: number }) => {
       const prev = selectedSchemeId;
 
       if (followSystem) {
@@ -162,7 +156,12 @@ export function AppThemePicker() {
         appThemeClient.setFollowSystem(false).catch(console.error);
       }
 
-      setSelectedSchemeId(id);
+      // Resolve against a fresh store read — `customSchemes` from the
+      // component closure can be stale when `handleImport` calls
+      // `handleSelect` synchronously right after `addCustomScheme`.
+      const scheme = resolveAppTheme(id, useAppThemeStore.getState().customSchemes);
+      commitSchemeSelection(id);
+      runThemeReveal(origin ?? null, () => injectSchemeToDOM(scheme));
       setOpen(false);
 
       try {
@@ -174,8 +173,7 @@ export function AppThemePicker() {
         console.error("Failed to persist app theme:", error);
       }
 
-      const scheme = allSchemes.find((s) => s.id === id);
-      if (scheme?.heroVideo && id !== prev && !prefersReducedMotion()) {
+      if (scheme.heroVideo && id !== prev && !prefersReducedMotion()) {
         const gen = ++videoGenRef.current;
         const video = videoRef.current;
         if (video) {
@@ -193,23 +191,26 @@ export function AppThemePicker() {
         }
       }
     },
-    [setSelectedSchemeId, selectedSchemeId, allSchemes, followSystem, setFollowSystem]
+    [commitSchemeSelection, selectedSchemeId, followSystem, setFollowSystem]
   );
 
-  const handleShuffle = useCallback(() => {
-    const otherIds = allSchemes.map((s) => s.id).filter((id) => id !== selectedSchemeId);
-    if (otherIds.length === 0) return;
+  const handleShuffle = useCallback(
+    (e: MouseEvent) => {
+      const otherIds = allSchemes.map((s) => s.id).filter((id) => id !== selectedSchemeId);
+      if (otherIds.length === 0) return;
 
-    // Filter out current theme in case it was manually selected mid-cycle
-    shuffleQueueRef.current = shuffleQueueRef.current.filter((id) => id !== selectedSchemeId);
+      // Filter out current theme in case it was manually selected mid-cycle
+      shuffleQueueRef.current = shuffleQueueRef.current.filter((id) => id !== selectedSchemeId);
 
-    if (shuffleQueueRef.current.length === 0) {
-      shuffleQueueRef.current = shuffleArray(otherIds);
-    }
+      if (shuffleQueueRef.current.length === 0) {
+        shuffleQueueRef.current = shuffleArray(otherIds);
+      }
 
-    const nextId = shuffleQueueRef.current.shift()!;
-    handleSelect(nextId);
-  }, [allSchemes, selectedSchemeId, handleSelect]);
+      const nextId = shuffleQueueRef.current.shift()!;
+      handleSelect(nextId, { x: e.clientX, y: e.clientY });
+    },
+    [allSchemes, selectedSchemeId, handleSelect]
+  );
 
   const handleToggleFollowSystem = useCallback(async () => {
     const newValue = !followSystem;
