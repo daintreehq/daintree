@@ -99,12 +99,16 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         history: [...state.history, state.step],
       };
 
-    case "SELECTION_CONTINUE":
+    case "SELECTION_CONTINUE": {
+      const selectedIds = Object.keys(state.selections).filter((id) => state.selections[id]);
+      const allSelectedInstalled =
+        selectedIds.length > 0 && selectedIds.every((id) => isAgentReady(state.availability[id]));
       return {
         ...state,
-        step: { type: "cli" },
+        step: allSelectedInstalled ? { type: "complete" } : { type: "cli" },
         history: [...state.history, state.step],
       };
+    }
 
     case "CLI_CONTINUE":
       return {
