@@ -4,6 +4,7 @@ import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useAppThemeStore, injectSchemeToDOM } from "@/store/appThemeStore";
+import { useNotificationStore } from "@/store/notificationStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { resolveAppTheme } from "@shared/theme";
@@ -68,33 +69,57 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
 
   const allSchemes = useMemo(() => [...BUILT_IN_APP_SCHEMES, ...customSchemes], [customSchemes]);
 
-  const { query, results, totalResults, selectedIndex, setQuery, selectPrevious, selectNext } =
-    useSearchablePalette<AppColorScheme>({
-      items: allSchemes,
-      fuseOptions: { keys: ["name"], threshold: 0.4 },
-      paletteId: "theme",
-      getItemId: (scheme) => scheme.id,
-    });
+  const {
+    query,
+    results,
+    totalResults,
+    selectedIndex,
+    setQuery,
+    setSelectedIndex,
+    selectPrevious,
+    selectNext,
+  } = useSearchablePalette<AppColorScheme>({
+    items: allSchemes,
+    fuseOptions: { keys: ["name"], threshold: 0.4 },
+    paletteId: "theme",
+    getItemId: (scheme) => scheme.id,
+  });
 
   const originalSchemeIdRef = useRef<string | null>(null);
   const committedRef = useRef(false);
   const wasOpenRef = useRef(false);
+  // Flips false → true on the first live-preview run of an open cycle so we can
+  // skip the initial render's injection. Without this guard the live-preview
+  // effect injects `results[0]` before the seeded `selectedIndex` has settled,
+  // causing a visible "flash" to the wrong theme and, if the user hit Enter
+  // without navigating, silently committing the wrong theme.
+  const livePreviewReadyRef = useRef(false);
 
   // Capture original theme on open; revert on close if not committed.
   useEffect(() => {
     if (isOpen && !wasOpenRef.current) {
-      originalSchemeIdRef.current = useAppThemeStore.getState().selectedSchemeId;
+      const currentSchemeId = useAppThemeStore.getState().selectedSchemeId;
+      originalSchemeIdRef.current = currentSchemeId;
       committedRef.current = false;
       wasOpenRef.current = true;
+      livePreviewReadyRef.current = false;
       // Reset search state: the palette is opened via paletteStore.openPalette
       // (from the canopy:open-theme-palette event), bypassing useSearchablePalette's
-      // own open() which resets query + selectedIndex. Clearing query triggers the
-      // hook's built-in results-change effect which resets selectedIndex to 0.
+      // own open() which resets query + selectedIndex.
       setQuery("");
+      // Seed selectedIndex to the currently active theme so the palette opens
+      // on the user's current selection instead of the first built-in scheme.
+      // `results` here reflects the pre-open render, which is the full list
+      // (the palette was just closed, query was empty).
+      const currentIdx = results.findIndex((s) => s.id === currentSchemeId);
+      if (currentIdx >= 0) {
+        setSelectedIndex(currentIdx);
+      }
       return;
     }
     if (!isOpen && wasOpenRef.current) {
       wasOpenRef.current = false;
+      livePreviewReadyRef.current = false;
       const originalId = originalSchemeIdRef.current;
       if (!committedRef.current && originalId) {
         const latestCustom = useAppThemeStore.getState().customSchemes;
@@ -104,12 +129,18 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       originalSchemeIdRef.current = null;
       committedRef.current = false;
     }
-  }, [isOpen, setQuery]);
+  }, [isOpen, results, setQuery, setSelectedIndex]);
 
   // Live preview: inject the focused scheme's CSS variables directly (no store commit).
+  // Skips the first render of each open cycle so we don't flash results[0] before
+  // the seeded selectedIndex has rendered.
   useEffect(() => {
     if (!isOpen) return;
     if (results.length === 0) return;
+    if (!livePreviewReadyRef.current) {
+      livePreviewReadyRef.current = true;
+      return;
+    }
     if (selectedIndex < 0 || selectedIndex >= results.length) return;
     injectSchemeToDOM(results[selectedIndex]);
   }, [isOpen, results, selectedIndex]);
@@ -120,6 +151,12 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       setSelectedSchemeId(scheme.id);
       appThemeClient.setColorScheme(scheme.id).catch((error) => {
         console.error("Failed to persist theme selection:", error);
+        useNotificationStore.getState().addNotification({
+          type: "error",
+          priority: "low",
+          message: `Failed to save theme: ${scheme.name}`,
+          duration: 3000,
+        });
       });
       onClose();
     },
