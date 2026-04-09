@@ -25,10 +25,16 @@ export class PtyPool {
   private defaultCwd: string;
   private isDisposed = false;
   private refillInProgress = false;
+  /**
+   * Generation counter incremented on each drainAndRefill() call.
+   * Captured in createPoolEntry closures so async spawns from a prior
+   * drain cycle can be rejected instead of registering at the new cwd.
+   */
+  private drainEpoch = 0;
 
   constructor(config: PtyPoolConfig = {}) {
     this.poolSize = this.resolvePoolSize(config.poolSize);
-    this.defaultCwd = this.resolveCwd(config.defaultCwd, this.getDefaultCwd());
+    this.defaultCwd = this.resolveCwd(config.defaultCwd, os.homedir());
     this.defaultShell = getDefaultShell();
   }
 
@@ -66,6 +72,11 @@ export class PtyPool {
   private async createPoolEntry(cwd: string): Promise<void> {
     if (this.isDisposed) return;
 
+    // Capture the current drain epoch. If it changes before we finish
+    // registering this entry, a drainAndRefill() happened and this spawn
+    // is stale — kill it instead of registering at the wrong cwd.
+    const epoch = this.drainEpoch;
+
     try {
       const id = `pool-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
@@ -88,14 +99,20 @@ export class PtyPool {
           entry.dataDisposable.dispose();
           this.pool.delete(id);
         }
-        if (!this.isDisposed) {
+        // Skip refill if this entry belonged to a prior drain cycle — a
+        // newer drainAndRefill() already initiated its own refill.
+        if (!this.isDisposed && this.drainEpoch === epoch) {
           this.refillPool();
         }
       });
 
-      if (this.isDisposed) {
+      if (this.isDisposed || this.drainEpoch !== epoch) {
         dataDisposable.dispose();
-        ptyProcess.kill();
+        try {
+          ptyProcess.kill();
+        } catch {
+          // already dead
+        }
         return;
       }
 
@@ -187,13 +204,72 @@ export class PtyPool {
       });
   }
 
-  setDefaultCwd(cwd: string): void {
-    const nextCwd = this.resolveCwd(cwd, "");
-    if (!nextCwd) {
-      console.warn("[PtyPool] Ignoring empty cwd");
+  /** Returns the cwd currently used to spawn new pool entries. */
+  getDefaultCwd(): string {
+    return this.defaultCwd;
+  }
+
+  /**
+   * Drain existing pooled entries and refill at a new cwd.
+   *
+   * Callers use this when the active project changes so pooled shells
+   * are pre-positioned at the project root (via node-pty's spawn cwd,
+   * which kernel-level chdirs before exec) rather than relying on a
+   * fragile shell-level `cd` write after acquire.
+   *
+   * Race protection: an epoch counter is captured into every in-flight
+   * createPoolEntry() closure. Bumping the epoch here causes any pending
+   * spawns from the previous cycle to reject instead of registering at
+   * the stale cwd. It also suppresses the onExit→refill cascade of the
+   * entries we're killing.
+   */
+  async drainAndRefill(cwd: string): Promise<void> {
+    if (this.isDisposed) {
+      console.warn("[PtyPool] Cannot drainAndRefill - pool disposed");
       return;
     }
+
+    const nextCwd = this.resolveCwd(cwd, "");
+    if (!nextCwd) {
+      console.warn("[PtyPool] Ignoring blank cwd in drainAndRefill");
+      return;
+    }
+
+    if (nextCwd === this.defaultCwd && this.pool.size === this.poolSize) {
+      // Already at the requested cwd and fully warmed — nothing to do.
+      return;
+    }
+
+    // Bump epoch BEFORE killing so onExit handlers (and any in-flight
+    // createPoolEntry promises) see the mismatch and skip refilling.
+    this.drainEpoch++;
     this.defaultCwd = nextCwd;
+
+    const snapshot = Array.from(this.pool.values());
+    this.pool.clear();
+
+    for (const entry of snapshot) {
+      try {
+        entry.dataDisposable.dispose();
+      } catch {
+        // ignore
+      }
+      try {
+        entry.process.kill();
+      } catch (error) {
+        if (process.env.CANOPY_VERBOSE) {
+          console.warn("[PtyPool] Error killing pooled PTY during drain:", error);
+        }
+      }
+    }
+
+    if (process.env.CANOPY_VERBOSE) {
+      console.log(
+        `[PtyPool] Drained ${snapshot.length} entries; refilling at ${nextCwd} (epoch ${this.drainEpoch})`
+      );
+    }
+
+    await this.warmPool();
   }
 
   getPoolSize(): number {
@@ -223,10 +299,6 @@ export class PtyPool {
 
     this.pool.clear();
     console.log("[PtyPool] Disposed");
-  }
-
-  private getDefaultCwd(): string {
-    return os.homedir();
   }
 
   private getFilteredEnv(): Record<string, string> {

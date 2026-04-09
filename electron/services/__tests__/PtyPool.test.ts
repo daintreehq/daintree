@@ -66,19 +66,103 @@ describe("PtyPool", () => {
     pool.dispose();
   });
 
-  it("ignores blank cwd updates from setDefaultCwd", async () => {
+  it("ignores blank cwd updates from drainAndRefill", async () => {
     spawnMock.mockReturnValue(createFakeProcess(101));
     const pool = new PtyPool({ poolSize: 1, defaultCwd: "/initial" });
-
-    pool.setDefaultCwd("   ");
     await pool.warmPool();
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.any(Array),
-      expect.objectContaining({ cwd: "/initial" })
-    );
+    await pool.drainAndRefill("   ");
+
+    expect(pool.getDefaultCwd()).toBe("/initial");
+    // Only the initial warm spawn — drainAndRefill with blank cwd is a no-op.
+    expect(spawnMock).toHaveBeenCalledTimes(1);
     pool.dispose();
+  });
+
+  it("drainAndRefill repoints pool to new cwd and kills stale entries", async () => {
+    const initial = createFakeProcess(601);
+    const refilled = createFakeProcess(602);
+    spawnMock.mockReturnValueOnce(initial).mockReturnValueOnce(refilled);
+
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/home/tester" });
+    await pool.warmPool();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    await pool.drainAndRefill("/repo");
+
+    expect(pool.getDefaultCwd()).toBe("/repo");
+    expect(initial.kill).toHaveBeenCalledTimes(1);
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(spawnMock.mock.calls[1]?.[2]).toMatchObject({ cwd: "/repo" });
+    expect(pool.getPoolSize()).toBe(1);
+    pool.dispose();
+  });
+
+  it("drainAndRefill short-circuits when already warmed at requested cwd", async () => {
+    spawnMock.mockReturnValueOnce(createFakeProcess(701));
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
+    await pool.warmPool();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    await pool.drainAndRefill("/repo");
+
+    // No drain or extra spawn — pool was already at /repo with poolSize entries.
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    pool.dispose();
+  });
+
+  it("drainAndRefill suppresses onExit refill of drained entries", async () => {
+    const initial = createFakeProcess(801);
+    const refilled = createFakeProcess(802);
+    spawnMock.mockReturnValueOnce(initial).mockReturnValueOnce(refilled);
+
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/home/tester" });
+    await pool.warmPool();
+
+    await pool.drainAndRefill("/repo");
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+
+    // Simulate onExit firing on the (already killed) initial entry after drain.
+    // A naive implementation would call refillPool() → extra spawn at the new cwd.
+    // The drain epoch guard must prevent that cascade.
+    initial.emitExit(0);
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(pool.getPoolSize()).toBe(1);
+    pool.dispose();
+  });
+
+  it("sequential drainAndRefill calls converge to the last cwd", async () => {
+    const first = createFakeProcess(901);
+    const second = createFakeProcess(902);
+    const third = createFakeProcess(903);
+    spawnMock
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+      .mockReturnValueOnce(third);
+
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/home/tester" });
+    await pool.warmPool();
+
+    await pool.drainAndRefill("/repo-a");
+    await pool.drainAndRefill("/repo-b");
+
+    expect(pool.getDefaultCwd()).toBe("/repo-b");
+    expect(spawnMock).toHaveBeenCalledTimes(3);
+    expect(spawnMock.mock.calls[2]?.[2]).toMatchObject({ cwd: "/repo-b" });
+    expect(first.kill).toHaveBeenCalled();
+    expect(second.kill).toHaveBeenCalled();
+    pool.dispose();
+  });
+
+  it("drainAndRefill is a no-op after dispose", async () => {
+    spawnMock.mockReturnValueOnce(createFakeProcess(1001));
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/repo" });
+    await pool.warmPool();
+
+    pool.dispose();
+    await expect(pool.drainAndRefill("/another")).resolves.toBeUndefined();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
   it("drops dead pooled terminals on acquire and refills the pool", async () => {

@@ -142,7 +142,7 @@ export class PtyClient extends EventEmitter {
   private activeProjectId: string | null = null;
   private windowProjectContexts = new Map<
     number,
-    { projectId: string | null; mode: "active" | "switch" }
+    { projectId: string | null; projectPath?: string; mode: "active" | "switch" }
   >();
   private shouldResyncProjectContext = false;
   private pendingMessagePorts = new Map<number, MessagePortMain>();
@@ -803,9 +803,19 @@ export class PtyClient extends EventEmitter {
       const ctx = this.windowProjectContexts.get(windowId);
       if (ctx) {
         if (ctx.mode === "switch" && ctx.projectId !== null) {
-          this.send({ type: "project-switch", windowId, projectId: ctx.projectId });
+          this.send({
+            type: "project-switch",
+            windowId,
+            projectId: ctx.projectId,
+            ...(ctx.projectPath ? { projectPath: ctx.projectPath } : {}),
+          });
         } else {
-          this.send({ type: "set-active-project", windowId, projectId: ctx.projectId });
+          this.send({
+            type: "set-active-project",
+            windowId,
+            projectId: ctx.projectId,
+            ...(ctx.projectPath ? { projectPath: ctx.projectPath } : {}),
+          });
         }
       }
     } catch (error) {
@@ -974,35 +984,55 @@ export class PtyClient extends EventEmitter {
 
     for (const [windowId, ctx] of this.windowProjectContexts) {
       if (ctx.mode === "switch" && ctx.projectId !== null) {
-        this.send({ type: "project-switch", windowId, projectId: ctx.projectId });
+        this.send({
+          type: "project-switch",
+          windowId,
+          projectId: ctx.projectId,
+          ...(ctx.projectPath ? { projectPath: ctx.projectPath } : {}),
+        });
       } else {
-        this.send({ type: "set-active-project", windowId, projectId: ctx.projectId });
+        this.send({
+          type: "set-active-project",
+          windowId,
+          projectId: ctx.projectId,
+          ...(ctx.projectPath ? { projectPath: ctx.projectPath } : {}),
+        });
       }
     }
   }
 
-  setActiveProject(windowId: number, projectId: string | null): void {
+  setActiveProject(windowId: number, projectId: string | null, projectPath?: string): void {
     this.activeProjectId = projectId;
-    this.windowProjectContexts.set(windowId, { projectId, mode: "active" });
+    this.windowProjectContexts.set(windowId, { projectId, projectPath, mode: "active" });
 
     if (!this.child) {
       this.shouldResyncProjectContext = true;
       return;
     }
 
-    this.send({ type: "set-active-project", windowId, projectId });
+    this.send({
+      type: "set-active-project",
+      windowId,
+      projectId,
+      ...(projectPath ? { projectPath } : {}),
+    });
   }
 
-  onProjectSwitch(windowId: number, projectId: string): void {
+  onProjectSwitch(windowId: number, projectId: string, projectPath?: string): void {
     this.activeProjectId = projectId;
-    this.windowProjectContexts.set(windowId, { projectId, mode: "switch" });
+    this.windowProjectContexts.set(windowId, { projectId, projectPath, mode: "switch" });
 
     if (!this.child) {
       this.shouldResyncProjectContext = true;
       return;
     }
 
-    this.send({ type: "project-switch", windowId, projectId });
+    this.send({
+      type: "project-switch",
+      windowId,
+      projectId,
+      ...(projectPath ? { projectPath } : {}),
+    });
   }
 
   async gracefulKill(id: string): Promise<string | null> {

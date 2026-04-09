@@ -843,12 +843,22 @@ port.on("message", async (rawMsg: any) => {
       case "set-active-project": {
         windowProjectMap.set(msg.windowId, msg.projectId);
         recomputeActivityTiers();
+        if (msg.projectPath && ptyPool) {
+          ptyPool.drainAndRefill(msg.projectPath).catch((err) => {
+            console.error("[PtyHost] drainAndRefill failed:", err);
+          });
+        }
         break;
       }
 
       case "project-switch": {
         windowProjectMap.set(msg.windowId, msg.projectId);
         recomputeActivityTiers();
+        if (msg.projectPath && ptyPool) {
+          ptyPool.drainAndRefill(msg.projectPath).catch((err) => {
+            console.error("[PtyHost] drainAndRefill failed:", err);
+          });
+        }
         break;
       }
 

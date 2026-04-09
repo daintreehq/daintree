@@ -271,7 +271,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
         const windowId = senderWindow?.id ?? deps.mainWindow?.id;
         if (windowId !== undefined) {
           if (deps.ptyClient) {
-            deps.ptyClient.onProjectSwitch(windowId, projectId);
+            deps.ptyClient.onProjectSwitch(windowId, projectId, project.path);
           }
 
           // Distribute PTY MessagePort to the switched-to view
@@ -556,7 +556,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
         const windowId = senderWindow?.id ?? deps.mainWindow?.id;
         if (windowId !== undefined) {
           if (deps.ptyClient) {
-            deps.ptyClient.onProjectSwitch(windowId, projectId);
+            deps.ptyClient.onProjectSwitch(windowId, projectId, project.path);
           }
 
           const win = senderWindow ?? deps.mainWindow;

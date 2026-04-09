@@ -117,6 +117,20 @@ describe("PtyClient multi-port support", () => {
     });
   });
 
+  it("includes projectPath with set-active-project when provided", () => {
+    const client = createClient();
+    mockChild.postMessage.mockClear();
+
+    client.setActiveProject(1, "project-a", "/projects/a");
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith({
+      type: "set-active-project",
+      windowId: 1,
+      projectId: "project-a",
+      projectPath: "/projects/a",
+    });
+  });
+
   it("sends windowId with project-switch", () => {
     const client = createClient();
     mockChild.postMessage.mockClear();
@@ -127,6 +141,20 @@ describe("PtyClient multi-port support", () => {
       type: "project-switch",
       windowId: 1,
       projectId: "project-b",
+    });
+  });
+
+  it("includes projectPath with project-switch when provided", () => {
+    const client = createClient();
+    mockChild.postMessage.mockClear();
+
+    client.onProjectSwitch(1, "project-b", "/projects/b");
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith({
+      type: "project-switch",
+      windowId: 1,
+      projectId: "project-b",
+      projectPath: "/projects/b",
     });
   });
 
@@ -144,8 +172,8 @@ describe("PtyClient multi-port support", () => {
 
   it("replays per-window project contexts after host restart", () => {
     const client = createClient();
-    client.setActiveProject(1, "project-a");
-    client.onProjectSwitch(2, "project-b");
+    client.setActiveProject(1, "project-a", "/projects/a");
+    client.onProjectSwitch(2, "project-b", "/projects/b");
 
     // Simulate host crash and restart
     const newChild = Object.assign(new EventEmitter(), {
@@ -180,12 +208,14 @@ describe("PtyClient multi-port support", () => {
       type: "set-active-project",
       windowId: 1,
       projectId: "project-a",
+      projectPath: "/projects/a",
     });
     expect(switchCalls.length).toBe(1);
     expect(switchCalls[0][0]).toMatchObject({
       type: "project-switch",
       windowId: 2,
       projectId: "project-b",
+      projectPath: "/projects/b",
     });
   });
 

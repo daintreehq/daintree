@@ -679,7 +679,10 @@ export async function setupWindowServices(
     createAndDistributePorts(win, ctx);
 
     const currentProjectId = projectStore.getCurrentProjectId();
-    ptyClient!.setActiveProject(win.id, currentProjectId);
+    const currentProjectPath = currentProjectId
+      ? projectStore.getProjectById(currentProjectId)?.path
+      : undefined;
+    ptyClient!.setActiveProject(win.id, currentProjectId, currentProjectPath);
 
     const availabilityStore = initializeAgentAvailabilityStore();
     const agentRouter = initializeAgentRouter(availabilityStore);

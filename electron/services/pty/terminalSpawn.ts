@@ -124,27 +124,17 @@ export function acquirePtyProcess(
   }
 
   if (pooledPty) {
-    if (process.platform === "win32") {
-      const shellLower = shell.toLowerCase();
+    // Pool entries are pre-spawned with the project cwd via node-pty's
+    // `cwd` option (kernel-level chdir before exec), so no shell-level
+    // `cd` write is needed and user `cd` overrides (zoxide, oh-my-zsh)
+    // cannot interfere. See issue #5097.
+    if (process.platform !== "win32") {
       try {
-        if (shellLower.includes("powershell") || shellLower.includes("pwsh")) {
-          pooledPty.write(`Set-Location "${options.cwd.replace(/"/g, '""')}"\r`);
-        } else {
-          pooledPty.write(`cd /d "${options.cwd.replace(/"/g, '\\"')}"\r`);
-        }
+        // Clear any pooled-shell init noise so the user sees a clean prompt.
+        // \033[H cursor home, \033[2J clear screen, \033[3J clear scrollback.
+        pooledPty.write(`printf '\\033[H\\033[2J\\033[3J'\r`);
       } catch (error) {
-        onWriteError(error, { operation: "write(cwd)" });
-      }
-    } else {
-      try {
-        // cd to project dir then clear the screen + scrollback so the user
-        // doesn't see the cd command or any pooled-shell init noise.
-        // \033[H  = cursor home, \033[2J = clear screen, \033[3J = clear scrollback
-        pooledPty.write(
-          `cd "${options.cwd.replace(/"/g, '\\"')}" && printf '\\033[H\\033[2J\\033[3J'\r`
-        );
-      } catch (error) {
-        onWriteError(error, { operation: "write(cwd)" });
+        onWriteError(error, { operation: "write(clear)" });
       }
     }
 

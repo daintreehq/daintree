@@ -68,7 +68,7 @@ export class ProjectSwitchService {
       await this.cleanupWorktreeService();
       const cleanupPromise = withPerformanceSpan(
         PERF_MARKS.PROJECT_SWITCH_CLEANUP,
-        () => this.cleanupSupportingServices(projectId, previousProjectId ?? null),
+        () => this.cleanupSupportingServices(projectId, previousProjectId ?? null, project.path),
         { projectId }
       );
 
@@ -124,7 +124,12 @@ export class ProjectSwitchService {
       console.error("[ProjectSwitch] Project switch failed, rolling back:", error);
       try {
         if (previousProjectId) {
-          this.deps.ptyClient!.onProjectSwitch(this.windowId!, previousProjectId);
+          const previousProject = projectStore.getProjectById(previousProjectId);
+          this.deps.ptyClient!.onProjectSwitch(
+            this.windowId!,
+            previousProjectId,
+            previousProject?.path
+          );
         } else {
           this.deps.ptyClient!.setActiveProject(this.windowId!, null);
         }
@@ -181,13 +186,14 @@ export class ProjectSwitchService {
 
   private async cleanupSupportingServices(
     projectId: string,
-    _previousProjectId: string | null
+    _previousProjectId: string | null,
+    projectPath: string
   ): Promise<void> {
     console.log("[ProjectSwitch] Cleaning up previous project state...");
 
     const safeCall = (fn: () => unknown): Promise<unknown> => Promise.resolve().then(fn);
     const cleanupResults = await Promise.allSettled([
-      safeCall(() => this.deps.ptyClient!.onProjectSwitch(this.windowId!, projectId)),
+      safeCall(() => this.deps.ptyClient!.onProjectSwitch(this.windowId!, projectId, projectPath)),
       safeCall(() => logBuffer.onProjectSwitch()),
       this.deps.eventBuffer?.onProjectSwitch
         ? safeCall(() => this.deps.eventBuffer!.onProjectSwitch())

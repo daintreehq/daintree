@@ -51,8 +51,20 @@ export type PtyHostRequest =
   | { type: "restore"; id: string }
   | { type: "set-activity-tier"; id: string; tier: PtyHostActivityTier }
   | { type: "wake-terminal"; id: string; requestId: string }
-  | { type: "set-active-project"; windowId: number; projectId: string | null }
-  | { type: "project-switch"; windowId: number; projectId: string }
+  | {
+      type: "set-active-project";
+      windowId: number;
+      projectId: string | null;
+      /** Filesystem path of the project; used to warm the PTY pool at the project root. */
+      projectPath?: string;
+    }
+  | {
+      type: "project-switch";
+      windowId: number;
+      projectId: string;
+      /** Filesystem path of the project; used to warm the PTY pool at the project root. */
+      projectPath?: string;
+    }
   | { type: "disconnect-port"; windowId: number }
   | { type: "kill-by-project"; projectId: string; requestId: string }
   | { type: "get-project-stats"; projectId: string; requestId: string }
