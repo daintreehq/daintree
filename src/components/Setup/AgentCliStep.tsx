@@ -16,7 +16,7 @@ import { systemClient } from "@/clients";
 import { useAgentSettingsStore } from "@/store";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { CopyableCommand } from "./InstallBlock";
-import { AGENT_DESCRIPTIONS } from "./AgentSetupWizard";
+import { AGENT_DESCRIPTIONS } from "@/config/agents";
 import type { CliAvailability } from "@shared/types";
 import { isAgentInstalled } from "@shared/utils/agentAvailability";
 

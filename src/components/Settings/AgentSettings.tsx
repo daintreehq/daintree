@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { cn } from "@/lib/utils";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
 import {
   useAgentSettingsStore,
@@ -13,15 +12,14 @@ import {
   getAgentSettingsEntry,
   DEFAULT_DANGEROUS_ARGS,
 } from "@shared/types";
-import { RotateCcw, ExternalLink, RefreshCw, Copy, Check } from "lucide-react";
+import { RotateCcw, ExternalLink } from "lucide-react";
 import { CanopyAgentIcon } from "@/components/icons";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
 import { actionService } from "@/services/ActionService";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { AgentHelpOutput } from "./AgentHelpOutput";
-import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
+import { AgentCard, AgentInstallSection } from "@/components/agents/AgentCard";
 import type { DefaultAgentId } from "@/store/agentPreferencesStore";
 
 const GENERAL_SUBTAB_ID = "general";
@@ -55,10 +53,6 @@ export function AgentSettings({
   const initializeCliAvailability = useCliAvailabilityStore((state) => state.initialize);
   const refreshCliAvailability = useCliAvailabilityStore((state) => state.refresh);
 
-  const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
-  const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const isMountedRef = useRef(true);
-
   const [loadTimedOut, setLoadTimedOut] = useState(false);
 
   useEffect(() => {
@@ -79,16 +73,6 @@ export function AgentSettings({
     void migrateAgentSelection(cliAvailability);
   }, [settings, isCliInitialized, isCliLoading, cliAvailability]);
 
-  useEffect(() => {
-    isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-      if (copyTimeoutRef.current) {
-        clearTimeout(copyTimeoutRef.current);
-      }
-    };
-  }, []);
-
   const handleRefreshCliAvailability = useCallback(async () => {
     if (isRefreshingCli) return;
     try {
@@ -97,28 +81,6 @@ export function AgentSettings({
       console.error("[AgentSettings] Failed to refresh CLI availability:", error);
     }
   }, [isRefreshingCli, refreshCliAvailability]);
-
-  const handleCopyCommand = useCallback(async (command: string) => {
-    try {
-      await navigator.clipboard.writeText(command);
-      if (!isMountedRef.current) return;
-
-      setCopiedCommand(command);
-
-      if (copyTimeoutRef.current) {
-        clearTimeout(copyTimeoutRef.current);
-      }
-
-      copyTimeoutRef.current = setTimeout(() => {
-        if (isMountedRef.current) {
-          setCopiedCommand(null);
-        }
-        copyTimeoutRef.current = null;
-      }, 2000);
-    } catch (error) {
-      console.error("Failed to copy command:", error);
-    }
-  }, []);
 
   const defaultAgent = useAgentPreferencesStore((state) => state.defaultAgent);
   const setDefaultAgent = useAgentPreferencesStore((state) => state.setDefaultAgent);
@@ -273,21 +235,11 @@ export function AgentSettings({
 
         {/* Agent Configuration Card */}
         {!isGeneralActive && activeAgent && agentOptions.some((a) => a.id === activeAgent.id) && (
-          <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4">
-            {/* Header with agent info */}
-            <div className="flex items-center justify-between pb-3 border-b border-canopy-border">
-              <div className="flex items-center gap-3">
-                {activeAgent.Icon && <activeAgent.Icon size={24} brandColor={activeAgent.color} />}
-                <div>
-                  <h4 className="text-sm font-medium text-canopy-text">
-                    {activeAgent.name} Settings
-                  </h4>
-                  <p className="text-xs text-canopy-text/50 select-text">
-                    Configure how {activeAgent.name.toLowerCase()} runs in terminals
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
+          <AgentCard
+            mode="management"
+            agentId={activeAgent.id}
+            actions={
+              <>
                 {activeAgent.usageUrl && (
                   <Button
                     size="sm"
@@ -326,9 +278,9 @@ export function AgentSettings({
                   <RotateCcw size={14} />
                   Reset
                 </Button>
-              </div>
-            </div>
-
+              </>
+            }
+          >
             {/* Enable Agent Toggle */}
             <div id="agents-enable">
               <SettingsSwitchCard
@@ -478,199 +430,16 @@ export function AgentSettings({
             />
 
             {/* Installation Section */}
-            {(() => {
-              const agentConfig = getAgentConfig(activeAgent.id);
-              const isCliAvailable = cliAvailability[activeAgent.id];
-              const isLoading = isCliLoading;
-              const installBlocks = agentConfig ? getInstallBlocksForCurrentOS(agentConfig) : null;
-              const hasInstallConfig = agentConfig?.install;
-
-              if (isCliAvailable === "ready") {
-                return null;
-              }
-
-              if (isLoading) {
-                return (
-                  <div className="pt-4 border-t border-canopy-border">
-                    <div className="text-xs text-canopy-text/40">Checking CLI availability...</div>
-                  </div>
-                );
-              }
-
-              return (
-                <div
-                  id="agents-installation"
-                  className="space-y-3 pt-4 border-t border-canopy-border"
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h5 className="text-sm font-medium text-canopy-text">
-                        {isCliAvailable === "installed" ? "Authentication" : "Installation"}
-                      </h5>
-                      <p className="text-xs text-canopy-text/50 select-text">
-                        {isCliAvailable === "installed"
-                          ? `${activeAgent.name} CLI found but not authenticated`
-                          : `${activeAgent.name} CLI not found`}
-                      </p>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void handleRefreshCliAvailability()}
-                      disabled={isRefreshingCli}
-                      className="text-canopy-text/50 hover:text-canopy-text"
-                    >
-                      <RefreshCw
-                        size={14}
-                        className={cn("mr-1.5", isRefreshingCli && "animate-spin")}
-                      />
-                      Re-check
-                    </Button>
-                  </div>
-
-                  {cliError && (
-                    <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
-                      <p className="text-xs text-status-error">
-                        Re-check failed. Try again or restart the app.
-                      </p>
-                    </div>
-                  )}
-
-                  {installBlocks && installBlocks.length > 0 ? (
-                    <div className="space-y-3">
-                      {installBlocks.map((block, blockIndex) => (
-                        <div
-                          key={blockIndex}
-                          className="rounded-[var(--radius-md)] border border-canopy-border bg-surface p-3 space-y-2"
-                        >
-                          {block.label && (
-                            <div className="text-xs font-medium text-canopy-text/70">
-                              {block.label}
-                            </div>
-                          )}
-
-                          {block.steps && block.steps.length > 0 && (
-                            <ul className="space-y-1 text-xs text-canopy-text/60">
-                              {block.steps.map((step, stepIndex) => (
-                                <li key={stepIndex} className="flex gap-2">
-                                  <span className="text-canopy-text/40">{stepIndex + 1}.</span>
-                                  <span>{step}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-
-                          {block.commands && block.commands.length > 0 && (
-                            <div className="space-y-1.5">
-                              {block.commands.map((command, cmdIndex) => (
-                                <div
-                                  key={cmdIndex}
-                                  className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
-                                >
-                                  <code className="flex-1 text-xs font-mono text-canopy-text">
-                                    {command}
-                                  </code>
-                                  <TooltipProvider>
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <button
-                                          onClick={() => void handleCopyCommand(command)}
-                                          className="shrink-0 p-1 hover:bg-tint/5 rounded transition-colors"
-                                          aria-label="Copy command"
-                                        >
-                                          {copiedCommand === command ? (
-                                            <Check size={14} className="text-canopy-accent" />
-                                          ) : (
-                                            <Copy size={14} className="text-canopy-text/40" />
-                                          )}
-                                        </button>
-                                      </TooltipTrigger>
-                                      <TooltipContent side="bottom">Copy command</TooltipContent>
-                                    </Tooltip>
-                                  </TooltipProvider>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          {block.notes && block.notes.length > 0 && (
-                            <div className="space-y-1 text-xs text-canopy-text/40">
-                              {block.notes.map((note, noteIndex) => (
-                                <p key={noteIndex}>{note}</p>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-
-                      {agentConfig?.install?.troubleshooting &&
-                        agentConfig.install.troubleshooting.length > 0 && (
-                          <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-                            <div className="text-xs font-medium text-status-warning mb-1">
-                              Troubleshooting
-                            </div>
-                            <ul className="space-y-0.5 text-xs text-canopy-text/60">
-                              {agentConfig.install.troubleshooting.map((tip, tipIndex) => (
-                                <li key={tipIndex}>• {tip}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-
-                      <div className="px-3 py-2 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border/50">
-                        <p className="text-xs text-canopy-text/40 select-text">
-                          ⚠️ Review commands before running them in your terminal
-                        </p>
-                      </div>
-                    </div>
-                  ) : hasInstallConfig?.docsUrl ? (
-                    <div className="px-4 py-6 rounded-[var(--radius-md)] border border-canopy-border bg-surface text-center">
-                      <p className="text-xs text-canopy-text/60 mb-3">
-                        No OS-specific install instructions available
-                      </p>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          const url = agentConfig?.install?.docsUrl;
-                          if (url) {
-                            void window.electron.system.openExternal(url);
-                          }
-                        }}
-                        className="text-canopy-accent hover:text-canopy-accent/80"
-                      >
-                        <ExternalLink size={14} />
-                        Open Install Docs
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="px-4 py-6 rounded-[var(--radius-md)] border border-canopy-border bg-surface text-center">
-                      <p className="text-xs text-canopy-text/60">
-                        No installation instructions configured for this agent
-                      </p>
-                    </div>
-                  )}
-
-                  {hasInstallConfig?.docsUrl && installBlocks && installBlocks.length > 0 && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        const url = agentConfig?.install?.docsUrl;
-                        if (url) {
-                          void window.electron.system.openExternal(url);
-                        }
-                      }}
-                      className="w-full text-canopy-text/50 hover:text-canopy-text"
-                    >
-                      <ExternalLink size={14} />
-                      View Official Documentation
-                    </Button>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
+            <AgentInstallSection
+              agentId={activeAgent.id}
+              agentName={activeAgent.name}
+              availability={cliAvailability[activeAgent.id]}
+              isCliLoading={isCliLoading}
+              isRefreshingCli={isRefreshingCli}
+              cliError={cliError}
+              onRefresh={() => void handleRefreshCliAvailability()}
+            />
+          </AgentCard>
         )}
       </div>
     </div>

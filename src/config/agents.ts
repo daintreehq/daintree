@@ -42,3 +42,12 @@ export function isRegisteredAgent(agentId: string): boolean {
 export function getAgentIds(): string[] {
   return getEffectiveAgentIds();
 }
+
+export const AGENT_DESCRIPTIONS: Record<string, string> = {
+  claude: "Deep refactoring, architecture, and complex reasoning",
+  gemini: "Quick exploration and broad knowledge lookup",
+  codex: "Careful, methodical runs with sandboxed execution",
+  opencode: "Provider-agnostic, open-source flexibility",
+  cursor: "Cursor's agentic coding assistant",
+  kiro: "Spec-driven development with autonomous execution",
+};
