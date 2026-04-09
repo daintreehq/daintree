@@ -53,6 +53,7 @@ interface IssueBadgeProps {
   onOpen?: () => void;
   isHeadline?: boolean;
   isActive?: boolean;
+  underlineOnHover?: boolean;
 }
 
 const IssueBadge = memo(function IssueBadge({
@@ -62,6 +63,7 @@ const IssueBadge = memo(function IssueBadge({
   onOpen,
   isHeadline,
   isActive,
+  underlineOnHover,
 }: IssueBadgeProps) {
   const [isOpen, setIsOpen] = useState(false);
   const { data, loading, error, fetchTooltip, reset } = useIssueTooltip(worktreePath, issueNumber);
@@ -103,7 +105,8 @@ const IssueBadge = memo(function IssueBadge({
           />
           <span
             className={cn(
-              "truncate flex-1 min-w-0 hover:underline",
+              "truncate flex-1 min-w-0",
+              underlineOnHover && "hover:underline",
               isHeadline
                 ? isActive
                   ? "text-text-primary font-medium"
@@ -137,6 +140,7 @@ interface PRBadgeProps {
   worktreePath: string;
   onOpen?: () => void;
   isActive?: boolean;
+  underlineOnHover?: boolean;
 }
 
 const PRBadge = memo(function PRBadge({
@@ -146,6 +150,7 @@ const PRBadge = memo(function PRBadge({
   worktreePath,
   onOpen,
   isActive,
+  underlineOnHover,
 }: PRBadgeProps) {
   const [isOpen, setIsOpen] = useState(false);
   const { data, loading, error, fetchTooltip, reset } = usePRTooltip(worktreePath, prNumber);
@@ -187,7 +192,9 @@ const PRBadge = memo(function PRBadge({
             <CornerDownRight className="w-3 h-3 text-text-muted shrink-0" aria-hidden="true" />
           )}
           <GitPullRequest className={cn("w-3 h-3 shrink-0", prStateColor)} aria-hidden="true" />
-          <span className={cn("font-mono hover:underline", prStateColor)}>#{prNumber}</span>
+          <span className={cn("font-mono", underlineOnHover && "hover:underline", prStateColor)}>
+            #{prNumber}
+          </span>
         </button>
       </TooltipTrigger>
       <TooltipContent side="right" align="start" className="p-3">
@@ -208,6 +215,7 @@ const PRBadge = memo(function PRBadge({
 export interface WorktreeHeaderProps {
   worktree: WorktreeState;
   isActive: boolean;
+  variant?: "sidebar" | "grid";
   isMuted?: boolean;
   isMainWorktree: boolean;
   isMainOnStandardBranch?: boolean;
@@ -274,6 +282,7 @@ export interface WorktreeHeaderProps {
 export function WorktreeHeader({
   worktree,
   isActive,
+  variant = "sidebar",
   isMuted,
   isMainWorktree,
   isMainOnStandardBranch,
@@ -303,6 +312,10 @@ export function WorktreeHeader({
 
   const hasIssueTitle = !!(worktree.issueNumber && worktree.issueTitle);
   const hasPlanFile = Boolean(worktree.hasPlanFile);
+  // In sidebar variant, badges only become actionable when the card is selected,
+  // so the hover underline is misleading on unselected cards. Grid variant has no
+  // such two-step ambiguity, so preserve its always-on hover affordance.
+  const underlineOnHover = variant !== "sidebar" || isActive;
   const hasUpstreamDelta =
     (worktree.aheadCount !== undefined && worktree.aheadCount > 0) ||
     (worktree.behindCount !== undefined && worktree.behindCount > 0);
@@ -345,6 +358,7 @@ export function WorktreeHeader({
               onOpen={badges.onOpenIssue}
               isHeadline
               isActive={isActive}
+              underlineOnHover={underlineOnHover}
             />
           ) : isMainStandardLayout ? (
             <span
@@ -627,6 +641,7 @@ export function WorktreeHeader({
                 worktreePath={worktree.path}
                 onOpen={badges.onOpenIssue}
                 isActive={isActive}
+                underlineOnHover={underlineOnHover}
               />
             )}
             {worktree.prNumber && worktree.prState !== "closed" && (
@@ -637,6 +652,7 @@ export function WorktreeHeader({
                 worktreePath={worktree.path}
                 onOpen={badges.onOpenPR}
                 isActive={isActive}
+                underlineOnHover={underlineOnHover}
               />
             )}
             {hasUpstreamDelta && (
@@ -692,7 +708,9 @@ export function WorktreeHeader({
                 aria-label="View agent plan file"
               >
                 <FileText className="w-3 h-3 shrink-0 text-canopy-accent/70" aria-hidden="true" />
-                <span className="font-mono hover:underline">{worktree.planFilePath ?? "Plan"}</span>
+                <span className={cn("font-mono", underlineOnHover && "hover:underline")}>
+                  {worktree.planFilePath ?? "Plan"}
+                </span>
               </button>
             )}
           </div>

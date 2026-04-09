@@ -659,6 +659,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               <WorktreeHeader
                 worktree={worktree}
                 isActive={isActive}
+                variant={variant}
                 isMuted={isMuted}
                 isMainWorktree={isMainWorktree}
                 isMainOnStandardBranch={isMainOnStandardBranch}

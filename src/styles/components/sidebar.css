@@ -1,6 +1,8 @@
 .sidebar-worktree-card[data-active="true"] {
-  background: var(--theme-overlay-selected);
-  box-shadow: var(--theme-shadow-ambient);
+  background: var(--theme-overlay-active);
+  box-shadow:
+    inset 2px 0 0 var(--theme-accent-primary),
+    var(--theme-shadow-ambient);
 }
 
 .sidebar-worktree-card[data-hoverable="true"]:hover,
