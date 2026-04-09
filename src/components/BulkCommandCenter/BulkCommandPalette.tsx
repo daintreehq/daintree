@@ -486,15 +486,7 @@ function BulkCommandPaletteInner() {
     } else {
       handlePreview();
     }
-  }, [
-    mode,
-    keystrokePreset,
-    pendingDestructive,
-    selectedIds,
-    resolveTargetIds,
-    closePalette,
-    handlePreview,
-  ]);
+  }, [mode, keystrokePreset, pendingDestructive, resolveTargetIds, closePalette, handlePreview]);
 
   const canSend = useMemo(() => {
     if (selectedIds.size === 0 || isSending) return false;
