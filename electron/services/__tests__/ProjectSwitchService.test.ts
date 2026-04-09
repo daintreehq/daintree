@@ -181,7 +181,11 @@ describe("ProjectSwitchService", () => {
         activeWorktreeId: "wt-old",
       })
     );
-    expect(ptyClient.onProjectSwitch).toHaveBeenCalledWith(MOCK_WINDOW_ID, "project-new");
+    expect(ptyClient.onProjectSwitch).toHaveBeenCalledWith(
+      MOCK_WINDOW_ID,
+      "project-new",
+      "/tmp/new"
+    );
     expect(worktreeService.loadProject).toHaveBeenCalledWith("/tmp/new", MOCK_WINDOW_ID);
     // onProjectSwitch is no longer called — blue-green swap in loadProject handles release
     expect(worktreeService.onProjectSwitch).not.toHaveBeenCalled();
