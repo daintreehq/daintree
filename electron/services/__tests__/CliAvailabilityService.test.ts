@@ -48,8 +48,8 @@ describe("CliAvailabilityService", () => {
         expect(state).toBe("installed");
       }
 
-      // Should have called execFileSync 6 times (once for each CLI)
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(6);
+      // Should have called execFileSync 7 times (once for each CLI)
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(7);
 
       // Verify stdio: "ignore" is passed to avoid hanging on TTY
       expect(mockedExecFileSync).toHaveBeenCalledWith(
@@ -90,6 +90,7 @@ describe("CliAvailabilityService", () => {
         opencode: "missing",
         cursor: "missing",
         kiro: "missing",
+        copilot: "missing",
       });
     });
 
@@ -288,7 +289,7 @@ describe("CliAvailabilityService", () => {
       expect(refreshed.codex).toBe("missing");
 
       expect(service.getAvailability()).toEqual(refreshed);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(6);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(7);
     });
 
     it("works on cold start before initial check", async () => {
@@ -317,13 +318,14 @@ describe("CliAvailabilityService", () => {
 
       await service.checkAvailability();
 
-      expect(executionOrder).toHaveLength(6);
+      expect(executionOrder).toHaveLength(7);
       expect(executionOrder).toContain("claude");
       expect(executionOrder).toContain("gemini");
       expect(executionOrder).toContain("codex");
       expect(executionOrder).toContain("opencode");
       expect(executionOrder).toContain("cursor-agent");
       expect(executionOrder).toContain("kiro-cli");
+      expect(executionOrder).toContain("copilot");
     });
 
     it("deduplicates concurrent checkAvailability calls", async () => {
@@ -337,7 +339,7 @@ describe("CliAvailabilityService", () => {
 
       expect(result1).toEqual(result2);
       expect(result2).toEqual(result3);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(6);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(7);
     });
 
     it("concurrent refresh calls each trigger a new check", async () => {
@@ -346,19 +348,19 @@ describe("CliAvailabilityService", () => {
       const [result1, result2] = await Promise.all([service.refresh(), service.refresh()]);
 
       expect(result1).toEqual(result2);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(12);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(14);
     });
 
     it("allows sequential checks after first completes", async () => {
       mockedExecFileSync.mockImplementation(() => Buffer.from(""));
 
       await service.checkAvailability();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(6);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(7);
 
       vi.clearAllMocks();
 
       await service.refresh();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(6);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(7);
     });
   });
 
