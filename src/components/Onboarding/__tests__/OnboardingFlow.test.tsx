@@ -58,10 +58,10 @@ vi.stubGlobal("window", {
 });
 
 const { isCanopyEnvEnabledMock } = vi.hoisted(() => ({
-  isCanopyEnvEnabledMock: vi.fn(() => false),
+  isCanopyEnvEnabledMock: vi.fn((_key: string): boolean => false),
 }));
 vi.mock("@/utils/env", () => ({
-  isCanopyEnvEnabled: (...args: unknown[]) => isCanopyEnvEnabledMock(...(args as [never])),
+  isCanopyEnvEnabled: (key: string) => isCanopyEnvEnabledMock(key),
 }));
 
 vi.mock("@/components/Setup/AgentSetupWizard", () => ({
