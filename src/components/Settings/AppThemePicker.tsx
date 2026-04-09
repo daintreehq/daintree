@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type FormEvent,
   type MouseEvent,
 } from "react";
 import { AlertTriangle, Monitor, Palette, Shuffle } from "lucide-react";
@@ -177,9 +178,9 @@ export function AppThemePicker() {
   }, [accentColorOverride, selectedScheme]);
 
   const handleAccentInput = useCallback(
-    (e: ChangeEvent<HTMLInputElement>) => {
+    (e: FormEvent<HTMLInputElement>) => {
       // Live preview during drag — Zustand only, no IPC write spam.
-      setAccentColorOverride(e.target.value);
+      setAccentColorOverride(e.currentTarget.value);
     },
     [setAccentColorOverride]
   );
