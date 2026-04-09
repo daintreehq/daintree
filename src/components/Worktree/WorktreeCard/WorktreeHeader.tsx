@@ -103,7 +103,8 @@ const IssueBadge = memo(function IssueBadge({
           />
           <span
             className={cn(
-              "truncate flex-1 min-w-0 hover:underline",
+              "truncate flex-1 min-w-0",
+              isActive && "hover:underline",
               isHeadline
                 ? isActive
                   ? "text-text-primary font-medium"
@@ -187,7 +188,9 @@ const PRBadge = memo(function PRBadge({
             <CornerDownRight className="w-3 h-3 text-text-muted shrink-0" aria-hidden="true" />
           )}
           <GitPullRequest className={cn("w-3 h-3 shrink-0", prStateColor)} aria-hidden="true" />
-          <span className={cn("font-mono hover:underline", prStateColor)}>#{prNumber}</span>
+          <span className={cn("font-mono", isActive && "hover:underline", prStateColor)}>
+            #{prNumber}
+          </span>
         </button>
       </TooltipTrigger>
       <TooltipContent side="right" align="start" className="p-3">
@@ -692,7 +695,9 @@ export function WorktreeHeader({
                 aria-label="View agent plan file"
               >
                 <FileText className="w-3 h-3 shrink-0 text-canopy-accent/70" aria-hidden="true" />
-                <span className="font-mono hover:underline">{worktree.planFilePath ?? "Plan"}</span>
+                <span className={cn("font-mono", isActive && "hover:underline")}>
+                  {worktree.planFilePath ?? "Plan"}
+                </span>
               </button>
             )}
           </div>
