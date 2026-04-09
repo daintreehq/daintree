@@ -116,6 +116,83 @@ describe("FixedDropdown overlay-count dismiss behavior", () => {
     );
 
     expect(onOpenChange).not.toHaveBeenCalled();
+    // Also verify the dropdown is still actually rendered — guards against
+    // a silent render-suppression regression.
+    expect(document.body.textContent).toContain("Content");
+  });
+
+  it("closes when a new overlay opens at the same level after the absorbed one disappeared", () => {
+    // Regression: baseline must decay when overlayCount drops, otherwise a
+    // user-initiated modal at the same numeric level as an absorbed
+    // in-flight modal fails to dismiss the dropdown.
+    const { rerender } = render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    // In-flight modal mounts during grace, absorbed into baseline=1.
+    mockOverlayCount = 1;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    advancePastGrace();
+
+    // In-flight modal closes — baseline must decay back to 0.
+    mockOverlayCount = 0;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    // User now opens a genuine modal at the same numeric level — must dismiss.
+    mockOverlayCount = 1;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("seeds baseline from a nonzero overlayCount when the dropdown opens mid-wizard", () => {
+    // Cold-start variant: a wizard is already open when the user clicks the
+    // toolbar. The grace-setup effect must seed baseline=1 so that the
+    // dropdown does not immediately self-close.
+    mockOverlayCount = 1;
+    const { rerender } = render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    advancePastGrace();
+
+    // Steady count should not trigger a close.
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    // A second modal on top of the first should dismiss the dropdown.
+    mockOverlayCount = 2;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("closes when an additional overlay opens after the grace window absorbed an in-flight one", () => {

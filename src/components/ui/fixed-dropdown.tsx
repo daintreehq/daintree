@@ -120,6 +120,14 @@ export function FixedDropdown({
       baselineOverlayCountRef.current = overlayCount;
       return;
     }
+    // Decay the baseline when the overlay count drops — e.g. the in-flight
+    // modal that was absorbed during grace has since closed. Without this,
+    // a subsequent user-initiated modal at the same numeric level would
+    // fail to dismiss the dropdown.
+    if (overlayCount < baselineOverlayCountRef.current) {
+      baselineOverlayCountRef.current = overlayCount;
+      return;
+    }
     if (overlayCount > baselineOverlayCountRef.current) {
       onOpenChange(false);
     }
