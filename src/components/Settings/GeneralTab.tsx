@@ -4,7 +4,6 @@ import {
   ChevronRight,
   Moon,
   CheckCircle,
-  AlertCircle,
   Wrench,
   LayoutGrid,
   PanelBottom,
@@ -28,7 +27,7 @@ import type {
   CliAvailability,
   AgentSettings,
 } from "@shared/types";
-import { isAgentReady } from "../../../shared/utils/agentAvailability";
+import { isAgentInstalled, isAgentReady } from "../../../shared/utils/agentAvailability";
 import { usePreferencesStore } from "@/store";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
@@ -441,7 +440,7 @@ export function GeneralTab({
           <SettingsSection
             icon={Info}
             title="System Status"
-            description="Agent CLI availability. Agents must be installed and accessible in your PATH."
+            description="Agents ready to use on your system."
             id="general-system-status"
           >
             {cliCheckFailed ? (
@@ -449,57 +448,93 @@ export function GeneralTab({
             ) : !cliAvailability || !agentSettings ? (
               <div className="text-sm text-text-muted">Loading agent status...</div>
             ) : (
-              <div className="space-y-2">
-                {getAgentIds().map((id) => {
-                  const config = getAgentConfig(id);
-                  const agentEntry = getAgentSettingsEntry(agentSettings, id);
-                  const isSelected = agentEntry.selected !== false;
-                  const isAvailable = isAgentReady(cliAvailability[id]);
-                  const name = config?.name ?? id;
-                  const isUnavailable = isSelected && !isAvailable;
+              (() => {
+                const allAgentIds = getAgentIds();
+                const installedAgentIds = allAgentIds.filter(
+                  (id) =>
+                    isAgentInstalled(cliAvailability[id]) &&
+                    getAgentSettingsEntry(agentSettings, id).selected !== false
+                );
+                const hiddenCount = allAgentIds.length - installedAgentIds.length;
 
+                if (installedAgentIds.length === 0) {
                   return (
-                    <button
-                      type="button"
-                      key={id}
-                      className={cn(
-                        "flex items-center justify-between text-sm px-3 py-2 rounded-[var(--radius-md)] border w-full text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
-                        isUnavailable
-                          ? "border-[color-mix(in_oklab,var(--color-status-warning)_30%,transparent)] bg-[color-mix(in_oklab,var(--color-status-warning)_6%,transparent)] hover:bg-[color-mix(in_oklab,var(--color-status-warning)_10%,transparent)]"
-                          : "settings-list-item border-canopy-border hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]"
-                      )}
-                      aria-label={`Go to ${name} agent settings`}
-                      onClick={() => onNavigateToAgents?.(id)}
-                    >
-                      <span className="text-text-secondary">{name}</span>
-                      <span className="flex items-center gap-2">
-                        {!isSelected ? (
-                          <span className="text-text-muted text-xs">Disabled</span>
-                        ) : isAvailable ? (
-                          <>
-                            <CheckCircle className="w-3.5 h-3.5 text-status-success" />
-                            <span className="text-status-success text-xs">Ready</span>
-                          </>
-                        ) : (
-                          <>
-                            <AlertCircle className="w-3.5 h-3.5 text-status-warning" />
-                            <span className="text-status-warning text-xs">CLI not found</span>
-                          </>
+                    <div className="space-y-2">
+                      <p className="text-sm text-text-muted">No agents installed yet.</p>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          className="text-xs text-canopy-accent hover:underline"
+                          onClick={() =>
+                            window.dispatchEvent(
+                              new CustomEvent("canopy:open-agent-setup-wizard")
+                            )
+                          }
+                        >
+                          Run setup wizard
+                        </button>
+                        {onNavigateToAgents && (
+                          <button
+                            type="button"
+                            className="text-xs text-canopy-accent hover:underline"
+                            onClick={() => onNavigateToAgents?.()}
+                          >
+                            Browse available agents
+                          </button>
                         )}
-                      </span>
-                    </button>
+                      </div>
+                    </div>
                   );
-                })}
+                }
 
-                {onNavigateToAgents && (
-                  <button
-                    onClick={() => onNavigateToAgents?.()}
-                    className="text-xs text-canopy-accent hover:underline"
-                  >
-                    Configure agents →
-                  </button>
-                )}
-              </div>
+                return (
+                  <div className="space-y-2">
+                    {installedAgentIds.map((id) => {
+                      const config = getAgentConfig(id);
+                      const name = config?.name ?? id;
+                      const ready = isAgentReady(cliAvailability[id]);
+
+                      return (
+                        <button
+                          type="button"
+                          key={id}
+                          className="settings-list-item border-canopy-border hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))] flex items-center justify-between text-sm px-3 py-2 rounded-[var(--radius-md)] border w-full text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+                          aria-label={`Go to ${name} agent settings`}
+                          onClick={() => onNavigateToAgents?.(id)}
+                        >
+                          <span className="text-text-secondary">{name}</span>
+                          <span className="flex items-center gap-2">
+                            <CheckCircle
+                              className={cn(
+                                "w-3.5 h-3.5",
+                                ready ? "text-status-success" : "text-status-warning"
+                              )}
+                            />
+                            <span
+                              className={cn(
+                                "text-xs",
+                                ready ? "text-status-success" : "text-status-warning"
+                              )}
+                            >
+                              {ready ? "Ready" : "Needs setup"}
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+
+                    {hiddenCount > 0 && onNavigateToAgents && (
+                      <button
+                        type="button"
+                        onClick={() => onNavigateToAgents?.()}
+                        className="text-xs text-canopy-accent hover:underline"
+                      >
+                        {`Canopy supports ${hiddenCount} more ${hiddenCount === 1 ? "agent" : "agents"} →`}
+                      </button>
+                    )}
+                  </div>
+                );
+              })()
             )}
           </SettingsSection>
 
