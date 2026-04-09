@@ -522,6 +522,8 @@ describe("preferences action hardening", () => {
       "window.close",
       "hibernation.getConfig",
       "hibernation.updateConfig",
+      "idleTerminalNotify.getConfig",
+      "idleTerminalNotify.updateConfig",
       "agentSettings.get",
       "agentSettings.set",
       "agentSettings.reset",
