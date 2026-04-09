@@ -81,6 +81,39 @@ describe("PtyPool", () => {
     pool.dispose();
   });
 
+  it("refills using updated defaultCwd after setDefaultCwd + acquire", async () => {
+    const warmed = createFakeProcess(601);
+    const refilled = createFakeProcess(602);
+    spawnMock.mockReturnValueOnce(warmed).mockReturnValueOnce(refilled);
+
+    const pool = new PtyPool({ poolSize: 1, defaultCwd: "/initial" });
+    await pool.warmPool();
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      1,
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({ cwd: "/initial" })
+    );
+
+    pool.setDefaultCwd("/project/path");
+    const acquired = pool.acquire();
+    expect(acquired).toBe(warmed);
+
+    // acquire() triggers refillPool() synchronously; the refill spawn must
+    // use the updated cwd, not the stale "/initial" default. This is the
+    // regression guard for issue #5091 (alternating terminal cwd bug).
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      2,
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({ cwd: "/project/path" })
+    );
+    pool.dispose();
+  });
+
   it("drops dead pooled terminals on acquire and refills the pool", async () => {
     spawnMock
       .mockReturnValueOnce(createFakeProcess("missing"))

@@ -104,6 +104,13 @@ export function acquirePtyProcess(
     !options.env &&
     !options.args &&
     options.kind !== "dev-preview";
+  // Update the pool's defaultCwd before acquiring so the refill triggered
+  // inside acquire() spawns the replacement shell at the project directory
+  // instead of the stale homedir. Without this, every other new terminal
+  // ends up rooted at ~ because refilled shells are pre-warmed there.
+  if (canUsePool) {
+    ptyPool!.setDefaultCwd(options.cwd);
+  }
   let pooledPty = canUsePool ? ptyPool!.acquire() : null;
 
   if (pooledPty) {
