@@ -29,6 +29,7 @@ export interface HibernationManagerDeps {
   clearDirectingState: (id: string) => void;
   onUserInput: (id: string, data: string) => void;
   onEnterPressed: (id: string) => void;
+  onWriteParsedReflow?: (managed: ManagedTerminal) => void;
 }
 
 export class TerminalHibernationManager {
@@ -181,6 +182,7 @@ export class TerminalHibernationManager {
       if (managed && !managed.isUserScrolledBack && !managed.isAltBuffer) {
         this.deps.scrollToBottomSafe(managed);
       }
+      this.deps.onWriteParsedReflow?.(managed);
     });
     managed.listeners.push(() => writeParsedDisposable.dispose());
 
@@ -339,6 +341,24 @@ export class TerminalHibernationManager {
     managed.restoreGeneration += 1;
     managed.isSerializedRestoreInProgress = false;
     managed.deferredOutput = [];
+    // Clear the reflow throttle so post-wake writes trigger an immediate
+    // IO re-evaluation.
+    managed.lastReflowAt = 0;
+
+    // Re-bind the fresh Terminal to its DOM host. Without this, the
+    // terminal exists in memory with a working buffer but no rendered
+    // output — a zombie. Only safe when the host has measurable
+    // dimensions (xterm.js measures character cell size during open()).
+    // If the host is offscreen/zero-sized, leave isOpened=false so
+    // TerminalInstanceService.attach() will open it on next mount.
+    if (hostElement.clientWidth > 0 && hostElement.clientHeight > 0) {
+      try {
+        terminal.open(hostElement);
+        managed.isOpened = true;
+      } catch (err) {
+        logError(`[TIS.unhibernate] terminal.open failed for ${id}`, err);
+      }
+    }
 
     managed.isHibernated = false;
     managed.isDetached = false;

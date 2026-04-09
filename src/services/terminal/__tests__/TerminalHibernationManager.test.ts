@@ -4,6 +4,33 @@ import { TerminalHibernationManager, HibernationManagerDeps } from "../TerminalH
 import type { ManagedTerminal } from "../types";
 import { TerminalRefreshTier } from "../../../../shared/types/panel";
 
+const { freshTerminalOpenMock, freshTerminalOnWriteParsed } = vi.hoisted(() => ({
+  freshTerminalOpenMock: vi.fn(),
+  freshTerminalOnWriteParsed: vi.fn(() => ({ dispose: vi.fn() })),
+}));
+
+vi.mock("@xterm/xterm", () => ({
+  Terminal: vi.fn(function MockTerminal(this: Record<string, unknown>) {
+    this.options = { scrollback: 5000 };
+    this.rows = 24;
+    this.cols = 80;
+    this.buffer = {
+      active: { length: 0, type: "normal", baseY: 0, viewportY: 0 },
+      onBufferChange: vi.fn(() => ({ dispose: vi.fn() })),
+    };
+    this.parser = {
+      registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })),
+    };
+    this.dispose = vi.fn();
+    this.open = freshTerminalOpenMock;
+    this.onData = vi.fn(() => ({ dispose: vi.fn() }));
+    this.onScroll = vi.fn(() => ({ dispose: vi.fn() }));
+    this.onWriteParsed = freshTerminalOnWriteParsed;
+    this.onSelectionChange = vi.fn(() => ({ dispose: vi.fn() }));
+    this.getSelection = vi.fn(() => "");
+  }),
+}));
+
 vi.mock("@/clients", () => ({
   terminalClient: {
     write: vi.fn(),
@@ -54,9 +81,14 @@ function makeMockTerminal() {
       registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })),
     },
     dispose: vi.fn(),
+    open: vi.fn(),
     onData: vi.fn(() => ({ dispose: vi.fn() })),
     onScroll: vi.fn(() => ({ dispose: vi.fn() })),
-    onWriteParsed: vi.fn(() => ({ dispose: vi.fn() })),
+    onWriteParsed: vi.fn((cb: () => void) => {
+      // capture so tests can simulate a parsed write
+      (makeMockTerminal as unknown as { _lastWriteParsedCb?: () => void })._lastWriteParsedCb = cb;
+      return { dispose: vi.fn() };
+    }),
     onSelectionChange: vi.fn(() => ({ dispose: vi.fn() })),
     getSelection: vi.fn(() => ""),
   };
@@ -139,6 +171,9 @@ describe("TerminalHibernationManager", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    freshTerminalOpenMock.mockReset();
+    freshTerminalOnWriteParsed.mockClear();
+    freshTerminalOnWriteParsed.mockImplementation(() => ({ dispose: vi.fn() }));
     managed = makeMockManaged();
     deps = makeMockDeps(managed);
     manager = new TerminalHibernationManager(deps);
@@ -313,6 +348,64 @@ describe("TerminalHibernationManager", () => {
       manager.unhibernate("t1");
 
       expect(managed.listeners.length).toBeGreaterThan(initialCount);
+    });
+
+    it("should open fresh terminal when host has non-zero dimensions", () => {
+      Object.defineProperty(managed.hostElement, "clientWidth", { value: 800, configurable: true });
+      Object.defineProperty(managed.hostElement, "clientHeight", {
+        value: 600,
+        configurable: true,
+      });
+
+      manager.unhibernate("t1");
+
+      expect(freshTerminalOpenMock).toHaveBeenCalledWith(managed.hostElement);
+      expect(managed.isOpened).toBe(true);
+    });
+
+    it("should leave isOpened=false when host is zero-sized and not call open", () => {
+      // jsdom hostElement has 0 clientWidth/clientHeight by default
+      manager.unhibernate("t1");
+
+      expect(freshTerminalOpenMock).not.toHaveBeenCalled();
+      expect(managed.isOpened).toBe(false);
+    });
+
+    it("should invoke onWriteParsedReflow when the fresh terminal emits a parsed write", () => {
+      const onWriteParsedReflow = vi.fn();
+      deps.onWriteParsedReflow = onWriteParsedReflow;
+
+      manager.unhibernate("t1");
+
+      // Grab the last registered onWriteParsed callback and invoke it
+      const callback = freshTerminalOnWriteParsed.mock.calls.at(-1)?.[0] as
+        | (() => void)
+        | undefined;
+      expect(callback).toBeTypeOf("function");
+      callback!();
+
+      expect(onWriteParsedReflow).toHaveBeenCalledWith(managed);
+    });
+
+    it("should reset lastReflowAt so next reflow fires immediately", () => {
+      managed.lastReflowAt = 99999;
+      manager.unhibernate("t1");
+      expect(managed.lastReflowAt).toBe(0);
+    });
+
+    it("should not throw if terminal.open throws (bad host)", () => {
+      Object.defineProperty(managed.hostElement, "clientWidth", { value: 800, configurable: true });
+      Object.defineProperty(managed.hostElement, "clientHeight", {
+        value: 600,
+        configurable: true,
+      });
+      freshTerminalOpenMock.mockImplementationOnce(() => {
+        throw new Error("boom");
+      });
+
+      expect(() => manager.unhibernate("t1")).not.toThrow();
+      // Left as not opened on failure so attach() can retry
+      expect(managed.isOpened).toBe(false);
     });
 
     it("should not leak listeners across hibernate/unhibernate cycles", () => {

@@ -35,6 +35,9 @@ export interface ManagedTerminal {
   keyHandlerInstalled: boolean;
   lastAttachAt: number;
   lastDetachAt: number;
+  // Last time forceXtermReflow() ran for this terminal — used to throttle the
+  // IntersectionObserver unpause reflow across write/heartbeat/focus triggers.
+  lastReflowAt?: number;
   // Visibility tracking
   isVisible: boolean;
   lastActiveTime: number;
