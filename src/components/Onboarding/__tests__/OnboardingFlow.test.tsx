@@ -57,8 +57,11 @@ vi.stubGlobal("window", {
   removeEventListener: vi.fn(),
 });
 
+const { isCanopyEnvEnabledMock } = vi.hoisted(() => ({
+  isCanopyEnvEnabledMock: vi.fn((_key: string): boolean => false),
+}));
 vi.mock("@/utils/env", () => ({
-  isCanopyEnvEnabled: () => false,
+  isCanopyEnvEnabled: (key: string) => isCanopyEnvEnabledMock(key),
 }));
 
 vi.mock("@/components/Setup/AgentSetupWizard", () => ({
@@ -281,6 +284,34 @@ describe("OnboardingFlow resume and legacy steps", () => {
     await vi.waitFor(() => {
       expect(getByTestId("agent-setup-wizard")).toBeTruthy();
     });
+  });
+
+  it("renders nothing and skips hydration when CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS is enabled", async () => {
+    // The component reads SKIP_FIRST_RUN_DIALOGS at module load, so we flip
+    // the mock, reset the module cache, and re-import.
+    isCanopyEnvEnabledMock.mockReturnValue(true);
+    try {
+      vi.resetModules();
+      const { OnboardingFlow: IsolatedOnboardingFlow } = await import("../OnboardingFlow");
+      const { baseElement } = await act(async () => {
+        return render(<IsolatedOnboardingFlow {...defaultProps} />);
+      });
+
+      // No dialog, no progress indicator — nothing should render
+      expect(
+        baseElement.ownerDocument.querySelector('[data-testid="agent-setup-wizard"]')
+      ).toBeNull();
+      expect(baseElement.ownerDocument.querySelector('[data-testid="welcome-step"]')).toBeNull();
+      expect(
+        baseElement.ownerDocument.querySelector('[data-testid="onboarding-progress"]')
+      ).toBeNull();
+
+      // IPC hydration should be skipped entirely
+      expect(onboardingMock.get).not.toHaveBeenCalled();
+    } finally {
+      isCanopyEnvEnabledMock.mockReturnValue(false);
+      vi.resetModules();
+    }
   });
 });
 

@@ -25,6 +25,7 @@ declare global {
       getRendererListenerCount: (channel: string) => number;
     };
     __CANOPY_E2E_MODE__?: boolean;
+    __CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS__?: boolean;
   }
 }
 

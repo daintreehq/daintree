@@ -2889,3 +2889,13 @@ if (process.env.CANOPY_E2E_FAULT_MODE === "1") {
 if (process.env.CANOPY_E2E_MODE === "1") {
   contextBridge.exposeInMainWorld("__CANOPY_E2E_MODE__", true);
 }
+
+// E2E test bridge: expose the "skip first-run dialogs" flag to the renderer at
+// runtime. This cannot travel through `import.meta.env` because that is baked
+// at Vite build time, and CI builds do not set the var at build time — it is
+// only set when the E2E harness launches Electron. The sandboxed renderer
+// cannot read `process.env` directly, so the preload (which does have a
+// polyfilled `process.env` even under sandbox: true) is the propagation point.
+if (process.env.CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS === "1") {
+  contextBridge.exposeInMainWorld("__CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS__", true);
+}
