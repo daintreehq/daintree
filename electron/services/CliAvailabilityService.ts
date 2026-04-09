@@ -114,11 +114,17 @@ export class CliAvailabilityService {
     agentName: string,
     authCheck: AgentAuthCheck
   ): Promise<AgentAvailabilityState> {
+    // Shared flag so the checkPromise knows the timeoutPromise already won
+    // the race. Without this, a slow fs.access can later resolve/reject and
+    // emit a misleading "auth check fell through" log for an agent whose
+    // state was actually determined by the timeout branch.
+    let timedOut = false;
+
     const timeoutPromise = new Promise<AgentAvailabilityState>((resolve) => {
-      setTimeout(
-        () => resolve(authCheck.fallback ?? "installed"),
-        CliAvailabilityService.AUTH_CHECK_TIMEOUT_MS
-      );
+      setTimeout(() => {
+        timedOut = true;
+        resolve(authCheck.fallback ?? "installed");
+      }, CliAvailabilityService.AUTH_CHECK_TIMEOUT_MS);
     });
 
     const checkPromise = (async (): Promise<AgentAvailabilityState> => {
@@ -162,11 +168,13 @@ export class CliAvailabilityService {
       }
 
       const fallbackState = authCheck.fallback ?? "installed";
-      console.log(
-        `[CliAvailabilityService] ${agentName}: binary found, auth check fell through (checked: ${
-          checkedPaths.join(", ") || "none"
-        }) -> "${fallbackState}"`
-      );
+      if (!timedOut) {
+        console.log(
+          `[CliAvailabilityService] ${agentName}: binary found, auth check fell through (checked: ${
+            checkedPaths.join(", ") || "none"
+          }) -> "${fallbackState}"`
+        );
+      }
       return fallbackState;
     })();
 

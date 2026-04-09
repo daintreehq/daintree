@@ -1238,11 +1238,13 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       // GitHub Copilot CLI primarily stores auth in the OS keychain
       // (macOS Keychain under "copilot-cli", Linux libsecret/GNOME Keyring).
       // ~/.copilot/config.json is written as a fallback when the keychain
-      // is unavailable (headless Linux, CI). ~/.config/gh/hosts.yml is
-      // populated when auth is delegated via `gh auth login`. The
-      // "installed" fallback covers the common macOS keychain case where
-      // no filesystem token exists.
-      configPathsAll: [".copilot/config.json", ".config/gh/hosts.yml"],
+      // is unavailable (headless Linux, CI). We intentionally do NOT probe
+      // ~/.config/gh/hosts.yml — that file is populated by any `gh auth login`
+      // for general GitHub CLI use, not specifically Copilot, so presence
+      // does not imply a Copilot subscription or active auth. The
+      // "installed" fallback covers the macOS keychain case where no
+      // filesystem token exists.
+      configPathsAll: [".copilot/config.json"],
       fallback: "installed",
     },
     prerequisites: [

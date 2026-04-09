@@ -429,7 +429,7 @@ describe("CliAvailabilityService", () => {
       expect(probedPaths).not.toContain(`${homedir()}/.kiro/config.json`);
     });
 
-    it("probes both Copilot auth paths (.copilot/config.json and .config/gh/hosts.yml)", async () => {
+    it("probes only .copilot/config.json for Copilot (NOT .config/gh/hosts.yml)", async () => {
       const { access } = await import("fs/promises");
       const mockedAccess = vi.mocked(access);
 
@@ -444,10 +444,12 @@ describe("CliAvailabilityService", () => {
 
       const probedPaths = mockedAccess.mock.calls.map((call) => String(call[0]));
       expect(probedPaths).toContain(`${homedir()}/.copilot/config.json`);
-      expect(probedPaths).toContain(`${homedir()}/.config/gh/hosts.yml`);
+      // gh/hosts.yml is populated by any `gh auth login`, not Copilot-specific,
+      // so probing it produces false positives. Must not be in the probe list.
+      expect(probedPaths).not.toContain(`${homedir()}/.config/gh/hosts.yml`);
     });
 
-    it("reaches 'ready' for Copilot when only .config/gh/hosts.yml exists", async () => {
+    it("reaches 'ready' for Copilot when .copilot/config.json exists", async () => {
       const { access } = await import("fs/promises");
       const mockedAccess = vi.mocked(access);
 
@@ -456,9 +458,9 @@ describe("CliAvailabilityService", () => {
         throw new Error("not found");
       });
 
-      const ghHostsPath = `${homedir()}/.config/gh/hosts.yml`;
+      const copilotConfig = `${homedir()}/.copilot/config.json`;
       mockedAccess.mockImplementation(async (path) => {
-        if (String(path) === ghHostsPath) return;
+        if (String(path) === copilotConfig) return;
         throw new Error("ENOENT");
       });
 
@@ -468,7 +470,7 @@ describe("CliAvailabilityService", () => {
   });
 
   describe("diagnostic logging for auth fallback", () => {
-    it("logs when auth check falls through to fallback, including checked paths", async () => {
+    it("logs exactly once when auth check falls through to fallback", async () => {
       mockedExecFileSync.mockImplementation((_file, args) => {
         if (args?.[0] === "copilot") return Buffer.from("");
         throw new Error("not found");
@@ -477,15 +479,15 @@ describe("CliAvailabilityService", () => {
       const result = await service.checkAvailability();
       expect(result.copilot).toBe("installed");
 
-      const copilotLog = consoleLogSpy.mock.calls.find((call) =>
-        String(call[0]).includes("GitHub Copilot")
+      const copilotLogs = consoleLogSpy.mock.calls.filter((call) =>
+        String(call[0]).includes("GitHub Copilot: binary found, auth check fell through")
       );
-      expect(copilotLog).toBeDefined();
-      const message = String(copilotLog![0]);
+      // Must fire exactly once — guards against the Promise.race leak where
+      // a slow fs.access would log after the timeout branch already resolved.
+      expect(copilotLogs).toHaveLength(1);
+      const message = String(copilotLogs[0][0]);
       expect(message).toContain("[CliAvailabilityService]");
-      expect(message).toContain("binary found, auth check fell through");
       expect(message).toContain(".copilot/config.json");
-      expect(message).toContain(".config/gh/hosts.yml");
       expect(message).toContain('-> "installed"');
     });
 
@@ -503,6 +505,52 @@ describe("CliAvailabilityService", () => {
       expect(kiroLog).toBeDefined();
       expect(String(kiroLog![0])).toContain("checked: none");
       expect(String(kiroLog![0])).toContain('-> "installed"');
+    });
+
+    it("does NOT log when auth check is short-circuited by envVar (OPENAI_API_KEY)", async () => {
+      process.env.OPENAI_API_KEY = "sk-test";
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (args?.[0] === "codex") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.codex).toBe("ready");
+
+      const codexLog = consoleLogSpy.mock.calls.find((call) =>
+        String(call[0]).includes("Codex")
+      );
+      expect(codexLog).toBeUndefined();
+    });
+
+    it("does NOT emit a fallback log when the auth check timed out", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      vi.useFakeTimers();
+      try {
+        mockedExecFileSync.mockImplementation((_file, args) => {
+          if (args?.[0] === "copilot") return Buffer.from("");
+          throw new Error("not found");
+        });
+        // Make fs.access hang forever so only the timeout can resolve the race.
+        mockedAccess.mockImplementation(() => new Promise(() => {}));
+
+        const checkPromise = service.checkAvailability();
+        // Advance past AUTH_CHECK_TIMEOUT_MS (3s) to resolve the timeout branch.
+        await vi.advanceTimersByTimeAsync(4_000);
+        const result = await checkPromise;
+
+        expect(result.copilot).toBe("installed");
+
+        const copilotLogs = consoleLogSpy.mock.calls.filter((call) =>
+          String(call[0]).includes("GitHub Copilot: binary found, auth check fell through")
+        );
+        // No fallback log should fire — the timeout decided the state.
+        expect(copilotLogs).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("does NOT log when auth file is found (success path)", async () => {
