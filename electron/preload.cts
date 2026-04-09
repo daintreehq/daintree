@@ -861,6 +861,7 @@ const CHANNELS = {
   APP_THEME_SET_PREFERRED_DARK_SCHEME: "app-theme:set-preferred-dark-scheme",
   APP_THEME_SET_PREFERRED_LIGHT_SCHEME: "app-theme:set-preferred-light-scheme",
   APP_THEME_SET_RECENT_SCHEME_IDS: "app-theme:set-recent-scheme-ids",
+  APP_THEME_SET_ACCENT_COLOR_OVERRIDE: "app-theme:set-accent-color-override",
   APP_THEME_SYSTEM_APPEARANCE_CHANGED: "app-theme:system-appearance-changed",
 
   // Telemetry channels
@@ -2555,6 +2556,9 @@ const api: ElectronAPI = {
 
     setRecentSchemeIds: (ids: string[]) =>
       _unwrappingInvoke(CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS, ids),
+
+    setAccentColorOverride: (color: string | null) =>
+      _unwrappingInvoke(CHANNELS.APP_THEME_SET_ACCENT_COLOR_OVERRIDE, color),
 
     onSystemAppearanceChanged: (
       callback: (payload: { isDark: boolean; schemeId: string }) => void

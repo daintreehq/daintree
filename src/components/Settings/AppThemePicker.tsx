@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type MouseEvent,
+} from "react";
 import { AlertTriangle, Monitor, Palette, Shuffle } from "lucide-react";
 import { ThemeSelector } from "./ThemeSelector";
 import { cn } from "@/lib/utils";
@@ -6,7 +15,7 @@ import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { injectSchemeToDOM, useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { prefersReducedMotion, runThemeReveal } from "@/lib/appThemeViewTransition";
-import { resolveAppTheme } from "@shared/theme";
+import { applyAccentOverrideToScheme, resolveAppTheme } from "@shared/theme";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { APP_THEME_PREVIEW_KEYS, getAppThemeWarnings } from "@shared/theme";
@@ -109,6 +118,8 @@ export function AppThemePicker() {
   const setPreferredDarkSchemeId = useAppThemeStore((s) => s.setPreferredDarkSchemeId);
   const preferredLightSchemeId = useAppThemeStore((s) => s.preferredLightSchemeId);
   const setPreferredLightSchemeId = useAppThemeStore((s) => s.setPreferredLightSchemeId);
+  const accentColorOverride = useAppThemeStore((s) => s.accentColorOverride);
+  const setAccentColorOverride = useAppThemeStore((s) => s.setAccentColorOverride);
   const [importWarnings, setImportWarnings] = useState<AppThemeValidationWarning[]>([]);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -145,9 +156,52 @@ export function AppThemePicker() {
   );
 
   const warningsByScheme = useMemo(
-    () => new Map(allSchemes.map((scheme) => [scheme.id, getAppThemeWarnings(scheme)])),
-    [allSchemes]
+    () =>
+      new Map(
+        allSchemes.map((scheme) => [
+          scheme.id,
+          getAppThemeWarnings(applyAccentOverrideToScheme(scheme, accentColorOverride)),
+        ])
+      ),
+    [allSchemes, accentColorOverride]
   );
+
+  const effectiveAccent = useMemo(
+    () => accentColorOverride ?? selectedScheme.tokens["accent-primary"],
+    [accentColorOverride, selectedScheme]
+  );
+  // Native <input type="color"> only accepts #rrggbb. Fall back to black if the
+  // theme's accent-primary is a non-hex expression (e.g. oklch()).
+  const pickerValue = useMemo(() => {
+    const candidate = accentColorOverride ?? selectedScheme.tokens["accent-primary"];
+    return /^#[0-9a-f]{6}$/i.test(candidate) ? candidate.toLowerCase() : "#000000";
+  }, [accentColorOverride, selectedScheme]);
+
+  const handleAccentInput = useCallback(
+    (e: FormEvent<HTMLInputElement>) => {
+      // Live preview during drag — Zustand only, no IPC write spam.
+      setAccentColorOverride(e.currentTarget.value);
+    },
+    [setAccentColorOverride]
+  );
+
+  const handleAccentCommit = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      // Persist on release/close.
+      setAccentColorOverride(e.target.value);
+      appThemeClient.setAccentColorOverride(e.target.value).catch((error) => {
+        console.error("Failed to persist accent color override:", error);
+      });
+    },
+    [setAccentColorOverride]
+  );
+
+  const handleAccentReset = useCallback(() => {
+    setAccentColorOverride(null);
+    appThemeClient.setAccentColorOverride(null).catch((error) => {
+      console.error("Failed to clear accent color override:", error);
+    });
+  }, [setAccentColorOverride]);
 
   const handleSelect = useCallback(
     async (id: string, origin?: { x: number; y: number }) => {
@@ -335,12 +389,15 @@ export function AppThemePicker() {
   const handleExport = useCallback(async () => {
     if (!selectedScheme) return;
     try {
-      await appThemeClient.exportTheme(selectedScheme);
+      // Bake the accent override into the exported scheme tokens so
+      // downstream users of the exported JSON see the user's chosen accent.
+      const effectiveScheme = applyAccentOverrideToScheme(selectedScheme, accentColorOverride);
+      await appThemeClient.exportTheme(effectiveScheme);
     } catch (error) {
       console.error("Failed to export app theme:", error);
       setImportMessage("Failed to export app theme.");
     }
-  }, [selectedScheme]);
+  }, [selectedScheme, accentColorOverride]);
 
   const selectedWarnings = warningsByScheme.get(selectedScheme.id) ?? [];
 
@@ -447,6 +504,51 @@ export function AppThemePicker() {
           </div>
         </div>
       </button>
+
+      <section
+        aria-label="Accent color"
+        className="flex items-center gap-3 p-2 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg"
+      >
+        <label
+          htmlFor="accent-color-override-input"
+          className="relative shrink-0 cursor-pointer"
+          style={{ width: 32, height: 32 }}
+        >
+          <div
+            className="w-full h-full rounded-md border border-canopy-border"
+            style={{ backgroundColor: effectiveAccent }}
+            aria-hidden="true"
+          />
+          <input
+            id="accent-color-override-input"
+            data-testid="accent-color-override-input"
+            type="color"
+            value={pickerValue}
+            onInput={handleAccentInput}
+            onChange={handleAccentCommit}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            aria-label="Accent color"
+          />
+        </label>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium text-canopy-text">Accent color</div>
+          <div className="text-xs text-canopy-text/60">
+            {accentColorOverride
+              ? `Overriding theme accent (${effectiveAccent})`
+              : "Click the swatch to override the theme accent"}
+          </div>
+        </div>
+        {accentColorOverride && (
+          <button
+            type="button"
+            onClick={handleAccentReset}
+            data-testid="accent-color-override-reset"
+            className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors shrink-0"
+          >
+            Reset to theme default
+          </button>
+        )}
+      </section>
 
       <AppDialog
         isOpen={open}

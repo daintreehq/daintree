@@ -382,6 +382,93 @@ export function hexToRgbTriplet(hex: string): string {
   return `${red}, ${green}, ${blue}`;
 }
 
+/**
+ * Normalize a user-supplied accent color to canonical lowercase `#rrggbb`.
+ * Accepts values with or without a leading `#`, case-insensitive, 3-digit or
+ * 6-digit hex. Returns `null` for any other input. Used as the single source of
+ * truth for accent override validation on both sides of the IPC boundary.
+ */
+export function normalizeAccentHex(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const clean = trimmed.startsWith("#") ? trimmed.slice(1) : trimmed;
+  if (!/^[0-9a-f]{3}$|^[0-9a-f]{6}$/i.test(clean)) return null;
+  const expanded =
+    clean.length === 3
+      ? clean
+          .split("")
+          .map((char) => `${char}${char}`)
+          .join("")
+      : clean;
+  return `#${expanded.toLowerCase()}`;
+}
+
+/**
+ * Derive the six accent tokens from a single user-picked hex color. Mirrors
+ * the formulas in `createCanopyTokens` so the override is indistinguishable
+ * from a theme's native accent.
+ *
+ * - `accent-primary`: the hex itself
+ * - `accent-hover`: `color-mix(in oklab, hex 90%, #fff/#000)` (brightened for dark, darkened for light)
+ * - `accent-soft`: `rgba(triplet, 0.18 dark / 0.12 light)`
+ * - `accent-muted`: `rgba(triplet, 0.30 dark / 0.20 light)`
+ * - `accent-rgb`: `R, G, B` triplet for use inside `rgba(var(--theme-accent-rgb), a)`
+ * - `accent-foreground`: best WCAG contrast from the scheme's own text-inverse / text-primary + white/black
+ */
+export function computeAccentOverrideTokens(
+  accentHex: string,
+  baseScheme: Pick<AppColorScheme, "type" | "tokens">
+): Pick<
+  AppColorSchemeTokens,
+  | "accent-primary"
+  | "accent-hover"
+  | "accent-foreground"
+  | "accent-soft"
+  | "accent-muted"
+  | "accent-rgb"
+> {
+  const normalized = normalizeAccentHex(accentHex);
+  if (!normalized) {
+    throw new Error(`computeAccentOverrideTokens: invalid accent hex "${accentHex}"`);
+  }
+  const dark = baseScheme.type === "dark";
+  return {
+    "accent-primary": normalized,
+    "accent-hover": `color-mix(in oklab, ${normalized} 90%, ${dark ? "#ffffff" : "#000000"})`,
+    "accent-soft": withAlpha(normalized, dark ? 0.18 : 0.12),
+    "accent-muted": withAlpha(normalized, dark ? 0.3 : 0.2),
+    "accent-rgb": hexToRgbTriplet(normalized),
+    "accent-foreground": pickReadableForeground(normalized, [
+      baseScheme.tokens["text-inverse"],
+      baseScheme.tokens["text-primary"],
+      "#ffffff",
+      "#000000",
+    ]),
+  };
+}
+
+/**
+ * Return a new scheme with accent tokens patched from the override hex, or the
+ * same scheme reference when no (valid) override is active. Safe to pass an
+ * invalid hex — the input is silently returned unchanged, matching the
+ * no-override branch so callers can call unconditionally.
+ */
+export function applyAccentOverrideToScheme(
+  scheme: AppColorScheme,
+  accentHex: string | null | undefined
+): AppColorScheme {
+  const normalized = normalizeAccentHex(accentHex);
+  if (!normalized) return scheme;
+  return {
+    ...scheme,
+    tokens: {
+      ...scheme.tokens,
+      ...computeAccentOverrideTokens(normalized, scheme),
+    },
+  };
+}
+
 export function getAppThemeById(
   id: string,
   customSchemes: AppColorScheme[] = []
