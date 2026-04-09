@@ -5,6 +5,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { AgentCliStep } from "./AgentCliStep";
 import { SystemRequirementsSection } from "./SystemRequirementsSection";
 import { AGENT_REGISTRY } from "@/config/agents";
+import { AgentCard } from "@/components/agents/AgentCard";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { useAgentSettingsStore } from "@/store";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -189,15 +190,6 @@ export function sortTierByInstalled<T extends string>(
   }
   return [...installed, ...notInstalled];
 }
-
-export const AGENT_DESCRIPTIONS: Record<string, string> = {
-  claude: "Deep refactoring, architecture, and complex reasoning",
-  gemini: "Quick exploration and broad knowledge lookup",
-  codex: "Careful, methodical runs with sandboxed execution",
-  opencode: "Provider-agnostic, open-source flexibility",
-  cursor: "Cursor's agentic coding assistant",
-  kiro: "Spec-driven development with autonomous execution",
-};
 
 // --- Step transition variants ---
 
@@ -659,60 +651,6 @@ export function AgentSetupWizard({
 
 // --- Selection step (merged from AgentSelectionStep) ---
 
-function AgentRow({
-  agentId,
-  availability,
-  selections,
-  isSaving,
-  onToggle,
-  compact = false,
-}: {
-  agentId: string;
-  availability: CliAvailability;
-  selections: Record<string, boolean>;
-  isSaving: boolean;
-  onToggle: (agentId: string, checked: boolean) => void;
-  compact?: boolean;
-}) {
-  const config = AGENT_REGISTRY[agentId];
-  if (!config) return null;
-  const isInstalled = isAgentInstalled(availability[agentId]);
-  const isChecked = selections[agentId] ?? false;
-  const Icon = config.icon;
-  const description = AGENT_DESCRIPTIONS[agentId] ?? config.tooltip ?? "";
-
-  return (
-    <label
-      className={`flex items-center gap-3 px-3 ${compact ? "py-2" : "py-2.5"} rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30 cursor-pointer hover:bg-canopy-bg/60 transition-colors`}
-    >
-      <input
-        type="checkbox"
-        className="w-4 h-4 accent-canopy-accent shrink-0"
-        checked={isChecked}
-        onChange={(e) => onToggle(agentId, e.target.checked)}
-        disabled={isSaving}
-      />
-      <div
-        className={`${compact ? "w-7 h-7" : "w-8 h-8"} rounded-[var(--radius-sm)] flex items-center justify-center shrink-0`}
-        style={{ backgroundColor: `${config.color}15` }}
-      >
-        <Icon size={compact ? 16 : 18} brandColor={config.color} />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-canopy-text">{config.name}</div>
-        {description && (
-          <div className="text-[11px] text-canopy-text/40 truncate">{description}</div>
-        )}
-      </div>
-      {isInstalled ? (
-        <span className="text-[11px] text-status-success font-medium shrink-0">Installed</span>
-      ) : (
-        <span className="text-[11px] text-canopy-text/30 shrink-0">Not installed</span>
-      )}
-    </label>
-  );
-}
-
 function SelectionStep({
   availability,
   selections,
@@ -837,11 +775,12 @@ function SelectionStep({
       ) : (
         <div className="space-y-2">
           {featuredAgents.map((agentId) => (
-            <AgentRow
+            <AgentCard
               key={agentId}
+              mode="onboarding"
               agentId={agentId}
               availability={availability}
-              selections={selections}
+              isChecked={selections[agentId] ?? false}
               isSaving={isSaving}
               onToggle={onToggle}
             />
@@ -857,11 +796,12 @@ function SelectionStep({
 
               <div className="space-y-1.5">
                 {moreAgents.map((agentId) => (
-                  <AgentRow
+                  <AgentCard
                     key={agentId}
+                    mode="onboarding"
                     agentId={agentId}
                     availability={availability}
-                    selections={selections}
+                    isChecked={selections[agentId] ?? false}
                     isSaving={isSaving}
                     onToggle={onToggle}
                     compact
