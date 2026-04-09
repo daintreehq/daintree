@@ -117,10 +117,14 @@ export function BrowserToolbar({
         setIsEditing(false);
         setIsDropdownOpen(false);
         setHighlightedIndex(-1);
-        onNavigate(result.url);
+        if (result.url === url) {
+          onReload();
+        } else {
+          onNavigate(result.url);
+        }
       }
     },
-    [inputValue, onNavigate]
+    [inputValue, url, onNavigate, onReload]
   );
 
   const handleFocus = useCallback(() => {
