@@ -277,20 +277,15 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // First worktree creation starts immediately
-    expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
-
-    // Advance to start second task
-    await advanceTimersGradually(400);
+    // Both concurrency slots fill immediately (concurrency = 2) — the
+    // backend leaky-bucket rate limiter drives the real cadence.
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
 
-    // Resolve first to free concurrency slot
+    // Resolve first to free a concurrency slot so the third task starts
     await act(async () => {
       resolvers[0]?.("wt-1");
       await vi.advanceTimersByTimeAsync(0);
     });
-
-    await advanceTimersGradually(400);
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
 
     // Resolve remaining
@@ -321,16 +316,15 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Should show "Creating worktree..." label
-    expect(screen.getByText("Creating worktree\u2026")).toBeTruthy();
+    // Should show "Creating worktree..." label for the two items that started
+    // immediately under concurrency = 2.
+    expect(screen.getAllByText("Creating worktree\u2026").length).toBeGreaterThanOrEqual(1);
 
     // Resolve all
-    await advanceTimersGradually(400);
     await act(async () => {
       resolvers[0]?.("wt-1");
       await vi.advanceTimersByTimeAsync(0);
     });
-    await advanceTimersGradually(400);
     await act(async () => {
       resolvers[1]?.("wt-2");
       resolvers[2]?.("wt-3");
@@ -991,11 +985,10 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Only item 1 has started, resolve it
-    await act(async () => {
-      resolvers[0]?.("wt-1");
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    // Items 1 and 2 both start immediately under concurrency = 2; item 3
+    // is still queued. Cancel before any resolve so the queue is cleared
+    // and item 3 never starts.
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
 
     // Close the dialog before remaining items finish
     await act(async () => {
@@ -1006,12 +999,16 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     expect(onClose).toHaveBeenCalled();
-    expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
 
+    // Resolving the in-flight items after cancel must not trigger item 3 —
+    // runIdRef has been bumped so the stale handlers exit early.
     await act(async () => {
+      resolvers[0]?.("wt-1");
+      resolvers[1]?.("wt-2");
       await vi.advanceTimersByTimeAsync(1000);
     });
 
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
     expect(screen.queryByTestId("bulk-create-done-button")).toBeNull();
   });
 
