@@ -2,8 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isCanopyEnvEnabled } from "@/utils/env";
 import { AgentSetupWizard } from "@/components/Setup/AgentSetupWizard";
 import { actionService } from "@/services/ActionService";
-import { WelcomeStep } from "./WelcomeStep";
-import { OnboardingProgressIndicator } from "./OnboardingProgressIndicator";
 import type { OnboardingState } from "@shared/types";
 import type { CliAvailability } from "@shared/types";
 
@@ -15,8 +13,8 @@ const LEGACY_KEYS = {
   firstRunToast: "canopy:first-run-toast",
 } as const;
 
-type OnboardingStep = "welcome" | "agentSetup";
-const STEP_ORDER: OnboardingStep[] = ["welcome", "agentSetup"];
+type OnboardingStep = "agentSetup";
+const STEP_ORDER: OnboardingStep[] = ["agentSetup"];
 
 interface OnboardingFlowProps {
   availability: CliAvailability;
@@ -37,7 +35,6 @@ export function OnboardingFlow({
 }: OnboardingFlowProps) {
   const [state, setState] = useState<OnboardingState | null>(null);
   const [currentStep, setCurrentStep] = useState<OnboardingStep | null>(null);
-  const [telemetryEnabled, setTelemetryEnabled] = useState(false);
   const [manualWizardOpen, setManualWizardOpen] = useState(false);
   const returnToPaletteRef = useRef(false);
   const flowStartTimeRef = useRef<number>(0);
@@ -89,8 +86,8 @@ export function OnboardingFlow({
         const resumeStep = rawStep as OnboardingStep | null;
         if (resumeStep && STEP_ORDER.includes(resumeStep)) {
           setCurrentStep(resumeStep);
-        } else if (rawStep === "agentSelection") {
-          // Legacy: "agentSelection" no longer exists; map to "agentSetup"
+        } else if (rawStep === "agentSelection" || rawStep === "welcome") {
+          // Legacy: "agentSelection" and "welcome" no longer exist; map to "agentSetup"
           setCurrentStep("agentSetup");
         } else {
           setCurrentStep(STEP_ORDER[0]);
@@ -169,20 +166,6 @@ export function OnboardingFlow({
     [onComplete]
   );
 
-  // Welcome step handlers
-  const handleWelcomeContinue = useCallback(async () => {
-    await window.electron.privacy.setTelemetryLevel(telemetryEnabled ? "errors" : "off");
-    await window.electron.telemetry.markPromptShown();
-    await advanceStep("welcome");
-  }, [advanceStep, telemetryEnabled]);
-
-  const handleWelcomeSkip = useCallback(async () => {
-    trackOnboarding("onboarding_step_skipped", { step: "welcome" });
-    await window.electron.privacy.setTelemetryLevel("off");
-    await window.electron.telemetry.markPromptShown();
-    await advanceStep("welcome");
-  }, [advanceStep]);
-
   const handleManualWizardClose = useCallback(() => {
     void onRefreshSettings();
     const shouldReturn = returnToPaletteRef.current;
@@ -227,29 +210,12 @@ export function OnboardingFlow({
   // Onboarding already complete
   if (state.completed || !currentStep) return null;
 
-  const currentStepIndex = STEP_ORDER.indexOf(currentStep);
-
   return (
-    <>
-      <OnboardingProgressIndicator currentIndex={currentStepIndex} total={STEP_ORDER.length} />
-
-      {currentStep === "welcome" && (
-        <WelcomeStep
-          isOpen
-          telemetryEnabled={telemetryEnabled}
-          onTelemetryChange={setTelemetryEnabled}
-          onContinue={handleWelcomeContinue}
-          onSkip={handleWelcomeSkip}
-        />
-      )}
-
-      {currentStep === "agentSetup" && (
-        <AgentSetupWizard
-          isOpen
-          onClose={handleAgentSetupClose}
-          initialAvailability={availability}
-        />
-      )}
-    </>
+    <AgentSetupWizard
+      isOpen
+      onClose={handleAgentSetupClose}
+      initialAvailability={availability}
+      isFirstRun
+    />
   );
 }

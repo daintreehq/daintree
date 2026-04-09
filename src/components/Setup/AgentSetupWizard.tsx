@@ -11,13 +11,161 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { cliAvailabilityClient } from "@/clients";
 import type { CliAvailability } from "@shared/types";
 import { isAgentInstalled, isAgentReady } from "../../../shared/utils/agentAvailability";
-import { Sparkles, ChevronLeft, ChevronRight, ArrowRight } from "lucide-react";
+import { Sparkles, ChevronLeft, ChevronRight, ArrowRight, Check, Sun, Moon } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion, type Variants } from "framer-motion";
 import { CanopyAgentIcon } from "@/components/icons";
 import { UI_ENTER_DURATION, UI_EXIT_DURATION } from "@/lib/animationUtils";
+import { cn } from "@/lib/utils";
+import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
+import { useAppThemeStore } from "@/store/appThemeStore";
+import { appThemeClient } from "@/clients/appThemeClient";
+import type { AppColorScheme } from "@shared/types/appTheme";
 
 const AGENT_ORDER = BUILT_IN_AGENT_IDS;
 const POLL_INTERVAL = 3000;
+
+const daintreeScheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
+const bondiScheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === "bondi")!;
+
+function ThemeMockup({ scheme }: { scheme: AppColorScheme }) {
+  const t = scheme.tokens;
+  return (
+    <div
+      className="rounded-lg overflow-hidden border"
+      style={{ backgroundColor: t["surface-canvas"], borderColor: t["border-default"] }}
+    >
+      <div
+        className="flex items-center gap-1 px-2 py-1"
+        style={{
+          backgroundColor: t["surface-panel-elevated"],
+          borderBottom: `1px solid ${t["border-default"]}`,
+        }}
+      >
+        <div className="flex gap-1">
+          <div
+            className="w-1.5 h-1.5 rounded-full"
+            style={{ backgroundColor: t["status-danger"] }}
+          />
+          <div
+            className="w-1.5 h-1.5 rounded-full"
+            style={{ backgroundColor: t["status-warning"] }}
+          />
+          <div
+            className="w-1.5 h-1.5 rounded-full"
+            style={{ backgroundColor: t["status-success"] }}
+          />
+        </div>
+        <div className="flex-1" />
+        <div className="text-[6px] font-medium tracking-wide" style={{ color: t["text-muted"] }}>
+          Canopy
+        </div>
+        <div className="flex-1" />
+      </div>
+
+      <div className="flex" style={{ height: 100 }}>
+        <div
+          className="flex flex-col items-center gap-1.5 py-2 px-1"
+          style={{
+            backgroundColor: t["surface-sidebar"],
+            borderRight: `1px solid ${t["border-default"]}`,
+            width: 24,
+          }}
+        >
+          <div
+            className="w-2.5 h-2.5 rounded-sm"
+            style={{ backgroundColor: t["accent-primary"] }}
+          />
+          <div
+            className="w-2.5 h-2.5 rounded-sm"
+            style={{ backgroundColor: t["text-muted"], opacity: 0.5 }}
+          />
+          <div
+            className="w-2.5 h-2.5 rounded-sm"
+            style={{ backgroundColor: t["text-muted"], opacity: 0.5 }}
+          />
+        </div>
+
+        <div className="flex-1 flex flex-col min-w-0">
+          <div
+            className="flex items-center"
+            style={{ borderBottom: `1px solid ${t["border-default"]}` }}
+          >
+            <div
+              className="px-2 py-0.5 text-[6px]"
+              style={{
+                backgroundColor: t["surface-panel"],
+                color: t["text-primary"],
+                borderBottom: `1.5px solid ${t["accent-primary"]}`,
+              }}
+            >
+              main.ts
+            </div>
+            <div
+              className="px-2 py-0.5 text-[6px]"
+              style={{
+                backgroundColor: t["surface-canvas"],
+                color: t["text-muted"],
+              }}
+            >
+              config.ts
+            </div>
+          </div>
+
+          <div
+            className="flex-1 px-2 py-1.5 font-mono text-[7px] leading-[11px] space-y-px overflow-hidden"
+            style={{ backgroundColor: t["surface-panel"] }}
+          >
+            <div>
+              <span style={{ color: t["syntax-keyword"] }}>import</span>
+              <span style={{ color: t["syntax-punctuation"] }}>{" { "}</span>
+              <span style={{ color: t["syntax-function"] }}>app</span>
+              <span style={{ color: t["syntax-punctuation"] }}>{" } "}</span>
+              <span style={{ color: t["syntax-keyword"] }}>from</span>
+              <span style={{ color: t["syntax-string"] }}>{" 'electron'"}</span>
+            </div>
+            <div style={{ height: 3 }} />
+            <div>
+              <span style={{ color: t["syntax-keyword"] }}>const</span>
+              <span style={{ color: t["text-primary"] }}> win</span>
+              <span style={{ color: t["syntax-operator"] }}> = </span>
+              <span style={{ color: t["syntax-keyword"] }}>new</span>
+              <span style={{ color: t["syntax-function"] }}> Window</span>
+              <span style={{ color: t["syntax-punctuation"] }}>({"{"}</span>
+            </div>
+            <div>
+              <span style={{ color: t["text-primary"] }}>{"  "}</span>
+              <span style={{ color: t["text-primary"] }}>width</span>
+              <span style={{ color: t["syntax-punctuation"] }}>: </span>
+              <span style={{ color: t["syntax-number"] }}>1200</span>
+              <span style={{ color: t["syntax-punctuation"] }}>,</span>
+            </div>
+            <div>
+              <span style={{ color: t["syntax-comment"] }}>{"  // "}</span>
+              <span style={{ color: t["syntax-comment"] }}>ready</span>
+            </div>
+          </div>
+
+          <div
+            className="px-2 py-1 font-mono text-[7px] leading-[10px]"
+            style={{
+              backgroundColor: t["surface-canvas"],
+              borderTop: `1px solid ${t["border-default"]}`,
+            }}
+          >
+            <div>
+              <span style={{ color: t["terminal-green"] }}>$</span>
+              <span style={{ color: t["text-primary"] }}> npm run dev</span>
+            </div>
+            <div>
+              <span style={{ color: t["terminal-cyan"] }}>ready</span>
+              <span style={{ color: t["text-muted"] }}> in 240ms</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // Tier arrays for the selection step — featured agents get prominent display,
 // the rest fall into "More agents". New built-in agents automatically land in MORE_AGENT_IDS.
@@ -170,9 +318,15 @@ interface AgentSetupWizardProps {
   isOpen: boolean;
   onClose: () => void;
   initialAvailability?: CliAvailability;
+  isFirstRun?: boolean;
 }
 
-export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: AgentSetupWizardProps) {
+export function AgentSetupWizard({
+  isOpen,
+  onClose,
+  initialAvailability,
+  isFirstRun = false,
+}: AgentSetupWizardProps) {
   const [state, dispatch] = useReducer(
     wizardReducer,
     initialAvailability ?? ({} as CliAvailability),
@@ -185,6 +339,15 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
   const { setAgentSelected } = useAgentSettingsStore();
   const isAvailabilityLoading = useCliAvailabilityStore((s) => s.isLoading || s.isRefreshing);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Theme state (first-run only)
+  const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
+  const setSelectedSchemeId = useAppThemeStore((s) => s.setSelectedSchemeId);
+  const hasAutoSelected = useRef(false);
+
+  // Telemetry state (first-run only)
+  const [telemetryEnabled, setTelemetryEnabled] = useState(false);
+  const telemetryCommittedRef = useRef(false);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isOpenRef = useRef(isOpen);
@@ -205,6 +368,9 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
         availability: initialAvailability ?? ({} as CliAvailability),
       });
       initRef.current = false;
+      hasAutoSelected.current = false;
+      telemetryCommittedRef.current = false;
+      setTelemetryEnabled(false);
       void useAgentSettingsStore.getState().initialize();
       directionRef.current = 1;
     }
@@ -250,6 +416,42 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
     dispatch({ type: "INIT_SELECTIONS", payload: initial });
   }, [isOpen, isAvailabilityLoading, state.availability, state.selectionsInitialized]);
 
+  // Auto-select theme based on OS preference (first-run only, once)
+  useEffect(() => {
+    if (!isFirstRun || !isOpen || hasAutoSelected.current) return;
+    if (state.step.type !== "selection") return;
+    hasAutoSelected.current = true;
+    const prefersLight = window.matchMedia("(prefers-color-scheme: light)").matches;
+    const targetId = prefersLight ? "bondi" : "daintree";
+    if (selectedSchemeId !== targetId) {
+      setSelectedSchemeId(targetId);
+      appThemeClient.setColorScheme(targetId).catch(console.error);
+    }
+  }, [isFirstRun, isOpen, state.step.type, selectedSchemeId, setSelectedSchemeId]);
+
+  const handleThemeSelect = useCallback(
+    async (id: string) => {
+      setSelectedSchemeId(id);
+      try {
+        await appThemeClient.setColorScheme(id);
+      } catch (error) {
+        console.error("Failed to persist app theme:", error);
+      }
+    },
+    [setSelectedSchemeId]
+  );
+
+  const commitTelemetry = useCallback(async (level: "errors" | "off") => {
+    if (telemetryCommittedRef.current) return;
+    try {
+      await window.electron.privacy.setTelemetryLevel(level);
+      await window.electron.telemetry.markPromptShown();
+      telemetryCommittedRef.current = true;
+    } catch (error) {
+      console.error("Failed to commit telemetry preference:", error);
+    }
+  }, []);
+
   const installedAgents = useMemo(
     () => AGENT_ORDER.filter((id) => isAgentReady(state.availability[id])),
     [state.availability]
@@ -263,6 +465,7 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
     [state.selections]
   );
 
+  const totalSteps = TOTAL_STEPS;
   const stepNumber = (() => {
     switch (state.step.type) {
       case "selection":
@@ -278,6 +481,9 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
     directionRef.current = 1;
     setIsSaving(true);
     try {
+      if (isFirstRun) {
+        await commitTelemetry(telemetryEnabled ? "errors" : "off");
+      }
       for (const [agentId, selected] of Object.entries(state.selections)) {
         await setAgentSelected(agentId, selected);
       }
@@ -285,7 +491,7 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
     } finally {
       setIsSaving(false);
     }
-  }, [state.selections, setAgentSelected]);
+  }, [state.selections, setAgentSelected, isFirstRun, commitTelemetry, telemetryEnabled]);
 
   const handleCliContinue = useCallback(() => {
     directionRef.current = 1;
@@ -301,21 +507,37 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
     onClose();
   }, [onClose]);
 
-  const handleSelectionSkip = useCallback(() => {
+  const handleSelectionSkip = useCallback(async () => {
+    if (isFirstRun) {
+      await commitTelemetry("off");
+    }
     onClose();
-  }, [onClose]);
+  }, [onClose, isFirstRun, commitTelemetry]);
 
   const showLoadingSelections = !state.selectionsInitialized && isAvailabilityLoading;
 
+  const handleBeforeClose = useCallback(async () => {
+    if (isFirstRun && state.step.type === "selection") {
+      await commitTelemetry("off");
+    }
+    return true;
+  }, [isFirstRun, state.step.type, commitTelemetry]);
+
   return (
-    <AppDialog isOpen={isOpen} onClose={handleFinish} size="lg" dismissible={!isSaving}>
+    <AppDialog
+      isOpen={isOpen}
+      onClose={handleFinish}
+      onBeforeClose={isFirstRun ? handleBeforeClose : undefined}
+      size="lg"
+      dismissible={!isSaving}
+    >
       <AppDialog.Header>
         <AppDialog.Title icon={<CanopyAgentIcon className="w-5 h-5 text-canopy-accent" />}>
           Agent Setup
         </AppDialog.Title>
         <div className="flex items-center gap-3">
           <span className="text-xs text-canopy-text/40">
-            {stepNumber + 1} of {TOTAL_STEPS}
+            {stepNumber + 1} of {totalSteps}
           </span>
           <AppDialog.CloseButton />
         </div>
@@ -343,6 +565,11 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
                   }
                   onFatalFailureChange={setHasFatalHealthFailure}
                   onCheckingChange={setIsHealthChecking}
+                  isFirstRun={isFirstRun}
+                  selectedSchemeId={selectedSchemeId}
+                  onThemeSelect={handleThemeSelect}
+                  telemetryEnabled={telemetryEnabled}
+                  onTelemetryChange={setTelemetryEnabled}
                 />
               )}
               {state.step.type === "cli" && (
@@ -367,7 +594,7 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
       <AppDialog.Footer>
         <div className="flex items-center justify-between w-full">
           <div className="flex items-center gap-1.5">
-            {Array.from({ length: TOTAL_STEPS }).map((_, i) => (
+            {Array.from({ length: totalSteps }).map((_, i) => (
               <div
                 key={i}
                 className={`w-1.5 h-1.5 rounded-full transition-colors ${
@@ -494,6 +721,11 @@ function SelectionStep({
   onToggle,
   onFatalFailureChange,
   onCheckingChange,
+  isFirstRun = false,
+  selectedSchemeId,
+  onThemeSelect,
+  telemetryEnabled,
+  onTelemetryChange,
 }: {
   availability: CliAvailability;
   selections: Record<string, boolean>;
@@ -502,6 +734,11 @@ function SelectionStep({
   onToggle: (agentId: string, checked: boolean) => void;
   onFatalFailureChange: (hasFatal: boolean) => void;
   onCheckingChange: (checking: boolean) => void;
+  isFirstRun?: boolean;
+  selectedSchemeId?: string;
+  onThemeSelect?: (id: string) => void;
+  telemetryEnabled?: boolean;
+  onTelemetryChange?: (enabled: boolean) => void;
 }) {
   const featuredAgents = useMemo(
     () => sortTierByInstalled(FEATURED_AGENT_IDS, availability),
@@ -512,6 +749,8 @@ function SelectionStep({
     [availability]
   );
 
+  const schemes = [daintreeScheme, bondiScheme] as const;
+
   return (
     <div className="space-y-4">
       <SystemRequirementsSection
@@ -519,14 +758,77 @@ function SelectionStep({
         onCheckingChange={onCheckingChange}
       />
 
-      <div>
-        <h3 className="text-base font-semibold text-canopy-text mb-2">Choose your AI agents</h3>
-        <p className="text-sm text-canopy-text/60">
-          Select the agents you want in your workflow. Already-installed agents are pre-selected.
-          You can change this anytime from{" "}
-          <span className="text-canopy-text/80">Settings &gt; Agents</span>.
-        </p>
-      </div>
+      {isFirstRun ? (
+        <div>
+          <h3 className="text-base font-semibold text-canopy-text mb-2">Welcome to Canopy</h3>
+          <p className="text-sm text-canopy-text/60">
+            Pick a theme, choose your agents, and you&apos;re ready to go.
+          </p>
+        </div>
+      ) : (
+        <div>
+          <h3 className="text-base font-semibold text-canopy-text mb-2">Choose your AI agents</h3>
+          <p className="text-sm text-canopy-text/60">
+            Select the agents you want in your workflow. Already-installed agents are pre-selected.
+            You can change this anytime from{" "}
+            <span className="text-canopy-text/80">Settings &gt; Agents</span>.
+          </p>
+        </div>
+      )}
+
+      {isFirstRun && onThemeSelect && (
+        <>
+          <div className="grid grid-cols-2 gap-4">
+            {schemes.map((scheme) => {
+              const isSelected = selectedSchemeId === scheme.id;
+              const isDark = scheme.type === "dark";
+              return (
+                <button
+                  key={scheme.id}
+                  onClick={() => onThemeSelect(scheme.id)}
+                  className={cn(
+                    "flex flex-col gap-2 p-3 rounded-[var(--radius-md)] border-2 transition-colors text-left",
+                    isSelected
+                      ? "border-canopy-accent bg-canopy-accent/10"
+                      : "border-canopy-border bg-canopy-bg hover:border-canopy-text/30"
+                  )}
+                >
+                  <ThemeMockup scheme={scheme} />
+                  <div className="flex items-center justify-between px-0.5">
+                    <div className="flex items-center gap-1.5">
+                      {isDark ? (
+                        <Moon className="w-3 h-3 text-canopy-text/50" />
+                      ) : (
+                        <Sun className="w-3 h-3 text-canopy-text/50" />
+                      )}
+                      <span className="text-sm font-medium text-canopy-text">{scheme.name}</span>
+                      <span className="text-xs text-canopy-text/50">
+                        {isDark ? "Dark" : "Light"}
+                      </span>
+                    </div>
+                    {isSelected && (
+                      <div className="w-4 h-4 rounded-full bg-canopy-accent flex items-center justify-center">
+                        <Check className="w-2.5 h-2.5 text-accent-primary-foreground" />
+                      </div>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-xs text-canopy-text/50 text-center">
+            More themes available in Settings → Appearance
+          </p>
+        </>
+      )}
+
+      {isFirstRun && (
+        <div className="flex items-center gap-2 py-1">
+          <div className="h-px flex-1 bg-border-divider" />
+          <span className="text-[11px] text-canopy-text/40 font-medium">Agents</span>
+          <div className="h-px flex-1 bg-border-divider" />
+        </div>
+      )}
 
       {isLoading ? (
         <div className="flex items-center justify-center py-8">
@@ -568,6 +870,35 @@ function SelectionStep({
               </div>
             </>
           )}
+        </div>
+      )}
+
+      {isFirstRun && onTelemetryChange != null && (
+        <div className="flex items-center justify-between gap-3 pt-4 border-t border-canopy-border">
+          <div>
+            <p className="text-sm font-medium text-canopy-text">Help improve Canopy</p>
+            <p className="text-xs text-canopy-text/50">
+              Send anonymous crash reports. No file contents or credentials.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={telemetryEnabled}
+            aria-label="Enable crash reporting"
+            onClick={() => onTelemetryChange(!telemetryEnabled)}
+            className={cn(
+              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
+              telemetryEnabled ? "bg-canopy-accent" : "bg-canopy-border"
+            )}
+          >
+            <span
+              className={cn(
+                "pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform mt-0.5",
+                telemetryEnabled ? "translate-x-4 ml-0.5" : "translate-x-0 ml-0.5"
+              )}
+            />
+          </button>
         </div>
       )}
     </div>
