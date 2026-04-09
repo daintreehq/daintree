@@ -12,6 +12,13 @@ import {
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useUIStore } from "@/store/uiStore";
 
+// Grace window after the dropdown opens during which overlay-count rises are
+// treated as in-flight modals (e.g. cold-start AgentSetupWizard) rather than
+// user-initiated dismiss triggers. Absorbs the cold-start race from issue
+// #5084 where deferred IPC mounts a modal shortly after the user clicks a
+// GitHub toolbar dropdown.
+const OVERLAY_RACE_GRACE_MS = 300;
+
 interface FixedDropdownProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -39,7 +46,29 @@ export function FixedDropdown({
     animationDuration: getUiTransitionDuration("exit"),
   });
   const overlayCount = useUIStore((state) => state.overlayCount);
-  const prevOverlayCountRef = useRef<number>(overlayCount);
+  const [overlayGraceActive, setOverlayGraceActive] = useState(false);
+  const baselineOverlayCountRef = useRef<number>(0);
+  // Carry the latest overlay count into the grace-setup effect without
+  // adding it as a reactive dependency — re-running on every count change
+  // would wrongly reset the grace window on each in-flight rise.
+  const latestOverlayCountRef = useRef<number>(overlayCount);
+  latestOverlayCountRef.current = overlayCount;
+
+  useEffect(() => {
+    if (!open) {
+      setOverlayGraceActive(false);
+      baselineOverlayCountRef.current = 0;
+      return;
+    }
+    setOverlayGraceActive(true);
+    baselineOverlayCountRef.current = latestOverlayCountRef.current;
+    const handle = setTimeout(() => {
+      setOverlayGraceActive(false);
+    }, OVERLAY_RACE_GRACE_MS);
+    return () => {
+      clearTimeout(handle);
+    };
+  }, [open]);
 
   useEffect(() => setMounted(true), []);
 
@@ -86,16 +115,27 @@ export function FixedDropdown({
   }, [open, onOpenChange, anchorRef, persistThroughChildOverlays, overlayCount]);
 
   useEffect(() => {
-    if (
-      !persistThroughChildOverlays &&
-      open &&
-      overlayCount > prevOverlayCountRef.current &&
-      overlayCount > 0
-    ) {
+    if (persistThroughChildOverlays || !open) return;
+    if (overlayGraceActive) {
+      // During the grace window, absorb any overlay rises as "already in
+      // flight when the dropdown opened." This keeps the baseline tracking
+      // the current count so rises after grace are measured against the
+      // settled baseline.
+      baselineOverlayCountRef.current = overlayCount;
+      return;
+    }
+    // Decay the baseline when the overlay count drops — e.g. the in-flight
+    // modal that was absorbed during grace has since closed. Without this,
+    // a subsequent user-initiated modal at the same numeric level would
+    // fail to dismiss the dropdown.
+    if (overlayCount < baselineOverlayCountRef.current) {
+      baselineOverlayCountRef.current = overlayCount;
+      return;
+    }
+    if (overlayCount > baselineOverlayCountRef.current) {
       onOpenChange(false);
     }
-    prevOverlayCountRef.current = overlayCount;
-  }, [open, overlayCount, onOpenChange, persistThroughChildOverlays]);
+  }, [open, overlayCount, onOpenChange, persistThroughChildOverlays, overlayGraceActive]);
 
   if (!shouldRender || !mounted || !position) return null;
 

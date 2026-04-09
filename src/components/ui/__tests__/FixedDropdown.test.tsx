@@ -5,6 +5,8 @@ import { FixedDropdown } from "../fixed-dropdown";
 import { _resetForTests } from "@/lib/escapeStack";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 
+const GRACE_MS = 300;
+
 let mockOverlayCount = 0;
 
 vi.mock("@/store/uiStore", () => ({
@@ -38,6 +40,12 @@ function pressEscape() {
   });
 }
 
+function advancePastGrace() {
+  act(() => {
+    vi.advanceTimersByTime(GRACE_MS + 1);
+  });
+}
+
 describe("FixedDropdown overlay-count dismiss behavior", () => {
   let onOpenChange: ReturnType<typeof vi.fn<(open: boolean) => void>>;
   let anchorRef: React.RefObject<HTMLElement | null>;
@@ -48,10 +56,12 @@ describe("FixedDropdown overlay-count dismiss behavior", () => {
     onOpenChange = vi.fn();
     anchorRef = createAnchor();
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
     _resetForTests();
+    vi.useRealTimers();
   });
 
   it("closes when overlayCount increases (default behavior)", () => {
@@ -61,6 +71,10 @@ describe("FixedDropdown overlay-count dismiss behavior", () => {
       </FixedDropdown>
     );
 
+    // Wait for the cold-start grace window to expire so that subsequent
+    // overlay rises are treated as user-initiated dismiss triggers.
+    advancePastGrace();
+
     mockOverlayCount = 1;
     rerender(
       <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
@@ -68,6 +82,189 @@ describe("FixedDropdown overlay-count dismiss behavior", () => {
       </FixedDropdown>
     );
 
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("does NOT close when overlayCount rises during the grace window (issue #5084)", () => {
+    // Dropdown opens with no overlays present.
+    const { rerender } = render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    // An in-flight modal (e.g. cold-start AgentSetupWizard) mounts shortly
+    // after and pushes the overlay count. Still inside the grace window, so
+    // the dropdown should not be auto-closed.
+    mockOverlayCount = 1;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    // Even after the grace window expires, the baseline absorbed the rise
+    // so a steady overlay count must not trigger a close.
+    advancePastGrace();
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+    // Also verify the dropdown is still actually rendered — guards against
+    // a silent render-suppression regression.
+    expect(document.body.textContent).toContain("Content");
+  });
+
+  it("closes when a new overlay opens at the same level after the absorbed one disappeared", () => {
+    // Regression: baseline must decay when overlayCount drops, otherwise a
+    // user-initiated modal at the same numeric level as an absorbed
+    // in-flight modal fails to dismiss the dropdown.
+    const { rerender } = render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    // In-flight modal mounts during grace, absorbed into baseline=1.
+    mockOverlayCount = 1;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    advancePastGrace();
+
+    // In-flight modal closes — baseline must decay back to 0.
+    mockOverlayCount = 0;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    // User now opens a genuine modal at the same numeric level — must dismiss.
+    mockOverlayCount = 1;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("seeds baseline from a nonzero overlayCount when the dropdown opens mid-wizard", () => {
+    // Cold-start variant: a wizard is already open when the user clicks the
+    // toolbar. The grace-setup effect must seed baseline=1 so that the
+    // dropdown does not immediately self-close.
+    mockOverlayCount = 1;
+    const { rerender } = render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    advancePastGrace();
+
+    // Steady count should not trigger a close.
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    // A second modal on top of the first should dismiss the dropdown.
+    mockOverlayCount = 2;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("closes when an additional overlay opens after the grace window absorbed an in-flight one", () => {
+    const { rerender } = render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    // In-flight modal arrives during grace; absorbed into baseline.
+    mockOverlayCount = 1;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    advancePastGrace();
+
+    // User now opens a genuinely new modal — this must dismiss the dropdown.
+    mockOverlayCount = 2;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("restarts the grace window on reopen", () => {
+    const { rerender } = render(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+    advancePastGrace();
+
+    // Close, then reopen while a modal is already visible.
+    rerender(
+      <FixedDropdown open={false} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    mockOverlayCount = 2;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    // Within the new grace window, any further in-flight rise is absorbed.
+    mockOverlayCount = 3;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    // After the new grace window expires, a further rise closes.
+    advancePastGrace();
+    mockOverlayCount = 4;
+    rerender(
+      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
@@ -82,6 +279,8 @@ describe("FixedDropdown overlay-count dismiss behavior", () => {
         <div>Content</div>
       </FixedDropdown>
     );
+
+    advancePastGrace();
 
     mockOverlayCount = 1;
     rerender(
