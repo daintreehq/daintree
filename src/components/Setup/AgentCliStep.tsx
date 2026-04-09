@@ -13,6 +13,8 @@ import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { getInstallBlocksForCurrentOS, isBlockExecutable } from "@/lib/agentInstall";
 import { systemClient } from "@/clients";
+import { useAgentSettingsStore } from "@/store";
+import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { CopyableCommand } from "./InstallBlock";
 import { AGENT_DESCRIPTIONS } from "./AgentSetupWizard";
 import type { CliAvailability } from "@shared/types";
@@ -172,6 +174,13 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
     const status = cardStatuses[id];
     return status === "idle" || status === "error";
   });
+
+  const updateAgent = useAgentSettingsStore((s) => s.updateAgent);
+  const agentSettings = useAgentSettingsStore((s) => s.settings?.agents);
+
+  const agentsWithDangerousToggle = selectedAgentIds.filter(
+    (id) => (DEFAULT_DANGEROUS_ARGS[id] ?? "") !== ""
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -367,6 +376,44 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
             </>
           )}
         </button>
+      )}
+
+      {agentsWithDangerousToggle.length > 0 && (
+        <div className="border-t border-canopy-border pt-3 space-y-2">
+          <div className="text-xs font-medium text-canopy-text/60">Skip Permissions</div>
+          <div className="space-y-1.5">
+            {agentsWithDangerousToggle.map((agentId) => {
+              const config = AGENT_REGISTRY[agentId];
+              if (!config) return null;
+              const dangerousArg = DEFAULT_DANGEROUS_ARGS[agentId] ?? "";
+              const isEnabled = agentSettings?.[agentId]?.dangerousEnabled ?? false;
+              return (
+                <label
+                  key={agentId}
+                  className="flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30 cursor-pointer hover:bg-canopy-bg/60 transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    className="w-3.5 h-3.5 accent-status-error shrink-0"
+                    checked={isEnabled}
+                    onChange={() => {
+                      void updateAgent(agentId, { dangerousEnabled: !isEnabled });
+                    }}
+                  />
+                  <span className="text-xs text-canopy-text/70">{config.name}</span>
+                  {isEnabled && (
+                    <code className="text-[10px] text-status-error font-mono ml-auto">
+                      {dangerousArg}
+                    </code>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-canopy-text/30">
+            Auto-approve all actions. Use with caution.
+          </p>
+        </div>
       )}
     </div>
   );

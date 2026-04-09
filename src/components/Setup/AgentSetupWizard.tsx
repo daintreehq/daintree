@@ -159,6 +159,7 @@ export function AgentSetupWizard({ isOpen, onClose, initialAvailability }: Agent
         availability: initialAvailability ?? ({} as CliAvailability),
       });
       initRef.current = false;
+      void useAgentSettingsStore.getState().initialize();
     }
     prevIsOpenRef.current = isOpen;
   }, [isOpen, initialAvailability]);
