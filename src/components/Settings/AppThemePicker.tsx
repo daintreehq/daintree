@@ -6,34 +6,10 @@ import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { APP_THEME_PREVIEW_KEYS, getAppThemeWarnings } from "@shared/theme";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
-
-function PaletteStrip({ scheme }: { scheme: AppColorScheme }) {
-  const t = scheme.tokens;
-  const keys = [
-    APP_THEME_PREVIEW_KEYS.accent,
-    APP_THEME_PREVIEW_KEYS.success,
-    APP_THEME_PREVIEW_KEYS.warning,
-    APP_THEME_PREVIEW_KEYS.danger,
-    APP_THEME_PREVIEW_KEYS.text,
-    APP_THEME_PREVIEW_KEYS.border,
-    APP_THEME_PREVIEW_KEYS.panel,
-    APP_THEME_PREVIEW_KEYS.sidebar,
-  ] as const;
-  return (
-    <div className="flex gap-0.5">
-      {keys.map((key) => (
-        <div
-          key={key}
-          className="w-3 h-3 rounded-sm shrink-0"
-          style={{ backgroundColor: t[key] }}
-        />
-      ))}
-    </div>
-  );
-}
 
 function HeroImage({ scheme, size }: { scheme: AppColorScheme; size: number }) {
   if (scheme.heroImage?.trim()) {
