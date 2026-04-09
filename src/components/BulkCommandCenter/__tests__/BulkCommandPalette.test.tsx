@@ -55,27 +55,44 @@ vi.mock("@/components/Worktree/AgentStatusIndicator", () => ({
   },
 }));
 
-vi.mock("@/components/Worktree/terminalStateConfig", () => ({
-  STATE_ICONS: {
-    working: ({ className }: { className?: string }) =>
-      `<span data-testid="state-icon-working" class="${className}">W</span>`,
-    idle: ({ className }: { className?: string }) =>
-      `<span data-testid="state-icon-idle" class="${className}">I</span>`,
-    waiting: ({ className }: { className?: string }) =>
-      `<span data-testid="state-icon-waiting" class="${className}">WA</span>`,
-    completed: ({ className }: { className?: string }) =>
-      `<span data-testid="state-icon-completed" class="${className}">C</span>`,
-    failed: ({ className }: { className?: string }) =>
-      `<span data-testid="state-icon-failed" class="${className}">F</span>`,
-  },
-  STATE_COLORS: {
-    working: "text-state-working",
-    idle: "text-canopy-text/40",
-    waiting: "text-state-waiting",
-    completed: "text-state-completed",
-    failed: "text-state-failed",
-  },
-}));
+vi.mock("@/components/Worktree/terminalStateConfig", () => {
+  const Icon =
+    (name: string) =>
+    ({ className }: { className?: string }) => (
+      <span data-testid={`state-icon-${name}`} className={className}>
+        {name[0]}
+      </span>
+    );
+  return {
+    STATE_ICONS: {
+      working: Icon("working"),
+      running: Icon("running"),
+      waiting: Icon("waiting"),
+      directing: Icon("directing"),
+      idle: Icon("idle"),
+      completed: Icon("completed"),
+      exited: Icon("exited"),
+    },
+    STATE_COLORS: {
+      working: "text-state-working",
+      running: "text-status-info",
+      waiting: "text-state-waiting",
+      directing: "text-category-blue",
+      idle: "text-canopy-text/40",
+      completed: "text-state-completed",
+      exited: "text-canopy-text/40",
+    },
+    STATE_LABELS: {
+      working: "working",
+      running: "running",
+      waiting: "waiting",
+      directing: "directing",
+      idle: "idle",
+      completed: "done",
+      exited: "exited",
+    },
+  };
+});
 
 vi.mock("@/utils/terminalType", () => ({
   isAgentTerminal: (kindOrType?: string, agentId?: string) => kindOrType === "agent" || !!agentId,
@@ -335,8 +352,7 @@ describe("BulkCommandPalette", () => {
   it("renders main worktree as disabled when it has no agent terminals", () => {
     render(<BulkCommandPalette />);
     openPalette();
-    const mainRow = screen.getByText("main").closest("button")!;
-    const checkbox = mainRow.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    const checkbox = screen.getByTestId("bulk-worktree-checkbox-wt-main") as HTMLInputElement;
     expect(checkbox.disabled).toBe(true);
   });
 
@@ -347,23 +363,73 @@ describe("BulkCommandPalette", () => {
     expect(screen.getAllByText("1 agent").length).toBeGreaterThanOrEqual(1); // wt-2 and wt-3 each have 1
   });
 
-  it("toggles worktree selection via checkbox row click", () => {
+  it("toggles worktree selection via branch click (selects all child terminals)", () => {
     render(<BulkCommandPalette />);
     openPalette();
-    const row = screen.getByText("feature/a").closest("button")!;
-    fireEvent.click(row);
-    const checkbox = row.querySelector('input[type="checkbox"]') as HTMLInputElement;
-    expect(checkbox.checked).toBe(true);
-    fireEvent.click(row);
-    expect(checkbox.checked).toBe(false);
+    fireEvent.click(screen.getByText("feature/a").closest("button")!);
+    const wtCheckbox = screen.getByTestId("bulk-worktree-checkbox-wt-1") as HTMLInputElement;
+    const t1Checkbox = screen.getByTestId("bulk-terminal-checkbox-t1") as HTMLInputElement;
+    const t2Checkbox = screen.getByTestId("bulk-terminal-checkbox-t2") as HTMLInputElement;
+    expect(wtCheckbox.checked).toBe(true);
+    expect(t1Checkbox.checked).toBe(true);
+    expect(t2Checkbox.checked).toBe(true);
+    fireEvent.click(screen.getByText("feature/a").closest("button")!);
+    expect(wtCheckbox.checked).toBe(false);
+    expect(t1Checkbox.checked).toBe(false);
+    expect(t2Checkbox.checked).toBe(false);
   });
 
-  it("select all toggles all enabled rows", () => {
+  it("toggling a single terminal shows the worktree checkbox as indeterminate", () => {
+    render(<BulkCommandPalette />);
+    openPalette();
+    fireEvent.click(screen.getByTestId("bulk-terminal-checkbox-t1"));
+    const wtCheckbox = screen.getByTestId("bulk-worktree-checkbox-wt-1") as HTMLInputElement;
+    const t1Checkbox = screen.getByTestId("bulk-terminal-checkbox-t1") as HTMLInputElement;
+    const t2Checkbox = screen.getByTestId("bulk-terminal-checkbox-t2") as HTMLInputElement;
+    expect(t1Checkbox.checked).toBe(true);
+    expect(t2Checkbox.checked).toBe(false);
+    expect(wtCheckbox.checked).toBe(false);
+    expect(wtCheckbox.indeterminate).toBe(true);
+    expect(wtCheckbox.getAttribute("aria-checked")).toBe("mixed");
+  });
+
+  it("worktree checkbox becomes fully checked (non-indeterminate) when all children selected", () => {
+    render(<BulkCommandPalette />);
+    openPalette();
+    fireEvent.click(screen.getByTestId("bulk-terminal-checkbox-t1"));
+    fireEvent.click(screen.getByTestId("bulk-terminal-checkbox-t2"));
+    const wtCheckbox = screen.getByTestId("bulk-worktree-checkbox-wt-1") as HTMLInputElement;
+    expect(wtCheckbox.checked).toBe(true);
+    expect(wtCheckbox.indeterminate).toBe(false);
+  });
+
+  it("expand button toggles the row's aria-expanded state", () => {
+    render(<BulkCommandPalette />);
+    openPalette();
+    const row = screen.getByTestId("bulk-worktree-row-wt-1");
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(screen.getByTestId("bulk-worktree-expand-wt-1"));
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(screen.getByTestId("bulk-worktree-expand-wt-1"));
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("disabled worktrees do not show an expand affordance", () => {
+    render(<BulkCommandPalette />);
+    openPalette();
+    const row = screen.getByTestId("bulk-worktree-row-wt-main");
+    expect(row.getAttribute("aria-expanded")).toBeNull();
+    const expandBtn = screen.getByTestId("bulk-worktree-expand-wt-main") as HTMLButtonElement;
+    expect(expandBtn.disabled).toBe(true);
+  });
+
+  it("select all toggles all enabled rows (worktree + terminal checkboxes)", () => {
     render(<BulkCommandPalette />);
     openPalette();
     fireEvent.click(screen.getByText("Select All"));
     const checkboxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
     const enabled = checkboxes.filter((c) => !c.disabled);
+    expect(enabled.length).toBeGreaterThan(0);
     expect(enabled.every((c) => c.checked)).toBe(true);
     fireEvent.click(screen.getByText("Deselect All"));
     expect(enabled.every((c) => !c.checked)).toBe(true);
@@ -386,6 +452,16 @@ describe("BulkCommandPalette", () => {
     expect(mockSendKey).toHaveBeenCalledWith("t2", "escape");
   });
 
+  it("sends keystroke to only individually selected terminal", () => {
+    render(<BulkCommandPalette />);
+    openPalette();
+    // Select only t1, leaving t2 (same worktree) untouched
+    fireEvent.click(screen.getByTestId("bulk-terminal-checkbox-t1"));
+    fireEvent.click(screen.getByText("Send"));
+    expect(mockSendKey).toHaveBeenCalledTimes(1);
+    expect(mockSendKey).toHaveBeenCalledWith("t1", "escape");
+  });
+
   it("sends double-escape with 1s delay after confirmation", () => {
     render(<BulkCommandPalette />);
     openPalette();
@@ -395,7 +471,7 @@ describe("BulkCommandPalette", () => {
     fireEvent.click(sendBtn);
     // Should show confirmation instead of sending
     expect(mockSendKey).toHaveBeenCalledTimes(0);
-    expect(screen.getByText(/Send Double Escape to 1 worktree\?/)).toBeTruthy();
+    expect(screen.getByText(/Send Double Escape to 1 agent\?/)).toBeTruthy();
     // Click Confirm to actually send
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
     expect(mockSendKey).toHaveBeenCalledTimes(1);
@@ -431,6 +507,22 @@ describe("BulkCommandPalette", () => {
     expect(mockSubmit).toHaveBeenCalledTimes(2);
     expect(mockSubmit).toHaveBeenCalledWith("t1", "npm test");
     expect(mockSubmit).toHaveBeenCalledWith("t2", "npm test");
+  });
+
+  it("text-mode send targets only individually selected terminals", async () => {
+    render(<BulkCommandPalette />);
+    openPalette();
+    fireEvent.click(screen.getByText("Text Command"));
+    // Select only t2, not t1 in the same worktree
+    fireEvent.click(screen.getByTestId("bulk-terminal-checkbox-t2"));
+    const input = screen.getByPlaceholderText(/Type a command/);
+    fireEvent.change(input, { target: { value: "echo hi" } });
+    fireEvent.click(screen.getByText("Preview"));
+    await act(async () => {
+      fireEvent.click(screen.getByText("Confirm"));
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(1);
+    expect(mockSubmit).toHaveBeenCalledWith("t2", "echo hi");
   });
 
   it("resolves template variables per worktree in preview", () => {
@@ -482,68 +574,61 @@ describe("BulkCommandPalette", () => {
   });
 
   describe("state presets", () => {
-    it("renders preset buttons with counts", () => {
+    it("renders preset buttons with terminal-level counts", () => {
       render(<BulkCommandPalette />);
       openPalette();
+      // Active: t1 (working). Waiting: t3. Idle: t2 (idle) + t6 (undefined→null) = 2.
       expect(screen.getByText("Active (1)")).toBeTruthy();
       expect(screen.getByText("Waiting (1)")).toBeTruthy();
-      expect(screen.getByText("Idle (1)")).toBeTruthy();
+      expect(screen.getByText("Idle (2)")).toBeTruthy();
       expect(screen.getByText("Completed (0)")).toBeTruthy();
     });
 
-    it("Active preset selects worktrees with working state", () => {
+    it("Active preset selects only matching terminals, not siblings in same worktree", () => {
       render(<BulkCommandPalette />);
       openPalette();
       fireEvent.click(screen.getByText("Active (1)"));
-      // wt-1 has dominant state "working" (mock returns first valid state)
-      const wt1Checkbox = screen
-        .getByText("feature/a")
-        .closest("button")!
-        .querySelector('input[type="checkbox"]') as HTMLInputElement;
-      expect(wt1Checkbox.checked).toBe(true);
+      const t1 = screen.getByTestId("bulk-terminal-checkbox-t1") as HTMLInputElement;
+      const t2 = screen.getByTestId("bulk-terminal-checkbox-t2") as HTMLInputElement;
+      const wt1 = screen.getByTestId("bulk-worktree-checkbox-wt-1") as HTMLInputElement;
+      // t1 is "working" → selected; t2 is "idle" in the same worktree → not selected
+      expect(t1.checked).toBe(true);
+      expect(t2.checked).toBe(false);
+      // parent shows indeterminate
+      expect(wt1.checked).toBe(false);
+      expect(wt1.indeterminate).toBe(true);
     });
 
-    it("Waiting preset selects worktrees with waiting state", () => {
+    it("Waiting preset selects terminals with waiting state", () => {
       render(<BulkCommandPalette />);
       openPalette();
       fireEvent.click(screen.getByText("Waiting (1)"));
-      const wt2Checkbox = screen
-        .getByText("feature/b")
-        .closest("button")!
-        .querySelector('input[type="checkbox"]') as HTMLInputElement;
-      expect(wt2Checkbox.checked).toBe(true);
+      const t3 = screen.getByTestId("bulk-terminal-checkbox-t3") as HTMLInputElement;
+      const wt2 = screen.getByTestId("bulk-worktree-checkbox-wt-2") as HTMLInputElement;
+      expect(t3.checked).toBe(true);
+      // wt-2 has only t3 as eligible agent → fully selected
+      expect(wt2.checked).toBe(true);
     });
 
-    it("Idle preset selects worktrees with null dominant state", () => {
+    it("Idle preset selects idle and stateless terminals across worktrees", () => {
       render(<BulkCommandPalette />);
       openPalette();
-      // wt-3 has a single terminal with undefined agentState, so mock returns null
-      fireEvent.click(screen.getByText("Idle (1)"));
-      const wt3Checkbox = screen
-        .getByText("feature/c")
-        .closest("button")!
-        .querySelector('input[type="checkbox"]') as HTMLInputElement;
-      expect(wt3Checkbox.checked).toBe(true);
+      fireEvent.click(screen.getByText("Idle (2)"));
+      const t2 = screen.getByTestId("bulk-terminal-checkbox-t2") as HTMLInputElement;
+      const t6 = screen.getByTestId("bulk-terminal-checkbox-t6") as HTMLInputElement;
+      expect(t2.checked).toBe(true);
+      expect(t6.checked).toBe(true);
     });
 
     it("presets are additive - do not clear existing selection", () => {
       render(<BulkCommandPalette />);
       openPalette();
-      // First select wt-1 manually
       fireEvent.click(screen.getByText("feature/a").closest("button")!);
-      // Then apply Waiting preset
       fireEvent.click(screen.getByText("Waiting (1)"));
-      // Both should be selected
-      const wt1Checkbox = screen
-        .getByText("feature/a")
-        .closest("button")!
-        .querySelector('input[type="checkbox"]') as HTMLInputElement;
-      const wt2Checkbox = screen
-        .getByText("feature/b")
-        .closest("button")!
-        .querySelector('input[type="checkbox"]') as HTMLInputElement;
-      expect(wt1Checkbox.checked).toBe(true);
-      expect(wt2Checkbox.checked).toBe(true);
+      const wt1 = screen.getByTestId("bulk-worktree-checkbox-wt-1") as HTMLInputElement;
+      const wt2 = screen.getByTestId("bulk-worktree-checkbox-wt-2") as HTMLInputElement;
+      expect(wt1.checked).toBe(true);
+      expect(wt2.checked).toBe(true);
     });
   });
 
@@ -646,11 +731,12 @@ describe("BulkCommandPalette", () => {
     it("ctrl+c shows confirmation before sending", () => {
       render(<BulkCommandPalette />);
       openPalette();
-      fireEvent.click(screen.getByText("feature/a").closest("button")!);
+      // Click single terminal (t3 in wt-2) to select exactly 1 agent
+      fireEvent.click(screen.getByTestId("bulk-terminal-checkbox-t3"));
       fireEvent.click(screen.getByText("Ctrl+C"));
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
       expect(mockSendKey).not.toHaveBeenCalled();
-      expect(screen.getByText(/Send Ctrl\+C to 1 worktree\?/)).toBeTruthy();
+      expect(screen.getByText(/Send Ctrl\+C to 1 agent\?/)).toBeTruthy();
     });
 
     it("non-destructive keystrokes send immediately", () => {

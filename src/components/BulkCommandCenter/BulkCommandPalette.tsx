@@ -10,8 +10,9 @@ import { useNotificationStore } from "@/store/notificationStore";
 import { useShallow } from "zustand/react/shallow";
 import { useEscapeStack } from "@/hooks";
 import { isAgentTerminal } from "@/utils/terminalType";
+import { ChevronRight } from "lucide-react";
 import { getDominantAgentState } from "@/components/Worktree/AgentStatusIndicator";
-import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
+import { STATE_ICONS, STATE_COLORS, STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
 import {
   replaceRecipeVariables,
   detectUnresolvedVariables,
@@ -33,12 +34,19 @@ type BulkMode = "keystroke" | "text" | "recipe";
 type BulkStep = "select" | "preview";
 type KeystrokePreset = "escape" | "enter" | "ctrl+c" | "double-escape";
 
+interface WorktreeTerminalRow {
+  id: string;
+  label: string;
+  agentState: AgentState | null;
+}
+
 interface WorktreeRow {
   id: string;
   branch: string;
   path: string;
   issueNumber?: number;
   prNumber?: number;
+  terminals: WorktreeTerminalRow[];
   agentTerminalCount: number;
   dominantState: AgentState | null;
   disabled: boolean;
@@ -63,18 +71,18 @@ const BULK_HISTORY_KEY = "bulk-commands";
 
 interface StatePreset {
   label: string;
-  match: (row: WorktreeRow) => boolean;
+  match: (terminal: WorktreeTerminalRow) => boolean;
 }
 
 const STATE_PRESETS: StatePreset[] = [
   {
     label: "Active",
-    match: (r) => r.dominantState === "working" || r.dominantState === "running",
+    match: (t) => t.agentState === "working" || t.agentState === "running",
   },
-  { label: "Waiting", match: (r) => r.dominantState === "waiting" },
-  { label: "Idle", match: (r) => r.dominantState === null && !r.disabled },
-  { label: "Completed", match: (r) => r.dominantState === "completed" },
-  { label: "Exited", match: (r) => r.dominantState === "exited" },
+  { label: "Waiting", match: (t) => t.agentState === "waiting" },
+  { label: "Idle", match: (t) => t.agentState === null || t.agentState === "idle" },
+  { label: "Completed", match: (t) => t.agentState === "completed" },
+  { label: "Exited", match: (t) => t.agentState === "exited" },
 ];
 
 function getEligibleTerminals(
@@ -102,15 +110,21 @@ function useWorktreeRows(): WorktreeRow[] {
     for (const wt of worktrees.values()) {
       const eligible = getEligibleTerminals(terminals, wt.id);
       const dominantState = getDominantAgentState(eligible.map((t) => t.agentState));
+      const terminalRows: WorktreeTerminalRow[] = eligible.map((t) => ({
+        id: t.id,
+        label: t.title?.trim() || t.agentId || t.id,
+        agentState: (t.agentState as AgentState | undefined) ?? null,
+      }));
       rows.push({
         id: wt.id,
         branch: wt.branch ?? wt.name,
         path: wt.path,
         issueNumber: wt.issueNumber,
         prNumber: wt.prNumber,
-        agentTerminalCount: eligible.length,
+        terminals: terminalRows,
+        agentTerminalCount: terminalRows.length,
         dominantState,
-        disabled: eligible.length === 0,
+        disabled: terminalRows.length === 0,
       });
     }
     return rows;
@@ -142,7 +156,9 @@ function BulkCommandPaletteInner() {
   const closePalette = useCallback(() => usePaletteStore.getState().closePalette(PALETTE_ID), []);
 
   const rows = useWorktreeRows();
+  // selectedIds now holds terminal IDs (was worktree IDs).
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<BulkMode>("keystroke");
   const [step, setStep] = useState<BulkStep>("select");
   const [keystrokePreset, setKeystrokePreset] = useState<KeystrokePreset>("escape");
@@ -187,32 +203,106 @@ function BulkCommandPaletteInner() {
   }, [keystrokePreset]);
 
   const enabledRows = useMemo(() => rows.filter((r) => !r.disabled), [rows]);
-  const allEnabledSelected =
-    enabledRows.length > 0 && enabledRows.every((r) => selectedIds.has(r.id));
 
+  // Prune stale selection/expansion ids when the rows collection changes (e.g.,
+  // a terminal exits or a worktree is removed while the palette is open).
+  useEffect(() => {
+    const validTerminalIds = new Set<string>();
+    const validWorktreeIds = new Set<string>();
+    for (const row of rows) {
+      validWorktreeIds.add(row.id);
+      for (const t of row.terminals) validTerminalIds.add(t.id);
+    }
+    setSelectedIds((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (validTerminalIds.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+    setExpandedIds((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (validWorktreeIds.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [rows]);
+
+  const rowAllSelected = useCallback(
+    (row: WorktreeRow) =>
+      row.terminals.length > 0 && row.terminals.every((t) => selectedIds.has(t.id)),
+    [selectedIds]
+  );
+  const rowSomeSelected = useCallback(
+    (row: WorktreeRow) => row.terminals.some((t) => selectedIds.has(t.id)),
+    [selectedIds]
+  );
+
+  const allEnabledSelected = useMemo(
+    () => enabledRows.length > 0 && enabledRows.every(rowAllSelected),
+    [enabledRows, rowAllSelected]
+  );
+
+  // Worktrees with at least one selected terminal — feeds preview UI,
+  // recipe broadcast, and the footer worktree count.
   const selectedRows = useMemo(
-    () => rows.filter((r) => selectedIds.has(r.id)),
+    () => rows.filter((r) => r.terminals.some((t) => selectedIds.has(t.id))),
     [rows, selectedIds]
   );
 
   const presetCounts = useMemo(
     () =>
       Object.fromEntries(
-        STATE_PRESETS.map((p) => [p.label, rows.filter((r) => !r.disabled && p.match(r)).length])
+        STATE_PRESETS.map((p) => [
+          p.label,
+          rows
+            .filter((r) => !r.disabled)
+            .flatMap((r) => r.terminals)
+            .filter((t) => p.match(t)).length,
+        ])
       ),
     [rows]
   );
 
-  const selectedAgentCount = useMemo(
-    () => selectedRows.reduce((sum, r) => sum + r.agentTerminalCount, 0),
-    [selectedRows]
-  );
+  const selectedTerminalCount = selectedIds.size;
+  const selectedWorktreeCount = selectedRows.length;
 
-  const toggleWorktree = useCallback((id: string) => {
+  const toggleTerminal = useCallback((terminalId: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(terminalId)) next.delete(terminalId);
+      else next.add(terminalId);
+      return next;
+    });
+  }, []);
+
+  const toggleWorktree = useCallback(
+    (row: WorktreeRow) => {
+      if (row.terminals.length === 0) return;
+      const allSelected = row.terminals.every((t) => selectedIds.has(t.id));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (allSelected) {
+          for (const t of row.terminals) next.delete(t.id);
+        } else {
+          for (const t of row.terminals) next.add(t.id);
+        }
+        return next;
+      });
+    },
+    [selectedIds]
+  );
+
+  const toggleExpand = useCallback((worktreeId: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(worktreeId)) next.delete(worktreeId);
+      else next.add(worktreeId);
       return next;
     });
   }, []);
@@ -221,7 +311,11 @@ function BulkCommandPaletteInner() {
     if (allEnabledSelected) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(enabledRows.map((r) => r.id)));
+      const all = new Set<string>();
+      for (const row of enabledRows) {
+        for (const t of row.terminals) all.add(t.id);
+      }
+      setSelectedIds(all);
     }
   }, [allEnabledSelected, enabledRows]);
 
@@ -230,8 +324,9 @@ function BulkCommandPaletteInner() {
       setSelectedIds((prev) => {
         const next = new Set(prev);
         for (const row of rows) {
-          if (!row.disabled && preset.match(row)) {
-            next.add(row.id);
+          if (row.disabled) continue;
+          for (const t of row.terminals) {
+            if (preset.match(t)) next.add(t.id);
           }
         }
         return next;
@@ -253,15 +348,23 @@ function BulkCommandPaletteInner() {
   }, [step, mode, selectedRows, commandText]);
 
   const resolveTargetIds = useCallback((): string[] => {
+    // selectedIds are terminal IDs. Filter against the current panel store
+    // so we drop anything that has exited or been trashed since selection.
     const { panelsById: tById, panelIds: tIds } = usePanelStore.getState();
+    const liveEligible = new Set<string>();
     const allTerminals = tIds.map((id) => tById[id]).filter(Boolean);
-    const ids: string[] = [];
-    for (const worktreeId of selectedIds) {
-      for (const t of getEligibleTerminals(allTerminals, worktreeId)) {
-        ids.push(t.id);
+    for (const t of allTerminals) {
+      if (!t.worktreeId) continue;
+      if (
+        isAgentTerminal(t.kind ?? t.type, t.agentId) &&
+        t.location !== "trash" &&
+        t.location !== "background" &&
+        t.hasPty !== false
+      ) {
+        liveEligible.add(t.id);
       }
     }
-    return ids;
+    return [...selectedIds].filter((id) => liveEligible.has(id));
   }, [selectedIds]);
 
   const handleInsertVariable = useCallback(
@@ -289,17 +392,20 @@ function BulkCommandPaletteInner() {
     let failures = 0;
 
     if (mode === "text") {
-      const { panelsById: tById, panelIds: tIds } = usePanelStore.getState();
-      const allTerminals = tIds.map((id) => tById[id]).filter(Boolean);
+      // Build a terminal-id → parent worktree lookup so recipe variables
+      // resolve from the correct worktree context.
+      const terminalToRow = new Map<string, WorktreeRow>();
+      for (const row of rows) {
+        for (const t of row.terminals) terminalToRow.set(t.id, row);
+      }
+      const targetIds = resolveTargetIds();
       const promises: Promise<unknown>[] = [];
-      for (const row of selectedRows) {
-        const ctx = buildRecipeContext(row);
-        const resolved = replaceRecipeVariables(commandText, ctx);
+      for (const terminalId of targetIds) {
+        const row = terminalToRow.get(terminalId);
+        if (!row) continue;
+        const resolved = replaceRecipeVariables(commandText, buildRecipeContext(row));
         if (!resolved.trim()) continue;
-        const eligible = getEligibleTerminals(allTerminals, row.id);
-        for (const t of eligible) {
-          promises.push(terminalClient.submit(t.id, resolved));
-        }
+        promises.push(terminalClient.submit(terminalId, resolved));
       }
       totalTargets = promises.length;
       const results = await Promise.allSettled(promises);
@@ -338,7 +444,7 @@ function BulkCommandPaletteInner() {
 
     setIsSending(false);
     closePalette();
-  }, [mode, selectedRows, commandText, selectedRecipeId, closePalette]);
+  }, [mode, rows, selectedRows, commandText, selectedRecipeId, resolveTargetIds, closePalette]);
 
   const handleSend = useCallback(async () => {
     if (mode === "keystroke") {
@@ -351,6 +457,7 @@ function BulkCommandPaletteInner() {
       if (targetIds.length === 0) return;
       setIsSending(true);
 
+      const sentCount = targetIds.length;
       if (keystrokePreset === "double-escape") {
         targetIds.forEach((id) => terminalClient.sendKey(id, "escape"));
         doubleEscapeTimerRef.current = setTimeout(() => {
@@ -361,7 +468,7 @@ function BulkCommandPaletteInner() {
           useNotificationStore.getState().addNotification({
             type: "success",
             priority: "low",
-            message: `Sent ${KEYSTROKE_LABELS[keystrokePreset]} to ${selectedIds.size} worktree${selectedIds.size !== 1 ? "s" : ""}`,
+            message: `Sent ${KEYSTROKE_LABELS[keystrokePreset]} to ${sentCount} agent${sentCount !== 1 ? "s" : ""}`,
           });
           closePalette();
         }, 1000);
@@ -372,22 +479,14 @@ function BulkCommandPaletteInner() {
         useNotificationStore.getState().addNotification({
           type: "success",
           priority: "low",
-          message: `Sent ${KEYSTROKE_LABELS[keystrokePreset]} to ${selectedIds.size} worktree${selectedIds.size !== 1 ? "s" : ""}`,
+          message: `Sent ${KEYSTROKE_LABELS[keystrokePreset]} to ${sentCount} agent${sentCount !== 1 ? "s" : ""}`,
         });
         closePalette();
       }
     } else {
       handlePreview();
     }
-  }, [
-    mode,
-    keystrokePreset,
-    pendingDestructive,
-    selectedIds.size,
-    resolveTargetIds,
-    closePalette,
-    handlePreview,
-  ]);
+  }, [mode, keystrokePreset, pendingDestructive, resolveTargetIds, closePalette, handlePreview]);
 
   const canSend = useMemo(() => {
     if (selectedIds.size === 0 || isSending) return false;
@@ -482,8 +581,8 @@ function BulkCommandPaletteInner() {
                 pendingDestructive ? (
                   <div className="flex items-center gap-2 py-1">
                     <span className="text-xs text-amber-400 flex-1">
-                      Send {KEYSTROKE_LABELS[keystrokePreset]} to {selectedIds.size} worktree
-                      {selectedIds.size !== 1 ? "s" : ""}?
+                      Send {KEYSTROKE_LABELS[keystrokePreset]} to {selectedTerminalCount} agent
+                      {selectedTerminalCount !== 1 ? "s" : ""}?
                     </span>
                     <button
                       onClick={() => {
@@ -654,38 +753,156 @@ function BulkCommandPaletteInner() {
                     );
                   })}
                 </div>
-                {rows.map((row) => {
-                  const StateIcon = row.dominantState ? STATE_ICONS[row.dominantState] : null;
-                  const stateColor = row.dominantState ? STATE_COLORS[row.dominantState] : "";
-                  return (
-                    <button
-                      key={row.id}
-                      onClick={() => !row.disabled && toggleWorktree(row.id)}
-                      disabled={row.disabled}
-                      className={`w-full text-left px-3 py-2 rounded-[var(--radius-lg)] border transition-colors flex items-center gap-2 ${
-                        row.disabled
-                          ? "opacity-40 cursor-not-allowed border-transparent"
-                          : selectedIds.has(row.id)
-                            ? "border-canopy-accent/40 bg-canopy-accent/10"
-                            : "border-transparent hover:bg-tint/[0.06]"
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(row.id)}
-                        disabled={row.disabled}
-                        onChange={() => {}}
-                        className="pointer-events-none shrink-0"
-                        tabIndex={-1}
-                      />
-                      <span className="flex-1 text-sm text-canopy-text truncate">{row.branch}</span>
-                      {StateIcon && <StateIcon className={`w-3.5 h-3.5 shrink-0 ${stateColor}`} />}
-                      <span className="text-xs text-canopy-text/40 shrink-0">
-                        {row.agentTerminalCount} {row.agentTerminalCount === 1 ? "agent" : "agents"}
-                      </span>
-                    </button>
-                  );
-                })}
+                <div
+                  role="treegrid"
+                  aria-multiselectable="true"
+                  aria-label="Worktrees and agent terminals"
+                >
+                  {rows.map((row, rowIndex) => {
+                    const StateIcon = row.dominantState ? STATE_ICONS[row.dominantState] : null;
+                    const stateColor = row.dominantState ? STATE_COLORS[row.dominantState] : "";
+                    const allSelected = rowAllSelected(row);
+                    const someSelected = rowSomeSelected(row);
+                    const isPartial = someSelected && !allSelected;
+                    const isExpanded = expandedIds.has(row.id);
+                    const canExpand = !row.disabled && row.terminals.length > 0;
+                    return (
+                      <div
+                        key={row.id}
+                        role="row"
+                        aria-level={1}
+                        aria-posinset={rowIndex + 1}
+                        aria-setsize={rows.length}
+                        aria-expanded={canExpand ? isExpanded : undefined}
+                        data-testid={`bulk-worktree-row-${row.id}`}
+                        className={`rounded-[var(--radius-lg)] border ${
+                          row.disabled
+                            ? "opacity-40 cursor-not-allowed border-transparent"
+                            : allSelected
+                              ? "border-canopy-accent/40 bg-canopy-accent/10"
+                              : someSelected
+                                ? "border-canopy-accent/20 bg-canopy-accent/5"
+                                : "border-transparent hover:bg-tint/[0.06]"
+                        }`}
+                      >
+                        <div role="gridcell" className="flex items-center gap-2 px-3 py-2">
+                          <button
+                            type="button"
+                            onClick={() => canExpand && toggleExpand(row.id)}
+                            disabled={!canExpand}
+                            aria-label={isExpanded ? "Collapse terminals" : "Expand terminals"}
+                            data-testid={`bulk-worktree-expand-${row.id}`}
+                            className={`shrink-0 w-4 h-4 flex items-center justify-center text-canopy-text/50 hover:text-canopy-text transition-colors ${
+                              canExpand ? "" : "invisible"
+                            }`}
+                          >
+                            <ChevronRight
+                              className={`w-3.5 h-3.5 transition-transform ${
+                                isExpanded ? "rotate-90" : ""
+                              }`}
+                            />
+                          </button>
+                          <input
+                            type="checkbox"
+                            checked={allSelected}
+                            disabled={row.disabled}
+                            onChange={() => toggleWorktree(row)}
+                            ref={(el) => {
+                              if (el) el.indeterminate = isPartial;
+                            }}
+                            aria-checked={isPartial ? "mixed" : allSelected}
+                            aria-label={`Select all agents in ${row.branch}`}
+                            data-testid={`bulk-worktree-checkbox-${row.id}`}
+                            className="shrink-0"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => !row.disabled && toggleWorktree(row)}
+                            disabled={row.disabled}
+                            className="flex-1 min-w-0 text-left text-sm text-canopy-text truncate"
+                          >
+                            {row.branch}
+                          </button>
+                          {StateIcon && (
+                            <StateIcon className={`w-3.5 h-3.5 shrink-0 ${stateColor}`} />
+                          )}
+                          <span className="text-xs text-canopy-text/40 shrink-0">
+                            {row.agentTerminalCount}{" "}
+                            {row.agentTerminalCount === 1 ? "agent" : "agents"}
+                          </span>
+                        </div>
+                        {canExpand && (
+                          <div
+                            className={`grid transition-[grid-template-rows] duration-200 ${
+                              isExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+                            }`}
+                          >
+                            <div className="overflow-hidden">
+                              <div className="pb-1.5 pl-7 pr-3 space-y-0.5">
+                                {row.terminals.map((terminal, tIndex) => {
+                                  const TStateIcon = terminal.agentState
+                                    ? STATE_ICONS[terminal.agentState]
+                                    : null;
+                                  const tStateColor = terminal.agentState
+                                    ? STATE_COLORS[terminal.agentState]
+                                    : "";
+                                  const tStateLabel = terminal.agentState
+                                    ? STATE_LABELS[terminal.agentState]
+                                    : "idle";
+                                  const isSelected = selectedIds.has(terminal.id);
+                                  return (
+                                    <div
+                                      key={terminal.id}
+                                      role="row"
+                                      aria-level={2}
+                                      aria-posinset={tIndex + 1}
+                                      aria-setsize={row.terminals.length}
+                                      data-testid={`bulk-terminal-row-${terminal.id}`}
+                                      className={`px-2 py-1 rounded-[var(--radius-md)] flex items-center gap-2 ${
+                                        isSelected ? "bg-canopy-accent/10" : "hover:bg-tint/[0.04]"
+                                      }`}
+                                    >
+                                      <div
+                                        role="gridcell"
+                                        className="flex items-center gap-2 flex-1 min-w-0"
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={isSelected}
+                                          onChange={() => toggleTerminal(terminal.id)}
+                                          aria-label={`Select agent ${terminal.label}`}
+                                          data-testid={`bulk-terminal-checkbox-${terminal.id}`}
+                                          className="shrink-0"
+                                          tabIndex={isExpanded ? 0 : -1}
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleTerminal(terminal.id)}
+                                          tabIndex={isExpanded ? 0 : -1}
+                                          className="flex-1 min-w-0 text-left text-xs text-canopy-text/80 truncate"
+                                        >
+                                          {terminal.label}
+                                        </button>
+                                        {TStateIcon && (
+                                          <TStateIcon
+                                            className={`w-3 h-3 shrink-0 ${tStateColor}`}
+                                          />
+                                        )}
+                                        <span className="text-[10px] text-canopy-text/40 shrink-0">
+                                          {tStateLabel}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </>
             )}
           </>
@@ -699,8 +916,8 @@ function BulkCommandPaletteInner() {
           </span>
           <div className="flex items-center gap-3">
             <span className="text-xs text-canopy-text/50">
-              {selectedIds.size} worktree{selectedIds.size !== 1 ? "s" : ""}, {selectedAgentCount}{" "}
-              agent{selectedAgentCount !== 1 ? "s" : ""}
+              {selectedWorktreeCount} worktree{selectedWorktreeCount !== 1 ? "s" : ""},{" "}
+              {selectedTerminalCount} agent{selectedTerminalCount !== 1 ? "s" : ""}
             </span>
             <button
               onClick={step === "preview" ? handleConfirm : handleSend}
