@@ -159,6 +159,84 @@ describe("appTheme handlers", () => {
     );
   });
 
+  describe("setRecentSchemeIds", () => {
+    it("persists a valid string array", async () => {
+      storeState.data.appTheme = { colorSchemeId: "daintree" };
+      registerAppThemeHandlers();
+
+      const handler = getHandler(CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS);
+      await handler({}, ["bondi", "dracula", "serengeti"]);
+
+      expect(storeMock.set).toHaveBeenCalledWith(
+        "appTheme",
+        expect.objectContaining({ recentSchemeIds: ["bondi", "dracula", "serengeti"] })
+      );
+    });
+
+    it("ignores non-array input without throwing", async () => {
+      storeState.data.appTheme = { colorSchemeId: "daintree" };
+      registerAppThemeHandlers();
+
+      const handler = getHandler(CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS);
+      await handler({}, "not-an-array");
+      await handler({}, null);
+      await handler({}, 42);
+
+      const recentCalls = storeMock.set.mock.calls.filter(
+        (c: unknown[]) => (c[1] as { recentSchemeIds?: unknown }).recentSchemeIds !== undefined
+      );
+      expect(recentCalls).toHaveLength(0);
+    });
+
+    it("filters out non-string and empty entries, trims whitespace", async () => {
+      storeState.data.appTheme = { colorSchemeId: "daintree" };
+      registerAppThemeHandlers();
+
+      const handler = getHandler(CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS);
+      await handler({}, ["bondi", "", "  ", 42, null, undefined, " dracula "]);
+
+      expect(storeMock.set).toHaveBeenCalledWith(
+        "appTheme",
+        expect.objectContaining({ recentSchemeIds: ["bondi", "dracula"] })
+      );
+    });
+
+    it("caps the persisted list at 5 entries", async () => {
+      storeState.data.appTheme = { colorSchemeId: "daintree" };
+      registerAppThemeHandlers();
+
+      const handler = getHandler(CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS);
+      await handler({}, ["a", "b", "c", "d", "e", "f", "g"]);
+
+      expect(storeMock.set).toHaveBeenCalledWith(
+        "appTheme",
+        expect.objectContaining({ recentSchemeIds: ["a", "b", "c", "d", "e"] })
+      );
+    });
+
+    it("preserves other appTheme fields when persisting", async () => {
+      storeState.data.appTheme = {
+        colorSchemeId: "daintree",
+        followSystem: true,
+        preferredDarkSchemeId: "custom-dark",
+      };
+      registerAppThemeHandlers();
+
+      const handler = getHandler(CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS);
+      await handler({}, ["bondi"]);
+
+      expect(storeMock.set).toHaveBeenCalledWith(
+        "appTheme",
+        expect.objectContaining({
+          colorSchemeId: "daintree",
+          followSystem: true,
+          preferredDarkSchemeId: "custom-dark",
+          recentSchemeIds: ["bondi"],
+        })
+      );
+    });
+  });
+
   it("nativeTheme updated does nothing when followSystem is false", () => {
     storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: false };
     registerAppThemeHandlers();

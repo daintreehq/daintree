@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import {
   BUILT_IN_SCHEMES,
   DEFAULT_SCHEME_ID,
@@ -73,15 +73,31 @@ export function ColorSchemePicker() {
   const customSchemes = useTerminalColorSchemeStore((s) => s.customSchemes);
   const setSelectedSchemeId = useTerminalColorSchemeStore((s) => s.setSelectedSchemeId);
   const addCustomScheme = useTerminalColorSchemeStore((s) => s.addCustomScheme);
+  const recentSchemeIds = useTerminalColorSchemeStore((s) => s.recentSchemeIds);
   const appThemeId = useAppThemeStore((s) => s.selectedSchemeId);
 
-  const allSchemes = [...BUILT_IN_SCHEMES, ...customSchemes];
+  const allSchemes = useMemo(() => [...BUILT_IN_SCHEMES, ...customSchemes], [customSchemes]);
+  const recentSchemes = useMemo(
+    () =>
+      recentSchemeIds
+        .map((id) => allSchemes.find((s) => s.id === id))
+        .filter((s): s is TerminalColorScheme => Boolean(s)),
+    [recentSchemeIds, allSchemes]
+  );
+  const recentIdSet = useMemo(() => new Set(recentSchemes.map((s) => s.id)), [recentSchemes]);
+  const otherSchemes = useMemo(
+    () => allSchemes.filter((s) => !recentIdSet.has(s.id)),
+    [allSchemes, recentIdSet]
+  );
 
   const handleSelect = useCallback(
     async (id: string) => {
       setSelectedSchemeId(id);
       try {
         await terminalConfigClient.setColorScheme(id);
+        await terminalConfigClient.setRecentSchemeIds(
+          useTerminalColorSchemeStore.getState().recentSchemeIds
+        );
       } catch (error) {
         console.error("Failed to persist color scheme:", error);
       }
@@ -100,36 +116,61 @@ export function ColorSchemePicker() {
         colors: result.scheme.colors,
       };
       addCustomScheme(scheme);
-      setSelectedSchemeId(scheme.id);
-      await terminalConfigClient.setColorScheme(scheme.id);
       await persistCustomSchemes();
+      await handleSelect(scheme.id);
     } catch (error) {
       console.error("Failed to import color scheme:", error);
     }
-  }, [addCustomScheme, setSelectedSchemeId]);
+  }, [addCustomScheme, handleSelect]);
 
   return (
     <div className="space-y-3">
-      <ThemeSelector<TerminalColorScheme>
-        items={allSchemes}
-        selectedId={selectedSchemeId}
-        onSelect={handleSelect}
-        renderPreview={(scheme) => (
-          <SchemePreview scheme={resolveSchemeForPreview(scheme, appThemeId)} />
-        )}
-        renderMeta={(scheme) => {
-          const resolved = resolveSchemeForPreview(scheme, appThemeId);
-          return (
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-canopy-text truncate">{scheme.name}</span>
-              {resolved.type === "light" && (
-                <span className="text-[10px] text-canopy-text/50 shrink-0">light</span>
-              )}
-            </div>
-          );
-        }}
-        getName={(s) => s.name}
-      />
+      {recentSchemes.length > 0 ? (
+        <ThemeSelector<TerminalColorScheme>
+          groups={[
+            { label: "Recently Used", items: recentSchemes },
+            ...(otherSchemes.length > 0 ? [{ label: "All schemes", items: otherSchemes }] : []),
+          ]}
+          selectedId={selectedSchemeId}
+          onSelect={handleSelect}
+          renderPreview={(scheme) => (
+            <SchemePreview scheme={resolveSchemeForPreview(scheme, appThemeId)} />
+          )}
+          renderMeta={(scheme) => {
+            const resolved = resolveSchemeForPreview(scheme, appThemeId);
+            return (
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-canopy-text truncate">{scheme.name}</span>
+                {resolved.type === "light" && (
+                  <span className="text-[10px] text-canopy-text/50 shrink-0">light</span>
+                )}
+              </div>
+            );
+          }}
+          getName={(s) => s.name}
+        />
+      ) : (
+        <ThemeSelector<TerminalColorScheme>
+          items={allSchemes}
+          selectedId={selectedSchemeId}
+          onSelect={handleSelect}
+          renderPreview={(scheme) => (
+            <SchemePreview scheme={resolveSchemeForPreview(scheme, appThemeId)} />
+          )}
+          renderMeta={(scheme) => {
+            const resolved = resolveSchemeForPreview(scheme, appThemeId);
+            return (
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-canopy-text truncate">{scheme.name}</span>
+                {resolved.type === "light" && (
+                  <span className="text-[10px] text-canopy-text/50 shrink-0">light</span>
+                )}
+              </div>
+            );
+          }}
+          getName={(s) => s.name}
+        />
+      )}
       <button
         onClick={handleImport}
         className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"

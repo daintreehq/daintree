@@ -154,6 +154,27 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
   ipcMain.handle(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES, handleTerminalConfigSetCustomSchemes);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES));
 
+  const handleTerminalConfigSetRecentSchemeIds = async (
+    _event: Electron.IpcMainInvokeEvent,
+    ids: unknown
+  ) => {
+    if (!Array.isArray(ids)) {
+      console.warn("Invalid terminal recentSchemeIds:", ids);
+      return;
+    }
+    const trimmed = ids
+      .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      .map((id) => id.trim());
+    const sanitized = Array.from(new Set(trimmed)).slice(0, 5);
+    const currentConfig = getTerminalConfigObject();
+    store.set("terminalConfig", { ...currentConfig, recentSchemeIds: sanitized });
+  };
+  ipcMain.handle(
+    CHANNELS.TERMINAL_CONFIG_SET_RECENT_SCHEME_IDS,
+    handleTerminalConfigSetRecentSchemeIds
+  );
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_RECENT_SCHEME_IDS));
+
   const handleTerminalConfigSetScreenReaderMode = async (
     _event: Electron.IpcMainInvokeEvent,
     mode: string

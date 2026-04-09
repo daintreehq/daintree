@@ -37,6 +37,10 @@ export const terminalConfigClient = {
     return window.electron.terminalConfig.setCustomSchemes(schemesJson);
   },
 
+  setRecentSchemeIds: (ids: string[]): Promise<void> => {
+    return window.electron.terminalConfig.setRecentSchemeIds(ids);
+  },
+
   importColorScheme: () => {
     return window.electron.terminalConfig.importColorScheme();
   },

@@ -757,6 +757,7 @@ export interface ElectronAPI {
     setHybridInputAutoFocus(enabled: boolean): Promise<void>;
     setColorScheme(schemeId: string): Promise<void>;
     setCustomSchemes(schemesJson: string): Promise<void>;
+    setRecentSchemeIds(ids: string[]): Promise<void>;
     importColorScheme(): Promise<
       | {
           ok: true;
@@ -1083,6 +1084,7 @@ export interface ElectronAPI {
     setFollowSystem(enabled: boolean): Promise<void>;
     setPreferredDarkScheme(schemeId: string): Promise<void>;
     setPreferredLightScheme(schemeId: string): Promise<void>;
+    setRecentSchemeIds(ids: string[]): Promise<void>;
     onSystemAppearanceChanged(
       callback: (payload: { isDark: boolean; schemeId: string }) => void
     ): () => void;

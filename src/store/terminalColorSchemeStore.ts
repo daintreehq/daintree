@@ -10,12 +10,16 @@ import {
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";
 
+const RECENT_SCHEMES_LIMIT = 5;
+
 interface TerminalColorSchemeState {
   selectedSchemeId: string;
   customSchemes: TerminalColorScheme[];
+  recentSchemeIds: string[];
   setSelectedSchemeId: (id: string) => void;
   addCustomScheme: (scheme: TerminalColorScheme) => void;
   removeCustomScheme: (id: string) => void;
+  setRecentSchemeIds: (ids: string[]) => void;
   getEffectiveTheme: () => ITheme;
 }
 
@@ -88,8 +92,16 @@ export function selectEffectiveTheme(state: TerminalColorSchemeState): ITheme {
 export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((set, get) => ({
   selectedSchemeId: DEFAULT_SCHEME_ID,
   customSchemes: [],
+  recentSchemeIds: [],
 
-  setSelectedSchemeId: (id) => set({ selectedSchemeId: id }),
+  setSelectedSchemeId: (id) =>
+    set((state) => ({
+      selectedSchemeId: id,
+      recentSchemeIds: [id, ...state.recentSchemeIds.filter((x) => x !== id)].slice(
+        0,
+        RECENT_SCHEMES_LIMIT
+      ),
+    })),
 
   addCustomScheme: (scheme) =>
     set((state) => ({
@@ -100,7 +112,11 @@ export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((s
     set((state) => ({
       customSchemes: state.customSchemes.filter((s) => s.id !== id),
       selectedSchemeId: state.selectedSchemeId === id ? DEFAULT_SCHEME_ID : state.selectedSchemeId,
+      recentSchemeIds: state.recentSchemeIds.filter((x) => x !== id),
     })),
+
+  setRecentSchemeIds: (ids) =>
+    set({ recentSchemeIds: Array.from(new Set(ids)).slice(0, RECENT_SCHEMES_LIMIT) }),
 
   getEffectiveTheme: (): ITheme => {
     const { selectedSchemeId, customSchemes } = get();

@@ -4,6 +4,8 @@ import { resolveAppTheme, type AppColorScheme } from "@shared/theme";
 import type { ColorVisionMode } from "@shared/types";
 import { applyAppThemeToRoot, applyColorVisionMode } from "@/theme/applyAppTheme";
 
+const RECENT_SCHEMES_LIMIT = 5;
+
 interface AppThemeState {
   selectedSchemeId: string;
   customSchemes: AppColorScheme[];
@@ -11,7 +13,14 @@ interface AppThemeState {
   followSystem: boolean;
   preferredDarkSchemeId: string;
   preferredLightSchemeId: string;
+  recentSchemeIds: string[];
   setSelectedSchemeId: (id: string) => void;
+  /**
+   * Like setSelectedSchemeId, but does NOT update recentSchemeIds. Used for
+   * OS-driven follow-system changes and startup hydration, where the change
+   * does not reflect direct user intent.
+   */
+  setSelectedSchemeIdSilent: (id: string) => void;
   addCustomScheme: (scheme: AppColorScheme) => void;
   removeCustomScheme: (id: string) => void;
   injectTheme: (scheme: AppColorScheme) => void;
@@ -19,6 +28,7 @@ interface AppThemeState {
   setFollowSystem: (enabled: boolean) => void;
   setPreferredDarkSchemeId: (id: string) => void;
   setPreferredLightSchemeId: (id: string) => void;
+  setRecentSchemeIds: (ids: string[]) => void;
 }
 
 function injectSchemeToDOM(scheme: AppColorScheme): void {
@@ -37,8 +47,22 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
   followSystem: false,
   preferredDarkSchemeId: "daintree",
   preferredLightSchemeId: "bondi",
+  recentSchemeIds: [],
 
   setSelectedSchemeId: (id) => {
+    const { customSchemes } = useAppThemeStore.getState();
+    const scheme = resolveAppTheme(id, customSchemes);
+    set((state) => ({
+      selectedSchemeId: scheme.id,
+      recentSchemeIds: [scheme.id, ...state.recentSchemeIds.filter((x) => x !== scheme.id)].slice(
+        0,
+        RECENT_SCHEMES_LIMIT
+      ),
+    }));
+    injectSchemeToDOM(scheme);
+  },
+
+  setSelectedSchemeIdSilent: (id) => {
     const { customSchemes } = useAppThemeStore.getState();
     const scheme = resolveAppTheme(id, customSchemes);
     set({ selectedSchemeId: scheme.id });
@@ -56,6 +80,7 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     set((state) => ({
       customSchemes: state.customSchemes.filter((s) => s.id !== id),
       selectedSchemeId: needsFallback ? DEFAULT_APP_SCHEME_ID : state.selectedSchemeId,
+      recentSchemeIds: state.recentSchemeIds.filter((x) => x !== id),
     }));
     if (needsFallback) {
       const defaultScheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === DEFAULT_APP_SCHEME_ID)!;
@@ -75,6 +100,8 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
   setFollowSystem: (enabled) => set({ followSystem: enabled }),
   setPreferredDarkSchemeId: (id) => set({ preferredDarkSchemeId: id }),
   setPreferredLightSchemeId: (id) => set({ preferredLightSchemeId: id }),
+  setRecentSchemeIds: (ids) =>
+    set({ recentSchemeIds: Array.from(new Set(ids)).slice(0, RECENT_SCHEMES_LIMIT) }),
 }));
 
 export { injectSchemeToDOM };

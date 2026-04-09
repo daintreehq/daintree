@@ -46,6 +46,7 @@ describe("terminalColorSchemeStore", () => {
     useTerminalColorSchemeStore.setState({
       selectedSchemeId: DEFAULT_SCHEME_ID,
       customSchemes: [],
+      recentSchemeIds: [],
     });
     useAppThemeStore.setState({
       selectedSchemeId: "daintree",
@@ -155,6 +156,72 @@ describe("terminalColorSchemeStore", () => {
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
 
     expect(theme).toEqual(CANOPY_TERMINAL_THEME);
+  });
+
+  describe("recentSchemeIds LRU", () => {
+    it("starts empty", () => {
+      expect(useTerminalColorSchemeStore.getState().recentSchemeIds).toEqual([]);
+    });
+
+    it("prepends the newly selected scheme id", () => {
+      useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
+      expect(useTerminalColorSchemeStore.getState().recentSchemeIds).toEqual(["dracula"]);
+
+      useTerminalColorSchemeStore.getState().setSelectedSchemeId("solarized-dark");
+      expect(useTerminalColorSchemeStore.getState().recentSchemeIds).toEqual([
+        "solarized-dark",
+        "dracula",
+      ]);
+    });
+
+    it("deduplicates when re-selecting an existing id (moves to front)", () => {
+      const store = useTerminalColorSchemeStore.getState();
+      store.setSelectedSchemeId("dracula");
+      store.setSelectedSchemeId("solarized-dark");
+      store.setSelectedSchemeId("monokai");
+      store.setSelectedSchemeId("dracula");
+
+      expect(useTerminalColorSchemeStore.getState().recentSchemeIds).toEqual([
+        "dracula",
+        "monokai",
+        "solarized-dark",
+      ]);
+    });
+
+    it("caps the list at 5 entries", () => {
+      const store = useTerminalColorSchemeStore.getState();
+      const ids = ["a", "b", "c", "d", "e", "f", "g"];
+      for (const id of ids) store.setSelectedSchemeId(id);
+
+      const recent = useTerminalColorSchemeStore.getState().recentSchemeIds;
+      expect(recent).toHaveLength(5);
+      expect(recent).toEqual(["g", "f", "e", "d", "c"]);
+    });
+
+    it("setRecentSchemeIds replaces the list and respects the 5-cap", () => {
+      useTerminalColorSchemeStore
+        .getState()
+        .setRecentSchemeIds(["a", "b", "c", "d", "e", "f", "g"]);
+      expect(useTerminalColorSchemeStore.getState().recentSchemeIds).toEqual([
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+      ]);
+    });
+
+    it("removing a custom scheme strips its id from the recents list", () => {
+      const store = useTerminalColorSchemeStore.getState();
+      store.addCustomScheme(CUSTOM_SCHEME);
+      store.setSelectedSchemeId("custom-test");
+      store.setSelectedSchemeId("dracula");
+      expect(useTerminalColorSchemeStore.getState().recentSchemeIds).toContain("custom-test");
+
+      useTerminalColorSchemeStore.getState().removeCustomScheme("custom-test");
+      expect(useTerminalColorSchemeStore.getState().recentSchemeIds).not.toContain("custom-test");
+      expect(useTerminalColorSchemeStore.getState().recentSchemeIds).toEqual(["dracula"]);
+    });
   });
 
   describe("selectWrapperBackground", () => {

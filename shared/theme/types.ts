@@ -212,6 +212,8 @@ export interface AppThemeConfig {
   followSystem?: boolean;
   preferredDarkSchemeId?: string;
   preferredLightSchemeId?: string;
+  /** IDs of the most recently selected themes (LRU, newest first, capped at 5) */
+  recentSchemeIds?: string[];
 }
 
 export interface AppThemeValidationWarning {

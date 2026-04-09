@@ -243,4 +243,54 @@ describe("terminalConfig handlers", () => {
     await fontSizeHandler({}, 16);
     expect(storeState.data.terminalConfig).toEqual({ fontSize: 16 });
   });
+
+  describe("setRecentSchemeIds", () => {
+    it("persists a valid string array", async () => {
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_RECENT_SCHEME_IDS);
+
+      await handler({}, ["dracula", "monokai"]);
+
+      expect(storeState.data.terminalConfig).toMatchObject({
+        recentSchemeIds: ["dracula", "monokai"],
+      });
+    });
+
+    it("ignores non-array input without mutating store", async () => {
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_RECENT_SCHEME_IDS);
+
+      const before = storeState.data.terminalConfig;
+      await handler({}, "not-an-array");
+      await handler({}, null);
+      await handler({}, 123);
+
+      expect(storeState.data.terminalConfig).toEqual(before);
+    });
+
+    it("filters non-string entries, trims whitespace, caps at 5", async () => {
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_RECENT_SCHEME_IDS);
+
+      await handler({}, ["a", "", "  ", 42, null, " b ", "c", "d", "e", "f", "g"]);
+
+      expect(storeState.data.terminalConfig).toMatchObject({
+        recentSchemeIds: ["a", "b", "c", "d", "e"],
+      });
+    });
+
+    it("preserves other terminalConfig fields when persisting", async () => {
+      registerTerminalConfigHandlers();
+      const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_RECENT_SCHEME_IDS);
+
+      await handler({}, ["dracula"]);
+
+      expect(storeState.data.terminalConfig).toMatchObject({
+        scrollbackLines: 1000,
+        fontSize: 12,
+        fontFamily: "JetBrains Mono",
+        recentSchemeIds: ["dracula"],
+      });
+    });
+  });
 });

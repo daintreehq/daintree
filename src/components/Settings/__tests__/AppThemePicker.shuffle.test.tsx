@@ -7,6 +7,7 @@ vi.mock("@/clients/appThemeClient", () => ({
     setColorScheme: vi.fn().mockResolvedValue(undefined),
     setFollowSystem: vi.fn().mockResolvedValue(undefined),
     setCustomSchemes: vi.fn().mockResolvedValue(undefined),
+    setRecentSchemeIds: vi.fn().mockResolvedValue(undefined),
     importTheme: vi.fn().mockResolvedValue({ ok: false, errors: ["Import cancelled"] }),
   },
 }));
@@ -87,13 +88,16 @@ describe("AppThemePicker shuffle button", () => {
     Object.assign(storeState, {
       selectedSchemeId: "theme-a",
       customSchemes: [],
+      recentSchemeIds: [],
       followSystem: false,
       preferredDarkSchemeId: "theme-a",
       preferredLightSchemeId: "theme-a",
       setSelectedSchemeId: vi.fn(),
+      setSelectedSchemeIdSilent: vi.fn(),
       setFollowSystem: vi.fn(),
       setPreferredDarkSchemeId: vi.fn(),
       setPreferredLightSchemeId: vi.fn(),
+      setRecentSchemeIds: vi.fn(),
       addCustomScheme: vi.fn(),
     });
   });

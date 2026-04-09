@@ -17,8 +17,8 @@ export function useTerminalConfig() {
 
   const selectedSchemeId = useTerminalColorSchemeStore((state) => state.selectedSchemeId);
   const customSchemes = useTerminalColorSchemeStore((state) => state.customSchemes);
-  const setSelectedSchemeId = useTerminalColorSchemeStore((state) => state.setSelectedSchemeId);
   const addCustomScheme = useTerminalColorSchemeStore((state) => state.addCustomScheme);
+  const setRecentSchemeIds = useTerminalColorSchemeStore((state) => state.setRecentSchemeIds);
 
   useEffect(() => {
     let cancelled = false;
@@ -34,7 +34,8 @@ export function useTerminalConfig() {
           setFontFamily(config.fontFamily);
         }
         if (typeof config.colorSchemeId === "string" && config.colorSchemeId.trim()) {
-          setSelectedSchemeId(config.colorSchemeId);
+          // Hydrate directly to avoid polluting the recently-used list on startup
+          useTerminalColorSchemeStore.setState({ selectedSchemeId: config.colorSchemeId.trim() });
         }
         if (typeof config.customSchemes === "string" && config.customSchemes.trim()) {
           try {
@@ -48,6 +49,13 @@ export function useTerminalConfig() {
             // ignore malformed custom schemes
           }
         }
+        if (Array.isArray(config.recentSchemeIds)) {
+          const sanitized = config.recentSchemeIds
+            .filter((id: unknown): id is string => typeof id === "string" && id.trim().length > 0)
+            .map((id) => id.trim())
+            .slice(0, 5);
+          setRecentSchemeIds(sanitized);
+        }
       })
       .catch((error) => {
         console.error("Failed to load terminal config:", error);
@@ -56,7 +64,7 @@ export function useTerminalConfig() {
     return () => {
       cancelled = true;
     };
-  }, [setFontSize, setFontFamily, setSelectedSchemeId, addCustomScheme]);
+  }, [setFontSize, setFontFamily, addCustomScheme, setRecentSchemeIds]);
 
   const screenReaderEnabled = useScreenReaderStore((s) => s.resolvedScreenReaderEnabled());
 

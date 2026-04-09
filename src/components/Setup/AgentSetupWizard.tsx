@@ -335,6 +335,7 @@ export function AgentSetupWizard({
   // Theme state (first-run only)
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
   const setSelectedSchemeId = useAppThemeStore((s) => s.setSelectedSchemeId);
+  const setSelectedSchemeIdSilent = useAppThemeStore((s) => s.setSelectedSchemeIdSilent);
   const hasAutoSelected = useRef(false);
 
   // Telemetry state (first-run only)
@@ -416,10 +417,12 @@ export function AgentSetupWizard({
     const prefersLight = window.matchMedia("(prefers-color-scheme: light)").matches;
     const targetId = prefersLight ? "bondi" : "daintree";
     if (selectedSchemeId !== targetId) {
-      setSelectedSchemeId(targetId);
+      // Auto-select mirrors OS appearance — not a direct user pick, so use the
+      // silent setter to avoid polluting the recently-used list.
+      setSelectedSchemeIdSilent(targetId);
       appThemeClient.setColorScheme(targetId).catch(console.error);
     }
-  }, [isFirstRun, isOpen, state.step.type, selectedSchemeId, setSelectedSchemeId]);
+  }, [isFirstRun, isOpen, state.step.type, selectedSchemeId, setSelectedSchemeIdSilent]);
 
   const handleThemeSelect = useCallback(
     async (id: string) => {

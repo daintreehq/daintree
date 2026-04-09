@@ -205,6 +205,24 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
   ipcMain.handle(CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME, handleSetPreferredLightScheme);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME));
 
+  const handleSetRecentSchemeIds = async (_event: Electron.IpcMainInvokeEvent, ids: unknown) => {
+    if (!Array.isArray(ids)) {
+      console.warn("Invalid app theme recentSchemeIds:", ids);
+      return;
+    }
+    const trimmed = ids
+      .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      .map((id) => id.trim());
+    const sanitized = Array.from(new Set(trimmed)).slice(0, 5);
+    const current = getAppThemeConfig();
+    store.set("appTheme", {
+      ...current,
+      recentSchemeIds: sanitized,
+    } satisfies AppThemeConfig);
+  };
+  ipcMain.handle(CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS, handleSetRecentSchemeIds);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS));
+
   // nativeTheme listener for auto-switching
   let appearanceTimer: ReturnType<typeof setTimeout> | null = null;
 

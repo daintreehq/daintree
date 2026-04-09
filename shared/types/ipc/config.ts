@@ -20,6 +20,8 @@ export interface TerminalConfig {
   colorSchemeId?: string;
   /** Custom imported color schemes (serialized) */
   customSchemes?: string;
+  /** IDs of the most recently selected terminal color schemes (LRU, newest first, capped at 5) */
+  recentSchemeIds?: string[];
   /** Screen reader mode: 'auto' (follow OS), 'on', or 'off' (default: 'auto') */
   screenReaderMode?: "auto" | "on" | "off";
   /** Show per-terminal CPU and memory usage in panel headers (default: false) */

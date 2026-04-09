@@ -36,4 +36,8 @@ export const appThemeClient = {
   setPreferredLightScheme: (schemeId: string): Promise<void> => {
     return window.electron.appTheme.setPreferredLightScheme(schemeId);
   },
+
+  setRecentSchemeIds: (ids: string[]): Promise<void> => {
+    return window.electron.appTheme.setRecentSchemeIds(ids);
+  },
 } as const;

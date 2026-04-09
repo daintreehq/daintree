@@ -131,6 +131,7 @@ export function AppThemePicker() {
   const customSchemes = useAppThemeStore((s) => s.customSchemes);
   const setSelectedSchemeId = useAppThemeStore((s) => s.setSelectedSchemeId);
   const addCustomScheme = useAppThemeStore((s) => s.addCustomScheme);
+  const recentSchemeIds = useAppThemeStore((s) => s.recentSchemeIds);
   const followSystem = useAppThemeStore((s) => s.followSystem);
   const setFollowSystem = useAppThemeStore((s) => s.setFollowSystem);
   const preferredDarkSchemeId = useAppThemeStore((s) => s.preferredDarkSchemeId);
@@ -146,8 +147,26 @@ export function AppThemePicker() {
   const shuffleQueueRef = useRef<string[]>([]);
 
   const allSchemes = useMemo(() => [...BUILT_IN_APP_SCHEMES, ...customSchemes], [customSchemes]);
-  const darkSchemes = useMemo(() => allSchemes.filter((s) => s.type !== "light"), [allSchemes]);
-  const lightSchemes = useMemo(() => allSchemes.filter((s) => s.type === "light"), [allSchemes]);
+  const recentSchemes = useMemo(
+    () =>
+      recentSchemeIds
+        .map((id) => allSchemes.find((s) => s.id === id))
+        .filter((s): s is AppColorScheme => Boolean(s)),
+    [recentSchemeIds, allSchemes]
+  );
+  const recentIdSet = useMemo(() => new Set(recentSchemes.map((s) => s.id)), [recentSchemes]);
+  const darkSchemes = useMemo(
+    () => allSchemes.filter((s) => s.type !== "light" && !recentIdSet.has(s.id)),
+    [allSchemes, recentIdSet]
+  );
+  const lightSchemes = useMemo(
+    () => allSchemes.filter((s) => s.type === "light" && !recentIdSet.has(s.id)),
+    [allSchemes, recentIdSet]
+  );
+  // Unfiltered dark/light lists — used for follow-system preferred pickers that
+  // should not hide recently-used themes.
+  const allDarkSchemes = useMemo(() => allSchemes.filter((s) => s.type !== "light"), [allSchemes]);
+  const allLightSchemes = useMemo(() => allSchemes.filter((s) => s.type === "light"), [allSchemes]);
   const selectedScheme = useMemo(
     () => allSchemes.find((s) => s.id === selectedSchemeId) ?? allSchemes[0],
     [allSchemes, selectedSchemeId]
@@ -172,6 +191,9 @@ export function AppThemePicker() {
 
       try {
         await appThemeClient.setColorScheme(id);
+        // Only persist the updated recents once the selection itself was saved.
+        // Read back from the store so we capture the post-LRU-update state.
+        await appThemeClient.setRecentSchemeIds(useAppThemeStore.getState().recentSchemeIds);
       } catch (error) {
         console.error("Failed to persist app theme:", error);
       }
@@ -261,9 +283,8 @@ export function AppThemePicker() {
       }
 
       addCustomScheme(result.scheme);
-      setSelectedSchemeId(result.scheme.id);
-      await appThemeClient.setColorScheme(result.scheme.id);
       await persistCustomSchemes();
+      await handleSelect(result.scheme.id);
 
       if (result.warnings.length > 0) {
         setImportWarnings(result.warnings);
@@ -277,7 +298,7 @@ export function AppThemePicker() {
       console.error("Failed to import app theme:", error);
       setImportMessage("Failed to import app theme.");
     }
-  }, [addCustomScheme, setSelectedSchemeId]);
+  }, [addCustomScheme, handleSelect]);
 
   const handleExport = useCallback(async () => {
     if (!selectedScheme) return;
@@ -307,13 +328,13 @@ export function AppThemePicker() {
         <div className="space-y-2 pl-1">
           <PreferredSchemePicker
             label="Preferred dark theme"
-            schemes={darkSchemes}
+            schemes={allDarkSchemes}
             selectedId={preferredDarkSchemeId}
             onSelect={handlePreferredDarkChange}
           />
           <PreferredSchemePicker
             label="Preferred light theme"
-            schemes={lightSchemes}
+            schemes={allLightSchemes}
             selectedId={preferredLightSchemeId}
             onSelect={handlePreferredLightChange}
           />
@@ -408,6 +429,9 @@ export function AppThemePicker() {
         <AppDialog.BodyScroll>
           <ThemeSelector<AppColorScheme>
             groups={[
+              ...(recentSchemes.length > 0
+                ? [{ label: "Recently Used", items: recentSchemes }]
+                : []),
               ...(darkSchemes.length > 0 ? [{ label: "Dark", items: darkSchemes }] : []),
               ...(lightSchemes.length > 0 ? [{ label: "Light", items: lightSchemes }] : []),
             ]}
