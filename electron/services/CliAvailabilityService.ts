@@ -107,10 +107,13 @@ export class CliAvailabilityService {
 
     if (!config.authCheck) return "ready";
 
-    return this.checkAuth(config.authCheck);
+    return this.checkAuth(config.name, config.authCheck);
   }
 
-  private async checkAuth(authCheck: AgentAuthCheck): Promise<AgentAvailabilityState> {
+  private async checkAuth(
+    agentName: string,
+    authCheck: AgentAuthCheck
+  ): Promise<AgentAvailabilityState> {
     const timeoutPromise = new Promise<AgentAvailabilityState>((resolve) => {
       setTimeout(
         () => resolve(authCheck.fallback ?? "installed"),
@@ -119,6 +122,8 @@ export class CliAvailabilityService {
     });
 
     const checkPromise = (async (): Promise<AgentAvailabilityState> => {
+      const checkedPaths: string[] = [];
+
       // Check environment variable first (positive signal only)
       if (authCheck.envVar && process.env[authCheck.envVar]) {
         return "ready";
@@ -132,6 +137,7 @@ export class CliAvailabilityService {
       if (platformPaths) {
         for (const relPath of platformPaths) {
           const fullPath = join(home, relPath);
+          checkedPaths.push(fullPath);
           try {
             await access(fullPath, constants.R_OK);
             return "ready";
@@ -145,6 +151,7 @@ export class CliAvailabilityService {
       if (authCheck.configPathsAll) {
         for (const relPath of authCheck.configPathsAll) {
           const fullPath = join(home, relPath);
+          checkedPaths.push(fullPath);
           try {
             await access(fullPath, constants.R_OK);
             return "ready";
@@ -154,7 +161,13 @@ export class CliAvailabilityService {
         }
       }
 
-      return authCheck.fallback ?? "installed";
+      const fallbackState = authCheck.fallback ?? "installed";
+      console.log(
+        `[CliAvailabilityService] ${agentName}: binary found, auth check fell through (checked: ${
+          checkedPaths.join(", ") || "none"
+        }) -> "${fallbackState}"`
+      );
+      return fallbackState;
     })();
 
     return Promise.race([checkPromise, timeoutPromise]);

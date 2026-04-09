@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import { homedir } from "os";
 import { CliAvailabilityService } from "../CliAvailabilityService.js";
 import { execFileSync } from "child_process";
 import { refreshPath } from "../../setup/environment.js";
@@ -25,29 +26,48 @@ vi.mock("fs/promises", () => ({
 describe("CliAvailabilityService", () => {
   let service: CliAvailabilityService;
   const mockedExecFileSync = vi.mocked(execFileSync);
-
+  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+  const savedEnv: Record<string, string | undefined> = {};
   // Auth env vars consulted by AgentAuthCheck.envVar across the built-in
   // registry. Clear them so local dev shells (which commonly have these set)
   // don't cause the "no auth file" assertions to flip to "ready".
-  const AUTH_ENV_VARS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"];
-  const savedAuthEnv: Record<string, string | undefined> = {};
+  const envKeysToClear = [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "COPILOT_GITHUB_TOKEN",
+  ];
 
-  beforeEach(() => {
-    service = new CliAvailabilityService();
-    vi.clearAllMocks();
-    for (const key of AUTH_ENV_VARS) {
-      savedAuthEnv[key] = process.env[key];
+  beforeEach(async () => {
+    // Isolate from any local env vars that would turn auth checks into "ready".
+    for (const key of envKeysToClear) {
+      savedEnv[key] = process.env[key];
       delete process.env[key];
     }
+
+    service = new CliAvailabilityService();
+    vi.clearAllMocks();
+    // Re-establish default "file not found" behavior for fs access. A prior
+    // test may have set mockResolvedValue on the same vi.fn(), and
+    // clearAllMocks() clears call history but NOT implementations.
+    const fs = await import("fs/promises");
+    vi.mocked(fs.access).mockRejectedValue(new Error("ENOENT"));
+    // Silence the diagnostic fallback log emitted by checkAuth() so
+    // the test runner output stays clean. Individual tests re-access
+    // the spy via `consoleLogSpy` to assert on log calls.
+    consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    for (const key of AUTH_ENV_VARS) {
-      if (savedAuthEnv[key] === undefined) {
+    for (const key of envKeysToClear) {
+      if (savedEnv[key] === undefined) {
         delete process.env[key];
       } else {
-        process.env[key] = savedAuthEnv[key];
+        process.env[key] = savedEnv[key];
       }
     }
   });
@@ -87,8 +107,15 @@ describe("CliAvailabilityService", () => {
 
       const result = await service.checkAvailability();
 
-      for (const state of Object.values(result)) {
-        expect(state).toBe("ready");
+      // Every agent with a configured file path reaches "ready". Kiro has
+      // no file paths (keychain-based) and intentionally falls back to
+      // "installed" — see authCheck comment in agentRegistry.ts.
+      for (const [id, state] of Object.entries(result)) {
+        if (id === "kiro") {
+          expect(state).toBe("installed");
+        } else {
+          expect(state).toBe("ready");
+        }
       }
     });
 
@@ -378,6 +405,122 @@ describe("CliAvailabilityService", () => {
 
       await service.refresh();
       expect(mockedExecFileSync).toHaveBeenCalledTimes(7);
+    });
+  });
+
+  describe("auth check paths (regression guards)", () => {
+    it("does NOT probe the bogus Kiro paths (.kiro/credentials, .kiro/config.json)", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      // Only kiro-cli binary found
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (args?.[0] === "kiro-cli") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+      const result = await service.checkAvailability();
+
+      // Kiro falls back to "installed" — keychain-based, no file probe.
+      expect(result.kiro).toBe("installed");
+
+      const probedPaths = mockedAccess.mock.calls.map((call) => String(call[0]));
+      expect(probedPaths).not.toContain(`${homedir()}/.kiro/credentials`);
+      expect(probedPaths).not.toContain(`${homedir()}/.kiro/config.json`);
+    });
+
+    it("probes both Copilot auth paths (.copilot/config.json and .config/gh/hosts.yml)", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      // Only copilot binary found
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (args?.[0] === "copilot") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.copilot).toBe("installed");
+
+      const probedPaths = mockedAccess.mock.calls.map((call) => String(call[0]));
+      expect(probedPaths).toContain(`${homedir()}/.copilot/config.json`);
+      expect(probedPaths).toContain(`${homedir()}/.config/gh/hosts.yml`);
+    });
+
+    it("reaches 'ready' for Copilot when only .config/gh/hosts.yml exists", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (args?.[0] === "copilot") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+      const ghHostsPath = `${homedir()}/.config/gh/hosts.yml`;
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === ghHostsPath) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.copilot).toBe("ready");
+    });
+  });
+
+  describe("diagnostic logging for auth fallback", () => {
+    it("logs when auth check falls through to fallback, including checked paths", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (args?.[0] === "copilot") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.copilot).toBe("installed");
+
+      const copilotLog = consoleLogSpy.mock.calls.find((call) =>
+        String(call[0]).includes("GitHub Copilot")
+      );
+      expect(copilotLog).toBeDefined();
+      const message = String(copilotLog![0]);
+      expect(message).toContain("[CliAvailabilityService]");
+      expect(message).toContain("binary found, auth check fell through");
+      expect(message).toContain(".copilot/config.json");
+      expect(message).toContain(".config/gh/hosts.yml");
+      expect(message).toContain('-> "installed"');
+    });
+
+    it("logs Kiro fallback with 'checked: none' since no paths are configured", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (args?.[0] === "kiro-cli") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+      await service.checkAvailability();
+
+      const kiroLog = consoleLogSpy.mock.calls.find((call) =>
+        String(call[0]).includes("Kiro")
+      );
+      expect(kiroLog).toBeDefined();
+      expect(String(kiroLog![0])).toContain("checked: none");
+      expect(String(kiroLog![0])).toContain('-> "installed"');
+    });
+
+    it("does NOT log when auth file is found (success path)", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (args?.[0] === "copilot") return Buffer.from("");
+        throw new Error("not found");
+      });
+      mockedAccess.mockResolvedValue(undefined);
+
+      await service.checkAvailability();
+
+      const copilotLog = consoleLogSpy.mock.calls.find((call) =>
+        String(call[0]).includes("GitHub Copilot: binary found, auth check fell through")
+      );
+      expect(copilotLog).toBeUndefined();
     });
   });
 
