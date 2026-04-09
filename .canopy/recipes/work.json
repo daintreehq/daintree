@@ -6,7 +6,7 @@
       "type": "claude",
       "title": "Work",
       "env": {},
-      "initialPrompt": "/work {{issue_number}}"
+      "initialPrompt": "/work {{number}}"
     }
   ],
   "createdAt": 1775381905486,
