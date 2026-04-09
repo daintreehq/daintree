@@ -26,13 +26,30 @@ describe("CliAvailabilityService", () => {
   let service: CliAvailabilityService;
   const mockedExecFileSync = vi.mocked(execFileSync);
 
+  // Auth env vars consulted by AgentAuthCheck.envVar across the built-in
+  // registry. Clear them so local dev shells (which commonly have these set)
+  // don't cause the "no auth file" assertions to flip to "ready".
+  const AUTH_ENV_VARS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"];
+  const savedAuthEnv: Record<string, string | undefined> = {};
+
   beforeEach(() => {
     service = new CliAvailabilityService();
     vi.clearAllMocks();
+    for (const key of AUTH_ENV_VARS) {
+      savedAuthEnv[key] = process.env[key];
+      delete process.env[key];
+    }
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    for (const key of AUTH_ENV_VARS) {
+      if (savedAuthEnv[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = savedAuthEnv[key];
+      }
+    }
   });
 
   describe("checkAvailability", () => {

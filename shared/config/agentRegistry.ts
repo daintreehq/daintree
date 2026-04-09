@@ -386,7 +386,11 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       args: [],
     },
     authCheck: {
-      configPathsAll: [".claude/config.json"],
+      // Claude Code CLI persists auth/session state in ~/.claude.json (the
+      // single file), not ~/.claude/config.json. ANTHROPIC_API_KEY is also a
+      // first-class auth signal supported directly by the CLI.
+      configPathsAll: [".claude.json", ".claude/config.json"],
+      envVar: "ANTHROPIC_API_KEY",
     },
     prerequisites: [
       {
@@ -857,6 +861,11 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         linux: [".config/opencode/config.json"],
         win32: [".config/opencode/config.json"],
       },
+      // OpenCode is provider-agnostic and accepts provider credentials
+      // directly from env vars (ANTHROPIC_API_KEY / OPENAI_API_KEY), so
+      // either is a sufficient signal that the CLI is usable.
+      configPathsAll: [".local/share/opencode/auth.json"],
+      envVar: "ANTHROPIC_API_KEY",
     },
     prerequisites: [
       {
