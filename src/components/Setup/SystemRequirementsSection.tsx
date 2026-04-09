@@ -27,8 +27,8 @@ export function SystemRequirementsSection({
   }, [hasFatalFailure, onFatalFailureChange]);
 
   useEffect(() => {
-    onCheckingChange(!allDone);
-  }, [allDone, onCheckingChange]);
+    onCheckingChange(isChecking);
+  }, [isChecking, onCheckingChange]);
 
   const hasWarning =
     allDone &&
@@ -63,7 +63,7 @@ export function SystemRequirementsSection({
         />
         <span className="text-sm font-medium text-canopy-text">System requirements</span>
 
-        {!allDone && (
+        {isChecking && (
           <span className="flex items-center gap-1.5 ml-auto text-[11px] text-canopy-text/40">
             <Loader2 className="w-3 h-3 animate-spin" />
             Checking...
@@ -134,8 +134,7 @@ export function SystemRequirementsSection({
           {allDone && hasFatalFailure && (
             <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-status-warning/20 bg-status-warning/5">
               <p className="text-xs text-status-warning">
-                Some required tools are missing or outdated. Agents that depend on them may not work
-                correctly.
+                Some required tools are missing or outdated. Install them to continue setup.
               </p>
             </div>
           )}

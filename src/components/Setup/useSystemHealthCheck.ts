@@ -98,7 +98,8 @@ export function useSystemHealthCheck(): SystemHealthCheckState {
   const visibleSpecs = specs.filter((s) => s.severity !== "silent");
 
   const allDone =
-    visibleSpecs.length > 0 && visibleSpecs.every((s) => checkStates[s.tool] !== "loading");
+    !isChecking &&
+    (visibleSpecs.length === 0 || visibleSpecs.every((s) => checkStates[s.tool] !== "loading"));
 
   const hasFatalFailure = allDone
     ? !visibleSpecs
