@@ -197,7 +197,7 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
   return (
     <div
       className={cn(
-        "overflow-auto font-mono [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
+        "overflow-auto [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
         className
       )}
     >
