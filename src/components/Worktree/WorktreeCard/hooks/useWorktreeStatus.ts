@@ -15,6 +15,8 @@ export interface ComputedSubtitle {
   tone: ComputedSubtitleTone;
 }
 
+export type ResourceStatusColor = "green" | "yellow" | "red" | "neutral";
+
 export interface UseWorktreeStatusResult {
   branchLabel: string;
   isMainOnStandardBranch: boolean;
@@ -27,6 +29,9 @@ export interface UseWorktreeStatusResult {
   spineState: SpineState;
   isLifecycleRunning: boolean;
   lifecycleLabel?: string;
+  resourceStatusLabel?: string;
+  resourceStatusColor?: ResourceStatusColor;
+  hasResourceConfig: boolean;
 }
 
 export function useWorktreeStatus({
@@ -160,21 +165,69 @@ export function useWorktreeStatus({
   const isLifecycleRunning = lifecycle?.state === "running";
   const lifecycleLabel = useMemo(() => {
     if (!lifecycle) return undefined;
+
+    const PHASE_LABELS: Record<string, string> = {
+      setup: "Running setup",
+      teardown: "Running teardown",
+      "resource-provision": "Provisioning resource",
+      "resource-teardown": "Tearing down resource",
+      "resource-resume": "Resuming resource",
+      "resource-pause": "Pausing resource",
+      "resource-status": "Checking resource status",
+    };
+
     if (lifecycle.state === "running") {
-      const phase = lifecycle.phase === "setup" ? "Running setup" : "Running teardown";
+      const phase = PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
       if (lifecycle.currentCommand) {
         return `${phase}: ${lifecycle.currentCommand}`;
       }
       return `${phase}...`;
     }
     if (lifecycle.state === "failed") {
-      return lifecycle.phase === "setup" ? "Setup failed" : "Teardown failed";
+      const phase = PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
+      return `${phase.replace(/^(Running |Provisioning |Tearing down |Resuming |Pausing |Checking )/, "")} failed`;
     }
     if (lifecycle.state === "timed-out") {
-      return lifecycle.phase === "setup" ? "Setup timed out" : "Teardown timed out";
+      const phase = PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
+      return `${phase.replace(/^(Running |Provisioning |Tearing down |Resuming |Pausing |Checking )/, "")} timed out`;
     }
     return undefined;
   }, [lifecycle]);
+
+  const KNOWN_STATUS_COLORS: Record<string, ResourceStatusColor> = {
+    running: "green",
+    healthy: "green",
+    ready: "green",
+    up: "green",
+    starting: "yellow",
+    provisioning: "yellow",
+    unhealthy: "red",
+    down: "red",
+    error: "red",
+    failed: "red",
+    paused: "neutral",
+    stopped: "neutral", // graceful fallback — prefer "paused"
+    stopping: "neutral",
+    unknown: "neutral",
+  };
+
+  // Synthesize resource status from lifecycle phase when a lifecycle action is in-flight.
+  // This prevents showing a stale "down" or null status while provisioning/resuming/pausing.
+  const LIFECYCLE_PHASE_STATUS: Partial<Record<string, string>> = {
+    "resource-provision": "provisioning",
+    "resource-resume": "starting",
+    "resource-pause": "paused",
+    "resource-teardown": "stopping",
+  };
+  const lifecyclePhaseStatus =
+    isLifecycleRunning && lifecycle ? LIFECYCLE_PHASE_STATUS[lifecycle.phase] : undefined;
+
+  const resourceStatus = lifecyclePhaseStatus ?? worktree.resourceStatus?.lastStatus;
+  const hasResourceConfig = !!worktree.hasResourceConfig;
+  const resourceStatusLabel = resourceStatus ?? undefined;
+  const resourceStatusColor: ResourceStatusColor | undefined = resourceStatus
+    ? (KNOWN_STATUS_COLORS[resourceStatus.toLowerCase()] ?? "neutral")
+    : undefined;
 
   return {
     branchLabel,
@@ -188,5 +241,8 @@ export function useWorktreeStatus({
     spineState,
     isLifecycleRunning,
     lifecycleLabel,
+    resourceStatusLabel,
+    resourceStatusColor,
+    hasResourceConfig,
   };
 }

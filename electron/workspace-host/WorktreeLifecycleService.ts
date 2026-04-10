@@ -1,18 +1,58 @@
 import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { readFile, access, cp } from "fs/promises";
-import { join as pathJoin } from "path";
+import { join as pathJoin, basename, dirname } from "path";
 import os from "os";
 import { z } from "zod/v4";
 
 const OUTPUT_TAIL_BYTES = 8192;
 const DEFAULT_TIMEOUT_MS = 120_000;
 
+const ResourceTimeoutsSchema = z.object({
+  provision: z.number().positive().optional(),
+  teardown: z.number().positive().optional(),
+  resume: z.number().positive().optional(),
+  pause: z.number().positive().optional(),
+  status: z.number().positive().optional(),
+});
+
+const ResourceConfigSchema = z.object({
+  provision: z.array(z.string()).optional(),
+  teardown: z.array(z.string()).optional(),
+  resume: z.array(z.string()).optional(),
+  pause: z.array(z.string()).optional(),
+  status: z.string().optional(),
+  connect: z.string().optional(),
+  timeouts: ResourceTimeoutsSchema.optional(),
+  statusInterval: z.number().positive().optional(),
+  provider: z.string().optional(),
+});
+
+export type ResourceConfig = z.infer<typeof ResourceConfigSchema>;
+
+const ResourcesConfigSchema = z.record(z.string(), ResourceConfigSchema);
+
 const CanopyLifecycleConfigSchema = z.object({
   setup: z.array(z.string()).optional(),
   teardown: z.array(z.string()).optional(),
+  resource: ResourceConfigSchema.optional(),
+  resources: ResourcesConfigSchema.optional(),
 });
 
 export type CanopyLifecycleConfig = z.infer<typeof CanopyLifecycleConfigSchema>;
+
+/** Variables available for {{variable}} substitution in lifecycle commands. */
+export interface LifecycleVariables {
+  branch?: string;
+  worktree_path: string;
+  worktree_name: string;
+  project_root: string;
+  endpoint?: string;
+  // Single-brace variables
+  "parent-dir"?: string;
+  "base-folder"?: string;
+  "branch-slug"?: string;
+  "repo-name"?: string;
+}
 
 export interface RunCommandsOptions {
   cwd: string;
@@ -89,6 +129,34 @@ export class WorktreeLifecycleService {
     }
 
     return null;
+  }
+
+  /**
+   * Load the resolved resource config for a specific environment.
+   * Resolution chain: resources[environmentId] > resources["default"] > resources[first] > resource (singular)
+   */
+  async loadResourceConfig(
+    worktreePath: string,
+    projectRootPath: string,
+    environmentId?: string
+  ): Promise<ResourceConfig | null> {
+    const config = await this.loadConfig(worktreePath, projectRootPath);
+    if (!config) return null;
+
+    if (config.resources) {
+      if (environmentId && config.resources[environmentId]) {
+        return config.resources[environmentId];
+      }
+      if (config.resources["default"]) {
+        return config.resources["default"];
+      }
+      const keys = Object.keys(config.resources);
+      if (keys.length > 0) {
+        return config.resources[keys[0]];
+      }
+    }
+
+    return config.resource ?? null;
   }
 
   /**
@@ -254,12 +322,50 @@ export class WorktreeLifecycleService {
     });
   }
 
+  async loadProjectResourceEnvironments(
+    projectRootPath: string
+  ): Promise<Record<string, ResourceConfig> | null> {
+    const sanitizedRoot = projectRootPath.replace(/[/\\:*?"<>|]/g, "_");
+    const candidates = [
+      pathJoin(this.homeDir, ".canopy", "projects", sanitizedRoot, "settings.json"),
+      pathJoin(projectRootPath, ".canopy", "settings.json"),
+    ];
+    for (const settingsPath of candidates) {
+      if (!(await fileExists(settingsPath))) continue;
+      const raw = await readJsonFile(settingsPath);
+      if (!raw || typeof raw !== "object") continue;
+      const settings = raw as Record<string, unknown>;
+      if (settings.resourceEnvironments && typeof settings.resourceEnvironments === "object") {
+        const result: Record<string, ResourceConfig> = {};
+        for (const [key, value] of Object.entries(
+          settings.resourceEnvironments as Record<string, unknown>
+        )) {
+          const parsed = ResourceConfigSchema.safeParse(value);
+          if (parsed.success) result[key] = parsed.data;
+        }
+        if (Object.keys(result).length > 0) return result;
+      }
+      // Migration: check old singular resourceEnvironment
+      if (settings.resourceEnvironment && typeof settings.resourceEnvironment === "object") {
+        const parsed = ResourceConfigSchema.safeParse(settings.resourceEnvironment);
+        if (parsed.success) {
+          return { default: parsed.data };
+        }
+      }
+    }
+    return null;
+  }
+
   buildEnv(
     worktreePath: string,
     projectRootPath: string,
-    worktreeName: string
+    worktreeName: string,
+    branch?: string,
+    resource?: { provider?: string; endpoint?: string; lastOutput?: string },
+    extraEnv?: Record<string, string>
   ): Record<string, string> {
-    return {
+    const env: Record<string, string> = {
+      ...(extraEnv ?? {}), // project vars first — CANOPY_* below will override
       CI: "true",
       NONINTERACTIVE: "1",
       GIT_TERMINAL_PROMPT: "0",
@@ -268,6 +374,66 @@ export class WorktreeLifecycleService {
       CANOPY_PROJECT_ROOT: projectRootPath,
       CANOPY_WORKTREE_NAME: worktreeName,
     };
+    if (branch) {
+      env.CANOPY_BRANCH = branch;
+    }
+    if (resource?.provider) {
+      env.CANOPY_RESOURCE_PROVIDER = resource.provider;
+    }
+    if (resource?.endpoint) {
+      env.CANOPY_RESOURCE_ENDPOINT = resource.endpoint;
+    }
+    if (resource?.lastOutput) {
+      env.CANOPY_RESOURCE_STATUS = resource.lastOutput;
+    }
+    return env;
+  }
+
+  buildVariables(
+    worktreePath: string,
+    projectRootPath: string,
+    worktreeName: string,
+    branch?: string,
+    endpoint?: string
+  ): LifecycleVariables {
+    const baseFolder = basename(projectRootPath);
+    const branchSlug = branch
+      ? branch
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-|-$/g, "")
+      : undefined;
+    return {
+      branch,
+      worktree_path: worktreePath,
+      worktree_name: worktreeName,
+      project_root: projectRootPath,
+      endpoint,
+      "parent-dir": dirname(projectRootPath),
+      "base-folder": baseFolder,
+      "branch-slug": branchSlug,
+      "repo-name": baseFolder,
+    };
+  }
+
+  /**
+   * Replace {{variable}} and {variable} placeholders in a command string.
+   * Unresolved variables are left as-is so the shell command fails loudly.
+   */
+  substituteVariables(command: string, vars: LifecycleVariables): string {
+    // Double-brace: {{variable}} with snake_case keys
+    let result = command.replace(/\{\{(\w+)\}\}/g, (match, name: string) => {
+      const key = name.toLowerCase() as keyof LifecycleVariables;
+      const value = vars[key];
+      return value != null ? value : match;
+    });
+    // Single-brace: {variable} with hyphenated keys — skip shell vars like ${foo}
+    result = result.replace(/(?<!\$)\{([\w-]+)\}/g, (match, name: string) => {
+      const key = name.toLowerCase() as keyof LifecycleVariables;
+      const value = vars[key];
+      return value != null ? value : match;
+    });
+    return result;
   }
 }
 

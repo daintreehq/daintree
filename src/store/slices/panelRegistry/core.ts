@@ -278,23 +278,35 @@ export const createCorePanelActions = (
     const projectStore = await resolveProjectStore();
     const capturedProjectId = projectStore.getState().currentProject?.id;
 
-    // Fetch project environment variables and merge with spawn options
-    // Precedence: spawn-time env > project env (spawn-time overrides project)
+    // Merge environment variables: global < project < spawn-time (later wins)
     let mergedEnv: Record<string, string> | undefined = options.env;
     try {
+      let globalEnvVars: Record<string, string> = {};
+      try {
+        globalEnvVars = await window.electron.globalEnv.get();
+      } catch (error) {
+        logWarn("[TerminalStore] Failed to fetch global environment variables", { error });
+      }
+
+      let projectEnvVars: Record<string, string> = {};
       if (capturedProjectId) {
         const projectSettings = await projectClient.getSettings(capturedProjectId);
         if (
           projectSettings?.environmentVariables &&
           Object.keys(projectSettings.environmentVariables).length > 0
         ) {
-          // Merge: project env as base, spawn-time env overrides
-          mergedEnv = { ...projectSettings.environmentVariables, ...options.env };
+          projectEnvVars = projectSettings.environmentVariables;
         }
       }
+
+      const hasGlobal = Object.keys(globalEnvVars).length > 0;
+      const hasProject = Object.keys(projectEnvVars).length > 0;
+
+      if (hasGlobal || hasProject) {
+        mergedEnv = { ...globalEnvVars, ...projectEnvVars, ...options.env };
+      }
     } catch (error) {
-      // Failed to fetch project env - continue with spawn-time env only
-      logWarn("[TerminalStore] Failed to fetch project environment variables", { error });
+      logWarn("[TerminalStore] Failed to fetch environment variables", { error });
     }
 
     try {

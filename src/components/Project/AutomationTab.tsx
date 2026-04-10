@@ -17,7 +17,8 @@ import { cn } from "@/lib/utils";
 import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
 import { validatePathPattern, previewPathPattern } from "@shared/utils/pathPattern";
 import type { RunCommand, TerminalRecipe } from "@/types";
-import type { Project } from "@shared/types/project";
+import type { Project, ResourceEnvironment } from "@shared/types/project";
+import { ResourceEnvironmentsSection } from "@/components/Settings/ResourceEnvironmentsSection";
 
 interface AutomationTabProps {
   currentProject: Project | undefined;
@@ -42,6 +43,13 @@ interface AutomationTabProps {
   recipes: TerminalRecipe[];
   recipesLoading: boolean;
   onNavigateToRecipes: () => void;
+  resourceEnvironments?: Record<string, ResourceEnvironment>;
+  onResourceEnvironmentsChange?: (envs: Record<string, ResourceEnvironment>) => void;
+  activeResourceEnvironment?: string;
+  onActiveResourceEnvironmentChange?: (name: string) => void;
+  defaultWorktreeMode?: string;
+  onDefaultWorktreeModeChange?: (mode: string) => void;
+  isOpen?: boolean;
 }
 
 export function AutomationTab({
@@ -67,6 +75,13 @@ export function AutomationTab({
   recipes,
   recipesLoading,
   onNavigateToRecipes,
+  resourceEnvironments,
+  onResourceEnvironmentsChange,
+  activeResourceEnvironment,
+  onActiveResourceEnvironmentChange,
+  defaultWorktreeMode,
+  onDefaultWorktreeModeChange,
+  isOpen,
 }: AutomationTabProps) {
   return (
     <>
@@ -556,6 +571,22 @@ export function AutomationTab({
           </div>
         </div>
       </div>
+
+      {onResourceEnvironmentsChange &&
+        onActiveResourceEnvironmentChange &&
+        onDefaultWorktreeModeChange && (
+          <div className="mt-6 pt-6 border-t border-canopy-border">
+            <ResourceEnvironmentsSection
+              resourceEnvironments={resourceEnvironments}
+              onResourceEnvironmentsChange={onResourceEnvironmentsChange}
+              activeResourceEnvironment={activeResourceEnvironment}
+              onActiveResourceEnvironmentChange={onActiveResourceEnvironmentChange}
+              defaultWorktreeMode={defaultWorktreeMode}
+              onDefaultWorktreeModeChange={onDefaultWorktreeModeChange}
+              isOpen={isOpen ?? false}
+            />
+          </div>
+        )}
     </>
   );
 }

@@ -199,6 +199,18 @@ export class ProjectSettingsManager {
             : undefined,
         terminalSettings: parseTerminalSettings(parsed.terminalSettings),
         notificationOverrides: parseNotificationOverrides(parsed.notificationOverrides),
+        resourceEnvironments:
+          parsed.resourceEnvironments &&
+          typeof parsed.resourceEnvironments === "object" &&
+          !Array.isArray(parsed.resourceEnvironments)
+            ? parsed.resourceEnvironments
+            : undefined,
+        activeResourceEnvironment:
+          typeof parsed.activeResourceEnvironment === "string"
+            ? parsed.activeResourceEnvironment
+            : undefined,
+        defaultWorktreeMode:
+          typeof parsed.defaultWorktreeMode === "string" ? parsed.defaultWorktreeMode : undefined,
       };
 
       this.notificationOverridesCache.set(projectId, settings.notificationOverrides);

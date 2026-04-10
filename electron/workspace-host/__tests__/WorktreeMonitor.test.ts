@@ -619,4 +619,114 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
   });
+
+  describe("adaptive resource polling", () => {
+    it("defaults to 30s polling when hasResourceConfig and hasStatusCommand are set on active worktree", async () => {
+      const activeWorktree: Worktree = { ...TEST_WORKTREE, isCurrent: true };
+      const callbacks = makeCallbacks({ onResourceStatusPoll: vi.fn() });
+      const monitor = new WorktreeMonitor(activeWorktree, TEST_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledWith("/test/worktree");
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+    });
+
+    it("defaults to 120s polling for background worktree", async () => {
+      const backgroundWorktree: Worktree = { ...TEST_WORKTREE, isCurrent: false };
+      const callbacks = makeCallbacks({ onResourceStatusPoll: vi.fn() });
+      const monitor = new WorktreeMonitor(backgroundWorktree, TEST_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(callbacks.onResourceStatusPoll).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledWith("/test/worktree");
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+    });
+
+    it("switches from 120s to 30s when isCurrent becomes true", async () => {
+      const backgroundWorktree: Worktree = { ...TEST_WORKTREE, isCurrent: false };
+      const callbacks = makeCallbacks({ onResourceStatusPoll: vi.fn() });
+      const monitor = new WorktreeMonitor(backgroundWorktree, TEST_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(callbacks.onResourceStatusPoll).not.toHaveBeenCalled();
+
+      monitor.isCurrent = true;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledWith("/test/worktree");
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+    });
+
+    it("does not poll when hasStatusCommand is false", async () => {
+      const callbacks = makeCallbacks({ onResourceStatusPoll: vi.fn() });
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(false);
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(callbacks.onResourceStatusPoll).not.toHaveBeenCalled();
+
+      monitor.stop();
+    });
+
+    it("explicit setResourcePollInterval overrides defaults", async () => {
+      const activeWorktree: Worktree = { ...TEST_WORKTREE, isCurrent: true };
+      const callbacks = makeCallbacks({ onResourceStatusPoll: vi.fn() });
+      const monitor = new WorktreeMonitor(activeWorktree, TEST_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+      monitor.setResourcePollInterval(60_000);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(callbacks.onResourceStatusPoll).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledWith("/test/worktree");
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+    });
+
+    it("isCurrent change does not override explicit interval", async () => {
+      const backgroundWorktree: Worktree = { ...TEST_WORKTREE, isCurrent: false };
+      const callbacks = makeCallbacks({ onResourceStatusPoll: vi.fn() });
+      const monitor = new WorktreeMonitor(backgroundWorktree, TEST_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+      monitor.setResourcePollInterval(60_000);
+
+      monitor.isCurrent = true;
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledWith("/test/worktree");
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+    });
+  });
 });

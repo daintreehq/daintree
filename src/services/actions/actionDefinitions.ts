@@ -4,6 +4,7 @@ import { registerFileActions } from "./definitions/fileActions";
 import { registerAppActions } from "./definitions/appActions";
 import { registerBrowserActions } from "./definitions/browserActions";
 import { registerDevServerActions } from "./definitions/devServerActions";
+import { registerEnvActions } from "./definitions/envActions";
 import { registerGithubActions } from "./definitions/githubActions";
 import { registerGitActions } from "./definitions/gitActions";
 import { registerIntrospectionActions } from "./definitions/introspectionActions";
@@ -45,6 +46,7 @@ export function createActionDefinitions(callbacks: ActionCallbacks): ActionRegis
   registerWorktreeSessionActions(actions, callbacks);
   registerRecipeActions(actions, callbacks);
   registerProjectActions(actions, callbacks);
+  registerEnvActions(actions, callbacks);
   registerGithubActions(actions, callbacks);
   registerGitActions(actions, callbacks);
   registerSystemActions(actions, callbacks);

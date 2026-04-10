@@ -392,6 +392,9 @@ function App() {
       return launchAgent(agentId, options);
     },
     onInject: inject,
+    onAddTerminal: async (options) => {
+      await usePanelStore.getState().addPanel(options);
+    },
     getDefaultCwd: () => defaultTerminalCwd,
     getActiveWorktreeId: () => activeWorktree?.id,
     getWorktrees: () => worktrees,

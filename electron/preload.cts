@@ -636,6 +636,8 @@ const CHANNELS = {
   GLOBAL_ADD_RECIPE: "global:add-recipe",
   GLOBAL_UPDATE_RECIPE: "global:update-recipe",
   GLOBAL_DELETE_RECIPE: "global:delete-recipe",
+  GLOBAL_ENV_GET: "global-env:get",
+  GLOBAL_ENV_SET: "global-env:set",
   PROJECT_GET_TERMINALS: "project:get-terminals",
   PROJECT_SET_TERMINALS: "project:set-terminals",
   PROJECT_GET_TERMINAL_SIZES: "project:get-terminal-sizes",
@@ -1740,6 +1742,13 @@ const api: ElectronAPI = {
 
     deleteRecipe: (recipeId: string): Promise<void> =>
       _unwrappingInvoke(CHANNELS.GLOBAL_DELETE_RECIPE, { recipeId }),
+  },
+
+  // Global Environment Variables API
+  globalEnv: {
+    get: (): Promise<Record<string, string>> => _unwrappingInvoke(CHANNELS.GLOBAL_ENV_GET),
+    set: (variables: Record<string, string>): Promise<void> =>
+      _unwrappingInvoke(CHANNELS.GLOBAL_ENV_SET, { variables }),
   },
 
   // Agent Settings API

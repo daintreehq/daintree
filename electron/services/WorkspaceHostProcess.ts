@@ -480,8 +480,12 @@ export class WorkspaceHostProcess extends EventEmitter {
         break;
 
       case "list-branches-result":
+      case "get-recent-branches-result":
       case "get-file-diff-result":
       case "file-tree-result":
+      case "resource-action-result":
+      case "has-resource-config-result":
+      case "update-monitor-config-result":
         this.handleRequestResult(this.toResult(event));
         break;
 

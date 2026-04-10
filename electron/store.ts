@@ -132,6 +132,7 @@ export interface StoreSchema {
     overrides: Record<string, string[]>;
   };
   projectEnv: Record<string, string>;
+  globalEnvironmentVariables: Record<string, string>;
   appAgentConfig: AppAgentConfig;
   windowStates: Record<
     string,
@@ -265,6 +266,7 @@ const storeOptions = {
       overrides: {},
     },
     projectEnv: {},
+    globalEnvironmentVariables: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
     windowStates: {},
     worktreeIssueMap: {},

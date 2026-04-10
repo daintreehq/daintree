@@ -1,26 +1,18 @@
 import { useState, useEffect } from "react";
 import {
   FolderX,
-  Key,
   Plus,
   Trash2,
-  Eye,
-  EyeOff,
   AlertTriangle,
   Play,
   Check,
   Settings,
   FileCode,
-  Lock,
-  ShieldAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { copyTreeClient } from "@/clients/copyTreeClient";
-import { isSensitiveEnvKey } from "@shared/utils/envVars";
 import type { CopyTreeSettings, CopyTreeTestConfigResult, Worktree } from "@/types";
-import type { EnvVar } from "./projectSettingsDirty";
-import type { ProjectSettings } from "@shared/types/project";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -42,10 +34,7 @@ interface ContextTabProps {
   onExcludedPathsChange: (value: string[]) => void;
   copyTreeSettings: CopyTreeSettings;
   onCopyTreeSettingsChange: (value: CopyTreeSettings) => void;
-  environmentVariables: EnvVar[];
-  onEnvironmentVariablesChange: (value: EnvVar[]) => void;
   worktrees: Worktree[];
-  settings: ProjectSettings | null;
   isOpen: boolean;
 }
 
@@ -54,35 +43,18 @@ export function ContextTab({
   onExcludedPathsChange,
   copyTreeSettings,
   onCopyTreeSettingsChange,
-  environmentVariables,
-  onEnvironmentVariablesChange,
   worktrees,
-  settings,
   isOpen,
 }: ContextTabProps) {
-  const [visibleEnvVars, setVisibleEnvVars] = useState<Set<string>>(new Set());
   const [testConfigResult, setTestConfigResult] = useState<CopyTreeTestConfigResult | null>(null);
   const [isTestingConfig, setIsTestingConfig] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
-      setVisibleEnvVars(new Set());
       setTestConfigResult(null);
       setIsTestingConfig(false);
     }
   }, [isOpen]);
-
-  const toggleEnvVarVisibility = (id: string) => {
-    setVisibleEnvVars((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  };
 
   const handleTestConfig = async () => {
     const mainWorktree = worktrees.find((wt) => wt.isMainWorktree) || worktrees[0];
@@ -507,171 +479,6 @@ export function ContextTab({
               </div>
             )}
           </div>
-        </div>
-      </div>
-
-      <div className="mb-6">
-        <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-          <Key className="h-4 w-4" />
-          Environment Variables
-        </h3>
-        <p className="text-xs text-canopy-text/60 mb-4">
-          Project-specific environment variables. Variable names containing KEY, SECRET, TOKEN, or
-          PASSWORD are stored securely using OS encryption <Lock className="inline h-3 w-3" />.
-        </p>
-
-        {settings?.insecureEnvironmentVariables &&
-          settings.insecureEnvironmentVariables.length > 0 && (
-            <div className="mb-4 p-3 bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)] flex items-start gap-2">
-              <ShieldAlert className="h-4 w-4 text-status-warning mt-0.5 flex-shrink-0" />
-              <div className="flex-1 text-xs">
-                <p className="text-status-warning font-semibold mb-1">
-                  Insecure sensitive variables detected
-                </p>
-                <p className="text-status-warning/80 mb-2">
-                  The following variables contain sensitive keywords but are stored in plaintext:{" "}
-                  <span className="font-mono">
-                    {settings.insecureEnvironmentVariables.join(", ")}
-                  </span>
-                </p>
-                <p className="text-status-warning/80">
-                  These will be automatically moved to secure storage when settings are saved.
-                </p>
-              </div>
-            </div>
-          )}
-
-        <div className="space-y-2">
-          {environmentVariables.length === 0 ? (
-            <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
-              No environment variables configured yet
-            </div>
-          ) : (
-            environmentVariables.map((envVar, index) => {
-              const isSensitive = isSensitiveEnvKey(envVar.key);
-              const isInsecure = settings?.insecureEnvironmentVariables?.includes(envVar.key);
-              const isSecured = isSensitive && !isInsecure;
-              const isVisible = visibleEnvVars.has(envVar.id);
-              const shouldMask = isSensitive && !isVisible;
-              return (
-                <div
-                  key={envVar.id}
-                  className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
-                >
-                  {isSecured && (
-                    <Lock
-                      className="h-3.5 w-3.5 text-status-success/60 flex-shrink-0"
-                      aria-label="Stored securely"
-                    />
-                  )}
-                  {isInsecure && (
-                    <ShieldAlert
-                      className="h-3.5 w-3.5 text-status-warning/60 flex-shrink-0"
-                      aria-label="Stored in plaintext"
-                    />
-                  )}
-                  <input
-                    type="text"
-                    value={envVar.key}
-                    onChange={(e) => {
-                      const nextKey = e.target.value;
-                      const wasSensitive = isSensitiveEnvKey(envVar.key);
-                      const nowSensitive = isSensitiveEnvKey(nextKey);
-                      onEnvironmentVariablesChange(
-                        environmentVariables.map((ev, i) =>
-                          i === index ? { ...envVar, key: nextKey } : ev
-                        )
-                      );
-                      if (!wasSensitive && nowSensitive) {
-                        setVisibleEnvVars((prev) => {
-                          const next = new Set(prev);
-                          next.delete(envVar.id);
-                          return next;
-                        });
-                      }
-                    }}
-                    spellCheck={false}
-                    autoCapitalize="none"
-                    className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                    placeholder="VARIABLE_NAME"
-                    aria-label="Environment variable name"
-                  />
-                  <span className="text-canopy-text/60">=</span>
-                  <div className="flex-1 relative">
-                    <input
-                      type={shouldMask ? "password" : "text"}
-                      value={envVar.value}
-                      onChange={(e) => {
-                        onEnvironmentVariablesChange(
-                          environmentVariables.map((ev, i) =>
-                            i === index ? { ...envVar, value: e.target.value } : ev
-                          )
-                        );
-                      }}
-                      spellCheck={false}
-                      autoCapitalize="none"
-                      autoComplete={isSensitive ? "new-password" : "off"}
-                      className={cn(
-                        "w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30",
-                        isSensitive && "pr-8"
-                      )}
-                      placeholder="value"
-                      aria-label="Environment variable value"
-                    />
-                    {isSensitive && (
-                      <button
-                        type="button"
-                        onClick={() => toggleEnvVarVisibility(envVar.id)}
-                        className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-canopy-border/50 transition-colors"
-                        aria-pressed={isVisible}
-                        aria-label={`${isVisible ? "Hide" : "Show"} value${envVar.key ? ` for ${envVar.key}` : ""}`}
-                      >
-                        {isVisible ? (
-                          <EyeOff className="h-4 w-4 text-canopy-text/60" />
-                        ) : (
-                          <Eye className="h-4 w-4 text-canopy-text/60" />
-                        )}
-                      </button>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onEnvironmentVariablesChange(
-                        environmentVariables.filter((_, i) => i !== index)
-                      );
-                      setVisibleEnvVars((prev) => {
-                        const next = new Set(prev);
-                        next.delete(envVar.id);
-                        return next;
-                      });
-                    }}
-                    className="p-1 rounded hover:bg-status-error/15 transition-colors"
-                    aria-label="Delete environment variable"
-                  >
-                    <Trash2 className="h-4 w-4 text-status-error" />
-                  </button>
-                </div>
-              );
-            })
-          )}
-          <Button
-            variant="outline"
-            onClick={() => {
-              onEnvironmentVariablesChange([
-                ...environmentVariables,
-                {
-                  id: `env-${Date.now()}-${Math.random()}`,
-                  key: "",
-                  value: "",
-                },
-              ]);
-            }}
-            className="w-full"
-          >
-            <Plus />
-            Add Variable
-          </Button>
         </div>
       </div>
     </>

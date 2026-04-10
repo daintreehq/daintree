@@ -29,6 +29,10 @@ export interface CreateWorktreeOptions {
   path: string;
   fromRemote?: boolean;
   useExistingBranch?: boolean;
+  /** Opt-in flag to run resource.provision after setup */
+  provisionResource?: boolean;
+  /** Worktree environment mode ("local" or an environment key from resourceEnvironments) */
+  worktreeMode?: string;
 }
 
 /** Worktree path pattern configuration */

@@ -17,9 +17,19 @@ export const SettingsTabSchema = z.enum([
   "toolbar",
   "integrations",
   "notifications",
-
+  "voice",
   "mcp",
+  "environment",
+  "privacy",
   "troubleshooting",
+  "project:general",
+  "project:context",
+  "project:variables",
+  "project:automation",
+  "project:recipes",
+  "project:commands",
+  "project:notifications",
+  "project:github",
 ]);
 
 export const SettingsNavTargetSchema = z.object({

@@ -10,6 +10,7 @@ import {
   ContextMenuSubContent,
 } from "@/components/ui/context-menu";
 import {
+  Activity,
   CircleDot,
   Code,
   Copy,
@@ -28,9 +29,13 @@ import {
   PanelTopOpen,
   Pin,
   PinOff,
+  Play,
+  Plug,
   RefreshCw,
   RotateCcw,
   Save,
+  Server,
+  Pause,
   SquareTerminal,
   Trash2,
   Undo2,
@@ -114,6 +119,17 @@ export interface WorktreeMenuItemsProps {
   onDeleteWorktree?: () => void;
   onRevertAgentChanges?: () => void;
   hasSnapshot?: boolean;
+  hasResourceConfig?: boolean;
+  worktreeMode?: string;
+  resourceEnvironmentKeys?: string[];
+  onSwitchEnvironment?: (envKey: string) => void;
+  resourceStatus?: string;
+  onResourceProvision?: () => void;
+  onResourceResume?: () => void;
+  onResourcePause?: () => void;
+  onResourceConnect?: () => void;
+  onResourceStatus?: () => void;
+  onResourceTeardown?: () => void;
 }
 
 export function WorktreeMenuItems({
@@ -155,6 +171,16 @@ export function WorktreeMenuItems({
   onDeleteWorktree,
   onRevertAgentChanges,
   hasSnapshot,
+  hasResourceConfig,
+  worktreeMode,
+  resourceEnvironmentKeys,
+  onSwitchEnvironment,
+  onResourceProvision,
+  onResourceResume,
+  onResourcePause,
+  onResourceConnect,
+  onResourceStatus,
+  onResourceTeardown,
 }: WorktreeMenuItemsProps) {
   const hasIssueSub = Boolean(worktree.issueNumber && (onOpenIssuePortal || onOpenIssueExternal));
   const hasPRSub = Boolean(worktree.prNumber && (onOpenPRPortal || onOpenPRExternal));
@@ -266,6 +292,96 @@ export function WorktreeMenuItems({
           </C.Item>
         </C.SubContent>
       </C.Sub>
+
+      <C.Separator />
+
+      {/* Resource */}
+      {hasResourceConfig && (
+        <C.Sub>
+          <C.SubTrigger>
+            <Server className="w-3.5 h-3.5 mr-2" />
+            Resource
+          </C.SubTrigger>
+          <C.SubContent>
+            {resourceEnvironmentKeys && resourceEnvironmentKeys.length > 0 && (
+              <>
+                <C.Sub>
+                  <C.SubTrigger>
+                    <Server className="w-3.5 h-3.5 mr-2" />
+                    Environment
+                  </C.SubTrigger>
+                  <C.SubContent>
+                    {(() => {
+                      const isLocalSelected = !worktreeMode || worktreeMode === "local";
+                      return (
+                        <C.Item
+                          onSelect={() => onSwitchEnvironment?.("local")}
+                          disabled={!onSwitchEnvironment}
+                        >
+                          <CircleDot
+                            className={`w-3.5 h-3.5 mr-2 ${isLocalSelected ? "text-status-success" : "opacity-0"}`}
+                          />
+                          Local
+                        </C.Item>
+                      );
+                    })()}
+                    {resourceEnvironmentKeys.map((key) => (
+                      <C.Item
+                        key={key}
+                        onSelect={() => onSwitchEnvironment?.(key)}
+                        disabled={!onSwitchEnvironment}
+                      >
+                        <CircleDot
+                          className={`w-3.5 h-3.5 mr-2 ${worktreeMode === key ? "text-status-success" : "opacity-0"}`}
+                        />
+                        {key}
+                      </C.Item>
+                    ))}
+                  </C.SubContent>
+                </C.Sub>
+                <C.Separator />
+              </>
+            )}
+            {(() => {
+              const isLocal = !worktreeMode || worktreeMode === "local";
+              return (
+                <>
+                  <C.Item onSelect={onResourceProvision} disabled={isLocal || !onResourceProvision}>
+                    <Play className="w-3.5 h-3.5 mr-2" />
+                    Provision
+                  </C.Item>
+                  <C.Item
+                    onSelect={onResourceTeardown}
+                    destructive
+                    disabled={isLocal || !onResourceTeardown}
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-2" />
+                    Teardown
+                  </C.Item>
+                  <C.Separator />
+                  <C.Item onSelect={onResourceResume} disabled={isLocal || !onResourceResume}>
+                    <Play className="w-3.5 h-3.5 mr-2 text-status-success" />
+                    Resume
+                  </C.Item>
+                  <C.Item onSelect={onResourcePause} disabled={isLocal || !onResourcePause}>
+                    <Pause className="w-3.5 h-3.5 mr-2" />
+                    Pause
+                  </C.Item>
+                  <C.Separator />
+                  <C.Item onSelect={onResourceConnect} disabled={isLocal || !onResourceConnect}>
+                    <Plug className="w-3.5 h-3.5 mr-2 text-status-info" />
+                    Connect
+                  </C.Item>
+                  <C.Item onSelect={onResourceStatus} disabled={isLocal || !onResourceStatus}>
+                    <Activity className="w-3.5 h-3.5 mr-2" />
+                    Check Status
+                  </C.Item>
+                </>
+              );
+            })()}
+          </C.SubContent>
+        </C.Sub>
+      )}
 
       <C.Separator />
 

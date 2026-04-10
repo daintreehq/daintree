@@ -6,10 +6,25 @@ import { cn } from "@/lib/utils";
 import { ActivityLight } from "../ActivityLight";
 import { LiveTimeAgo } from "../LiveTimeAgo";
 import { WorktreeDetails } from "../WorktreeDetails";
-import { ChevronRight, GitCommitHorizontal } from "lucide-react";
+import {
+  ChevronRight,
+  GitCommitHorizontal,
+  Play,
+  Square,
+  Plug,
+  Activity,
+  Trash2,
+} from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import type { ComputedSubtitle } from "./hooks/useWorktreeStatus";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+  ContextMenuItem,
+  ContextMenuSeparator,
+} from "@/components/ui/context-menu";
 
 export interface WorktreeDetailsSectionProps {
   worktree: WorktreeState;
@@ -28,28 +43,58 @@ export interface WorktreeDetailsSectionProps {
   onOpenReviewHub?: () => void;
   isLifecycleRunning?: boolean;
   lifecycleLabel?: string;
+
+  hasResourceConfig?: boolean;
+  resourceStatus?: string;
+  onResourceResume?: () => void;
+  onResourcePause?: () => void;
+  onResourceConnect?: () => void;
+  onResourceProvision?: () => void;
+  onResourceTeardown?: () => void;
+  onResourceStatus?: () => void;
 }
 
-export function WorktreeDetailsSection({
-  worktree,
-  homeDir,
-  isExpanded,
-  hasChanges,
-  computedSubtitle,
-  effectiveNote,
-  effectiveSummary,
-  worktreeErrors,
-  isFocused,
-  onToggleExpand,
-  onPathClick,
-  onDismissError,
-  onRetryError,
-  onOpenReviewHub,
-  isLifecycleRunning,
-  lifecycleLabel,
-}: WorktreeDetailsSectionProps) {
+export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
+  const {
+    worktree,
+    homeDir,
+    isExpanded,
+    hasChanges,
+    computedSubtitle,
+    effectiveNote,
+    effectiveSummary,
+    worktreeErrors,
+    isFocused,
+    onToggleExpand,
+    onPathClick,
+    onDismissError,
+    onRetryError,
+    onOpenReviewHub,
+    isLifecycleRunning,
+    lifecycleLabel,
+
+    hasResourceConfig,
+    resourceStatus,
+    onResourceResume,
+    onResourcePause,
+    onResourceConnect,
+    onResourceTeardown,
+    onResourceStatus,
+  } = props;
   const detailsId = `worktree-${worktree.id}-details`;
   const detailsPanelId = `worktree-${worktree.id}-details-panel`;
+
+  const rsLower = resourceStatus?.toLowerCase();
+  const showResourceResume =
+    hasResourceConfig &&
+    (!rsLower ||
+      rsLower === "paused" ||
+      rsLower === "stopped" ||
+      rsLower === "unknown" ||
+      rsLower === "terminated" ||
+      rsLower === "down");
+  const showResourcePause = hasResourceConfig && (rsLower === "running" || rsLower === "starting");
+  const showResourceConnect = hasResourceConfig && !!onResourceConnect && rsLower === "running";
 
   return (
     <div
@@ -93,8 +138,16 @@ export function WorktreeDetailsSection({
         </div>
       ) : (
         <div className="-m-3 flex items-stretch">
-          <button
+          <div
             onClick={onToggleExpand}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onToggleExpand(e as unknown as React.MouseEvent);
+              }
+            }}
+            role="button"
+            tabIndex={0}
             aria-expanded={false}
             aria-controls={detailsPanelId}
             className={cn(
@@ -155,6 +208,108 @@ export function WorktreeDetailsSection({
               )}
             </span>
 
+            {hasResourceConfig && (
+              <ContextMenu>
+                <ContextMenuTrigger asChild>
+                  <span className="sr-only">Resource actions</span>
+                </ContextMenuTrigger>
+                <ContextMenuContent onClick={(e) => e.stopPropagation()}>
+                  {showResourceResume && onResourceResume && (
+                    <ContextMenuItem onClick={onResourceResume}>
+                      <Play className="w-3.5 h-3.5 mr-2" />
+                      Resume
+                    </ContextMenuItem>
+                  )}
+                  {showResourcePause && onResourcePause && (
+                    <ContextMenuItem onClick={onResourcePause}>
+                      <Square className="w-3.5 h-3.5 mr-2" />
+                      Pause
+                    </ContextMenuItem>
+                  )}
+                  {showResourceConnect && (
+                    <ContextMenuItem onClick={onResourceConnect}>
+                      <Plug className="w-3.5 h-3.5 mr-2" />
+                      Connect
+                    </ContextMenuItem>
+                  )}
+                  {(showResourceResume || showResourcePause || showResourceConnect) &&
+                    onResourceStatus && <ContextMenuSeparator />}
+                  {onResourceStatus && (
+                    <ContextMenuItem onClick={onResourceStatus}>
+                      <Activity className="w-3.5 h-3.5 mr-2" />
+                      Check Status
+                    </ContextMenuItem>
+                  )}
+                  {onResourceTeardown && (
+                    <>
+                      <ContextMenuSeparator />
+                      <ContextMenuItem onClick={onResourceTeardown} className="text-status-error">
+                        <Trash2 className="w-3.5 h-3.5 mr-2" />
+                        Teardown
+                      </ContextMenuItem>
+                    </>
+                  )}
+                </ContextMenuContent>
+              </ContextMenu>
+            )}
+
+            {hasResourceConfig &&
+              (showResourceResume || showResourcePause || showResourceConnect) && (
+                <span className="ml-1 inline-flex shrink-0 items-center gap-0.5">
+                  {showResourceResume && onResourceResume && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onResourceResume();
+                          }}
+                          className="shrink-0 p-1 rounded transition-colors text-status-success/70 hover:text-status-success hover:bg-overlay-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                          aria-label="Resume Resource"
+                        >
+                          <Play className="w-3 h-3" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Resume Resource</TooltipContent>
+                    </Tooltip>
+                  )}
+                  {showResourcePause && onResourcePause && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onResourcePause();
+                          }}
+                          className="shrink-0 p-1 rounded transition-colors text-status-error/70 hover:text-status-error hover:bg-overlay-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                          aria-label="Pause Resource"
+                        >
+                          <Square className="w-3 h-3" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Pause Resource</TooltipContent>
+                    </Tooltip>
+                  )}
+                  {showResourceConnect && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onResourceConnect!();
+                          }}
+                          className="shrink-0 p-1 rounded transition-colors text-status-info/70 hover:text-status-info hover:bg-overlay-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                          aria-label="Connect to Resource"
+                        >
+                          <Plug className="w-3 h-3" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Connect to Resource</TooltipContent>
+                    </Tooltip>
+                  )}
+                </span>
+              )}
+
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className="ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
@@ -171,7 +326,7 @@ export function WorktreeDetailsSection({
                   : "No recent activity recorded"}
               </TooltipContent>
             </Tooltip>
-          </button>
+          </div>
 
           {onOpenReviewHub && hasChanges && (
             <Tooltip>

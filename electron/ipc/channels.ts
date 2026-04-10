@@ -223,6 +223,8 @@ export const CHANNELS = {
   GLOBAL_ADD_RECIPE: "global:add-recipe",
   GLOBAL_UPDATE_RECIPE: "global:update-recipe",
   GLOBAL_DELETE_RECIPE: "global:delete-recipe",
+  GLOBAL_ENV_GET: "global-env:get",
+  GLOBAL_ENV_SET: "global-env:set",
 
   PROJECT_GET_TERMINALS: "project:get-terminals",
   PROJECT_SET_TERMINALS: "project:set-terminals",

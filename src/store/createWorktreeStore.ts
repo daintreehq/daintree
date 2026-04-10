@@ -149,8 +149,26 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.planFilePath === b.planFilePath &&
     a.aheadCount === b.aheadCount &&
     a.behindCount === b.behindCount &&
+    a.worktreeMode === b.worktreeMode &&
+    a.worktreeEnvironmentLabel === b.worktreeEnvironmentLabel &&
+    a.hasResourceConfig === b.hasResourceConfig &&
+    resourceStatusEqual(a.resourceStatus, b.resourceStatus) &&
     worktreeChangesEqual(a.worktreeChanges, b.worktreeChanges) &&
     lifecycleStatusEqual(a.lifecycleStatus, b.lifecycleStatus)
+  );
+}
+
+function resourceStatusEqual(
+  a: WorktreeSnapshot["resourceStatus"],
+  b: WorktreeSnapshot["resourceStatus"]
+): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  return (
+    a.lastStatus === b.lastStatus &&
+    a.provider === b.provider &&
+    a.endpoint === b.endpoint &&
+    a.lastCheckedAt === b.lastCheckedAt
   );
 }
 

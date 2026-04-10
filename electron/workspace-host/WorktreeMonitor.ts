@@ -25,6 +25,8 @@ const WATCHER_RETRY_INTERVAL_MS = 30_000;
 const WATCHER_MAX_RETRIES = 5;
 const WATCHER_WORKTREE_MAX_WAIT_MS = 2000;
 const PLAN_FILE_CANDIDATES = ["TODO.md", "PLAN.md", "plan.md", "TASKS.md"] as const;
+const RESOURCE_POLL_DEFAULT_ACTIVE_MS = 30_000;
+const RESOURCE_POLL_DEFAULT_BACKGROUND_MS = 120_000;
 
 export interface WorktreeMonitorConfig {
   basePollingInterval: number;
@@ -41,6 +43,7 @@ export interface WorktreeMonitorCallbacks {
   onError?: (worktreeId: string, error: Error) => void;
   onBranchChanged?: (worktreeId: string, newBranch: string) => void;
   onExternalRemoval?: (worktreeId: string) => void;
+  onResourceStatusPoll?: (worktreeId: string) => void;
 }
 
 export class WorktreeMonitor {
@@ -104,6 +107,24 @@ export class WorktreeMonitor {
   private _createdAt: number | undefined;
   private _lifecycleStatus: WorktreeLifecycleStatus | undefined;
 
+  // Resource state
+  private _resourceStatus:
+    | import("../../shared/types/worktree.js").WorktreeResourceStatus
+    | undefined;
+  private _resourceConnectCommand: string | undefined;
+  private _resourceProvider: string | undefined;
+  private _hasResourceConfig: boolean = false;
+  private _hasStatusCommand: boolean = false;
+  private _hasPauseCommand: boolean = false;
+  private _hasResumeCommand: boolean = false;
+  private _hasTeardownCommand: boolean = false;
+  private _worktreeMode: string = "local";
+  private _worktreeEnvironmentLabel: string | undefined;
+
+  // Resource status auto-polling
+  private resourcePollTimer: NodeJS.Timeout | null = null;
+  private resourcePollIntervalMs: number = 0; // 0 = disabled
+
   // Poll queue concurrency
   private _pendingPollPromise: Promise<void> | null = null;
   private _pollAbortController: AbortController = new AbortController();
@@ -164,7 +185,21 @@ export class WorktreeMonitor {
   }
 
   set isCurrent(value: boolean) {
+    const changed = this._isCurrent !== value;
     this._isCurrent = value;
+    if (changed && this._hasResourceConfig && this._hasStatusCommand && this._isRunning) {
+      // Only adapt if no explicit statusInterval was configured (i.e., using defaults)
+      const isUsingDefaultInterval =
+        this.resourcePollIntervalMs === RESOURCE_POLL_DEFAULT_ACTIVE_MS ||
+        this.resourcePollIntervalMs === RESOURCE_POLL_DEFAULT_BACKGROUND_MS;
+      if (isUsingDefaultInterval) {
+        this.resourcePollIntervalMs = value
+          ? RESOURCE_POLL_DEFAULT_ACTIVE_MS
+          : RESOURCE_POLL_DEFAULT_BACKGROUND_MS;
+        this.clearResourcePollTimer();
+        this.scheduleResourcePoll();
+      }
+    }
   }
 
   get isMainWorktree(): boolean {
@@ -238,6 +273,149 @@ export class WorktreeMonitor {
 
   setLifecycleStatus(status: WorktreeLifecycleStatus | undefined): void {
     this._lifecycleStatus = status;
+  }
+
+  get resourceStatus():
+    | import("../../shared/types/worktree.js").WorktreeResourceStatus
+    | undefined {
+    return this._resourceStatus;
+  }
+
+  setResourceStatus(
+    status: import("../../shared/types/worktree.js").WorktreeResourceStatus | undefined
+  ): void {
+    this._resourceStatus = status;
+  }
+
+  get resourceConnectCommand(): string | undefined {
+    return this._resourceConnectCommand;
+  }
+
+  setResourceConnectCommand(cmd: string | undefined): void {
+    this._resourceConnectCommand = cmd;
+  }
+
+  get resourceProvider(): string | undefined {
+    return this._resourceProvider;
+  }
+
+  setResourceProvider(provider: string | undefined): void {
+    this._resourceProvider = provider;
+  }
+
+  get hasResourceConfig(): boolean {
+    return this._hasResourceConfig;
+  }
+
+  setHasResourceConfig(has: boolean): void {
+    this._hasResourceConfig = has;
+    if (has && this._hasStatusCommand && this._isRunning) {
+      if (this.resourcePollIntervalMs === 0) {
+        this.resourcePollIntervalMs = this._isCurrent
+          ? RESOURCE_POLL_DEFAULT_ACTIVE_MS
+          : RESOURCE_POLL_DEFAULT_BACKGROUND_MS;
+      }
+      this.scheduleResourcePoll();
+    } else if (!has) {
+      this.clearResourcePollTimer();
+    }
+  }
+
+  get hasStatusCommand(): boolean {
+    return this._hasStatusCommand;
+  }
+
+  get hasPauseCommand(): boolean {
+    return this._hasPauseCommand;
+  }
+
+  setHasPauseCommand(has: boolean): void {
+    this._hasPauseCommand = has;
+  }
+
+  get hasResumeCommand(): boolean {
+    return this._hasResumeCommand;
+  }
+
+  setHasResumeCommand(has: boolean): void {
+    this._hasResumeCommand = has;
+  }
+
+  get hasTeardownCommand(): boolean {
+    return this._hasTeardownCommand;
+  }
+
+  setHasTeardownCommand(has: boolean): void {
+    this._hasTeardownCommand = has;
+  }
+
+  setHasStatusCommand(has: boolean): void {
+    this._hasStatusCommand = has;
+    if (has && this._hasResourceConfig && this._isRunning) {
+      // If no explicit interval was set, apply default based on isCurrent
+      if (this.resourcePollIntervalMs === 0) {
+        this.resourcePollIntervalMs = this._isCurrent
+          ? RESOURCE_POLL_DEFAULT_ACTIVE_MS
+          : RESOURCE_POLL_DEFAULT_BACKGROUND_MS;
+      }
+      this.scheduleResourcePoll();
+    } else if (!has) {
+      this.clearResourcePollTimer();
+    }
+  }
+
+  /**
+   * Set the resource status polling interval in milliseconds.
+   * 0 disables auto-polling. Reads from config.json `statusInterval` (seconds).
+   */
+  setResourcePollInterval(ms: number): void {
+    this.resourcePollIntervalMs = ms;
+    this.clearResourcePollTimer();
+    if (ms > 0 && this._hasResourceConfig && this._isRunning) {
+      this.scheduleResourcePoll();
+    }
+  }
+
+  private scheduleResourcePoll(): void {
+    if (this.resourcePollTimer) return;
+    if (this.resourcePollIntervalMs <= 0 || !this._hasResourceConfig || !this._hasStatusCommand)
+      return;
+
+    this.resourcePollTimer = setTimeout(() => {
+      this.resourcePollTimer = null;
+      if (
+        this._isRunning &&
+        this._hasResourceConfig &&
+        this._hasStatusCommand &&
+        this.resourcePollIntervalMs > 0
+      ) {
+        this.callbacks.onResourceStatusPoll?.(this.id);
+        this.scheduleResourcePoll();
+      }
+    }, this.resourcePollIntervalMs);
+  }
+
+  private clearResourcePollTimer(): void {
+    if (this.resourcePollTimer) {
+      clearTimeout(this.resourcePollTimer);
+      this.resourcePollTimer = null;
+    }
+  }
+
+  get worktreeMode(): string {
+    return this._worktreeMode;
+  }
+
+  setWorktreeMode(mode: string): void {
+    this._worktreeMode = mode;
+  }
+
+  get worktreeEnvironmentLabel(): string | undefined {
+    return this._worktreeEnvironmentLabel;
+  }
+
+  setWorktreeEnvironmentLabel(label: string | undefined): void {
+    this._worktreeEnvironmentLabel = label;
   }
 
   setMood(mood: WorktreeMood): void {
@@ -338,6 +516,13 @@ export class WorktreeMonitor {
   }
 
   getSnapshot(): WorktreeSnapshot {
+    let resourceStatus: import("../../shared/types/worktree.js").WorktreeResourceStatus | undefined;
+    if (this._resourceStatus) {
+      resourceStatus = { ...this._resourceStatus, provider: this._resourceProvider };
+    } else if (this._resourceProvider) {
+      resourceStatus = { provider: this._resourceProvider };
+    }
+
     const snapshot: WorktreeSnapshot = {
       id: this.id,
       path: this.path,
@@ -364,6 +549,14 @@ export class WorktreeMonitor {
       worktreeId: this.id,
       timestamp: Date.now(),
       lifecycleStatus: this._lifecycleStatus,
+      resourceStatus,
+      resourceConnectCommand: this._resourceConnectCommand,
+      hasResourceConfig: this._hasResourceConfig || undefined,
+      hasPauseCommand: this._hasPauseCommand || undefined,
+      hasResumeCommand: this._hasResumeCommand || undefined,
+      hasTeardownCommand: this._hasTeardownCommand || undefined,
+      worktreeMode: this._worktreeMode !== "local" ? this._worktreeMode : undefined,
+      worktreeEnvironmentLabel: this._worktreeEnvironmentLabel,
       hasPlanFile: this.hasPlanFile || undefined,
       planFilePath: this.planFilePath,
       aheadCount: this.aheadCount,
@@ -556,6 +749,7 @@ export class WorktreeMonitor {
       clearTimeout(this.watcherRetryTimer);
       this.watcherRetryTimer = null;
     }
+    this.clearResourcePollTimer();
   }
 
   private scheduleCircuitBreakerRetry(): void {

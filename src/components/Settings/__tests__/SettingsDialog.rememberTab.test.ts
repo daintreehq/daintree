@@ -21,6 +21,7 @@ const VALID_TABS: SettingsTab[] = [
   "troubleshooting",
   "project:general",
   "project:context",
+  "project:variables",
   "project:automation",
   "project:recipes",
   "project:commands",

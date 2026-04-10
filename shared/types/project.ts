@@ -245,6 +245,24 @@ export interface CopyTreeSettings {
   alwaysExclude?: string[];
 }
 
+/** Resource environment configuration for remote compute hooks */
+export type ResourceEnvironment = {
+  /** Commands to provision the remote environment */
+  provision?: string[];
+  /** Commands to destroy the remote environment */
+  teardown?: string[];
+  /** Commands to resume a paused environment */
+  resume?: string[];
+  /** Commands to pause the environment without destroying */
+  pause?: string[];
+  /** Single command that outputs JSON with { "status": "<string>" } */
+  status?: string;
+  /** Command to open a shell session (ssh, docker exec, etc.) */
+  connect?: string;
+  /** Lucide icon name for visual identification in the UI */
+  icon?: string;
+};
+
 /** Per-project terminal configuration overrides */
 export interface ProjectTerminalSettings {
   /** Override shell executable path (machine-local, not stored in .canopy/settings.json) */
@@ -320,4 +338,12 @@ export interface ProjectSettings {
   terminalSettings?: ProjectTerminalSettings;
   /** Per-project notification overrides (machine-local, never written to .canopy/settings.json) */
   notificationOverrides?: Partial<NotificationSettings>;
+  /** @deprecated Use resourceEnvironments instead. Kept for migration only. */
+  resourceEnvironment?: ResourceEnvironment;
+  /** Named resource environment configurations for remote compute hooks */
+  resourceEnvironments?: Record<string, ResourceEnvironment>;
+  /** Name of the currently active resource environment (defaults to "default") */
+  activeResourceEnvironment?: string;
+  /** Default worktree mode for new worktrees ("local" or an environment key from resourceEnvironments) */
+  defaultWorktreeMode?: string;
 }
