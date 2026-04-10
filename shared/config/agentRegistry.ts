@@ -1105,12 +1105,15 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       args: [],
     },
     authCheck: {
-      // Kiro CLI auth is managed via the OS keychain and internal state
+      // AWS SSO users authenticate via `kiro-cli login` (optionally with
+      // --use-device-flow for headless/SSH), which writes a Kiro-specific
+      // token cache to ~/.aws/sso/cache/kiro-auth-token.json. Probe that
+      // file so SSO-authenticated users reach "ready" instead of "installed".
+      // Non-SSO Kiro auth is managed via the OS keychain and internal state
       // directories (e.g. ~/Library/Application Support/kiro-cli/ on macOS,
-      // ~/.local/share/kiro-cli/ on Linux). There is no reliable, human-readable
-      // cross-platform auth file to probe, so we fall back to "installed"
-      // whenever the binary is present — mirroring the pattern used by Cursor
-      // (also keychain-based).
+      // ~/.local/share/kiro-cli/ on Linux), which we cannot reliably probe —
+      // those users fall back to "installed", mirroring Cursor.
+      configPathsAll: [".aws/sso/cache/kiro-auth-token.json"],
       fallback: "installed",
     },
     prerequisites: [

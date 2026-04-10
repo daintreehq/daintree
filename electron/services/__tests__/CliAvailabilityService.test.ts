@@ -107,15 +107,8 @@ describe("CliAvailabilityService", () => {
 
       const result = await service.checkAvailability();
 
-      // Every agent with a configured file path reaches "ready". Kiro has
-      // no file paths (keychain-based) and intentionally falls back to
-      // "installed" — see authCheck comment in agentRegistry.ts.
-      for (const [id, state] of Object.entries(result)) {
-        if (id === "kiro") {
-          expect(state).toBe("installed");
-        } else {
-          expect(state).toBe("ready");
-        }
+      for (const state of Object.values(result)) {
+        expect(state).toBe("ready");
       }
     });
 
@@ -413,20 +406,50 @@ describe("CliAvailabilityService", () => {
       const { access } = await import("fs/promises");
       const mockedAccess = vi.mocked(access);
 
-      // Only kiro-cli binary found
+      // Only kiro-cli binary found; no auth files exist
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (args?.[0] === "kiro-cli") return Buffer.from("");
+        throw new Error("not found");
+      });
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+      const result = await service.checkAvailability();
+
+      // Without an SSO token cache, Kiro falls back to "installed" — non-SSO
+      // auth is keychain-based and not probed.
+      expect(result.kiro).toBe("installed");
+
+      const probedPaths = mockedAccess.mock.calls.map((call) => String(call[0]));
+      // .kiro/credentials and .kiro/config.json are not real Kiro auth files
+      // and must never be probed (regression guard for prior bogus paths).
+      expect(probedPaths).not.toContain(`${homedir()}/.kiro/credentials`);
+      expect(probedPaths).not.toContain(`${homedir()}/.kiro/config.json`);
+    });
+
+    it("reaches 'ready' for Kiro when AWS SSO token cache exists", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
       mockedExecFileSync.mockImplementation((_file, args) => {
         if (args?.[0] === "kiro-cli") return Buffer.from("");
         throw new Error("not found");
       });
 
+      const ssoTokenPath = `${homedir()}/.aws/sso/cache/kiro-auth-token.json`;
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === ssoTokenPath) return;
+        throw new Error("ENOENT");
+      });
+
       const result = await service.checkAvailability();
+      expect(result.kiro).toBe("ready");
 
-      // Kiro falls back to "installed" — keychain-based, no file probe.
-      expect(result.kiro).toBe("installed");
-
-      const probedPaths = mockedAccess.mock.calls.map((call) => String(call[0]));
-      expect(probedPaths).not.toContain(`${homedir()}/.kiro/credentials`);
-      expect(probedPaths).not.toContain(`${homedir()}/.kiro/config.json`);
+      // Upper-bound guard: the only Kiro auth file probed must be the SSO
+      // token cache. Catches any future reintroduction of extra Kiro paths.
+      const kiroProbedPaths = mockedAccess.mock.calls
+        .map((call) => String(call[0]))
+        .filter((p) => p.includes(".kiro") || p.includes("kiro-auth-token"));
+      expect(kiroProbedPaths).toEqual([ssoTokenPath]);
     });
 
     it("probes only .copilot/config.json for Copilot (NOT .config/gh/hosts.yml)", async () => {
@@ -491,11 +514,15 @@ describe("CliAvailabilityService", () => {
       expect(message).toContain('-> "installed"');
     });
 
-    it("logs Kiro fallback with 'checked: none' since no paths are configured", async () => {
+    it("logs Kiro fallback listing the AWS SSO token path that was checked", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
       mockedExecFileSync.mockImplementation((_file, args) => {
         if (args?.[0] === "kiro-cli") return Buffer.from("");
         throw new Error("not found");
       });
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
 
       await service.checkAvailability();
 
@@ -503,7 +530,7 @@ describe("CliAvailabilityService", () => {
         String(call[0]).includes("Kiro")
       );
       expect(kiroLog).toBeDefined();
-      expect(String(kiroLog![0])).toContain("checked: none");
+      expect(String(kiroLog![0])).toContain(".aws/sso/cache/kiro-auth-token.json");
       expect(String(kiroLog![0])).toContain('-> "installed"');
     });
 
