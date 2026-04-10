@@ -1,5 +1,6 @@
 import { createTheme } from "@uiw/codemirror-themes";
 import { tags as t } from "@lezer/highlight";
+import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 
 export const canopyTheme = createTheme({
   theme: "dark",
@@ -12,6 +13,7 @@ export const canopyTheme = createTheme({
     lineHighlight: "var(--theme-border-default)",
     gutterBackground: "var(--theme-surface-canvas)",
     gutterForeground: "var(--theme-activity-idle)",
+    fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
   },
   styles: [
     { tag: t.heading, color: "var(--theme-accent-primary)", fontWeight: "bold" },
