@@ -73,7 +73,7 @@ class PullRequestService {
     const branchChanged = currentContext?.branchName !== newBranchName;
     const issueChanged = currentContext?.issueNumber !== newIssueNumber;
 
-    const shouldTrack = isCandidateBranch(newBranchName);
+    const shouldTrack = !state.isMainWorktree && isCandidateBranch(newBranchName);
 
     // Build the next context first
     const nextContext: WorktreeContext = {

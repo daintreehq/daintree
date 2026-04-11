@@ -52,7 +52,12 @@ export class PRIntegrationService {
 
   async initialize(
     projectRootPath: string,
-    getMonitorCandidates: () => Array<{ worktreeId: string; branch?: string; issueNumber?: number }>
+    getMonitorCandidates: () => Array<{
+      worktreeId: string;
+      branch?: string;
+      issueNumber?: number;
+      isMainWorktree?: boolean;
+    }>
   ): Promise<void> {
     if (this.initializedForPath === projectRootPath) {
       return;
@@ -107,6 +112,7 @@ export class PRIntegrationService {
           worktreeId: candidate.worktreeId,
           branch: candidate.branch,
           issueNumber: candidate.issueNumber,
+          isMainWorktree: candidate.isMainWorktree,
         } as any);
         /* eslint-enable @typescript-eslint/no-explicit-any */
       }

@@ -1459,12 +1459,18 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
 
     return this.prService.initialize(this.projectRootPath, () => {
-      const candidates: Array<{ worktreeId: string; branch?: string; issueNumber?: number }> = [];
+      const candidates: Array<{
+        worktreeId: string;
+        branch?: string;
+        issueNumber?: number;
+        isMainWorktree?: boolean;
+      }> = [];
       for (const monitor of this.monitors.values()) {
         candidates.push({
           worktreeId: monitor.id,
           branch: monitor.branch,
           issueNumber: monitor.issueNumber,
+          isMainWorktree: monitor.isMainWorktree,
         });
       }
       return candidates;
