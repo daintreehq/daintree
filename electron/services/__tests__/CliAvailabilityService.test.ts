@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { homedir } from "os";
+import { join } from "path";
 import { CliAvailabilityService } from "../CliAvailabilityService.js";
 import { execFileSync } from "child_process";
 import { refreshPath } from "../../setup/environment.js";
@@ -422,8 +423,8 @@ describe("CliAvailabilityService", () => {
       const probedPaths = mockedAccess.mock.calls.map((call) => String(call[0]));
       // .kiro/credentials and .kiro/config.json are not real Kiro auth files
       // and must never be probed (regression guard for prior bogus paths).
-      expect(probedPaths).not.toContain(`${homedir()}/.kiro/credentials`);
-      expect(probedPaths).not.toContain(`${homedir()}/.kiro/config.json`);
+      expect(probedPaths).not.toContain(join(homedir(), ".kiro/credentials"));
+      expect(probedPaths).not.toContain(join(homedir(), ".kiro/config.json"));
     });
 
     it("reaches 'ready' for Kiro when AWS SSO token cache exists", async () => {
@@ -435,7 +436,7 @@ describe("CliAvailabilityService", () => {
         throw new Error("not found");
       });
 
-      const ssoTokenPath = `${homedir()}/.aws/sso/cache/kiro-auth-token.json`;
+      const ssoTokenPath = join(homedir(), ".aws/sso/cache/kiro-auth-token.json");
       mockedAccess.mockImplementation(async (path) => {
         if (String(path) === ssoTokenPath) return;
         throw new Error("ENOENT");
@@ -466,10 +467,10 @@ describe("CliAvailabilityService", () => {
       expect(result.copilot).toBe("installed");
 
       const probedPaths = mockedAccess.mock.calls.map((call) => String(call[0]));
-      expect(probedPaths).toContain(`${homedir()}/.copilot/config.json`);
+      expect(probedPaths).toContain(join(homedir(), ".copilot/config.json"));
       // gh/hosts.yml is populated by any `gh auth login`, not Copilot-specific,
       // so probing it produces false positives. Must not be in the probe list.
-      expect(probedPaths).not.toContain(`${homedir()}/.config/gh/hosts.yml`);
+      expect(probedPaths).not.toContain(join(homedir(), ".config/gh/hosts.yml"));
     });
 
     it("reaches 'ready' for Copilot when .copilot/config.json exists", async () => {
@@ -481,7 +482,7 @@ describe("CliAvailabilityService", () => {
         throw new Error("not found");
       });
 
-      const copilotConfig = `${homedir()}/.copilot/config.json`;
+      const copilotConfig = join(homedir(), ".copilot/config.json");
       mockedAccess.mockImplementation(async (path) => {
         if (String(path) === copilotConfig) return;
         throw new Error("ENOENT");
@@ -510,7 +511,7 @@ describe("CliAvailabilityService", () => {
       expect(copilotLogs).toHaveLength(1);
       const message = String(copilotLogs[0][0]);
       expect(message).toContain("[CliAvailabilityService]");
-      expect(message).toContain(".copilot/config.json");
+      expect(message).toContain(join(".copilot", "config.json"));
       expect(message).toContain('-> "installed"');
     });
 
@@ -530,7 +531,7 @@ describe("CliAvailabilityService", () => {
         String(call[0]).includes("Kiro")
       );
       expect(kiroLog).toBeDefined();
-      expect(String(kiroLog![0])).toContain(".aws/sso/cache/kiro-auth-token.json");
+      expect(String(kiroLog![0])).toContain(join(".aws", "sso", "cache", "kiro-auth-token.json"));
       expect(String(kiroLog![0])).toContain('-> "installed"');
     });
 
