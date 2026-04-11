@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ActionDefinition } from "@shared/types/actions";
 
 // Stub all external imports that worktreeActions.ts pulls in
