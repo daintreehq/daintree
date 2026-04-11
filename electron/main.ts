@@ -152,13 +152,16 @@ if (!gotTheLock) {
 
   let powerMonitorInitialized = false;
 
-  async function createWindow(initialProjectPath?: string | null): Promise<void> {
+  async function createWindow(
+    initialProjectPath?: string | null,
+    initialProjectId?: string
+  ): Promise<void> {
     const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
       setupBrowserWindow(__dirname, {
-        onRecreateWindow: () => createWindow(initialProjectPath),
+        onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId),
         onCreateWindow: (projectPath?: string) => createWindow(projectPath),
         projectPath: initialProjectPath,
-        initialProjectId: lastActiveProjectId ?? undefined,
+        initialProjectId,
       });
     setMainWindow(win);
     const ctx = windowRegistry.register(win, { projectPath: initialProjectPath ?? undefined });
@@ -166,7 +169,7 @@ if (!gotTheLock) {
 
     const pvm = new ProjectViewManager(win, {
       dirname: __dirname,
-      onRecreateWindow: () => createWindow(initialProjectPath),
+      onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId),
       windowRegistry,
       cachedProjectViews:
         store.get("terminalConfig")?.cachedProjectViews ??
@@ -224,7 +227,7 @@ if (!gotTheLock) {
       smokeRendererUnresponsive,
       windowRegistry,
       initialProjectPath: initialProjectPath ?? undefined,
-      initialProjectId: lastActiveProjectId ?? undefined,
+      initialProjectId,
       projectViewManager: pvm,
       initialAppView: appView,
     });
@@ -278,7 +281,7 @@ if (!gotTheLock) {
       registerAppProtocol(distPath);
       registerCanopyFileProtocol();
       setupWebviewCSP();
-      await createWindow();
+      await createWindow(undefined, lastActiveProjectId ?? undefined);
       getCrashLoopGuard().startStabilityTimer();
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
