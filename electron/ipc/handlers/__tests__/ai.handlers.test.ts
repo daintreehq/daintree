@@ -164,7 +164,7 @@ describe("ai handler payload validation", () => {
       {} as never,
       {
         agentType: "claude",
-        settings: { enabled: false, customFlags: "--foo" },
+        settings: { customFlags: "--foo" },
       } as never
     );
 
@@ -173,7 +173,6 @@ describe("ai handler payload validation", () => {
       expect.objectContaining({
         agents: {
           claude: {
-            enabled: false,
             customFlags: "--foo",
           },
         },
@@ -183,7 +182,7 @@ describe("ai handler payload validation", () => {
       expect.objectContaining({
         agents: expect.objectContaining({
           claude: expect.objectContaining({
-            enabled: false,
+            customFlags: "--foo",
           }),
         }),
       })
@@ -235,7 +234,7 @@ describe("ai handler payload validation", () => {
         {} as never,
         {
           agentType: " __proto__ ",
-          settings: { enabled: true },
+          settings: { pinned: true },
         } as never
       )
     ).rejects.toThrow("reserved key");
@@ -244,7 +243,7 @@ describe("ai handler payload validation", () => {
       {} as never,
       {
         agentType: " claude ",
-        settings: { enabled: false },
+        settings: { pinned: false },
       } as never
     );
 
@@ -253,7 +252,7 @@ describe("ai handler payload validation", () => {
       expect.objectContaining({
         agents: {
           claude: expect.objectContaining({
-            enabled: false,
+            pinned: false,
           }),
         },
       })
@@ -262,7 +261,7 @@ describe("ai handler payload validation", () => {
       expect.objectContaining({
         agents: expect.objectContaining({
           claude: expect.objectContaining({
-            enabled: false,
+            pinned: false,
           }),
         }),
       })
