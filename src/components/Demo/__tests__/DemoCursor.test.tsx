@@ -258,10 +258,12 @@ describe("DemoCursor", () => {
       requestId: "req-type-native",
     });
 
-    await new Promise((r) => setTimeout(r, 200));
+    await vi.waitFor(
+      () => expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-type-native", undefined),
+      { timeout: 2000, interval: 20 }
+    );
 
     expect(input.value).toBe("hi");
-    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-type-native", undefined);
 
     document.body.removeChild(input);
   });
