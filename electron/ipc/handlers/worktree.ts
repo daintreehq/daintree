@@ -333,7 +333,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error("[Git] Failed to get file diff via WorkspaceClient:", errorMessage);
-      throw new Error(`Failed to get file diff: ${errorMessage}`);
+      throw new Error(`Failed to get file diff: ${errorMessage}`, { cause: error });
     }
   };
   ipcMain.handle(CHANNELS.GIT_GET_FILE_DIFF, handleGitGetFileDiff);

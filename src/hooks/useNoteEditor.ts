@@ -112,6 +112,7 @@ export function useNoteEditor({
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only on id change; selectedNote captured via closure for concurrent-mode safety
   }, [selectedNote?.id]);
 
   const handleContentChange = useCallback(
