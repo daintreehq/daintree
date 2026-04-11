@@ -72,6 +72,7 @@ export function worktreeCardPropsAreEqual(
       a.hasTeardownCommand !== b.hasTeardownCommand ||
       a.hasStatusCommand !== b.hasStatusCommand ||
       a.hasProvisionCommand !== b.hasProvisionCommand ||
+      a.resourceConnectCommand !== b.resourceConnectCommand ||
       a.worktreeMode !== b.worktreeMode ||
       a.worktreeEnvironmentLabel !== b.worktreeEnvironmentLabel ||
       a.taskId !== b.taskId ||

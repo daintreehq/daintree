@@ -710,6 +710,26 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
+    it("resumePolling restarts resource poll timer after pausePolling", async () => {
+      const activeWorktree: Worktree = { ...TEST_WORKTREE, isCurrent: true };
+      const callbacks = makeCallbacks({ onResourceStatusPoll: vi.fn() });
+      const monitor = new WorktreeMonitor(activeWorktree, TEST_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+
+      // Pause and resume
+      monitor.pausePolling();
+      monitor.resumePolling();
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledWith("/test/worktree");
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+    });
+
     it("isCurrent change does not override explicit interval", async () => {
       const backgroundWorktree: Worktree = { ...TEST_WORKTREE, isCurrent: false };
       const callbacks = makeCallbacks({ onResourceStatusPoll: vi.fn() });

@@ -152,6 +152,12 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.worktreeMode === b.worktreeMode &&
     a.worktreeEnvironmentLabel === b.worktreeEnvironmentLabel &&
     a.hasResourceConfig === b.hasResourceConfig &&
+    a.hasStatusCommand === b.hasStatusCommand &&
+    a.hasProvisionCommand === b.hasProvisionCommand &&
+    a.hasPauseCommand === b.hasPauseCommand &&
+    a.hasResumeCommand === b.hasResumeCommand &&
+    a.hasTeardownCommand === b.hasTeardownCommand &&
+    a.resourceConnectCommand === b.resourceConnectCommand &&
     resourceStatusEqual(a.resourceStatus, b.resourceStatus) &&
     worktreeChangesEqual(a.worktreeChanges, b.worktreeChanges) &&
     lifecycleStatusEqual(a.lifecycleStatus, b.lifecycleStatus)

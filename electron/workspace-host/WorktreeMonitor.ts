@@ -522,6 +522,8 @@ export class WorktreeMonitor {
         }
       }, jitter);
     }
+
+    this.scheduleResourcePoll();
   }
 
   getSnapshot(): WorktreeSnapshot {
