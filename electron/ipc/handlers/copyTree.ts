@@ -31,6 +31,30 @@ const getExtensionForFormat = (format: CopyTreeFormat | undefined): string => {
   if (!format) return "xml";
   return FORMAT_TO_EXTENSION[format] ?? "xml";
 };
+
+export function buildRemoteComputeBlock(worktree: {
+  resourceStatus?: { provider?: string; lastStatus?: string; endpoint?: string };
+  resourceConnectCommand?: string;
+}): string {
+  if (!worktree.resourceStatus) {
+    return "";
+  }
+
+  const provider = worktree.resourceStatus.provider ?? "unknown";
+  const lastStatus = worktree.resourceStatus.lastStatus;
+  const endpoint = worktree.resourceStatus.endpoint;
+  const connectCommand = worktree.resourceConnectCommand;
+
+  if (lastStatus === "ready" && endpoint && connectCommand) {
+    return `\n\n## Remote Compute\nProvider: ${provider} | Status: ${lastStatus} | Endpoint: ${endpoint}\nRun remote commands: ${connectCommand}\nOr use the wrapper: canopy-remote "<command>"\n`;
+  }
+
+  if (lastStatus) {
+    return `\n\n## Remote Compute\nProvider: ${provider} | Status: ${lastStatus}\nResource is not yet available for remote execution.\n`;
+  }
+
+  return "";
+}
 import {
   CopyTreeGeneratePayloadSchema,
   CopyTreeGenerateAndCopyFilePayloadSchema,
@@ -427,10 +451,11 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         return result;
       }
 
+      const remoteComputeBlock = buildRemoteComputeBlock(worktree);
+      const contentToInject = result.content + remoteComputeBlock;
       const CHUNK_SIZE = 4096;
-      const content = result.content;
 
-      for (let i = 0; i < content.length; i += CHUNK_SIZE) {
+      for (let i = 0; i < contentToInject.length; i += CHUNK_SIZE) {
         if (contextInjectionTracker.isCancelled(injectionId)) {
           console.log(`[${traceId}] CopyTree inject cancelled by user`);
           return {
@@ -448,9 +473,9 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
           };
         }
 
-        const chunk = content.slice(i, i + CHUNK_SIZE);
+        const chunk = contentToInject.slice(i, i + CHUNK_SIZE);
         deps.ptyClient!.write(validated.terminalId, chunk, traceId);
-        if (i + CHUNK_SIZE < content.length) {
+        if (i + CHUNK_SIZE < contentToInject.length) {
           await new Promise((resolve) => setTimeout(resolve, 1));
         }
       }

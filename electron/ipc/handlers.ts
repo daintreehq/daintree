@@ -9,6 +9,7 @@ import { registerAgentCliHandlers } from "./handlers/agentCli.js";
 import { registerProjectCrudHandlers } from "./handlers/projectCrud.js";
 import { registerProjectRecipesHandlers } from "./handlers/projectRecipes.js";
 import { registerGlobalRecipesHandlers } from "./handlers/globalRecipes.js";
+import { registerGlobalEnvHandlers } from "./handlers/globalEnv.js";
 import { registerTerminalLayoutHandlers } from "./handlers/terminalLayout.js";
 import { registerProjectInRepoSettingsHandlers } from "./handlers/projectInRepoSettings.js";
 import { registerGithubHandlers } from "./handlers/github.js";
@@ -104,6 +105,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerProjectCrudHandlers(deps));
     register(() => registerProjectRecipesHandlers(deps));
     register(() => registerGlobalRecipesHandlers(deps));
+    register(() => registerGlobalEnvHandlers(deps));
     register(() => registerTerminalLayoutHandlers(deps));
     register(() => registerProjectInRepoSettingsHandlers(deps));
     register(() => registerGithubHandlers(deps));

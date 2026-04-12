@@ -12,6 +12,7 @@ import path from "path";
 import crypto from "crypto";
 import { events } from "./events.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { store } from "../store.js";
 
 import { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
 import type {
@@ -253,6 +254,7 @@ export class WorkspaceClient extends EventEmitter {
       type: "load-project",
       requestId,
       rootPath: entry.projectPath,
+      globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
     });
 
     // Re-establish direct renderer ports after host restart
@@ -388,6 +390,7 @@ export class WorkspaceClient extends EventEmitter {
         type: "load-project",
         requestId,
         rootPath: normalizedPath,
+        globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
       });
     })();
 
@@ -449,6 +452,7 @@ export class WorkspaceClient extends EventEmitter {
         type: "load-project",
         requestId,
         rootPath: normalizedPath,
+        globalEnvVars: store.get("globalEnvironmentVariables") ?? {},
       });
     })();
 

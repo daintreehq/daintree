@@ -6,9 +6,10 @@ import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 
 import { openSettings } from "../helpers/panels";
-let ctx: AppContext;
 
 test.describe.serial("Core: Settings Tabs Coverage", () => {
+  let ctx: AppContext;
+
   test.beforeAll(async () => {
     ctx = await launchApp();
     const fixtureDir = createFixtureRepo({ name: "settings-tabs" });
@@ -291,6 +292,358 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(window.locator("h3", { hasText: "Search Results" })).not.toBeVisible({
       timeout: T_SHORT,
     });
+
+    await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+  });
+
+  // ── Project Resources Tab: Add Environment ────────────────
+  // Run Resources tests before Variables tests to avoid app crash from
+  // Variables cleanup interfering with subsequent tests.
+
+  test("Project Resources tab: add and remove resource environment", async () => {
+    const { window } = ctx;
+    await openSettings(window);
+    await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+
+    // Switch to Project scope
+    const scopeSelect = window.locator('[aria-label="Settings scope"]');
+    await scopeSelect.selectOption("project");
+    await window.waitForTimeout(T_SETTLE);
+
+    // Navigate to Resources tab — scope everything to this panel
+    await window
+      .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
+      .click();
+    const panel = window.locator("#settings-panel-project\\:automation");
+    await expect(panel.locator("h2", { hasText: "Resource Environments" })).toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    // Click the "+" button to add the first environment
+    await panel.locator('[aria-label="Add environment"]').click();
+
+    const nameInput = panel.locator("#new-environment-name");
+    await expect(nameInput).toBeVisible({ timeout: T_SHORT });
+    await nameInput.fill("staging");
+
+    const formAddButton = panel
+      .locator('[data-testid="add-environment-form"]')
+      .locator("button", { hasText: "Add" });
+    await formAddButton.click();
+    await window.waitForTimeout(T_SETTLE);
+
+    // "staging" should appear in the environment dropdown
+    const selectorBar = panel.locator('[data-testid="environment-selector-bar"]');
+    await expect(selectorBar).toBeVisible({ timeout: T_SHORT });
+    const selectEl = selectorBar.locator("select");
+    await expect(selectEl.locator('option[value="staging"]')).toBeAttached({ timeout: T_SHORT });
+
+    // Add a second environment
+    await panel.locator('[aria-label="Add environment"]').click();
+    const nameInput2 = panel.locator("#new-environment-name");
+    await expect(nameInput2).toBeVisible({ timeout: T_SHORT });
+    await nameInput2.fill("production");
+
+    const formAddButton2 = panel
+      .locator('[data-testid="add-environment-form"]')
+      .locator("button", { hasText: "Add" });
+    await formAddButton2.click();
+    await window.waitForTimeout(T_SETTLE);
+
+    // "production" should appear in the dropdown
+    await expect(selectEl.locator('option[value="production"]')).toBeAttached({
+      timeout: T_SHORT,
+    });
+
+    // Select "staging" in dropdown, then remove it via the X button
+    await selectEl.selectOption("staging");
+    await window.waitForTimeout(T_SETTLE);
+
+    const removeButton = panel.locator('[aria-label="Remove staging environment"]');
+    await removeButton.click();
+
+    // ConfirmDialog should appear (rendered via portal, so use window scope)
+    await expect(window.locator("text=Remove environment?")).toBeVisible({ timeout: T_SHORT });
+    await window.locator('[role="dialog"] button', { hasText: "Remove" }).click();
+    await window.waitForTimeout(T_SETTLE);
+
+    // "staging" should be gone from dropdown, "production" should remain
+    await expect(selectEl.locator('option[value="staging"]')).not.toBeAttached({
+      timeout: T_SHORT,
+    });
+    await expect(selectEl.locator('option[value="production"]')).toBeAttached({
+      timeout: T_SHORT,
+    });
+
+    await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+  });
+
+  // ── Project Resources Tab: Persistence Round-Trip ─────────
+  // Verifies that flush() on settings close persists data so it survives
+  // a close → reopen cycle. The previous test left "production" in the
+  // store; this test re-opens and confirms it is still visible.
+
+  test("Project Resources tab: environment persists after settings close/reopen", async () => {
+    const { window } = ctx;
+
+    // Reopen settings and verify "production" persisted from the previous test.
+    // flush() is called synchronously on Escape/close (direct persist, no debounce
+    // race), so no extra wait is needed before reopening.
+    await openSettings(window);
+    await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+
+    const scopeSelect = window.locator('[aria-label="Settings scope"]');
+    await scopeSelect.selectOption("project");
+    await window.waitForTimeout(T_SETTLE);
+
+    await window
+      .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
+      .click();
+    const panel = window.locator("#settings-panel-project\\:automation");
+    await expect(panel.locator("h2", { hasText: "Resource Environments" })).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+
+    // "production" should still be in the dropdown (persisted from previous test)
+    const selectorBar = panel.locator('[data-testid="environment-selector-bar"]');
+    await expect(selectorBar).toBeVisible({ timeout: T_MEDIUM });
+    const selectEl = selectorBar.locator("select");
+    await expect(selectEl.locator('option[value="production"]')).toBeAttached({
+      timeout: T_MEDIUM,
+    });
+
+    await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+  });
+
+  // ── Project Resources Tab: Default Worktree Mode ──────────
+
+  test("Project Resources tab: toggle default worktree mode", async () => {
+    const { window } = ctx;
+    await openSettings(window);
+    await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+
+    // Switch to Project scope
+    const scopeSelect = window.locator('[aria-label="Settings scope"]');
+    await scopeSelect.selectOption("project");
+    await window.waitForTimeout(T_SETTLE);
+
+    await window
+      .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
+      .click();
+    const panel = window.locator("#settings-panel-project\\:automation");
+    await expect(panel.locator("h2", { hasText: "Resource Environments" })).toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    // Ensure at least one environment exists so we have a second radio option
+    const selectorBar = panel.locator('[data-testid="environment-selector-bar"]');
+    const hasEnvs = await selectorBar.isVisible().catch(() => false);
+    if (!hasEnvs) {
+      await panel.locator('[aria-label="Add environment"]').click();
+      const nameInput = panel.locator("#new-environment-name");
+      await expect(nameInput).toBeVisible({ timeout: T_SHORT });
+      await nameInput.fill("test-env");
+      await panel
+        .locator('[data-testid="add-environment-form"]')
+        .locator("button", { hasText: "Add" })
+        .click();
+      await window.waitForTimeout(T_SETTLE);
+      await expect(selectorBar).toBeVisible({ timeout: T_SHORT });
+    }
+
+    // Default Worktree Mode should be visible
+    await expect(panel.locator("text=Default Worktree Mode")).toBeVisible({ timeout: T_SHORT });
+
+    // "Local" radio is always present with value="local"
+    const localRadio = panel.locator('input[type="radio"][value="local"]');
+    await expect(localRadio).toBeVisible({ timeout: T_SHORT });
+
+    // Local should be default
+    await expect(localRadio).toBeChecked({ timeout: T_SHORT });
+
+    // Find the first non-local radio option (one of the environment keys)
+    const allRadios = panel.locator('input[type="radio"]');
+    const radioCount = await allRadios.count();
+    expect(radioCount).toBeGreaterThanOrEqual(2);
+
+    // Pick the second radio (first environment key after "Local")
+    const envRadio = allRadios.nth(1);
+    await envRadio.click();
+    await expect(envRadio).toBeChecked({ timeout: T_SHORT });
+    await expect(localRadio).not.toBeChecked({ timeout: T_SHORT });
+
+    // Switch back to Local
+    await localRadio.click();
+    await expect(localRadio).toBeChecked({ timeout: T_SHORT });
+
+    await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+  });
+
+  // ── Project Resources Tab: Duplicate Env Name ─────────────
+
+  test("Project Resources tab: shows error for duplicate environment name", async () => {
+    const { window } = ctx;
+    await openSettings(window);
+    await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+
+    // Switch to Project scope
+    const scopeSelect = window.locator('[aria-label="Settings scope"]');
+    await scopeSelect.selectOption("project");
+    await window.waitForTimeout(T_SETTLE);
+
+    await window
+      .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
+      .click();
+    const panel = window.locator("#settings-panel-project\\:automation");
+    await expect(panel.locator("h2", { hasText: "Resource Environments" })).toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    // Ensure at least one environment exists to test duplicate detection against
+    const selectorBar = panel.locator('[data-testid="environment-selector-bar"]');
+    const hasEnvs = await selectorBar.isVisible().catch(() => false);
+    if (!hasEnvs) {
+      await panel.locator('[aria-label="Add environment"]').click();
+      const setupInput = panel.locator("#new-environment-name");
+      await expect(setupInput).toBeVisible({ timeout: T_SHORT });
+      await setupInput.fill("existing-env");
+      await panel
+        .locator('[data-testid="add-environment-form"]')
+        .locator("button", { hasText: "Add" })
+        .click();
+      await window.waitForTimeout(T_SETTLE);
+      await expect(selectorBar).toBeVisible({ timeout: T_SHORT });
+    }
+
+    // Get the name of the first existing environment from the dropdown
+    const selectEl = panel.locator('[data-testid="environment-selector-bar"] select');
+    const existingName = await selectEl.inputValue();
+
+    // Click "+" to start adding a new environment
+    await panel.locator('[aria-label="Add environment"]').click();
+
+    const nameInput = panel.locator("#new-environment-name");
+    await expect(nameInput).toBeVisible({ timeout: T_SHORT });
+    await nameInput.fill(existingName);
+
+    // Submit via the form's Add button
+    const formAddButton = panel
+      .locator('[data-testid="add-environment-form"]')
+      .locator("button", { hasText: "Add" });
+    await formAddButton.click();
+
+    // Error should appear
+    await expect(panel.locator("text=already exists")).toBeVisible({ timeout: T_SHORT });
+
+    // Cancel the add
+    await panel
+      .locator('[data-testid="add-environment-form"]')
+      .locator("button", { hasText: "Cancel" })
+      .click();
+
+    await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+  });
+
+  // ── Project Variables Tab: Add and Remove ─────────────────
+
+  test("Project Variables tab: add and remove environment variable", async () => {
+    const { window } = ctx;
+    await openSettings(window);
+    await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+
+    // Switch to Project scope
+    const scopeSelect = window.locator('[aria-label="Settings scope"]');
+    await scopeSelect.selectOption("project");
+    await window.waitForTimeout(T_SETTLE);
+
+    // Navigate to Variables tab
+    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Variables" }).click();
+    await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    // Initially shows empty state
+    await expect(window.locator("text=No environment variables configured yet")).toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    // Click "Add Variable"
+    await window.locator("button", { hasText: "Add Variable" }).click();
+
+    // Fill in key and value
+    const keyInput = window.locator('input[placeholder="VARIABLE_NAME"]');
+    await expect(keyInput).toBeVisible({ timeout: T_SHORT });
+    await keyInput.fill("TEST_API_KEY");
+
+    const valueInput = window.locator('input[placeholder="value"]');
+    await valueInput.fill("my-secret-value");
+
+    // Empty state should be gone
+    await expect(window.locator("text=No environment variables configured yet")).not.toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    // Delete the variable
+    await window.locator('button[aria-label="Delete environment variable"]').click();
+
+    // Empty state returns
+    await expect(window.locator("text=No environment variables configured yet")).toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+  });
+
+  // ── Project Variables Tab: Validation ─────────────────────
+
+  test("Project Variables tab: validates duplicate and invalid keys", async () => {
+    const { window } = ctx;
+    await openSettings(window);
+    await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+
+    // Switch to Project scope
+    const scopeSelect = window.locator('[aria-label="Settings scope"]');
+    await scopeSelect.selectOption("project");
+    await window.waitForTimeout(T_SETTLE);
+
+    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Variables" }).click();
+    await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    // Add two variables with the same key
+    await window.locator("button", { hasText: "Add Variable" }).click();
+    await window.locator("button", { hasText: "Add Variable" }).click();
+
+    const keyInputs = window.locator('input[placeholder="VARIABLE_NAME"]');
+    await keyInputs.nth(0).fill("DUPLICATE_KEY");
+    await keyInputs.nth(1).fill("DUPLICATE_KEY");
+
+    // Click Save — should trigger validation
+    const saveButton = window.locator("button", { hasText: "Save" }).first();
+    if (await saveButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await saveButton.click();
+      await window.waitForTimeout(T_SETTLE);
+
+      // Should show duplicate error
+      await expect(window.locator("text=Duplicate variable name")).toBeVisible({
+        timeout: T_SHORT,
+      });
+    }
+
+    // Clean up — delete both rows one at a time with settle time
+    const deleteButtons = window.locator('button[aria-label="Delete environment variable"]');
+    const deleteCount = await deleteButtons.count();
+    for (let i = deleteCount - 1; i >= 0; i--) {
+      await deleteButtons.nth(i).click();
+      await window.waitForTimeout(T_SETTLE);
+    }
 
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });

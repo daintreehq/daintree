@@ -48,6 +48,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
       onOpenShortcuts: () => callbacksRef.current.onOpenShortcuts(),
       onLaunchAgent: (agentId, opts) => callbacksRef.current.onLaunchAgent(agentId, opts),
       onInject: (worktreeId) => callbacksRef.current.onInject(worktreeId),
+      onAddTerminal: (options) => callbacksRef.current.onAddTerminal(options),
       getDefaultCwd: () => callbacksRef.current.getDefaultCwd(),
       getActiveWorktreeId: () => callbacksRef.current.getActiveWorktreeId(),
       getWorktrees: () => callbacksRef.current.getWorktrees(),

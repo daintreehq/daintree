@@ -1,5 +1,9 @@
 import type { CommandOverride } from "@shared/types/commands";
-import type { CopyTreeSettings, ProjectTerminalSettings } from "@shared/types/project";
+import type {
+  CopyTreeSettings,
+  ProjectTerminalSettings,
+  ResourceEnvironment,
+} from "@shared/types/project";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 
 export interface ProjectSettingsSnapshot {
@@ -28,6 +32,9 @@ export interface ProjectSettingsSnapshot {
   worktreePathPattern: string;
   terminalSettings: ProjectTerminalSettings | undefined;
   notificationOverrides: Partial<NotificationSettings> | undefined;
+  resourceEnvironments: Record<string, ResourceEnvironment> | undefined;
+  activeResourceEnvironment: string | undefined;
+  defaultWorktreeMode: string | undefined;
 }
 
 export interface EnvVar {
@@ -64,7 +71,10 @@ export function createProjectSettingsSnapshot(
   worktreePathPattern: string = "",
   terminalSettings: ProjectTerminalSettings | undefined = undefined,
   notificationOverrides: Partial<NotificationSettings> | undefined = undefined,
-  color: string | undefined = undefined
+  color: string | undefined = undefined,
+  resourceEnvironments: Record<string, ResourceEnvironment> | undefined = undefined,
+  activeResourceEnvironment: string | undefined = undefined,
+  defaultWorktreeMode: string | undefined = undefined
 ): ProjectSettingsSnapshot {
   const envVarRecord: Record<string, string> = {};
   const seenKeys = new Map<string, number>();
@@ -146,6 +156,9 @@ export function createProjectSettingsSnapshot(
     worktreePathPattern: worktreePathPattern.trim(),
     terminalSettings: normalizeTerminalSettings(terminalSettings),
     notificationOverrides: normalizeNotificationOverrides(notificationOverrides),
+    resourceEnvironments,
+    activeResourceEnvironment,
+    defaultWorktreeMode,
   };
 }
 
@@ -298,6 +311,11 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
     if (aNotif.waitingEscalationEnabled !== bNotif.waitingEscalationEnabled) return false;
     if (aNotif.waitingEscalationDelayMs !== bNotif.waitingEscalationDelayMs) return false;
   }
+
+  if (JSON.stringify(a.resourceEnvironments) !== JSON.stringify(b.resourceEnvironments))
+    return false;
+  if (a.activeResourceEnvironment !== b.activeResourceEnvironment) return false;
+  if (a.defaultWorktreeMode !== b.defaultWorktreeMode) return false;
 
   return true;
 }

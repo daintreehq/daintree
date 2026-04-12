@@ -66,6 +66,7 @@ async function createRegistry() {
     onOpenShortcuts: () => {},
     onLaunchAgent: async () => null,
     onInject: () => {},
+    onAddTerminal: async () => {},
     getDefaultCwd: () => "/",
     getActiveWorktreeId: () => undefined,
     getWorktrees: () => [],

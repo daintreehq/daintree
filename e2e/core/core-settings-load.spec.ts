@@ -3,7 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
-import { T_SHORT, T_MEDIUM } from "../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 
 import { openSettings } from "../helpers/panels";
 let ctx: AppContext;
@@ -287,6 +287,67 @@ test.describe.serial("Core: Settings Pages Load", () => {
     });
 
     // Close settings
+    await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+  });
+
+  // ── Project Settings: Variables tab loads ──────────────────
+
+  test("Project Variables tab loads", async () => {
+    const { window } = ctx;
+    await openSettings(window);
+    await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+
+    // Switch to Project scope
+    const scopeSelect = window.locator('[aria-label="Settings scope"]');
+    await scopeSelect.selectOption("project");
+    await window.waitForTimeout(T_SETTLE);
+
+    // Click Variables tab
+    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Variables" }).click();
+
+    // The EnvironmentVariablesEditor heading should appear
+    await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    // Add Variable button should be visible
+    await expect(window.locator("button", { hasText: "Add Variable" })).toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+  });
+
+  // ── Project Settings: Resources tab loads ─────────────────
+
+  test("Project Resources tab loads", async () => {
+    const { window } = ctx;
+    await openSettings(window);
+    await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+
+    // Switch to Project scope
+    const scopeSelect = window.locator('[aria-label="Settings scope"]');
+    await scopeSelect.selectOption("project");
+    await window.waitForTimeout(T_SETTLE);
+
+    // Click Worktree Setup tab (resources are now embedded here)
+    await window
+      .locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" })
+      .click();
+
+    // The Resource Environments heading should appear (scoped to the automation panel)
+    const automationPanel = window.locator("#settings-panel-project\\:automation");
+    await expect(automationPanel.locator("h2", { hasText: "Resource Environments" })).toBeVisible({
+      timeout: T_SHORT,
+    });
+
+    // Default Worktree Mode section should be visible (scoped to automation panel)
+    await expect(automationPanel.locator("text=Default Worktree Mode")).toBeVisible({
+      timeout: T_SHORT,
+    });
+
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
   });

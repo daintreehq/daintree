@@ -146,6 +146,7 @@ import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
 import { useProjectSettingsForm } from "@/hooks/useProjectSettingsForm";
 import { GeneralTab as ProjectGeneralTab } from "@/components/Project/GeneralTab";
 import { ContextTab as ProjectContextTab } from "@/components/Project/ContextTab";
+import { EnvironmentVariablesEditor } from "@/components/Project/EnvironmentVariablesEditor";
 import { AutomationTab as ProjectAutomationTab } from "@/components/Project/AutomationTab";
 import { RecipesTab as ProjectRecipesTab } from "@/components/Project/RecipesTab";
 import { CommandOverridesTab } from "./CommandOverridesTab";
@@ -190,6 +191,7 @@ export type SettingsTab =
   | "troubleshooting"
   | "project:general"
   | "project:context"
+  | "project:variables"
   | "project:automation"
   | "project:recipes"
   | "project:commands"
@@ -388,6 +390,17 @@ export function SettingsDialog({
   ]);
 
   const projectForm = useProjectSettingsForm({ projectId: projectId ?? null, isOpen });
+  const projectLabel =
+    projectForm.currentProject?.name ?? projectForm.currentProject?.id ?? "project";
+
+  const [globalEnvVars, setGlobalEnvVars] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!isOpen) return;
+    window.electron.globalEnv
+      .get()
+      .then(setGlobalEnvVars)
+      .catch(() => {});
+  }, [isOpen]);
 
   const handleBeforeClose = useCallback(async () => {
     await projectForm.flush();
@@ -576,6 +589,7 @@ export function SettingsDialog({
     troubleshooting: "Troubleshooting",
     "project:general": "General",
     "project:context": "Context",
+    "project:variables": "Variables",
     "project:automation": "Worktree Setup",
     "project:recipes": "Recipes",
     "project:commands": "Commands",
@@ -603,6 +617,7 @@ export function SettingsDialog({
     troubleshooting: <LifeBuoy className="w-5 h-5 text-text-secondary" />,
     "project:general": <SettingsIcon className="w-5 h-5 text-text-secondary" />,
     "project:context": <FileCode className="w-5 h-5 text-text-secondary" />,
+    "project:variables": <KeyRound className="w-5 h-5 text-text-secondary" />,
     "project:automation": <GitBranch className="w-5 h-5 text-text-secondary" />,
     "project:recipes": <TerminalRecipeIcon className="w-5 h-5 text-text-secondary" />,
     "project:commands": <Command className="w-5 h-5 text-text-secondary" />,
@@ -875,6 +890,15 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts["project:context"]}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="project:variables"
+                  icon={<KeyRound className="w-4 h-4" />}
+                  label="Variables"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts["project:variables"]}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -1330,11 +1354,28 @@ export function SettingsDialog({
                               onExcludedPathsChange={projectForm.setExcludedPaths}
                               copyTreeSettings={projectForm.copyTreeSettings}
                               onCopyTreeSettingsChange={projectForm.setCopyTreeSettings}
+                              worktrees={projectForm.worktrees}
+                              isOpen={isOpen}
+                            />
+                          )}
+                        </div>
+
+                        <div
+                          role="tabpanel"
+                          id="settings-panel-project:variables"
+                          aria-labelledby="settings-tab-project:variables"
+                          tabIndex={0}
+                          className={activeTab === "project:variables" ? "" : "hidden"}
+                        >
+                          {visitedTabs.has("project:variables") && (
+                            <EnvironmentVariablesEditor
                               environmentVariables={projectForm.environmentVariables}
                               onEnvironmentVariablesChange={projectForm.setEnvironmentVariables}
-                              worktrees={projectForm.worktrees}
                               settings={projectForm.projectSettings}
                               isOpen={isOpen}
+                              onFlush={projectForm.flush}
+                              projectLabel={projectLabel}
+                              globalEnvironmentVariables={globalEnvVars}
                             />
                           )}
                         </div>
@@ -1375,6 +1416,15 @@ export function SettingsDialog({
                                 markTabVisited("project:recipes");
                                 startTransition(() => setActiveTab("project:recipes"));
                               }}
+                              resourceEnvironments={projectForm.resourceEnvironments}
+                              onResourceEnvironmentsChange={projectForm.setResourceEnvironments}
+                              activeResourceEnvironment={projectForm.activeResourceEnvironment}
+                              onActiveResourceEnvironmentChange={
+                                projectForm.setActiveResourceEnvironment
+                              }
+                              defaultWorktreeMode={projectForm.defaultWorktreeMode}
+                              onDefaultWorktreeModeChange={projectForm.setDefaultWorktreeMode}
+                              isOpen={isOpen}
                             />
                           )}
                         </div>

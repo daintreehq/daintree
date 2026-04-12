@@ -92,4 +92,22 @@ export const worktreeClient = {
   onActivated: (callback: (data: { worktreeId: string }) => void): (() => void) => {
     return window.electron.worktree.onActivated(callback);
   },
+
+  resourceAction: (
+    worktreeId: string,
+    action: "provision" | "teardown" | "resume" | "pause" | "status"
+  ): Promise<void> => {
+    return window.electron.worktreePort.request("resource-action", { worktreeId, action });
+  },
+
+  switchEnvironment: (worktreeId: string, envKey: string): Promise<void> => {
+    return window.electron.worktreePort.request("switch-worktree-environment", {
+      worktreeId,
+      envKey,
+    });
+  },
+
+  hasResourceConfig: (rootPath: string): Promise<{ hasConfig: boolean }> => {
+    return window.electron.worktreePort.request("has-resource-config", { rootPath });
+  },
 } as const;

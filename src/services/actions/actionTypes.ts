@@ -1,6 +1,9 @@
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
 import type { Worktree } from "@shared/types/worktree";
 import type { SettingsNavTarget } from "@/components/Settings";
+import type { AddPanelOptions } from "@/store";
+
+type AddTerminalOptions = AddPanelOptions;
 
 export type ActionRegistry = Map<ActionId, () => ActionDefinition<unknown, unknown>>;
 
@@ -46,4 +49,5 @@ export interface ActionCallbacks {
     findDockByIndex: (currentId: string, direction: "left" | "right") => string | null;
     getCurrentLocation: () => "grid" | "dock" | null;
   };
+  onAddTerminal: (options: AddTerminalOptions) => Promise<void>;
 }

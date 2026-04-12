@@ -261,6 +261,215 @@ describe("useWorktreeStatus — branchLabel", () => {
   });
 });
 
+describe("useWorktreeStatus — resource status badge", () => {
+  function getResourceStatus(overrides: Partial<WorktreeState> = {}) {
+    const { result } = renderHook(() => useWorktreeStatus({ worktree: makeWorktree(overrides) }));
+    return {
+      resourceStatusLabel: result.current.resourceStatusLabel,
+      resourceStatusColor: result.current.resourceStatusColor,
+      hasResourceConfig: result.current.hasResourceConfig,
+    };
+  }
+
+  it("returns undefined when no resourceStatus present", () => {
+    const s = getResourceStatus({});
+    expect(s.resourceStatusLabel).toBeUndefined();
+    expect(s.resourceStatusColor).toBeUndefined();
+    expect(s.hasResourceConfig).toBe(false);
+  });
+
+  it("maps 'ready' to green", () => {
+    const s = getResourceStatus({
+      hasResourceConfig: true,
+      resourceStatus: { lastStatus: "ready", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusLabel).toBe("ready");
+    expect(s.resourceStatusColor).toBe("green");
+    expect(s.hasResourceConfig).toBe(true);
+  });
+
+  it("maps 'running' to green", () => {
+    const s = getResourceStatus({
+      resourceStatus: { lastStatus: "running", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusColor).toBe("green");
+  });
+
+  it("maps 'healthy' to green", () => {
+    const s = getResourceStatus({
+      resourceStatus: { lastStatus: "healthy", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusColor).toBe("green");
+  });
+
+  it("maps 'up' to green", () => {
+    const s = getResourceStatus({
+      resourceStatus: { lastStatus: "up", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusColor).toBe("green");
+  });
+
+  it("maps 'provisioning' to yellow", () => {
+    const s = getResourceStatus({
+      resourceStatus: { lastStatus: "provisioning", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusLabel).toBe("provisioning");
+    expect(s.resourceStatusColor).toBe("yellow");
+  });
+
+  it("maps 'starting' to yellow", () => {
+    const s = getResourceStatus({
+      resourceStatus: { lastStatus: "starting", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusColor).toBe("yellow");
+  });
+
+  it("maps 'paused' to neutral", () => {
+    const s = getResourceStatus({
+      resourceStatus: { lastStatus: "paused", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusLabel).toBe("paused");
+    expect(s.resourceStatusColor).toBe("neutral");
+  });
+
+  it("maps legacy 'stopped' to neutral for graceful fallback", () => {
+    const s = getResourceStatus({
+      resourceStatus: { lastStatus: "stopped", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusLabel).toBe("stopped");
+    expect(s.resourceStatusColor).toBe("neutral");
+  });
+
+  it("maps 'unhealthy' to red", () => {
+    const s = getResourceStatus({
+      resourceStatus: { lastStatus: "unhealthy", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusLabel).toBe("unhealthy");
+    expect(s.resourceStatusColor).toBe("red");
+  });
+
+  it("maps 'error' to red", () => {
+    const s = getResourceStatus({
+      resourceStatus: { lastStatus: "error", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusColor).toBe("red");
+  });
+
+  it("maps 'down' to red", () => {
+    const s = getResourceStatus({
+      resourceStatus: { lastStatus: "down", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusColor).toBe("red");
+  });
+
+  it("maps 'failed' to red", () => {
+    const s = getResourceStatus({
+      resourceStatus: { lastStatus: "failed", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusColor).toBe("red");
+  });
+
+  it("maps 'unknown' to neutral", () => {
+    const s = getResourceStatus({
+      resourceStatus: { lastStatus: "unknown", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusLabel).toBe("unknown");
+    expect(s.resourceStatusColor).toBe("neutral");
+  });
+
+  it("maps unrecognized status to neutral", () => {
+    const s = getResourceStatus({
+      resourceStatus: { lastStatus: "custom-provider-state", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusLabel).toBe("custom-provider-state");
+    expect(s.resourceStatusColor).toBe("neutral");
+  });
+
+  it("is case-insensitive for status mapping", () => {
+    const s = getResourceStatus({
+      resourceStatus: { lastStatus: "Ready", lastCheckedAt: Date.now() },
+    });
+    expect(s.resourceStatusColor).toBe("green");
+  });
+});
+
+describe("useWorktreeStatus — lifecycle labels for resource phases", () => {
+  function getLifecycleLabel(overrides: Partial<WorktreeState> = {}) {
+    const { result } = renderHook(() => useWorktreeStatus({ worktree: makeWorktree(overrides) }));
+    return result.current.lifecycleLabel;
+  }
+
+  it("shows 'Provisioning resource' during resource-provision", () => {
+    const label = getLifecycleLabel({
+      lifecycleStatus: {
+        phase: "resource-provision",
+        state: "running",
+        startedAt: Date.now(),
+        currentCommand: "terraform apply",
+      },
+    });
+    expect(label).toBe("Provisioning resource: terraform apply");
+  });
+
+  it("shows 'Tearing down resource' during resource-teardown", () => {
+    const label = getLifecycleLabel({
+      lifecycleStatus: {
+        phase: "resource-teardown",
+        state: "running",
+        startedAt: Date.now(),
+      },
+    });
+    expect(label).toBe("Tearing down resource...");
+  });
+
+  it("shows 'Resuming resource' during resource-resume", () => {
+    const label = getLifecycleLabel({
+      lifecycleStatus: {
+        phase: "resource-resume",
+        state: "running",
+        startedAt: Date.now(),
+        currentCommand: "docker compose up -d",
+      },
+    });
+    expect(label).toBe("Resuming resource: docker compose up -d");
+  });
+
+  it("shows 'Pausing resource' during resource-pause", () => {
+    const label = getLifecycleLabel({
+      lifecycleStatus: {
+        phase: "resource-pause",
+        state: "running",
+        startedAt: Date.now(),
+      },
+    });
+    expect(label).toBe("Pausing resource...");
+  });
+
+  it("shows failure label for resource-provision failed", () => {
+    const label = getLifecycleLabel({
+      lifecycleStatus: {
+        phase: "resource-provision",
+        state: "failed",
+        startedAt: Date.now(),
+        completedAt: Date.now(),
+      },
+    });
+    expect(label).toBe("resource failed");
+  });
+
+  it("shows timed-out label for resource-status", () => {
+    const label = getLifecycleLabel({
+      lifecycleStatus: {
+        phase: "resource-status",
+        state: "timed-out",
+        startedAt: Date.now(),
+        completedAt: Date.now(),
+      },
+    });
+    expect(label).toBe("resource status timed out");
+  });
+});
+
 describe("useWorktreeStatus — computedSubtitle", () => {
   function getSubtitle(overrides: Partial<WorktreeState> = {}) {
     const { result } = renderHook(() => useWorktreeStatus({ worktree: makeWorktree(overrides) }));

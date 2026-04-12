@@ -11,7 +11,7 @@ import {
 } from "@/components/Project/projectSettingsDirty";
 import { validatePathPattern } from "@shared/utils/pathPattern";
 import type { RunCommand, CopyTreeSettings } from "@/types";
-import type { ProjectTerminalSettings } from "@shared/types/project";
+import type { ProjectTerminalSettings, ResourceEnvironment } from "@shared/types/project";
 import type { CommandOverride } from "@shared/types/commands";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
@@ -61,13 +61,20 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     {}
   );
   const [githubRemote, setGithubRemote] = useState<string | undefined>(undefined);
+  const [resourceEnvironments, setResourceEnvironments] = useState<
+    Record<string, ResourceEnvironment> | undefined
+  >(undefined);
+  const [activeResourceEnvironment, setActiveResourceEnvironment] = useState<string | undefined>(
+    undefined
+  );
+  const [defaultWorktreeMode, setDefaultWorktreeMode] = useState<string | undefined>(undefined);
   const lastSavedSnapshotRef = useRef<ReturnType<typeof createProjectSettingsSnapshot> | null>(
     null
   );
   const currentProjectSnapshotRef = useRef<ReturnType<typeof createProjectSettingsSnapshot> | null>(
     null
   );
-  const prevProjectIdRef = useRef<string | null>(null);
+  const prevProjectIdRef = useRef(projectId);
 
   const { recipes, isLoading: recipesLoading } = useRecipeStore();
   const { worktreeMap, worktrees } = useWorktrees();
@@ -106,7 +113,10 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       worktreePathPattern,
       currentTerminalSettings,
       notificationOverrides,
-      projectColor
+      projectColor,
+      resourceEnvironments,
+      activeResourceEnvironment,
+      defaultWorktreeMode
     );
   }, [
     projectName,
@@ -128,14 +138,22 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     currentProject,
     currentTerminalSettings,
     notificationOverrides,
+    resourceEnvironments,
+    activeResourceEnvironment,
+    defaultWorktreeMode,
   ]);
   currentProjectSnapshotRef.current = currentProjectSnapshot;
 
   useEffect(() => {
+    if (isOpen && projectId !== prevProjectIdRef.current) {
+      setProjectIsInitialized(false);
+    }
+    prevProjectIdRef.current = projectId;
+  }, [projectId, isOpen]);
+
+  useEffect(() => {
     if (!isOpen) {
       debouncedProjectSaveRef.current.cancel();
-      prevProjectIdRef.current = null;
-      lastSavedSnapshotRef.current = null;
       setProjectIsInitialized(false);
       setEnvironmentVariables([]);
       setProjectIconSvg(undefined);
@@ -155,18 +173,10 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       setTerminalScrollback("");
       setNotificationOverrides({});
       setGithubRemote(undefined);
-      return;
-    }
-
-    const projectChanged =
-      prevProjectIdRef.current !== null && projectId !== prevProjectIdRef.current;
-
-    // When the project changes while the dialog is open, cancel any pending save
-    // from the old project and defer initialization until fresh settings arrive.
-    if (projectChanged) {
-      debouncedProjectSaveRef.current.cancel();
-      prevProjectIdRef.current = projectId;
-      setProjectIsInitialized(false);
+      setResourceEnvironments(undefined);
+      setActiveResourceEnvironment(undefined);
+      setDefaultWorktreeMode(undefined);
+      lastSavedSnapshotRef.current = null;
       return;
     }
 
@@ -193,6 +203,25 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     const initialTerminalSettings = projectSettings.terminalSettings;
     const initialNotificationOverrides = projectSettings.notificationOverrides ?? {};
     const initialGithubRemote = projectSettings.githubRemote;
+    // Migration: convert old singular resourceEnvironment to resourceEnvironments
+    let initialResourceEnvironments: Record<string, ResourceEnvironment> | undefined;
+    let initialActiveResourceEnvironment: string | undefined;
+    if (projectSettings.resourceEnvironments) {
+      initialResourceEnvironments = projectSettings.resourceEnvironments;
+      initialActiveResourceEnvironment = projectSettings.activeResourceEnvironment;
+      // Validate activeResourceEnvironment points to existing key
+      if (
+        initialActiveResourceEnvironment &&
+        !initialResourceEnvironments[initialActiveResourceEnvironment]
+      ) {
+        const keys = Object.keys(initialResourceEnvironments);
+        initialActiveResourceEnvironment = keys.length > 0 ? keys[0] : "default";
+      }
+    } else if (projectSettings.resourceEnvironment) {
+      initialResourceEnvironments = { default: projectSettings.resourceEnvironment };
+      initialActiveResourceEnvironment = "default";
+    }
+    const initialDefaultWorktreeMode = projectSettings.defaultWorktreeMode;
 
     setProjectName(currentProject.name);
     setProjectEmoji(currentProject.emoji || "🌲");
@@ -219,6 +248,9 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     );
     setNotificationOverrides(initialNotificationOverrides);
     setGithubRemote(initialGithubRemote);
+    setResourceEnvironments(initialResourceEnvironments);
+    setActiveResourceEnvironment(initialActiveResourceEnvironment);
+    setDefaultWorktreeMode(initialDefaultWorktreeMode);
 
     lastSavedSnapshotRef.current = createProjectSettingsSnapshot(
       currentProject.name,
@@ -238,15 +270,19 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       initialWorktreePathPattern,
       initialTerminalSettings,
       initialNotificationOverrides,
-      currentProject.color
+      currentProject.color,
+      initialResourceEnvironments,
+      initialActiveResourceEnvironment,
+      initialDefaultWorktreeMode
     );
-    prevProjectIdRef.current = projectId;
     setProjectIsInitialized(true);
   }, [projectSettings, isOpen, projectIsInitialized, currentProject, projectIsLoading, projectId]);
 
   const projectPersistRef = useRef<() => Promise<void>>(undefined);
   projectPersistRef.current = async () => {
-    if (!projectSettings || !currentProject || !projectId) return;
+    if (!projectSettings || !currentProject || !projectId) {
+      return;
+    }
 
     const sanitizedRunCommands = runCommands
       .map((cmd) => ({ ...cmd, name: cmd.name.trim(), command: cmd.command.trim() }))
@@ -333,6 +369,10 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
         terminalSettings: currentTerminalSettings,
         notificationOverrides:
           Object.keys(notificationOverrides).length > 0 ? notificationOverrides : undefined,
+        resourceEnvironment: undefined,
+        resourceEnvironments,
+        activeResourceEnvironment,
+        defaultWorktreeMode,
         insecureEnvironmentVariables: undefined,
         unresolvedSecureEnvironmentVariables: undefined,
       });
@@ -353,8 +393,11 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   );
 
   useEffect(() => {
-    if (!projectIsInitialized || !currentProjectSnapshot || !lastSavedSnapshotRef.current) return;
-    if (areSnapshotsEqual(lastSavedSnapshotRef.current, currentProjectSnapshot)) return;
+    if (!projectIsInitialized || !currentProjectSnapshot || !lastSavedSnapshotRef.current) {
+      return;
+    }
+    const equal = areSnapshotsEqual(lastSavedSnapshotRef.current, currentProjectSnapshot);
+    if (equal) return;
     debouncedProjectSaveRef.current();
   }, [currentProjectSnapshot, projectIsInitialized]);
 
@@ -366,11 +409,12 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   }, []);
 
   const flush = async () => {
-    debouncedProjectSaveRef.current.cancel();
-    const current = currentProjectSnapshotRef.current;
-    const last = lastSavedSnapshotRef.current;
-    if (current && last && !areSnapshotsEqual(last, current)) {
-      await projectPersistRef.current?.();
+    // First try flushing any pending debounced save
+    await debouncedProjectSaveRef.current.flush();
+    // If no debounced save was pending (state changed but useEffect hasn't
+    // scheduled it yet), force a direct save to avoid data loss on close
+    if (projectIsInitialized && projectPersistRef.current) {
+      await projectPersistRef.current();
     }
   };
 
@@ -419,6 +463,12 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setNotificationOverrides,
     githubRemote,
     setGithubRemote,
+    resourceEnvironments,
+    setResourceEnvironments,
+    activeResourceEnvironment,
+    setActiveResourceEnvironment,
+    defaultWorktreeMode,
+    setDefaultWorktreeMode,
     projectSettings,
     projectIsLoading,
     projectError,

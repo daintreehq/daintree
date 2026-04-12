@@ -11,6 +11,7 @@ import { GripVertical } from "lucide-react";
 import { useErrorStore, usePanelStore, type RetryAction, type TerminalInstance } from "../../store";
 import { useRecipeStore } from "../../store/recipeStore";
 import { useWorktreeSelectionStore } from "../../store/worktreeStore";
+import { useProjectSettingsStore } from "../../store/projectSettingsStore";
 import { useWorktreeFilterStore } from "../../store/worktreeFilterStore";
 import { errorsClient, worktreeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
@@ -64,6 +65,16 @@ export function worktreeCardPropsAreEqual(
       a.issueTitle !== b.issueTitle ||
       a.isDetached !== b.isDetached ||
       a.lifecycleStatus !== b.lifecycleStatus ||
+      a.resourceStatus !== b.resourceStatus ||
+      a.hasResourceConfig !== b.hasResourceConfig ||
+      a.hasPauseCommand !== b.hasPauseCommand ||
+      a.hasResumeCommand !== b.hasResumeCommand ||
+      a.hasTeardownCommand !== b.hasTeardownCommand ||
+      a.hasStatusCommand !== b.hasStatusCommand ||
+      a.hasProvisionCommand !== b.hasProvisionCommand ||
+      a.resourceConnectCommand !== b.resourceConnectCommand ||
+      a.worktreeMode !== b.worktreeMode ||
+      a.worktreeEnvironmentLabel !== b.worktreeEnvironmentLabel ||
       a.taskId !== b.taskId ||
       a.hasPlanFile !== b.hasPlanFile ||
       a.planFilePath !== b.planFilePath ||
@@ -179,6 +190,18 @@ export const WorktreeCard = React.memo(function WorktreeCard({
 
   const getRecipesForWorktree = useRecipeStore((state) => state.getRecipesForWorktree);
   const recipes = getRecipesForWorktree(worktree.id);
+
+  const resourceEnvironments = useProjectSettingsStore(
+    useCallback((state) => state.settings?.resourceEnvironments, [])
+  );
+
+  const environmentIcon = useMemo(
+    () =>
+      worktree.worktreeMode && worktree.worktreeMode !== "local"
+        ? resourceEnvironments?.[worktree.worktreeMode]?.icon
+        : undefined,
+    [worktree.worktreeMode, resourceEnvironments]
+  );
 
   const isPinned = useWorktreeFilterStore(
     useCallback((state) => state.pinnedWorktrees.includes(worktree.id), [worktree.id])
@@ -308,7 +331,16 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     spineState,
     isLifecycleRunning,
     lifecycleLabel,
+    resourceStatusLabel,
+    resourceStatusColor,
+    hasResourceConfig,
   } = useWorktreeStatus({ worktree });
+
+  const hasPauseCommand = !!worktree.hasPauseCommand;
+  const hasResumeCommand = !!worktree.hasResumeCommand;
+  const hasTeardownCommand = !!worktree.hasTeardownCommand;
+  const hasStatusCommand = !!worktree.hasStatusCommand;
+  const hasProvisionCommand = !!worktree.hasProvisionCommand;
 
   const {
     runningRecipeId,
@@ -365,6 +397,66 @@ export const WorktreeCard = React.memo(function WorktreeCard({
       "worktree.sessions.resetRenderers",
       { worktreeId: worktree.id },
       { source: "user" }
+    );
+  }, [worktree.id]);
+
+  const handleResourceResume = useCallback(() => {
+    void actionService.dispatch(
+      "worktree.resource.resume",
+      { worktreeId: worktree.id },
+      { source: "context-menu" }
+    );
+  }, [worktree.id]);
+
+  const handleResourcePause = useCallback(() => {
+    void actionService.dispatch(
+      "worktree.resource.pause",
+      { worktreeId: worktree.id },
+      { source: "context-menu" }
+    );
+  }, [worktree.id]);
+
+  const handleResourceConnect = useCallback(() => {
+    void actionService.dispatch(
+      "worktree.resource.connect",
+      { worktreeId: worktree.id },
+      { source: "context-menu" }
+    );
+  }, [worktree.id]);
+
+  const resourceEnvironmentKeys = useMemo(
+    () => Object.keys(resourceEnvironments ?? {}),
+    [resourceEnvironments]
+  );
+
+  const handleSwitchEnvironment = useCallback(
+    (envKey: string) => {
+      void worktreeClient.switchEnvironment(worktree.id, envKey);
+    },
+    [worktree.id]
+  );
+
+  const handleResourceProvision = useCallback(() => {
+    void actionService.dispatch(
+      "worktree.resource.provision",
+      { worktreeId: worktree.id },
+      { source: "context-menu" }
+    );
+  }, [worktree.id]);
+
+  const handleResourceTeardown = useCallback(() => {
+    void actionService.dispatch(
+      "worktree.resource.teardown",
+      { worktreeId: worktree.id },
+      { source: "context-menu" }
+    );
+  }, [worktree.id]);
+
+  const handleResourceStatus = useCallback(() => {
+    void actionService.dispatch(
+      "worktree.resource.status",
+      { worktreeId: worktree.id },
+      { source: "context-menu" }
     );
   }, [worktree.id]);
 
@@ -593,6 +685,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
           role="button"
           data-worktree-branch={branchLabel}
           data-worktree-is-main={isMainWorktree ? "true" : undefined}
+          data-resource-status={resourceStatusLabel ?? undefined}
           aria-label={`Worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}${isActive ? " (selected)" : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${spineState}${hasChanges ? ", has uncommitted changes" : ""}`}
         >
           {isOver && !isActive && (
@@ -671,6 +764,14 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                 branchLabel={branchLabel}
                 sessionStates={terminalCounts.byState}
                 sessionTotal={terminalCounts.total}
+                environmentIcon={environmentIcon}
+                isLifecycleRunning={isLifecycleRunning}
+                resourceStatusLabel={resourceStatusLabel}
+                resourceStatusColor={resourceStatusColor}
+                resourceLastOutput={worktree.resourceStatus?.lastOutput}
+                resourceEndpoint={worktree.resourceStatus?.endpoint}
+                resourceLastCheckedAt={worktree.resourceStatus?.lastCheckedAt}
+                onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
                 badges={{
                   onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
                   onOpenPR: worktree.prNumber ? handleOpenPRExternal : undefined,
@@ -726,6 +827,19 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                   onDeleteWorktree: !isMainWorktree ? () => setShowDeleteDialog(true) : undefined,
                   onRevertAgentChanges: handleRevertAgentChanges,
                   hasSnapshot,
+                  hasResourceConfig,
+                  worktreeMode: worktree.worktreeMode,
+                  resourceEnvironmentKeys,
+                  onSwitchEnvironment: handleSwitchEnvironment,
+                  resourceStatus: worktree.resourceStatus?.lastStatus,
+                  onResourceProvision: hasProvisionCommand ? handleResourceProvision : undefined,
+                  onResourceResume: hasResumeCommand ? handleResourceResume : undefined,
+                  onResourcePause: hasPauseCommand ? handleResourcePause : undefined,
+                  onResourceConnect: worktree.resourceConnectCommand
+                    ? handleResourceConnect
+                    : undefined,
+                  onResourceStatus: hasStatusCommand ? handleResourceStatus : undefined,
+                  onResourceTeardown: hasTeardownCommand ? handleResourceTeardown : undefined,
                 }}
               />
 
@@ -755,6 +869,16 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                     onOpenReviewHub={() => setShowReviewHub(true)}
                     isLifecycleRunning={isLifecycleRunning}
                     lifecycleLabel={lifecycleLabel}
+                    hasResourceConfig={hasResourceConfig}
+                    resourceStatus={worktree.resourceStatus?.lastStatus}
+                    onResourceResume={hasResumeCommand ? handleResourceResume : undefined}
+                    onResourcePause={hasPauseCommand ? handleResourcePause : undefined}
+                    onResourceConnect={
+                      worktree.resourceConnectCommand ? handleResourceConnect : undefined
+                    }
+                    onResourceProvision={hasProvisionCommand ? handleResourceProvision : undefined}
+                    onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
+                    onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
                   />
 
                   <WorktreeTerminalSection
@@ -833,6 +957,16 @@ export const WorktreeCard = React.memo(function WorktreeCard({
           onEndAll={handleEndAll}
           onOpenPanelPalette={handleOpenPanelPalette}
           onDeleteWorktree={!isMainWorktree ? () => setShowDeleteDialog(true) : undefined}
+          hasResourceConfig={hasResourceConfig}
+          worktreeMode={worktree.worktreeMode}
+          resourceEnvironmentKeys={resourceEnvironmentKeys}
+          onSwitchEnvironment={handleSwitchEnvironment}
+          onResourceProvision={hasProvisionCommand ? handleResourceProvision : undefined}
+          onResourceResume={hasResumeCommand ? handleResourceResume : undefined}
+          onResourcePause={hasPauseCommand ? handleResourcePause : undefined}
+          onResourceConnect={worktree.resourceConnectCommand ? handleResourceConnect : undefined}
+          onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
+          onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
         />
       </ContextMenuContent>
     </ContextMenu>

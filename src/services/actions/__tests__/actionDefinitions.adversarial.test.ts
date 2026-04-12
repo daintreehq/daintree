@@ -264,6 +264,7 @@ function createCallbacks(overrides: Partial<ActionCallbacks> = {}): ActionCallba
     onOpenShortcuts: vi.fn(),
     onLaunchAgent: vi.fn(async () => null),
     onInject: vi.fn(),
+    onAddTerminal: vi.fn(async () => {}),
     getDefaultCwd: () => "/repo",
     getActiveWorktreeId: () => undefined,
     getWorktrees: () => [],

@@ -248,7 +248,7 @@ export class ProjectViewManager {
   }
 
   setCachedViewLimit(n: number): void {
-    this.maxCachedViews = n;
+    this.maxCachedViews = Math.max(1, Math.min(5, n));
     this.evictStaleViews();
   }
 
@@ -598,6 +598,7 @@ export class ProjectViewManager {
 
   private evictStaleViews(): void {
     if (this.views.size <= this.maxCachedViews) return;
+    if (this.activeProjectId === null) return;
 
     const evictable = Array.from(this.views.entries())
       .filter(([id]) => id !== this.activeProjectId)

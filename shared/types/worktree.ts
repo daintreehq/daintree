@@ -4,7 +4,14 @@ import type { FileChangeDetail, WorktreeChanges } from "./git.js";
 export type WorktreeMood = "stable" | "active" | "stale" | "error";
 
 /** Phase of worktree lifecycle script execution */
-export type WorktreeLifecyclePhase = "setup" | "teardown";
+export type WorktreeLifecyclePhase =
+  | "setup"
+  | "teardown"
+  | "resource-provision"
+  | "resource-teardown"
+  | "resource-resume"
+  | "resource-pause"
+  | "resource-status";
 
 /** State of worktree lifecycle script execution */
 export type WorktreeLifecycleState = "running" | "success" | "failed" | "timed-out";
@@ -20,6 +27,28 @@ export interface WorktreeLifecycleStatus {
   startedAt: number;
   completedAt?: number;
   error?: string;
+}
+
+/** Resource status from the last manual status check */
+export interface WorktreeResourceStatus {
+  /** Raw status string from CLI output (e.g., "ready", "paused", "running") */
+  lastStatus?: string;
+  /** Last command output (tail) */
+  lastOutput?: string;
+  /** Error message if the last resource command failed */
+  error?: string;
+  /** Timestamp of the last status check */
+  lastCheckedAt?: number;
+  /** Resource endpoint URL from status JSON */
+  endpoint?: string;
+  /** Arbitrary metadata from status JSON */
+  meta?: Record<string, unknown>;
+  /** Provider identifier from config */
+  provider?: string;
+  /** Timestamp (ms epoch) when resource was last resumed */
+  resumedAt?: number;
+  /** Timestamp (ms epoch) when resource was last paused */
+  pausedAt?: number;
 }
 
 /** Git worktree - multiple working trees on same repo */
@@ -118,6 +147,36 @@ export interface Worktree {
 
   /** Number of commits behind the upstream tracking branch */
   behindCount?: number;
+
+  /** Resource status from the last manual status check */
+  resourceStatus?: WorktreeResourceStatus;
+
+  /** Connect command from .canopy/config.json resource block */
+  resourceConnectCommand?: string;
+
+  /** Whether this worktree's project has a resource config block */
+  hasResourceConfig?: boolean;
+
+  /** Whether the configured resource environment has a pause command */
+  hasPauseCommand?: boolean;
+
+  /** Whether the configured resource environment has a resume command */
+  hasResumeCommand?: boolean;
+
+  /** Whether the configured resource environment has a teardown command */
+  hasTeardownCommand?: boolean;
+
+  /** Whether the configured resource environment has a status command */
+  hasStatusCommand?: boolean;
+
+  /** Whether the configured resource environment has a provision command */
+  hasProvisionCommand?: boolean;
+
+  /** Worktree environment mode ("local" or an environment key from resourceEnvironments) */
+  worktreeMode?: string;
+
+  /** Cached display label for the environment (e.g., "Docker", "Akash") */
+  worktreeEnvironmentLabel?: string;
 }
 
 /** Runtime worktree state (internal to WorktreeService) */

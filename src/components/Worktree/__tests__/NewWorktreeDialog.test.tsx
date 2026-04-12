@@ -34,6 +34,7 @@ vi.mock("@/clients", () => ({
     listBranches: (...args: unknown[]) => mockListBranches(...args),
     fetchPRBranch: (...args: unknown[]) => mockFetchPRBranch(...args),
     getRecentBranches: (...args: unknown[]) => mockGetRecentBranches(...args),
+    hasResourceConfig: vi.fn().mockResolvedValue({ hasConfig: false }),
   },
   githubClient: {
     assignIssue: vi.fn(),
@@ -381,6 +382,8 @@ describe("NewWorktreeDialog — existing branch mode", () => {
           path: expect.stringContaining("feature/existing-work"),
           fromRemote: false,
           useExistingBranch: true,
+          provisionResource: undefined,
+          worktreeMode: "local",
         },
       },
       { source: "user" }

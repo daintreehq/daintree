@@ -12,7 +12,12 @@
  */
 
 import type { FileChangeDetail, WorktreeChanges } from "./git.js";
-import type { Worktree, WorktreeMood, WorktreeLifecycleStatus } from "./worktree.js";
+import type {
+  Worktree,
+  WorktreeMood,
+  WorktreeLifecycleStatus,
+  WorktreeResourceStatus,
+} from "./worktree.js";
 import type {
   CopyTreeOptions,
   CopyTreeProgress,
@@ -29,6 +34,10 @@ export interface CreateWorktreeOptions {
   path: string;
   fromRemote?: boolean;
   useExistingBranch?: boolean;
+  /** Opt-in flag to run resource.provision after setup */
+  provisionResource?: boolean;
+  /** Worktree environment mode ("local" or an environment key from resourceEnvironments) */
+  worktreeMode?: string;
 }
 
 /** Branch information from git */
@@ -102,6 +111,36 @@ export interface WorktreeSnapshot {
 
   /** Number of commits behind the upstream tracking branch */
   behindCount?: number;
+
+  /** Resource status from the last manual status check */
+  resourceStatus?: WorktreeResourceStatus;
+
+  /** Connect command from .canopy/config.json resource block */
+  resourceConnectCommand?: string;
+
+  /** Whether this worktree's project has a resource config block */
+  hasResourceConfig?: boolean;
+
+  /** Whether the resource config has a status command */
+  hasStatusCommand?: boolean;
+
+  /** Whether the resource config has a pause command */
+  hasPauseCommand?: boolean;
+
+  /** Whether the resource config has a resume command */
+  hasResumeCommand?: boolean;
+
+  /** Whether the resource config has a teardown command */
+  hasTeardownCommand?: boolean;
+
+  /** Whether the resource config has a provision command */
+  hasProvisionCommand?: boolean;
+
+  /** Worktree environment mode ("local" or an environment key from resourceEnvironments) */
+  worktreeMode?: string;
+
+  /** Cached display label for the environment (e.g., "Docker", "Akash") */
+  worktreeEnvironmentLabel?: string;
 }
 
 /** Monitor configuration for polling intervals */
@@ -122,7 +161,12 @@ export interface MonitorConfig {
  */
 export type WorkspaceHostRequest =
   // Project lifecycle
-  | { type: "load-project"; requestId: string; rootPath: string }
+  | {
+      type: "load-project";
+      requestId: string;
+      rootPath: string;
+      globalEnvVars?: Record<string, string>;
+    }
   | {
       type: "sync";
       requestId: string;
@@ -198,10 +242,26 @@ export type WorkspaceHostRequest =
     }
   // Resource profile config update
   | { type: "update-monitor-config"; requestId: string; config: MonitorConfig }
+  // Resource actions
+  | {
+      type: "resource-action";
+      requestId: string;
+      worktreeId: string;
+      action: "provision" | "teardown" | "resume" | "pause" | "status";
+    }
+  | {
+      type: "switch-worktree-environment";
+      requestId: string;
+      worktreeId: string;
+      envKey: string;
+    }
+  | { type: "has-resource-config"; requestId: string; rootPath: string }
   // Direct renderer port attachment (port transferred via postMessage transfer list)
   | { type: "attach-renderer-port" }
   // GitHub token propagation
   | { type: "update-github-token"; token: string | null }
+  // Project environment variable propagation
+  | { type: "update-project-env"; vars: Record<string, string> }
   // File tree operations
   | {
       type: "get-file-tree";
@@ -309,7 +369,20 @@ export type WorkspaceHostEvent =
     }
   // Project Pulse events
   | { type: "git:project-pulse"; requestId: string; data: ProjectPulse }
-  | { type: "git:project-pulse-error"; requestId: string; error: string };
+  | { type: "git:project-pulse-error"; requestId: string; error: string }
+  // Resource action responses
+  | {
+      type: "resource-action-result";
+      requestId: string;
+      success: boolean;
+      output?: string;
+      error?: string;
+    }
+  | {
+      type: "has-resource-config-result";
+      requestId: string;
+      hasConfig: boolean;
+    };
 
 /** Configuration for WorkspaceClient */
 export interface WorkspaceClientConfig {

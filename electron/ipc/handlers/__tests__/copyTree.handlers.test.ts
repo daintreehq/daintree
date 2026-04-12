@@ -29,7 +29,11 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 }));
 
 import { CHANNELS } from "../../channels.js";
-import { registerCopyTreeHandlers, mergeCopyTreeOptions } from "../copyTree.js";
+import {
+  registerCopyTreeHandlers,
+  mergeCopyTreeOptions,
+  buildRemoteComputeBlock,
+} from "../copyTree.js";
 
 function getInvokeHandler(channel: string): (...args: unknown[]) => Promise<unknown> {
   const call = (ipcMainMock.handle as Mock).mock.calls.find(
@@ -156,5 +160,76 @@ describe("mergeCopyTreeOptions", () => {
     expect(result.charLimit).toBe(3000);
     expect(result.sort).toBe("name");
     expect(result.always).toEqual(["README.md"]);
+  });
+});
+
+describe("buildRemoteComputeBlock", () => {
+  it("returns empty string when worktree has no resourceStatus", () => {
+    const worktree = { resourceStatus: undefined };
+    const block = buildRemoteComputeBlock(worktree);
+    expect(block).toBe("");
+  });
+
+  it("includes full Remote Compute block with endpoint and connect command when status is ready", () => {
+    const worktree = {
+      resourceStatus: {
+        provider: "aws",
+        lastStatus: "ready",
+        endpoint: "ec2-1-2-3-4.compute.amazonaws.com",
+      },
+      resourceConnectCommand: "ssh -i key.pem root@ec2-1-2-3-4.compute.amazonaws.com",
+    };
+    const block = buildRemoteComputeBlock(worktree);
+    expect(block).toContain("## Remote Compute");
+    expect(block).toContain("Provider: aws");
+    expect(block).toContain("Status: ready");
+    expect(block).toContain("Endpoint: ec2-1-2-3-4.compute.amazonaws.com");
+    expect(block).toContain(
+      "Run remote commands: ssh -i key.pem root@ec2-1-2-3-4.compute.amazonaws.com"
+    );
+    expect(block).toContain('canopy-remote "<command>"');
+  });
+
+  it("includes informational Remote Compute block without connect command when status is provisioning", () => {
+    const worktree = {
+      resourceStatus: {
+        provider: "gcp",
+        lastStatus: "provisioning",
+      },
+      resourceConnectCommand: undefined,
+    };
+    const block = buildRemoteComputeBlock(worktree);
+    expect(block).toContain("## Remote Compute");
+    expect(block).toContain("Provider: gcp");
+    expect(block).toContain("Status: provisioning");
+    expect(block).toContain("Resource is not yet available for remote execution");
+    expect(block).not.toContain("Run remote commands:");
+    expect(block).not.toContain("canopy-remote");
+  });
+
+  it("shows error status without connect command when status is error", () => {
+    const worktree = {
+      resourceStatus: {
+        provider: "azure",
+        lastStatus: "error",
+      },
+      resourceConnectCommand: undefined,
+    };
+    const block = buildRemoteComputeBlock(worktree);
+    expect(block).toContain("## Remote Compute");
+    expect(block).toContain("Provider: azure");
+    expect(block).toContain("Status: error");
+    expect(block).toContain("Resource is not yet available for remote execution");
+  });
+
+  it("uses unknown provider when provider is undefined", () => {
+    const worktree = {
+      resourceStatus: {
+        lastStatus: "provisioning",
+      },
+      resourceConnectCommand: undefined,
+    };
+    const block = buildRemoteComputeBlock(worktree);
+    expect(block).toContain("Provider: unknown");
   });
 });

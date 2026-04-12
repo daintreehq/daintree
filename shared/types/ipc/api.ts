@@ -548,6 +548,10 @@ export interface ElectronAPI {
     ): Promise<void>;
     deleteRecipe(recipeId: string): Promise<void>;
   };
+  globalEnv: {
+    get(): Promise<Record<string, string>>;
+    set(variables: Record<string, string>): Promise<void>;
+  };
   agentSettings: {
     get(): Promise<AgentSettings>;
     set(agentId: AgentId, settings: Partial<AgentSettingsEntry>): Promise<AgentSettings>;
