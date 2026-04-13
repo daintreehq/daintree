@@ -220,6 +220,7 @@ function App() {
   const onboardingWizardOpen = useProjectStore((state) => state.onboardingWizardOpen);
   const onboardingProjectId = useProjectStore((state) => state.onboardingProjectId);
   const closeOnboardingWizard = useProjectStore((state) => state.closeOnboardingWizard);
+  const switchProject = useProjectStore((state) => state.switchProject);
 
   const createFolderDialogOpen = useProjectStore((state) => state.createFolderDialogOpen);
   const closeCreateFolderDialog = useProjectStore((state) => state.closeCreateFolderDialog);
@@ -315,30 +316,40 @@ function App() {
     [launchAgent]
   );
 
-  const handleWizardFinish = useCallback(() => {
-    // In e2e mode, skip the automatic primary-agent launch — it leaves an
-    // extra panel in the grid that breaks panel-count assertions in tests
-    // that expect a clean post-onboarding state. The behaviour is locally
-    // observable only when an agent CLI (e.g., Claude) is installed, so
-    // tests pass on CI but fail on dev machines without this guard.
-    if (typeof window !== "undefined" && window.__CANOPY_E2E_MODE__) {
-      return;
-    }
+  const handleWizardFinish = useCallback(
+    (finishedProjectId: string) => {
+      // Switch to the newly-onboarded project. Opening the wizard on the
+      // current view (rather than pre-switching) avoids stranding it in a
+      // throttled background view; we complete the switch here instead.
+      if (finishedProjectId && finishedProjectId !== currentProject?.id) {
+        void switchProject(finishedProjectId);
+      }
 
-    const defaultAgent = useAgentPreferencesStore.getState().defaultAgent;
-    const selected = agentSettings?.agents
-      ? Object.entries(agentSettings.agents)
-          .filter(([, entry]) => entry.pinned === true)
-          .map(([id]) => id)
-      : [];
-    const primaryAgent = defaultAgent ?? selected[0];
+      // In e2e mode, skip the automatic primary-agent launch — it leaves an
+      // extra panel in the grid that breaks panel-count assertions in tests
+      // that expect a clean post-onboarding state. The behaviour is locally
+      // observable only when an agent CLI (e.g., Claude) is installed, so
+      // tests pass on CI but fail on dev machines without this guard.
+      if (typeof window !== "undefined" && window.__CANOPY_E2E_MODE__) {
+        return;
+      }
 
-    if (primaryAgent && isAgentReady(availability[primaryAgent])) {
-      launchAgent(primaryAgent, {
-        worktreeId: activeWorktreeId ?? undefined,
-      }).catch(() => {});
-    }
-  }, [launchAgent, activeWorktreeId, availability, agentSettings]);
+      const defaultAgent = useAgentPreferencesStore.getState().defaultAgent;
+      const selected = agentSettings?.agents
+        ? Object.entries(agentSettings.agents)
+            .filter(([, entry]) => entry.pinned === true)
+            .map(([id]) => id)
+        : [];
+      const primaryAgent = defaultAgent ?? selected[0];
+
+      if (primaryAgent && isAgentReady(availability[primaryAgent])) {
+        launchAgent(primaryAgent, {
+          worktreeId: activeWorktreeId ?? undefined,
+        }).catch(() => {});
+      }
+    },
+    [launchAgent, activeWorktreeId, availability, agentSettings, switchProject, currentProject?.id]
+  );
 
   const closeNotesPalette = useCallback(() => {
     usePaletteStore.getState().closePalette("notes");

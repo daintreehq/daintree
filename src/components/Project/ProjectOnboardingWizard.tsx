@@ -22,7 +22,7 @@ interface ProjectOnboardingWizardProps {
   isOpen: boolean;
   projectId: string;
   onClose: () => void;
-  onFinish?: () => void;
+  onFinish?: (projectId: string) => void;
 }
 
 export function ProjectOnboardingWizard({
@@ -90,7 +90,7 @@ export function ProjectOnboardingWizard({
       });
 
       onClose();
-      onFinish?.();
+      onFinish?.(projectId);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "Failed to save settings");
     } finally {

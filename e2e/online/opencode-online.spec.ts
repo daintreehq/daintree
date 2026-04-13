@@ -53,7 +53,11 @@ test.describe("OpenCode Online Flow", () => {
     await test.step("launch OpenCode agent", async () => {
       const { window } = ctx;
 
-      await window.locator(SEL.opencodeAgent.startButton).click();
+      // Agents are unpinned by default, so the toolbar shows the Agent Tray
+      // rather than a direct "Start OpenCode Agent" button. Open the tray and
+      // click the OpenCode entry under "Launch".
+      await window.locator(SEL.agent.trayButton).click();
+      await window.getByRole("menuitem", { name: "OpenCode" }).click();
 
       const agentPanel = window.locator(SEL.opencodeAgent.panel);
       await expect(agentPanel).toBeVisible({ timeout: 30_000 });

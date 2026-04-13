@@ -185,6 +185,7 @@ export const SEL = {
   agent: {
     panel: '[aria-label^="Claude agent:"]',
     startButton: '[aria-label="Start Claude Agent"]',
+    trayButton: '[aria-label="Agent tray"]',
   },
   opencodeAgent: {
     panel: '[aria-label^="OpenCode agent:"]',

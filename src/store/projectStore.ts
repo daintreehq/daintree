@@ -187,10 +187,19 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       const isNewProject = !existingProjectIds.has(newProject.id);
 
       await get().loadProjects();
-      await get().switchProject(newProject.id);
 
       if (isNewProject) {
-        set({ onboardingWizardOpen: true, onboardingProjectId: newProject.id });
+        // Open the onboarding wizard on the current view; the switch to the
+        // new project happens when the wizard finishes. Swapping views first
+        // strands the wizard in the deactivated (background-throttled) view,
+        // where React state updates stall and the Finish button stays disabled.
+        set({
+          isLoading: false,
+          onboardingWizardOpen: true,
+          onboardingProjectId: newProject.id,
+        });
+      } else {
+        await get().switchProject(newProject.id);
       }
     } catch (error) {
       logErrorWithContext(error, {

@@ -33,7 +33,9 @@ test.describe.serial("Core: Worktree Session Bulk", () => {
 
     const sessionsTrigger = window.getByRole("menuitem", { name: "Sessions" });
     await expect(sessionsTrigger).toBeVisible({ timeout: T_SHORT });
-    await sessionsTrigger.hover();
+    // Hover doesn't reliably open Radix submenus on Linux CI. Click the
+    // trigger so the submenu opens on all platforms.
+    await sessionsTrigger.click();
   }
 
   async function clickSessionsItem(name: string | RegExp) {
