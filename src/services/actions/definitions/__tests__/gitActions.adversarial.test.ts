@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ActionDefinition } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 import { registerGitActions } from "../gitActions";
