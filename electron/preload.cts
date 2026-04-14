@@ -1121,6 +1121,10 @@ const CHANNELS = {
   APP_RELOAD_CONFIG: "app:reload-config",
   APP_CONFIG_RELOADED: "app:config-reloaded",
 
+  AGENT_FLAVORS_UPDATED: "agent-flavors:updated",
+
+  AGENT_CAPABILITIES_GET_CCR_FLAVORS: "agent-capabilities:get-ccr-flavors",
+
   PERF_FLUSH_RENDERER_MARKS: "perf:flush-renderer-marks",
 } as const;
 
@@ -2670,6 +2674,21 @@ const api: ElectronAPI = {
 
     isAgentEnabled: (agentId: string) =>
       _unwrappingInvoke(CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED, agentId),
+
+    onFlavorsUpdated: (
+      callback: (payload: {
+        agentId: string;
+        flavors: Array<{
+          id: string;
+          name: string;
+          description?: string;
+          env?: Record<string, string>;
+          args?: string[];
+        }>;
+      }) => void
+    ) => _typedOn(CHANNELS.AGENT_FLAVORS_UPDATED, callback),
+
+    getCcrFlavors: () => _unwrappingInvoke(CHANNELS.AGENT_CAPABILITIES_GET_CCR_FLAVORS),
   },
 
   // Agent Session History API

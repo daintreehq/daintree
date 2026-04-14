@@ -367,6 +367,17 @@ export async function setupWindowServices(
 
     // Auto-updater
     autoUpdaterService.initialize();
+
+    // CCR config — discover Claude Code Router models as agent flavors
+    try {
+      const { CcrConfigService } = await import("../services/CcrConfigService.js");
+      const ccrService = CcrConfigService.getInstance();
+      await ccrService.loadAndApply();
+      ccrService.startWatching();
+      console.log("[MAIN] CcrConfigService initialized");
+    } catch (err) {
+      console.warn("[MAIN] CcrConfigService init failed (non-fatal):", err);
+    }
   }
 
   // ── Per-window initialization ──
