@@ -21,6 +21,11 @@ async function refreshRendererConfig(): Promise<void> {
   actionService.dispatch("cliAvailability.refresh", undefined, { source: "agent" });
 }
 
+// Module-level guard prevents re-subscribing onConfigReloaded when
+// registerAppActions is called multiple times (HMR, tests, or repeated
+// registry rebuilds).
+let configReloadedSubscribed = false;
+
 export function registerAppActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("app.newWindow", () => ({
     id: "app.newWindow",
@@ -82,10 +87,14 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
 
   // Subscribe to config reloaded events from main process.
   // Fires after both action-triggered and menu-triggered reloads.
+  // Dedup across registration cycles so repeated registerAppActions calls
+  // (tests, HMR) do not fan out refreshes multiple times per reload.
   if (
+    !configReloadedSubscribed &&
     typeof window !== "undefined" &&
     typeof window.electron?.app?.onConfigReloaded === "function"
   ) {
+    configReloadedSubscribed = true;
     window.electron.app.onConfigReloaded(async () => {
       try {
         await refreshRendererConfig();
