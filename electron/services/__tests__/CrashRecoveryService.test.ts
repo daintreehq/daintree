@@ -536,7 +536,7 @@ describe("CrashRecoveryService", () => {
       expect(readKeys).not.toContain("projects");
     });
 
-    it("restoreBackup returns true but applies no state for legacy-only snapshot", () => {
+    it("restoreBackup returns false and applies no state for legacy-only snapshot", () => {
       const backupDir = path.join(userData, "backups");
       fs.mkdirSync(backupDir, { recursive: true });
       const snapshot = {
@@ -552,7 +552,7 @@ describe("CrashRecoveryService", () => {
       storeMock.set.mockClear();
       const result = svc.restoreBackup();
 
-      expect(result).toBe(true);
+      expect(result).toBe(false);
       expect(storeMock.set).not.toHaveBeenCalled();
     });
   });

@@ -148,6 +148,10 @@ export class CrashRecoveryService {
         }
       }
 
+      if (!hasRestorableSnapshotContent(snapshot)) {
+        return false;
+      }
+
       this.applySessionSnapshot(snapshot);
       this.cachedBackupSnapshot = null;
       console.log(
@@ -445,9 +449,15 @@ export class CrashRecoveryService {
   }
 
   private applySessionSnapshot(snapshot: SessionSnapshot): void {
-    if (snapshot.appState) store.set("appState", snapshot.appState);
-    if (snapshot.windowState) store.set("windowState", snapshot.windowState);
-    if (snapshot.windowStates) store.set("windowStates", snapshot.windowStates);
+    if (isValidAppStateSnapshot(snapshot.appState)) {
+      store.set("appState", snapshot.appState);
+    }
+    if (isPlainObject(snapshot.windowState)) {
+      store.set("windowState", snapshot.windowState);
+    }
+    if (isPlainObject(snapshot.windowStates)) {
+      store.set("windowStates", snapshot.windowStates);
+    }
   }
 
   private pruneOldLogs(): void {
@@ -519,6 +529,31 @@ function isValidMarker(value: unknown): value is MarkerFile {
     value !== null &&
     typeof (value as MarkerFile).sessionStartMs === "number" &&
     typeof (value as MarkerFile).appVersion === "string"
+  );
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isValidAppStateSnapshot(value: unknown): value is Record<string, unknown> {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+
+  const terminals = value.terminals;
+  if (terminals !== undefined && !Array.isArray(terminals)) {
+    return false;
+  }
+
+  return true;
+}
+
+function hasRestorableSnapshotContent(snapshot: SessionSnapshot): boolean {
+  return (
+    isValidAppStateSnapshot(snapshot.appState) ||
+    isPlainObject(snapshot.windowState) ||
+    isPlainObject(snapshot.windowStates)
   );
 }
 
