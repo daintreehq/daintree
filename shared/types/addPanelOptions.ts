@@ -44,6 +44,8 @@ export interface AddPanelOptionsBase {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** Flavor ID selected at launch time for per-panel flavor selection */
+  agentFlavorId?: string;
 }
 
 /** Options for creating a terminal panel */

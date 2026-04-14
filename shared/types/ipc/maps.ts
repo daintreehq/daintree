@@ -11,6 +11,7 @@ import type {
 } from "../project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { AgentSettings } from "../agentSettings.js";
+import type { AgentFlavor } from "../../config/agentRegistry.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
 import type { KeybindingImportResult, MicPermissionStatus, VoiceInputSettings } from "./api.js";
@@ -2360,6 +2361,9 @@ export interface IpcEventMap {
 
   // Onboarding checklist push (main → renderer)
   "onboarding:checklist-push": ChecklistState;
+
+  // Agent flavor events
+  "agent-flavors:updated": { agentId: string; flavors: AgentFlavor[] };
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];

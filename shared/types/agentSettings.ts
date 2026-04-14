@@ -89,6 +89,16 @@ export interface AgentSettingsEntry {
   shareClipboardDirectory?: boolean;
   /** Override the default model for this agent in assistant/help contexts (e.g., "claude-opus-4-6") */
   assistantModelId?: string;
+  /** Selected flavor ID for this agent (persisted per-agent across sessions) */
+  flavorId?: string;
+  /** User-defined custom flavors for this agent (persisted, editable from Settings) */
+  customFlavors?: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    env?: Record<string, string>;
+    args?: string[];
+  }>;
   [key: string]: unknown;
 }
 
@@ -181,6 +191,8 @@ export interface GenerateAgentCommandOptions {
   modelId?: string;
   /** Additional CLI arguments from recipe terminal (whitespace-separated string) */
   recipeArgs?: string;
+  /** Additional CLI arguments from agent flavor (whitespace-separated string) */
+  flavorArgs?: string;
 }
 
 /**
@@ -237,6 +249,17 @@ export function generateAgentCommand(
   // Add --model flag if a specific model was selected for this launch
   if (options?.modelId) {
     parts.push("--model", options.modelId);
+  }
+
+  // Add flavor-level args (env overrides applied separately via spawn env)
+  if (options?.flavorArgs) {
+    for (const token of options.flavorArgs.trim().split(/\s+/).filter(Boolean)) {
+      if (token.startsWith("-")) {
+        parts.push(token);
+      } else {
+        parts.push(escapeShellArg(token));
+      }
+    }
   }
 
   // Add recipe-level args (per-terminal overrides from recipe editor)
