@@ -3,11 +3,12 @@ import {
   useMemo,
   useRef,
   useState,
+  useCallback,
   type ComponentType,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Plug, Pin, Settings2 } from "lucide-react";
+import { Plug, Pin, Settings2, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -108,6 +109,52 @@ function RunningDot({ state }: { state: AgentState | null }) {
   );
 }
 
+type SplitLaunchItemProps = {
+  row: AgentRow;
+  onLaunch: (agentId: BuiltInAgentId, flavorId?: string) => void;
+};
+
+function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
+  const leftAreaRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    const el = leftAreaRef.current;
+    if (!el) return;
+    const handler = (e: PointerEvent) => {
+      e.stopPropagation();
+      onLaunch(row.id);
+    };
+    el.addEventListener("pointerdown", handler, true);
+    return () => el.removeEventListener("pointerdown", handler, true);
+  }, [row.id, onLaunch]);
+
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger
+        className="p-0 [&>svg:last-child]:hidden overflow-hidden"
+        data-testid="submenu-trigger"
+      >
+        <span ref={leftAreaRef} className="flex flex-1 items-center gap-2 px-2.5 py-1.5">
+          <span className="inline-flex h-4 w-4 items-center justify-center shrink-0">
+            <row.Icon brandColor={getBrandColorHex(row.id)} />
+          </span>
+          {row.name}
+        </span>
+        <span className="flex items-center px-2 py-1.5 border-l border-daintree-border/50">
+          <ChevronRight className="h-3.5 w-3.5 text-daintree-text/40" aria-hidden="true" />
+        </span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent data-testid="submenu-content">
+        {row.flavors!.map((flavor) => (
+          <DropdownMenuItem key={flavor.id} onSelect={() => onLaunch(row.id, flavor.id)}>
+            {flavor.name.replace(/^CCR:\s*/, "")}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
 export function AgentTrayButton({
   agentAvailability,
   "data-toolbar-item": dataToolbarItem,
@@ -127,6 +174,8 @@ export function AgentTrayButton({
     welcomeCardDismissed,
     markAgentsSeen,
   } = useAgentDiscoveryOnboarding();
+
+  const [open, setOpen] = useState(false);
 
   const panelsById = usePanelStore(useShallow((s) => s.panelsById));
   const panelIds = usePanelStore(useShallow((s) => s.panelIds));
@@ -311,13 +360,14 @@ export function AgentTrayButton({
     ccrFlavorsByAgent,
   ]);
 
-  const handleLaunch = (agentId: BuiltInAgentId, flavorId?: string) => {
+  const handleLaunch = useCallback((agentId: BuiltInAgentId, flavorId?: string) => {
+    setOpen(false);
     void actionService.dispatch(
       "agent.launch",
       { agentId, ...(flavorId ? { flavorId } : {}) },
       { source: "user" }
     );
-  };
+  }, []);
 
   const handleSetup = (agentId: BuiltInAgentId) => {
     void actionService.dispatch(
@@ -372,23 +422,7 @@ export function AgentTrayButton({
 
   const renderLaunchItem = (row: AgentRow) => {
     if (row.flavors && row.flavors.length > 1) {
-      return (
-        <DropdownMenuSub key={`launch-${row.id}`}>
-          <DropdownMenuSubTrigger data-testid="submenu-trigger">
-            <span className="mr-2 inline-flex h-4 w-4 items-center justify-center">
-              <row.Icon brandColor={getBrandColorHex(row.id)} />
-            </span>
-            {row.name}
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent data-testid="submenu-content">
-            {row.flavors.map((flavor) => (
-              <DropdownMenuItem key={flavor.id} onSelect={() => handleLaunch(row.id, flavor.id)}>
-                {flavor.name}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-      );
+      return <SplitLaunchItem key={`launch-${row.id}`} row={row} onLaunch={handleLaunch} />;
     }
 
     return (
@@ -404,7 +438,13 @@ export function AgentTrayButton({
   };
 
   return (
-    <DropdownMenu onOpenChange={handleOpenChange}>
+    <DropdownMenu
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        handleOpenChange(o);
+      }}
+    >
       <TooltipProvider>
         <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange}>
           <TooltipTrigger asChild>

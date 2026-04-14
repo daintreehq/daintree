@@ -343,7 +343,7 @@ export function AgentSettings({
                   { id, name: "New Flavor", env: {} },
                 ];
                 void (async () => {
-                  await updateAgent(activeAgent.id, { customFlavors: updated });
+                  await updateAgent(activeAgent.id, { customFlavors: updated, flavorId: id });
                   onSettingsChange?.();
                 })();
               };
@@ -390,11 +390,14 @@ export function AgentSettings({
               const handleDeleteFlavor = (flavorId: string) => {
                 const updated = (activeEntry.customFlavors ?? []).filter((f) => f.id !== flavorId);
                 void (async () => {
-                  const updates: Record<string, unknown> = { customFlavors: updated };
                   if (activeEntry.flavorId === flavorId) {
-                    updates.flavorId = undefined;
+                    await updateAgent(activeAgent.id, {
+                      customFlavors: updated,
+                      flavorId: undefined,
+                    });
+                  } else {
+                    await updateAgent(activeAgent.id, { customFlavors: updated });
                   }
-                  await updateAgent(activeAgent.id, updates);
                   onSettingsChange?.();
                 })();
               };
@@ -451,6 +454,10 @@ export function AgentSettings({
               const isCcrFlavor = (id: string) => id.startsWith("ccr-");
               const isCustomFlavor = (id: string) => id.startsWith("user-");
 
+              const selectedFlavor = allFlavors.find((f) => f.id === activeEntry.flavorId);
+              const selectedIsCcr = selectedFlavor ? isCcrFlavor(selectedFlavor.id) : false;
+              const selectedIsCustom = selectedFlavor ? isCustomFlavor(selectedFlavor.id) : false;
+
               return (
                 <div id="agents-flavors" className="space-y-3 pt-2 border-t border-daintree-border">
                   <div className="flex items-center justify-between">
@@ -471,29 +478,70 @@ export function AgentSettings({
                     </Button>
                   </div>
 
-                  {/* Default flavor selector */}
-                  {allFlavors.length > 1 && (
-                    <div className="space-y-1">
-                      <label className="text-xs text-daintree-text/60 block">Default flavor</label>
-                      <select
-                        value={activeEntry.flavorId ?? ""}
-                        onChange={(e) => {
-                          void (async () => {
-                            await updateAgent(activeAgent.id, {
-                              flavorId: e.target.value || undefined,
-                            });
-                            onSettingsChange?.();
-                          })();
-                        }}
-                        className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent focus:outline-none transition-colors"
-                      >
-                        <option value="">Vanilla (no overrides)</option>
-                        {allFlavors.map((f) => (
+                  {/* Unified flavor picker */}
+                  <select
+                    value={activeEntry.flavorId ?? ""}
+                    onChange={(e) => {
+                      void (async () => {
+                        await updateAgent(activeAgent.id, {
+                          flavorId: e.target.value || undefined,
+                        });
+                        onSettingsChange?.();
+                      })();
+                    }}
+                    className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent focus:outline-none transition-colors"
+                  >
+                    <option value="">Vanilla (no overrides)</option>
+                    {ccrFlavors && ccrFlavors.length > 0 && (
+                      <optgroup label="CCR Routes">
+                        {ccrFlavors.map((f) => (
+                          <option key={f.id} value={f.id}>
+                            {f.name.replace(/^CCR:\s*/, "")}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {customFlavors && customFlavors.length > 0 && (
+                      <optgroup label="Custom">
+                        {customFlavors.map((f) => (
                           <option key={f.id} value={f.id}>
                             {f.name}
                           </option>
                         ))}
-                      </select>
+                      </optgroup>
+                    )}
+                  </select>
+
+                  {/* Detail view for selected flavor */}
+                  {selectedFlavor && selectedIsCcr && (
+                    <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 space-y-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-medium text-daintree-text">
+                          {selectedFlavor.name.replace(/^CCR:\s*/, "")}
+                        </span>
+                        <span
+                          data-testid="flavor-badge-auto"
+                          className="text-[10px] text-daintree-text/40 bg-daintree-text/10 px-1.5 py-0.5 rounded"
+                        >
+                          auto
+                        </span>
+                      </div>
+                      {selectedFlavor.env && Object.keys(selectedFlavor.env).length > 0 && (
+                        <div className="space-y-1">
+                          {Object.entries(selectedFlavor.env).map(([k, v]) => (
+                            <div key={k} className="flex items-center gap-2 font-mono text-[11px]">
+                              <span className="text-daintree-text/50 shrink-0">{k}</span>
+                              <span className="text-daintree-text/30">=</span>
+                              <span className="text-daintree-accent/70 truncate">{v}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {selectedFlavor.description && (
+                        <p className="text-[11px] text-daintree-text/40 select-text">
+                          {selectedFlavor.description}
+                        </p>
+                      )}
                     </div>
                   )}
 

@@ -162,6 +162,18 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
   updateAgent: async (agentId: string, updates: Partial<AgentSettingsEntry>) => {
     const myEpoch = ++normalizeEpoch;
     set({ error: null });
+    const previous = get().settings;
+    if (previous) {
+      set({
+        settings: {
+          ...previous,
+          agents: {
+            ...previous.agents,
+            [agentId]: { ...previous.agents[agentId], ...updates },
+          },
+        },
+      });
+    }
     try {
       const raw = await agentSettingsClient.set(agentId, updates);
       if (myEpoch !== normalizeEpoch) return;
@@ -170,6 +182,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       set({ settings });
     } catch (e) {
       if (myEpoch !== normalizeEpoch) return;
+      if (previous) set({ settings: previous });
       set({ error: e instanceof Error ? e.message : `Failed to update ${agentId} settings` });
       throw e;
     }

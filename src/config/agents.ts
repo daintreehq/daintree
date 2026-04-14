@@ -100,7 +100,7 @@ export function getMergedFlavors(
     if (flavor.name.length > 200) return null;
     if (/[<>'"&]/.test(flavor.name)) return null; // Basic XSS prevention
     if (flavor.id.length > 100) return null;
-    if (!/^[a-zA-Z0-9_-]+$/.test(flavor.id)) return null; // Only safe ID chars
+    if (!/^[a-zA-Z0-9_.-]+$/.test(flavor.id)) return null; // Only safe ID chars
 
     return {
       ...flavor,

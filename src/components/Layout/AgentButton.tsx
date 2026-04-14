@@ -97,7 +97,7 @@ export function AgentButton({
 
   const entry = agentSettings?.agents?.[type] ?? {};
   const flavors = getMergedFlavors(type, entry.customFlavors, ccrFlavors);
-  const hasFlavors = flavors.length > 1;
+  const hasFlavors = flavors.length > 0;
   const savedFlavorId = agentSettings?.agents?.[type]?.flavorId;
 
   const tooltipDetails = config.tooltip ? ` — ${config.tooltip}` : "";
@@ -310,6 +310,18 @@ export function AgentButton({
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" sideOffset={4} className="min-w-[12rem]">
+                    <DropdownMenuItem
+                      className={cn(!savedFlavorId && "font-medium")}
+                      onSelect={() => {
+                        void actionService.dispatch(
+                          "agent.launch",
+                          { agentId: type },
+                          { source: "user" }
+                        );
+                      }}
+                    >
+                      Vanilla (no overrides)
+                    </DropdownMenuItem>
                     {flavors.map((flavor) => (
                       <DropdownMenuItem
                         key={flavor.id}
@@ -322,7 +334,7 @@ export function AgentButton({
                           );
                         }}
                       >
-                        {flavor.name}
+                        {flavor.name.replace(/^CCR:\s*/, "")}
                       </DropdownMenuItem>
                     ))}
                   </DropdownMenuContent>
