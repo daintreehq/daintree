@@ -126,6 +126,18 @@ interface ProjectState {
   handleCloneSuccess: (clonedPath: string) => Promise<void>;
 }
 
+/**
+ * Module-reload-resilient state for the renderer's IPC subscriptions.
+ *
+ * HMR or test re-imports would otherwise re-register the `onUpdated`/
+ * `onRemoved` listeners on every module load without ever removing the prior
+ * registration, so each project update would fire N times per reload cycle.
+ * We store registration state on `globalThis` — persistent across module
+ * instances in the same window — and keep mutable `applyUpdated`/
+ * `applyRemoved` pointers that the latest module instance rebinds to its
+ * own store on import. New module instances reuse the existing subscription
+ * but drive the *current* store.
+ */
 interface ProjectStoreListenerState {
   applyUpdated: ((project: Project) => void) | null;
   applyRemoved: ((projectId: string) => void) | null;

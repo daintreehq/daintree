@@ -46,21 +46,23 @@ describe("CopyTreeService adversarial", () => {
   });
 
   it("overlapping concurrent operations use independent signals", async () => {
-    const captured: CapturedOptions[] = [];
-    const resolvers: Array<(value: unknown) => void> = [];
+    // Each generate() awaits fs.access + ConfigManager.create before it hits
+    // copyMock, so the two mock invocations can arrive in either order under
+    // parallel-run scheduling. Keying by the captured AbortSignal avoids
+    // depending on call order.
+    const pendingOps: Array<{
+      options: CapturedOptions;
+      resolve: (value: unknown) => void;
+    }> = [];
+
     copyMock.mockImplementation((_root: string, options: CapturedOptions) => {
-      captured.push(options);
-      if (captured.length === 1) {
-        return new Promise((_resolve, reject) => {
-          options.signal.addEventListener("abort", () => {
-            const e = new Error("aborted");
-            e.name = "AbortError";
-            reject(e);
-          });
+      return new Promise((resolve, reject) => {
+        options.signal.addEventListener("abort", () => {
+          const e = new Error("aborted");
+          e.name = "AbortError";
+          reject(e);
         });
-      }
-      return new Promise((resolve) => {
-        resolvers.push(resolve);
+        pendingOps.push({ options, resolve });
       });
     });
 
@@ -68,15 +70,18 @@ describe("CopyTreeService adversarial", () => {
     const child = copyTreeService.generate(tempDir, {}, undefined, "child");
 
     await vi.waitFor(() => {
-      expect(captured.length).toBe(2);
+      expect(pendingOps.length).toBe(2);
     });
 
     copyTreeService.cancel("parent");
 
-    expect(captured[0].signal.aborted).toBe(true);
-    expect(captured[1].signal.aborted).toBe(false);
+    // Exactly one op's signal should be aborted — the parent's.
+    const aborted = pendingOps.filter((op) => op.options.signal.aborted);
+    const surviving = pendingOps.filter((op) => !op.options.signal.aborted);
+    expect(aborted).toHaveLength(1);
+    expect(surviving).toHaveLength(1);
 
-    resolvers[0]({
+    surviving[0].resolve({
       output: "<ok/>",
       stats: { totalFiles: 1, totalSize: 10, duration: 5 },
     });

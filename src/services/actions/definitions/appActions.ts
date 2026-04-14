@@ -23,7 +23,9 @@ async function refreshRendererConfig(): Promise<void> {
 
 // Module-level guard prevents re-subscribing onConfigReloaded when
 // registerAppActions is called multiple times (HMR, tests, or repeated
-// registry rebuilds).
+// registry rebuilds in multi-window startup). Without it, a single main-
+// process config-reload event would fan out the refresh-all-stores
+// sequence N times per reload cycle.
 let configReloadedSubscribed = false;
 
 export function registerAppActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
