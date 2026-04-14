@@ -58,6 +58,7 @@ export class WorktreePortBroker {
       webContents.postMessage("worktree-port", null, [port2]);
     } catch {
       port1.close();
+      port2.close();
       return false;
     }
 
