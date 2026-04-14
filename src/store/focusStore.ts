@@ -24,20 +24,21 @@ const createFocusStore: StateCreator<FocusState> = (set, get) => ({
       if (state.isFocusMode) {
         return { isFocusMode: false, savedPanelState: null };
       } else {
-        return { isFocusMode: true, savedPanelState: currentPanelState };
+        return { isFocusMode: true, savedPanelState: { ...currentPanelState } };
       }
     }),
 
   setFocusMode: (enabled, savedOrCurrentPanelState) =>
     set((state) => {
+      const cloned = savedOrCurrentPanelState ? { ...savedOrCurrentPanelState } : null;
       if (enabled && !state.isFocusMode) {
-        // When enabling focus mode, save the panel state (either passed in or null)
-        return { isFocusMode: true, savedPanelState: savedOrCurrentPanelState ?? null };
+        // When enabling focus mode, save a copy of the panel state (either passed in or null)
+        return { isFocusMode: true, savedPanelState: cloned };
       } else if (!enabled && state.isFocusMode) {
         return { isFocusMode: false, savedPanelState: null };
-      } else if (enabled && state.isFocusMode && savedOrCurrentPanelState) {
+      } else if (enabled && state.isFocusMode && cloned) {
         // Already in focus mode but restoring saved panel state (hydration case)
-        return { ...state, savedPanelState: savedOrCurrentPanelState };
+        return { ...state, savedPanelState: cloned };
       }
       return state;
     }),

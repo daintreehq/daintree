@@ -30,11 +30,17 @@ export function registerGlobalRecipesHandlers(_deps: HandlerDependencies): () =>
     if (recipe.worktreeId !== undefined) {
       throw new Error("Global recipe must not have a worktreeId");
     }
-    if (!recipe.id || !recipe.name || !Array.isArray(recipe.terminals)) {
+    if (
+      typeof recipe.id !== "string" ||
+      !recipe.id.trim() ||
+      typeof recipe.name !== "string" ||
+      !recipe.name.trim() ||
+      !Array.isArray(recipe.terminals)
+    ) {
       throw new Error("Recipe missing required fields (id, name, terminals)");
     }
-    if (typeof recipe.createdAt !== "number") {
-      throw new Error("Recipe createdAt must be a number");
+    if (!Number.isFinite(recipe.createdAt)) {
+      throw new Error("Recipe createdAt must be a finite number");
     }
     return projectStore.addGlobalRecipe(recipe);
   };
@@ -55,8 +61,18 @@ export function registerGlobalRecipesHandlers(_deps: HandlerDependencies): () =>
     if (typeof recipeId !== "string" || !recipeId) {
       throw new Error("Invalid recipe ID");
     }
-    if (!updates || typeof updates !== "object") {
+    if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
       throw new Error("Invalid updates");
+    }
+    const immutableKeys = ["id", "projectId", "createdAt"] as const;
+    for (const key of immutableKeys) {
+      if (key in updates) {
+        throw new Error(`Cannot update immutable field: ${key}`);
+      }
+    }
+    const patch = updates as Record<string, unknown>;
+    if ("terminals" in patch && !Array.isArray(patch.terminals)) {
+      throw new Error("Invalid updates: terminals must be an array");
     }
     return projectStore.updateGlobalRecipe(recipeId, updates);
   };
