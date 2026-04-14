@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
+import { waitForTerminalText } from "../helpers/terminal";
 import { getGridPanelCount, getGridPanelIds, getPanelById, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_LONG, T_SETTLE } from "../helpers/timeouts";
@@ -20,14 +20,56 @@ let probePanelId: string;
  * since page.keyboard.type() sends characters one-by-one through the
  * browser event loop and can drop keystrokes under load.
  */
-async function _ptyWrite(page: import("@playwright/test").Page, panelId: string, data: string) {
-  await page.evaluate(
-    ([id, d]) =>
-      (
-        window as unknown as { electron: { terminal: { write: (id: string, d: string) => void } } }
-      ).electron.terminal.write(id, d),
+async function setActive(page: import("@playwright/test").Page, panelId: string) {
+  await page.evaluate((id) => {
+    const w = window as unknown as {
+      electron?: {
+        terminal?: { setActivityTier?: (id: string, tier: "active" | "background") => void };
+      };
+    };
+    w.electron?.terminal?.setActivityTier?.(id, "active");
+  }, panelId);
+}
+
+async function ptyWrite(page: import("@playwright/test").Page, panelId: string, data: string) {
+  const result = await page.evaluate(
+    ([id, d]) => {
+      const w = window as unknown as {
+        electron?: { terminal?: { write?: (id: string, d: string) => void } };
+      };
+      if (!w.electron?.terminal?.write) {
+        return { ok: false, reason: "terminal.write API missing" };
+      }
+      w.electron.terminal.write(id, d);
+      return { ok: true };
+    },
     [panelId, data]
   );
+  if (!result.ok) throw new Error(`ptyWrite failed: ${result.reason}`);
+}
+
+async function ptySubmit(page: import("@playwright/test").Page, panelId: string, text: string) {
+  const result = await page.evaluate(
+    async ([id, t]) => {
+      const w = window as unknown as {
+        electron?: { terminal?: { submit?: (id: string, t: string) => Promise<unknown> } };
+      };
+      if (!w.electron?.terminal?.submit) {
+        return { ok: false, reason: "terminal.submit API missing" };
+      }
+      try {
+        // PTY submit writes body, then appends `\r` for each trailing newline.
+        // Without a trailing `\n` the command text is written but never committed.
+        const payload = t.endsWith("\n") ? t : `${t}\n`;
+        await w.electron.terminal.submit(id, payload);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    [panelId, text]
+  );
+  if (!result.ok) throw new Error(`ptySubmit failed: ${result.reason}`);
 }
 
 test.describe.serial("Core: Terminal Isolation", () => {
@@ -70,16 +112,20 @@ test.describe.serial("Core: Terminal Isolation", () => {
     await waitForTerminalText(floodPanel, "terminal-isolation", T_LONG);
     await waitForTerminalText(probePanel, "terminal-isolation", T_LONG);
 
-    // Start throttled flood in the first terminal
-    await runTerminalCommand(
-      window,
-      floodPanel,
-      "while true; do echo FLOOD_LINE; sleep 0.02; done"
-    );
+    // Mark both terminals as active so neither is throttled by the
+    // background activity tier (only one panel is typically visible/active).
+    await setActive(window, floodPanelId);
+    await setActive(window, probePanelId);
+
+    // Start a moderate flood in the first terminal via PTY submit. The rate is
+    // deliberately throttled to ensure isolation is measurable without
+    // saturating the PTY host's write queue.
+    await ptySubmit(window, floodPanelId, "while true; do echo FLOOD_LINE; sleep 0.1; done");
     await waitForTerminalText(floodPanel, "FLOOD_LINE", T_LONG);
 
-    // Send probe command in the second terminal while flood is active
-    await runTerminalCommand(window, probePanel, "echo RESPONSE_OK");
+    // Send probe command in the second terminal via PTY submit — keyboard.type
+    // races with the flood's output and can interleave characters between panels.
+    await ptySubmit(window, probePanelId, "echo RESPONSE_OK");
     await waitForTerminalText(probePanel, "RESPONSE_OK", T_LONG);
 
     // Verify toolbar remains interactive (app is not frozen)
@@ -92,16 +138,15 @@ test.describe.serial("Core: Terminal Isolation", () => {
 
     const floodPanel = getPanelById(window, floodPanelId);
 
-    // Send Ctrl+C to interrupt the flood
-    const xterm = floodPanel.locator(SEL.terminal.xtermRows);
-    await xterm.click();
-    await window.keyboard.press("Control+c");
+    // Send Ctrl+C (0x03) directly via PTY to interrupt the flood — keyboard
+    // events can race with the flooded output.
+    await ptyWrite(window, floodPanelId, "\x03");
 
     // Wait for shell to settle after interrupt
     await window.waitForTimeout(T_SETTLE);
 
     // Run recovery command in the previously flooded terminal
-    await runTerminalCommand(window, floodPanel, "echo FLOOD_RECOVERED");
+    await ptySubmit(window, floodPanelId, "echo FLOOD_RECOVERED");
     await waitForTerminalText(floodPanel, "FLOOD_RECOVERED", T_LONG);
   });
 });

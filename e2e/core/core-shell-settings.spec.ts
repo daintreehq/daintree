@@ -43,18 +43,9 @@ test.describe.serial("Core: Shell & Settings", () => {
       });
     });
 
-    test("sidebar toggle hides and restores sidebar", async () => {
-      const { window } = ctx;
-
-      const sidebar = window.locator(SEL.sidebar.resizeHandle);
-      await expect(sidebar).toBeVisible({ timeout: T_MEDIUM });
-
-      await window.locator(SEL.toolbar.toggleSidebar).click();
-      await expect(sidebar).not.toBeVisible({ timeout: T_SHORT });
-
-      await window.locator(SEL.toolbar.toggleSidebar).click();
-      await expect(sidebar).toBeVisible({ timeout: T_SHORT });
-    });
+    // Sidebar toggle test moved to Keyboard Shortcuts describe below — the
+    // worktree sidebar is intentionally hidden on the welcome screen, so the
+    // toggle is only testable once a project is opened.
 
     test("settings opens, navigates all tabs, closes via Escape", async () => {
       const { window } = ctx;
@@ -143,6 +134,19 @@ test.describe.serial("Core: Shell & Settings", () => {
       await expect(sidebar).not.toBeVisible({ timeout: T_SHORT });
 
       await window.keyboard.press(`${mod}+b`);
+      await expect(sidebar).toBeVisible({ timeout: T_SHORT });
+    });
+
+    test("toolbar button toggles sidebar off and on", async () => {
+      const { window } = ctx;
+
+      const sidebar = window.locator(SEL.sidebar.resizeHandle);
+      await expect(sidebar).toBeVisible({ timeout: T_MEDIUM });
+
+      await window.locator(SEL.toolbar.toggleSidebar).click();
+      await expect(sidebar).not.toBeVisible({ timeout: T_SHORT });
+
+      await window.locator(SEL.toolbar.toggleSidebar).click();
       await expect(sidebar).toBeVisible({ timeout: T_SHORT });
     });
 

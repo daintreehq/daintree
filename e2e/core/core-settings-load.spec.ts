@@ -311,8 +311,10 @@ test.describe.serial("Core: Settings Pages Load", () => {
       timeout: T_SHORT,
     });
 
-    // Add Variable button should be visible
-    await expect(window.locator("button", { hasText: "Add Variable" })).toBeVisible({
+    // Add Variable button should be visible. Two Environment Variables editors
+    // can render (one under Environment tab, one under Variables tab); check
+    // that at least one Add Variable button is present.
+    await expect(window.getByRole("button", { name: "Add Variable" }).first()).toBeVisible({
       timeout: T_SHORT,
     });
 
