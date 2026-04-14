@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   getAgentIds,
   getAgentConfig,
@@ -11,6 +11,8 @@ import {
   isUserDefinedAgent,
   getAgentModelConfig,
   getAgentDisplayTitle,
+  getAgentFlavor,
+  setAgentFlavors,
   ASSISTANT_FAST_MODELS,
   type AgentConfig,
 } from "../agentRegistry.js";
@@ -580,6 +582,50 @@ describe("getAgentDisplayTitle", () => {
 
   it("returns plain agent name for agent without models", () => {
     expect(getAgentDisplayTitle("cursor", "some-model")).toBe("Cursor");
+  });
+});
+
+describe("getAgentFlavor", () => {
+  afterEach(() => {
+    setAgentFlavors("claude", []);
+  });
+
+  it("returns undefined when agent has no flavors", () => {
+    expect(getAgentFlavor("claude")).toBeUndefined();
+  });
+
+  it("returns first flavor when no flavorId specified", () => {
+    setAgentFlavors("claude", [
+      { id: "vanilla", name: "Vanilla" },
+      { id: "ccr-deep", name: "CCR DeepSeek" },
+    ]);
+    const flavor = getAgentFlavor("claude");
+    expect(flavor?.id).toBe("vanilla");
+  });
+
+  it("returns flavor matching flavorId", () => {
+    setAgentFlavors("claude", [
+      { id: "vanilla", name: "Vanilla" },
+      { id: "ccr-deep", name: "CCR DeepSeek" },
+    ]);
+    const flavor = getAgentFlavor("claude", "ccr-deep");
+    expect(flavor?.name).toBe("CCR DeepSeek");
+  });
+
+  it("returns defaultFlavorId flavor when set", () => {
+    setAgentFlavors("claude", [
+      { id: "vanilla", name: "Vanilla" },
+      { id: "ccr-deep", name: "CCR DeepSeek" },
+    ]);
+    const config = getEffectiveAgentConfig("claude");
+    config!.defaultFlavorId = "ccr-deep";
+    const flavor = getAgentFlavor("claude");
+    expect(flavor?.id).toBe("ccr-deep");
+    delete config!.defaultFlavorId;
+  });
+
+  it("returns undefined for unknown agent", () => {
+    expect(getAgentFlavor("nonexistent-agent")).toBeUndefined();
   });
 });
 

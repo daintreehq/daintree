@@ -136,6 +136,14 @@ export interface AgentAuthCheck {
   fallback?: "installed" | "ready";
 }
 
+export interface AgentFlavor {
+  id: string;
+  name: string;
+  description?: string;
+  env?: Record<string, string>;
+  args?: string[];
+}
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -279,6 +287,17 @@ export interface AgentConfig {
    * launch routing via `wsl.exe` is out of scope for the detection service.
    */
   supportsWsl?: boolean;
+  /**
+   * Available flavors for this agent — variants sharing the same base CLI
+   * but differing in env overrides, args, or routing (e.g. CCR-routed models).
+   * Populated at runtime by services like CcrConfigService.
+   */
+  flavors?: AgentFlavor[];
+  /**
+   * ID of the flavor to use when none is explicitly selected.
+   * If omitted, the first flavor in the array is the default.
+   */
+  defaultFlavorId?: string;
 }
 
 export const AGENT_REGISTRY: Record<string, AgentConfig> = {
@@ -1389,4 +1408,22 @@ export function getAgentDisplayTitle(agentId: string, modelId?: string): string 
   if (!modelId) return baseName;
   const model = config?.models?.find((m) => m.id === modelId);
   return model ? `${baseName} (${model.shortLabel})` : baseName;
+}
+
+export function getAgentFlavor(agentId: string, flavorId?: string): AgentFlavor | undefined {
+  const config = getEffectiveAgentConfig(agentId);
+  if (!config?.flavors?.length) return undefined;
+  if (!flavorId) {
+    const defaultId = config.defaultFlavorId;
+    if (defaultId) return config.flavors.find((f) => f.id === defaultId);
+    return config.flavors[0];
+  }
+  return config.flavors.find((f) => f.id === flavorId);
+}
+
+export function setAgentFlavors(agentId: string, flavors: AgentFlavor[]): void {
+  const config = AGENT_REGISTRY[agentId];
+  if (config) {
+    (config as { flavors?: AgentFlavor[] }).flavors = flavors;
+  }
 }
