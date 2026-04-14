@@ -10,7 +10,6 @@ import {
   navigateToAgentSettings,
   addCustomFlavor,
 } from "../helpers/flavors";
-import { openSettings } from "../helpers/panels";
 
 let ctx: AppContext;
 

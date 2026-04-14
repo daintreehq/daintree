@@ -222,7 +222,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       const options: AddPanelOptions = isAgent
         ? {
             kind: "agent",
-            type: agentId as any,
+            type: agentId as import("@shared/types/panel").TerminalType,
             agentId,
             command: command as string,
             title: flavorTitle,

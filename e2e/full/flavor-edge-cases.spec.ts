@@ -95,7 +95,7 @@ test.describe.serial("Flavors: Edge Cases & Resilience (97–100)", () => {
   test("100. Corrupt customFlavors data does not crash settings page", async () => {
     try {
       await ctx.window.evaluate(() => {
-        const stores = Object.keys(window).filter(
+        const _stores = Object.keys(window).filter(
           (k) => k.startsWith("__CANOPY") || k.includes("store")
         );
         const event = new CustomEvent("flavor-test-inject", {

@@ -4,7 +4,6 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
-import { openSettings, openTerminal } from "../helpers/panels";
 import {
   writeCcrConfig,
   removeCcrConfig,

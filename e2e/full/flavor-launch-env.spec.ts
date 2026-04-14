@@ -4,12 +4,10 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
-import { openSettings } from "../helpers/panels";
 import {
   writeCcrConfig,
   removeCcrConfig,
   navigateToAgentSettings,
-  addCustomFlavor,
   getFlavorRowByName,
 } from "../helpers/flavors";
 
@@ -75,7 +73,6 @@ test.describe.serial("Flavors: Launch Env Overrides (63–70)", () => {
     await expect(select).toBeVisible({ timeout: T_SHORT });
 
     const options = select.locator("option");
-    const optionTexts = await options.allTextContents();
     const vanillaOption = options.locator(SEL.flavor.vanillaOption);
     if ((await vanillaOption.count()) > 0) {
       await select.selectOption({ value: "" });

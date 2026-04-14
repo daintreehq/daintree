@@ -3,8 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
-import { openSettings } from "../helpers/panels";
+import { T_SHORT, T_SETTLE } from "../helpers/timeouts";
 import {
   writeCcrConfig,
   removeCcrConfig,
@@ -135,7 +134,7 @@ test.describe.serial("Flavors: CCR Discovery & Auto-Config (1–12)", () => {
   });
 
   test("7. Invalid CCR JSON does not crash the app", async () => {
-    writeCcrConfig([{ id: "before" }] as any);
+    writeCcrConfig([{ id: "before" }] as import("../helpers/flavors").CcrModelEntry[]);
     const { writeFileSync } = await import("fs");
     const { join } = await import("path");
     const { homedir } = await import("os");

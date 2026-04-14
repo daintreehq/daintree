@@ -3,7 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
-import { T_MEDIUM, T_SHORT } from "../helpers/timeouts";
+import { T_MEDIUM } from "../helpers/timeouts";
 import { writeCcrConfig, removeCcrConfig, navigateToAgentSettings } from "../helpers/flavors";
 
 let ctx: AppContext;
