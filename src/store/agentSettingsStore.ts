@@ -60,7 +60,8 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       try {
         set({ isLoading: true, error: null });
 
-        const settings = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
+        const raw = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
+        const settings = normalizeAgentSelection(raw);
         set({ settings, isLoading: false, isInitialized: true });
       } catch (e) {
         set({
@@ -77,7 +78,8 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
   refresh: async () => {
     set({ error: null });
     try {
-      const settings = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
+      const raw = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
+      const settings = normalizeAgentSelection(raw);
       set({ settings });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : "Failed to refresh agent settings" });
@@ -88,7 +90,8 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
   updateAgent: async (agentId: string, updates: Partial<AgentSettingsEntry>) => {
     set({ error: null });
     try {
-      const settings = await agentSettingsClient.set(agentId, updates);
+      const raw = await agentSettingsClient.set(agentId, updates);
+      const settings = normalizeAgentSelection(raw);
       set({ settings });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : `Failed to update ${agentId} settings` });
@@ -103,7 +106,8 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
   reset: async (agentId?: string) => {
     set({ error: null });
     try {
-      const settings = await agentSettingsClient.reset(agentId);
+      const raw = await agentSettingsClient.reset(agentId);
+      const settings = normalizeAgentSelection(raw);
       set({ settings });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : "Failed to reset agent settings" });

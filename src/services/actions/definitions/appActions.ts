@@ -21,6 +21,30 @@ async function refreshRendererConfig(): Promise<void> {
   actionService.dispatch("cliAvailability.refresh", undefined, { source: "agent" });
 }
 
+interface AppConfigReloadListenerState {
+  refresh: (() => Promise<void>) | null;
+  subscribed: boolean;
+}
+
+const APP_CONFIG_RELOAD_LISTENER_STATE_KEY = "__canopyAppConfigReloadListenerState";
+
+function getAppConfigReloadListenerState(): AppConfigReloadListenerState {
+  const target = globalThis as typeof globalThis & {
+    [APP_CONFIG_RELOAD_LISTENER_STATE_KEY]?: AppConfigReloadListenerState;
+  };
+  const existing = target[APP_CONFIG_RELOAD_LISTENER_STATE_KEY];
+  if (existing) {
+    return existing;
+  }
+
+  const created: AppConfigReloadListenerState = {
+    refresh: null,
+    subscribed: false,
+  };
+  target[APP_CONFIG_RELOAD_LISTENER_STATE_KEY] = created;
+  return created;
+}
+
 export function registerAppActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("app.newWindow", () => ({
     id: "app.newWindow",
@@ -82,16 +106,24 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
 
   // Subscribe to config reloaded events from main process.
   // Fires after both action-triggered and menu-triggered reloads.
+  // Dedup across repeated register calls and module reloads (tests/HMR)
+  // while keeping the active refresh implementation hot-swappable.
+  const listenerState = getAppConfigReloadListenerState();
+  listenerState.refresh = async () => {
+    try {
+      await refreshRendererConfig();
+    } catch (e) {
+      console.error("[app.reloadConfig] Failed to refresh renderer config:", e);
+    }
+  };
   if (
+    !listenerState.subscribed &&
     typeof window !== "undefined" &&
     typeof window.electron?.app?.onConfigReloaded === "function"
   ) {
+    listenerState.subscribed = true;
     window.electron.app.onConfigReloaded(async () => {
-      try {
-        await refreshRendererConfig();
-      } catch (e) {
-        console.error("[app.reloadConfig] Failed to refresh renderer config:", e);
-      }
+      await listenerState.refresh?.();
     });
   }
 

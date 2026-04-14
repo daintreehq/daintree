@@ -121,6 +121,7 @@ export class DevPreviewSessionService {
   private readonly sessions = new Map<string, DevPreviewSession>();
   private readonly terminalToSession = new Map<string, string>();
   private readonly locks = new Map<string, Promise<void>>();
+  private disposed = false;
   private readonly onDataListener: (id: string, data: string | Uint8Array) => void;
   private readonly onExitListener: (id: string, exitCode: number) => void;
 
@@ -135,6 +136,7 @@ export class DevPreviewSessionService {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.ptyClient.off("data", this.onDataListener);
     this.ptyClient.off("exit", this.onExitListener);
     for (const session of this.sessions.values()) {
@@ -482,6 +484,7 @@ export class DevPreviewSessionService {
       >
     >
   ): void {
+    if (this.disposed) return;
     if (updates.status !== undefined) session.status = updates.status;
     if (updates.url !== undefined) session.url = updates.url;
     if (updates.error !== undefined) session.error = updates.error;
@@ -746,6 +749,7 @@ export class DevPreviewSessionService {
   }
 
   private handleData(id: string, data: string | Uint8Array): void {
+    if (this.disposed) return;
     const sessionKey = this.terminalToSession.get(id);
     if (!sessionKey) return;
     const session = this.sessions.get(sessionKey);
@@ -797,6 +801,7 @@ export class DevPreviewSessionService {
   }
 
   private handleExit(id: string, exitCode: number): void {
+    if (this.disposed) return;
     const sessionKey = this.terminalToSession.get(id);
     if (!sessionKey) return;
     const session = this.sessions.get(sessionKey);

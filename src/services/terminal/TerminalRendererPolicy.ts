@@ -12,6 +12,8 @@ export interface RendererPolicyDeps {
 
 export class TerminalRendererPolicy {
   private lastBackendTier = new Map<string, "active" | "background">();
+  private knownTerminalIds = new Set<string>();
+  private wakeGeneration = new Map<string, number>();
   private deps: RendererPolicyDeps;
 
   constructor(deps: RendererPolicyDeps) {
@@ -23,6 +25,7 @@ export class TerminalRendererPolicy {
   }
 
   setBackendTier(id: string, tier: "active" | "background"): void {
+    this.knownTerminalIds.add(id);
     const prev = this.lastBackendTier.get(id);
     if (prev === tier) {
       return;
@@ -32,6 +35,7 @@ export class TerminalRendererPolicy {
   }
 
   applyRendererPolicy(id: string, tier: TerminalRefreshTier): void {
+    this.knownTerminalIds.add(id);
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 
@@ -102,11 +106,14 @@ export class TerminalRendererPolicy {
 
     if (backendTier === "active" && prevBackendTier !== "active") {
       if (managed.needsWake !== false) {
+        const wakeGeneration = this.bumpWakeGeneration(id);
+        const wakeTarget = managed;
         void this.deps
           .wakeAndRestore(id)
           .then((ok) => {
+            if (this.wakeGeneration.get(id) !== wakeGeneration) return;
             const current = this.deps.getInstance(id);
-            if (!current) return;
+            if (!current || current !== wakeTarget) return;
             current.needsWake = ok ? false : true;
 
             current.terminal.refresh(0, current.terminal.rows - 1);
@@ -116,8 +123,9 @@ export class TerminalRendererPolicy {
             }
           })
           .catch(() => {
+            if (this.wakeGeneration.get(id) !== wakeGeneration) return;
             const current = this.deps.getInstance(id);
-            if (!current) return;
+            if (!current || current !== wakeTarget) return;
             current.needsWake = true;
 
             // Force a refresh on failure as a recovery mechanism.
@@ -136,7 +144,10 @@ export class TerminalRendererPolicy {
   }
 
   clearTierState(id: string): void {
+    this.clearManagedTierState(id);
     this.lastBackendTier.delete(id);
+    this.knownTerminalIds.delete(id);
+    this.wakeGeneration.delete(id);
   }
 
   /**
@@ -145,6 +156,7 @@ export class TerminalRendererPolicy {
    * allowing proper wake behavior when transitioning back to active.
    */
   initializeBackendTier(id: string, tier: "active" | "background"): void {
+    this.knownTerminalIds.add(id);
     // Validate tier value for defensive programming
     if (tier !== "active" && tier !== "background") {
       console.warn(
@@ -165,6 +177,28 @@ export class TerminalRendererPolicy {
   }
 
   dispose(): void {
+    for (const id of this.knownTerminalIds) {
+      this.clearManagedTierState(id);
+    }
+    this.knownTerminalIds.clear();
     this.lastBackendTier.clear();
+    this.wakeGeneration.clear();
+  }
+
+  private clearManagedTierState(id: string): void {
+    this.bumpWakeGeneration(id);
+    const managed = this.deps.getInstance(id);
+    if (!managed) return;
+    if (managed.tierChangeTimer !== undefined) {
+      clearTimeout(managed.tierChangeTimer);
+      managed.tierChangeTimer = undefined;
+    }
+    managed.pendingTier = undefined;
+  }
+
+  private bumpWakeGeneration(id: string): number {
+    const next = (this.wakeGeneration.get(id) ?? 0) + 1;
+    this.wakeGeneration.set(id, next);
+    return next;
   }
 }

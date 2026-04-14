@@ -97,7 +97,15 @@ export class ProjectFileStore {
     if (index === -1) {
       throw new Error(`Recipe ${recipeId} not found in project ${projectId}`);
     }
-    recipes[index] = { ...recipes[index], ...updates };
+    // Defense-in-depth: strip immutable fields even if a caller bypasses
+    // the compile-time Omit.
+    const {
+      id: _id,
+      projectId: _pid,
+      createdAt: _ca,
+      ...safeUpdates
+    } = updates as Record<string, unknown>;
+    recipes[index] = { ...recipes[index], ...safeUpdates };
     await this.saveRecipes(projectId, recipes);
   }
 

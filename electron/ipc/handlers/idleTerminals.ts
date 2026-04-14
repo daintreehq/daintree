@@ -18,7 +18,7 @@ export function registerIdleTerminalHandlers(_deps: HandlerDependencies): () => 
     _event: Electron.IpcMainInvokeEvent,
     config: Partial<IdleTerminalNotifyConfig>
   ): Promise<IdleTerminalNotifyConfig> => {
-    if (typeof config !== "object" || config === null) {
+    if (typeof config !== "object" || config === null || Array.isArray(config)) {
       throw new Error("Invalid config object");
     }
     if (config.enabled !== undefined && typeof config.enabled !== "boolean") {
@@ -45,7 +45,7 @@ export function registerIdleTerminalHandlers(_deps: HandlerDependencies): () => 
     _event: Electron.IpcMainInvokeEvent,
     projectId: unknown
   ): Promise<void> => {
-    if (typeof projectId !== "string" || projectId.length === 0) {
+    if (typeof projectId !== "string" || projectId.trim() === "") {
       throw new Error("projectId must be a non-empty string");
     }
     await service.closeProject(projectId);
@@ -57,7 +57,7 @@ export function registerIdleTerminalHandlers(_deps: HandlerDependencies): () => 
     _event: Electron.IpcMainInvokeEvent,
     projectId: unknown
   ): Promise<void> => {
-    if (typeof projectId !== "string" || projectId.length === 0) {
+    if (typeof projectId !== "string" || projectId.trim() === "") {
       throw new Error("projectId must be a non-empty string");
     }
     service.dismissProject(projectId);

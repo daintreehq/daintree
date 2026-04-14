@@ -59,12 +59,25 @@ export function registerEditorConfigHandlers(_deps: HandlerDependencies): () => 
         throw new Error("Invalid customTemplate");
       }
     }
+
+    const isCustom = editorObj.id === "custom";
+    if (isCustom) {
+      const cmd = typeof editorObj.customCommand === "string" ? editorObj.customCommand.trim() : "";
+      if (!cmd) {
+        throw new Error("Invalid customCommand: must be non-empty for custom editor");
+      }
+    }
+
     const editorConfig = {
       id: editorObj.id as import("../../../shared/types/editor.js").KnownEditorId,
       customCommand:
-        typeof editorObj.customCommand === "string" ? editorObj.customCommand : undefined,
+        isCustom && typeof editorObj.customCommand === "string"
+          ? editorObj.customCommand
+          : undefined,
       customTemplate:
-        typeof editorObj.customTemplate === "string" ? editorObj.customTemplate : undefined,
+        isCustom && typeof editorObj.customTemplate === "string"
+          ? editorObj.customTemplate
+          : undefined,
     };
 
     const pid = typeof projectId === "string" ? projectId : null;

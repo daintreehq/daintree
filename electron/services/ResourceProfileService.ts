@@ -47,6 +47,7 @@ export class ResourceProfileService {
 
   start(): void {
     if (this.interval) return;
+    this.disposed = false;
 
     logInfo("resource-profile-service-started", { profile: this.currentProfile });
 
@@ -59,11 +60,13 @@ export class ResourceProfileService {
   }
 
   private refreshWorktreeCount(): void {
+    if (this.disposed) return;
     const workspaceClient = this.deps.getWorkspaceClient();
     if (!workspaceClient) return;
     workspaceClient
       .getAllStatesAsync()
       .then((states) => {
+        if (this.disposed) return;
         this.cachedWorktreeCount = states.length;
       })
       .catch(() => {

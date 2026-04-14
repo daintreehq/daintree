@@ -648,8 +648,13 @@ export class WorkspaceService {
 
       await this.syncMonitors(worktreeList, this.activeWorktreeId, this.mainBranch);
 
-      const createdWorktree = worktreeList.find((wt) => wt.branch === newBranch);
-      const canonicalWorktreeId = createdWorktree?.id || path;
+      const createdWorktree = worktreeList.find(
+        (wt) => wt.path === absolutePath || wt.id === absolutePath || wt.branch === newBranch
+      );
+      if (!createdWorktree) {
+        throw new Error(`Worktree not found after creation: ${absolutePath}`);
+      }
+      const canonicalWorktreeId = createdWorktree.id;
 
       this.sendEvent({
         type: "create-worktree-result",

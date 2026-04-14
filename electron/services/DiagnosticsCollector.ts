@@ -12,6 +12,7 @@ const execFileAsync = promisify(execFile);
 
 const SECTION_TIMEOUT_MS = 5_000;
 const GPU_TIMEOUT_MS = 2_000;
+const MAX_DIAGNOSTIC_STRING_LENGTH = 16_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
@@ -44,6 +45,38 @@ function redactDeep(value: unknown): unknown {
       } else {
         result[key] = redactDeep(val);
       }
+    }
+    return result;
+  }
+
+  return value;
+}
+
+function truncateDiagnosticString(value: string): string {
+  if (value.length <= MAX_DIAGNOSTIC_STRING_LENGTH) {
+    return value;
+  }
+
+  const truncatedLength = value.length - MAX_DIAGNOSTIC_STRING_LENGTH;
+  return (
+    value.slice(0, MAX_DIAGNOSTIC_STRING_LENGTH) +
+    `… [truncated ${truncatedLength.toString()} chars]`
+  );
+}
+
+function truncateDeep(value: unknown): unknown {
+  if (typeof value === "string") {
+    return truncateDiagnosticString(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(truncateDeep);
+  }
+
+  if (value && typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      result[key] = truncateDeep(entry);
     }
     return result;
   }
@@ -333,8 +366,8 @@ async function collectLogs() {
       totalEntries: entries.length,
       recentEntries: recent.map((e) => ({
         ...e,
-        message: sanitizePath(e.message),
-        context: e.context ? redactDeep(e.context) : undefined,
+        message: truncateDiagnosticString(sanitizePath(e.message)),
+        context: e.context ? truncateDeep(redactDeep(e.context)) : undefined,
       })),
     };
   } catch {

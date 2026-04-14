@@ -35,6 +35,7 @@ interface PendingNotification {
   terminalId?: string;
   agentId?: string;
   triggerSound: boolean;
+  soundFile?: string;
 }
 
 interface BurstWaitingEntry {
@@ -311,10 +312,22 @@ class AgentNotificationService {
     const items = this.waitingBurstBuffer.splice(0);
     if (items.length === 0) return;
 
-    const first = items[0];
+    const dedupedItems: BurstWaitingEntry[] = [];
+    const seen = new Set<string>();
+    for (const [index, item] of items.entries()) {
+      const key =
+        (item.terminalId ?? item.agentId ?? item.worktreeId)
+          ? `${item.terminalId ?? ""}|${item.agentId ?? ""}|${item.worktreeId ?? ""}`
+          : `unknown:${index}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      dedupedItems.push(item);
+    }
+
+    const first = dedupedItems[0];
     this.playNotificationSound(first.soundEnabled, first.soundFile);
 
-    if (items.length === 1) {
+    if (dedupedItems.length === 1) {
       const label = this.getLabel(first.agentId, first.worktreeId);
       const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
       notificationService.showWatchNotification(
@@ -328,7 +341,7 @@ class AgentNotificationService {
       const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
       notificationService.showWatchNotification(
         "Agents waiting",
-        `${items.length} agents waiting for input`,
+        `${dedupedItems.length} agents waiting for input`,
         context,
         CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
         true
@@ -499,10 +512,7 @@ class AgentNotificationService {
       return;
     }
 
-    this.notificationQueue.push({ ...notification });
-    if (soundFile) {
-      this.playNotificationSound(notification.triggerSound, soundFile);
-    }
+    this.notificationQueue.push({ ...notification, soundFile });
 
     if (!this.staggerTimer) {
       this.drainQueue();
@@ -517,6 +527,10 @@ class AgentNotificationService {
     if (settings.enabled === false) {
       this.notificationQueue = [];
       return;
+    }
+
+    if (item.soundFile) {
+      this.playNotificationSound(item.triggerSound, item.soundFile);
     }
 
     const context = this.makeContext(item.terminalId, item.agentId, item.worktreeId);

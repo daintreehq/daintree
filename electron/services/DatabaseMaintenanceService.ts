@@ -107,7 +107,7 @@ class DatabaseMaintenanceService {
   private async runBackup(): Promise<void> {
     if (this.backupPromise && !this.disposed) {
       // Another backup is already in flight from a tick — skip
-      return;
+      return this.backupPromise;
     }
 
     const sqlite = getSharedSqlite();

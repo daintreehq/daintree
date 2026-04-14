@@ -75,7 +75,12 @@ export class FileTreeService {
           continue;
         }
 
-        const fileStat = await fs.lstat(absolutePath);
+        let fileStat: Awaited<ReturnType<typeof fs.lstat>>;
+        try {
+          fileStat = await fs.lstat(absolutePath);
+        } catch {
+          continue;
+        }
         const isSymlink = fileStat.isSymbolicLink();
 
         if (isSymlink) {

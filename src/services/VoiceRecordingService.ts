@@ -100,6 +100,7 @@ function resolveQueuedCorrectionStart(draft: string, rawText: string): number {
 class VoiceRecordingService {
   private initialized = false;
   private generation = 0;
+  private startRequestId = 0;
   private audioContext: AudioContext | null = null;
   private workletNode: AudioWorkletNode | null = null;
   private keepAliveOscillator: OscillatorNode | null = null;
@@ -109,6 +110,7 @@ class VoiceRecordingService {
   private sessionStartedAt = 0;
   private unsubscribers: Array<() => void> = [];
   private isStoppingSession = false;
+  private stopPromise: Promise<void> | null = null;
   private levelRaf: number | null = null;
   private pendingLevel = 0;
 
@@ -471,18 +473,22 @@ class VoiceRecordingService {
 
   async start(target: VoiceRecordingTarget): Promise<void> {
     this.initialize();
+    const startRequestId = ++this.startRequestId;
     logDebug(`${LOG_PREFIX} start() called`, {
       panelId: target.panelId,
       generation: this.generation,
+      startRequestId,
     });
 
     const isConfigured = await this.refreshConfiguration().catch(() => false);
-    if (!isConfigured) {
+    if (!isConfigured || this.isStartRequestStale(startRequestId)) {
       logWarn(`${LOG_PREFIX} Not configured, aborting start`);
-      useVoiceRecordingStore.getState().setError("Voice input is not configured.");
-      useVoiceRecordingStore
-        .getState()
-        .announce("Voice dictation is not configured. Open Voice settings to continue.");
+      if (!this.isStartRequestStale(startRequestId)) {
+        useVoiceRecordingStore.getState().setError("Voice input is not configured.");
+        useVoiceRecordingStore
+          .getState()
+          .announce("Voice dictation is not configured. Open Voice settings to continue.");
+      }
       return;
     }
 
@@ -490,6 +496,9 @@ class VoiceRecordingService {
     // from the main process before getUserMedia will succeed in the renderer).
     logDebug(`${LOG_PREFIX} Checking microphone permission`);
     const micStatus = await window.electron.voiceInput.checkMicPermission();
+    if (this.isStartRequestStale(startRequestId)) {
+      return;
+    }
     logDebug(`${LOG_PREFIX} Microphone permission status`, { micStatus });
 
     if (micStatus === "denied" || micStatus === "restricted") {
@@ -504,6 +513,9 @@ class VoiceRecordingService {
     if (micStatus === "not-determined") {
       logDebug(`${LOG_PREFIX} Requesting OS microphone permission`);
       const granted = await window.electron.voiceInput.requestMicPermission();
+      if (this.isStartRequestStale(startRequestId)) {
+        return;
+      }
       logDebug(`${LOG_PREFIX} OS microphone permission result`, { granted });
       if (!granted) {
         const message = "Microphone permission denied. Enable it in System Settings and try again.";
@@ -535,9 +547,26 @@ class VoiceRecordingService {
       return;
     }
 
+    if (this.isStartRequestStale(startRequestId)) {
+      for (const track of stream.getTracks()) {
+        track.stop();
+      }
+      return;
+    }
+
     if (useVoiceRecordingStore.getState().activeTarget) {
       logDebug(`${LOG_PREFIX} Stopping existing session before starting new one`);
-      await this.stop(undefined, { preserveLiveText: true, announce: false });
+      await this.stop(undefined, {
+        preserveLiveText: true,
+        announce: false,
+        preservePendingStart: true,
+      });
+      if (this.isStartRequestStale(startRequestId)) {
+        for (const track of stream.getTracks()) {
+          track.stop();
+        }
+        return;
+      }
     }
 
     const generation = ++this.generation;
@@ -551,15 +580,25 @@ class VoiceRecordingService {
     logDebug(`${LOG_PREFIX} Creating AudioContext (24kHz) — eager capture`);
     const audioContext = new AudioContext({ sampleRate: 24000 });
     this.audioContext = audioContext;
+    const captureResources: {
+      keepAliveOscillator?: OscillatorNode | null;
+      keepAliveGain?: GainNode | null;
+      workletNode?: AudioWorkletNode | null;
+    } = {};
 
     if (audioContext.state === "suspended") {
       logDebug(`${LOG_PREFIX} AudioContext suspended, resuming`);
       await audioContext.resume();
     }
 
-    if (this.generation !== generation) {
+    if (this.generation !== generation || this.isStartRequestStale(startRequestId)) {
       logWarn(`${LOG_PREFIX} Generation mismatch after AudioContext setup`);
-      await this.cleanupAudioCapture();
+      await this.cleanupCaptureResources({
+        audioContext,
+        keepAliveGain: captureResources.keepAliveGain,
+        keepAliveOscillator: captureResources.keepAliveOscillator,
+        stream,
+      });
       return;
     }
 
@@ -573,6 +612,8 @@ class VoiceRecordingService {
     keepAliveOscillator.connect(keepAliveGain);
     keepAliveGain.connect(audioContext.destination);
     keepAliveOscillator.start();
+    captureResources.keepAliveGain = keepAliveGain;
+    captureResources.keepAliveOscillator = keepAliveOscillator;
     this.keepAliveOscillator = keepAliveOscillator;
     this.keepAliveGain = keepAliveGain;
 
@@ -581,7 +622,7 @@ class VoiceRecordingService {
       await audioContext.audioWorklet.addModule("/pcm-processor.js");
       logDebug(`${LOG_PREFIX} pcm-processor worklet loaded`);
     } catch (err) {
-      if (this.generation !== generation) return;
+      if (this.generation !== generation || this.isStartRequestStale(startRequestId)) return;
       logError(`${LOG_PREFIX} Failed to load pcm-processor worklet`, err);
       useVoiceRecordingStore.getState().setError("Failed to load the audio processor.");
       await this.stop(undefined, { nextStatus: "error", announce: false });
@@ -589,14 +630,20 @@ class VoiceRecordingService {
       return;
     }
 
-    if (this.generation !== generation) {
+    if (this.generation !== generation || this.isStartRequestStale(startRequestId)) {
       logWarn(`${LOG_PREFIX} Generation mismatch after worklet load`);
-      await this.cleanupAudioCapture();
+      await this.cleanupCaptureResources({
+        audioContext,
+        keepAliveGain: captureResources.keepAliveGain,
+        keepAliveOscillator: captureResources.keepAliveOscillator,
+        stream,
+      });
       return;
     }
 
     const source = audioContext.createMediaStreamSource(stream);
     const workletNode = new AudioWorkletNode(audioContext, "pcm-processor");
+    captureResources.workletNode = workletNode;
     this.workletNode = workletNode;
 
     let chunkCount = 0;
@@ -645,8 +692,15 @@ class VoiceRecordingService {
       error: !result.ok ? result.error : undefined,
     });
 
-    if (this.generation !== generation) {
+    if (this.generation !== generation || this.isStartRequestStale(startRequestId)) {
       logWarn(`${LOG_PREFIX} Generation mismatch after IPC start`);
+      await this.cleanupCaptureResources({
+        audioContext,
+        keepAliveGain: captureResources.keepAliveGain,
+        keepAliveOscillator: captureResources.keepAliveOscillator,
+        stream,
+        workletNode: captureResources.workletNode,
+      });
       return;
     }
 
@@ -659,7 +713,7 @@ class VoiceRecordingService {
       return;
     }
 
-    if (this.generation !== generation) {
+    if (this.generation !== generation || this.isStartRequestStale(startRequestId)) {
       logWarn(`${LOG_PREFIX} Generation mismatch after IPC start (late check)`);
       return;
     }
@@ -675,65 +729,84 @@ class VoiceRecordingService {
       preserveLiveText?: boolean;
       nextStatus?: "idle" | "error";
       announce?: boolean;
+      preservePendingStart?: boolean;
     } = {}
   ): Promise<void> {
-    this.initialize();
-    const { skipRemoteStop = false, preserveLiveText = true, nextStatus = "idle" } = options;
-    const shouldAnnounce = options.announce ?? true;
-
-    const storeState = useVoiceRecordingStore.getState();
-    const hasSession = storeState.activeTarget !== null || isActiveVoiceSession(storeState.status);
-
-    logDebug(`${LOG_PREFIX} stop() called`, {
-      announcement,
-      hasSession,
-      skipRemoteStop,
-      nextStatus,
-      currentStatus: storeState.status,
-      hasActiveTarget: !!storeState.activeTarget,
-    });
-
-    // Stop audio capture immediately — no new audio after this point.
-    // DON'T increment generation yet so in-flight worklet messages still
-    // get forwarded to the main process before the drain.
-    this.clearTimers();
-    await this.cleanupAudioCapture();
-    this.generation++;
-
-    if (!skipRemoteStop) {
-      // Graceful stop: the IPC handler drains pending transcriptions and flushes
-      // the paragraph buffer before resolving. Keep activeTarget alive so late
-      // transcription and correction events are still applied to the correct panel.
-      logDebug(`${LOG_PREFIX} Sending remote stop (graceful drain)`);
-      this.isStoppingSession = true;
-      useVoiceRecordingStore.getState().setStatus("finishing");
-      await window.electron.voiceInput.stop().catch(() => null);
+    if (this.stopPromise) {
+      await this.stopPromise;
+      return;
     }
 
-    if (hasSession) {
-      // Flush any remaining delta text (liveText) to the draft store before
-      // finishSession clears it — this handles the case where recording stops
-      // mid-utterance with un-committed delta text in the editor.
-      if (preserveLiveText) {
-        const currentTarget = useVoiceRecordingStore.getState().activeTarget;
-        if (currentTarget) {
-          const { panelId } = currentTarget;
-          const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
-          const remaining = buffer?.liveText?.trim();
-          if (remaining) {
-            useTerminalInputStore.getState().bumpVoiceDraftRevision();
+    this.stopPromise = (async () => {
+      this.initialize();
+      const { skipRemoteStop = false, preserveLiveText = true, nextStatus = "idle" } = options;
+      const shouldAnnounce = options.announce ?? true;
+
+      if (!options.preservePendingStart) {
+        this.startRequestId++;
+      }
+
+      const storeState = useVoiceRecordingStore.getState();
+      const hasSession =
+        storeState.activeTarget !== null || isActiveVoiceSession(storeState.status);
+
+      logDebug(`${LOG_PREFIX} stop() called`, {
+        announcement,
+        hasSession,
+        skipRemoteStop,
+        nextStatus,
+        currentStatus: storeState.status,
+        hasActiveTarget: !!storeState.activeTarget,
+      });
+
+      // Stop audio capture immediately — no new audio after this point.
+      // DON'T increment generation yet so in-flight worklet messages still
+      // get forwarded to the main process before the drain.
+      this.clearTimers();
+      await this.cleanupAudioCapture();
+      this.generation++;
+
+      if (!skipRemoteStop) {
+        // Graceful stop: the IPC handler drains pending transcriptions and flushes
+        // the paragraph buffer before resolving. Keep activeTarget alive so late
+        // transcription and correction events are still applied to the correct panel.
+        logDebug(`${LOG_PREFIX} Sending remote stop (graceful drain)`);
+        this.isStoppingSession = true;
+        useVoiceRecordingStore.getState().setStatus("finishing");
+        await window.electron.voiceInput.stop().catch(() => null);
+      }
+
+      if (hasSession) {
+        // Flush any remaining delta text (liveText) to the draft store before
+        // finishSession clears it — this handles the case where recording stops
+        // mid-utterance with un-committed delta text in the editor.
+        if (preserveLiveText) {
+          const currentTarget = useVoiceRecordingStore.getState().activeTarget;
+          if (currentTarget) {
+            const { panelId } = currentTarget;
+            const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
+            const remaining = buffer?.liveText?.trim();
+            if (remaining) {
+              useTerminalInputStore.getState().bumpVoiceDraftRevision();
+            }
           }
         }
+        useVoiceRecordingStore.getState().finishSession({ preserveLiveText, nextStatus });
+        if (shouldAnnounce) {
+          useVoiceRecordingStore.getState().announce(announcement);
+        }
+      } else if (nextStatus === "idle") {
+        useVoiceRecordingStore.getState().setStatus("idle");
       }
-      useVoiceRecordingStore.getState().finishSession({ preserveLiveText, nextStatus });
-      if (shouldAnnounce) {
-        useVoiceRecordingStore.getState().announce(announcement);
-      }
-    } else if (nextStatus === "idle") {
-      useVoiceRecordingStore.getState().setStatus("idle");
-    }
 
-    this.isStoppingSession = false;
+      this.isStoppingSession = false;
+    })();
+
+    try {
+      await this.stopPromise;
+    } finally {
+      this.stopPromise = null;
+    }
   }
 
   async toggleFocusedPanel(): Promise<void> {
@@ -856,6 +929,7 @@ class VoiceRecordingService {
   }
 
   destroy(): void {
+    this.startRequestId++;
     for (const unsub of this.unsubscribers) {
       unsub();
     }
@@ -864,38 +938,72 @@ class VoiceRecordingService {
   }
 
   private async cleanupAudioCapture(): Promise<void> {
-    if (this.levelRaf !== null) {
+    await this.cleanupCaptureResources({
+      audioContext: this.audioContext,
+      keepAliveGain: this.keepAliveGain,
+      keepAliveOscillator: this.keepAliveOscillator,
+      stream: this.stream,
+      workletNode: this.workletNode,
+    });
+  }
+
+  private isStartRequestStale(startRequestId: number): boolean {
+    return !this.initialized || startRequestId !== this.startRequestId;
+  }
+
+  private async cleanupCaptureResources(resources: {
+    audioContext?: AudioContext | null;
+    keepAliveGain?: GainNode | null;
+    keepAliveOscillator?: OscillatorNode | null;
+    stream?: MediaStream | null;
+    workletNode?: AudioWorkletNode | null;
+  }): Promise<void> {
+    if (
+      resources.workletNode &&
+      this.levelRaf !== null &&
+      this.workletNode === resources.workletNode
+    ) {
       cancelAnimationFrame(this.levelRaf);
       this.levelRaf = null;
     }
 
-    if (this.workletNode) {
-      this.workletNode.port.onmessage = null;
-      this.workletNode.disconnect();
-      this.workletNode = null;
+    if (resources.workletNode) {
+      resources.workletNode.port.onmessage = null;
+      resources.workletNode.disconnect();
+      if (this.workletNode === resources.workletNode) {
+        this.workletNode = null;
+      }
     }
 
-    if (this.keepAliveOscillator) {
-      this.keepAliveOscillator.stop();
-      this.keepAliveOscillator.disconnect();
-      this.keepAliveOscillator = null;
+    if (resources.keepAliveOscillator) {
+      resources.keepAliveOscillator.stop();
+      resources.keepAliveOscillator.disconnect();
+      if (this.keepAliveOscillator === resources.keepAliveOscillator) {
+        this.keepAliveOscillator = null;
+      }
     }
 
-    if (this.keepAliveGain) {
-      this.keepAliveGain.disconnect();
-      this.keepAliveGain = null;
+    if (resources.keepAliveGain) {
+      resources.keepAliveGain.disconnect();
+      if (this.keepAliveGain === resources.keepAliveGain) {
+        this.keepAliveGain = null;
+      }
     }
 
-    if (this.audioContext) {
-      await this.audioContext.close().catch(() => {});
-      this.audioContext = null;
+    if (resources.audioContext) {
+      await resources.audioContext.close().catch(() => {});
+      if (this.audioContext === resources.audioContext) {
+        this.audioContext = null;
+      }
     }
 
-    if (this.stream) {
-      for (const track of this.stream.getTracks()) {
+    if (resources.stream) {
+      for (const track of resources.stream.getTracks()) {
         track.stop();
       }
-      this.stream = null;
+      if (this.stream === resources.stream) {
+        this.stream = null;
+      }
     }
   }
 }

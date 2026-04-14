@@ -796,6 +796,19 @@ function parseGitHubError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const isTimeout = error instanceof Error && error.name === "TimeoutError";
 
+  if (
+    message === "GitHub token not configured. Set it in Settings." ||
+    message === "Invalid GitHub token. Please update in Settings." ||
+    message === "Token lacks required permissions. Required scopes: repo, read:org" ||
+    message === "Issue not found or you don't have access to this repository" ||
+    message.startsWith("Cannot assign user ") ||
+    message.startsWith("Assignment succeeded but user ") ||
+    message.startsWith("Invalid GitHub API response:") ||
+    message === "Cannot reach GitHub. Check your internet connection."
+  ) {
+    return message;
+  }
+
   if (message.includes("rate limit") || message.includes("API rate limit")) {
     return "GitHub rate limit exceeded. Try again in a few minutes.";
   }
@@ -1211,6 +1224,10 @@ export async function listPullRequests(
           orderBy,
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
+
+        if (!response?.repository) {
+          throw new Error("Repository not found or token lacks access.");
+        }
 
         const pullRequests = response?.repository?.pullRequests;
         const nodes = (pullRequests?.nodes ?? []) as Array<Record<string, unknown>>;

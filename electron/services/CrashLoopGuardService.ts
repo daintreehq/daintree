@@ -132,7 +132,8 @@ export class CrashLoopGuardService {
         parsed.version === 1 &&
         typeof parsed.crashes === "number" &&
         Array.isArray(parsed.launches) &&
-        typeof parsed.cleanExit === "boolean"
+        typeof parsed.cleanExit === "boolean" &&
+        typeof parsed.lastReset === "number"
       ) {
         return parsed as CrashLoopState;
       }

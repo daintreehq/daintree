@@ -12,6 +12,8 @@ const FILE_LIST_CACHE = new Cache<string, FileListCacheEntry>({
   maxSize: 30,
   defaultTTL: 10_000, // 10 seconds (reduced from 30s for faster worktree updates)
 });
+const FILE_LIST_IN_FLIGHT = new Map<string, Promise<string[]>>();
+const FILE_LIST_EPOCHS = new Map<string, number>();
 
 const MAX_RESULTS_DEFAULT = 50;
 const MAX_QUERY_LENGTH = 256;
@@ -254,14 +256,7 @@ export class FileSearchService {
       const resolvedCwd = path.resolve(payload.cwd);
       const limit = clampInt(payload.limit, 1, 100, MAX_RESULTS_DEFAULT);
 
-      const cached = FILE_LIST_CACHE.get(resolvedCwd);
-      const files =
-        cached?.files ??
-        (await (async () => {
-          const loaded = await this.loadFileList(resolvedCwd);
-          FILE_LIST_CACHE.set(resolvedCwd, { files: loaded });
-          return loaded;
-        })());
+      const files = await this.getFiles(resolvedCwd);
 
       return pickTopMatches(files, payload.query, limit);
     } catch {
@@ -278,14 +273,7 @@ export class FileSearchService {
       const resolvedCwd = path.resolve(payload.cwd);
       const limit = clampInt(payload.limit, 1, 100, 20);
 
-      const cached = FILE_LIST_CACHE.get(resolvedCwd);
-      const files =
-        cached?.files ??
-        (await (async () => {
-          const loaded = await this.loadFileList(resolvedCwd);
-          FILE_LIST_CACHE.set(resolvedCwd, { files: loaded });
-          return loaded;
-        })());
+      const files = await this.getFiles(resolvedCwd);
 
       return pickTopNaturalLanguageMatches(files, payload.description, limit);
     } catch {
@@ -296,6 +284,8 @@ export class FileSearchService {
   invalidate(cwd: string): void {
     const resolvedCwd = path.resolve(cwd);
     FILE_LIST_CACHE.invalidate(resolvedCwd);
+    FILE_LIST_IN_FLIGHT.delete(resolvedCwd);
+    FILE_LIST_EPOCHS.set(resolvedCwd, (FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0) + 1);
   }
 
   private async loadFileList(cwd: string): Promise<string[]> {
@@ -318,6 +308,35 @@ export class FileSearchService {
     }
 
     return loadFilesFromDisk(cwd);
+  }
+
+  private async getFiles(resolvedCwd: string): Promise<string[]> {
+    const cached = FILE_LIST_CACHE.get(resolvedCwd);
+    if (cached) {
+      return cached.files;
+    }
+
+    const existing = FILE_LIST_IN_FLIGHT.get(resolvedCwd);
+    if (existing) {
+      return existing;
+    }
+
+    const epoch = FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0;
+    const loadPromise = this.loadFileList(resolvedCwd)
+      .then((loaded) => {
+        if ((FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0) === epoch) {
+          FILE_LIST_CACHE.set(resolvedCwd, { files: loaded });
+        }
+        return loaded;
+      })
+      .finally(() => {
+        if (FILE_LIST_IN_FLIGHT.get(resolvedCwd) === loadPromise) {
+          FILE_LIST_IN_FLIGHT.delete(resolvedCwd);
+        }
+      });
+
+    FILE_LIST_IN_FLIGHT.set(resolvedCwd, loadPromise);
+    return loadPromise;
   }
 }
 

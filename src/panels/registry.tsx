@@ -1,6 +1,6 @@
 import { Suspense, lazy, type ComponentType } from "react";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
-import { getPanelKindConfig, registerPanelKind } from "@shared/config/panelKindRegistry";
+import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { BrowserPaneSkeleton } from "@/components/Browser/BrowserPaneSkeleton";
@@ -97,20 +97,15 @@ const BUILT_IN_SERIALIZE_DEFAULTS: Record<
   "dev-preview": { serialize: serializeDevPreview, createDefaults: createDevPreviewDefaults },
 };
 
-let _initialized = false;
-
 export function initBuiltInPanelKinds(): void {
-  if (_initialized) return;
-  _initialized = true;
-
   for (const [kindId, hooks] of Object.entries(BUILT_IN_SERIALIZE_DEFAULTS)) {
-    const existing = getPanelKindConfig(kindId);
-    if (existing) {
-      registerPanelKind({
-        ...existing,
-        serialize: hooks.serialize,
-        createDefaults: hooks.createDefaults,
-      });
+    const existing = requirePanelKindConfig(kindId);
+    if (
+      existing.serialize !== hooks.serialize ||
+      existing.createDefaults !== hooks.createDefaults
+    ) {
+      existing.serialize = hooks.serialize;
+      existing.createDefaults = hooks.createDefaults;
     }
   }
 }

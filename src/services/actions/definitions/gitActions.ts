@@ -144,8 +144,9 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       const { cwd, message } = (args ?? {}) as { cwd?: string; message?: string };
       const resolvedCwd = cwd ?? ctx.activeWorktreePath;
       if (!resolvedCwd) throw new Error("No active worktree");
-      if (!message) throw new Error("Commit message is required");
-      return await window.electron.git.commit(resolvedCwd, message);
+      const trimmed = message?.trim();
+      if (!trimmed) throw new Error("Commit message is required");
+      return await window.electron.git.commit(resolvedCwd, trimmed);
     },
   }));
 

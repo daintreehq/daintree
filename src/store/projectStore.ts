@@ -126,6 +126,49 @@ interface ProjectState {
   handleCloneSuccess: (clonedPath: string) => Promise<void>;
 }
 
+/**
+ * Module-reload-resilient state for the renderer's IPC subscriptions.
+ *
+ * HMR or test re-imports would otherwise re-register the `onUpdated`/
+ * `onRemoved` listeners on every module load without ever removing the prior
+ * registration, so each project update would fire N times per reload cycle.
+ * We store registration state on `globalThis` — persistent across module
+ * instances in the same window — and keep mutable `applyUpdated`/
+ * `applyRemoved` pointers that the latest module instance rebinds to its
+ * own store on import. New module instances reuse the existing subscription
+ * but drive the *current* store.
+ */
+interface ProjectStoreListenerState {
+  applyUpdated: ((project: Project) => void) | null;
+  applyRemoved: ((projectId: string) => void) | null;
+  updatedRegistered: boolean;
+  removedRegistered: boolean;
+}
+
+const PROJECT_STORE_LISTENER_STATE_KEY = "__canopyProjectStoreListenerState";
+
+let projectTransitionRequestId = 0;
+let projectListRequestId = 0;
+
+function getProjectStoreListenerState(): ProjectStoreListenerState {
+  const target = globalThis as typeof globalThis & {
+    [PROJECT_STORE_LISTENER_STATE_KEY]?: ProjectStoreListenerState;
+  };
+  const existing = target[PROJECT_STORE_LISTENER_STATE_KEY];
+  if (existing) {
+    return existing;
+  }
+
+  const created: ProjectStoreListenerState = {
+    applyUpdated: null,
+    applyRemoved: null,
+    updatedRegistered: false,
+    removedRegistered: false,
+  };
+  target[PROJECT_STORE_LISTENER_STATE_KEY] = created;
+  return created;
+}
+
 function getProjectOpenErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const lower = message.toLowerCase();
@@ -158,6 +201,18 @@ function getProjectOpenErrorMessage(error: unknown): string {
   }
 
   return message || "Failed to open project.";
+}
+
+function isPersistedProject(value: unknown): value is Project {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<Project>;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.name === "string" &&
+    typeof candidate.path === "string" &&
+    typeof candidate.emoji === "string" &&
+    typeof candidate.lastOpened === "number"
+  );
 }
 
 const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
@@ -232,13 +287,20 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   loadProjects: async () => {
+    const requestId = ++projectListRequestId;
     set({ isLoading: true, error: null });
     try {
       const projects = await projectClient.getAll();
+      if (requestId !== projectListRequestId) {
+        return;
+      }
       set({ projects, isLoading: false });
       // Check for missing directories in the background after updating the list
       void get().checkMissingProjects();
     } catch (error) {
+      if (requestId !== projectListRequestId) {
+        return;
+      }
       logErrorWithContext(error, {
         operation: "load_projects",
         component: "projectStore",
@@ -273,6 +335,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
   switchProject: async (projectId) => {
     if (get().currentProject?.id === projectId) return;
+    const requestId = ++projectTransitionRequestId;
 
     // Capture outgoing state before the renderer gets detached
     const currentProjectId = get().currentProject?.id;
@@ -283,6 +346,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // renderer gets detached. Don't write the response into stores — the
     // new view handles its own state independently.
     projectClient.switch(projectId, outgoingState).catch((error) => {
+      if (requestId !== projectTransitionRequestId) {
+        return;
+      }
       logErrorWithContext(error, {
         operation: "switch_project",
         component: "projectStore",
@@ -430,11 +496,15 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   reopenProject: async (projectId) => {
+    const requestId = ++projectTransitionRequestId;
     const currentProjectId = get().currentProject?.id;
     const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
 
     set({ isLoading: true, error: null });
     projectClient.reopen(projectId, outgoingState).catch((error) => {
+      if (requestId !== projectTransitionRequestId) {
+        return;
+      }
       logErrorWithContext(error, {
         operation: "reopen_project",
         component: "projectStore",
@@ -452,9 +522,13 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   checkMissingProjects: async () => {
+    const requestId = projectListRequestId;
     try {
       await projectClient.checkMissing();
       const projects = await projectClient.getAll();
+      if (requestId !== projectListRequestId) {
+        return;
+      }
       set({ projects });
     } catch (error) {
       logErrorWithContext(error, {
@@ -543,6 +617,16 @@ export const useProjectStore = create<ProjectState>()(
         partialize: (state) => ({
           projects: state.projects,
         }),
+        merge: (persistedState, currentState) => {
+          const persisted = persistedState as { projects?: unknown } | undefined;
+          const projects = Array.isArray(persisted?.projects)
+            ? persisted.projects.filter(isPersistedProject)
+            : currentState.projects;
+          return {
+            ...currentState,
+            projects,
+          };
+        },
       }
     )
   )
@@ -557,28 +641,38 @@ panelPersistence.setProjectIdGetter(() => useProjectStore.getState().currentProj
 // without these subscriptions a stale view will keep showing old project
 // names or miss newly-added projects entirely.
 if (typeof window !== "undefined" && window.electron?.project) {
+  const listenerState = getProjectStoreListenerState();
+  listenerState.applyUpdated = (updated) => {
+    useProjectStore.setState((state) => {
+      const exists = state.projects.some((p) => p.id === updated.id);
+      const projects = exists
+        ? state.projects.map((p) => (p.id === updated.id ? updated : p))
+        : [...state.projects, updated];
+      const currentProject =
+        state.currentProject?.id === updated.id ? updated : state.currentProject;
+      return { projects, currentProject };
+    });
+  };
+  listenerState.applyRemoved = (projectId) => {
+    useProjectStore.setState((state) => {
+      const projects = state.projects.filter((p) => p.id !== projectId);
+      const currentProject = state.currentProject?.id === projectId ? null : state.currentProject;
+      return { projects, currentProject };
+    });
+  };
+
   const projectApi = window.electron.project;
-  if (projectApi.onUpdated) {
+  if (projectApi.onUpdated && !listenerState.updatedRegistered) {
+    listenerState.updatedRegistered = true;
     projectApi.onUpdated((updated) => {
       if (!updated || typeof updated !== "object") return;
-      useProjectStore.setState((state) => {
-        const exists = state.projects.some((p) => p.id === updated.id);
-        const projects = exists
-          ? state.projects.map((p) => (p.id === updated.id ? updated : p))
-          : [...state.projects, updated];
-        const currentProject =
-          state.currentProject?.id === updated.id ? updated : state.currentProject;
-        return { projects, currentProject };
-      });
+      listenerState.applyUpdated?.(updated as Project);
     });
   }
-  if (projectApi.onRemoved) {
+  if (projectApi.onRemoved && !listenerState.removedRegistered) {
+    listenerState.removedRegistered = true;
     projectApi.onRemoved((projectId) => {
-      useProjectStore.setState((state) => {
-        const projects = state.projects.filter((p) => p.id !== projectId);
-        const currentProject = state.currentProject?.id === projectId ? null : state.currentProject;
-        return { projects, currentProject };
-      });
+      listenerState.applyRemoved?.(projectId);
     });
   }
 }

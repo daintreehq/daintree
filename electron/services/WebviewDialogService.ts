@@ -17,22 +17,31 @@ class WebviewDialogService {
   private destroyedListeners = new Set<number>();
 
   registerPanel(webContentsId: number, panelId: string): void {
+    const wc = webContents.fromId(webContentsId);
+    if (!wc || wc.isDestroyed()) {
+      this.panelMap.delete(webContentsId);
+      this.destroyedListeners.delete(webContentsId);
+      return;
+    }
+
+    const previousPanelId = this.panelMap.get(webContentsId);
+    if (previousPanelId && previousPanelId !== panelId) {
+      this.pendingOAuthSessionStorage.delete(previousPanelId);
+    }
+
     this.panelMap.set(webContentsId, panelId);
 
     if (!this.destroyedListeners.has(webContentsId)) {
       this.destroyedListeners.add(webContentsId);
-      const wc = webContents.fromId(webContentsId);
-      if (wc && !wc.isDestroyed()) {
-        wc.once("destroyed", () => {
-          this.cancelPendingForGuest(webContentsId);
-          const panelId = this.panelMap.get(webContentsId);
-          if (panelId) {
-            this.pendingOAuthSessionStorage.delete(panelId);
-          }
-          this.panelMap.delete(webContentsId);
-          this.destroyedListeners.delete(webContentsId);
-        });
-      }
+      wc.once("destroyed", () => {
+        this.cancelPendingForGuest(webContentsId);
+        const panelId = this.panelMap.get(webContentsId);
+        if (panelId) {
+          this.pendingOAuthSessionStorage.delete(panelId);
+        }
+        this.panelMap.delete(webContentsId);
+        this.destroyedListeners.delete(webContentsId);
+      });
     }
   }
 
@@ -47,6 +56,16 @@ class WebviewDialogService {
   ): string | undefined {
     const panelId = this.panelMap.get(webContentsId);
     if (!panelId) return undefined;
+
+    const previous = this.pendingDialogs.get(dialogId);
+    if (previous) {
+      this.pendingDialogs.delete(dialogId);
+      try {
+        previous.callback(false);
+      } catch {
+        // Ignore stale callback failures when superseding a dialog id.
+      }
+    }
 
     this.pendingDialogs.set(dialogId, { callback, webContentsId, panelId });
     return panelId;

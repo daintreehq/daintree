@@ -20,7 +20,7 @@ export function registerHibernationHandlers(_deps: HandlerDependencies): () => v
     _event: Electron.IpcMainInvokeEvent,
     config: Partial<HibernationConfig>
   ): Promise<HibernationConfig> => {
-    if (typeof config !== "object" || config === null) {
+    if (typeof config !== "object" || config === null || Array.isArray(config)) {
       throw new Error("Invalid config object");
     }
 

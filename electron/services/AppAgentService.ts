@@ -17,7 +17,7 @@ export class AppAgentService {
 
   hasApiKey(): boolean {
     const config = store.get("appAgentConfig");
-    return !!config.apiKey;
+    return typeof config.apiKey === "string" && config.apiKey.trim() !== "";
   }
 
   async testApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }> {
@@ -87,7 +87,7 @@ export class AppAgentService {
   async testModel(model: string): Promise<{ valid: boolean; error?: string }> {
     const config = store.get("appAgentConfig");
 
-    if (!config.apiKey) {
+    if (typeof config.apiKey !== "string" || config.apiKey.trim() === "") {
       return { valid: false, error: "API key not configured" };
     }
 

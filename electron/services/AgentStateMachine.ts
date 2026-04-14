@@ -26,6 +26,14 @@ export function isValidTransition(from: AgentState, to: AgentState): boolean {
 }
 
 export function nextAgentState(current: AgentState, event: AgentEvent): AgentState {
+  if (!event || typeof event !== "object" || typeof event.type !== "string") {
+    return current;
+  }
+
+  if (event.type === "exit" && typeof event.code !== "number") {
+    return current;
+  }
+
   // Error events are no-ops
   if (event.type === "error") {
     return current;

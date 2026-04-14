@@ -14,6 +14,30 @@ import type {
 
 export function registerPortalHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
+  const isValidBounds = (bounds: unknown): bounds is PortalBounds => {
+    if (!bounds || typeof bounds !== "object") return false;
+    const candidate = bounds as Partial<PortalBounds>;
+    return (
+      typeof candidate.x === "number" &&
+      Number.isFinite(candidate.x) &&
+      typeof candidate.y === "number" &&
+      Number.isFinite(candidate.y) &&
+      typeof candidate.width === "number" &&
+      Number.isFinite(candidate.width) &&
+      typeof candidate.height === "number" &&
+      Number.isFinite(candidate.height)
+    );
+  };
+
+  const sendMenuAction = (win: Electron.BrowserWindow, action: string) => {
+    try {
+      const appWebContents = getAppWebContents(win);
+      if (appWebContents.isDestroyed()) return;
+      appWebContents.send(CHANNELS.MENU_ACTION, action);
+    } catch (error) {
+      console.warn("[PortalHandler] Failed to send portal menu action:", error);
+    }
+  };
 
   const handlePortalCreate = async (
     _event: Electron.IpcMainInvokeEvent,
@@ -45,7 +69,7 @@ export function registerPortalHandlers(deps: HandlerDependencies): () => void {
       if (!payload?.tabId || typeof payload.tabId !== "string") {
         throw new Error("Invalid tabId");
       }
-      if (!payload?.bounds || typeof payload.bounds !== "object") {
+      if (!isValidBounds(payload?.bounds)) {
         throw new Error("Invalid bounds");
       }
       deps.portalManager.showTab(payload.tabId, payload.bounds);
@@ -67,7 +91,7 @@ export function registerPortalHandlers(deps: HandlerDependencies): () => void {
   const handlePortalResize = async (_event: Electron.IpcMainInvokeEvent, bounds: PortalBounds) => {
     try {
       if (!deps.portalManager) return;
-      if (!bounds || typeof bounds !== "object") {
+      if (!isValidBounds(bounds)) {
         throw new Error("Invalid bounds");
       }
       deps.portalManager.updateBounds(bounds);
@@ -205,13 +229,13 @@ export function registerPortalHandlers(deps: HandlerDependencies): () => void {
           ...(links.length > 0 ? [{ type: "separator" as const }] : []),
           {
             label: "Manage Portal Settings...",
-            click: () => getAppWebContents(win).send(CHANNELS.MENU_ACTION, "open-settings:portal"),
+            click: () => sendMenuAction(win, "open-settings:portal"),
           },
         ],
       },
       {
         label: "Manage Portal Settings...",
-        click: () => getAppWebContents(win).send(CHANNELS.MENU_ACTION, "open-settings:portal"),
+        click: () => sendMenuAction(win, "open-settings:portal"),
       },
     ]);
 

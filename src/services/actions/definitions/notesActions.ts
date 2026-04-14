@@ -49,6 +49,10 @@ export function registerNotesActions(actions: ActionRegistry, _callbacks: Action
         return;
       }
 
+      if (noteScope === "worktree" && (typeof worktreeId !== "string" || !worktreeId)) {
+        throw new Error("worktreeId is required when scope is 'worktree'");
+      }
+
       const note = await notesClient.create(title, noteScope ?? "project", worktreeId);
       if (content) {
         await notesClient.write(note.path, content, note.metadata);

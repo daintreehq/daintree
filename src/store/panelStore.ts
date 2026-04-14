@@ -515,6 +515,7 @@ export const usePanelStore = create<PanelGridState>()((set, get, api) => {
         lastCrashType: null,
         lastClosedConfig: null,
         mruList: [],
+        watchedPanels: new Set(),
       });
     },
   };

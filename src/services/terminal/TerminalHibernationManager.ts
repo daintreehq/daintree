@@ -94,17 +94,29 @@ export class TerminalHibernationManager {
     }
 
     // Dispose parser handler
-    managed.parserHandler?.dispose();
+    try {
+      managed.parserHandler?.dispose();
+    } catch {
+      /* ignore — terminal already disposing */
+    }
     managed.parserHandler = undefined;
 
     // Dispose last activity marker
-    managed.lastActivityMarker?.dispose();
+    try {
+      managed.lastActivityMarker?.dispose();
+    } catch {
+      /* ignore — terminal already disposing */
+    }
     managed.lastActivityMarker = undefined;
 
     // Dispose terminal instance — this removes xterm's injected DOM elements
     // from the hostElement but leaves the hostElement itself in the DOM
     // so XtermAdapter's container ref stays valid for reattachment
-    managed.terminal.dispose();
+    try {
+      managed.terminal.dispose();
+    } catch {
+      /* ignore — terminal already disposing */
+    }
 
     managed.isHibernated = true;
     managed.isOpened = false;
@@ -361,6 +373,9 @@ export class TerminalHibernationManager {
     }
 
     managed.isHibernated = false;
-    managed.isDetached = false;
+    managed.isDetached = managed.isDetached ?? false;
+    if (managed.isOpened) {
+      managed.isDetached = false;
+    }
   }
 }

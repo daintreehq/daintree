@@ -429,7 +429,7 @@ export class PtyClient extends EventEmitter {
 
     // Handle transport-level events and request/response correlation
     switch (event.type) {
-      case "ready":
+      case "ready": {
         // Ignore late ready events if host is already dead
         if (!this.child) {
           console.warn("[PtyClient] Ignoring late ready event - host is dead");
@@ -447,12 +447,14 @@ export class PtyClient extends EventEmitter {
           this.needsRespawn = false;
           this.respawnPending();
         }
+        const pendingPortWindowIds = new Set(this.pendingMessagePorts.keys());
+        this.flushPendingMessagePorts();
         if (this.shouldResyncProjectContext) {
           this.shouldResyncProjectContext = false;
-          this.syncProjectContext();
+          this.syncProjectContext(pendingPortWindowIds);
         }
-        this.flushPendingMessagePorts();
         break;
+      }
 
       case "data":
         this.emit("data", event.id, event.data);
@@ -976,13 +978,16 @@ export class PtyClient extends EventEmitter {
     return promise.catch(() => ({ state: null }));
   }
 
-  private syncProjectContext(): void {
+  private syncProjectContext(skipWindowIds?: ReadonlySet<number>): void {
     if (!this.child) {
       this.shouldResyncProjectContext = true;
       return;
     }
 
     for (const [windowId, ctx] of this.windowProjectContexts) {
+      if (skipWindowIds?.has(windowId)) {
+        continue;
+      }
       if (ctx.mode === "switch" && ctx.projectId !== null) {
         this.send({
           type: "project-switch",
