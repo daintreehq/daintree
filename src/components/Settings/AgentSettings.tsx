@@ -350,7 +350,10 @@ export function AgentSettings({
 
               if (allFlavors.length === 0 && !customFlavors?.length) {
                 return (
-                  <div id="agents-flavors" className="space-y-3 pt-2 border-t border-daintree-border">
+                  <div
+                    id="agents-flavors"
+                    className="space-y-3 pt-2 border-t border-daintree-border"
+                  >
                     <div className="flex items-center justify-between">
                       <div>
                         <label className="text-sm font-medium text-daintree-text">Flavors</label>

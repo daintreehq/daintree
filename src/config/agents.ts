@@ -65,9 +65,18 @@ export function getMergedFlavors(
 
   // Sanitize and validate env vars to prevent injection attacks
   const sanitizeEnv = (env?: Record<string, string>) => {
-    if (!env) return env;
+    if (!env || typeof env !== "object") return undefined;
     const sanitized: Record<string, string> = {};
-    for (const [key, value] of Object.entries(env)) {
+    let entries: [string, unknown][];
+    try {
+      entries = Object.entries(env);
+    } catch {
+      return undefined;
+    }
+    for (const [key, rawValue] of entries) {
+      // Reject non-string values (circular refs, objects, etc.)
+      if (typeof rawValue !== "string") continue;
+      const value = rawValue;
       // Reject keys that could cause prototype pollution
       if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
       // Reject values with shell injection patterns
