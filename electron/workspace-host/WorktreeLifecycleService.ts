@@ -419,22 +419,40 @@ export class WorktreeLifecycleService {
   /**
    * Replace {{variable}} and {variable} placeholders in a command string.
    * Unresolved variables are left as-is so the shell command fails loudly.
+   * Values are shell-escaped to prevent injection via untrusted inputs
+   * (e.g. branch names containing shell metacharacters).
    */
   substituteVariables(command: string, vars: LifecycleVariables): string {
     // Double-brace: {{variable}} with snake_case keys
     let result = command.replace(/\{\{(\w+)\}\}/g, (match, name: string) => {
       const key = name.toLowerCase() as keyof LifecycleVariables;
       const value = vars[key];
-      return value != null ? value : match;
+      return value != null ? shellEscapeValue(value) : match;
     });
     // Single-brace: {variable} with hyphenated keys — skip shell vars like ${foo}
+    // {branch-slug} is safe unquoted — its charset is locked to [a-z0-9-]
     result = result.replace(/(?<!\$)\{([\w-]+)\}/g, (match, name: string) => {
       const key = name.toLowerCase() as keyof LifecycleVariables;
       const value = vars[key];
-      return value != null ? value : match;
+      if (value == null) return match;
+      if (key === "branch-slug") return value;
+      return shellEscapeValue(value);
     });
     return result;
   }
+}
+
+/**
+ * Shell-escape a value for safe interpolation into a command string run with
+ * `shell: true`. On Unix (/bin/sh), wraps in single quotes with embedded
+ * single-quote escaping. On Windows (cmd.exe), wraps in double quotes with
+ * embedded double-quote escaping.
+ */
+function shellEscapeValue(value: string): string {
+  if (process.platform === "win32") {
+    return '"' + value.replace(/"/g, '""') + '"';
+  }
+  return "'" + value.replace(/'/g, "'\\''") + "'";
 }
 
 function buildSpawnEnv(customEnv: Record<string, string>): Record<string, string> {
