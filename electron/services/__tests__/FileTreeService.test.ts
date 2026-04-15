@@ -42,7 +42,7 @@ describe("FileTreeService", () => {
     expect(result).toEqual([
       expect.objectContaining({
         name: "main.ts",
-        path: path.join("src", "main.ts"),
+        path: "src/main.ts",
         isDirectory: false,
       }),
     ]);
