@@ -81,6 +81,8 @@ export function openDb(dbPath: string): { sqlite: Database.Database; db: AppDb }
   sqlite.pragma("busy_timeout = 3000");
   sqlite.exec(CREATE_TABLES_SQL);
 
+  // TODO(0.9.0): Remove this temporary Canopy -> Daintree column rename once
+  // we no longer need to open pre-rebrand databases in place.
   // Rebrand migration: rename projects.canopy_config_present ->
   // daintree_config_present on upgraded DBs. CREATE TABLE IF NOT EXISTS is a
   // no-op on existing tables, so without this ALTER the schema keeps the

@@ -14,7 +14,7 @@ app.setAboutPanelOptions({
   applicationName: "Daintree",
   applicationVersion: app.getVersion(),
   version: "Beta",
-  copyright: `© ${new Date().getFullYear()} Daintree Team`,
+  copyright: `© ${new Date().getFullYear()} Daintree.org Team`,
   website: "https://github.com/canopyide/canopy",
 });
 

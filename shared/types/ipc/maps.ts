@@ -182,9 +182,13 @@ export interface OnboardingState {
   completed: boolean;
   currentStep: string | null;
   agentSetupIds: string[];
+  // TODO(0.9.0): Remove after deleting the temporary onboarding localStorage
+  // rebrand shim that backfills old Canopy keys.
   firstRunToastSeen: boolean;
   newsletterPromptSeen: boolean;
   waitingNudgeSeen: boolean;
+  // TODO(0.9.0): Remove after deleting onboarding:migrate and the renderer
+  // localStorage import path for old Canopy onboarding keys.
   migratedFromLocalStorage: boolean;
   checklist: ChecklistState;
 }
@@ -1536,6 +1540,8 @@ export interface IpcInvokeMap {
     result: OnboardingState;
   };
   "onboarding:migrate": {
+    // TODO(0.9.0): Remove after deleting the temporary Canopy onboarding
+    // localStorage migration path.
     args: [
       payload: {
         agentSelectionDismissed: boolean;

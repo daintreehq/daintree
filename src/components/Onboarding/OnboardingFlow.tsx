@@ -7,6 +7,8 @@ import type { CliAvailability } from "@shared/types";
 
 const SKIP_FIRST_RUN_DIALOGS = isDaintreeEnvEnabled("DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS");
 
+// TODO(0.9.0): Remove this temporary Canopy -> Daintree onboarding
+// localStorage import after the 0.8.x upgrade window closes.
 const LEGACY_KEYS = {
   agentSelection: "canopy:agent-selection-dismissed",
   agentSetup: "canopy:agent-setup-complete",
@@ -50,7 +52,8 @@ export function OnboardingFlow({
     (async () => {
       let onboardingState = await window.electron.onboarding.get();
 
-      // Migrate legacy localStorage keys if needed
+      // TODO(0.9.0): Remove this temporary Canopy -> Daintree onboarding
+      // localStorage migration after the 0.8.x upgrade window closes.
       if (!onboardingState.migratedFromLocalStorage) {
         let agentSelectionDismissed = false;
         let agentSetupComplete = false;
@@ -87,7 +90,8 @@ export function OnboardingFlow({
         if (resumeStep && STEP_ORDER.includes(resumeStep)) {
           setCurrentStep(resumeStep);
         } else if (rawStep === "agentSelection" || rawStep === "welcome") {
-          // Legacy: "agentSelection" and "welcome" no longer exist; map to "agentSetup"
+          // TODO(0.9.0): Remove this temporary resume-step mapping when the
+          // old Canopy onboarding flow is no longer supported.
           setCurrentStep("agentSetup");
         } else {
           setCurrentStep(STEP_ORDER[0]);

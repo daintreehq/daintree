@@ -2602,6 +2602,8 @@ const api: ElectronAPI = {
 
   onboarding: {
     get: () => _unwrappingInvoke(CHANNELS.ONBOARDING_GET),
+    // TODO(0.9.0): Remove after deleting the temporary Canopy onboarding
+    // localStorage migration path.
     migrate: (payload: {
       agentSelectionDismissed: boolean;
       agentSetupComplete: boolean;

@@ -19,6 +19,8 @@ const LEGACY_DISCOVERY_DIR = path.join(os.homedir(), ".canopy");
 const DISCOVERY_FILE = path.join(DISCOVERY_DIR, "mcp.json");
 const MCP_SERVER_KEY = "daintree";
 
+// TODO(0.9.0): Remove this temporary Canopy -> Daintree discovery-dir rename
+// after the 0.8.x migration window closes.
 // One-shot rebrand migration: rename ~/.canopy -> ~/.daintree if the new dir
 // doesn't exist yet and the old one does. Success and "nothing-to-do"
 // outcomes are cached; transient failures are not, so retries stay possible.

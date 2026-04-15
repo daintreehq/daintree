@@ -501,6 +501,8 @@ export const CHANNELS = {
 
   // Onboarding channels
   ONBOARDING_GET: "onboarding:get",
+  // TODO(0.9.0): Remove after deleting the temporary Canopy localStorage
+  // onboarding migration path.
   ONBOARDING_MIGRATE: "onboarding:migrate",
   ONBOARDING_SET_STEP: "onboarding:set-step",
   ONBOARDING_COMPLETE: "onboarding:complete",

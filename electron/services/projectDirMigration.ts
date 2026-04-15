@@ -11,6 +11,9 @@ const LEGACY_CANOPY_DIR = ".canopy";
 const settledPaths = new Set<string>();
 
 /**
+ * TODO(0.9.0): Remove this temporary Canopy -> Daintree project-dir rename
+ * once the 0.8.x migration window has passed.
+ *
  * One-shot migration from `.canopy/` to `.daintree/` for a project directory.
  *
  * If `.daintree/` is absent but `.canopy/` exists, rename. Safe to call

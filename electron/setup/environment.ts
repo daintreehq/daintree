@@ -42,6 +42,8 @@ if (!app.isPackaged && !hasExplicitUserDataDir) {
   app.setPath("userData", path.join(app.getPath("appData"), "daintree-dev"));
 }
 
+// TODO(0.9.0): Remove this temporary Canopy -> Daintree userData migration
+// after the 0.8.x upgrade window closes for trusted testers.
 // One-shot rebrand migration: copy old userData dir into the new one on first
 // launch, then rename the SQLite db file. A `.rebrand-migrated` marker gates
 // the skip so a partial copy can be retried on next launch instead of leaving
