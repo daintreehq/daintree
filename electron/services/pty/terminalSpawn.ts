@@ -1,6 +1,10 @@
 import * as pty from "node-pty";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
-import { filterEnvironment, injectCanopyMetadata, ensureUtf8Locale } from "./EnvironmentFilter.js";
+import {
+  filterEnvironment,
+  injectDaintreeMetadata,
+  ensureUtf8Locale,
+} from "./EnvironmentFilter.js";
 import {
   buildNonInteractiveEnv,
   AGENT_ENV_EXCLUSIONS,
@@ -55,7 +59,7 @@ export function buildTerminalEnv(
         string
       >)
     : {};
-  const mergedEnv = injectCanopyMetadata(
+  const mergedEnv = injectDaintreeMetadata(
     { ...filteredBaseEnv, ...intentionalEnv },
     {
       paneId: id,
@@ -77,7 +81,7 @@ export function buildTerminalEnv(
     normalizedAgentId ? (AGENT_ENV_EXCLUSIONS[normalizedAgentId] ?? []) : []
   );
   const filteredAgentEnv = Object.fromEntries(
-    Object.entries(agentEnv).filter(([key]) => !exclusions.has(key) && !key.startsWith("CANOPY_"))
+    Object.entries(agentEnv).filter(([key]) => !exclusions.has(key) && !key.startsWith("DAINTREE_"))
   ) as Record<string, string>;
 
   return ensureUtf8Locale(
@@ -145,7 +149,7 @@ export function acquirePtyProcess(
       }
     }
 
-    if (process.env.CANOPY_VERBOSE) {
+    if (process.env.DAINTREE_VERBOSE) {
       console.log(`[TerminalProcess] Acquired terminal ${id} from pool (instant spawn)`);
     }
 

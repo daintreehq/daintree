@@ -83,7 +83,7 @@ export function AgentButton({
                   disabled={isLoading}
                   data-toolbar-item={dataToolbarItem}
                   className={cn(
-                    "toolbar-agent-button text-canopy-text transition-colors",
+                    "toolbar-agent-button text-daintree-text transition-colors",
                     isAvailable &&
                       "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
                     !isAvailable && !isLoading && "opacity-60"
@@ -93,7 +93,7 @@ export function AgentButton({
                   <div className="relative">
                     <config.icon brandColor={getBrandColorHex(type)} />
                     {!isAvailable && !isLoading && (
-                      <div className="absolute -top-1 -right-1 w-2 h-2 bg-status-warning rounded-full ring-2 ring-canopy-sidebar" />
+                      <div className="absolute -top-1 -right-1 w-2 h-2 bg-status-warning rounded-full ring-2 ring-daintree-sidebar" />
                     )}
                   </div>
                 </Button>

@@ -75,11 +75,11 @@ export interface MonitorConfig {
   gitWatchDebounceMs?: number;
 }
 
-/** Agent note feature config (agents write status to .git/canopy/note) */
+/** Agent note feature config (agents write status to .git/daintree/note) */
 export interface NoteConfig {
   /** Enable/disable the AI note feature (default: true) */
   enabled?: boolean;
-  /** Override the note filename (default: 'canopy/note') */
+  /** Override the note filename (default: 'daintree/note') */
   filename?: string;
 }
 
@@ -132,7 +132,7 @@ export interface GitDisplayConfig {
 // Main Configuration Interface
 
 /** Complete app configuration */
-export interface CanopyConfig {
+export interface DaintreeConfig {
   /** Default editor command */
   editor: string;
   /** Arguments to pass to the editor */

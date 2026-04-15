@@ -12,7 +12,7 @@ let fixtureDir: string;
 
 async function getActiveWorktreeId(window: import("@playwright/test").Page): Promise<string> {
   const res: any = await window.evaluate(() =>
-    (window as any).__canopyDispatchAction("actions.getContext")
+    (window as any).__daintreeDispatchAction("actions.getContext")
   );
   return res?.result?.activeWorktreeId ?? "";
 }
@@ -28,7 +28,7 @@ test.describe.serial("Core: Context Injection", () => {
       .poll(
         async () => {
           return ctx.window.evaluate(() => {
-            const dispatch = (window as any).__canopyDispatchAction;
+            const dispatch = (window as any).__daintreeDispatchAction;
             return typeof dispatch === "function" ? "ready" : "no-hook";
           });
         },

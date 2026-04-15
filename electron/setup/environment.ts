@@ -1,5 +1,5 @@
 // Silence EPIPE errors on stdout/stderr. When the parent terminal is closed
-// (e.g. user quits Terminal.app while Canopy runs), writes to the broken pipe
+// (e.g. user quits Terminal.app while Daintree runs), writes to the broken pipe
 // throw an uncaught EPIPE that would crash the main process. These are harmless.
 for (const stream of [process.stdout, process.stderr]) {
   if (stream && typeof stream.on === "function") {
@@ -24,7 +24,7 @@ export let exposeGc: (() => void) | undefined;
 try {
   nodeV8.setFlagsFromString("--expose_gc");
   exposeGc = vm.runInNewContext("gc") as () => void;
-  (globalThis as Record<string, unknown>).__canopy_gc = exposeGc;
+  (globalThis as Record<string, unknown>).__daintree_gc = exposeGc;
 } catch {
   // GC exposure not available — non-critical
 }
@@ -39,7 +39,50 @@ if (app.isPackaged) {
 // each test run gets its own isolated data directory.
 const hasExplicitUserDataDir = process.argv.some((a) => a.startsWith("--user-data-dir"));
 if (!app.isPackaged && !hasExplicitUserDataDir) {
-  app.setPath("userData", path.join(app.getPath("appData"), "canopy-app-dev"));
+  app.setPath("userData", path.join(app.getPath("appData"), "daintree-dev"));
+}
+
+// TODO(0.9.0): Remove this temporary Canopy -> Daintree userData migration
+// after the 0.8.x upgrade window closes for trusted testers.
+// One-shot rebrand migration: copy old userData dir into the new one on first
+// launch, then rename the SQLite db file. A `.rebrand-migrated` marker gates
+// the skip so a partial copy can be retried on next launch instead of leaving
+// the user stranded with a half-populated userData.
+// Skipped when --user-data-dir is explicitly set (e.g. E2E tests).
+if (!hasExplicitUserDataDir) {
+  try {
+    const newUserData = app.getPath("userData");
+    const markerPath = path.join(newUserData, ".rebrand-migrated");
+    if (!fs.existsSync(markerPath)) {
+      const appData = app.getPath("appData");
+      const legacyName = app.isPackaged ? "Canopy" : "canopy-app-dev";
+      const legacyUserData = path.join(appData, legacyName);
+      if (fs.existsSync(legacyUserData)) {
+        // If a partial copy from a previous aborted run exists, wipe it so
+        // we start from a clean state.
+        if (fs.existsSync(newUserData)) {
+          fs.rmSync(newUserData, { recursive: true, force: true });
+        }
+        fs.cpSync(legacyUserData, newUserData, { recursive: true });
+        // Rename the SQLite database + WAL/SHM/backup artifacts in place.
+        for (const suffix of ["", "-wal", "-shm", ".backup"]) {
+          const oldDb = path.join(newUserData, "canopy.db" + suffix);
+          const newDb = path.join(newUserData, "daintree.db" + suffix);
+          if (fs.existsSync(oldDb) && !fs.existsSync(newDb)) {
+            fs.renameSync(oldDb, newDb);
+          }
+        }
+        fs.writeFileSync(markerPath, new Date().toISOString());
+        console.log(`[daintree] Migrated userData ${legacyUserData} -> ${newUserData}`);
+      } else if (fs.existsSync(newUserData)) {
+        // No legacy dir but new dir already exists (fresh install or already
+        // migrated on a prior version) — drop the marker so we don't re-check.
+        fs.writeFileSync(markerPath, new Date().toISOString());
+      }
+    }
+  } catch (err) {
+    console.warn("[daintree] userData migration failed:", err);
+  }
 }
 
 // GPU crash fallback: disable hardware acceleration before app.whenReady()
@@ -53,7 +96,7 @@ if (gpuHardwareAccelerationDisabled) {
 
 // Handle --reset-data: wipe userData before Chromium acquires file locks
 const shouldResetData =
-  process.argv.includes("--reset-data") || process.env.CANOPY_RESET_DATA === "1";
+  process.argv.includes("--reset-data") || process.env.DAINTREE_RESET_DATA === "1";
 if (shouldResetData) {
   const userDataPath = app.getPath("userData");
   if (fs.existsSync(userDataPath)) {
@@ -284,7 +327,7 @@ if (isSmokeTest) {
 
 app.enableSandbox();
 
-// Prevent macOS keychain prompt ("canopy-app Safe Storage").
+// Prevent macOS keychain prompt ("Daintree Safe Storage").
 // Chromium encrypts cookies/network state via the OS keychain by default.
 // We don't rely on Chromium cookie encryption — all secrets are in electron-store.
 app.commandLine.appendSwitch("use-mock-keychain");

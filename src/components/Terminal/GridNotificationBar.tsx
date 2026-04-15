@@ -90,7 +90,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
             {notification.title}
           </p>
         )}
-        <div className="text-xs leading-snug text-canopy-text/90">{notification.message}</div>
+        <div className="text-xs leading-snug text-daintree-text/90">{notification.message}</div>
       </div>
 
       {actions.length > 0 && (
@@ -104,10 +104,10 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
               }}
               className={cn(
                 "h-7 rounded-[var(--radius-sm)] px-3 text-xs font-medium transition-colors",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent/60",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent/60",
                 action.variant === "secondary"
-                  ? "border border-tint/15 bg-tint/5 text-canopy-text/80 hover:bg-tint/10 hover:text-canopy-text"
-                  : "border border-canopy-accent/40 bg-canopy-accent/15 text-canopy-accent hover:bg-canopy-accent/25"
+                  ? "border border-tint/15 bg-tint/5 text-daintree-text/80 hover:bg-tint/10 hover:text-daintree-text"
+                  : "border border-daintree-accent/40 bg-daintree-accent/15 text-daintree-accent hover:bg-daintree-accent/25"
               )}
             >
               {action.label}
@@ -120,7 +120,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
         <button
           type="button"
           onClick={() => removeNotification(notification.id)}
-          className="h-7 shrink-0 rounded-[var(--radius-sm)] border border-tint/10 bg-tint/5 px-2 text-xs text-canopy-text/60 transition-colors hover:bg-tint/10 hover:text-canopy-text/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent/60"
+          className="h-7 shrink-0 rounded-[var(--radius-sm)] border border-tint/10 bg-tint/5 px-2 text-xs text-daintree-text/60 transition-colors hover:bg-tint/10 hover:text-daintree-text/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent/60"
         >
           Dismiss
         </button>

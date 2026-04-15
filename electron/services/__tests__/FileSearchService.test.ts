@@ -15,7 +15,7 @@ vi.mock("simple-git", () => ({
 }));
 
 function makeTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "canopy-file-search-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "daintree-file-search-"));
 }
 
 function writeFile(filePath: string, content = "x"): void {
@@ -49,7 +49,7 @@ describe("FileSearchService", () => {
 
   it("returns empty results when cwd does not exist", async () => {
     const service = await createService();
-    const missingDir = path.join(os.tmpdir(), "canopy-does-not-exist", `${Date.now()}`);
+    const missingDir = path.join(os.tmpdir(), "daintree-does-not-exist", `${Date.now()}`);
 
     await expect(service.search({ cwd: missingDir, query: "readme" })).resolves.toEqual([]);
   });

@@ -62,8 +62,9 @@ export function useSettingsDialog() {
       handleOpenSettingsTab(target);
     };
 
-    window.addEventListener("canopy:open-settings-tab", handleOpenSettingsTabEvent);
-    return () => window.removeEventListener("canopy:open-settings-tab", handleOpenSettingsTabEvent);
+    window.addEventListener("daintree:open-settings-tab", handleOpenSettingsTabEvent);
+    return () =>
+      window.removeEventListener("daintree:open-settings-tab", handleOpenSettingsTabEvent);
   }, [handleOpenSettingsTab]);
 
   return {

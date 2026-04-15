@@ -5,7 +5,7 @@ import * as path from "path";
 import { SlashCommandService } from "../SlashCommandService.js";
 
 async function makeTempDir(): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), "canopy-slash-commands-"));
+  return fs.mkdtemp(path.join(os.tmpdir(), "daintree-slash-commands-"));
 }
 
 async function writeFile(filePath: string, contents: string): Promise<void> {

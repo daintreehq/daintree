@@ -19,7 +19,7 @@ vi.mock("../../utils/fs.js", () => utilsMock);
 
 import { GlobalFileStore } from "../GlobalFileStore.js";
 
-const CONFIG_DIR = path.normalize("/tmp/canopy-global");
+const CONFIG_DIR = path.normalize("/tmp/daintree-global");
 const RECIPES_FILE = path.join(CONFIG_DIR, "recipes.json");
 
 describe("GlobalFileStore adversarial", () => {

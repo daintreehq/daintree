@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { EventBuffer } from "../EventBuffer.js";
-import { events, type CanopyEventMap } from "../events.js";
+import { events, type DaintreeEventMap } from "../events.js";
 
-type NotifyEventPayload = CanopyEventMap["ui:notify"] & { timestamp: number };
+type NotifyEventPayload = DaintreeEventMap["ui:notify"] & { timestamp: number };
 
 describe("EventBuffer adversarial", () => {
   let buffer: EventBuffer;

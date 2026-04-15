@@ -440,7 +440,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     const analysisPacket = packetFramer.frame(id, data);
     if (analysisPacket) {
       const analysisWritten = analysisBuffer.write(analysisPacket);
-      if (analysisWritten === 0 && process.env.CANOPY_VERBOSE) {
+      if (analysisWritten === 0 && process.env.DAINTREE_VERBOSE) {
         console.log(`[PtyHost] Analysis buffer full - dropping frame for terminal ${id}`);
       }
     }

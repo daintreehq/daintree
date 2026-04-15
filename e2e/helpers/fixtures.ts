@@ -26,11 +26,11 @@ export function createFixtureRepo(options: FixtureRepoOptions = {}): string {
     withSpreadCommits = false,
   } = options;
 
-  const dir = mkdtempSync(path.join(tmpdir(), `canopy-e2e-${name}-`));
+  const dir = mkdtempSync(path.join(tmpdir(), `daintree-e2e-${name}-`));
 
   git("init -b main", dir);
-  git('config user.email "test@canopy.dev"', dir);
-  git('config user.name "Canopy Test"', dir);
+  git('config user.email "test@daintree.dev"', dir);
+  git('config user.name "Daintree Test"', dir);
 
   writeFileSync(path.join(dir, "README.md"), `# ${name}\n`);
 
@@ -121,7 +121,7 @@ export function createMultiProjectFixture(
   optsA?: FixtureRepoOptions,
   optsB?: FixtureRepoOptions
 ): MultiProjectFixture {
-  const rootDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-multi-"));
+  const rootDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-multi-"));
   const repoA = createFixtureRepo({ name: "project-A", ...optsA });
   const repoB = createFixtureRepo({ name: "project-B", ...optsB });
 

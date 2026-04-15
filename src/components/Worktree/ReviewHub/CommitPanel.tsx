@@ -93,9 +93,9 @@ export function CommitPanel({
           rows={4}
           disabled={isBusy || isDetachedHead}
           className={cn(
-            "w-full resize-none rounded-md border bg-canopy-bg px-3 py-2 text-xs font-mono",
-            "placeholder:text-canopy-text/30 text-canopy-text",
-            "focus:outline-none focus:ring-2 focus:ring-canopy-accent focus:border-transparent",
+            "w-full resize-none rounded-md border bg-daintree-bg px-3 py-2 text-xs font-mono",
+            "placeholder:text-daintree-text/30 text-daintree-text",
+            "focus:outline-none focus:ring-2 focus:ring-daintree-accent focus:border-transparent",
             "disabled:opacity-50 disabled:cursor-not-allowed",
             isOverLimit ? "border-status-warning" : "border-divider"
           )}
@@ -103,7 +103,7 @@ export function CommitPanel({
         <div
           className={cn(
             "absolute bottom-1.5 right-2 text-[10px]",
-            isOverLimit ? "text-status-warning" : "text-canopy-text/30"
+            isOverLimit ? "text-status-warning" : "text-daintree-text/30"
           )}
         >
           <span className="tabular-nums">

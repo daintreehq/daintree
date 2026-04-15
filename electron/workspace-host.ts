@@ -24,8 +24,8 @@ if (!process.parentPort) {
   throw new Error("[WorkspaceHost] Must run in UtilityProcess context");
 }
 
-if (process.env.CANOPY_USER_DATA) {
-  initializeLogger(process.env.CANOPY_USER_DATA);
+if (process.env.DAINTREE_USER_DATA) {
+  initializeLogger(process.env.DAINTREE_USER_DATA);
 }
 
 const port = process.parentPort as unknown as MessagePort;

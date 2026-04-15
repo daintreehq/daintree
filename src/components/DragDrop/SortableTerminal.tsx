@@ -52,7 +52,7 @@ export function SortableTerminal({
       data-terminal-id={terminal.id}
       className={cn(
         "h-full min-w-0 contain-layout contain-style",
-        isDragging && "opacity-40 ring-2 ring-canopy-accent/50 rounded"
+        isDragging && "opacity-40 ring-2 ring-daintree-accent/50 rounded"
       )}
       {...attributes}
       aria-roledescription="sortable item"

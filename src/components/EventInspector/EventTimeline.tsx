@@ -59,7 +59,7 @@ export function EventTimeline({
     if (!style)
       return {
         label: "???",
-        color: "bg-canopy-border/20 text-canopy-text/60 border-canopy-border/30",
+        color: "bg-daintree-border/20 text-daintree-text/60 border-daintree-border/30",
       };
     return { label: style.shortLabel, color: style.color };
   };

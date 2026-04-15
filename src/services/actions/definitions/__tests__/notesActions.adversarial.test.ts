@@ -73,7 +73,7 @@ describe("notesActions adversarial", () => {
     expect(notesClientMock.create).not.toHaveBeenCalled();
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
     const event = dispatchSpy.mock.calls[0][0] as unknown as { type: string };
-    expect(event.type).toBe("canopy:open-notes-palette");
+    expect(event.type).toBe("daintree:open-notes-palette");
   });
 
   it("notes.create with title + content writes content after creating", async () => {
@@ -188,7 +188,7 @@ describe("notesActions adversarial", () => {
       type: string;
       detail: { highlightNotePath: string };
     };
-    expect(event.type).toBe("canopy:open-notes-palette");
+    expect(event.type).toBe("daintree:open-notes-palette");
     expect(event.detail.highlightNotePath).toBe("/notes/x.md");
   });
 

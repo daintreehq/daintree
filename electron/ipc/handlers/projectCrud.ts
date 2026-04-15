@@ -157,7 +157,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
         })
         .catch((err) => {
           console.warn(
-            `[IPC] project:update: failed to sync .canopy/project.json for ${projectId}:`,
+            `[IPC] project:update: failed to sync .daintree/project.json for ${projectId}:`,
             err
           );
         });

@@ -64,7 +64,7 @@ function getStructuredProps(error: unknown) {
 export function classifyError(error: unknown): ErrorCategory {
   const { name, code, syscall } = getStructuredProps(error);
 
-  // Tier 1: known Canopy error class names (preserved through IPC deserialization)
+  // Tier 1: known Daintree error class names (preserved through IPC deserialization)
   if (name && name !== "Error") {
     const category = NAME_TO_CATEGORY[name];
     if (category) return category;

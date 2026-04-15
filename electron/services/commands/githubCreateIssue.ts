@@ -1,4 +1,4 @@
-import type { CanopyCommand, CommandResult } from "../../../shared/types/commands.js";
+import type { DaintreeCommand, CommandResult } from "../../../shared/types/commands.js";
 import { getGitHubToken, getRepoContext, clearGitHubCaches } from "../GitHubService.js";
 import { GITHUB_API_TIMEOUT_MS } from "../github/index.js";
 
@@ -14,7 +14,7 @@ interface CreateIssueResult {
   title: string;
 }
 
-export const githubCreateIssueCommand: CanopyCommand<CreateIssueArgs, CreateIssueResult> = {
+export const githubCreateIssueCommand: DaintreeCommand<CreateIssueArgs, CreateIssueResult> = {
   id: "github:create-issue",
   label: "/github:create-issue",
   description:

@@ -225,7 +225,7 @@ describe("WorkspaceService.deleteWorktree", () => {
     const mockReadFile = vi.mocked(fsModule.readFile);
 
     mockAccess.mockImplementation(async (p: unknown) => {
-      if (n(p as string).endsWith("/test/root/.canopy/config.json")) return undefined;
+      if (n(p as string).endsWith("/test/root/.daintree/config.json")) return undefined;
       throw new Error("ENOENT");
     });
     mockReadFile.mockResolvedValue(JSON.stringify(teardownConfig));
@@ -272,7 +272,7 @@ describe("WorkspaceService.deleteWorktree", () => {
     const mockReadFile = vi.mocked(fsModule.readFile);
 
     mockAccess.mockImplementation(async (p: unknown) => {
-      if (n(p as string).endsWith("/test/root/.canopy/config.json")) return undefined;
+      if (n(p as string).endsWith("/test/root/.daintree/config.json")) return undefined;
       throw new Error("ENOENT");
     });
     mockReadFile.mockResolvedValue(JSON.stringify(teardownConfig));

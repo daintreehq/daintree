@@ -54,8 +54,8 @@ vi.mock("@/components/icons", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/icons")>();
   return {
     ...actual,
-    CanopyIcon: ({ className }: { className?: string }) => (
-      <div data-testid="canopy-icon" className={className} />
+    DaintreeIcon: ({ className }: { className?: string }) => (
+      <div data-testid="daintree-icon" className={className} />
     ),
   };
 });
@@ -207,8 +207,8 @@ describe("WelcomeScreen", () => {
   it("renders hero section with icon, title, and tagline", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    expect(screen.getByTestId("canopy-icon")).toBeTruthy();
-    expect(screen.getByText("Welcome to Canopy")).toBeTruthy();
+    expect(screen.getByTestId("daintree-icon")).toBeTruthy();
+    expect(screen.getByText("Welcome to Daintree")).toBeTruthy();
     expect(screen.getByText("A habitat for your AI agents.")).toBeTruthy();
   });
 
@@ -266,10 +266,10 @@ describe("WelcomeScreen", () => {
 
   // --- Checklist ---
 
-  it("shows Install Canopy as completed first item", () => {
+  it("shows Install Daintree as completed first item", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    expect(screen.getByText("Install Canopy")).toBeTruthy();
+    expect(screen.getByText("Install Daintree")).toBeTruthy();
     expect(screen.getByText("Getting Started")).toBeTruthy();
   });
 
@@ -329,7 +329,7 @@ describe("WelcomeScreen", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(dismissed)} />);
 
     expect(screen.queryByText("Getting Started")).toBeNull();
-    expect(screen.queryByText("Install Canopy")).toBeNull();
+    expect(screen.queryByText("Install Daintree")).toBeNull();
   });
 
   it("hides checklist when all items are complete", () => {
@@ -348,7 +348,7 @@ describe("WelcomeScreen", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete, false)} />);
 
     expect(screen.queryByText("Getting Started")).toBeNull();
-    expect(screen.queryByText("Install Canopy")).toBeNull();
+    expect(screen.queryByText("Install Daintree")).toBeNull();
   });
 
   // --- Quick Actions ---
@@ -420,7 +420,7 @@ describe("WelcomeScreen", () => {
     expect(newsletterButton).toBeTruthy();
 
     fireEvent.click(newsletterButton);
-    expect(openExternalMock).toHaveBeenCalledWith("https://canopyide.com/newsletter");
+    expect(openExternalMock).toHaveBeenCalledWith("https://daintree.org/newsletter");
   });
 
   // --- Adaptive Layout ---

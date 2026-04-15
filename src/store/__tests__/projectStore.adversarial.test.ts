@@ -89,7 +89,7 @@ vi.mock("@shared/utils/smokeTestTerminals", () => ({
 
 const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 const originalWindowElectron = window.electron;
-const LISTENER_STATE_KEY = "__canopyProjectStoreListenerState";
+const LISTENER_STATE_KEY = "__daintreeProjectStoreListenerState";
 
 const projectA: ProjectShape = {
   id: "project-a",

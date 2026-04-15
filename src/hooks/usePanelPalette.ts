@@ -152,7 +152,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
         id: `resume:${session.sessionId}`,
         name: `Resume ${agentConfig?.name ?? session.agentId}`,
         iconId: agentConfig?.iconId ?? "terminal",
-        color: agentConfig?.color ?? "var(--color-canopy-text)",
+        color: agentConfig?.color ?? "var(--color-daintree-text)",
         description,
         category: "resume" as const,
         resumeSession: session,
@@ -165,7 +165,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
         id: MORE_AGENTS_PANEL_ID,
         name: "More agents...",
         iconId: "sparkles",
-        color: "var(--color-canopy-text)",
+        color: "var(--color-daintree-text)",
         description: "Set up additional AI agents",
         category: "agent" as const,
       },
@@ -207,7 +207,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       if (option.id === MORE_AGENTS_PANEL_ID || option.installed === false) {
         close();
         window.dispatchEvent(
-          new CustomEvent("canopy:open-agent-setup-wizard", {
+          new CustomEvent("daintree:open-agent-setup-wizard", {
             detail: { returnToPanelPalette: true },
           })
         );
@@ -227,7 +227,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     if (selected.id === MORE_AGENTS_PANEL_ID || selected.installed === false) {
       close();
       window.dispatchEvent(
-        new CustomEvent("canopy:open-agent-setup-wizard", {
+        new CustomEvent("daintree:open-agent-setup-wizard", {
           detail: { returnToPanelPalette: true },
         })
       );

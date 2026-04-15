@@ -6,9 +6,9 @@ export { TerminalProcess } from "./TerminalProcess.js";
 export {
   ensureUtf8Locale,
   filterEnvironment,
-  injectCanopyMetadata,
+  injectDaintreeMetadata,
   isSensitiveVar,
-  type CanopyTerminalMetadata,
+  type DaintreeTerminalMetadata,
 } from "./EnvironmentFilter.js";
 export {
   AgentPatternDetector,

@@ -255,7 +255,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
       },
     }),
     {
-      name: "canopy-worktree-filters",
+      name: "daintree-worktree-filters",
       storage: createSafeJSONStorage(),
       partialize: (state): PersistedState => ({
         query: state.query,

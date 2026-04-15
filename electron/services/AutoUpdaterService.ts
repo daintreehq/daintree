@@ -9,8 +9,8 @@ import { getCrashRecoveryService } from "./CrashRecoveryService.js";
 import { store } from "../store.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
-const STABLE_FEED_URL = "https://updates.canopyide.com/releases/";
-const NIGHTLY_FEED_URL = "https://updates.canopyide.com/nightly/";
+const STABLE_FEED_URL = "https://updates.daintree.org/releases/";
+const NIGHTLY_FEED_URL = "https://updates.daintree.org/nightly/";
 const { autoUpdater } = electronUpdater;
 
 class AutoUpdaterService {
@@ -143,7 +143,7 @@ class AutoUpdaterService {
           broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
             type: "info",
             title: "No Updates Available",
-            message: `Canopy ${app.getVersion()} is the latest version.`,
+            message: `Daintree ${app.getVersion()} is the latest version.`,
           });
         }
       };

@@ -18,7 +18,7 @@ describe("githubCreateIssueCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getGitHubTokenMock.mockReturnValue("token-123");
-    getRepoContextMock.mockResolvedValue({ owner: "canopy", repo: "app" });
+    getRepoContextMock.mockResolvedValue({ owner: "daintree", repo: "app" });
     (globalThis as unknown as { fetch: Mock }).fetch = vi.fn();
   });
 
@@ -39,7 +39,7 @@ describe("githubCreateIssueCommand", () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: vi.fn().mockResolvedValue({
-        html_url: "https://github.com/canopy/app/issues/42",
+        html_url: "https://github.com/daintree/app/issues/42",
         number: 42,
         title: "Improve logging",
       }),

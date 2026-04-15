@@ -72,7 +72,7 @@ export function ActionPalette({
       noMatchMessage={`No actions match "${query}"`}
       totalResults={totalResults}
       emptyContent={
-        <p className="mt-2 text-xs text-canopy-text/40">
+        <p className="mt-2 text-xs text-daintree-text/40">
           Actions depend on the focused panel and current context.
         </p>
       }

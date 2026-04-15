@@ -41,8 +41,8 @@ function isSvgFile(filePath: string): boolean {
   return filePath.split(".").pop()?.toLowerCase() === SVG_EXTENSION;
 }
 
-function buildCanopyFileUrl(filePath: string, rootPath: string): string {
-  return `canopy-file://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
+function buildDaintreeFileUrl(filePath: string, rootPath: string): string {
+  return `daintree-file://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
 }
 
 const ERROR_MESSAGES: Record<FileReadErrorCode, string> = {
@@ -65,7 +65,7 @@ export function FileViewerModal({
   onClose,
 }: FileViewerModalProps) {
   // If the file is outside the project root, use its parent directory as the
-  // effective root so that the canopy-file:// protocol and files.read IPC
+  // effective root so that the daintree-file:// protocol and files.read IPC
   // containment checks pass.
   const fwd = (p: string) => p.replace(/\\/g, "/");
   const fwdRoot = fwd(rootPath).replace(/\/$/, "") + "/";
@@ -221,7 +221,7 @@ export function FileViewerModal({
     return { lineCount, sizeLabel: formatBytes(byteSize) };
   }, [canShowView, content]);
 
-  // Route Cmd+F (canopy:find-in-panel) and Cmd+L to CodeViewer
+  // Route Cmd+F (daintree:find-in-panel) and Cmd+L to CodeViewer
   useEffect(() => {
     if (!isOpen || isImageMode || mode !== "view") return;
 
@@ -238,10 +238,10 @@ export function FileViewerModal({
       }
     };
 
-    window.addEventListener("canopy:find-in-panel", handleFindInPanel);
+    window.addEventListener("daintree:find-in-panel", handleFindInPanel);
     window.addEventListener("keydown", handleKeyDown);
     return () => {
-      window.removeEventListener("canopy:find-in-panel", handleFindInPanel);
+      window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [isOpen, isImageMode, mode]);
@@ -263,7 +263,7 @@ export function FileViewerModal({
                   <span className="truncate cursor-default">
                     {branch && <span className="text-muted-foreground/70 mr-1.5">{branch}</span>}
                     {relativeDir && <span className="text-muted-foreground">{relativeDir}</span>}
-                    <span className="text-canopy-text">{fileName}</span>
+                    <span className="text-daintree-text">{fileName}</span>
                   </span>
                 </TooltipTrigger>
               </AppDialog.Title>
@@ -275,7 +275,7 @@ export function FileViewerModal({
 
           {/* Show view/diff toggle only when both are potentially available */}
           {hasDiff && !imageFile && (canShowView || loadState !== "loading") && (
-            <div className="flex bg-canopy-sidebar rounded p-0.5 shrink-0">
+            <div className="flex bg-daintree-sidebar rounded p-0.5 shrink-0">
               <button
                 type="button"
                 onClick={() => setMode("view")}
@@ -283,8 +283,8 @@ export function FileViewerModal({
                 className={cn(
                   "px-2.5 py-1 text-xs font-medium rounded transition-colors",
                   mode === "view"
-                    ? "bg-canopy-border text-canopy-text"
-                    : "text-muted-foreground hover:text-canopy-text disabled:opacity-40 disabled:cursor-not-allowed"
+                    ? "bg-daintree-border text-daintree-text"
+                    : "text-muted-foreground hover:text-daintree-text disabled:opacity-40 disabled:cursor-not-allowed"
                 )}
               >
                 View
@@ -295,8 +295,8 @@ export function FileViewerModal({
                 className={cn(
                   "px-2.5 py-1 text-xs font-medium rounded transition-colors",
                   mode === "diff"
-                    ? "bg-canopy-border text-canopy-text"
-                    : "text-muted-foreground hover:text-canopy-text"
+                    ? "bg-daintree-border text-daintree-text"
+                    : "text-muted-foreground hover:text-daintree-text"
                 )}
               >
                 Diff
@@ -308,15 +308,15 @@ export function FileViewerModal({
         <div className="flex items-center gap-2">
           {/* Split/Unified toggle — only visible in diff mode */}
           {mode === "diff" && hasDiff && (
-            <div className="flex bg-canopy-sidebar rounded p-0.5">
+            <div className="flex bg-daintree-sidebar rounded p-0.5">
               <button
                 type="button"
                 onClick={() => setViewType("split")}
                 className={cn(
                   "px-2.5 py-1 text-xs font-medium rounded transition-colors",
                   viewType === "split"
-                    ? "bg-canopy-border text-canopy-text"
-                    : "text-muted-foreground hover:text-canopy-text"
+                    ? "bg-daintree-border text-daintree-text"
+                    : "text-muted-foreground hover:text-daintree-text"
                 )}
               >
                 Split
@@ -327,8 +327,8 @@ export function FileViewerModal({
                 className={cn(
                   "px-2.5 py-1 text-xs font-medium rounded transition-colors",
                   viewType === "unified"
-                    ? "bg-canopy-border text-canopy-text"
-                    : "text-muted-foreground hover:text-canopy-text"
+                    ? "bg-daintree-border text-daintree-text"
+                    : "text-muted-foreground hover:text-daintree-text"
                 )}
               >
                 Unified
@@ -345,7 +345,7 @@ export function FileViewerModal({
                     type="button"
                     onClick={handleCopyDiff}
                     aria-label={diffCopied ? "Copied!" : "Copy diff to clipboard"}
-                    className="p-1.5 rounded transition-colors text-muted-foreground hover:text-canopy-text hover:bg-canopy-border"
+                    className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
                   >
                     {diffCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                   </button>
@@ -361,7 +361,7 @@ export function FileViewerModal({
             <button
               type="button"
               onClick={handleOpenInImageViewer}
-              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground hover:text-canopy-text hover:bg-canopy-border rounded transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground hover:text-daintree-text hover:bg-daintree-border rounded transition-colors"
               title="Open in image viewer"
             >
               <ImageIcon className="w-3.5 h-3.5" />
@@ -371,7 +371,7 @@ export function FileViewerModal({
             <button
               type="button"
               onClick={handleOpenInEditor}
-              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground hover:text-canopy-text hover:bg-canopy-border rounded transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground hover:text-daintree-text hover:bg-daintree-border rounded transition-colors"
               title="Open in editor"
             >
               <ExternalLink className="w-3.5 h-3.5" />
@@ -388,7 +388,7 @@ export function FileViewerModal({
             {loadState === "image" && (
               <img
                 key={filePath}
-                src={buildCanopyFileUrl(filePath, effectiveRootPath)}
+                src={buildDaintreeFileUrl(filePath, effectiveRootPath)}
                 alt={fileName}
                 className="max-w-full max-h-[70vh] object-contain rounded"
                 draggable={false}
@@ -422,7 +422,7 @@ export function FileViewerModal({
                   <button
                     type="button"
                     onClick={handleOpenInImageViewer}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-canopy-text bg-canopy-border hover:bg-canopy-border/80 rounded transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
                   >
                     <ImageIcon className="w-3.5 h-3.5" />
                     Open in Image Viewer
@@ -431,7 +431,7 @@ export function FileViewerModal({
                   <button
                     type="button"
                     onClick={handleOpenInEditor}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-canopy-text bg-canopy-border hover:bg-canopy-border/80 rounded transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
                     Open in Editor
@@ -445,7 +445,7 @@ export function FileViewerModal({
                 {metadata && (
                   <div
                     data-testid="file-viewer-metadata"
-                    className="px-3 py-1 border-b border-canopy-border text-xs text-muted-foreground font-mono"
+                    className="px-3 py-1 border-b border-daintree-border text-xs text-muted-foreground font-mono"
                   >
                     {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
                   </div>

@@ -76,7 +76,7 @@ export function IssueSelector({
           role="combobox"
           aria-expanded={open}
           aria-haspopup="listbox"
-          className="w-full justify-between bg-canopy-bg border-canopy-border text-canopy-text hover:bg-canopy-bg hover:text-canopy-text"
+          className="w-full justify-between bg-daintree-bg border-daintree-border text-daintree-text hover:bg-daintree-bg hover:text-daintree-text"
           disabled={disabled}
         >
           {selectedIssue ? (
@@ -104,9 +104,9 @@ export function IssueSelector({
                           handleClear(e as unknown as React.MouseEvent);
                         }
                       }}
-                      className="p-0.5 hover:bg-canopy-border rounded cursor-pointer"
+                      className="p-0.5 hover:bg-daintree-border rounded cursor-pointer"
                     >
-                      <X className="h-3.5 w-3.5 text-muted-foreground hover:text-canopy-text" />
+                      <X className="h-3.5 w-3.5 text-muted-foreground hover:text-daintree-text" />
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">Clear selection</TooltipContent>
@@ -122,7 +122,7 @@ export function IssueSelector({
         align="start"
         onEscapeKeyDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center border-b border-canopy-border px-3">
+        <div className="flex items-center border-b border-daintree-border px-3">
           <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
           <input
             className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
@@ -153,8 +153,8 @@ export function IssueSelector({
                   handleOpenChange(false);
                 }}
                 className={cn(
-                  "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                  selectedIssue?.number === issue.number && "bg-canopy-border"
+                  "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                  selectedIssue?.number === issue.number && "bg-daintree-border"
                 )}
               >
                 <CircleDot className="w-3 h-3 text-github-open shrink-0" />

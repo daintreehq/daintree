@@ -2,15 +2,15 @@
  * E2E: OAuth Loopback Flow in Dev Preview
  *
  * Simulates a realistic Next.js + Keycloak authentication flow inside
- * Canopy's dev-preview panel. Tests the full chain:
+ * Daintree's dev-preview panel. Tests the full chain:
  *
  * 1. Fake "Next.js app" at localhost serves a sign-in page
  * 2. The app redirects to a fake "Keycloak" authorization endpoint
  * 3. Dev-preview blocks the cross-origin redirect → banner appears
  * 4. User clicks "Sign in via Browser"
- * 5. Canopy's loopback server rewrites redirect_uri and opens system browser
+ * 5. Daintree's loopback server rewrites redirect_uri and opens system browser
  * 6. Fake Keycloak auto-approves and redirects to loopback with code
- * 7. Canopy captures the code, attaches CDP Fetch interceptor, navigates webview
+ * 7. Daintree captures the code, attaches CDP Fetch interceptor, navigates webview
  * 8. CDP rewrites redirect_uri in the token exchange POST
  * 9. Fake Keycloak validates PKCE + redirect_uri → issues tokens
  * 10. The app shows "authenticated" status
@@ -386,7 +386,7 @@ function doLogin() {
     + '&code_challenge=${codeChallenge}'
     + '&code_challenge_method=S256';
 
-  // This redirect will be blocked by Canopy's dev-preview
+  // This redirect will be blocked by Daintree's dev-preview
   window.location.href = authUrl;
 }
 
@@ -450,7 +450,7 @@ test.describe.serial("E2E: OAuth Loopback Flow in Dev Preview", () => {
       })
     );
 
-    // Launch Canopy — always disable GPU to prevent black-screen hangs on macOS
+    // Launch Daintree — always disable GPU to prevent black-screen hangs on macOS
     ctx = await launchApp({ extraArgs: ["--disable-gpu", "--disable-software-rasterizer"] });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, "OAuth E2E");
   });
@@ -600,11 +600,11 @@ test.describe.serial("E2E: OAuth Loopback Flow in Dev Preview", () => {
     }, keycloakPort);
 
     // Now click "Sign in via Browser" — triggers the full loopback + CDP flow:
-    // 1. Canopy starts loopback server, rewrites redirect_uri, calls shell.openExternal
+    // 1. Daintree starts loopback server, rewrites redirect_uri, calls shell.openExternal
     // 2. Our mock resolves auth.test → 127.0.0.1, makes HTTP request to fake Keycloak
     // 3. Fake Keycloak auto-approves, redirects to loopback with code
-    // 4. Canopy captures code, attaches CDP Fetch to webview
-    // 5. Canopy navigates webview to /auth/callback?code=...&state=...
+    // 4. Daintree captures code, attaches CDP Fetch to webview
+    // 5. Daintree navigates webview to /auth/callback?code=...&state=...
     // 6. Webview JS calls fetch() to auth.test/token → webRequest redirects to 127.0.0.1
     // 7. CDP intercepts the POST, rewrites redirect_uri in body
     // 8. Fake Keycloak validates PKCE + redirect_uri → issues tokens

@@ -66,7 +66,7 @@ export const useCommandHistoryStore = create<CommandHistoryState>()(
         }),
     }),
     {
-      name: "canopy-command-history",
+      name: "daintree-command-history",
       storage: createSafeJSONStorage(),
       partialize: (state) => ({ history: state.history }),
     }

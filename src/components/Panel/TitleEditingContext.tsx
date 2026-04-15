@@ -59,7 +59,7 @@ export function TitleEditingProvider({
     };
 
     const controller = new AbortController();
-    window.addEventListener("canopy:rename-terminal", handleRenameEvent, {
+    window.addEventListener("daintree:rename-terminal", handleRenameEvent, {
       signal: controller.signal,
     });
     return () => controller.abort();

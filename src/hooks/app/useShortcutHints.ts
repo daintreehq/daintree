@@ -15,7 +15,8 @@ export function useShortcutHints(isStateLoaded: boolean) {
         shortcutHintStore.getState().hydrateCounts({});
       });
 
-    // Mark the legacy firstRunToastSeen flag for backward compatibility
+    // TODO(0.9.0): Remove once the temporary Canopy onboarding migration is
+    // deleted. This only exists to settle migrated first-run state.
     if (window.electron?.onboarding) {
       window.electron.onboarding
         .get()

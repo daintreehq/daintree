@@ -39,7 +39,7 @@ vi.mock("@shared/theme", () => ({
 
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 
-const APP_CONFIG_RELOAD_LISTENER_STATE_KEY = "__canopyAppConfigReloadListenerState";
+const APP_CONFIG_RELOAD_LISTENER_STATE_KEY = "__daintreeAppConfigReloadListenerState";
 
 let registerAppActions: typeof import("../appActions").registerAppActions;
 

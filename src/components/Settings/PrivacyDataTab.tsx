@@ -158,7 +158,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         <SettingsSection
           icon={Signal}
           title="Telemetry & Diagnostics"
-          description="Control what data Canopy collects. No personal data, file contents, or credentials are ever collected."
+          description="Control what data Daintree collects. No personal data, file contents, or credentials are ever collected."
         >
           <div className="space-y-2">
             {TELEMETRY_OPTIONS.map((option) => (
@@ -168,10 +168,10 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                 onClick={() => void handleTelemetryChange(option.level)}
                 className={cn(
                   "w-full text-left p-4 rounded-[var(--radius-lg)] border transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
                   telemetryLevel === option.level
-                    ? "border-canopy-accent/40 bg-canopy-accent/5"
-                    : "border-canopy-border hover:bg-tint/5"
+                    ? "border-daintree-accent/40 bg-daintree-accent/5"
+                    : "border-daintree-border hover:bg-tint/5"
                 )}
               >
                 <div className="flex items-center gap-3">
@@ -179,17 +179,17 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     className={cn(
                       "w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0",
                       telemetryLevel === option.level
-                        ? "border-canopy-accent"
-                        : "border-canopy-text/30"
+                        ? "border-daintree-accent"
+                        : "border-daintree-text/30"
                     )}
                   >
                     {telemetryLevel === option.level && (
-                      <div className="w-2 h-2 rounded-full bg-canopy-accent" />
+                      <div className="w-2 h-2 rounded-full bg-daintree-accent" />
                     )}
                   </div>
                   <div>
-                    <div className="text-sm font-medium text-canopy-text">{option.title}</div>
-                    <div className="text-xs text-canopy-text/50 mt-0.5 select-text">
+                    <div className="text-sm font-medium text-daintree-text">{option.title}</div>
+                    <div className="text-xs text-daintree-text/50 mt-0.5 select-text">
                       {option.description}
                     </div>
                   </div>
@@ -197,7 +197,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
               </button>
             ))}
           </div>
-          <p className="text-xs text-canopy-text/40 mt-2 select-text">
+          <p className="text-xs text-daintree-text/40 mt-2 select-text">
             Changes to telemetry level take effect on next app restart.
           </p>
         </SettingsSection>
@@ -208,17 +208,17 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           <SettingsSection
             icon={FolderOpen}
             title="Data Folder"
-            description="Location where Canopy stores settings, logs, and session data."
+            description="Location where Daintree stores settings, logs, and session data."
           >
             <div className="flex items-center gap-3">
-              <code className="flex-1 text-xs bg-canopy-bg p-2.5 rounded-[var(--radius-md)] border border-canopy-border font-mono text-canopy-text/70 truncate">
+              <code className="flex-1 text-xs bg-daintree-bg p-2.5 rounded-[var(--radius-md)] border border-daintree-border font-mono text-daintree-text/70 truncate">
                 {dataFolderPath}
               </code>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={handleOpenDataFolder}
-                className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text shrink-0"
+                className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text shrink-0"
               >
                 <FolderOpen className="w-4 h-4" />
                 Open Folder
@@ -239,17 +239,17 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   onClick={() => void handleRetentionChange(option.value)}
                   className={cn(
                     "px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
                     logRetentionDays === option.value
-                      ? "bg-canopy-accent/10 text-canopy-accent border border-canopy-accent/30"
-                      : "text-canopy-text/60 border border-canopy-border hover:bg-tint/5 hover:text-canopy-text"
+                      ? "bg-daintree-accent/10 text-daintree-accent border border-daintree-accent/30"
+                      : "text-daintree-text/60 border border-daintree-border hover:bg-tint/5 hover:text-daintree-text"
                   )}
                 >
                   {option.label}
                 </button>
               ))}
             </div>
-            <p className="text-xs text-canopy-text/40 mt-2 select-text">
+            <p className="text-xs text-daintree-text/40 mt-2 select-text">
               Log pruning happens at startup. Changing this setting takes effect on next launch.
             </p>
           </SettingsSection>
@@ -264,7 +264,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
               size="sm"
               onClick={() => void handleClearCache()}
               disabled={cacheClearing}
-              className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text"
+              className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
             >
               <Trash2 className={cn("w-4 h-4", cacheClearing && "animate-spin")} />
               {cacheClearing ? "Clearing…" : cacheCleared ? "Cache Cleared" : "Clear Cache"}
@@ -282,7 +282,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                 variant="outline"
                 size="sm"
                 onClick={() => setResetState("confirming")}
-                className="text-status-error border-canopy-border hover:bg-status-error/10 hover:border-status-error/20"
+                className="text-status-error border-daintree-border hover:bg-status-error/10 hover:border-status-error/20"
               >
                 <AlertTriangle className="w-4 h-4" />
                 Reset All Data…
@@ -290,10 +290,10 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
             ) : (
               <div className="space-y-3">
                 <div className="p-3 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5">
-                  <p className="text-sm text-canopy-text font-medium mb-1">
+                  <p className="text-sm text-daintree-text font-medium mb-1">
                     Are you sure you want to reset?
                   </p>
-                  <p className="text-xs text-canopy-text/60">
+                  <p className="text-xs text-daintree-text/60">
                     This will permanently delete all settings, API keys, session data, and logs. The
                     app will restart with factory defaults. This cannot be undone.
                   </p>
@@ -303,7 +303,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     variant="outline"
                     size="sm"
                     onClick={() => setResetState("idle")}
-                    className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text"
+                    className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
                   >
                     Cancel
                   </Button>

@@ -44,7 +44,7 @@ import {
 } from "lucide-react";
 import {
   WorktreeIcon,
-  CanopyAgentIcon,
+  DaintreeAgentIcon,
   TerminalRecipeIcon,
   McpServerIcon,
 } from "@/components/icons";
@@ -603,7 +603,7 @@ export function SettingsDialog({
     terminal: <LayoutGrid className="w-5 h-5 text-text-secondary" />,
     terminalAppearance: <SquareTerminal className="w-5 h-5 text-text-secondary" />,
     worktree: <WorktreeIcon className="w-5 h-5 text-text-secondary" />,
-    agents: <CanopyAgentIcon className="w-5 h-5 text-text-secondary" />,
+    agents: <DaintreeAgentIcon className="w-5 h-5 text-text-secondary" />,
     github: <Github className="w-5 h-5 text-text-secondary" />,
     portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
     toolbar: <SettingsIcon className="w-5 h-5 text-text-secondary" />,
@@ -635,9 +635,9 @@ export function SettingsDialog({
       className="settings-shell min-h-[500px] max-h-[800px]"
     >
       <div className="flex h-full overflow-hidden">
-        <div className="settings-sidebar w-52 border-r border-canopy-border p-3 flex flex-col shrink-0">
+        <div className="settings-sidebar w-52 border-r border-daintree-border p-3 flex flex-col shrink-0">
           <div className="flex items-center justify-between mb-3 pl-2">
-            <h2 className="text-sm font-semibold text-canopy-text">Settings</h2>
+            <h2 className="text-sm font-semibold text-daintree-text">Settings</h2>
             {hasProject && (
               <div className="relative flex items-center">
                 <select
@@ -647,7 +647,7 @@ export function SettingsDialog({
                     handleScopeSwitch(e.target.value as SettingsScope);
                     e.target.blur();
                   }}
-                  className="appearance-none text-xs py-1 pl-2 pr-6 rounded-[var(--radius-md)] bg-transparent border border-border-strong text-text-secondary hover:text-canopy-text hover:border-canopy-text/30 focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/20 outline-none cursor-pointer transition-colors"
+                  className="appearance-none text-xs py-1 pl-2 pr-6 rounded-[var(--radius-md)] bg-transparent border border-border-strong text-text-secondary hover:text-daintree-text hover:border-daintree-text/30 focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/20 outline-none cursor-pointer transition-colors"
                 >
                   <option value="global">Global</option>
                   <option value="project">Project</option>
@@ -664,7 +664,7 @@ export function SettingsDialog({
             className={cn(
               "flex items-center gap-1.5 px-2 py-1.5 mb-3 rounded-[var(--radius-md)]",
               "settings-search border border-border-strong",
-              "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
+              "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
             )}
           >
             <Search
@@ -679,7 +679,7 @@ export function SettingsDialog({
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearchKeyDown}
               aria-label="Search settings"
-              className="settings-search-input flex-1 min-w-0 text-xs bg-transparent text-canopy-text focus:outline-none"
+              className="settings-search-input flex-1 min-w-0 text-xs bg-transparent text-daintree-text focus:outline-none"
             />
             {searchQuery && (
               <button
@@ -689,7 +689,7 @@ export function SettingsDialog({
                   searchInputRef.current?.focus();
                 }}
                 aria-label="Clear search"
-                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-canopy-text/40 hover:text-canopy-text"
+                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-daintree-text/40 hover:text-daintree-text"
               >
                 <X className="w-3 h-3" />
               </button>
@@ -806,7 +806,7 @@ export function SettingsDialog({
                 <NavGroup label="Integrations">
                   <NavItem
                     tab="agents"
-                    icon={<CanopyAgentIcon className="w-4 h-4" />}
+                    icon={<DaintreeAgentIcon className="w-4 h-4" />}
                     label="CLI Agents"
                     activeTab={activeTab}
                     isSearching={isSearching}
@@ -950,14 +950,14 @@ export function SettingsDialog({
             )}
           </ScrollShadow>
 
-          <div className="pt-2 mt-2 border-t border-canopy-border px-2">
+          <div className="pt-2 mt-2 border-t border-daintree-border px-2">
             <span className="settings-meta font-mono">{appVersion}</span>
           </div>
         </div>
 
         <div className="settings-shell flex-1 flex flex-col min-w-0">
-          <div className="dialog-header flex items-center justify-between px-6 py-4 border-b border-canopy-border shrink-0">
-            <h3 className="text-lg font-medium text-canopy-text flex items-center gap-2">
+          <div className="dialog-header flex items-center justify-between px-6 py-4 border-b border-daintree-border shrink-0">
+            <h3 className="text-lg font-medium text-daintree-text flex items-center gap-2">
               {isSearching ? (
                 <>
                   <Search className="w-5 h-5 text-text-secondary" />
@@ -972,7 +972,7 @@ export function SettingsDialog({
             </h3>
             <button
               onClick={handleClose}
-              className="text-canopy-text/60 hover:text-canopy-text transition-colors p-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+              className="text-daintree-text/60 hover:text-daintree-text transition-colors p-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
               aria-label="Close settings"
             >
               <X className="h-5 w-5" />
@@ -1289,7 +1289,7 @@ export function SettingsDialog({
                 {activeScope === "project" && projectId && (
                   <>
                     {projectForm.projectIsLoading && (
-                      <div className="text-sm text-canopy-text/60 text-center py-8">
+                      <div className="text-sm text-daintree-text/60 text-center py-8">
                         Loading settings...
                       </div>
                     )}
@@ -1558,11 +1558,11 @@ function NavItem({
       onClick={() => onSelect(tab)}
       className={cn(
         "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
         "settings-nav-item",
         active
-          ? "text-canopy-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-          : "text-text-secondary hover:text-canopy-text"
+          ? "text-daintree-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
+          : "text-text-secondary hover:text-daintree-text"
       )}
       data-active={active ? "true" : undefined}
     >
@@ -1570,7 +1570,7 @@ function NavItem({
         {icon}
         {modified && (
           <span
-            className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-canopy-accent"
+            className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-daintree-accent"
             title="Modified from default"
           />
         )}
@@ -1585,7 +1585,7 @@ function MatchBadge({ count }: { count: number }) {
   return (
     <span
       aria-hidden="true"
-      className="ml-auto text-[10px] font-medium tabular-nums px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent leading-none"
+      className="ml-auto text-[10px] font-medium tabular-nums px-1.5 py-0.5 rounded-full bg-daintree-accent/20 text-daintree-accent leading-none"
     >
       {count}
     </span>
@@ -1619,11 +1619,11 @@ function SearchResults({
   if (results.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
-        <Search className="w-8 h-8 text-canopy-text/20 mb-3" />
-        <p className="text-sm text-canopy-text/50">
-          No results for <span className="font-medium text-canopy-text/70">"{query}"</span>
+        <Search className="w-8 h-8 text-daintree-text/20 mb-3" />
+        <p className="text-sm text-daintree-text/50">
+          No results for <span className="font-medium text-daintree-text/70">"{query}"</span>
         </p>
-        <p className="text-xs text-canopy-text/40 mt-1">
+        <p className="text-xs text-daintree-text/40 mt-1">
           {cleanQuery
             ? "Try different keywords or check spelling"
             : "No settings have been modified from their defaults"}
@@ -1635,11 +1635,11 @@ function SearchResults({
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between mb-3">
-        <p className="text-xs text-canopy-text/40">
+        <p className="text-xs text-daintree-text/40">
           <span className="tabular-nums">{results.length}</span> result
           {results.length === 1 ? "" : "s"}
         </p>
-        <p className="text-[10px] text-canopy-text/30">
+        <p className="text-[10px] text-daintree-text/30">
           <kbd className="settings-kbd px-1 py-0.5 rounded border font-mono">↑↓</kbd> navigate{" "}
           <kbd className="settings-kbd px-1 py-0.5 rounded border font-mono">↵</kbd> go
         </p>
@@ -1657,25 +1657,25 @@ function SearchResults({
           className={cn(
             "group w-full text-left p-3 rounded-[var(--radius-md)] border transition-colors",
             index === activeIndex
-              ? "bg-overlay-soft border-canopy-accent/30"
-              : "border-transparent hover:bg-overlay-soft hover:border-canopy-border",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+              ? "bg-overlay-soft border-daintree-accent/30"
+              : "border-transparent hover:bg-overlay-soft hover:border-daintree-border",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
           )}
         >
           <div className="flex items-center gap-3">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-0.5">
-                <span className="text-[10px] font-medium text-canopy-accent/80 uppercase tracking-wide">
+                <span className="text-[10px] font-medium text-daintree-accent/80 uppercase tracking-wide">
                   {result.tabLabel}
                 </span>
                 {result.subtabLabel && (
                   <>
-                    <span className="text-[10px] text-canopy-text/30">›</span>
-                    <span className="text-[10px] text-canopy-text/50">{result.subtabLabel}</span>
+                    <span className="text-[10px] text-daintree-text/30">›</span>
+                    <span className="text-[10px] text-daintree-text/50">{result.subtabLabel}</span>
                   </>
                 )}
-                <span className="text-[10px] text-canopy-text/30">›</span>
-                <span className="text-[10px] text-canopy-text/50">{result.section}</span>
+                <span className="text-[10px] text-daintree-text/30">›</span>
+                <span className="text-[10px] text-daintree-text/50">{result.section}</span>
                 {result.requiresEnabled && (
                   <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-status-warning shrink-0">
                     <AlertTriangle className="w-3 h-3" />
@@ -1683,19 +1683,19 @@ function SearchResults({
                   </span>
                 )}
               </div>
-              <div className="text-sm font-medium text-canopy-text">
+              <div className="text-sm font-medium text-daintree-text">
                 <HighlightText text={result.title} query={query} />
               </div>
-              <div className="text-xs text-canopy-text/50 mt-0.5 leading-relaxed">
+              <div className="text-xs text-daintree-text/50 mt-0.5 leading-relaxed">
                 <HighlightText text={result.description} query={query} />
               </div>
             </div>
             <ChevronRight
               className={cn(
-                "w-4 h-4 text-canopy-text/20 shrink-0 transition",
+                "w-4 h-4 text-daintree-text/20 shrink-0 transition",
                 index === activeIndex
-                  ? "text-canopy-accent/60 translate-x-0.5"
-                  : "group-hover:text-canopy-text/40"
+                  ? "text-daintree-accent/60 translate-x-0.5"
+                  : "group-hover:text-daintree-text/40"
               )}
             />
           </div>

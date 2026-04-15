@@ -14,7 +14,7 @@ import { taskQueueService, TaskQueueService } from "./TaskQueueService.js";
 import { AgentRouter, getAgentRouter } from "./AgentRouter.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { AgentState } from "../../shared/types/agent.js";
-import type { CanopyEventMap } from "./events.js";
+import type { DaintreeEventMap } from "./events.js";
 import type { TaskRoutingHints } from "../../shared/types/task.js";
 
 /**
@@ -224,7 +224,7 @@ export class TaskOrchestrator {
    * When an agent becomes idle or waiting, attempt to assign a new task.
    */
   private async handleAgentStateChange(
-    payload: CanopyEventMap["agent:state-changed"]
+    payload: DaintreeEventMap["agent:state-changed"]
   ): Promise<void> {
     if (this.isDisposed) return;
 
@@ -243,7 +243,7 @@ export class TaskOrchestrator {
    * Handle task state changes.
    * When a task becomes queued (enqueued or unblocked), attempt assignment.
    */
-  private handleTaskStateChange(payload: CanopyEventMap["task:state-changed"]): void {
+  private handleTaskStateChange(payload: DaintreeEventMap["task:state-changed"]): void {
     if (this.isDisposed) return;
     if (payload.state === "queued") {
       void this.assignNextTask();
@@ -254,7 +254,7 @@ export class TaskOrchestrator {
    * Handle agent completion.
    * Correlate the completion to a running task and mark it as completed.
    */
-  private async handleAgentComplete(payload: CanopyEventMap["agent:completed"]): Promise<void> {
+  private async handleAgentComplete(payload: DaintreeEventMap["agent:completed"]): Promise<void> {
     if (this.isDisposed) return;
 
     const { agentId } = payload;
@@ -308,7 +308,7 @@ export class TaskOrchestrator {
    * Handle agent kill (user-initiated termination).
    * Clean up task tracking and cancel the associated task.
    */
-  private async handleAgentKilled(payload: CanopyEventMap["agent:killed"]): Promise<void> {
+  private async handleAgentKilled(payload: DaintreeEventMap["agent:killed"]): Promise<void> {
     if (this.isDisposed) return;
 
     const { agentId } = payload;
@@ -350,7 +350,7 @@ export class TaskOrchestrator {
    * Cancel all tasks tied to the removed worktree.
    */
   private async handleWorktreeRemove(
-    payload: CanopyEventMap["sys:worktree:remove"]
+    payload: DaintreeEventMap["sys:worktree:remove"]
   ): Promise<void> {
     if (this.isDisposed) return;
 

@@ -266,7 +266,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      window.dispatchEvent(new CustomEvent("canopy:reset-sidebar-width"));
+      window.dispatchEvent(new CustomEvent("daintree:reset-sidebar-width"));
     },
   }));
 }

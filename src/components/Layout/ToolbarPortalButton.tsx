@@ -6,7 +6,7 @@ import { createTooltipWithShortcut } from "@/lib/platform";
 import { useKeybindingDisplay } from "@/hooks";
 import { usePortalStore } from "@/store";
 
-const toolbarIconButtonClass = "toolbar-icon-button text-canopy-text transition-colors";
+const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
 
 export const ToolbarPortalButton = memo(function ToolbarPortalButton({
   "data-toolbar-item": dataToolbarItem,

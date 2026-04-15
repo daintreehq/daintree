@@ -76,7 +76,7 @@ export class ProjectSwitchService {
 
       await projectStore.setCurrentProject(projectId);
 
-      // Apply portable project identity from .canopy/project.json if the user
+      // Apply portable project identity from .daintree/project.json if the user
       // hasn't customised the project name/emoji (still has defaults).
       await this.applyInRepoIdentity(project);
 
@@ -235,7 +235,7 @@ export class ProjectSwitchService {
   }
 
   /**
-   * Apply portable project identity from .canopy/project.json during switch.
+   * Apply portable project identity from .daintree/project.json during switch.
    * Only applies values when the project still has default name/emoji (user hasn't customised).
    */
   private async applyInRepoIdentity(project: Project): Promise<void> {
@@ -243,10 +243,10 @@ export class ProjectSwitchService {
       const inRepo = await projectStore.readInRepoProjectIdentity(project.path);
       const updates: Partial<Project> = {};
 
-      if (inRepo.found && !project.canopyConfigPresent) {
-        updates.canopyConfigPresent = true;
-      } else if (!inRepo.found && project.canopyConfigPresent) {
-        updates.canopyConfigPresent = false;
+      if (inRepo.found && !project.daintreeConfigPresent) {
+        updates.daintreeConfigPresent = true;
+      } else if (!inRepo.found && project.daintreeConfigPresent) {
+        updates.daintreeConfigPresent = false;
       }
 
       const defaultName = path.basename(project.path);

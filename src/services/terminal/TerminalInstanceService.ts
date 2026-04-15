@@ -1859,7 +1859,7 @@ export const terminalInstanceService = new TerminalInstanceService();
 // Registered unconditionally but gated at call time — the function is harmless
 // in production and avoids import-time env var timing issues.
 if (typeof window !== "undefined") {
-  (window as unknown as Record<string, unknown>).__canopyReadTerminalBuffer = (
+  (window as unknown as Record<string, unknown>).__daintreeReadTerminalBuffer = (
     panelId: string
   ): string => {
     const managed = terminalInstanceService["instances"].get(panelId);
@@ -1873,7 +1873,7 @@ if (typeof window !== "undefined") {
     return lines.join("\n");
   };
 
-  (window as unknown as Record<string, unknown>).__canopySelectTerminalAll = (
+  (window as unknown as Record<string, unknown>).__daintreeSelectTerminalAll = (
     panelId: string
   ): boolean => {
     const managed = terminalInstanceService["instances"].get(panelId);
@@ -1882,7 +1882,7 @@ if (typeof window !== "undefined") {
     return true;
   };
 
-  (window as unknown as Record<string, unknown>).__canopyGetTerminalBufferLength = (
+  (window as unknown as Record<string, unknown>).__daintreeGetTerminalBufferLength = (
     panelId: string
   ): number => {
     const managed = terminalInstanceService["instances"].get(panelId);
@@ -1890,7 +1890,7 @@ if (typeof window !== "undefined") {
     return managed.terminal.buffer.active.length;
   };
 
-  (window as unknown as Record<string, unknown>).__canopyTriggerTerminalLink = (
+  (window as unknown as Record<string, unknown>).__daintreeTriggerTerminalLink = (
     panelId: string,
     url: string
   ): string => {

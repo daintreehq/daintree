@@ -66,7 +66,7 @@ export class TerminalSerializerService {
     this.isDisposed = true;
     this.inFlightRequests.clear();
 
-    if (process.env.CANOPY_VERBOSE) {
+    if (process.env.DAINTREE_VERBOSE) {
       console.log("[TerminalSerializerService] Disposed");
     }
   }

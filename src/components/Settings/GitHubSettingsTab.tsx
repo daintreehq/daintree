@@ -141,7 +141,7 @@ export function GitHubSettingsTab() {
     void actionService.dispatch(
       "system.openExternal",
       {
-        url: "https://github.com/settings/tokens/new?scopes=repo,read:org&description=Canopy",
+        url: "https://github.com/settings/tokens/new?scopes=repo,read:org&description=Daintree",
       },
       { source: "user" }
     );
@@ -154,7 +154,7 @@ export function GitHubSettingsTab() {
           <div className="text-status-error text-sm">Settings load timed out</div>
           <button
             onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
-            className="text-xs px-3 py-1.5 bg-canopy-accent/10 hover:bg-canopy-accent/20 text-canopy-accent rounded transition-colors"
+            className="text-xs px-3 py-1.5 bg-daintree-accent/10 hover:bg-daintree-accent/20 text-daintree-accent rounded transition-colors"
           >
             Reload Application
           </button>
@@ -163,7 +163,7 @@ export function GitHubSettingsTab() {
     }
     return (
       <div className="flex items-center justify-center h-32">
-        <div className="text-canopy-text/60 text-sm">Loading GitHub settings...</div>
+        <div className="text-daintree-text/60 text-sm">Loading GitHub settings...</div>
       </div>
     );
   }
@@ -176,7 +176,7 @@ export function GitHubSettingsTab() {
         </div>
         <button
           onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
-          className="text-xs px-3 py-1.5 bg-canopy-accent/10 hover:bg-canopy-accent/20 text-canopy-accent rounded transition-colors"
+          className="text-xs px-3 py-1.5 bg-daintree-accent/10 hover:bg-daintree-accent/20 text-daintree-accent rounded transition-colors"
         >
           Reload Application
         </button>
@@ -210,7 +210,7 @@ export function GitHubSettingsTab() {
               }
               aria-label="GitHub personal access token"
               autoComplete="new-password"
-              className="flex-1 bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors"
+              className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-muted focus:outline-none focus:border-daintree-accent transition-colors"
               disabled={isValidating || isTesting}
             />
             <Button
@@ -220,7 +220,7 @@ export function GitHubSettingsTab() {
               size="sm"
               aria-label="Test token"
               aria-busy={isTesting}
-              className="min-w-[70px] text-canopy-text border-canopy-border hover:bg-canopy-border"
+              className="min-w-[70px] text-daintree-text border-daintree-border hover:bg-daintree-border"
             >
               {isTesting ? (
                 <Spinner />
@@ -246,7 +246,7 @@ export function GitHubSettingsTab() {
                 onClick={handleClearToken}
                 variant="outline"
                 size="sm"
-                className="text-status-error border-canopy-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+                className="text-status-error border-daintree-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
               >
                 Clear
               </Button>
@@ -289,21 +289,21 @@ export function GitHubSettingsTab() {
           onClick={openGitHubTokenPage}
           variant="outline"
           size="sm"
-          className="text-canopy-text border-canopy-border hover:bg-canopy-border"
+          className="text-daintree-text border-daintree-border hover:bg-daintree-border"
         >
           <ExternalLink />
           Create Token on GitHub
         </Button>
         <div className="space-y-1">
-          <p className="text-xs text-canopy-text/50">Required scopes:</p>
-          <ul className="text-xs text-canopy-text/50 list-disc list-inside space-y-0.5">
+          <p className="text-xs text-daintree-text/50">Required scopes:</p>
+          <ul className="text-xs text-daintree-text/50 list-disc list-inside space-y-0.5">
             <li>
-              <code className="text-canopy-text/70 bg-canopy-bg px-1 rounded">repo</code> — Access
-              repository data
+              <code className="text-daintree-text/70 bg-daintree-bg px-1 rounded">repo</code> —
+              Access repository data
             </li>
             <li>
-              <code className="text-canopy-text/70 bg-canopy-bg px-1 rounded">read:org</code> — Read
-              organization membership (for private repos)
+              <code className="text-daintree-text/70 bg-daintree-bg px-1 rounded">read:org</code> —
+              Read organization membership (for private repos)
             </li>
           </ul>
         </div>

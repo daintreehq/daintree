@@ -10,7 +10,7 @@ import {
   GitBranch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CanopyIcon } from "@/components/icons";
+import { DaintreeIcon } from "@/components/icons";
 import { useProjectStore } from "@/store/projectStore";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
@@ -52,7 +52,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const completedCount = checklist ? Object.values(checklist.items).filter(Boolean).length : 0;
   const allDone = checklist ? Object.values(checklist.items).every(Boolean) : false;
   const showChecklist = gettingStarted.visible && checklist && !checklist.dismissed && !allDone;
-  const progressTotal = 4; // 3 real items + endowed "Install Canopy"
+  const progressTotal = 4; // 3 real items + endowed "Install Daintree"
   const progressDone = 1 + completedCount; // endowed item always complete
 
   return (
@@ -60,11 +60,11 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
       <div className="max-w-2xl w-full flex flex-col items-center px-8 py-12 gap-10">
         {/* Hero */}
         <div className="flex flex-col items-center text-center">
-          <CanopyIcon className="h-16 w-16 text-tint/50 mb-6" />
-          <h1 className="text-2xl font-semibold text-canopy-text tracking-tight mb-2">
-            Welcome to Canopy
+          <DaintreeIcon className="h-16 w-16 text-tint/50 mb-6" />
+          <h1 className="text-2xl font-semibold text-daintree-text tracking-tight mb-2">
+            Welcome to Daintree
           </h1>
-          <p className="text-sm text-canopy-text/60 leading-relaxed font-medium">
+          <p className="text-sm text-daintree-text/60 leading-relaxed font-medium">
             A habitat for your AI agents.
           </p>
         </div>
@@ -125,7 +125,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
 
         {/* Keyboard Shortcuts */}
         <div className="w-full">
-          <h3 className="text-xs font-medium text-canopy-text/50 uppercase tracking-wider mb-3">
+          <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider mb-3">
             Keyboard Shortcuts
           </h3>
           <div className="grid grid-cols-2 gap-x-8 gap-y-2">
@@ -134,8 +134,8 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
               if (!combo) return null;
               return (
                 <div key={actionId} className="flex items-center justify-between gap-3">
-                  <span className="text-sm text-canopy-text/70">{label}</span>
-                  <kbd className="shrink-0 bg-canopy-bg border border-canopy-border rounded px-1.5 py-0.5 text-xs font-mono text-canopy-text/80 shadow-sm">
+                  <span className="text-sm text-daintree-text/70">{label}</span>
+                  <kbd className="shrink-0 bg-daintree-bg border border-daintree-border rounded px-1.5 py-0.5 text-xs font-mono text-daintree-text/80 shadow-sm">
                     {combo}
                   </kbd>
                 </div>
@@ -145,13 +145,13 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center gap-4 text-xs text-canopy-text/40 pt-2">
+        <div className="flex items-center gap-4 text-xs text-daintree-text/40 pt-2">
           <button
             type="button"
             onClick={() =>
-              void window.electron?.system?.openExternal("https://canopyide.com/newsletter")
+              void window.electron?.system?.openExternal("https://daintree.org/newsletter")
             }
-            className="flex items-center gap-1.5 hover:text-canopy-text/60 transition-colors"
+            className="flex items-center gap-1.5 hover:text-daintree-text/60 transition-colors"
           >
             <Newspaper className="h-3 w-3" />
             Newsletter
@@ -174,7 +174,7 @@ function RecentProjects({
 }) {
   return (
     <div className="w-full">
-      <h3 className="text-xs font-medium text-canopy-text/50 uppercase tracking-wider mb-3">
+      <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider mb-3">
         Recent Projects
       </h3>
       <div className="space-y-1">
@@ -186,7 +186,7 @@ function RecentProjects({
             className={cn(
               "w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-left transition-colors",
               "hover:bg-overlay-soft",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
             )}
           >
             <div
@@ -194,7 +194,7 @@ function RecentProjects({
               style={{
                 background: project.color
                   ? `linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), ${getProjectGradient(project.color)}`
-                  : "linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), var(--color-canopy-sidebar)",
+                  : "linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), var(--color-daintree-sidebar)",
               }}
             >
               <span className="leading-none select-none filter drop-shadow-sm">
@@ -202,12 +202,12 @@ function RecentProjects({
               </span>
             </div>
             <div className="flex-1 min-w-0">
-              <span className="text-sm font-semibold text-canopy-text/85 truncate block">
+              <span className="text-sm font-semibold text-daintree-text/85 truncate block">
                 {project.name}
               </span>
-              <span className="text-xs text-canopy-text/40 truncate block">{project.path}</span>
+              <span className="text-xs text-daintree-text/40 truncate block">{project.path}</span>
             </div>
-            <span className="text-xs text-canopy-text/40 shrink-0">
+            <span className="text-xs text-daintree-text/40 shrink-0">
               {formatTimeAgo(project.lastOpened)}
             </span>
           </button>
@@ -229,30 +229,30 @@ function InlineChecklist({
   return (
     <div className="w-full">
       <div className="flex items-center gap-3 mb-3">
-        <h3 className="text-xs font-medium text-canopy-text/50 uppercase tracking-wider">
+        <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider">
           Getting Started
         </h3>
-        <span className="text-[10px] text-canopy-text/40 font-mono">
+        <span className="text-[10px] text-daintree-text/40 font-mono">
           {progressDone}/{progressTotal}
         </span>
       </div>
 
       {/* Progress bar */}
-      <div className="w-full h-1 bg-canopy-border/50 rounded-full mb-4 overflow-hidden">
+      <div className="w-full h-1 bg-daintree-border/50 rounded-full mb-4 overflow-hidden">
         <div
-          className="h-full bg-canopy-accent rounded-full transition-[width] duration-500"
+          className="h-full bg-daintree-accent rounded-full transition-[width] duration-500"
           style={{ width: `${(progressDone / progressTotal) * 100}%` }}
         />
       </div>
 
       <div className="space-y-1">
-        {/* Endowed progress: Install Canopy (always complete) */}
+        {/* Endowed progress: Install Daintree (always complete) */}
         <div className="flex items-start gap-2.5 px-2 py-1.5 opacity-60">
-          <div className="h-4 w-4 rounded-full bg-canopy-accent border border-canopy-accent flex items-center justify-center shrink-0">
-            <Check className="h-2.5 w-2.5 text-canopy-bg" />
+          <div className="h-4 w-4 rounded-full bg-daintree-accent border border-daintree-accent flex items-center justify-center shrink-0">
+            <Check className="h-2.5 w-2.5 text-daintree-bg" />
           </div>
-          <Download className="h-3.5 w-3.5 text-canopy-text/40 shrink-0" />
-          <span className="text-xs leading-snug text-canopy-text/40">Install Canopy</span>
+          <Download className="h-3.5 w-3.5 text-daintree-text/40 shrink-0" />
+          <span className="text-xs leading-snug text-daintree-text/40">Install Daintree</span>
         </div>
 
         {/* Real checklist items */}
@@ -264,22 +264,22 @@ function InlineChecklist({
               <div
                 className={cn(
                   "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition-colors duration-200",
-                  done ? "bg-canopy-accent border-canopy-accent" : "border-canopy-text/30"
+                  done ? "bg-daintree-accent border-daintree-accent" : "border-daintree-text/30"
                 )}
               >
-                {done && <Check className="h-2.5 w-2.5 text-canopy-bg" />}
+                {done && <Check className="h-2.5 w-2.5 text-daintree-bg" />}
               </div>
               <Icon
                 className={cn(
                   "h-3.5 w-3.5 shrink-0",
-                  done ? "text-canopy-text/40" : "text-canopy-text/70"
+                  done ? "text-daintree-text/40" : "text-daintree-text/70"
                 )}
               />
               <div className="flex flex-col min-w-0 flex-1">
                 <span
                   className={cn(
                     "text-xs leading-snug",
-                    done ? "text-canopy-text/40" : "text-canopy-text/90"
+                    done ? "text-daintree-text/40" : "text-daintree-text/90"
                   )}
                 >
                   {label}
@@ -288,7 +288,7 @@ function InlineChecklist({
                   <span
                     className={cn(
                       "text-[10px] leading-snug",
-                      done ? "text-canopy-text/30" : "text-canopy-text/50"
+                      done ? "text-daintree-text/30" : "text-daintree-text/50"
                     )}
                   >
                     {description}
@@ -325,7 +325,7 @@ function InlineChecklist({
                 sharedClasses,
                 "w-full text-left cursor-pointer",
                 "hover:bg-tint/10",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
               )}
             >
               {content}

@@ -88,7 +88,7 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
   test.beforeAll(async () => {
     const [repoA, repoB] = createFixtureRepos(2);
 
-    ctx = await launchApp({ env: { CANOPY_E2E_FAULT_MODE: "1" } });
+    ctx = await launchApp({ env: { DAINTREE_E2E_FAULT_MODE: "1" } });
 
     // Open and onboard Project A
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, repoA, PROJECT_A_NAME);

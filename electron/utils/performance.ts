@@ -20,9 +20,9 @@ interface IpcSampleMeta {
 
 export const APP_BOOT_T0 = performance.now();
 export const mainTimeOrigin = performance.timeOrigin;
-const SHOULD_CAPTURE = process.env.CANOPY_PERF_CAPTURE === "1";
-const METRICS_FILE = process.env.CANOPY_PERF_METRICS_FILE
-  ? path.resolve(process.cwd(), process.env.CANOPY_PERF_METRICS_FILE)
+const SHOULD_CAPTURE = process.env.DAINTREE_PERF_CAPTURE === "1";
+const METRICS_FILE = process.env.DAINTREE_PERF_METRICS_FILE
+  ? path.resolve(process.cwd(), process.env.DAINTREE_PERF_METRICS_FILE)
   : null;
 const CAPTURE_ENABLED = SHOULD_CAPTURE && Boolean(METRICS_FILE);
 
@@ -97,7 +97,7 @@ function estimatePayloadBytes(payload: unknown): number | null {
 export function sampleIpcTiming(channel: string, durationMs: number, meta?: IpcSampleMeta): void {
   if (!CAPTURE_ENABLED) return;
 
-  const sampleRateRaw = Number(process.env.CANOPY_PERF_IPC_SAMPLE_RATE ?? "0.1");
+  const sampleRateRaw = Number(process.env.DAINTREE_PERF_IPC_SAMPLE_RATE ?? "0.1");
   const sampleRate = Number.isFinite(sampleRateRaw) ? Math.max(0, Math.min(1, sampleRateRaw)) : 0.1;
 
   if (sampleRate <= 0) return;

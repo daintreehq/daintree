@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canopyTheme } from "../editorTheme";
+import { daintreeTheme } from "../editorTheme";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 
 /**
@@ -22,13 +22,13 @@ function deepContainsValue(obj: unknown, target: string, seen = new WeakSet()): 
   return false;
 }
 
-describe("canopyTheme", () => {
+describe("daintreeTheme", () => {
   it("includes fontFamily in the theme extension", () => {
-    expect(deepContainsValue(canopyTheme, DEFAULT_TERMINAL_FONT_FAMILY)).toBe(true);
+    expect(deepContainsValue(daintreeTheme, DEFAULT_TERMINAL_FONT_FAMILY)).toBe(true);
   });
 
   it("is a valid CodeMirror extension array", () => {
-    expect(Array.isArray(canopyTheme)).toBe(true);
-    expect((canopyTheme as readonly unknown[]).length).toBeGreaterThan(0);
+    expect(Array.isArray(daintreeTheme)).toBe(true);
+    expect((daintreeTheme as readonly unknown[]).length).toBeGreaterThan(0);
   });
 });

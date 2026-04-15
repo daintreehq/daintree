@@ -218,7 +218,7 @@ export const createRestartActions = (
           if (agentSettings) {
             const agentConfig = getAgentConfig(effectiveAgentId);
             const baseCommand = agentConfig?.command || effectiveAgentId;
-            const clipboardDirectory = tmpDir ? `${tmpDir}/canopy-clipboard` : undefined;
+            const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
             commandToRun = generateAgentCommand(
               baseCommand,
               agentSettings.agents?.[effectiveAgentId] ?? {},
@@ -662,7 +662,7 @@ export const createRestartActions = (
         if (agentSettings) {
           const agentConfig = getAgentConfig(effectiveAgentId);
           const baseCommand = agentConfig?.command || effectiveAgentId;
-          const clipboardDirectory = tmpDir ? `${tmpDir}/canopy-clipboard` : undefined;
+          const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
           commandToRun = generateAgentCommand(
             baseCommand,
             agentSettings.agents?.[effectiveAgentId] ?? {},

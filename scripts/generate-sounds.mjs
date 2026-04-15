@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Generate Canopy notification sounds.
+ * Generate Daintree notification sounds.
  *
  * Design language: "digital ecology" — organic strike transients,
  * FM-synthesis body with woody inharmonicity, subtle natural-space
@@ -569,7 +569,7 @@ class BrownNoise {
 }
 
 // ---------------------------------------------------------------------------
-// Canopy note synthesizer
+// Daintree note synthesizer
 //
 // Architecture: serial excitation.  The FM "digital shimmer" and mallet
 // noise are combined into a composite excitation signal that is fed INTO
@@ -584,7 +584,7 @@ class BrownNoise {
 //                              [detuned double adds organic width at output]
 // ---------------------------------------------------------------------------
 
-function canopyNote(freq, duration, opts = {}) {
+function daintreeNote(freq, duration, opts = {}) {
   const {
     amplitude = 0.55,
     // Modal wood body
@@ -729,7 +729,7 @@ function sequence(notes, opts = {}) {
     let noteFreq = n.freq;
     const pitchCents = (n.opts || {})._pitchCents || 0;
     if (pitchCents !== 0) noteFreq *= Math.pow(2, pitchCents / 1200);
-    const noteSamples = canopyNote(noteFreq, noteDur, n.opts || {});
+    const noteSamples = daintreeNote(noteFreq, noteDur, n.opts || {});
     for (let j = 0; j < noteSamples.length && jitteredOffset + j < totalSamples; j++) {
       output[jitteredOffset + j] += noteSamples[j];
     }
@@ -851,7 +851,7 @@ function writeWav(samples, filePath) {
 }
 
 // ---------------------------------------------------------------------------
-// Sound definitions — the Canopy palette
+// Sound definitions — the Daintree palette
 //
 // Design principles:
 //   1. Earthy core — modal wood resonators are the primary voice
@@ -877,7 +877,7 @@ function writeWav(samples, filePath) {
 // Single quiet note, long attack, played every 8-10s during background work.
 // A4 (root) conveys grounding/presence without implying completion or alert.
 const pulse = postProcess(
-  canopyNote(JI.A4, 0.22, {
+  daintreeNote(JI.A4, 0.22, {
     amplitude: 0.28,
     resonance: 1.1,
     fmAmt: 0.2,
@@ -894,7 +894,7 @@ const pulse = postProcess(
 
 // error.wav — STATIC: no variants.  Critical sounds need Pavlovian consistency.
 const error = postProcess(
-  canopyNote(JI.Cs5, 0.26, {
+  daintreeNote(JI.Cs5, 0.26, {
     amplitude: 0.55,
     resonance: 0.7,
     modeQs: [150, 80, 40, 20],
@@ -1080,7 +1080,7 @@ function genPing(variantIdx = 0) {
   );
   let freq = JI.E5;
   if (vopts._pitchCents) freq *= Math.pow(2, vopts._pitchCents / 1200);
-  return postProcess(canopyNote(freq, 0.22, vopts), {
+  return postProcess(daintreeNote(freq, 0.22, vopts), {
     reverbWet: 0.02,
     targetPeak: 0.68,
     chassisMix: 0.02,
@@ -1179,7 +1179,7 @@ function genGitCommit(variantIdx = 0) {
   );
   let freq = JI.E5;
   if (vopts._pitchCents) freq *= Math.pow(2, vopts._pitchCents / 1200);
-  return postProcess(canopyNote(freq, 0.18, vopts), {
+  return postProcess(daintreeNote(freq, 0.18, vopts), {
     reverbWet: 0.01,
     targetPeak: 0.55,
     chassisMix: 0.015,
@@ -1303,7 +1303,7 @@ function genAgentSpawned(variantIdx = 0) {
   );
   let freq = JI.A4;
   if (vopts._pitchCents) freq *= Math.pow(2, vopts._pitchCents / 1200);
-  return postProcess(canopyNote(freq, 0.15, vopts), {
+  return postProcess(daintreeNote(freq, 0.15, vopts), {
     reverbWet: 0.01,
     targetPeak: 0.5,
     chassisMix: 0.01,
@@ -1332,7 +1332,7 @@ function genContextInjected(variantIdx = 0) {
   );
   let freq = JI.Cs5;
   if (vopts._pitchCents) freq *= Math.pow(2, vopts._pitchCents / 1200);
-  return postProcess(canopyNote(freq, 0.12, vopts), {
+  return postProcess(daintreeNote(freq, 0.12, vopts), {
     reverbWet: 0.005,
     targetPeak: 0.52,
     chassisMix: 0.01,
@@ -1351,7 +1351,7 @@ function genContextInjected(variantIdx = 0) {
 // git-push-error.wav — STATIC: error semantics need consistency.
 // Shorter, quieter sibling of error.wav — a soft "operation failed" cue.
 const gitPushError = postProcess(
-  canopyNote(JI.Cs5, 0.18, {
+  daintreeNote(JI.Cs5, 0.18, {
     amplitude: 0.45,
     resonance: 0.65,
     modeQs: [120, 60, 30, 15],

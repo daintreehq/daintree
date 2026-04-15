@@ -205,9 +205,9 @@ export function AppLayout({
       handleToggleFocusMode();
     };
 
-    window.addEventListener("canopy:toggle-focus-mode", handleFocusModeToggle);
+    window.addEventListener("daintree:toggle-focus-mode", handleFocusModeToggle);
     return () => {
-      window.removeEventListener("canopy:toggle-focus-mode", handleFocusModeToggle);
+      window.removeEventListener("daintree:toggle-focus-mode", handleFocusModeToggle);
     };
   }, [handleToggleFocusMode]);
 
@@ -216,14 +216,15 @@ export function AppLayout({
       layout.togglePortal();
     };
 
-    window.addEventListener("canopy:toggle-portal", handlePortalToggle);
-    return () => window.removeEventListener("canopy:toggle-portal", handlePortalToggle);
+    window.addEventListener("daintree:toggle-portal", handlePortalToggle);
+    return () => window.removeEventListener("daintree:toggle-portal", handlePortalToggle);
   }, [layout.togglePortal]);
 
   useEffect(() => {
     const handleResetSidebarWidth = () => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
-    window.addEventListener("canopy:reset-sidebar-width", handleResetSidebarWidth);
-    return () => window.removeEventListener("canopy:reset-sidebar-width", handleResetSidebarWidth);
+    window.addEventListener("daintree:reset-sidebar-width", handleResetSidebarWidth);
+    return () =>
+      window.removeEventListener("daintree:reset-sidebar-width", handleResetSidebarWidth);
   }, []);
 
   // Sync macro focus region visibility from layout state
@@ -277,14 +278,14 @@ export function AppLayout({
 
   return (
     <div
-      className="h-screen flex flex-col bg-canopy-bg"
+      className="h-screen flex flex-col bg-daintree-bg"
       style={{
         height: "100vh",
         width: "100vw",
-        backgroundColor: "var(--color-canopy-bg)",
+        backgroundColor: "var(--color-daintree-bg)",
         display: "flex",
         flexDirection: "column",
-        color: "var(--color-canopy-text)",
+        color: "var(--color-daintree-text)",
       }}
     >
       <PortalVisibilityController />
@@ -317,13 +318,13 @@ export function AppLayout({
           )}
           <ErrorBoundary variant="section" componentName="MainContent">
             <main
-              className="flex-1 flex flex-col overflow-hidden bg-canopy-bg relative"
+              className="flex-1 flex flex-col overflow-hidden bg-daintree-bg relative"
               style={{
                 flex: 1,
                 display: "flex",
                 flexDirection: "column",
                 overflow: "hidden",
-                backgroundColor: "var(--color-canopy-bg)",
+                backgroundColor: "var(--color-daintree-bg)",
               }}
             >
               <div className="flex-1 overflow-hidden min-h-0">{children}</div>
@@ -343,7 +344,7 @@ export function AppLayout({
               )}
               {layout.portalOpen && (
                 <ErrorBoundary variant="section" componentName="PortalDock">
-                  <div className="absolute right-0 top-0 bottom-0 z-50 shadow-2xl border-l border-canopy-border">
+                  <div className="absolute right-0 top-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border">
                     <PortalDock />
                   </div>
                 </ErrorBoundary>

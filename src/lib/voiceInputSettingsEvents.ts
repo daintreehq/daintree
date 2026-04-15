@@ -1,6 +1,6 @@
 import type { VoiceInputSettings } from "@shared/types";
 
-export const VOICE_INPUT_SETTINGS_CHANGED_EVENT = "canopy:voice-input-settings-changed";
+export const VOICE_INPUT_SETTINGS_CHANGED_EVENT = "daintree:voice-input-settings-changed";
 
 export function dispatchVoiceInputSettingsChanged(settings: VoiceInputSettings): void {
   window.dispatchEvent(

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Icon Generation Script for Canopy
+# Icon Generation Script for Daintree
 # Usage: ./scripts/generate-icons.sh <source-image.png>
 #
 # Requires:

@@ -3,27 +3,27 @@ import { isTrustedRendererUrl, getTrustedOrigins } from "../trustedRenderer.js";
 
 describe("trustedRenderer", () => {
   const originalNodeEnv = process.env.NODE_ENV;
-  const originalDevServerUrl = process.env.CANOPY_DEV_SERVER_URL;
+  const originalDevServerUrl = process.env.DAINTREE_DEV_SERVER_URL;
 
   beforeEach(() => {
     process.env.NODE_ENV = "development";
-    delete process.env.CANOPY_DEV_SERVER_URL;
+    delete process.env.DAINTREE_DEV_SERVER_URL;
   });
 
   afterEach(() => {
     process.env.NODE_ENV = originalNodeEnv;
     if (originalDevServerUrl === undefined) {
-      delete process.env.CANOPY_DEV_SERVER_URL;
+      delete process.env.DAINTREE_DEV_SERVER_URL;
     } else {
-      process.env.CANOPY_DEV_SERVER_URL = originalDevServerUrl;
+      process.env.DAINTREE_DEV_SERVER_URL = originalDevServerUrl;
     }
   });
 
   describe("isTrustedRendererUrl", () => {
     it("should allow production app:// origin", () => {
-      expect(isTrustedRendererUrl("app://canopy")).toBe(true);
-      expect(isTrustedRendererUrl("app://canopy/")).toBe(true);
-      expect(isTrustedRendererUrl("app://canopy/path/to/page")).toBe(true);
+      expect(isTrustedRendererUrl("app://daintree")).toBe(true);
+      expect(isTrustedRendererUrl("app://daintree/")).toBe(true);
+      expect(isTrustedRendererUrl("app://daintree/path/to/page")).toBe(true);
     });
 
     it("should allow localhost:5173 dev origin", () => {
@@ -56,7 +56,7 @@ describe("trustedRenderer", () => {
     });
 
     it("should reject app protocol with non-standard port", () => {
-      expect(isTrustedRendererUrl("app://canopy:1234")).toBe(false);
+      expect(isTrustedRendererUrl("app://daintree:1234")).toBe(false);
     });
 
     it("should reject userinfo tricks", () => {
@@ -69,8 +69,8 @@ describe("trustedRenderer", () => {
     it("should allow query strings and hash fragments", () => {
       expect(isTrustedRendererUrl("http://localhost:5173/?foo=bar")).toBe(true);
       expect(isTrustedRendererUrl("http://localhost:5173/#/path")).toBe(true);
-      expect(isTrustedRendererUrl("app://canopy/index.html?v=1")).toBe(true);
-      expect(isTrustedRendererUrl("app://canopy/#/settings")).toBe(true);
+      expect(isTrustedRendererUrl("app://daintree/index.html?v=1")).toBe(true);
+      expect(isTrustedRendererUrl("app://daintree/#/settings")).toBe(true);
     });
 
     it("should handle malformed URLs", () => {
@@ -83,11 +83,11 @@ describe("trustedRenderer", () => {
     it("should normalize protocol and hostname to lowercase per URL spec", () => {
       expect(isTrustedRendererUrl("HTTP://localhost:5173")).toBe(true);
       expect(isTrustedRendererUrl("http://LOCALHOST:5173")).toBe(true);
-      expect(isTrustedRendererUrl("APP://canopy")).toBe(true);
+      expect(isTrustedRendererUrl("APP://daintree")).toBe(true);
     });
 
     it("should allow an env-configured dev origin", () => {
-      process.env.CANOPY_DEV_SERVER_URL = "http://127.0.0.1:6123";
+      process.env.DAINTREE_DEV_SERVER_URL = "http://127.0.0.1:6123";
 
       expect(isTrustedRendererUrl("http://127.0.0.1:6123")).toBe(true);
       expect(isTrustedRendererUrl("http://localhost:6123")).toBe(true);
@@ -98,7 +98,7 @@ describe("trustedRenderer", () => {
   describe("getTrustedOrigins", () => {
     it("should return all trusted origins including dev origins in development", () => {
       const origins = getTrustedOrigins();
-      expect(origins).toContain("app://canopy");
+      expect(origins).toContain("app://daintree");
       expect(origins).toContain("http://localhost:5173");
       expect(origins).toContain("http://127.0.0.1:5173");
     });

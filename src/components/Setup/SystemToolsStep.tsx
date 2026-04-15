@@ -35,14 +35,14 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
   const versionMismatch = check?.available && !check.meetsMinVersion && check.minVersion;
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30">
+    <div className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30">
       <div className="flex items-center gap-3 px-3 py-2.5">
         <StatusIcon check={check} loading={loading} />
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-canopy-text truncate">{label}</div>
+          <div className="text-sm font-medium text-daintree-text truncate">{label}</div>
         </div>
         {loading ? (
-          <span className="text-[11px] text-canopy-text/30 shrink-0">Checking…</span>
+          <span className="text-[11px] text-daintree-text/30 shrink-0">Checking…</span>
         ) : needsInstall ? (
           <div className="flex items-center gap-2 shrink-0">
             {versionMismatch && (
@@ -57,7 +57,7 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
               <button
                 type="button"
                 onClick={() => setExpanded((v) => !v)}
-                className="inline-flex items-center gap-1 text-[11px] text-canopy-accent hover:underline"
+                className="inline-flex items-center gap-1 text-[11px] text-daintree-accent hover:underline"
               >
                 {expanded ? (
                   <ChevronDown className="w-3 h-3" />
@@ -70,7 +70,7 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
             {check.installUrl && (
               <a
                 href={check.installUrl}
-                className="inline-flex items-center gap-1 text-[11px] text-canopy-text/40 hover:text-canopy-text"
+                className="inline-flex items-center gap-1 text-[11px] text-daintree-text/40 hover:text-daintree-text"
                 onClick={(e) => {
                   e.preventDefault();
                   void systemClient.openExternal(check.installUrl!);
@@ -81,9 +81,9 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
             )}
           </div>
         ) : check?.version ? (
-          <span className="text-[11px] text-canopy-text/40 shrink-0">v{check.version}</span>
+          <span className="text-[11px] text-daintree-text/40 shrink-0">v{check.version}</span>
         ) : check?.available ? (
-          <span className="text-[11px] text-canopy-text/40 shrink-0">Installed</span>
+          <span className="text-[11px] text-daintree-text/40 shrink-0">Installed</span>
         ) : null}
       </div>
       {expanded && installBlocks && (
@@ -105,7 +105,7 @@ export function StatusIcon({
   loading: boolean;
 }) {
   if (loading) {
-    return <Loader2 className="w-4 h-4 text-canopy-text/30 animate-spin shrink-0" />;
+    return <Loader2 className="w-4 h-4 text-daintree-text/30 animate-spin shrink-0" />;
   }
   if (check?.available && check.meetsMinVersion) {
     return <CircleCheck className="w-4 h-4 text-status-success shrink-0" />;

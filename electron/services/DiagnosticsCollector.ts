@@ -128,7 +128,7 @@ async function collectRuntime() {
     argv: process.argv.map(sanitizePath),
     env: {
       NODE_ENV: process.env.NODE_ENV ?? null,
-      CANOPY_DEBUG: process.env.CANOPY_DEBUG ?? null,
+      DAINTREE_DEBUG: process.env.DAINTREE_DEBUG ?? null,
       SHELL: process.env.SHELL ?? null,
       TERM: process.env.TERM ?? null,
       PATH: process.env.PATH ? sanitizePath(process.env.PATH) : null,

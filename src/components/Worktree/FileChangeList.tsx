@@ -35,7 +35,7 @@ const STATUS_CONFIG: Record<GitStatus, { label: string; color: string }> = {
   untracked: { label: "?", color: "text-status-success" },
   renamed: { label: "R", color: "text-status-info" },
   copied: { label: "C", color: "text-status-info" },
-  ignored: { label: "I", color: "text-canopy-text/40" },
+  ignored: { label: "I", color: "text-daintree-text/40" },
   conflicted: { label: "!", color: "text-status-error" },
 };
 
@@ -193,11 +193,11 @@ export function FileChangeList({
 
               <div className="flex-1 min-w-0 flex items-center mr-2">
                 {showDir && displayDir && (
-                  <span className="truncate min-w-0 text-canopy-text/60 opacity-60 group-hover/filerow:opacity-80">
+                  <span className="truncate min-w-0 text-daintree-text/60 opacity-60 group-hover/filerow:opacity-80">
                     {displayDir}/
                   </span>
                 )}
-                <span className="text-canopy-text group-hover/filerow:text-canopy-text font-medium truncate min-w-0">
+                <span className="text-daintree-text group-hover/filerow:text-daintree-text font-medium truncate min-w-0">
                   {base}
                 </span>
               </div>
@@ -224,10 +224,10 @@ export function FileChangeList({
         <div className="space-y-3 w-full max-h-64 overflow-y-auto overscroll-contain">
           {groupedChanges.map((group) => (
             <div key={group.dir}>
-              <div className="flex items-center gap-1.5 text-[11px] text-canopy-text/40 mb-1">
+              <div className="flex items-center gap-1.5 text-[11px] text-daintree-text/40 mb-1">
                 <Folder className="w-3 h-3" />
                 <span className="font-mono">{group.displayDir}</span>
-                <span className="text-canopy-text/30">({group.files.length})</span>
+                <span className="text-daintree-text/30">({group.files.length})</span>
               </div>
               <div className="pl-4 flex flex-col gap-0.5">
                 {group.files.map((file) => renderFileItem(file, false))}
@@ -235,7 +235,7 @@ export function FileChangeList({
             </div>
           ))}
           {remainingCount > 0 && (
-            <div className="text-[11px] text-canopy-text/60 pl-4 pt-1">
+            <div className="text-[11px] text-daintree-text/60 pl-4 pt-1">
               ...and {remainingCount} more
               {remainingFiles.length > 0 && (
                 <span className="ml-1 opacity-75">
@@ -264,7 +264,7 @@ export function FileChangeList({
         {visibleChanges.map((change) => renderFileItem(change, true))}
 
         {remainingCount > 0 && (
-          <div className="text-[11px] text-canopy-text/60 pl-5 pt-1">
+          <div className="text-[11px] text-daintree-text/60 pl-5 pt-1">
             ...and {remainingCount} more
             {remainingFiles.length > 0 && (
               <span className="ml-1 opacity-75">

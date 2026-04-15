@@ -40,7 +40,7 @@ const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string
   ignored: {
     label: "I",
     bg: "bg-tint/[0.06]",
-    text: "text-canopy-text/40",
+    text: "text-daintree-text/40",
   },
   conflicted: {
     label: "!",
@@ -95,7 +95,7 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
       tabIndex={0}
       className={cn(
         "group/stagerow flex items-center text-xs rounded px-1.5 py-1.5 cursor-pointer transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent",
         isStaged ? "bg-status-success/[0.06] hover:bg-status-success/[0.10]" : "hover:bg-tint/5"
       )}
       onClick={handleClick}
@@ -108,7 +108,7 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
               onClick={handleToggle}
               className={cn(
                 "w-5 h-5 flex items-center justify-center rounded shrink-0 mr-2 transition-colors",
-                "hover:bg-tint/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                "hover:bg-tint/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
               )}
               aria-label={isStaged ? `Unstage ${file.path}` : `Stage ${file.path}`}
             >
@@ -137,11 +137,11 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
 
       <div className="flex-1 min-w-0 flex items-baseline" title={file.path}>
         {dir && (
-          <span className="shrink truncate text-canopy-text/50 group-hover/stagerow:text-canopy-text/70 font-mono text-[11px] transition-colors">
+          <span className="shrink truncate text-daintree-text/50 group-hover/stagerow:text-daintree-text/70 font-mono text-[11px] transition-colors">
             {dir}/
           </span>
         )}
-        <span className="shrink truncate text-canopy-text group-hover/stagerow:text-canopy-text font-medium font-mono text-[11px] transition-colors">
+        <span className="shrink truncate text-daintree-text group-hover/stagerow:text-daintree-text font-medium font-mono text-[11px] transition-colors">
           {base}
         </span>
       </div>

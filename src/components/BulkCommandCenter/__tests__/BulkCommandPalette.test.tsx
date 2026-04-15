@@ -78,9 +78,9 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => {
       running: "text-status-info",
       waiting: "text-state-waiting",
       directing: "text-category-blue",
-      idle: "text-canopy-text/40",
+      idle: "text-daintree-text/40",
       completed: "text-state-completed",
-      exited: "text-canopy-text/40",
+      exited: "text-daintree-text/40",
     },
     STATE_LABELS: {
       working: "working",

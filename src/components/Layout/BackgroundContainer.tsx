@@ -148,7 +148,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
           size="sm"
           className={cn(
             compact ? "px-1.5 min-w-0" : "px-3",
-            isOpen && "bg-canopy-border border-canopy-accent/40 ring-1 ring-canopy-accent/30"
+            isOpen && "bg-daintree-border border-daintree-accent/40 ring-1 ring-daintree-accent/30"
           )}
           aria-haspopup="dialog"
           aria-expanded={isOpen}
@@ -156,9 +156,9 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
           aria-label={`Background: ${count} panel${count === 1 ? "" : "s"}`}
         >
           <span className="relative">
-            <Eclipse className="w-3.5 h-3.5 text-canopy-text/50" aria-hidden="true" />
+            <Eclipse className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
             {compact && count > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold tabular-nums shadow-sm bg-canopy-text/20 text-canopy-text">
+              <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold tabular-nums shadow-sm bg-daintree-text/20 text-daintree-text">
                 {count > 9 ? "9+" : count}
               </span>
             )}
@@ -179,8 +179,8 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
         <div className="flex flex-col">
-          <div className="px-3 py-2 border-b border-divider bg-canopy-bg/50 flex justify-between items-center">
-            <span className="text-xs font-medium text-canopy-text/70">Background Panels</span>
+          <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
+            <span className="text-xs font-medium text-daintree-text/70">Background Panels</span>
           </div>
 
           <div className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto">
@@ -214,11 +214,11 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
                         className="h-3 w-3"
                       />
                     </div>
-                    <span className="text-xs truncate font-medium text-canopy-text/70 group-hover:text-canopy-text transition-colors">
+                    <span className="text-xs truncate font-medium text-daintree-text/70 group-hover:text-daintree-text transition-colors">
                       {item.terminal.title}
                     </span>
                   </div>
-                  <span className="text-[10px] text-canopy-text/40 shrink-0">Restore</span>
+                  <span className="text-[10px] text-daintree-text/40 shrink-0">Restore</span>
                 </button>
               );
             })}
@@ -259,25 +259,25 @@ function BackgroundGroupItem({
           aria-controls={`bg-group-${groupRestoreId}`}
         >
           {isExpanded ? (
-            <ChevronDown className="w-3 h-3 text-canopy-text/60" />
+            <ChevronDown className="w-3 h-3 text-daintree-text/60" />
           ) : (
-            <ChevronRight className="w-3 h-3 text-canopy-text/60" />
+            <ChevronRight className="w-3 h-3 text-daintree-text/60" />
           )}
         </Button>
 
         <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-          <Layers className="w-3 h-3 text-canopy-text/70" />
+          <Layers className="w-3 h-3 text-daintree-text/70" />
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-canopy-text/70 group-hover:text-canopy-text truncate transition-colors">
+          <div className="text-xs font-medium text-daintree-text/70 group-hover:text-daintree-text truncate transition-colors">
             {groupName}
           </div>
         </div>
 
         <button
           type="button"
-          className="text-[10px] text-canopy-text/40 shrink-0 hover:text-canopy-text transition-colors"
+          className="text-[10px] text-daintree-text/40 shrink-0 hover:text-daintree-text transition-colors"
           onClick={() => onRestoreGroup(groupRestoreId, groupMetadata)}
         >
           Restore All
@@ -315,12 +315,12 @@ function BackgroundGroupItem({
                     className="w-2.5 h-2.5 opacity-60"
                   />
                   <span
-                    className={`truncate flex-1 ${isActiveTab ? "text-canopy-text/70 font-medium" : "text-canopy-text/50"}`}
+                    className={`truncate flex-1 ${isActiveTab ? "text-daintree-text/70 font-medium" : "text-daintree-text/50"}`}
                   >
                     {terminal.title}
-                    {isActiveTab && <span className="ml-1 text-canopy-text/40">(active)</span>}
+                    {isActiveTab && <span className="ml-1 text-daintree-text/40">(active)</span>}
                   </span>
-                  <span className="text-[10px] text-canopy-text/30 shrink-0">Restore</span>
+                  <span className="text-[10px] text-daintree-text/30 shrink-0">Restore</span>
                 </button>
               );
             })}

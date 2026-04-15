@@ -35,7 +35,7 @@ export interface ImportedScheme {
 
 export type ImportResult = { ok: true; scheme: ImportedScheme } | { ok: false; errors: string[] };
 
-const CANOPY_DEFAULTS: Required<ImportedSchemeColors> = {
+const DAINTREE_DEFAULTS: Required<ImportedSchemeColors> = {
   background: "#19191a",
   foreground: "#e4e4e7",
   cursor: "#36CE94",
@@ -77,7 +77,7 @@ function isDarkTheme(bg: string): boolean {
 }
 
 function fillDefaults(colors: ImportedSchemeColors): Required<ImportedSchemeColors> {
-  const result = { ...CANOPY_DEFAULTS };
+  const result = { ...DAINTREE_DEFAULTS };
   for (const [key, value] of Object.entries(colors)) {
     if (value && typeof value === "string") {
       (result as Record<string, string>)[key] = value;

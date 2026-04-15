@@ -118,7 +118,7 @@ export function compilePatterns(
     try {
       compiled.push(new RegExp(pattern, "im"));
     } catch (error) {
-      if (process.env.CANOPY_VERBOSE) {
+      if (process.env.DAINTREE_VERBOSE) {
         const prefix = agentId ? `${agentId} ${label}` : label;
         console.warn(`[terminalActivityPatterns] Invalid ${prefix} pattern: ${pattern}`, error);
       }

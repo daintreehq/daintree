@@ -572,11 +572,11 @@ export function GitHubResourceList({
             className={cn(
               "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)] flex-1 min-w-0",
               "bg-overlay-soft border border-[var(--border-overlay)]",
-              "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
+              "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
             )}
           >
             <Search
-              className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
+              className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none"
               aria-hidden="true"
             />
             <input
@@ -594,14 +594,14 @@ export function GitHubResourceList({
               aria-controls={listId}
               aria-activedescendant={activeItemId}
               aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
-              className="flex-1 min-w-0 text-sm bg-transparent text-canopy-text placeholder:text-muted-foreground focus:outline-none"
+              className="flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-muted-foreground focus:outline-none"
             />
             {searchQuery && (
               <button
                 type="button"
                 onClick={handleClearSearch}
                 aria-label="Clear search"
-                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-canopy-text/40 hover:text-canopy-text"
+                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-daintree-text/40 hover:text-daintree-text"
               >
                 <X className="w-3 h-3" />
               </button>
@@ -615,14 +615,14 @@ export function GitHubResourceList({
                 aria-haspopup="dialog"
                 className={cn(
                   "relative flex items-center justify-center w-7 h-7 rounded shrink-0",
-                  "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/[0.06]",
+                  "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
                   "transition-colors",
-                  sortOrder !== "updated" && "text-canopy-accent"
+                  sortOrder !== "updated" && "text-daintree-accent"
                 )}
               >
                 <Filter className="w-3.5 h-3.5" />
                 {sortOrder !== "updated" && (
-                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-canopy-accent" />
+                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-daintree-accent" />
                 )}
               </button>
             </PopoverTrigger>
@@ -639,7 +639,7 @@ export function GitHubResourceList({
                 }
               }}
             >
-              <div className="text-[10px] font-medium text-canopy-text/50 uppercase tracking-wide mb-2">
+              <div className="text-[10px] font-medium text-daintree-text/50 uppercase tracking-wide mb-2">
                 Sort by
               </div>
               <div className="flex flex-col gap-1" role="radiogroup" aria-label="Sort order">
@@ -658,16 +658,16 @@ export function GitHubResourceList({
                     className={cn(
                       "flex items-center gap-2 px-2 py-1 text-xs rounded",
                       sortOrder === option.value
-                        ? "bg-canopy-accent/10 text-canopy-accent"
-                        : "text-canopy-text/70 hover:bg-overlay-medium"
+                        ? "bg-daintree-accent/10 text-daintree-accent"
+                        : "text-daintree-text/70 hover:bg-overlay-medium"
                     )}
                   >
                     <div
                       className={cn(
                         "w-3 h-3 rounded-full border",
                         sortOrder === option.value
-                          ? "border-canopy-accent bg-canopy-accent"
-                          : "border-canopy-border"
+                          ? "border-daintree-accent bg-daintree-accent"
+                          : "border-daintree-border"
                       )}
                     >
                       {sortOrder === option.value && (
@@ -708,7 +708,7 @@ export function GitHubResourceList({
                       selection.selectAll(data.map((item) => item.number));
                     }
                   }}
-                  className="text-xs text-canopy-text/50 hover:text-canopy-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent transition-colors px-1 py-0.5 rounded"
+                  className="text-xs text-daintree-text/50 hover:text-daintree-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent transition-colors px-1 py-0.5 rounded"
                 >
                   {allSelected ? "Deselect all" : `Select all (${data.length})`}
                 </button>
@@ -718,7 +718,7 @@ export function GitHubResourceList({
                     onClick={() => {
                       selection.selectAll(unassigned.map((item) => item.number));
                     }}
-                    className="text-xs text-canopy-text/50 hover:text-canopy-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent transition-colors px-1 py-0.5 rounded"
+                    className="text-xs text-daintree-text/50 hover:text-daintree-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent transition-colors px-1 py-0.5 rounded"
                   >
                     {`Select unassigned (${unassigned.length})`}
                   </button>
@@ -743,8 +743,8 @@ export function GitHubResourceList({
                 className={cn(
                   "flex-1 px-3 py-1 text-xs font-medium rounded transition-colors",
                   isActive
-                    ? "bg-canopy-accent/10 text-canopy-accent"
-                    : "text-muted-foreground hover:text-canopy-text"
+                    ? "bg-daintree-accent/10 text-daintree-accent"
+                    : "text-muted-foreground hover:text-daintree-text"
                 )}
               >
                 {tab.label}
@@ -776,7 +776,7 @@ export function GitHubResourceList({
                     variant="ghost"
                     size="sm"
                     onClick={handleOpenGitHubSettings}
-                    className="ml-auto h-6 text-xs text-muted-foreground hover:text-canopy-text shrink-0"
+                    className="ml-auto h-6 text-xs text-muted-foreground hover:text-daintree-text shrink-0"
                   >
                     <Settings className="h-3 w-3" />
                     Settings
@@ -786,7 +786,7 @@ export function GitHubResourceList({
                     variant="ghost"
                     size="sm"
                     onClick={handleRetry}
-                    className="ml-auto h-6 text-xs text-muted-foreground hover:text-canopy-text shrink-0"
+                    className="ml-auto h-6 text-xs text-muted-foreground hover:text-daintree-text shrink-0"
                   >
                     <RefreshCw className="h-3 w-3" />
                     Retry
@@ -835,7 +835,7 @@ export function GitHubResourceList({
                         variant="ghost"
                         size="sm"
                         onClick={handleOpenGitHubSettings}
-                        className="mt-1 text-muted-foreground hover:text-canopy-text h-6 text-xs"
+                        className="mt-1 text-muted-foreground hover:text-daintree-text h-6 text-xs"
                       >
                         <Settings className="h-3 w-3" />
                         Open GitHub Settings
@@ -845,7 +845,7 @@ export function GitHubResourceList({
                         variant="ghost"
                         size="sm"
                         onClick={handleLoadMore}
-                        className="mt-1 text-muted-foreground hover:text-canopy-text h-6 text-xs"
+                        className="mt-1 text-muted-foreground hover:text-daintree-text h-6 text-xs"
                       >
                         Retry
                       </Button>
@@ -858,8 +858,8 @@ export function GitHubResourceList({
                   onClick={handleLoadMore}
                   disabled={loadingMore}
                   className={cn(
-                    "w-full text-muted-foreground hover:text-canopy-text",
-                    isLoadMoreActive && "ring-1 ring-canopy-accent text-canopy-text"
+                    "w-full text-muted-foreground hover:text-daintree-text",
+                    isLoadMoreActive && "ring-1 ring-daintree-accent text-daintree-text"
                   )}
                 >
                   {loadingMore ? (
@@ -883,7 +883,7 @@ export function GitHubResourceList({
                 variant="ghost"
                 size="sm"
                 onClick={handleOpenGitHubSettings}
-                className="mt-2 text-muted-foreground hover:text-canopy-text"
+                className="mt-2 text-muted-foreground hover:text-daintree-text"
               >
                 <Settings className="h-3.5 w-3.5" />
                 Open GitHub Settings
@@ -893,7 +893,7 @@ export function GitHubResourceList({
                 variant="ghost"
                 size="sm"
                 onClick={handleRetry}
-                className="mt-2 text-muted-foreground hover:text-canopy-text"
+                className="mt-2 text-muted-foreground hover:text-daintree-text"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
                 Retry
@@ -910,7 +910,7 @@ export function GitHubResourceList({
           variant="ghost"
           size="sm"
           onClick={handleOpenInGitHub}
-          className="text-muted-foreground hover:text-canopy-text gap-1.5"
+          className="text-muted-foreground hover:text-daintree-text gap-1.5"
         >
           <ExternalLink className="h-3.5 w-3.5" />
           View on GitHub
@@ -919,7 +919,7 @@ export function GitHubResourceList({
           variant="ghost"
           size="sm"
           onClick={handleCreateNew}
-          className="text-muted-foreground hover:text-canopy-text gap-1.5"
+          className="text-muted-foreground hover:text-daintree-text gap-1.5"
         >
           <Plus className="h-3.5 w-3.5" />
           New

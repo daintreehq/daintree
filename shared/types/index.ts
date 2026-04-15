@@ -1,5 +1,5 @@
 /**
- * Shared types for Canopy
+ * Shared types for Daintree
  *
  * This module provides a single source of truth for type definitions
  * used across the main process, renderer process, and preload script.
@@ -247,7 +247,7 @@ export type {
   WorktreesConfig,
   GitDisplayConfig,
   // Main config
-  CanopyConfig,
+  DaintreeConfig,
 } from "./config.js";
 
 // Keymap types - keyboard shortcuts
@@ -405,7 +405,7 @@ export type {
   BuilderFieldValidation,
   BuilderField,
   BuilderStep,
-  CanopyCommand,
+  DaintreeCommand,
   CommandManifestEntry,
   CommandExecutePayload,
   CommandGetPayload,

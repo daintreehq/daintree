@@ -118,7 +118,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
           <p className="text-sm font-medium tabular-nums text-status-warning">
             {activeCount} panels open
           </p>
-          <p className="text-xs text-canopy-text/70 mt-0.5">
+          <p className="text-xs text-daintree-text/70 mt-0.5">
             Consider closing idle panels to keep the board light.
             {completedCount > 0 && (
               <>
@@ -126,7 +126,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
                 <button
                   type="button"
                   onClick={handleCleanup}
-                  className="underline hover:text-canopy-text transition-colors inline-flex items-center gap-1"
+                  className="underline hover:text-daintree-text transition-colors inline-flex items-center gap-1"
                 >
                   <Trash2 className="h-3 w-3" />
                   Close <span className="tabular-nums">{completedCount}</span> completed agent

@@ -1,8 +1,8 @@
 {
   "toolsAllowlist": ["read_file", "list_directory", "search_files", "web_search", "shell"],
   "mcpServers": {
-    "canopy-docs": {
-      "httpUrl": "https://canopyide.com/api/mcp",
+    "daintree-docs": {
+      "httpUrl": "https://daintree.org/api/mcp",
       "trust": true
     }
   }

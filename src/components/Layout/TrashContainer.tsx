@@ -149,7 +149,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
           data-testid="trash-container"
           className={cn(
             compact ? "px-1.5 min-w-0" : "px-3",
-            isOpen && "bg-canopy-border border-canopy-accent/40 ring-1 ring-canopy-accent/30"
+            isOpen && "bg-daintree-border border-daintree-accent/40 ring-1 ring-daintree-accent/30"
           )}
           aria-haspopup="dialog"
           aria-expanded={isOpen}
@@ -157,9 +157,9 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
           aria-label={`Trash: ${count} terminal${count === 1 ? "" : "s"}`}
         >
           <span key={pulseKey} className={cn("relative", pulseKey > 0 && "animate-trash-pulse")}>
-            <Trash2 className="w-3.5 h-3.5 text-canopy-text/60" aria-hidden="true" />
+            <Trash2 className="w-3.5 h-3.5 text-daintree-text/60" aria-hidden="true" />
             {compact && count > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-canopy-text/40 text-[10px] font-bold tabular-nums text-text-inverse">
+              <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-daintree-text/40 text-[10px] font-bold tabular-nums text-text-inverse">
                 {count > 9 ? "9+" : count}
               </span>
             )}
@@ -178,9 +178,9 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
         sideOffset={8}
       >
         <div className="flex flex-col">
-          <div className="px-3 py-2 border-b border-divider bg-canopy-bg/50 flex justify-between items-center">
-            <span className="text-xs font-medium text-canopy-text/70">Recently Closed</span>
-            <span className="text-[11px] text-canopy-text/40">Auto-clears</span>
+          <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
+            <span className="text-xs font-medium text-daintree-text/70">Recently Closed</span>
+            <span className="text-[11px] text-daintree-text/40">Auto-clears</span>
           </div>
 
           <div className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto">

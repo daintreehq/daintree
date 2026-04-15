@@ -57,7 +57,7 @@ function createMockWindow() {
       }),
       reload: vi.fn(),
       loadURL: vi.fn(),
-      getURL: vi.fn(() => "app://canopy/index.html"),
+      getURL: vi.fn(() => "app://daintree/index.html"),
       setWindowOpenHandler: vi.fn(),
       isDestroyed: vi.fn(() => false),
     },
@@ -91,7 +91,7 @@ function setupCrashRecovery(
 
   const getRecoveryUrl = (reason: string, exitCode: number): string => {
     const params = new URLSearchParams({ reason, exitCode: String(exitCode) });
-    return `app://canopy/recovery.html?${params}`;
+    return `app://daintree/recovery.html?${params}`;
   };
 
   win.webContents.on("render-process-gone", (_event, ...args) => {

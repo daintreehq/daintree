@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   isSensitiveVar,
   filterEnvironment,
-  injectCanopyMetadata,
+  injectDaintreeMetadata,
   ensureUtf8Locale,
 } from "../EnvironmentFilter.js";
 
@@ -95,16 +95,16 @@ describe("filterEnvironment", () => {
     expect("UNDEFINED_VAR" in result).toBe(false);
   });
 
-  it("strips CANOPY_* vars from inherited env (anti-spoofing)", () => {
+  it("strips DAINTREE_* vars from inherited env (anti-spoofing)", () => {
     const env = {
       PATH: "/usr/bin",
-      CANOPY_PANE_ID: "spoofed-id",
-      CANOPY_PROJECT_ID: "spoofed-project",
+      DAINTREE_PANE_ID: "spoofed-id",
+      DAINTREE_PROJECT_ID: "spoofed-project",
     };
     const result = filterEnvironment(env);
     expect(result.PATH).toBe("/usr/bin");
-    expect(result.CANOPY_PANE_ID).toBeUndefined();
-    expect(result.CANOPY_PROJECT_ID).toBeUndefined();
+    expect(result.DAINTREE_PANE_ID).toBeUndefined();
+    expect(result.DAINTREE_PROJECT_ID).toBeUndefined();
   });
 
   it("handles empty input", () => {
@@ -118,21 +118,21 @@ describe("filterEnvironment", () => {
   });
 });
 
-describe("injectCanopyMetadata", () => {
+describe("injectDaintreeMetadata", () => {
   it("injects paneId and cwd always", () => {
     const env = { PATH: "/usr/bin" };
-    const result = injectCanopyMetadata(env, {
+    const result = injectDaintreeMetadata(env, {
       paneId: "pane-123",
       cwd: "/Users/test/project",
     });
 
-    expect(result.CANOPY_PANE_ID).toBe("pane-123");
-    expect(result.CANOPY_CWD).toBe("/Users/test/project");
+    expect(result.DAINTREE_PANE_ID).toBe("pane-123");
+    expect(result.DAINTREE_CWD).toBe("/Users/test/project");
     expect(result.PATH).toBe("/usr/bin");
   });
 
   it("injects optional projectId and worktreeId when provided", () => {
-    const result = injectCanopyMetadata(
+    const result = injectDaintreeMetadata(
       {},
       {
         paneId: "p1",
@@ -142,21 +142,21 @@ describe("injectCanopyMetadata", () => {
       }
     );
 
-    expect(result.CANOPY_PROJECT_ID).toBe("proj-abc");
-    expect(result.CANOPY_WORKTREE_ID).toBe("wt-xyz");
+    expect(result.DAINTREE_PROJECT_ID).toBe("proj-abc");
+    expect(result.DAINTREE_WORKTREE_ID).toBe("wt-xyz");
   });
 
   it("omits projectId and worktreeId keys when undefined", () => {
-    const result = injectCanopyMetadata({}, { paneId: "p1", cwd: "/cwd" });
+    const result = injectDaintreeMetadata({}, { paneId: "p1", cwd: "/cwd" });
 
-    expect("CANOPY_PROJECT_ID" in result).toBe(false);
-    expect("CANOPY_WORKTREE_ID" in result).toBe(false);
+    expect("DAINTREE_PROJECT_ID" in result).toBe(false);
+    expect("DAINTREE_WORKTREE_ID" in result).toBe(false);
   });
 
   it("does not mutate the input env", () => {
     const env = { PATH: "/usr/bin" };
-    injectCanopyMetadata(env, { paneId: "x", cwd: "/c" });
-    expect("CANOPY_PANE_ID" in env).toBe(false);
+    injectDaintreeMetadata(env, { paneId: "x", cwd: "/c" });
+    expect("DAINTREE_PANE_ID" in env).toBe(false);
   });
 });
 
@@ -219,7 +219,7 @@ describe("ensureUtf8Locale", () => {
   });
 });
 
-describe("filterEnvironment + injectCanopyMetadata integration", () => {
+describe("filterEnvironment + injectDaintreeMetadata integration", () => {
   it("produces a clean env with metadata for a typical developer shell", () => {
     const shellEnv = {
       PATH: "/usr/local/bin:/usr/bin",
@@ -235,12 +235,12 @@ describe("filterEnvironment + injectCanopyMetadata integration", () => {
       AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG",
       DATABASE_URL: "postgres://localhost/dev",
       MY_CUSTOM_TOKEN: "tok_abc123",
-      // Pre-existing CANOPY_ vars should be stripped
-      CANOPY_PANE_ID: "old-id",
+      // Pre-existing DAINTREE_ vars should be stripped
+      DAINTREE_PANE_ID: "old-id",
     };
 
     const filtered = filterEnvironment(shellEnv);
-    const final = injectCanopyMetadata(filtered, {
+    const final = injectDaintreeMetadata(filtered, {
       paneId: "new-pane-id",
       cwd: "/Users/dev/project",
       projectId: "proj-1",
@@ -260,9 +260,9 @@ describe("filterEnvironment + injectCanopyMetadata integration", () => {
     expect(final.DATABASE_URL).toBeUndefined();
     expect(final.MY_CUSTOM_TOKEN).toBeUndefined();
 
-    // CANOPY_* freshly injected (not spoofed)
-    expect(final.CANOPY_PANE_ID).toBe("new-pane-id");
-    expect(final.CANOPY_CWD).toBe("/Users/dev/project");
-    expect(final.CANOPY_PROJECT_ID).toBe("proj-1");
+    // DAINTREE_* freshly injected (not spoofed)
+    expect(final.DAINTREE_PANE_ID).toBe("new-pane-id");
+    expect(final.DAINTREE_CWD).toBe("/Users/dev/project");
+    expect(final.DAINTREE_PROJECT_ID).toBe("proj-1");
   });
 });

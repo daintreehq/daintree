@@ -1,6 +1,6 @@
 # Theme Token Reference
 
-Complete reference for Canopy's semantic token system. Every built-in and custom theme must provide values for all tokens. The `createCanopyTokens()` helper derives sensible defaults for most tokens from a smaller set of required palette values.
+Complete reference for Daintree's semantic token system. Every built-in and custom theme must provide values for all tokens. The `createDaintreeTokens()` helper derives sensible defaults for most tokens from a smaller set of required palette values.
 
 ## Token Layers
 
@@ -304,7 +304,7 @@ Theme-controlled colors for the diff viewer. Derived from `status-success` and `
 
 The token system has two contracts:
 
-**Palette authoring** — what a theme author provides via `BuiltInThemeSource.palette`. The `ThemePalette` structure requires surfaces, text, border, accent, status, activity, terminal colors, and syntax colors. `createSemanticTokens()` maps these to token inputs and calls `createCanopyTokens()`.
+**Palette authoring** — what a theme author provides via `BuiltInThemeSource.palette`. The `ThemePalette` structure requires surfaces, text, border, accent, status, activity, terminal colors, and syntax colors. `createSemanticTokens()` maps these to token inputs and calls `createDaintreeTokens()`.
 
 **Token overrides** — `BuiltInThemeSource.tokens` allows overriding any derived semantic token when the automatic derivation doesn't produce the right result.
 

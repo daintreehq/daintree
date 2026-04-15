@@ -66,7 +66,7 @@ export function StatusContainer({ config, compact = false }: StatusContainerProp
           size="sm"
           className={cn(
             compact ? "px-1.5 min-w-0" : "px-3",
-            isOpen && "bg-canopy-border border-canopy-accent/40 ring-1 ring-canopy-accent/30"
+            isOpen && "bg-daintree-border border-daintree-accent/40 ring-1 ring-daintree-accent/30"
           )}
           aria-haspopup="dialog"
           aria-expanded={isOpen}
@@ -107,8 +107,8 @@ export function StatusContainer({ config, compact = false }: StatusContainerProp
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
         <div className="flex flex-col">
-          <div className="px-3 py-2 border-b border-divider bg-canopy-bg/50 flex justify-between items-center">
-            <span className="text-xs font-medium text-canopy-text/70">{config.headerLabel}</span>
+          <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
+            <span className="text-xs font-medium text-daintree-text/70">{config.headerLabel}</span>
           </div>
 
           <div className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto">
@@ -138,7 +138,7 @@ export function StatusContainer({ config, compact = false }: StatusContainerProp
                       className="h-3 w-3"
                     />
                   </div>
-                  <span className="text-xs truncate font-medium text-canopy-text/70 group-hover:text-canopy-text transition-colors">
+                  <span className="text-xs truncate font-medium text-daintree-text/70 group-hover:text-daintree-text transition-colors">
                     {terminal.title}
                   </span>
                 </div>

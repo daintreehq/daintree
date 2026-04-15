@@ -57,7 +57,7 @@ function checkConcurrentAgents(): boolean {
 
 function checkContextInjection(): boolean {
   try {
-    return localStorage.getItem("canopy:context-injected-once") === "true";
+    return localStorage.getItem("daintree:context-injected-once") === "true";
   } catch {
     return false;
   }
@@ -204,8 +204,10 @@ export function useOrchestrationMilestones(isStateLoaded: boolean): void {
             showToast("first-context-injection");
           }
         };
-        window.addEventListener("canopy:context-injected", onContextInjected);
-        unsubs.push(() => window.removeEventListener("canopy:context-injected", onContextInjected));
+        window.addEventListener("daintree:context-injected", onContextInjected);
+        unsubs.push(() =>
+          window.removeEventListener("daintree:context-injected", onContextInjected)
+        );
       })
       .catch(console.error);
 

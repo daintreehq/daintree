@@ -452,7 +452,7 @@ describe("WorkspaceService.loadProject performance behavior", () => {
   it("uses the worktree folder name for detached worktrees", () => {
     const mapped = service["listService"].mapToWorktrees([
       {
-        path: "/repo/canopy-bisect/cross-worktree-diff-2026-03-06",
+        path: "/repo/daintree-bisect/cross-worktree-diff-2026-03-06",
         branch: "",
         head: "a4b85920ee91c51a265eb7ceb98a23381d4ba08f",
         isDetached: true,

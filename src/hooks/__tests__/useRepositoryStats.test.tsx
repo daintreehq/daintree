@@ -36,7 +36,7 @@ describe("useRepositoryStats", () => {
     vi.clearAllMocks();
   });
 
-  it("force-fetches when canopy:refresh-sidebar event is dispatched", async () => {
+  it("force-fetches when daintree:refresh-sidebar event is dispatched", async () => {
     const project = { id: "project-a", path: "/repo/a" };
     getCurrentMock.mockResolvedValue(project);
     onSwitchMock.mockReturnValue(() => {});
@@ -58,7 +58,7 @@ describe("useRepositoryStats", () => {
     });
 
     await act(async () => {
-      window.dispatchEvent(new CustomEvent("canopy:refresh-sidebar"));
+      window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
       await Promise.resolve();
     });
 

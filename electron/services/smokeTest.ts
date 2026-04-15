@@ -210,7 +210,7 @@ async function runSmokeTerminalChecks(smokeClient: PtyClient): Promise<void> {
   const cwd = os.homedir();
 
   for (let i = 0; i < SMOKE_TERMINAL_ROUNDS; i++) {
-    const token = `CANOPY_SMOKE_TERM_${i}_${Date.now()}`;
+    const token = `DAINTREE_SMOKE_TERM_${i}_${Date.now()}`;
     const command =
       process.platform === "win32" ? `echo ${token} && cd\r\n` : `echo ${token} && pwd\n`;
     const terminalId = `smoke-test-terminal-${i}`;
@@ -232,7 +232,7 @@ function buildSmokeTerminalSnapshot(id: string, cwd: string, title: string): Ter
 }
 
 async function runSmokeProjectPersistenceChecks(window: BrowserWindow): Promise<void> {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "canopy-smoke-project-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "daintree-smoke-project-"));
   const repoPath = path.join(tempRoot, "repo");
 
   let createdProjectId: string | null = null;

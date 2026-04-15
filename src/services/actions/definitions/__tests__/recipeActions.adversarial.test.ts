@@ -228,7 +228,7 @@ describe("recipeActions adversarial", () => {
       type: string;
       detail: { worktreeId: string; initialTerminals: unknown[] };
     };
-    expect(event.type).toBe("canopy:open-recipe-editor");
+    expect(event.type).toBe("daintree:open-recipe-editor");
     expect(event.detail.worktreeId).toBe("wt-a");
     expect(event.detail.initialTerminals).toEqual(terminals);
   });
@@ -258,7 +258,7 @@ describe("recipeActions adversarial", () => {
       type: string;
       detail: { worktreeId: string; recipeId: string; initialTerminals: unknown };
     };
-    expect(event.type).toBe("canopy:open-recipe-editor");
+    expect(event.type).toBe("daintree:open-recipe-editor");
     expect(event.detail).toEqual({
       worktreeId: "wt-a",
       recipeId: "r1",
@@ -276,7 +276,7 @@ describe("recipeActions adversarial", () => {
       type: string;
       detail?: unknown;
     };
-    expect(event.type).toBe("canopy:open-recipe-manager");
+    expect(event.type).toBe("daintree:open-recipe-manager");
     expect(event.detail).toBeFalsy();
   });
 });

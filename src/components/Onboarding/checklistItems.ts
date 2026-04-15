@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import { FolderOpen, Mail } from "lucide-react";
-import { CanopyAgentIcon, WorktreeIcon } from "@/components/icons";
+import { DaintreeAgentIcon, WorktreeIcon } from "@/components/icons";
 import type { ActionId } from "@shared/types/actions";
 import type { ChecklistItemId } from "@shared/types/ipc/maps";
 
@@ -26,7 +26,7 @@ export const CHECKLIST_ITEMS: ChecklistItemDef[] = [
     id: "launchedAgent",
     label: "Ask AI to help with your code",
     description: "Agents can write code, fix bugs, and answer questions about your codebase.",
-    icon: CanopyAgentIcon,
+    icon: DaintreeAgentIcon,
     actionId: "panel.palette",
   },
   {
@@ -42,7 +42,7 @@ export const CHECKLIST_ITEMS: ChecklistItemDef[] = [
     description: "Get product updates and tips in your inbox.",
     icon: Mail,
     actionId: "system.openExternal",
-    actionArgs: { url: "https://canopyide.com/newsletter" },
+    actionArgs: { url: "https://daintree.org/newsletter" },
     markOnClick: true,
   },
 ];

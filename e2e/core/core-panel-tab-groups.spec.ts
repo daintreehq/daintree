@@ -23,7 +23,7 @@ test.describe.serial("Core: Panel Tab Groups", () => {
     // the zustand store hydrates avoids this.
     await ctx.window.evaluate(() => {
       localStorage.setItem(
-        "canopy-two-pane-split",
+        "daintree-two-pane-split",
         JSON.stringify({
           state: {
             config: { enabled: false, defaultRatio: 0.5, preferPreview: false },

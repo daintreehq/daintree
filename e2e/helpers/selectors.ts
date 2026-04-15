@@ -173,7 +173,7 @@ export const SEL = {
     openFolder: 'button:has-text("Open Folder")',
   },
   firstRun: {
-    welcomeTitle: 'role=dialog >> text="Welcome to Canopy"',
+    welcomeTitle: 'role=dialog >> text="Welcome to Daintree"',
     agentTitle: 'text="Choose your AI agents"',
     agentSetupTitle: 'text="Agent Setup"',
   },

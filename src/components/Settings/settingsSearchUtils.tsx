@@ -174,7 +174,7 @@ export function HighlightText({ text, query }: HighlightTextProps) {
       <span>
         {parts.map((part, i) =>
           lowerTokens.some((t) => part.toLowerCase() === t) ? (
-            <mark key={i} className="bg-canopy-accent/25 text-inherit rounded-sm not-italic">
+            <mark key={i} className="bg-daintree-accent/25 text-inherit rounded-sm not-italic">
               {part}
             </mark>
           ) : (

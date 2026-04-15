@@ -516,13 +516,13 @@ export interface ElectronAPI {
     readClaudeMd(projectId: string): Promise<string | null>;
     writeClaudeMd(projectId: string, content: string): Promise<void>;
     /**
-     * Enable in-repo settings mode: writes current identity and settings to .canopy/,
+     * Enable in-repo settings mode: writes current identity and settings to .daintree/,
      * then sets project.inRepoSettings = true.
      */
     enableInRepoSettings(projectId: string): Promise<Project>;
     /**
      * Disable in-repo settings mode: clears project.inRepoSettings flag.
-     * Does NOT delete .canopy/ files.
+     * Does NOT delete .daintree/ files.
      */
     disableInRepoSettings(projectId: string): Promise<Project>;
     /**
@@ -1119,6 +1119,8 @@ export interface ElectronAPI {
   };
   onboarding: {
     get(): Promise<OnboardingState>;
+    // TODO(0.9.0): Remove after deleting the temporary Canopy onboarding
+    // localStorage migration path.
     migrate(payload: {
       agentSelectionDismissed: boolean;
       agentSetupComplete: boolean;

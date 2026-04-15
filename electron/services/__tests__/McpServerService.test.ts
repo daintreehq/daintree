@@ -290,7 +290,7 @@ describe("McpServerService", () => {
     electronMocks.ipcMain.handle.mockClear();
     electronMocks.ipcMain.removeHandler.mockClear();
     transports.length = 0;
-    await fs.rm(path.join(testHomeDir, ".canopy"), { recursive: true, force: true });
+    await fs.rm(path.join(testHomeDir, ".daintree"), { recursive: true, force: true });
     await fs.mkdir(testHomeDir, { recursive: true });
     consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     service = new McpServerService();
@@ -349,7 +349,7 @@ describe("McpServerService", () => {
     expect(dangerousTool?.description).toContain("Requires explicit confirmation");
     expect(dangerousTool?.inputSchema.properties?._meta).toEqual({
       type: "object",
-      description: "Reserved Canopy MCP metadata.",
+      description: "Reserved Daintree MCP metadata.",
       properties: {
         confirmed: {
           type: "boolean",
@@ -451,20 +451,20 @@ describe("McpServerService", () => {
 
   it("refreshes the discovery file when authentication changes while running", async () => {
     const { window } = createMockWindow();
-    const discoveryFile = path.join(testHomeDir, ".canopy", "mcp.json");
+    const discoveryFile = path.join(testHomeDir, ".daintree", "mcp.json");
 
     await service.start(window);
 
     const initial = JSON.parse(await fs.readFile(discoveryFile, "utf8")) as {
       mcpServers: Record<string, { headers?: { Authorization: string } }>;
     };
-    expect(initial.mcpServers.canopy.headers).toBeUndefined();
+    expect(initial.mcpServers.daintree.headers).toBeUndefined();
 
     const generatedKey = await service.generateApiKey();
     const generated = JSON.parse(await fs.readFile(discoveryFile, "utf8")) as {
       mcpServers: Record<string, { headers?: { Authorization: string } }>;
     };
-    expect(generated.mcpServers.canopy.headers).toEqual({
+    expect(generated.mcpServers.daintree.headers).toEqual({
       Authorization: `Bearer ${generatedKey}`,
     });
 
@@ -472,7 +472,7 @@ describe("McpServerService", () => {
     const cleared = JSON.parse(await fs.readFile(discoveryFile, "utf8")) as {
       mcpServers: Record<string, { headers?: { Authorization: string } }>;
     };
-    expect(cleared.mcpServers.canopy.headers).toBeUndefined();
+    expect(cleared.mcpServers.daintree.headers).toBeUndefined();
   });
 
   it("rejects unauthorized requests and invalid host headers", async () => {

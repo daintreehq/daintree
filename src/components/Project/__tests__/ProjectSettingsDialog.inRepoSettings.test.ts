@@ -3,15 +3,15 @@ import { GITIGNORE_SNIPPET } from "../projectSettingsConstants";
 
 describe("GITIGNORE_SNIPPET", () => {
   it("includes project.json path as safe to commit", () => {
-    expect(GITIGNORE_SNIPPET).toContain(".canopy/project.json");
+    expect(GITIGNORE_SNIPPET).toContain(".daintree/project.json");
   });
 
   it("includes settings.json path as safe to commit", () => {
-    expect(GITIGNORE_SNIPPET).toContain(".canopy/settings.json");
+    expect(GITIGNORE_SNIPPET).toContain(".daintree/settings.json");
   });
 
   it("includes wildcard pattern for machine-local files", () => {
-    expect(GITIGNORE_SNIPPET).toContain(".canopy/*.local.json");
+    expect(GITIGNORE_SNIPPET).toContain(".daintree/*.local.json");
   });
 });
 
@@ -38,14 +38,14 @@ describe("In-repo settings — enable/disable UI logic", () => {
     expect(inRepoSettings).toBe(false);
   });
 
-  it("disabling leaves .canopy/ files in place (canopyConfigPresent unchanged)", () => {
+  it("disabling leaves .daintree/ files in place (daintreeConfigPresent unchanged)", () => {
     let inRepoSettings = true;
-    const canopyConfigPresent = true;
+    const daintreeConfigPresent = true;
 
     inRepoSettings = false;
 
     expect(inRepoSettings).toBe(false);
-    expect(canopyConfigPresent).toBe(true);
+    expect(daintreeConfigPresent).toBe(true);
   });
 
   it("shows error and keeps in-repo mode off when enable IPC fails", () => {
@@ -54,7 +54,7 @@ describe("In-repo settings — enable/disable UI logic", () => {
     let inRepoEnabling = true;
 
     try {
-      throw new Error("EACCES: permission denied, mkdir '.canopy'");
+      throw new Error("EACCES: permission denied, mkdir '.daintree'");
     } catch (err) {
       inRepoError = err instanceof Error ? err.message : "Failed to enable in-repo settings";
     } finally {
@@ -96,11 +96,11 @@ describe("In-repo settings — enable/disable UI logic", () => {
     expect(callCount).toBe(0);
   });
 
-  it("canopyConfigPresent can be true while inRepoSettings is false (loaded but sync not enabled)", () => {
-    const canopyConfigPresent = true;
+  it("daintreeConfigPresent can be true while inRepoSettings is false (loaded but sync not enabled)", () => {
+    const daintreeConfigPresent = true;
     const inRepoSettings = false;
 
-    expect(canopyConfigPresent).toBe(true);
+    expect(daintreeConfigPresent).toBe(true);
     expect(inRepoSettings).toBe(false);
   });
 });

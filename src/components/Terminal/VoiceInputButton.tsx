@@ -212,7 +212,7 @@ export function VoiceInputButton({
             {/* Dot: core (crisp) + halo (soft glow) */}
             <span
               ref={dotHaloRef}
-              className="absolute rounded-full bg-canopy-accent/30"
+              className="absolute rounded-full bg-daintree-accent/30"
               style={{
                 width: "6px",
                 height: "6px",
@@ -223,7 +223,7 @@ export function VoiceInputButton({
             />
             <span
               ref={dotCoreRef}
-              className="absolute rounded-full bg-canopy-accent"
+              className="absolute rounded-full bg-daintree-accent"
               style={{
                 width: "3.5px",
                 height: "3.5px",
@@ -253,13 +253,13 @@ export function VoiceInputButton({
         className={cn(
           "relative flex items-center justify-center rounded-full transition duration-200",
           "h-6 w-6",
-          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent",
           showOrbit
-            ? "bg-canopy-accent/10 text-canopy-accent hover:bg-canopy-accent/15"
+            ? "bg-daintree-accent/10 text-daintree-accent hover:bg-daintree-accent/15"
             : cn(
                 status === "error"
                   ? "text-activity-waiting hover:text-activity-waiting/80"
-                  : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-tint/[0.06]"
+                  : "text-daintree-text/50 hover:text-daintree-text/80 hover:bg-tint/[0.06]"
               ),
           disabled && !isActive && "pointer-events-none opacity-40"
         )}

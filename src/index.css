@@ -363,16 +363,16 @@
   --height-sm: 2rem;
   --height-md: 2.5rem;
   --height-lg: 3rem;
-  --color-canopy-bg: var(--theme-surface-canvas);
-  --color-canopy-sidebar: var(--theme-surface-sidebar);
-  --color-canopy-border: var(--theme-border-default);
-  --color-canopy-text: var(--theme-text-primary);
-  --color-canopy-accent: var(--theme-accent-primary);
-  --color-canopy-accent-rgb: var(--theme-accent-rgb);
+  --color-daintree-bg: var(--theme-surface-canvas);
+  --color-daintree-sidebar: var(--theme-surface-sidebar);
+  --color-daintree-border: var(--theme-border-default);
+  --color-daintree-text: var(--theme-text-primary);
+  --color-daintree-accent: var(--theme-accent-primary);
+  --color-daintree-accent-rgb: var(--theme-accent-rgb);
   --color-surface: var(--theme-surface-panel);
   --color-surface-highlight: var(--theme-surface-panel-elevated);
   --color-grid-bg: var(--panel-grid-bg, var(--terminal-grid-bg, var(--theme-surface-grid)));
-  --color-canopy-focus: var(--theme-focus-ring);
+  --color-daintree-focus: var(--theme-focus-ring);
   --color-status-error: var(--theme-status-danger);
   --color-state-active: var(--theme-activity-active);
   --color-state-idle: var(--theme-activity-idle);
@@ -545,7 +545,7 @@ code.hljs {
   );
   --border-divider: var(--theme-border-divider);
 
-  --dock-bg: var(--color-canopy-sidebar);
+  --dock-bg: var(--color-daintree-sidebar);
   --dock-border: var(--border-divider);
   --dock-shadow: 0 -2px 12px color-mix(in oklch, var(--theme-shadow-color) 75%, transparent);
   --dock-padding-x: 0.5rem;
@@ -742,149 +742,149 @@ code.hljs {
     font-family: "JetBrains Mono", monospace;
   }
 
-  /* Canopy prose theme - customized typography for dark theme */
-  .prose-canopy {
-    --tw-prose-body: var(--color-canopy-text);
+  /* Daintree prose theme - customized typography for dark theme */
+  .prose-daintree {
+    --tw-prose-body: var(--color-daintree-text);
     --tw-prose-headings: var(--color-text-primary);
-    --tw-prose-lead: color-mix(in oklab, var(--color-canopy-text) 80%, transparent);
-    --tw-prose-links: var(--color-canopy-accent);
-    --tw-prose-bold: var(--color-canopy-text);
-    --tw-prose-counters: color-mix(in oklab, var(--color-canopy-text) 60%, transparent);
-    --tw-prose-bullets: color-mix(in oklab, var(--color-canopy-text) 40%, transparent);
-    --tw-prose-hr: var(--color-canopy-border);
-    --tw-prose-quotes: var(--color-canopy-text);
-    --tw-prose-quote-borders: var(--color-canopy-accent);
-    --tw-prose-captions: color-mix(in oklab, var(--color-canopy-text) 60%, transparent);
-    --tw-prose-code: var(--color-canopy-text);
-    --tw-prose-pre-code: var(--color-canopy-text);
-    --tw-prose-pre-bg: var(--color-canopy-sidebar);
-    --tw-prose-th-borders: var(--color-canopy-border);
-    --tw-prose-td-borders: color-mix(in oklab, var(--color-canopy-border) 60%, transparent);
+    --tw-prose-lead: color-mix(in oklab, var(--color-daintree-text) 80%, transparent);
+    --tw-prose-links: var(--color-daintree-accent);
+    --tw-prose-bold: var(--color-daintree-text);
+    --tw-prose-counters: color-mix(in oklab, var(--color-daintree-text) 60%, transparent);
+    --tw-prose-bullets: color-mix(in oklab, var(--color-daintree-text) 40%, transparent);
+    --tw-prose-hr: var(--color-daintree-border);
+    --tw-prose-quotes: var(--color-daintree-text);
+    --tw-prose-quote-borders: var(--color-daintree-accent);
+    --tw-prose-captions: color-mix(in oklab, var(--color-daintree-text) 60%, transparent);
+    --tw-prose-code: var(--color-daintree-text);
+    --tw-prose-pre-code: var(--color-daintree-text);
+    --tw-prose-pre-bg: var(--color-daintree-sidebar);
+    --tw-prose-th-borders: var(--color-daintree-border);
+    --tw-prose-td-borders: color-mix(in oklab, var(--color-daintree-border) 60%, transparent);
   }
 
   /* Prose code inline styling - matches existing MarkdownRenderer */
-  .prose-canopy :where(code):not(:where(pre *)) {
-    background: color-mix(in oklab, var(--color-canopy-sidebar) 60%, transparent);
+  .prose-daintree :where(code):not(:where(pre *)) {
+    background: color-mix(in oklab, var(--color-daintree-sidebar) 60%, transparent);
     padding: 0.125rem 0.375rem;
     border-radius: var(--radius-xs);
     font-size: 0.8125rem;
     font-family: "JetBrains Mono", monospace;
-    border: 1px solid color-mix(in oklab, var(--color-canopy-border) 50%, transparent);
+    border: 1px solid color-mix(in oklab, var(--color-daintree-border) 50%, transparent);
   }
 
-  .prose-canopy :where(code):not(:where(pre *))::before,
-  .prose-canopy :where(code):not(:where(pre *))::after {
+  .prose-daintree :where(code):not(:where(pre *))::before,
+  .prose-daintree :where(code):not(:where(pre *))::after {
     content: none;
   }
 
   /* Prose pre/code block styling */
-  .prose-canopy :where(pre) {
-    background: color-mix(in oklab, var(--color-canopy-sidebar) 30%, transparent);
-    border: 1px solid var(--color-canopy-border);
+  .prose-daintree :where(pre) {
+    background: color-mix(in oklab, var(--color-daintree-sidebar) 30%, transparent);
+    border: 1px solid var(--color-daintree-border);
     border-radius: var(--radius-lg);
     font-family: "JetBrains Mono", monospace;
   }
 
   /* Prose link hover */
-  .prose-canopy :where(a):hover {
+  .prose-daintree :where(a):hover {
     text-decoration: underline;
   }
 
   /* Prose headings - stable top spacing for alignment */
-  .prose-canopy :where(h1, h2, h3, h4, h5, h6):first-child {
+  .prose-daintree :where(h1, h2, h3, h4, h5, h6):first-child {
     margin-top: 0;
   }
 
   /* Prose list spacing */
-  .prose-canopy :where(ul, ol):first-child {
+  .prose-daintree :where(ul, ol):first-child {
     margin-top: 0;
   }
 
   /* Compact spacing for chat interface */
-  .prose-canopy :where(p) {
+  .prose-daintree :where(p) {
     margin-top: 0.5rem;
     margin-bottom: 0.5rem;
   }
 
-  .prose-canopy :where(p):first-child {
+  .prose-daintree :where(p):first-child {
     margin-top: 0;
   }
 
-  .prose-canopy :where(p):last-child {
+  .prose-daintree :where(p):last-child {
     margin-bottom: 0;
   }
 
-  .prose-canopy :where(ul, ol) {
+  .prose-daintree :where(ul, ol) {
     margin-top: 0.5rem;
     margin-bottom: 0.5rem;
     padding-left: 1.25rem;
   }
 
-  .prose-canopy :where(li) {
+  .prose-daintree :where(li) {
     margin-top: 0.125rem;
     margin-bottom: 0.125rem;
   }
 
-  .prose-canopy :where(h1, h2, h3) {
+  .prose-daintree :where(h1, h2, h3) {
     margin-top: 1rem;
     margin-bottom: 0.375rem;
   }
 
   /* Heading hierarchy - distinct weights and sizing */
-  .prose-canopy :where(h1) {
+  .prose-daintree :where(h1) {
     font-size: 1.25rem;
     font-weight: 600;
     letter-spacing: -0.01em;
   }
 
-  .prose-canopy :where(h2) {
+  .prose-daintree :where(h2) {
     font-size: 1.1rem;
     font-weight: 600;
     letter-spacing: -0.01em;
   }
 
-  .prose-canopy :where(h3) {
+  .prose-daintree :where(h3) {
     font-size: 1rem;
     font-weight: 600;
     color: color-mix(in oklab, var(--color-text-primary) 85%, transparent);
   }
 
   /* Tighter code block spacing */
-  .prose-canopy :where(pre) {
+  .prose-daintree :where(pre) {
     margin-top: 0.75rem;
     margin-bottom: 0.75rem;
   }
 
   /* Neutralize highlight.js global background inside prose blocks */
-  .prose-canopy pre code.hljs {
+  .prose-daintree pre code.hljs {
     background: transparent;
     padding: 0;
   }
 
   /* GFM table styling */
-  .prose-canopy :where(table) {
+  .prose-daintree :where(table) {
     width: 100%;
     border-collapse: collapse;
   }
 
-  .prose-canopy :where(th) {
+  .prose-daintree :where(th) {
     text-align: left;
     font-weight: 600;
   }
 
-  .prose-canopy :where(th, td) {
+  .prose-daintree :where(th, td) {
     padding: 0.375rem 0.75rem;
-    border: 1px solid var(--color-canopy-border);
+    border: 1px solid var(--color-daintree-border);
   }
 
   /* GFM task list checkbox */
-  .prose-canopy :where(input[type="checkbox"]) {
+  .prose-daintree :where(input[type="checkbox"]) {
     margin-right: 0.375rem;
     vertical-align: middle;
   }
 
   /* GFM strikethrough */
-  .prose-canopy :where(del) {
+  .prose-daintree :where(del) {
     opacity: 0.6;
   }
 
@@ -1042,7 +1042,7 @@ body,
     color: var(--color-state-working);
   }
   50% {
-    color: color-mix(in oklab, var(--color-state-working) 70%, var(--color-canopy-text));
+    color: color-mix(in oklab, var(--color-state-working) 70%, var(--color-daintree-text));
   }
 }
 
@@ -1375,7 +1375,7 @@ body,
   0% {
     /* Unselected appearance */
     background-color: var(--color-surface);
-    border-color: var(--color-canopy-border);
+    border-color: var(--color-daintree-border);
     box-shadow: none;
   }
   35% {
@@ -1481,7 +1481,7 @@ body,
 }
 
 .github-status-loading {
-  background: color-mix(in oklab, var(--color-canopy-accent) 20%, transparent);
+  background: color-mix(in oklab, var(--color-daintree-accent) 20%, transparent);
 }
 
 .github-status-loading::after {
@@ -1494,7 +1494,7 @@ body,
   background: linear-gradient(
     90deg,
     transparent,
-    color-mix(in oklab, var(--color-canopy-accent) 80%, transparent),
+    color-mix(in oklab, var(--color-daintree-accent) 80%, transparent),
     transparent
   );
   animation: github-status-shimmer 1.5s ease-in-out infinite;
@@ -1548,7 +1548,7 @@ body,
   }
 
   .github-status-loading {
-    background: color-mix(in oklab, var(--color-canopy-accent) 60%, transparent);
+    background: color-mix(in oklab, var(--color-daintree-accent) 60%, transparent);
   }
 
   .github-status-success {
@@ -1569,7 +1569,7 @@ body[data-performance-mode="true"] .github-status-loading::after {
 }
 
 body[data-performance-mode="true"] .github-status-loading {
-  background: color-mix(in oklab, var(--color-canopy-accent) 60%, transparent) !important;
+  background: color-mix(in oklab, var(--color-daintree-accent) 60%, transparent) !important;
 }
 
 body[data-performance-mode="true"] .github-status-success {
@@ -1625,24 +1625,24 @@ body[data-performance-mode="true"] .github-status-error {
 
 /* Base diff table styling */
 .diff-viewer .diff {
-  background: var(--color-canopy-bg);
-  color: var(--color-canopy-text);
+  background: var(--color-daintree-bg);
+  color: var(--color-daintree-text);
 }
 
 /* Gutter (line numbers) styling */
 .diff-viewer .diff-gutter {
-  background: var(--color-canopy-sidebar);
+  background: var(--color-daintree-sidebar);
   color: var(--color-state-idle);
   padding: 0 8px;
   min-width: 50px;
   text-align: right;
   user-select: none;
-  border-right: 1px solid var(--color-canopy-border);
+  border-right: 1px solid var(--color-daintree-border);
 }
 
 /* Code content styling */
 .diff-viewer .diff-code {
-  background: var(--color-canopy-bg);
+  background: var(--color-daintree-bg);
   padding: 0 12px;
   white-space: pre;
   overflow-x: auto;
@@ -1685,8 +1685,8 @@ body[data-performance-mode="true"] .github-status-error {
   color: var(--color-status-info);
   padding: 4px 12px;
   font-size: 11px;
-  border-top: 1px solid var(--color-canopy-border);
-  border-bottom: 1px solid var(--color-canopy-border);
+  border-top: 1px solid var(--color-daintree-border);
+  border-bottom: 1px solid var(--color-daintree-border);
 }
 
 .diff-viewer .diff-hunk-header-gutter {
@@ -1720,7 +1720,7 @@ body[data-performance-mode="true"] .github-status-error {
 }
 
 .diff-viewer::-webkit-scrollbar-track {
-  background: var(--color-canopy-bg);
+  background: var(--color-daintree-bg);
 }
 
 .diff-viewer::-webkit-scrollbar-thumb {

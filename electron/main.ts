@@ -10,7 +10,7 @@ import { markPerformance } from "./utils/performance.js";
 import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/security.js";
 import {
   registerAppProtocol,
-  registerCanopyFileProtocol,
+  registerDaintreeFileProtocol,
   setupWebviewCSP,
 } from "./setup/protocols.js";
 import { registerAppLifecycleHandlers } from "./lifecycle/appLifecycle.js";
@@ -81,7 +81,7 @@ protocol.registerSchemesAsPrivileged([
     },
   },
   {
-    scheme: "canopy-file",
+    scheme: "daintree-file",
     privileges: {
       secure: true,
       supportFetchAPI: true,
@@ -178,7 +178,7 @@ if (!gotTheLock) {
         // originating project view survives a switch into a freshly added
         // project view. Increase the cache only when the e2e harness flag is
         // set so production behavior is unchanged.
-        (process.env.CANOPY_E2E_MODE ? 4 : undefined),
+        (process.env.DAINTREE_E2E_MODE ? 4 : undefined),
       onViewEvicted: (wcId) => {
         getWorkspaceClientRef()?.removeDirectPort(wcId);
         getWorktreePortBrokerRef()?.closePortsForView(wcId);
@@ -279,7 +279,7 @@ if (!gotTheLock) {
     try {
       setupPermissionLockdown();
       registerAppProtocol(distPath);
-      registerCanopyFileProtocol();
+      registerDaintreeFileProtocol();
       setupWebviewCSP();
       await createWindow(undefined, lastActiveProjectId ?? undefined);
       getCrashLoopGuard().startStabilityTimer();

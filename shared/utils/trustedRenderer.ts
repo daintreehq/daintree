@@ -1,6 +1,6 @@
 import { getDevServerOrigins } from "../config/devServer.js";
 
-const PRODUCTION_ORIGINS = ["app://canopy"] as const;
+const PRODUCTION_ORIGINS = ["app://daintree"] as const;
 
 function getTrustedRendererOrigins(): readonly string[] {
   const isDev = process.env.NODE_ENV === "development";

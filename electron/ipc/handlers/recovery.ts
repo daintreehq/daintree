@@ -8,7 +8,7 @@ function getAppUrl(): string {
   if (process.env.NODE_ENV === "development") {
     return getDevServerUrl();
   }
-  return "app://canopy/index.html";
+  return "app://daintree/index.html";
 }
 
 export function registerRecoveryHandlers(deps: HandlerDependencies): () => void {

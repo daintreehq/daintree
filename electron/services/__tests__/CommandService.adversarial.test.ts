@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
-  CanopyCommand,
+  DaintreeCommand,
   CommandContext,
   CommandResult,
 } from "../../../shared/types/commands.js";
@@ -31,8 +31,8 @@ function deferred<T>(): Deferred<T> {
 }
 
 function createCommand(
-  overrides: Partial<CanopyCommand<Record<string, unknown>, string>> = {}
-): CanopyCommand<Record<string, unknown>, string> {
+  overrides: Partial<DaintreeCommand<Record<string, unknown>, string>> = {}
+): DaintreeCommand<Record<string, unknown>, string> {
   return {
     id: "project:test",
     label: "Test Command",

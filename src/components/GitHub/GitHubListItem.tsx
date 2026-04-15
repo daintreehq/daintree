@@ -171,8 +171,8 @@ export function GitHubListItem({
               className={cn(
                 "absolute inset-0 rounded border flex items-center justify-center transition-colors cursor-pointer",
                 isSelected
-                  ? "bg-canopy-accent border-canopy-accent"
-                  : "border-canopy-border hover:border-canopy-accent/60",
+                  ? "bg-daintree-accent border-daintree-accent"
+                  : "border-daintree-border hover:border-daintree-accent/60",
                 isSelectionActive || isSelected ? "flex" : "hidden group-hover/icon:flex"
               )}
             >
@@ -334,7 +334,7 @@ export function GitHubListItem({
                 <Tooltip>
                   <TooltipTrigger asChild>
                     {isActiveWorktree ? (
-                      <span className="shrink-0 text-canopy-accent">
+                      <span className="shrink-0 text-daintree-accent">
                         <WorktreeIcon className="w-3.5 h-3.5" />
                       </span>
                     ) : onSwitchToWorktree && matchedWorktree ? (

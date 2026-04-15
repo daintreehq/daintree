@@ -135,7 +135,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
   return (
     <AppDialog isOpen={isOpen} onClose={handleClose} size="md" dismissible={!isInitializing}>
       <AppDialog.Header>
-        <AppDialog.Title icon={<WorktreeIcon className="h-5 w-5 text-canopy-accent" />}>
+        <AppDialog.Title icon={<WorktreeIcon className="h-5 w-5 text-daintree-accent" />}>
           Initialize Git Repository
         </AppDialog.Title>
         {!isInitializing && <AppDialog.CloseButton />}

@@ -23,7 +23,7 @@ permissions:
 env:
   NODE_VERSION: "22"
   NIGHTLY_CHANNEL: "nightly"
-  NIGHTLY_URL: "https://updates.canopyide.com/nightly/"
+  NIGHTLY_URL: "https://updates.daintree.org/nightly/"
 
 jobs:
   matrix-setup:

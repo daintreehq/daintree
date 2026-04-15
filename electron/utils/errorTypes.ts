@@ -1,4 +1,4 @@
-export class CanopyError extends Error {
+export class DaintreeError extends Error {
   constructor(
     message: string,
     public readonly context?: Record<string, unknown>,
@@ -10,7 +10,7 @@ export class CanopyError extends Error {
   }
 }
 
-export class GitError extends CanopyError {
+export class GitError extends DaintreeError {
   constructor(message: string, context?: Record<string, unknown>, cause?: Error) {
     super(message, context, cause);
   }
@@ -25,32 +25,32 @@ export class WorktreeRemovedError extends GitError {
   }
 }
 
-export class FileSystemError extends CanopyError {
+export class FileSystemError extends DaintreeError {
   constructor(message: string, context?: Record<string, unknown>, cause?: Error) {
     super(message, context, cause);
   }
 }
 
-export class ConfigError extends CanopyError {
+export class ConfigError extends DaintreeError {
   constructor(message: string, context?: Record<string, unknown>, cause?: Error) {
     super(message, context, cause);
   }
 }
 
-export class ProcessError extends CanopyError {
+export class ProcessError extends DaintreeError {
   constructor(message: string, context?: Record<string, unknown>, cause?: Error) {
     super(message, context, cause);
   }
 }
 
-export class WatcherError extends CanopyError {
+export class WatcherError extends DaintreeError {
   constructor(message: string, context?: Record<string, unknown>, cause?: Error) {
     super(message, context, cause);
   }
 }
 
-export function isCanopyError(error: unknown): error is CanopyError {
-  return error instanceof CanopyError;
+export function isDaintreeError(error: unknown): error is DaintreeError {
+  return error instanceof DaintreeError;
 }
 
 export function isPermissionError(error: unknown): boolean {
@@ -71,7 +71,7 @@ export function isTransientError(error: unknown): boolean {
 }
 
 export function getUserMessage(error: unknown): string {
-  if (isCanopyError(error)) {
+  if (isDaintreeError(error)) {
     return error.message;
   }
 
@@ -98,7 +98,7 @@ export function getErrorDetails(
     details.stack = error.stack;
   }
 
-  if (isCanopyError(error)) {
+  if (isDaintreeError(error)) {
     details.context = error.context;
     if (error.cause) {
       if (error.cause instanceof Error && !seen.has(error.cause)) {

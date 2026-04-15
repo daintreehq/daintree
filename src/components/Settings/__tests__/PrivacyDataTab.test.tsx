@@ -25,7 +25,7 @@ function createPrivacyApi(overrides: Partial<typeof window.electron.privacy> = {
     getSettings: vi.fn().mockResolvedValue({
       telemetryLevel: "off" as const,
       logRetentionDays: 30 as const,
-      dataFolderPath: "/tmp/canopy",
+      dataFolderPath: "/tmp/daintree",
     }),
     setTelemetryLevel: vi.fn().mockResolvedValue(undefined),
     setLogRetention: vi.fn().mockResolvedValue(undefined),
@@ -59,7 +59,7 @@ describe("PrivacyDataTab", () => {
 
     await waitFor(() => {
       const errorsButton = screen.getByText("Errors Only").closest("button")!;
-      expect(errorsButton.className).toContain("border-canopy-accent/40");
+      expect(errorsButton.className).toContain("border-daintree-accent/40");
     });
   });
 
@@ -79,7 +79,7 @@ describe("PrivacyDataTab", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Off").closest("button")!.className).toContain(
-        "border-canopy-accent/40"
+        "border-daintree-accent/40"
       );
     });
 
@@ -88,10 +88,10 @@ describe("PrivacyDataTab", () => {
     await waitFor(() => {
       // Should revert back to "Off" being selected
       expect(screen.getByText("Off").closest("button")!.className).toContain(
-        "border-canopy-accent/40"
+        "border-daintree-accent/40"
       );
       expect(screen.getByText("Errors Only").closest("button")!.className).not.toContain(
-        "border-canopy-accent/40"
+        "border-daintree-accent/40"
       );
     });
 
@@ -122,7 +122,7 @@ describe("PrivacyDataTab", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Off").closest("button")!.className).toContain(
-        "border-canopy-accent/40"
+        "border-daintree-accent/40"
       );
     });
 
@@ -130,7 +130,7 @@ describe("PrivacyDataTab", () => {
     fireEvent.click(screen.getByText("Errors Only").closest("button")!);
     await waitFor(() => {
       expect(screen.getByText("Errors Only").closest("button")!.className).toContain(
-        "border-canopy-accent/40"
+        "border-daintree-accent/40"
       );
     });
 
@@ -139,10 +139,10 @@ describe("PrivacyDataTab", () => {
     await waitFor(() => {
       // Should revert to "errors" (the last successful value), NOT "off"
       expect(screen.getByText("Errors Only").closest("button")!.className).toContain(
-        "border-canopy-accent/40"
+        "border-daintree-accent/40"
       );
       expect(screen.getByText("Full Usage").closest("button")!.className).not.toContain(
-        "border-canopy-accent/40"
+        "border-daintree-accent/40"
       );
     });
   });
@@ -163,7 +163,7 @@ describe("PrivacyDataTab", () => {
 
     await waitFor(() => {
       expect(screen.getByText("30 days").closest("button")!.className).toContain(
-        "bg-canopy-accent/10"
+        "bg-daintree-accent/10"
       );
     });
 
@@ -172,10 +172,10 @@ describe("PrivacyDataTab", () => {
     await waitFor(() => {
       // Should revert back to 30 days
       expect(screen.getByText("30 days").closest("button")!.className).toContain(
-        "bg-canopy-accent/10"
+        "bg-daintree-accent/10"
       );
       expect(screen.getByText("90 days").closest("button")!.className).not.toContain(
-        "bg-canopy-accent/10"
+        "bg-daintree-accent/10"
       );
     });
 

@@ -74,14 +74,14 @@ describe("WebAudioService", () => {
     return { service, ctx, mockFetch, mockSuccessfulFetch, fakeBuffer, ...mocks };
   }
 
-  it("plays a sound by fetching via canopy-file:// and decoding", async () => {
+  it("plays a sound by fetching via daintree-file:// and decoding", async () => {
     const { service, mockFetch, mockSuccessfulFetch, mockDecodeAudioData, mockConnect, mockStart } =
       await setupTest();
     mockSuccessfulFetch();
 
     await service.playSound("chime.wav");
 
-    expect(mockFetch).toHaveBeenCalledWith(expect.stringContaining("canopy-file://"));
+    expect(mockFetch).toHaveBeenCalledWith(expect.stringContaining("daintree-file://"));
     expect(mockFetch).toHaveBeenCalledWith(expect.stringContaining("chime.wav"));
     expect(mockDecodeAudioData).toHaveBeenCalled();
     expect(mockConnect).toHaveBeenCalled();

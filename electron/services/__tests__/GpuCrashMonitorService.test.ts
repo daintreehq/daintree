@@ -135,27 +135,27 @@ describe("GpuCrashMonitorService", () => {
 
     it("logs non-GPU process crashes without triggering GPU relaunch", async () => {
       await loadAndInit();
-      emitChildProcessGone("Utility", "crashed", 1, "canopy-pty-host");
-      emitChildProcessGone("Utility", "crashed", 1, "canopy-pty-host");
-      emitChildProcessGone("Utility", "crashed", 1, "canopy-pty-host");
+      emitChildProcessGone("Utility", "crashed", 1, "daintree-pty-host");
+      emitChildProcessGone("Utility", "crashed", 1, "daintree-pty-host");
+      emitChildProcessGone("Utility", "crashed", 1, "daintree-pty-host");
       expect(appMock.relaunch).not.toHaveBeenCalled();
       expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("[ChildProcess]"));
-      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("name=canopy-pty-host"));
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("name=daintree-pty-host"));
     });
 
     it("does not log non-GPU clean-exit or killed events", async () => {
       await loadAndInit();
-      emitChildProcessGone("Utility", "clean-exit", 0, "canopy-pty-host");
-      emitChildProcessGone("Utility", "killed", 137, "canopy-workspace-host");
+      emitChildProcessGone("Utility", "clean-exit", 0, "daintree-pty-host");
+      emitChildProcessGone("Utility", "killed", 137, "daintree-workspace-host");
       expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining("[ChildProcess]"));
     });
 
     it("logs non-GPU crash with full process details", async () => {
       await loadAndInit();
-      emitChildProcessGone("Utility", "oom", 137, "canopy-workspace-host");
+      emitChildProcessGone("Utility", "oom", 137, "daintree-workspace-host");
       expect(console.warn).toHaveBeenCalledWith(
         expect.stringContaining(
-          "type=Utility, reason=oom, exitCode=137, name=canopy-workspace-host"
+          "type=Utility, reason=oom, exitCode=137, name=daintree-workspace-host"
         )
       );
     });

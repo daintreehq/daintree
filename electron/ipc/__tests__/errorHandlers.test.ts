@@ -14,7 +14,7 @@ const shellMock = vi.hoisted(() => ({
 }));
 
 const loggerMock = vi.hoisted(() => ({
-  getLogFilePath: vi.fn(() => "/tmp/canopy.log"),
+  getLogFilePath: vi.fn(() => "/tmp/daintree.log"),
   logError: vi.fn(),
 }));
 

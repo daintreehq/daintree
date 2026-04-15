@@ -27,7 +27,7 @@ test.describe.serial("Core: Terminal Scrollback Integrity Under Load", () => {
     // Must use the action dispatcher (not the IPC bridge directly) because the action
     // updates both the renderer Zustand store AND persists via IPC.
     await window.evaluate(async () => {
-      const dispatch = (window as unknown as Record<string, unknown>).__canopyDispatchAction as (
+      const dispatch = (window as unknown as Record<string, unknown>).__daintreeDispatchAction as (
         id: string,
         args?: unknown,
         opts?: unknown

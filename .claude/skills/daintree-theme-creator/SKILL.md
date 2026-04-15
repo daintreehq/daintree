@@ -1,9 +1,9 @@
 ---
-name: canopy-theme-creator
-description: Guide for creating or modifying Canopy themes. Use when working on theme palettes, semantic tokens, component extensions, or built-in theme definitions.
+name: daintree-theme-creator
+description: Guide for creating or modifying Daintree themes. Use when working on theme palettes, semantic tokens, component extensions, or built-in theme definitions.
 ---
 
-# Canopy Theme Creator
+# Daintree Theme Creator
 
 Before starting, read the architecture documentation for full context:
 
@@ -12,7 +12,7 @@ Before starting, read the architecture documentation for full context:
 
 ## Three-Layer Pipeline
 
-Canopy themes flow through three layers. Each layer has a specific role:
+Daintree themes flow through three layers. Each layer has a specific role:
 
 1. **Palette** — The visual foundation. A structured object defining surfaces, text, accent, borders, status, activity, terminal, syntax, and strategy. This is what theme authors write.
 2. **Semantic tokens** — Compiled from the palette by `createSemanticTokens()`. These become `--theme-*` CSS variables. ~140 tokens covering every app-wide visual concern.

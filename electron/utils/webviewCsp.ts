@@ -24,7 +24,7 @@ export function classifyPartition(partition: string): WebviewPartitionType {
   if (isDevPreviewPartition(partition)) {
     return "dev-preview";
   }
-  if (partition === "persist:canopy-app" || partition.startsWith("persist:project-")) {
+  if (partition === "persist:daintree" || partition.startsWith("persist:project-")) {
     return "project";
   }
   return "unknown";

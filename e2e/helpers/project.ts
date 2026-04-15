@@ -15,7 +15,7 @@ export async function openProject(
 }
 
 export async function dismissTelemetryConsent(window: Page): Promise<void> {
-  const dialog = window.getByRole("dialog", { name: "Help improve Canopy" });
+  const dialog = window.getByRole("dialog", { name: "Help improve Daintree" });
   if (await dialog.isVisible().catch(() => false)) {
     await dialog.getByRole("button", { name: "Disable" }).click();
     await expect(dialog).not.toBeVisible({ timeout: 3_000 });

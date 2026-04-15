@@ -1012,7 +1012,7 @@ export function BulkCreateWorktreeDialog({
         <AppDialog.Title
           icon={
             isExecuting ? (
-              <Spinner size="lg" className="text-canopy-accent" />
+              <Spinner size="lg" className="text-daintree-accent" />
             ) : isDone ? (
               failedCount > 0 ? (
                 <AlertTriangle className="w-5 h-5 text-status-warning" />
@@ -1020,7 +1020,7 @@ export function BulkCreateWorktreeDialog({
                 <Check className="w-5 h-5 text-status-success" />
               )
             ) : (
-              <WorktreeIcon className="w-5 h-5 text-canopy-accent" />
+              <WorktreeIcon className="w-5 h-5 text-daintree-accent" />
             )
           }
         >
@@ -1038,7 +1038,7 @@ export function BulkCreateWorktreeDialog({
           <div className="space-y-4">
             {/* Assign to self (issues only) */}
             {mode === "issue" && currentUser && (
-              <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-canopy-bg/50 border-canopy-border transition-colors">
+              <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-daintree-bg/50 border-daintree-border transition-colors">
                 {currentUserAvatar ? (
                   <img
                     src={`${currentUserAvatar}${currentUserAvatar.includes("?") ? "&" : "?"}s=64`}
@@ -1046,14 +1046,14 @@ export function BulkCreateWorktreeDialog({
                     className="w-8 h-8 rounded-full shrink-0"
                   />
                 ) : (
-                  <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-canopy-accent/10 text-canopy-accent">
+                  <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-daintree-accent/10 text-daintree-accent">
                     <UserPlus className="w-4 h-4" />
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-canopy-text">Assign to me</span>
-                    <span className="text-xs text-canopy-text/50 font-mono">@{currentUser}</span>
+                    <span className="text-sm font-medium text-daintree-text">Assign to me</span>
+                    <span className="text-xs text-daintree-text/50 font-mono">@{currentUser}</span>
                   </div>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
@@ -1067,13 +1067,13 @@ export function BulkCreateWorktreeDialog({
                   <div
                     className={cn(
                       "w-9 h-5 rounded-full transition-colors",
-                      "peer-focus-visible:ring-2 peer-focus-visible:ring-canopy-accent",
+                      "peer-focus-visible:ring-2 peer-focus-visible:ring-daintree-accent",
                       "after:content-[''] after:absolute after:top-0.5 after:left-0.5",
                       "after:rounded-full after:h-4 after:w-4",
                       "after:transition-transform after:duration-200",
                       assignWorktreeToSelf
-                        ? "bg-canopy-accent after:translate-x-4 after:bg-text-inverse"
-                        : "bg-canopy-border after:translate-x-0 after:bg-canopy-text"
+                        ? "bg-daintree-accent after:translate-x-4 after:bg-text-inverse"
+                        : "bg-daintree-border after:translate-x-0 after:bg-daintree-text"
                     )}
                   />
                 </label>
@@ -1084,7 +1084,7 @@ export function BulkCreateWorktreeDialog({
             <div className="space-y-2">
               <label
                 htmlFor="bulk-recipe-selector"
-                className="block text-sm font-medium text-canopy-text"
+                className="block text-sm font-medium text-daintree-text"
               >
                 Starting Layout
               </label>
@@ -1097,27 +1097,27 @@ export function BulkCreateWorktreeDialog({
                     aria-expanded={recipePickerOpen}
                     aria-haspopup="listbox"
                     aria-controls="bulk-recipe-list"
-                    className="w-full justify-between bg-canopy-bg border-canopy-border text-canopy-text hover:bg-canopy-bg hover:text-canopy-text"
+                    className="w-full justify-between bg-daintree-bg border-daintree-border text-daintree-text hover:bg-daintree-bg hover:text-daintree-text"
                   >
                     <span className="flex items-center gap-2 truncate">
                       {selectedRecipeId === CLONE_LAYOUT_ID ? (
                         <>
-                          <Copy className="shrink-0 text-canopy-accent" />
+                          <Copy className="shrink-0 text-daintree-accent" />
                           <span>Clone current layout</span>
                         </>
                       ) : selectedRecipe ? (
                         <>
-                          <Play className="shrink-0 text-canopy-accent" />
+                          <Play className="shrink-0 text-daintree-accent" />
                           <span>{selectedRecipe.name}</span>
-                          <span className="text-xs text-canopy-text/50">
+                          <span className="text-xs text-daintree-text/50">
                             ({selectedRecipe.terminals.length} terminal
                             {selectedRecipe.terminals.length !== 1 ? "s" : ""})
                           </span>
                         </>
                       ) : (
                         <>
-                          <Play className="shrink-0 text-canopy-accent" />
-                          <span className="text-canopy-text/60">Empty</span>
+                          <Play className="shrink-0 text-daintree-accent" />
+                          <span className="text-daintree-text/60">Empty</span>
                         </>
                       )}
                     </span>
@@ -1146,16 +1146,16 @@ export function BulkCreateWorktreeDialog({
                       }}
                       onClick={() => handleRecipeSelect(CLONE_LAYOUT_ID)}
                       className={cn(
-                        "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                        selectedRecipeId === CLONE_LAYOUT_ID && "bg-canopy-border"
+                        "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                        selectedRecipeId === CLONE_LAYOUT_ID && "bg-daintree-border"
                       )}
                     >
                       <div className="flex items-center gap-2">
-                        <Copy className="h-3.5 w-3.5 text-canopy-text/50" />
+                        <Copy className="h-3.5 w-3.5 text-daintree-text/50" />
                         <span>Clone current layout</span>
                       </div>
                       {selectedRecipeId === CLONE_LAYOUT_ID && (
-                        <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
+                        <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
                       )}
                     </div>
                     <div
@@ -1170,13 +1170,13 @@ export function BulkCreateWorktreeDialog({
                       }}
                       onClick={handleRecipeSelectNone}
                       className={cn(
-                        "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                        selectedRecipeId === null && "bg-canopy-border"
+                        "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                        selectedRecipeId === null && "bg-daintree-border"
                       )}
                     >
-                      <span className="text-canopy-text/60">Empty</span>
+                      <span className="text-daintree-text/60">Empty</span>
                       {selectedRecipeId === null && (
-                        <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
+                        <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
                       )}
                     </div>
                     {globalRecipes.map((recipe) => (
@@ -1193,22 +1193,22 @@ export function BulkCreateWorktreeDialog({
                         }}
                         onClick={() => handleRecipeSelect(recipe.id)}
                         className={cn(
-                          "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                          recipe.id === selectedRecipeId && "bg-canopy-border"
+                          "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                          recipe.id === selectedRecipeId && "bg-daintree-border"
                         )}
                       >
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="truncate">{recipe.name}</span>
-                          <span className="text-xs text-canopy-text/50 shrink-0">
+                          <span className="text-xs text-daintree-text/50 shrink-0">
                             {recipe.terminals.length} terminal
                             {recipe.terminals.length !== 1 ? "s" : ""}
                           </span>
                           {recipe.id === defaultRecipeId && (
-                            <span className="text-xs text-canopy-accent shrink-0">(default)</span>
+                            <span className="text-xs text-daintree-accent shrink-0">(default)</span>
                           )}
                         </div>
                         {recipe.id === selectedRecipeId && (
-                          <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
+                          <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
                         )}
                       </div>
                     ))}
@@ -1219,10 +1219,10 @@ export function BulkCreateWorktreeDialog({
 
             {/* Worktree list */}
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-canopy-text">
+              <label className="block text-sm font-medium text-daintree-text">
                 Worktrees to create
               </label>
-              <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-canopy-border divide-y divide-canopy-border">
+              <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-daintree-border divide-y divide-daintree-border">
                 {planned.map((item) => (
                   <div
                     key={item.item.number}
@@ -1233,15 +1233,15 @@ export function BulkCreateWorktreeDialog({
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-canopy-text/50 text-xs font-mono shrink-0">
+                        <span className="text-daintree-text/50 text-xs font-mono shrink-0">
                           #{item.item.number}
                         </span>
-                        <span className="text-canopy-text truncate">{item.item.title}</span>
+                        <span className="text-daintree-text truncate">{item.item.title}</span>
                       </div>
                       {!item.skipped && (
                         <div className="flex items-center gap-1.5 mt-0.5">
-                          <WorktreeIcon className="w-3 h-3 text-canopy-text/40 shrink-0" />
-                          <span className="text-xs text-canopy-text/50 font-mono truncate">
+                          <WorktreeIcon className="w-3 h-3 text-daintree-text/40 shrink-0" />
+                          <span className="text-xs text-daintree-text/50 font-mono truncate">
                             {item.branchName}
                           </span>
                         </div>
@@ -1260,7 +1260,7 @@ export function BulkCreateWorktreeDialog({
         ) : (
           <div className="space-y-4">
             {/* Per-item status list */}
-            <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-canopy-border divide-y divide-canopy-border">
+            <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-daintree-border divide-y divide-daintree-border">
               {planned
                 .filter((p) => progress.items.has(p.item.number))
                 .map((item) => {
@@ -1278,29 +1278,29 @@ export function BulkCreateWorktreeDialog({
                     >
                       <div className="mt-0.5 shrink-0">
                         {isInProgress ? (
-                          <Spinner size="md" className="text-canopy-accent" />
+                          <Spinner size="md" className="text-daintree-accent" />
                         ) : itemStatus?.stage === "succeeded" ? (
                           <Check className="w-4 h-4 text-status-success" />
                         ) : itemStatus?.stage === "failed" ? (
                           <AlertTriangle className="w-4 h-4 text-status-warning" />
                         ) : (
-                          <div className="w-4 h-4 rounded-full border border-canopy-border" />
+                          <div className="w-4 h-4 rounded-full border border-daintree-border" />
                         )}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-canopy-text/50 text-xs font-mono shrink-0">
+                          <span className="text-daintree-text/50 text-xs font-mono shrink-0">
                             #{item.item.number}
                           </span>
-                          <span className="text-canopy-text truncate">{item.item.title}</span>
+                          <span className="text-daintree-text truncate">{item.item.title}</span>
                           {isInProgress && itemStatus.attempt > 1 && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-canopy-accent/10 text-canopy-accent shrink-0">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-daintree-accent/10 text-daintree-accent shrink-0">
                               retry {itemStatus.attempt - 1}
                             </span>
                           )}
                         </div>
                         {stageLabel && (
-                          <p className="text-xs text-canopy-text/50 mt-0.5">{stageLabel}</p>
+                          <p className="text-xs text-daintree-text/50 mt-0.5">{stageLabel}</p>
                         )}
                         {itemStatus?.stage === "failed" && itemStatus.error && (
                           <p className="text-xs text-status-warning mt-0.5 break-words">
@@ -1317,13 +1317,13 @@ export function BulkCreateWorktreeDialog({
             <div className="space-y-2">
               <div className="h-2 rounded-full bg-overlay-soft overflow-hidden">
                 <div
-                  className="h-full rounded-full bg-canopy-accent transition-[width] duration-300"
+                  className="h-full rounded-full bg-daintree-accent transition-[width] duration-300"
                   style={{
                     width: `${progress.items.size > 0 ? (processedCount / progress.items.size) * 100 : 0}%`,
                   }}
                 />
               </div>
-              <div className="flex items-center justify-center gap-1.5 text-sm tabular-nums text-canopy-text/70">
+              <div className="flex items-center justify-center gap-1.5 text-sm tabular-nums text-daintree-text/70">
                 <span>
                   {succeededCount} of {progress.items.size} created
                 </span>

@@ -28,7 +28,7 @@ export const useAgentPreferencesStore = create<AgentPreferencesState>()(
       setDefaultAgent: (agent) => set({ defaultAgent: agent }),
     }),
     {
-      name: "canopy-agent-preferences",
+      name: "daintree-agent-preferences",
       storage: createSafeJSONStorage(),
       merge: (persistedState, currentState) => {
         const persisted = persistedState as Partial<AgentPreferencesState> | null;
@@ -48,7 +48,7 @@ export const useAgentPreferencesStore = create<AgentPreferencesState>()(
         // We access localStorage directly here because getItem on StateStorage can return
         // a Promise in async storage implementations, but localStorage is always synchronous.
         try {
-          const oldRaw = readLocalStorageItemSafely("canopy-toolbar-preferences");
+          const oldRaw = readLocalStorageItemSafely("daintree-toolbar-preferences");
           if (oldRaw) {
             const oldData = JSON.parse(oldRaw) as {
               state?: { launcher?: { defaultAgent?: unknown } };

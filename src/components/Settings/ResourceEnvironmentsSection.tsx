@@ -106,7 +106,7 @@ function CommandList({
               onChange={(e) => updateCommand(index, e.target.value)}
               placeholder={placeholder}
               spellCheck={false}
-              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
             />
             <div className="flex flex-col">
               <button
@@ -116,7 +116,7 @@ function CommandList({
                 className="p-0.5 rounded hover:bg-surface-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 aria-label={`Move command ${index + 1} up`}
               >
-                <ChevronUp className="h-3 w-3 text-canopy-text" />
+                <ChevronUp className="h-3 w-3 text-daintree-text" />
               </button>
               <button
                 type="button"
@@ -125,7 +125,7 @@ function CommandList({
                 className="p-0.5 rounded hover:bg-surface-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 aria-label={`Move command ${index + 1} down`}
               >
-                <ChevronDown className="h-3 w-3 text-canopy-text" />
+                <ChevronDown className="h-3 w-3 text-daintree-text" />
               </button>
             </div>
             <button
@@ -141,7 +141,7 @@ function CommandList({
         <button
           type="button"
           onClick={addCommand}
-          className="flex items-center gap-1.5 text-xs text-canopy-text/60 hover:text-canopy-text transition-colors px-1 py-1"
+          className="flex items-center gap-1.5 text-xs text-daintree-text/60 hover:text-daintree-text transition-colors px-1 py-1"
         >
           <Plus className="h-3.5 w-3.5" />
           Add command
@@ -172,7 +172,7 @@ function IconPickerButton({ currentIcon, onChange }: IconPickerButtonProps) {
         className="p-1.5 rounded hover:bg-surface-inset border border-border-default transition-colors flex items-center justify-center"
         aria-label="Select environment icon"
       >
-        <DisplayIcon className="h-4 w-4 text-canopy-text" />
+        <DisplayIcon className="h-4 w-4 text-daintree-text" />
       </button>
 
       {isOpen && (
@@ -191,12 +191,12 @@ function IconPickerButton({ currentIcon, onChange }: IconPickerButtonProps) {
                 className={cn(
                   "p-2 rounded flex items-center justify-center transition-colors",
                   isSelected
-                    ? "bg-canopy-accent/20 border border-canopy-accent"
+                    ? "bg-daintree-accent/20 border border-daintree-accent"
                     : "hover:bg-surface-hover border border-transparent"
                 )}
                 title={label}
               >
-                <IconComp className="h-4 w-4 text-canopy-text" />
+                <IconComp className="h-4 w-4 text-daintree-text" />
               </button>
             );
           })}
@@ -311,7 +311,7 @@ export function ResourceEnvironmentsSection({
   return (
     <div className="space-y-6 p-1">
       <div className="flex items-center gap-2 mb-2">
-        <Server className="h-5 w-5 text-canopy-text/60" />
+        <Server className="h-5 w-5 text-daintree-text/60" />
         <h2 className="text-base font-semibold text-text-primary">Resource Environments</h2>
       </div>
 
@@ -322,7 +322,7 @@ export function ResourceEnvironmentsSection({
             value={currentEnvName}
             onChange={(e) => handleSelectEnv(e.target.value)}
             aria-label="Select environment"
-            className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+            className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
           >
             {envKeys.map((name) => (
               <option key={name} value={name}>
@@ -348,7 +348,7 @@ export function ResourceEnvironmentsSection({
               setAddEnvironmentError(null);
             }}
             aria-label="Add environment"
-            className="flex items-center gap-1 px-2 py-1.5 text-xs text-canopy-text/60 hover:text-canopy-text transition-colors"
+            className="flex items-center gap-1 px-2 py-1.5 text-xs text-daintree-text/60 hover:text-daintree-text transition-colors"
           >
             <Plus className="h-3.5 w-3.5" />
           </button>
@@ -364,7 +364,7 @@ export function ResourceEnvironmentsSection({
             setAddEnvironmentError(null);
           }}
           aria-label="Add environment"
-          className="flex items-center gap-1.5 text-xs text-canopy-text/60 hover:text-canopy-text transition-colors px-1 py-1"
+          className="flex items-center gap-1.5 text-xs text-daintree-text/60 hover:text-daintree-text transition-colors px-1 py-1"
         >
           <Plus className="h-3.5 w-3.5" />
           Add environment
@@ -374,7 +374,7 @@ export function ResourceEnvironmentsSection({
       {isAddingEnvironment && (
         <div
           data-testid="add-environment-form"
-          className="space-y-2 p-3 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg"
+          className="space-y-2 p-3 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg"
         >
           <label
             className="block text-sm font-medium text-text-primary"
@@ -404,7 +404,7 @@ export function ResourceEnvironmentsSection({
               autoFocus
               spellCheck={false}
               placeholder="docker-local"
-              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
             />
             <Button type="button" size="sm" onClick={handleAddEnv}>
               Add
@@ -431,41 +431,41 @@ export function ResourceEnvironmentsSection({
       {/* Variables hint */}
       <div className="px-3 py-2 rounded-[var(--radius-md)] bg-surface-inset border border-border-default text-xs text-text-muted space-y-1">
         <div>
-          <span className="font-medium text-canopy-text/70">Variables</span>{" "}
-          <span className="text-canopy-text/40">(replaced at runtime in all commands):</span>
+          <span className="font-medium text-daintree-text/70">Variables</span>{" "}
+          <span className="text-daintree-text/40">(replaced at runtime in all commands):</span>
         </div>
         <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
           <div>
-            <code className="text-canopy-accent/80">{"{branch}"}</code>
-            <span className="text-canopy-text/40"> — branch name</span>
+            <code className="text-daintree-accent/80">{"{branch}"}</code>
+            <span className="text-daintree-text/40"> — branch name</span>
           </div>
           <div>
-            <code className="text-canopy-accent/80">{"{branch-slug}"}</code>
-            <span className="text-canopy-text/40"> — sanitized branch</span>
+            <code className="text-daintree-accent/80">{"{branch-slug}"}</code>
+            <span className="text-daintree-text/40"> — sanitized branch</span>
           </div>
           <div>
-            <code className="text-canopy-accent/80">{"{repo-name}"}</code>
-            <span className="text-canopy-text/40"> — repository folder</span>
+            <code className="text-daintree-accent/80">{"{repo-name}"}</code>
+            <span className="text-daintree-text/40"> — repository folder</span>
           </div>
           <div>
-            <code className="text-canopy-accent/80">{"{base-folder}"}</code>
-            <span className="text-canopy-text/40"> — alias for repo-name</span>
+            <code className="text-daintree-accent/80">{"{base-folder}"}</code>
+            <span className="text-daintree-text/40"> — alias for repo-name</span>
           </div>
           <div>
-            <code className="text-canopy-accent/80">{"{parent-dir}"}</code>
-            <span className="text-canopy-text/40"> — parent directory</span>
+            <code className="text-daintree-accent/80">{"{parent-dir}"}</code>
+            <span className="text-daintree-text/40"> — parent directory</span>
           </div>
           <div>
-            <code className="text-canopy-accent/80">{"{worktree_name}"}</code>
-            <span className="text-canopy-text/40"> — worktree name</span>
+            <code className="text-daintree-accent/80">{"{worktree_name}"}</code>
+            <span className="text-daintree-text/40"> — worktree name</span>
           </div>
           <div>
-            <code className="text-canopy-accent/80">{"{worktree_path}"}</code>
-            <span className="text-canopy-text/40"> — full worktree path</span>
+            <code className="text-daintree-accent/80">{"{worktree_path}"}</code>
+            <span className="text-daintree-text/40"> — full worktree path</span>
           </div>
           <div>
-            <code className="text-canopy-accent/80">{"{project_root}"}</code>
-            <span className="text-canopy-text/40"> — project root path</span>
+            <code className="text-daintree-accent/80">{"{project_root}"}</code>
+            <span className="text-daintree-text/40"> — project root path</span>
           </div>
         </div>
       </div>
@@ -517,7 +517,7 @@ export function ResourceEnvironmentsSection({
               onChange={(e) => updateEnv({ status: e.target.value || undefined })}
               placeholder={"docker compose -p {worktree_name} ps --format json"}
               spellCheck={false}
-              className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+              className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
             />
             <p className="text-xs text-text-muted mt-1">
               Must output JSON with {'{ "status": "<string>" }'}
@@ -533,7 +533,7 @@ export function ResourceEnvironmentsSection({
               onChange={(e) => updateEnv({ connect: e.target.value || undefined })}
               placeholder="docker compose -p {worktree_name} exec app bash"
               spellCheck={false}
-              className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+              className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
             />
             <p className="text-xs text-text-muted mt-1">
               Shell command for connecting (ssh, docker exec, kubectl exec)
@@ -553,9 +553,9 @@ export function ResourceEnvironmentsSection({
               value="local"
               checked={(defaultWorktreeMode ?? "local") === "local"}
               onChange={() => onDefaultWorktreeModeChange("local")}
-              className="accent-canopy-accent"
+              className="accent-daintree-accent"
             />
-            <span className="text-sm text-canopy-text">Local</span>
+            <span className="text-sm text-daintree-text">Local</span>
           </label>
           {envKeys.map((key) => (
             <label key={key} className="flex items-center gap-2 cursor-pointer">
@@ -565,9 +565,9 @@ export function ResourceEnvironmentsSection({
                 value={key}
                 checked={defaultWorktreeMode === key}
                 onChange={() => onDefaultWorktreeModeChange(key)}
-                className="accent-canopy-accent"
+                className="accent-daintree-accent"
               />
-              <span className="text-sm text-canopy-text">{key}</span>
+              <span className="text-sm text-daintree-text">{key}</span>
             </label>
           ))}
         </div>

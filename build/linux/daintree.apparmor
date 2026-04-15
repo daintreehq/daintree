@@ -1,0 +1,7 @@
+abi <abi/4.0>,
+include <tunables/global>
+
+profile daintree /opt/Daintree/daintree flags=(unconfined) {
+  userns,
+  include if exists <local/daintree>
+}

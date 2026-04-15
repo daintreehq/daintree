@@ -32,7 +32,7 @@ function createAppProtocolHandler(distPath: string) {
     }
 
     const { filePath, error } = resolveAppUrlToDistPath(request.url, distPath, {
-      expectedHostname: "canopy",
+      expectedHostname: "daintree",
     });
 
     if (error || !filePath) {
@@ -73,9 +73,9 @@ function createAppProtocolHandler(distPath: string) {
 }
 
 /**
- * Create the canopy-file:// protocol handler function.
+ * Create the daintree-file:// protocol handler function.
  */
-function createCanopyFileProtocolHandler() {
+function createDaintreeFileProtocolHandler() {
   return async (request: GlobalRequest) => {
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method Not Allowed", { status: 405 });
@@ -122,14 +122,14 @@ function createCanopyFileProtocolHandler() {
         headers: { "Content-Type": mimeType },
       });
     } catch (err) {
-      console.error("[MAIN] canopy-file protocol error:", err);
+      console.error("[MAIN] daintree-file protocol error:", err);
       return new Response("Internal Server Error", { status: 500 });
     }
   };
 }
 
 /**
- * Register app:// and canopy-file:// protocol handlers on a specific session.
+ * Register app:// and daintree-file:// protocol handlers on a specific session.
  * Safe to call multiple times — skips sessions that are already configured.
  * Used for per-project session partitions that don't inherit the default session's handlers.
  */
@@ -138,7 +138,7 @@ export function registerProtocolsForSession(ses: Electron.Session, distPath: str
   registeredSessions.add(ses);
 
   ses.protocol.handle("app", createAppProtocolHandler(distPath));
-  ses.protocol.handle("canopy-file", createCanopyFileProtocolHandler());
+  ses.protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
 }
 
 export function registerAppProtocol(distPath: string): void {
@@ -146,8 +146,8 @@ export function registerAppProtocol(distPath: string): void {
   protocol.handle("app", createAppProtocolHandler(distPath));
 }
 
-export function registerCanopyFileProtocol(): void {
-  protocol.handle("canopy-file", createCanopyFileProtocolHandler());
+export function registerDaintreeFileProtocol(): void {
+  protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
 }
 
 /**

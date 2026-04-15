@@ -45,7 +45,7 @@ describe("VoiceInputButton", () => {
   it("shows the active mic icon when voice input is configured but idle", () => {
     useVoiceRecordingStore.setState({ isConfigured: true });
     const { container } = render(
-      <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Canopy" />
+      <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" />
     );
 
     expect(container.innerHTML).toContain("lucide-mic");
@@ -53,7 +53,7 @@ describe("VoiceInputButton", () => {
 
   it("renders nothing when voice input is not configured", () => {
     const { container } = render(
-      <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Canopy" />
+      <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" />
     );
 
     expect(container.innerHTML).toBe("");
@@ -66,7 +66,7 @@ describe("VoiceInputButton", () => {
       activeTarget: { panelId: "panel-1" } as never,
     });
     const { container } = render(
-      <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Canopy" />
+      <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" />
     );
 
     expect(container.innerHTML).not.toBe("");

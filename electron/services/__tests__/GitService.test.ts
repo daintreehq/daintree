@@ -33,7 +33,7 @@ describe("GitService", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-git-service-"));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-git-service-"));
     vi.clearAllMocks();
     createHardenedGitMock.mockImplementation(() => gitClientMock);
     gitClientMock.branch.mockResolvedValue({ branches: {} });

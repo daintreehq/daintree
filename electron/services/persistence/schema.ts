@@ -36,7 +36,7 @@ export const projects = sqliteTable("projects", {
   lastOpened: integer("last_opened").notNull(),
   color: text("color"),
   status: text("status"),
-  canopyConfigPresent: integer("canopy_config_present", { mode: "boolean" }),
+  daintreeConfigPresent: integer("daintree_config_present", { mode: "boolean" }),
   inRepoSettings: integer("in_repo_settings", { mode: "boolean" }),
   pinned: integer("pinned").notNull().default(0),
   frecencyScore: real("frecency_score").notNull().default(3.0),

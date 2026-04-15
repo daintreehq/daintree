@@ -40,7 +40,7 @@ const CREATE_TABLES_SQL = `
     last_opened INTEGER NOT NULL,
     color TEXT,
     status TEXT,
-    canopy_config_present INTEGER,
+    daintree_config_present INTEGER,
     in_repo_settings INTEGER,
     pinned INTEGER NOT NULL DEFAULT 0,
     frecency_score REAL NOT NULL DEFAULT 3.0,
@@ -56,7 +56,7 @@ const CREATE_TABLES_SQL = `
 let sharedInstance: { sqlite: Database.Database; db: AppDb } | null = null;
 
 export function getDbPath(): string {
-  return path.join(app.getPath("userData"), "canopy.db");
+  return path.join(app.getPath("userData"), "daintree.db");
 }
 
 export function getBackupPath(): string {
@@ -80,6 +80,23 @@ export function openDb(dbPath: string): { sqlite: Database.Database; db: AppDb }
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("busy_timeout = 3000");
   sqlite.exec(CREATE_TABLES_SQL);
+
+  // TODO(0.9.0): Remove this temporary Canopy -> Daintree column rename once
+  // we no longer need to open pre-rebrand databases in place.
+  // Rebrand migration: rename projects.canopy_config_present ->
+  // daintree_config_present on upgraded DBs. CREATE TABLE IF NOT EXISTS is a
+  // no-op on existing tables, so without this ALTER the schema keeps the
+  // legacy column name and Drizzle writes fail with "no such column".
+  const preCols = sqlite.pragma("table_info(projects)") as { name: string }[];
+  const hasLegacy = preCols.some((c) => c.name === "canopy_config_present");
+  const hasNew = preCols.some((c) => c.name === "daintree_config_present");
+  if (hasLegacy && !hasNew) {
+    sqlite
+      .prepare(
+        "ALTER TABLE projects RENAME COLUMN canopy_config_present TO daintree_config_present"
+      )
+      .run();
+  }
 
   // Migrate: add pinned column to projects table if it doesn't exist
   const cols = sqlite.pragma("table_info(projects)") as { name: string }[];

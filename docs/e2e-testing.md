@@ -1,6 +1,6 @@
 # E2E Testing
 
-Canopy uses [Playwright](https://playwright.dev/) for end-to-end testing of the Electron app.
+Daintree uses [Playwright](https://playwright.dev/) for end-to-end testing of the Electron app.
 
 ## Setup
 

@@ -132,7 +132,7 @@ describe("GettingStartedChecklist", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).toHaveBeenCalledWith(
       "system.openExternal",
-      { url: "https://canopyide.com/newsletter" },
+      { url: "https://daintree.org/newsletter" },
       { source: "user" }
     );
     expect(defaultProps.onMarkItem).toHaveBeenCalledWith("subscribedNewsletter");

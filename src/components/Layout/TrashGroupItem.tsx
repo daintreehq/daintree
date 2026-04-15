@@ -84,28 +84,28 @@ export function TrashGroupItem({
           aria-controls={`trash-group-${groupRestoreId}`}
         >
           {isExpanded ? (
-            <ChevronDown className="w-3 h-3 text-canopy-text/60" />
+            <ChevronDown className="w-3 h-3 text-daintree-text/60" />
           ) : (
-            <ChevronRight className="w-3 h-3 text-canopy-text/60" />
+            <ChevronRight className="w-3 h-3 text-daintree-text/60" />
           )}
         </Button>
 
         <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-          <Layers className="w-3 h-3 text-canopy-text/70" />
+          <Layers className="w-3 h-3 text-daintree-text/70" />
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-canopy-text/70 group-hover:text-canopy-text truncate transition-colors">
+          <div className="text-xs font-medium text-daintree-text/70 group-hover:text-daintree-text truncate transition-colors">
             {groupName}
             {worktreeName ? (
-              <span className="text-canopy-text/50 ml-1 font-normal">({worktreeName})</span>
+              <span className="text-daintree-text/50 ml-1 font-normal">({worktreeName})</span>
             ) : isOrphan ? (
               <span className="text-status-warning/70 ml-1 font-normal text-[11px]">
                 (deleted tree)
               </span>
             ) : null}
           </div>
-          <div className="text-[11px] text-canopy-text/40" aria-live="off">
+          <div className="text-[11px] text-daintree-text/40" aria-live="off">
             {seconds}s remaining
           </div>
         </div>
@@ -192,10 +192,10 @@ export function TrashGroupItem({
                     className="w-2.5 h-2.5 opacity-60"
                   />
                   <span
-                    className={`truncate flex-1 ${isActiveTab ? "text-canopy-text/70 font-medium" : "text-canopy-text/50"}`}
+                    className={`truncate flex-1 ${isActiveTab ? "text-daintree-text/70 font-medium" : "text-daintree-text/50"}`}
                   >
                     {terminalName}
-                    {isActiveTab && <span className="ml-1 text-canopy-text/40">(active)</span>}
+                    {isActiveTab && <span className="ml-1 text-daintree-text/40">(active)</span>}
                   </span>
                   <div className="flex gap-0.5 opacity-0 group-hover/panel:opacity-100 transition-opacity">
                     <TooltipProvider>

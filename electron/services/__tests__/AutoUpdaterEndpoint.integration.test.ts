@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { load } from "js-yaml";
 
-const BASE_URL = "https://updates.canopyide.com/releases";
+const BASE_URL = "https://updates.daintree.org/releases";
 
 const MANIFESTS = [
   { name: "macOS", file: "latest-mac.yml" },

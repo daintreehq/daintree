@@ -32,9 +32,9 @@ export function HelpAgentPicker({ onSelectAgent }: HelpAgentPickerProps) {
   if (enabledAgents.length === 0) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">
-        <p className="text-sm text-canopy-text/50">No agents are currently available.</p>
-        <p className="text-xs text-canopy-text/40">
-          Enable an agent in settings to use as your Canopy assistant.
+        <p className="text-sm text-daintree-text/50">No agents are currently available.</p>
+        <p className="text-xs text-daintree-text/40">
+          Enable an agent in settings to use as your Daintree assistant.
         </p>
         <Button
           type="button"
@@ -53,8 +53,8 @@ export function HelpAgentPicker({ onSelectAgent }: HelpAgentPickerProps) {
   return (
     <div className="flex-1 flex flex-col p-6 gap-6 overflow-y-auto">
       <div className="text-center">
-        <h3 className="text-sm font-medium text-canopy-text/80">
-          Which agent would you like to use as your Canopy assistant?
+        <h3 className="text-sm font-medium text-daintree-text/80">
+          Which agent would you like to use as your Daintree assistant?
         </h3>
       </div>
 
@@ -70,9 +70,9 @@ export function HelpAgentPicker({ onSelectAgent }: HelpAgentPickerProps) {
               onClick={() => onSelectAgent(id)}
               className={cn(
                 "flex items-center gap-3 p-3 rounded-[var(--radius-md)]",
-                "border border-canopy-border/50 bg-canopy-bg",
-                "transition-colors hover:bg-tint/8 hover:border-canopy-border",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+                "border border-daintree-border/50 bg-daintree-bg",
+                "transition-colors hover:bg-tint/8 hover:border-daintree-border",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
                 "group text-left"
               )}
             >
@@ -83,11 +83,11 @@ export function HelpAgentPicker({ onSelectAgent }: HelpAgentPickerProps) {
                 />
               </div>
               <div className="flex flex-col min-w-0">
-                <span className="text-sm font-medium text-canopy-text/80 group-hover:text-canopy-text transition-colors">
+                <span className="text-sm font-medium text-daintree-text/80 group-hover:text-daintree-text transition-colors">
                   {config.name}
                 </span>
                 {config.tooltip && (
-                  <span className="text-xs text-canopy-text/40 group-hover:text-canopy-text/60 transition-colors truncate">
+                  <span className="text-xs text-daintree-text/40 group-hover:text-daintree-text/60 transition-colors truncate">
                     {config.tooltip}
                   </span>
                 )}

@@ -13,7 +13,7 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type {
-  CanopyCommand,
+  DaintreeCommand,
   CommandContext,
   CommandResult,
 } from "../../../shared/types/commands.js";
@@ -172,7 +172,7 @@ async function detectBaseBranch(
   return { branch: "main", fromRemote: false };
 }
 
-export const githubWorkIssueCommand: CanopyCommand<GitHubWorkIssueArgs, GitHubWorkIssueResult> = {
+export const githubWorkIssueCommand: DaintreeCommand<GitHubWorkIssueArgs, GitHubWorkIssueResult> = {
   id: "github:work-issue",
   label: "/github:work-issue",
   description:

@@ -337,7 +337,7 @@ export function BrowserToolbar({
                     className={cn(
                       "px-1.5 py-1 rounded text-xs font-medium transition-colors",
                       "hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed",
-                      isNonDefaultZoom ? "text-status-info" : "text-canopy-text/60"
+                      isNonDefaultZoom ? "text-status-info" : "text-daintree-text/60"
                     )}
                     aria-label="Reset zoom"
                   >
@@ -373,7 +373,7 @@ export function BrowserToolbar({
       <div ref={containerRef} className="relative flex-1 min-w-0">
         <form onSubmit={handleSubmit}>
           <div className="relative flex items-center">
-            <Globe className="absolute left-2 w-3.5 h-3.5 text-canopy-text/40 pointer-events-none" />
+            <Globe className="absolute left-2 w-3.5 h-3.5 text-daintree-text/40 pointer-events-none" />
             {urlMightBeStale && !isEditing && (
               <TooltipProvider>
                 <Tooltip>
@@ -401,16 +401,16 @@ export function BrowserToolbar({
               autoComplete="off"
               className={cn(
                 "w-full pl-7 pr-2 py-1 text-xs rounded",
-                "bg-canopy-bg border border-overlay",
+                "bg-daintree-bg border border-overlay",
                 "focus:outline-none focus:border-border-strong",
-                "text-canopy-text placeholder:text-canopy-text/40",
+                "text-daintree-text placeholder:text-daintree-text/40",
                 error && "border-status-error/50"
               )}
               placeholder="localhost:3000"
             />
           </div>
           {error && (
-            <div className="absolute mt-1 text-xs text-status-error bg-canopy-bg border border-status-error/30 rounded px-2 py-1 z-10">
+            <div className="absolute mt-1 text-xs text-status-error bg-daintree-bg border border-status-error/30 rounded px-2 py-1 z-10">
               {error}
             </div>
           )}
@@ -419,7 +419,7 @@ export function BrowserToolbar({
         {isDropdownOpen && suggestions.length > 0 && (
           <div
             ref={dropdownRef}
-            className="absolute left-0 right-0 top-full mt-1 z-50 bg-canopy-bg border border-overlay rounded shadow-[var(--theme-shadow-floating)] overflow-hidden"
+            className="absolute left-0 right-0 top-full mt-1 z-50 bg-daintree-bg border border-overlay rounded shadow-[var(--theme-shadow-floating)] overflow-hidden"
           >
             {suggestions.map((entry, index) => (
               <button
@@ -440,9 +440,9 @@ export function BrowserToolbar({
                 )}
               >
                 {entry.title && (
-                  <span className="text-xs text-canopy-text truncate">{entry.title}</span>
+                  <span className="text-xs text-daintree-text truncate">{entry.title}</span>
                 )}
-                <span className="text-xs text-canopy-text/50 truncate">{entry.url}</span>
+                <span className="text-xs text-daintree-text/50 truncate">{entry.url}</span>
               </button>
             ))}
           </div>
@@ -491,7 +491,10 @@ export function BrowserToolbar({
               <button
                 type="button"
                 onClick={onToggleConsole}
-                className={cn(buttonClass, isConsoleOpen && "bg-overlay-emphasis text-canopy-text")}
+                className={cn(
+                  buttonClass,
+                  isConsoleOpen && "bg-overlay-emphasis text-daintree-text"
+                )}
                 aria-label="Toggle console"
                 aria-pressed={isConsoleOpen}
               >

@@ -177,25 +177,25 @@ describe("useWorktreeStatus — branchLabel", () => {
   }
 
   it("returns branch name for main worktree on standard branch (main)", () => {
-    const s = getStatus({ isMainWorktree: true, name: "canopy", branch: "main" });
+    const s = getStatus({ isMainWorktree: true, name: "daintree", branch: "main" });
     expect(s.branchLabel).toBe("main");
     expect(s.isMainOnStandardBranch).toBe(true);
   });
 
   it("returns branch name for main worktree on standard branch (develop)", () => {
-    const s = getStatus({ isMainWorktree: true, name: "canopy", branch: "develop" });
+    const s = getStatus({ isMainWorktree: true, name: "daintree", branch: "develop" });
     expect(s.branchLabel).toBe("develop");
     expect(s.isMainOnStandardBranch).toBe(true);
   });
 
   it("handles case-insensitive standard branch matching", () => {
-    const s = getStatus({ isMainWorktree: true, name: "canopy", branch: "Develop" });
+    const s = getStatus({ isMainWorktree: true, name: "daintree", branch: "Develop" });
     expect(s.branchLabel).toBe("Develop");
     expect(s.isMainOnStandardBranch).toBe(true);
   });
 
   it("returns branch name for main worktree on non-standard branch", () => {
-    const s = getStatus({ isMainWorktree: true, name: "canopy", branch: "feature/test" });
+    const s = getStatus({ isMainWorktree: true, name: "daintree", branch: "feature/test" });
     expect(s.branchLabel).toBe("feature/test");
     expect(s.isMainOnStandardBranch).toBe(false);
   });
@@ -203,41 +203,41 @@ describe("useWorktreeStatus — branchLabel", () => {
   it("returns directory name for main worktree when detached", () => {
     const s = getStatus({
       isMainWorktree: true,
-      name: "canopy",
+      name: "daintree",
       branch: undefined,
       isDetached: true,
     });
-    expect(s.branchLabel).toBe("canopy");
+    expect(s.branchLabel).toBe("daintree");
     expect(s.isMainOnStandardBranch).toBe(false);
   });
 
   it("returns directory name for main worktree when branch is undefined", () => {
-    const s = getStatus({ isMainWorktree: true, name: "canopy", branch: undefined });
-    expect(s.branchLabel).toBe("canopy");
+    const s = getStatus({ isMainWorktree: true, name: "daintree", branch: undefined });
+    expect(s.branchLabel).toBe("daintree");
     expect(s.isMainOnStandardBranch).toBe(false);
   });
 
   it("does not treat near-miss branch as standard", () => {
-    const s = getStatus({ isMainWorktree: true, name: "canopy", branch: "development" });
+    const s = getStatus({ isMainWorktree: true, name: "daintree", branch: "development" });
     expect(s.branchLabel).toBe("development");
     expect(s.isMainOnStandardBranch).toBe(false);
   });
 
   it("returns branch name for non-main worktree", () => {
-    const s = getStatus({ isMainWorktree: false, name: "canopy", branch: "feature/test" });
+    const s = getStatus({ isMainWorktree: false, name: "daintree", branch: "feature/test" });
     expect(s.branchLabel).toBe("feature/test");
     expect(s.isMainOnStandardBranch).toBe(false);
   });
 
   it("falls back to name when branch is undefined for non-main worktree", () => {
-    const s = getStatus({ isMainWorktree: false, name: "canopy", branch: undefined });
-    expect(s.branchLabel).toBe("canopy");
+    const s = getStatus({ isMainWorktree: false, name: "daintree", branch: undefined });
+    expect(s.branchLabel).toBe("daintree");
     expect(s.isMainOnStandardBranch).toBe(false);
   });
 
   it("recognizes master and dev as standard branches", () => {
     for (const branch of ["master", "dev"]) {
-      const s = getStatus({ isMainWorktree: true, name: "canopy", branch });
+      const s = getStatus({ isMainWorktree: true, name: "daintree", branch });
       expect(s.branchLabel).toBe(branch);
       expect(s.isMainOnStandardBranch).toBe(true);
     }
@@ -246,16 +246,16 @@ describe("useWorktreeStatus — branchLabel", () => {
   it("returns directory name for detached HEAD even with stale branch value", () => {
     const s = getStatus({
       isMainWorktree: true,
-      name: "canopy",
+      name: "daintree",
       branch: "main",
       isDetached: true,
     });
-    expect(s.branchLabel).toBe("canopy");
+    expect(s.branchLabel).toBe("daintree");
     expect(s.isMainOnStandardBranch).toBe(false);
   });
 
   it("does not apply standard branch logic to non-main worktree on 'main'", () => {
-    const s = getStatus({ isMainWorktree: false, name: "canopy", branch: "main" });
+    const s = getStatus({ isMainWorktree: false, name: "daintree", branch: "main" });
     expect(s.branchLabel).toBe("main");
     expect(s.isMainOnStandardBranch).toBe(false);
   });

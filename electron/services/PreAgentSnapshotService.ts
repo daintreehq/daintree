@@ -3,7 +3,7 @@ import { createHardenedGit } from "../utils/hardenedGit.js";
 import { logInfo, logWarn } from "../utils/logger.js";
 import type { SnapshotInfo } from "../../shared/types/ipc/git.js";
 
-const STASH_PREFIX = "canopy:pre-agent:";
+const STASH_PREFIX = "daintree:pre-agent:";
 const DEFAULT_TTL_MS = 48 * 60 * 60 * 1000; // 48 hours
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 

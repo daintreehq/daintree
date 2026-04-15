@@ -284,7 +284,7 @@ export const actionService = new ActionService();
 // Registered unconditionally but gated at call time — the function is harmless
 // in production and avoids import-time env var timing issues.
 if (typeof window !== "undefined") {
-  (window as unknown as Record<string, unknown>).__canopyDispatchAction = (
+  (window as unknown as Record<string, unknown>).__daintreeDispatchAction = (
     actionId: string,
     args?: unknown,
     options?: { source?: string; confirmed?: boolean }

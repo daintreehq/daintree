@@ -162,7 +162,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
       className={cn(
         "absolute top-2 right-2 z-20",
         "flex items-center gap-1 px-2 py-1.5",
-        "bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-md)] shadow-[var(--theme-shadow-floating)]",
+        "bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-md)] shadow-[var(--theme-shadow-floating)]",
         className
       )}
       onClick={(e) => e.stopPropagation()}
@@ -178,9 +178,9 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         data-terminal-search-input
         className={cn(
           "w-44 px-2 py-1 text-sm",
-          "bg-canopy-bg border border-canopy-border rounded",
+          "bg-daintree-bg border border-daintree-border rounded",
           "focus:outline-none focus:ring-1 focus:ring-status-info",
-          "text-canopy-text placeholder:text-text-muted"
+          "text-daintree-text placeholder:text-text-muted"
         )}
       />
 
@@ -192,8 +192,8 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               className={cn(
                 "px-1.5 py-1 text-xs rounded transition-colors",
                 caseSensitive
-                  ? "bg-status-info text-canopy-bg"
-                  : "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg"
+                  ? "bg-status-info text-daintree-bg"
+                  : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg"
               )}
               aria-label="Toggle case sensitivity"
               aria-pressed={caseSensitive}
@@ -213,8 +213,8 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               className={cn(
                 "px-1.5 py-1 text-xs font-mono rounded transition-colors",
                 regexEnabled
-                  ? "bg-status-info text-canopy-bg"
-                  : "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg"
+                  ? "bg-status-info text-daintree-bg"
+                  : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg"
               )}
               aria-label="Toggle regex mode"
               aria-pressed={regexEnabled}
@@ -231,7 +231,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
           data-terminal-search-status
           className={cn(
             "text-xs px-1.5",
-            searchStatus === "found" ? "text-canopy-text/60" : "text-status-error"
+            searchStatus === "found" ? "text-daintree-text/60" : "text-status-error"
           )}
         >
           {statusText}
@@ -251,7 +251,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
                 disabled={!searchTerm}
                 className={cn(
                   "p-1 rounded transition-colors",
-                  "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg",
+                  "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg",
                   "disabled:opacity-30 disabled:cursor-not-allowed"
                 )}
                 aria-label="Previous match"
@@ -273,7 +273,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
                 disabled={!searchTerm}
                 className={cn(
                   "p-1 rounded transition-colors",
-                  "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg",
+                  "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg",
                   "disabled:opacity-30 disabled:cursor-not-allowed"
                 )}
                 aria-label="Next match"
@@ -293,7 +293,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               onClick={handleClose}
               className={cn(
                 "p-1 rounded transition-colors",
-                "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-bg"
+                "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-bg"
               )}
               aria-label="Close search"
             >

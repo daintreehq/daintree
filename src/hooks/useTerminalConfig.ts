@@ -106,7 +106,7 @@ export function useTerminalConfig() {
     });
     // customSchemes in deps ensures re-run when a custom scheme is added/changed
     // colorVisionMode in deps ensures terminal ANSI colors update when CVD mode changes
-    // appThemeId in deps ensures terminal updates when app theme changes while "canopy" is selected
+    // appThemeId in deps ensures terminal updates when app theme changes while "daintree" is selected
     // screenReaderEnabled in deps ensures terminals update when screen reader mode changes
   }, [
     selectedSchemeId,

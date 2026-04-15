@@ -24,7 +24,7 @@ export const ACTION_CATEGORY_COLORS: Record<string, string> = {
   browser: "bg-cat-cyan/15 text-cat-cyan",
 };
 
-export const ACTION_CATEGORY_DEFAULT_COLOR = "bg-tint/[0.06] text-canopy-text/50";
+export const ACTION_CATEGORY_DEFAULT_COLOR = "bg-tint/[0.06] text-daintree-text/50";
 
 /**
  * Event inspector category chip styles.

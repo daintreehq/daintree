@@ -206,16 +206,16 @@ describe("createAuthenticatedGit", () => {
   });
 
   it("spreads process.env into the .env() call", () => {
-    process.env.CANOPY_TEST_SENTINEL = "sentinel_value";
+    process.env.DAINTREE_TEST_SENTINEL = "sentinel_value";
     try {
       createAuthenticatedGit("/test/repo");
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       expect(envArg.PATH).toBe(process.env.PATH);
       expect(envArg.HOME).toBe(process.env.HOME);
-      expect(envArg.CANOPY_TEST_SENTINEL).toBe("sentinel_value");
+      expect(envArg.DAINTREE_TEST_SENTINEL).toBe("sentinel_value");
     } finally {
-      delete process.env.CANOPY_TEST_SENTINEL;
+      delete process.env.DAINTREE_TEST_SENTINEL;
     }
   });
 

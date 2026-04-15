@@ -665,8 +665,8 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         const callbackOrigin = new URL(callbackUrl).origin;
         const restoreScript = `
           (() => {
-            if (window.__canopyOAuthRestored) return;
-            window.__canopyOAuthRestored = true;
+            if (window.__daintreeOAuthRestored) return;
+            window.__daintreeOAuthRestored = true;
             const expectedOrigin = ${JSON.stringify(callbackOrigin)};
             const entries = ${JSON.stringify(sessionStorageSnapshot)};
             try {

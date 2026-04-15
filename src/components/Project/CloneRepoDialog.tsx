@@ -161,7 +161,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   return (
     <AppDialog isOpen={isOpen} onClose={handleClose} size="md" dismissible={!isCloning}>
       <AppDialog.Header>
-        <AppDialog.Title icon={<WorktreeIcon className="h-5 w-5 text-canopy-accent" />}>
+        <AppDialog.Title icon={<WorktreeIcon className="h-5 w-5 text-daintree-accent" />}>
           Clone Repository
         </AppDialog.Title>
         {!isCloning && <AppDialog.CloseButton />}
@@ -170,27 +170,27 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       <AppDialog.Body className="space-y-4">
         {/* URL Input */}
         <div className="space-y-1.5">
-          <label className="text-sm font-medium text-canopy-text/70">Repository URL</label>
+          <label className="text-sm font-medium text-daintree-text/70">Repository URL</label>
           <input
             type="text"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="owner/repo or https://github.com/user/repo.git"
             disabled={isCloning || isComplete}
-            className="w-full rounded-md border border-canopy-border bg-canopy-bg px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 disabled:opacity-50"
+            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 focus:outline-none focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
           />
         </div>
 
         {/* Parent Directory */}
         <div className="space-y-1.5">
-          <label className="text-sm font-medium text-canopy-text/70">Parent Directory</label>
+          <label className="text-sm font-medium text-daintree-text/70">Parent Directory</label>
           <div className="flex gap-2">
             <input
               type="text"
               value={parentPath}
               readOnly
               placeholder="Select a directory..."
-              className="flex-1 rounded-md border border-canopy-border bg-canopy-bg px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 disabled:opacity-50"
+              className="flex-1 rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 disabled:opacity-50"
             />
             <Button
               variant="outline"
@@ -206,7 +206,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
 
         {/* Folder Name */}
         <div className="space-y-1.5">
-          <label className="text-sm font-medium text-canopy-text/70">Folder Name</label>
+          <label className="text-sm font-medium text-daintree-text/70">Folder Name</label>
           <input
             type="text"
             value={folderName}
@@ -215,7 +215,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               setFolderNameEdited(true);
             }}
             disabled={isCloning || isComplete}
-            className="w-full rounded-md border border-canopy-border bg-canopy-bg px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 disabled:opacity-50"
+            className="w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40 focus:outline-none focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50"
           />
         </div>
 
@@ -226,9 +226,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             checked={shallowClone}
             onChange={(e) => setShallowClone(e.target.checked)}
             disabled={isCloning || isComplete}
-            className="rounded border-canopy-border accent-canopy-accent"
+            className="rounded border-daintree-border accent-daintree-accent"
           />
-          <span className="text-sm text-canopy-text/70">Shallow clone (--depth 1)</span>
+          <span className="text-sm text-daintree-text/70">Shallow clone (--depth 1)</span>
         </label>
 
         {/* Progress Log */}

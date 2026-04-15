@@ -12,7 +12,7 @@ import type {
   CommandGetPayload,
   CommandManifestEntry,
   CommandResult,
-  CanopyCommand,
+  DaintreeCommand,
 } from "../../../shared/types/commands.js";
 
 export function registerCommandHandlers(): () => void {
@@ -90,7 +90,7 @@ export function registerCommandHandlers(): () => void {
   const handleCommandsGetBuilder = async (
     _event: Electron.IpcMainInvokeEvent,
     commandId: string
-  ): Promise<CanopyCommand["builder"] | null> => {
+  ): Promise<DaintreeCommand["builder"] | null> => {
     if (typeof commandId !== "string") {
       return null;
     }

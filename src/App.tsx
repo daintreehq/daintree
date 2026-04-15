@@ -143,14 +143,14 @@ function App() {
   useResourceProfile();
 
   useEffect(() => {
-    window.__CANOPY_E2E_ERROR_STORE__ = () =>
+    window.__DAINTREE_E2E_ERROR_STORE__ = () =>
       useErrorStore.getState().errors.map((e) => ({
         id: e.id,
         source: e.source,
         message: e.message,
         fromPreviousSession: e.fromPreviousSession,
       }));
-    window.__CANOPY_E2E_ADD_ERROR__ = (message: string) => {
+    window.__DAINTREE_E2E_ADD_ERROR__ = (message: string) => {
       useErrorStore.getState().addError({
         type: "unknown",
         message,
@@ -158,13 +158,13 @@ function App() {
         source: "e2e-test",
       });
     };
-    window.__CANOPY_E2E_CLEAR_ERRORS__ = () => {
+    window.__DAINTREE_E2E_CLEAR_ERRORS__ = () => {
       useErrorStore.getState().clearAll();
     };
     return () => {
-      delete window.__CANOPY_E2E_ERROR_STORE__;
-      delete window.__CANOPY_E2E_ADD_ERROR__;
-      delete window.__CANOPY_E2E_CLEAR_ERRORS__;
+      delete window.__DAINTREE_E2E_ERROR_STORE__;
+      delete window.__DAINTREE_E2E_ADD_ERROR__;
+      delete window.__DAINTREE_E2E_CLEAR_ERRORS__;
     };
   }, []);
 
@@ -330,7 +330,7 @@ function App() {
       // that expect a clean post-onboarding state. The behaviour is locally
       // observable only when an agent CLI (e.g., Claude) is installed, so
       // tests pass on CI but fail on dev machines without this guard.
-      if (typeof window !== "undefined" && window.__CANOPY_E2E_MODE__) {
+      if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__) {
         return;
       }
 
@@ -379,7 +379,7 @@ function App() {
       }
     }
     terminalInstanceService.suppressResizesDuringLayoutTransition(gridIds, SIDEBAR_TOGGLE_LOCK_MS);
-    window.dispatchEvent(new CustomEvent("canopy:toggle-focus-mode"));
+    window.dispatchEvent(new CustomEvent("daintree:toggle-focus-mode"));
   }, []);
 
   useActionRegistry({
@@ -445,8 +445,8 @@ function App() {
 
   if (!isElectronAvailable()) {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-canopy-bg">
-        <div className="text-canopy-text/60 text-sm">
+      <div className="h-screen w-screen flex items-center justify-center bg-daintree-bg">
+        <div className="text-daintree-text/60 text-sm">
           Electron API not available - please run in Electron
         </div>
       </div>
@@ -455,7 +455,7 @@ function App() {
 
   if (crashState.status === "pending") {
     return (
-      <div className="h-screen w-screen bg-canopy-bg">
+      <div className="h-screen w-screen bg-daintree-bg">
         <CrashRecoveryDialog
           crash={crashState.crash}
           config={crashState.config}
@@ -467,7 +467,7 @@ function App() {
   }
 
   if (!crashResolved || !isStateLoaded) {
-    return <div className="h-screen w-screen bg-canopy-bg" />;
+    return <div className="h-screen w-screen bg-daintree-bg" />;
   }
 
   return (

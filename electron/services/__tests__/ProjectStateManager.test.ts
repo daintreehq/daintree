@@ -40,7 +40,7 @@ describe("ProjectStateManager clone isolation", () => {
   let projectId: string;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-state-"));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-state-"));
     manager = new ProjectStateManager(tempDir);
     projectId = generateProjectId("/test/project");
 

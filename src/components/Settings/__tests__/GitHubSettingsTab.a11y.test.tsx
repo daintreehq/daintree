@@ -116,7 +116,7 @@ describe("GitHubSettingsTab accessibility", () => {
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "system.openExternal",
       {
-        url: "https://github.com/settings/tokens/new?scopes=repo,read:org&description=Canopy",
+        url: "https://github.com/settings/tokens/new?scopes=repo,read:org&description=Daintree",
       },
       { source: "user" }
     );

@@ -79,8 +79,8 @@ test.describe.serial("Core: Terminal & Panels", () => {
     test("run command and verify output", async () => {
       const { window } = ctx;
       const panel = getFirstGridPanel(window);
-      await runTerminalCommand(window, panel, "node -e \"console.log('CANOPY_E2E_OK')\"");
-      await waitForTerminalText(panel, "CANOPY_E2E_OK", T_LONG);
+      await runTerminalCommand(window, panel, "node -e \"console.log('DAINTREE_E2E_OK')\"");
+      await waitForTerminalText(panel, "DAINTREE_E2E_OK", T_LONG);
     });
 
     test("maximize and unmaximize panel", async () => {

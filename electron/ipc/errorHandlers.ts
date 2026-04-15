@@ -402,7 +402,7 @@ const errorService = new ErrorService();
 
 if (FAULT_MODE_ENABLED) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- E2E fault injection
-  (globalThis as any).__canopyErrorService = errorService;
+  (globalThis as any).__daintreeErrorService = errorService;
 }
 
 export function flushPendingErrors(): void {

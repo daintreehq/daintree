@@ -209,7 +209,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      window.dispatchEvent(new CustomEvent("canopy:toggle-portal"));
+      window.dispatchEvent(new CustomEvent("daintree:toggle-portal"));
     },
   }));
 

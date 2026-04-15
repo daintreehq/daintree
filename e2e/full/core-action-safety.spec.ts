@@ -14,7 +14,7 @@ test.describe.serial("Core: Action dispatch safety", () => {
       .poll(
         async () => {
           return ctx.window.evaluate(() => {
-            const dispatch = (window as any).__canopyDispatchAction;
+            const dispatch = (window as any).__daintreeDispatchAction;
             if (typeof dispatch !== "function") return "no-hook";
             return "ready";
           });
@@ -28,7 +28,7 @@ test.describe.serial("Core: Action dispatch safety", () => {
       .poll(
         async () => {
           const result = await ctx.window.evaluate(() => {
-            return (window as any).__canopyDispatchAction("actions.getContext");
+            return (window as any).__daintreeDispatchAction("actions.getContext");
           });
           return (result as any)?.ok;
         },
@@ -38,7 +38,7 @@ test.describe.serial("Core: Action dispatch safety", () => {
 
     // Ensure EventBuffer is recording by dispatching an action and verifying it appears
     await ctx.window.evaluate(() => (window as any).electron.eventInspector.clear());
-    await ctx.window.evaluate(() => (window as any).__canopyDispatchAction("actions.getContext"));
+    await ctx.window.evaluate(() => (window as any).__daintreeDispatchAction("actions.getContext"));
     await expect
       .poll(
         async () => {
@@ -61,7 +61,7 @@ test.describe.serial("Core: Action dispatch safety", () => {
 
   test("agent dispatch of confirm-level action without confirmation returns CONFIRMATION_REQUIRED", async () => {
     const result = await ctx.window.evaluate(() =>
-      (window as any).__canopyDispatchAction("terminal.kill", {}, { source: "agent" })
+      (window as any).__daintreeDispatchAction("terminal.kill", {}, { source: "agent" })
     );
 
     expect((result as any).ok).toBe(false);
@@ -71,7 +71,7 @@ test.describe.serial("Core: Action dispatch safety", () => {
 
   test("agent dispatch of confirm-level action with confirmed: true succeeds", async () => {
     const result = await ctx.window.evaluate(() =>
-      (window as any).__canopyDispatchAction(
+      (window as any).__daintreeDispatchAction(
         "terminal.kill",
         {},
         { source: "agent", confirmed: true }
@@ -85,7 +85,7 @@ test.describe.serial("Core: Action dispatch safety", () => {
     await ctx.window.evaluate(() => (window as any).electron.eventInspector.clear());
 
     await ctx.window.evaluate(() =>
-      (window as any).__canopyDispatchAction(
+      (window as any).__daintreeDispatchAction(
         "logs.getAll",
         { token: "secret-token-value", password: "hunter2", normalField: "visible" },
         { source: "user" }
@@ -117,7 +117,7 @@ test.describe.serial("Core: Action dispatch safety", () => {
 
   test("disabled action returns DISABLED with reason", async () => {
     const result = await ctx.window.evaluate(() =>
-      (window as any).__canopyDispatchAction("worktree.inject", {}, { source: "agent" })
+      (window as any).__daintreeDispatchAction("worktree.inject", {}, { source: "agent" })
     );
 
     expect((result as any).ok).toBe(false);

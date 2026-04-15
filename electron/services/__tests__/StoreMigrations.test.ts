@@ -38,7 +38,7 @@ describe("MigrationRunner", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-02-10T10:00:00.000Z"));
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "canopy-migrations-"));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-migrations-"));
     storePath = path.join(tempDir, "config.json");
     fs.writeFileSync(storePath, JSON.stringify({ ok: true }), "utf8");
   });

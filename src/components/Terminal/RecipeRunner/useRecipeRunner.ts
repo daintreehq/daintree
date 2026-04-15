@@ -127,7 +127,7 @@ export function useRecipeRunner({
   const handleEdit = useCallback(
     (recipeId: string) => {
       window.dispatchEvent(
-        new CustomEvent("canopy:open-recipe-editor", {
+        new CustomEvent("daintree:open-recipe-editor", {
           detail: { recipeId, worktreeId: activeWorktreeId },
         })
       );

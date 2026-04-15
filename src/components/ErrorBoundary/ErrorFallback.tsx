@@ -13,7 +13,7 @@ export interface ErrorFallbackProps {
 }
 
 const VARIANT_STYLES = {
-  fullscreen: "h-screen w-screen flex items-center justify-center bg-canopy-bg",
+  fullscreen: "h-screen w-screen flex items-center justify-center bg-daintree-bg",
   section: "h-full w-full flex items-center justify-center p-8",
   component:
     "p-4 rounded-[var(--radius-lg)] bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)] border border-status-error/30",
@@ -74,21 +74,21 @@ export function ErrorFallback({
             {variant === "component" && `${componentName || "Component"} Error`}
           </h2>
 
-          <p className={cn("text-canopy-text/80", sizes.message)}>
+          <p className={cn("text-daintree-text/80", sizes.message)}>
             {import.meta.env.DEV
               ? error.message
               : "Something went wrong. Please try again or contact support."}
           </p>
 
           {variant === "fullscreen" && (
-            <p className={cn("text-canopy-text/60", sizes.message)}>
+            <p className={cn("text-daintree-text/60", sizes.message)}>
               The application encountered an unexpected error. You can try restarting or check the
               logs for more details.
             </p>
           )}
 
           {!import.meta.env.DEV && incidentId && variant !== "component" && (
-            <p className={cn("text-canopy-text/50 font-mono", sizes.message)}>
+            <p className={cn("text-daintree-text/50 font-mono", sizes.message)}>
               Error ID: {incidentId.slice(-7)}
             </p>
           )}
@@ -100,7 +100,7 @@ export function ErrorFallback({
             onClick={resetError}
             data-testid="error-fallback-restart"
             className={cn(
-              "bg-status-error hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)] text-canopy-bg rounded transition-colors",
+              "bg-status-error hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)] text-daintree-bg rounded transition-colors",
               sizes.button
             )}
           >
@@ -113,7 +113,7 @@ export function ErrorFallback({
               onClick={onReport}
               data-testid="error-fallback-report"
               className={cn(
-                "bg-canopy-border hover:bg-canopy-border/80 text-canopy-text rounded transition-colors",
+                "bg-daintree-border hover:bg-daintree-border/80 text-daintree-text rounded transition-colors",
                 sizes.button
               )}
             >
@@ -126,7 +126,7 @@ export function ErrorFallback({
             onClick={handleOpenLogs}
             data-testid="error-fallback-logs"
             className={cn(
-              "bg-canopy-border hover:bg-canopy-border/80 text-canopy-text rounded transition-colors",
+              "bg-daintree-border hover:bg-daintree-border/80 text-daintree-text rounded transition-colors",
               sizes.button
             )}
           >
@@ -136,7 +136,7 @@ export function ErrorFallback({
 
         {import.meta.env.DEV && errorInfo?.componentStack && variant !== "component" && (
           <details className="w-full mt-4">
-            <summary className="cursor-pointer text-xs text-canopy-text/60 hover:text-canopy-text/80">
+            <summary className="cursor-pointer text-xs text-daintree-text/60 hover:text-daintree-text/80">
               Technical Details
             </summary>
             <pre className="mt-2 p-3 bg-scrim-soft rounded text-xs text-status-error/80 overflow-auto max-h-48 select-text">

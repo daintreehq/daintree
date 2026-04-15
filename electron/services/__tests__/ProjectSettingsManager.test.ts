@@ -39,7 +39,7 @@ describe("ProjectSettingsManager caching", () => {
   let projectId: string;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-settings-"));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-settings-"));
     manager = new ProjectSettingsManager(tempDir, createMockStore());
 
     projectId = generateProjectId("/test/project");

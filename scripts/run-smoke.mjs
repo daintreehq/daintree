@@ -45,7 +45,7 @@ async function assertBuildArtifacts() {
 
 function runElectronSmokeOnce({ runIndex, runCount, timeoutMs, extraArgs }) {
   return new Promise((resolve, reject) => {
-    mkdtemp(path.join(os.tmpdir(), "canopy-smoke-"))
+    mkdtemp(path.join(os.tmpdir(), "daintree-smoke-"))
       .then((userDataDir) => {
         const args = [
           ".",

@@ -16,7 +16,7 @@ import {
 } from "@/lib/animationUtils";
 
 export const KBD_CLASS =
-  "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60";
+  "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60";
 
 export interface AppPaletteDialogProps {
   isOpen: boolean;
@@ -119,7 +119,7 @@ export function AppPaletteDialog({
       <div
         ref={dialogRef}
         className={cn(
-          "w-full max-w-xl mx-4 bg-canopy-bg border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden",
+          "w-full max-w-xl mx-4 bg-daintree-bg border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden",
           "transition-[opacity,transform]",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
           isVisible
@@ -154,8 +154,8 @@ AppPaletteDialog.Header = function AppPaletteHeader({
   className,
 }: AppPaletteHeaderProps) {
   return (
-    <div className={cn("px-3 pt-2 pb-1 border-b border-canopy-border", className)}>
-      <div className="flex justify-between items-center mb-1.5 text-[11px] text-canopy-text/50">
+    <div className={cn("px-3 pt-2 pb-1 border-b border-daintree-border", className)}>
+      <div className="flex justify-between items-center mb-1.5 text-[11px] text-daintree-text/50">
         <span>{label}</span>
         {keyHint && <span className="font-mono">{keyHint}</span>}
       </div>
@@ -194,7 +194,7 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
   return (
     <div
       className={cn(
-        "px-3 py-2 border-t border-canopy-border bg-canopy-sidebar/50 text-xs text-canopy-text/50 flex items-center gap-4",
+        "px-3 py-2 border-t border-daintree-border bg-daintree-sidebar/50 text-xs text-daintree-text/50 flex items-center gap-4",
         className
       )}
     >
@@ -230,7 +230,7 @@ export function PaletteFooterHints({ primaryHint, hints }: PaletteFooterHintsPro
         <PopoverTrigger asChild>
           <button
             type="button"
-            className="p-0.5 rounded transition-colors text-canopy-text/40 hover:text-canopy-text/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+            className="p-0.5 rounded transition-colors text-daintree-text/40 hover:text-daintree-text/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
             aria-label="Keyboard shortcuts"
           >
             <CircleHelp className="w-3.5 h-3.5" />
@@ -242,7 +242,7 @@ export function PaletteFooterHints({ primaryHint, hints }: PaletteFooterHintsPro
           className="w-auto p-3"
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
-          <div className="flex flex-col gap-1.5 text-xs text-canopy-text/60">
+          <div className="flex flex-col gap-1.5 text-xs text-daintree-text/60">
             {hints.map(({ keys, label }) => (
               <span key={label}>
                 {keys.map((key, i) => (
@@ -288,9 +288,9 @@ AppPaletteDialog.Input = function AppPaletteInput({
       type="text"
       className={cn(
         "w-full px-3 py-2 text-sm",
-        "bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-md)]",
-        "text-canopy-text placeholder:text-text-muted",
-        "focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/20",
+        "bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-md)]",
+        "text-daintree-text placeholder:text-text-muted",
+        "focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/20",
         className
       )}
       {...props}
@@ -312,7 +312,7 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
   children,
 }: AppPaletteEmptyProps) {
   return (
-    <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
+    <div className="px-3 py-8 text-center text-daintree-text/50 text-sm">
       {query.trim() ? <>{noMatchMessage || `No items match "${query}"`}</> : <>{emptyMessage}</>}
       {!query.trim() && children}
     </div>

@@ -271,7 +271,7 @@ server.listen(0, '127.0.0.1', () => {
           async () => {
             return window.evaluate((id) => {
               const reader = (window as unknown as Record<string, unknown>)
-                .__canopyReadTerminalBuffer;
+                .__daintreeReadTerminalBuffer;
               if (typeof reader === "function") return reader(id) as string;
               return "";
             }, terminalId);

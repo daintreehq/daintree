@@ -24,13 +24,13 @@ function FilterSection({ title, children, defaultOpen = false }: FilterSectionPr
   const contentId = `filter-section-${title.toLowerCase().replace(/\s+/g, "-")}`;
 
   return (
-    <div className="border-b border-canopy-border last:border-b-0">
+    <div className="border-b border-daintree-border last:border-b-0">
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         aria-expanded={isOpen}
         aria-controls={contentId}
-        className="flex items-center justify-between w-full px-3 py-2 text-xs font-medium text-canopy-text/70 hover:bg-overlay-soft"
+        className="flex items-center justify-between w-full px-3 py-2 text-xs font-medium text-daintree-text/70 hover:bg-overlay-soft"
       >
         {title}
         <ChevronDown
@@ -61,8 +61,8 @@ function FilterChip({ label, isActive, onClick }: FilterChipProps) {
       className={cn(
         "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full border transition-colors",
         isActive
-          ? "bg-canopy-accent/20 border-canopy-accent/40 text-canopy-accent"
-          : "bg-canopy-bg border-canopy-border text-canopy-text/60 hover:bg-overlay-medium hover:text-canopy-text/80"
+          ? "bg-daintree-accent/20 border-daintree-accent/40 text-daintree-accent"
+          : "bg-daintree-bg border-daintree-border text-daintree-text/60 hover:bg-overlay-medium hover:text-daintree-text/80"
       )}
     >
       {label}
@@ -202,16 +202,16 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
         <button
           className={cn(
             "relative flex items-center justify-center w-5 h-5 rounded",
-            "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/[0.06]",
+            "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
             "transition-colors",
-            hasActiveFilters() && "text-canopy-accent"
+            hasActiveFilters() && "text-daintree-accent"
           )}
           aria-label="Filter and sort worktrees"
           aria-haspopup="dialog"
         >
           <Filter className="w-3.5 h-3.5" />
           {showBadge && (
-            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-canopy-accent" />
+            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-daintree-accent" />
           )}
         </button>
       </PopoverTrigger>
@@ -224,7 +224,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
         <div className="flex flex-col">
           {/* Search */}
           {!hideSearchInput && (
-            <div className="p-3 border-b border-canopy-border">
+            <div className="p-3 border-b border-daintree-border">
               <div className="relative">
                 <input
                   type="text"
@@ -234,9 +234,9 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
                   aria-label="Search worktrees"
                   className={cn(
                     "w-full px-2.5 py-1.5 text-xs rounded",
-                    "bg-canopy-bg border border-canopy-border",
-                    "text-canopy-text placeholder-canopy-text/40",
-                    "focus:outline-none focus:border-canopy-accent/50"
+                    "bg-daintree-bg border border-daintree-border",
+                    "text-daintree-text placeholder-daintree-text/40",
+                    "focus:outline-none focus:border-daintree-accent/50"
                   )}
                 />
                 {localQuery && (
@@ -249,7 +249,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
                       setLocalQuery("");
                       setQuery("");
                     }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-canopy-text/40 hover:text-canopy-text"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-daintree-text/40 hover:text-daintree-text"
                     aria-label="Clear search"
                   >
                     <X className="w-3 h-3" />
@@ -260,8 +260,8 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
           )}
 
           {/* Sort Order */}
-          <div className="p-3 border-b border-canopy-border">
-            <div className="text-[10px] font-medium text-canopy-text/50 uppercase tracking-wide mb-2">
+          <div className="p-3 border-b border-daintree-border">
+            <div className="text-[10px] font-medium text-daintree-text/50 uppercase tracking-wide mb-2">
               Sort by
             </div>
             <div className="flex flex-col gap-1">
@@ -276,16 +276,16 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
                     className={cn(
                       "flex items-center gap-2 px-2 py-1 text-xs rounded",
                       orderBy === option.value
-                        ? "bg-canopy-accent/10 text-canopy-accent"
-                        : "text-canopy-text/70 hover:bg-overlay-medium"
+                        ? "bg-daintree-accent/10 text-daintree-accent"
+                        : "text-daintree-text/70 hover:bg-overlay-medium"
                     )}
                   >
                     <div
                       className={cn(
                         "w-3 h-3 rounded-full border",
                         orderBy === option.value
-                          ? "border-canopy-accent bg-canopy-accent"
-                          : "border-canopy-border"
+                          ? "border-daintree-accent bg-daintree-accent"
+                          : "border-daintree-border"
                       )}
                     >
                       {orderBy === option.value && (
@@ -302,15 +302,15 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
           </div>
 
           {/* Group by Type Toggle */}
-          <div className="px-3 py-2 border-b border-canopy-border">
+          <div className="px-3 py-2 border-b border-daintree-border">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
                 checked={groupByType}
                 onChange={(e) => setGroupByType(e.target.checked)}
-                className="w-3.5 h-3.5 rounded border-canopy-border text-canopy-accent focus:ring-canopy-accent focus:ring-offset-0 bg-canopy-bg"
+                className="w-3.5 h-3.5 rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent focus:ring-offset-0 bg-daintree-bg"
               />
-              <span className="text-xs text-canopy-text/70">Group by type</span>
+              <span className="text-xs text-daintree-text/70">Group by type</span>
             </label>
           </div>
 
@@ -382,7 +382,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
 
           {/* Clear All */}
           {hasActiveFilters() && (
-            <div className="p-3 border-t border-canopy-border">
+            <div className="p-3 border-t border-daintree-border">
               <Button variant="subtle" size="xs" onClick={handleClearAll} className="w-full">
                 Clear all filters
               </Button>

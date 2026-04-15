@@ -4,6 +4,8 @@ const OLD_IDS = new Set(["canopy", "canopy-slate"]);
 
 export const migration006: Migration = {
   version: 6,
+  // TODO(0.9.0): Remove this temporary Canopy -> Daintree theme-id migration
+  // after the 0.8.x upgrade window closes.
   description: "Rename theme id canopy/canopy-slate to daintree",
   up: (store) => {
     const appTheme = store.get("appTheme") as

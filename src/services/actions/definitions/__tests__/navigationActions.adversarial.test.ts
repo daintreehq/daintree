@@ -69,13 +69,13 @@ describe("navigationActions adversarial", () => {
     expect(callbacks.onFocusRegionPrev).toHaveBeenCalledTimes(1);
   });
 
-  it("find.inFocusedPanel dispatches a canopy:find-in-panel event", async () => {
+  it("find.inFocusedPanel dispatches a daintree:find-in-panel event", async () => {
     const { actions } = setupActions();
     await call(actions, "find.inFocusedPanel");
 
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
     const event = dispatchSpy.mock.calls[0][0] as unknown as { type: string };
-    expect(event.type).toBe("canopy:find-in-panel");
+    expect(event.type).toBe("daintree:find-in-panel");
   });
 
   it("each action takes no args (verified by Action shape)", () => {

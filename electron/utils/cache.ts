@@ -1,6 +1,6 @@
 /**
  * Generic TTL-aware LRU cache with memory limits
- * Migrated from Canopy CLI for Electron main process.
+ * Migrated from Daintree CLI for Electron main process.
  */
 
 export interface CacheOptions {

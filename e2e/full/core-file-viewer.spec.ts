@@ -16,7 +16,7 @@ async function dispatchViewFile(ctx: AppContext, filePath: string, rootPath?: st
   await ctx.window.evaluate(
     ({ p, r }) => {
       window.dispatchEvent(
-        new CustomEvent("canopy:view-file", { detail: { path: p, rootPath: r } })
+        new CustomEvent("daintree:view-file", { detail: { path: p, rootPath: r } })
       );
     },
     { p: normPath, r: normRoot }

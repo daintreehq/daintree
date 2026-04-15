@@ -99,22 +99,22 @@ describe("resolvePathPattern", () => {
 
 describe("generateWorktreePath", () => {
   it("generates path with default pattern", () => {
-    const result = generateWorktreePath("/Users/name/Projects/canopy-app", "feature/foo-bar");
-    expect(result).toBe("/Users/name/Projects/canopy-app-worktrees/feature-foo-bar");
+    const result = generateWorktreePath("/Users/name/Projects/daintree-app", "feature/foo-bar");
+    expect(result).toBe("/Users/name/Projects/daintree-app-worktrees/feature-foo-bar");
   });
 
   it("generates path with custom pattern", () => {
     const result = generateWorktreePath(
-      "/Users/name/Projects/canopy-app",
+      "/Users/name/Projects/daintree-app",
       "feature/foo-bar",
       "{parent-dir}/{base-folder}-{branch-slug}"
     );
-    expect(result).toBe("/Users/name/Projects/canopy-app-feature-foo-bar");
+    expect(result).toBe("/Users/name/Projects/daintree-app-feature-foo-bar");
   });
 
   it("generates path with flat sibling pattern", () => {
     const result = generateWorktreePath(
-      "/Users/name/Projects/canopy-app",
+      "/Users/name/Projects/daintree-app",
       "feature/foo-bar",
       "{parent-dir}/{branch-slug}"
     );

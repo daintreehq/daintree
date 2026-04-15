@@ -7,7 +7,7 @@ export const DEFAULT_CONFIRMATION_LIMIT = 20;
 export const DEFAULT_HARD_LIMIT = 32;
 export const DISMISS_STEP_SIZE = 4;
 
-const STORAGE_KEY = "canopy-panel-limits";
+const STORAGE_KEY = "daintree-panel-limits";
 
 export type PanelLimitTier = "ok" | "soft" | "confirm" | "hard";
 

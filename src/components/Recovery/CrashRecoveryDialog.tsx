@@ -10,7 +10,7 @@ import {
   Monitor,
   StickyNote,
 } from "lucide-react";
-import { CanopyAgentIcon } from "@/components/icons";
+import { DaintreeAgentIcon } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
 import type {
@@ -32,7 +32,7 @@ interface CrashRecoveryDialogProps {
 function getPanelIcon(kind: string) {
   switch (kind) {
     case "agent":
-      return <CanopyAgentIcon className="h-3.5 w-3.5" />;
+      return <DaintreeAgentIcon className="h-3.5 w-3.5" />;
     case "browser":
       return <Globe className="h-3.5 w-3.5" />;
     case "notes":
@@ -149,34 +149,34 @@ export function CrashRecoveryDialog({
     >
       <AppDialog.Header>
         <AppDialog.Title icon={<AlertTriangle className="h-5 w-5 text-status-warning" />}>
-          Canopy Crashed
+          Daintree Crashed
         </AppDialog.Title>
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-4">
-        <p className="text-sm text-canopy-text/80">
+        <p className="text-sm text-daintree-text/80">
           The previous session ended unexpectedly on {crashDate}.
           {hasPanels ? " Select which panels to restore:" : " Choose how to continue:"}
         </p>
 
         {hasPanels ? (
           <>
-            <div className="border border-canopy-border rounded-lg overflow-hidden">
-              <div className="flex items-center justify-between px-3 py-2 bg-overlay-soft border-b border-canopy-border">
+            <div className="border border-daintree-border rounded-lg overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 bg-overlay-soft border-b border-daintree-border">
                 <button
                   type="button"
                   onClick={toggleAll}
-                  className="cursor-pointer text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
+                  className="cursor-pointer text-xs text-daintree-accent hover:text-daintree-accent/80 transition-colors"
                   data-testid="toggle-all-button"
                 >
                   {allSelected ? "Deselect all" : "Select all"}
                 </button>
-                <span className="text-xs tabular-nums text-canopy-text/50">
+                <span className="text-xs tabular-nums text-daintree-text/50">
                   {selectedCount} of {panels.length} selected
                 </span>
               </div>
               <div
-                className="max-h-48 overflow-y-auto divide-y divide-canopy-border/50"
+                className="max-h-48 overflow-y-auto divide-y divide-daintree-border/50"
                 data-testid="panel-list"
               >
                 {panels.map((panel) => (
@@ -221,7 +221,7 @@ export function CrashRecoveryDialog({
             </div>
 
             {backupDate && (
-              <p className="text-xs text-canopy-text/50">Session backup from {backupDate}</p>
+              <p className="text-xs text-daintree-text/50">Session backup from {backupDate}</p>
             )}
           </>
         ) : (
@@ -230,20 +230,22 @@ export function CrashRecoveryDialog({
               type="button"
               onClick={handleRestoreAll}
               disabled={resolving}
-              className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-canopy-border hover:border-canopy-accent hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
+              className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-daintree-border hover:border-daintree-accent hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
               data-testid="restore-button"
             >
-              <div className="mt-0.5 h-5 w-5 rounded-full bg-canopy-accent/20 flex items-center justify-center shrink-0">
-                <div className="h-2 w-2 rounded-full bg-canopy-accent" />
+              <div className="mt-0.5 h-5 w-5 rounded-full bg-daintree-accent/20 flex items-center justify-center shrink-0">
+                <div className="h-2 w-2 rounded-full bg-daintree-accent" />
               </div>
               <div>
-                <div className="text-sm font-medium text-canopy-text">Restore Previous Session</div>
+                <div className="text-sm font-medium text-daintree-text">
+                  Restore Previous Session
+                </div>
                 {backupDate ? (
-                  <div className="text-xs text-canopy-text/60 mt-0.5">
+                  <div className="text-xs text-daintree-text/60 mt-0.5">
                     Restore session from {backupDate}
                   </div>
                 ) : (
-                  <div className="text-xs text-canopy-text/60 mt-0.5">
+                  <div className="text-xs text-daintree-text/60 mt-0.5">
                     No backup available — layout may be empty
                   </div>
                 )}
@@ -254,15 +256,15 @@ export function CrashRecoveryDialog({
               type="button"
               onClick={handleFresh}
               disabled={resolving}
-              className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-canopy-border hover:border-canopy-border/80 hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
+              className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-daintree-border hover:border-daintree-border/80 hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
               data-testid="fresh-button"
             >
-              <div className="mt-0.5 h-5 w-5 rounded-full bg-canopy-text/10 flex items-center justify-center shrink-0">
-                <div className="h-2 w-2 rounded-full bg-canopy-text/40" />
+              <div className="mt-0.5 h-5 w-5 rounded-full bg-daintree-text/10 flex items-center justify-center shrink-0">
+                <div className="h-2 w-2 rounded-full bg-daintree-text/40" />
               </div>
               <div>
-                <div className="text-sm font-medium text-canopy-text">Start Fresh</div>
-                <div className="text-xs text-canopy-text/60 mt-0.5">
+                <div className="text-sm font-medium text-daintree-text">Start Fresh</div>
+                <div className="text-xs text-daintree-text/60 mt-0.5">
                   Reset to a clean layout — open panels will be cleared
                 </div>
               </div>
@@ -270,11 +272,11 @@ export function CrashRecoveryDialog({
           </div>
         )}
 
-        <div className="border border-canopy-border rounded-lg overflow-hidden">
+        <div className="border border-daintree-border rounded-lg overflow-hidden">
           <button
             type="button"
             onClick={() => setDetailsOpen((o) => !o)}
-            className="cursor-pointer w-full flex items-center justify-between px-3 py-2 text-sm text-canopy-text/70 hover:text-canopy-text hover:bg-overlay-soft transition-colors"
+            className="cursor-pointer w-full flex items-center justify-between px-3 py-2 text-sm text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
             data-testid="details-toggle"
           >
             <span className="font-medium">Error Details</span>
@@ -287,7 +289,7 @@ export function CrashRecoveryDialog({
 
           {detailsOpen && (
             <div
-              className="px-3 pb-3 space-y-2 border-t border-canopy-border"
+              className="px-3 pb-3 space-y-2 border-t border-daintree-border"
               data-testid="details-section"
             >
               <DetailRow label="App version" value={crash.entry.appVersion} />
@@ -319,7 +321,7 @@ export function CrashRecoveryDialog({
               )}
               {crash.entry.errorMessage && (
                 <div className="mt-2">
-                  <div className="text-xs text-canopy-text/50 mb-1">Error</div>
+                  <div className="text-xs text-daintree-text/50 mb-1">Error</div>
                   <pre className="text-xs text-status-danger bg-status-danger/10 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all select-text">
                     {crash.entry.errorMessage}
                   </pre>
@@ -327,8 +329,8 @@ export function CrashRecoveryDialog({
               )}
               {crash.entry.errorStack && (
                 <div>
-                  <div className="text-xs text-canopy-text/50 mb-1">Stack trace</div>
-                  <pre className="text-xs text-canopy-text/60 bg-overlay-soft rounded p-2 overflow-x-auto max-h-32 whitespace-pre-wrap break-all select-text">
+                  <div className="text-xs text-daintree-text/50 mb-1">Stack trace</div>
+                  <pre className="text-xs text-daintree-text/60 bg-overlay-soft rounded p-2 overflow-x-auto max-h-32 whitespace-pre-wrap break-all select-text">
                     {crash.entry.errorStack}
                   </pre>
                 </div>
@@ -380,10 +382,10 @@ export function CrashRecoveryDialog({
             type="checkbox"
             checked={config.autoRestoreOnCrash}
             onChange={(e) => handleAutoRestore(e.target.checked)}
-            className="accent-canopy-accent h-4 w-4"
+            className="accent-daintree-accent h-4 w-4"
             data-testid="auto-restore-checkbox"
           />
-          <span className="text-xs text-canopy-text/60">
+          <span className="text-xs text-daintree-text/60">
             Don't show this again — always restore automatically
           </span>
         </label>
@@ -410,21 +412,21 @@ function PanelRow({
         type="checkbox"
         checked={selected}
         onChange={() => onToggle(panel.id)}
-        className="accent-canopy-accent h-3.5 w-3.5 shrink-0"
+        className="accent-daintree-accent h-3.5 w-3.5 shrink-0"
         data-testid={`panel-checkbox-${panel.id}`}
       />
-      <span className="text-canopy-text/60 shrink-0">{getPanelIcon(panel.kind)}</span>
+      <span className="text-daintree-text/60 shrink-0">{getPanelIcon(panel.kind)}</span>
       <div className="flex-1 min-w-0">
-        <div className="text-sm text-canopy-text truncate">{panel.title || panel.kind}</div>
-        {panel.cwd && <div className="text-xs text-canopy-text/40 truncate">{panel.cwd}</div>}
+        <div className="text-sm text-daintree-text truncate">{panel.title || panel.kind}</div>
+        {panel.cwd && <div className="text-xs text-daintree-text/40 truncate">{panel.cwd}</div>}
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
         {panel.agentState && (
-          <span className="text-xs text-canopy-text/50" data-testid={`agent-state-${panel.id}`}>
+          <span className="text-xs text-daintree-text/50" data-testid={`agent-state-${panel.id}`}>
             {panel.agentState}
           </span>
         )}
-        <span className="text-xs text-canopy-text/40">{panel.location}</span>
+        <span className="text-xs text-daintree-text/40">{panel.location}</span>
         {panel.isSuspect && (
           <span
             className="text-status-warning"
@@ -442,8 +444,8 @@ function PanelRow({
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-0.5">
-      <span className="text-xs text-canopy-text/50 shrink-0">{label}</span>
-      <span className="text-xs text-canopy-text/80 text-right font-mono">{value}</span>
+      <span className="text-xs text-daintree-text/50 shrink-0">{label}</span>
+      <span className="text-xs text-daintree-text/80 text-right font-mono">{value}</span>
     </div>
   );
 }
@@ -470,7 +472,7 @@ function buildClipboardText(crash: PendingCrash): string {
   const lines: string[] = [
     `## Crash Report`,
     ``,
-    `**Canopy ${e.appVersion}** on ${e.platform} ${e.arch}`,
+    `**Daintree ${e.appVersion}** on ${e.platform} ${e.arch}`,
     `- **OS**: ${e.osVersion}`,
   ];
 

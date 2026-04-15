@@ -13,7 +13,7 @@ import { createTooltipWithShortcut } from "@/lib/platform";
 import { useKeybindingDisplay } from "@/hooks";
 import { actionService } from "@/services/ActionService";
 
-const toolbarIconButtonClass = "toolbar-icon-button text-canopy-text transition-colors";
+const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
 
 const SETTINGS_CONTEXT_MENU_TABS = [
   { tab: "general", label: "General" },

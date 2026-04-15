@@ -21,7 +21,7 @@ export class NoteFileReader {
   constructor(
     worktreePath: string,
     enabled: boolean = DEFAULT_CONFIG.note?.enabled ?? true,
-    filename: string = DEFAULT_CONFIG.note?.filename ?? "canopy/note"
+    filename: string = DEFAULT_CONFIG.note?.filename ?? "daintree/note"
   ) {
     this.worktreePath = worktreePath;
     this.enabled = enabled;

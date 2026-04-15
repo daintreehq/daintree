@@ -102,7 +102,7 @@ function BlockedNavBanner({
   })();
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-canopy-text/80">
+    <div className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-daintree-text/80">
       <ExternalLink className="h-3.5 w-3.5 shrink-0 text-status-warning" />
       <span className="truncate flex-1">Navigation to external site blocked: {hostname}</span>
       {isOAuth ? (
@@ -129,7 +129,7 @@ function BlockedNavBanner({
               );
             }
           }}
-          className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-canopy-text/90 transition-colors"
+          className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-daintree-text/90 transition-colors"
         >
           Sign in via Browser
         </button>
@@ -140,7 +140,7 @@ function BlockedNavBanner({
             void window.electron.system.openExternal(blockedNav.url);
             onDismiss();
           }}
-          className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-canopy-text/90 transition-colors"
+          className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-daintree-text/90 transition-colors"
         >
           Open in External Browser
         </button>
@@ -148,7 +148,7 @@ function BlockedNavBanner({
       <button
         type="button"
         onClick={onDismiss}
-        className="shrink-0 text-canopy-text/40 hover:text-canopy-text/70 transition-colors"
+        className="shrink-0 text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
         aria-label="Dismiss"
       >
         ×
@@ -790,18 +790,18 @@ export function DevPreviewPane({
 
         <div className="relative flex-1 min-h-0 bg-surface-canvas">
           {isRestarting || status === "starting" || status === "installing" ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg">
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg">
               <Spinner size="2xl" className="text-status-info mb-4" />
-              <p className="text-sm text-canopy-text/60">
+              <p className="text-sm text-daintree-text/60">
                 {isRestarting ? "Restarting" : status === "installing" ? "Installing" : "Starting"}
                 ...
               </p>
             </div>
           ) : status === "error" && error ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
               <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
-              <h3 className="text-sm font-medium text-canopy-text/70 mb-1">Dev Server Error</h3>
-              <p className="text-xs text-canopy-text/50 text-center mb-3 max-w-md">
+              <h3 className="text-sm font-medium text-daintree-text/70 mb-1">Dev Server Error</h3>
+              <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
                 {error.message}
               </p>
               <div className="flex items-center gap-1">
@@ -809,7 +809,7 @@ export function DevPreviewPane({
                   onClick={handleRetry}
                   variant="ghost"
                   size="sm"
-                  className="gap-1.5 px-2.5 py-1.5 group text-canopy-accent/70 hover:text-canopy-accent"
+                  className="gap-1.5 px-2.5 py-1.5 group text-daintree-accent/70 hover:text-daintree-accent"
                 >
                   <RotateCw className="h-3.5 w-3.5" />
                   <span className="text-xs">Retry</span>
@@ -819,7 +819,7 @@ export function DevPreviewPane({
                     onClick={handleOpenExternal}
                     variant="ghost"
                     size="sm"
-                    className="gap-1.5 px-2.5 py-1.5 group text-canopy-text/50 hover:text-canopy-text/70"
+                    className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
                   >
                     <ExternalLink className="h-3.5 w-3.5" />
                     <span className="text-xs">Open External</span>
@@ -828,13 +828,13 @@ export function DevPreviewPane({
               </div>
             </div>
           ) : !currentUrl || status !== "running" ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
               {isUnconfigured ? (
                 <div className="flex flex-col items-center text-center max-w-md">
-                  <h3 className="text-sm font-medium text-canopy-text/70 mb-1">
+                  <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
                     Configure Dev Server
                   </h3>
-                  <p className="text-xs text-canopy-text/50 mb-4 leading-relaxed">
+                  <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
                     No dev server command is configured for this project.
                     {allDetectedRunners && findDevServerCandidate(allDetectedRunners)
                       ? " We found a script in your package.json that looks like a dev server."
@@ -847,7 +847,7 @@ export function DevPreviewPane({
                         disabled={isAutoDetecting || isSettingsLoading}
                         variant="ghost"
                         size="sm"
-                        className="gap-1.5 px-2.5 py-1.5 group text-canopy-accent/70 hover:text-canopy-accent"
+                        className="gap-1.5 px-2.5 py-1.5 group text-daintree-accent/70 hover:text-daintree-accent"
                       >
                         <WandSparkles className="h-3.5 w-3.5" />
                         <span className="text-xs">
@@ -861,7 +861,7 @@ export function DevPreviewPane({
                       onClick={handleOpenSettings}
                       variant="ghost"
                       size="sm"
-                      className="gap-1.5 px-2.5 py-1.5 group text-canopy-text/50 hover:text-canopy-text/70"
+                      className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
                     >
                       <Settings className="h-3.5 w-3.5" />
                       <span className="text-xs">Open Project Settings</span>
@@ -870,41 +870,41 @@ export function DevPreviewPane({
                 </div>
               ) : (
                 <div className="flex flex-col items-center text-center max-w-md">
-                  <h3 className="text-sm font-medium text-canopy-text/70 mb-1">
+                  <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
                     Waiting for Dev Server
                   </h3>
-                  <p className="text-xs text-canopy-text/50 mb-4 leading-relaxed">
+                  <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
                     The development server will appear here once it starts and a URL is detected.
                   </p>
                 </div>
               )}
             </div>
           ) : !hasBeenVisible ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text">
-              <p className="text-xs text-canopy-text/50">
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text">
+              <p className="text-xs text-daintree-text/50">
                 Preview will load when this panel is first viewed
               </p>
             </div>
           ) : isEvicted ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
-              <p className="text-xs text-canopy-text/50">Reclaimed for memory</p>
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
+              <p className="text-xs text-daintree-text/50">Reclaimed for memory</p>
             </div>
           ) : (
             <>
               {webviewLoadError && (
-                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
+                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
                   <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
-                  <h3 className="text-sm font-medium text-canopy-text/70 mb-1">
+                  <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
                     Dev Server Unreachable
                   </h3>
-                  <p className="text-xs text-canopy-text/50 text-center mb-3 max-w-md">
+                  <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
                     {webviewLoadError}
                   </p>
                   <Button
                     onClick={handleHardRestart}
                     variant="ghost"
                     size="sm"
-                    className="gap-1.5 px-2.5 py-1.5 group text-canopy-accent/70 hover:text-canopy-accent"
+                    className="gap-1.5 px-2.5 py-1.5 group text-daintree-accent/70 hover:text-daintree-accent"
                   >
                     <RotateCw className="h-3.5 w-3.5" />
                     <span className="text-xs">Hard Restart</span>

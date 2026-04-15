@@ -148,7 +148,7 @@ export function registerArtifactHandlers(deps: HandlerDependencies): () => void 
         };
       }
 
-      const tmpPatchPath = path.join(os.tmpdir(), `canopy-patch-${Date.now()}.patch`);
+      const tmpPatchPath = path.join(os.tmpdir(), `daintree-patch-${Date.now()}.patch`);
       await fs.writeFile(tmpPatchPath, patchContent, "utf-8");
 
       try {

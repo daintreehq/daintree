@@ -50,12 +50,12 @@ export function NoteListItemRow({
           aria-selected={isSelected}
           className={cn(
             "relative flex items-start px-3 py-1.5 cursor-pointer transition-colors group",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1",
             isSelected
-              ? "bg-surface-panel-elevated shadow-sm text-canopy-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+              ? "bg-surface-panel-elevated shadow-sm text-daintree-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
               : isHighlighted
-                ? "bg-overlay-subtle text-canopy-text"
-                : "text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
+                ? "bg-overlay-subtle text-daintree-text"
+                : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
           )}
           onClick={() => onSelect(note, index)}
           onDoubleClick={(e) => titleEdit.handleStartRename(note, e)}
@@ -85,17 +85,17 @@ export function NoteListItemRow({
                   noteTitleBaseClass,
                   "appearance-none focus:outline-none",
                   isEditing
-                    ? "bg-canopy-sidebar border-canopy-accent text-canopy-text cursor-text"
+                    ? "bg-daintree-sidebar border-daintree-accent text-daintree-text cursor-text"
                     : "bg-transparent border-transparent text-inherit truncate cursor-default pointer-events-none"
                 )}
               />
               {!isEditing && (
-                <span className="shrink-0 text-[11px] text-canopy-text/40 tabular-nums">
+                <span className="shrink-0 text-[11px] text-daintree-text/40 tabular-nums">
                   {formatTimeAgo(note.modifiedAt)}
                 </span>
               )}
             </div>
-            <div className="text-[11px] text-canopy-text/40 truncate mt-0.5 px-1">
+            <div className="text-[11px] text-daintree-text/40 truncate mt-0.5 px-1">
               {note.preview || "Empty note"}
             </div>
           </div>
@@ -105,7 +105,7 @@ export function NoteListItemRow({
                 <button
                   type="button"
                   onClick={(e) => onDelete(note, e)}
-                  className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded-[var(--radius-sm)] hover:bg-status-error/10 text-canopy-text/40 hover:text-status-error transition"
+                  className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded-[var(--radius-sm)] hover:bg-status-error/10 text-daintree-text/40 hover:text-status-error transition"
                   aria-label="Delete note"
                 >
                   <Trash2 size={12} />

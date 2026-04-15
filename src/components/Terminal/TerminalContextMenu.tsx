@@ -38,7 +38,12 @@ import {
   Trash2,
   Unlock,
 } from "lucide-react";
-import { MoveToDockIcon, MoveToGridIcon, CanopyAgentIcon, WorktreeIcon } from "@/components/icons";
+import {
+  MoveToDockIcon,
+  MoveToGridIcon,
+  DaintreeAgentIcon,
+  WorktreeIcon,
+} from "@/components/icons";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -628,7 +633,7 @@ export function TerminalContextMenu({
             disabled={isCurrent}
             onSelect={() => handleAction(`convert-to:${agentId}`)}
           >
-            <CanopyAgentIcon className={ICON_CLASS} />
+            <DaintreeAgentIcon className={ICON_CLASS} />
             {config.name}
           </ContextMenuItem>
         );

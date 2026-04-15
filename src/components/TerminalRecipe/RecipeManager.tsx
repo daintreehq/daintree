@@ -295,17 +295,17 @@ export function RecipeManager({
         <AppDialog.Body>
           {/* Global Recipes Section */}
           <div className="mb-6">
-            <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
               <Globe className="h-4 w-4" />
               Global Recipes
             </h3>
-            <p className="text-xs text-canopy-text/60 mb-3">Available across all projects</p>
+            <p className="text-xs text-daintree-text/60 mb-3">Available across all projects</p>
             {globalRecipes.length === 0 ? (
-              <div className="text-sm text-canopy-text/60 text-center py-4 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+              <div className="text-sm text-daintree-text/60 text-center py-4 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
                 No global recipes
               </div>
             ) : (
-              <div className="border border-canopy-border rounded-[var(--radius-md)] divide-y divide-canopy-border">
+              <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
                 {globalRecipes.map((r) => renderRecipeRow(r))}
               </div>
             )}
@@ -320,14 +320,14 @@ export function RecipeManager({
           {/* Team Recipes Section (in-repo) */}
           {inRepoRecipes.length > 0 && (
             <div className="mb-6">
-              <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
                 <GitBranch className="h-4 w-4" />
                 Team Recipes
               </h3>
-              <p className="text-xs text-canopy-text/60 mb-3">
-                Shared via .canopy/recipes/ in the repository
+              <p className="text-xs text-daintree-text/60 mb-3">
+                Shared via .daintree/recipes/ in the repository
               </p>
-              <div className="border border-canopy-border rounded-[var(--radius-md)] divide-y divide-canopy-border">
+              <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
                 {inRepoRecipes.map((r) => renderRecipeRow(r))}
               </div>
             </div>
@@ -335,22 +335,22 @@ export function RecipeManager({
 
           {/* Project Recipes Section */}
           <div className="mb-4">
-            <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
               <FolderOpen className="h-4 w-4" />
               Project Recipes
               {currentProject && (
-                <span className="text-xs font-normal text-canopy-text/50">
+                <span className="text-xs font-normal text-daintree-text/50">
                   {currentProject.emoji} {currentProject.name}
                 </span>
               )}
             </h3>
-            <p className="text-xs text-canopy-text/60 mb-3">Specific to the current project</p>
+            <p className="text-xs text-daintree-text/60 mb-3">Specific to the current project</p>
             {projectRecipes.length === 0 ? (
-              <div className="text-sm text-canopy-text/60 text-center py-4 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+              <div className="text-sm text-daintree-text/60 text-center py-4 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
                 No project recipes
               </div>
             ) : (
-              <div className="border border-canopy-border rounded-[var(--radius-md)] divide-y divide-canopy-border">
+              <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
                 {projectRecipes.map((r) => renderRecipeRow(r))}
               </div>
             )}
@@ -400,7 +400,7 @@ export function RecipeManager({
         description={
           saveError
             ? `Error: ${saveError}`
-            : "This recipe will be written to .canopy/recipes/ in the repository where it can be committed and shared with the team."
+            : "This recipe will be written to .daintree/recipes/ in the repository where it can be committed and shared with the team."
         }
         confirmLabel={saveError ? "Retry" : "Save to Repo"}
         isConfirmLoading={isSaving}
@@ -438,11 +438,11 @@ export function RecipeManager({
 
         <AppDialog.Body>
           <div className="mb-4">
-            <label className="block text-sm font-medium text-canopy-text mb-1">Import as</label>
+            <label className="block text-sm font-medium text-daintree-text mb-1">Import as</label>
             <select
               value={importScope}
               onChange={(e) => setImportScope(e.target.value as "global" | "project")}
-              className="w-full px-3 pr-8 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text text-sm"
+              className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text text-sm"
             >
               <option value="project">Project Recipe</option>
               <option value="global">Global Recipe</option>
@@ -452,7 +452,7 @@ export function RecipeManager({
             value={importJson}
             onChange={(e) => setImportJson(e.target.value)}
             placeholder='{"name": "My Recipe", "terminals": [...]}'
-            className="w-full h-48 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-sm text-canopy-text font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent resize-none"
+            className="w-full h-48 px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-none focus:ring-2 focus:ring-daintree-accent resize-none"
             spellCheck={false}
           />
           {importError && (

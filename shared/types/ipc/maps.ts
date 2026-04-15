@@ -185,6 +185,8 @@ export interface OnboardingState {
   firstRunToastSeen: boolean;
   newsletterPromptSeen: boolean;
   waitingNudgeSeen: boolean;
+  // TODO(0.9.0): Remove after deleting onboarding:migrate and the renderer
+  // localStorage import path for old Canopy onboarding keys.
   migratedFromLocalStorage: boolean;
   checklist: ChecklistState;
 }
@@ -1362,7 +1364,7 @@ export interface IpcInvokeMap {
     result: boolean;
   };
 
-  // Canopy CLI install channels
+  // Daintree CLI install channels
   "cli:install": {
     args: [];
     result: CliInstallStatus;
@@ -1536,6 +1538,8 @@ export interface IpcInvokeMap {
     result: OnboardingState;
   };
   "onboarding:migrate": {
+    // TODO(0.9.0): Remove after deleting the temporary Canopy onboarding
+    // localStorage migration path.
     args: [
       payload: {
         agentSelectionDismissed: boolean;

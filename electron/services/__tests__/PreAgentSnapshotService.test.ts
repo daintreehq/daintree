@@ -24,7 +24,7 @@ vi.mock("../../utils/logger.js", () => ({
   logWarn: vi.fn(),
 }));
 
-import { events, type CanopyEventMap } from "../events.js";
+import { events, type DaintreeEventMap } from "../events.js";
 import { preAgentSnapshotService } from "../PreAgentSnapshotService.js";
 
 function emitStateChange(previousState: string, state: string, worktreeId?: string) {
@@ -36,7 +36,7 @@ function emitStateChange(previousState: string, state: string, worktreeId?: stri
     timestamp: Date.now(),
     trigger: "heuristic",
     confidence: 1.0,
-  } as CanopyEventMap["agent:state-changed"]);
+  } as DaintreeEventMap["agent:state-changed"]);
 }
 
 describe("PreAgentSnapshotService", () => {
@@ -66,7 +66,7 @@ describe("PreAgentSnapshotService", () => {
             "push",
             "--include-untracked",
             "-m",
-            expect.stringContaining("canopy:pre-agent:"),
+            expect.stringContaining("daintree:pre-agent:"),
           ])
         );
       });
@@ -157,7 +157,7 @@ describe("PreAgentSnapshotService", () => {
 
       // Now set up for revert
       mockRaw.mockResolvedValue(
-        "stash@{0} 1700000000 On main: canopy:pre-agent:/test/worktree:1700000000"
+        "stash@{0} 1700000000 On main: daintree:pre-agent:/test/worktree:1700000000"
       );
       mockReset.mockResolvedValue(undefined);
       mockClean.mockResolvedValue(undefined);

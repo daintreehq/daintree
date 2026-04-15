@@ -89,9 +89,9 @@ export function deserializeError(serialized: SerializedError): Error {
 }
 
 export function wrapSuccess<T>(data: T): IpcSuccessEnvelope<T> {
-  return { __canopyIpcEnvelope: true, ok: true, data };
+  return { __daintreeIpcEnvelope: true, ok: true, data };
 }
 
 export function wrapError(error: unknown): IpcErrorEnvelope {
-  return { __canopyIpcEnvelope: true, ok: false, error: serializeError(error) };
+  return { __daintreeIpcEnvelope: true, ok: false, error: serializeError(error) };
 }

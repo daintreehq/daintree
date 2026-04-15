@@ -353,7 +353,7 @@ test.describe.serial("Core: Browser Panel", () => {
       await addressBar.click();
       await window.waitForTimeout(T_SETTLE);
 
-      await window.evaluate(() => window.dispatchEvent(new CustomEvent("canopy:find-in-panel")));
+      await window.evaluate(() => window.dispatchEvent(new CustomEvent("daintree:find-in-panel")));
 
       const findInput = browserPanel.locator(SEL.browser.findInput);
       await expect(findInput).toBeVisible({ timeout: T_MEDIUM });

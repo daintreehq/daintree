@@ -74,7 +74,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md">
       <AppDialog.Header>
-        <AppDialog.Title icon={<FolderOpen className="w-5 h-5 text-canopy-accent" />}>
+        <AppDialog.Title icon={<FolderOpen className="w-5 h-5 text-daintree-accent" />}>
           Update Working Directory
         </AppDialog.Title>
         <AppDialog.CloseButton />
@@ -88,7 +88,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
 
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-canopy-text/70 mb-1">
+            <label className="block text-sm font-medium text-daintree-text/70 mb-1">
               Current (invalid):
             </label>
             <code className="block p-2 bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)] border border-status-error/30 rounded text-sm text-status-error font-mono truncate">
@@ -99,7 +99,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
           <div>
             <label
               htmlFor="new-cwd-input"
-              className="block text-sm font-medium text-canopy-text/70 mb-1"
+              className="block text-sm font-medium text-daintree-text/70 mb-1"
             >
               New Directory:
             </label>
@@ -113,7 +113,7 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
                 setValidationError(undefined);
               }}
               onKeyDown={handleKeyDown}
-              className="w-full p-2 bg-canopy-bg border border-canopy-border rounded font-mono text-sm text-canopy-text focus:outline-none focus:border-canopy-accent"
+              className="w-full p-2 bg-daintree-bg border border-daintree-border rounded font-mono text-sm text-daintree-text focus:outline-none focus:border-daintree-accent"
               placeholder="/path/to/directory"
               aria-invalid={!!validationError}
               aria-describedby={validationError ? "cwd-error" : undefined}

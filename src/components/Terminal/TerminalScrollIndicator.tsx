@@ -26,9 +26,9 @@ export function TerminalScrollIndicator({ terminalId }: TerminalScrollIndicatorP
         type="button"
         className={cn(
           "pointer-events-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full",
-          "bg-canopy-bg/90 border border-canopy-border/40 text-canopy-text shadow-[var(--theme-shadow-floating)]",
+          "bg-daintree-bg/90 border border-daintree-border/40 text-daintree-text shadow-[var(--theme-shadow-floating)]",
           "text-xs font-medium cursor-pointer",
-          "hover:bg-canopy-bg hover:border-canopy-border/60",
+          "hover:bg-daintree-bg hover:border-daintree-border/60",
           "transition duration-150",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
           isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2"

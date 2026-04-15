@@ -46,43 +46,46 @@ describe("appProtocol utilities", () => {
     const distRoot = path.resolve("/fake/dist");
 
     it("should resolve root path to index.html", () => {
-      const result = resolveAppUrlToDistPath("app://canopy/", distRoot);
+      const result = resolveAppUrlToDistPath("app://daintree/", distRoot);
       expect(result.error).toBeUndefined();
       expect(result.filePath).toBe(path.join(distRoot, "index.html"));
     });
 
     it("should resolve empty path to index.html", () => {
-      const result = resolveAppUrlToDistPath("app://canopy", distRoot);
+      const result = resolveAppUrlToDistPath("app://daintree", distRoot);
       expect(result.error).toBeUndefined();
       expect(result.filePath).toBe(path.join(distRoot, "index.html"));
     });
 
     it("should resolve file paths correctly", () => {
-      const result = resolveAppUrlToDistPath("app://canopy/assets/app.js", distRoot);
+      const result = resolveAppUrlToDistPath("app://daintree/assets/app.js", distRoot);
       expect(result.error).toBeUndefined();
       expect(result.filePath).toBe(path.join(distRoot, "assets", "app.js"));
     });
 
     it("should handle URL encoding", () => {
-      const result = resolveAppUrlToDistPath("app://canopy/path%20with%20spaces/file.js", distRoot);
+      const result = resolveAppUrlToDistPath(
+        "app://daintree/path%20with%20spaces/file.js",
+        distRoot
+      );
       expect(result.error).toBeUndefined();
       expect(result.filePath).toBe(path.join(distRoot, "path with spaces", "file.js"));
     });
 
     it("should handle path segments with .. (URL normalizes before reaching resolver)", () => {
-      const result = resolveAppUrlToDistPath("app://canopy/../secret.txt", distRoot);
+      const result = resolveAppUrlToDistPath("app://daintree/../secret.txt", distRoot);
       expect(result.error).toBeUndefined();
       expect(result.filePath).toBe(path.join(distRoot, "secret.txt"));
     });
 
     it("should handle nested path segments with .. (URL normalizes)", () => {
-      const result = resolveAppUrlToDistPath("app://canopy/nested/../../outside.txt", distRoot);
+      const result = resolveAppUrlToDistPath("app://daintree/nested/../../outside.txt", distRoot);
       expect(result.error).toBeUndefined();
       expect(result.filePath).toBe(path.join(distRoot, "outside.txt"));
     });
 
     it("should reject non-app:// protocol", () => {
-      const result = resolveAppUrlToDistPath("http://canopy/index.html", distRoot);
+      const result = resolveAppUrlToDistPath("http://daintree/index.html", distRoot);
       expect(result.error).toBe("Invalid protocol");
       expect(result.filePath).toBe("");
     });
@@ -94,50 +97,50 @@ describe("appProtocol utilities", () => {
     });
 
     it("should resolve nested paths correctly", () => {
-      const result = resolveAppUrlToDistPath("app://canopy/assets/images/logo.png", distRoot);
+      const result = resolveAppUrlToDistPath("app://daintree/assets/images/logo.png", distRoot);
       expect(result.error).toBeUndefined();
       expect(result.filePath).toBe(path.join(distRoot, "assets", "images", "logo.png"));
     });
 
     it("should handle paths with leading slash", () => {
-      const result = resolveAppUrlToDistPath("app://canopy/app.js", distRoot);
+      const result = resolveAppUrlToDistPath("app://daintree/app.js", distRoot);
       expect(result.error).toBeUndefined();
       expect(result.filePath).toBe(path.join(distRoot, "app.js"));
     });
 
     it("should handle encoded dot segments (URL normalizes %2e%2e before resolver)", () => {
-      const result = resolveAppUrlToDistPath("app://canopy/%2e%2e/secret.txt", distRoot);
+      const result = resolveAppUrlToDistPath("app://daintree/%2e%2e/secret.txt", distRoot);
       expect(result.error).toBeUndefined();
       expect(result.filePath).toBe(path.join(distRoot, "secret.txt"));
     });
 
     it("should handle encoded absolute paths safely (URL preserves %2F encoding)", () => {
-      const result = resolveAppUrlToDistPath("app://canopy/%2Fetc%2Fpasswd", distRoot);
+      const result = resolveAppUrlToDistPath("app://daintree/%2Fetc%2Fpasswd", distRoot);
       expect(result.error).toBeUndefined();
       expect(result.filePath).toBe(path.join(distRoot, "etc", "passwd"));
     });
 
     it("should reject paths with null bytes", () => {
-      const result = resolveAppUrlToDistPath("app://canopy/file%00.txt", distRoot);
+      const result = resolveAppUrlToDistPath("app://daintree/file%00.txt", distRoot);
       expect(result.error).toBe("Invalid path");
       expect(result.filePath).toBe("");
     });
 
     it("should reject paths with backslashes", () => {
-      const result = resolveAppUrlToDistPath("app://canopy/path\\file.txt", distRoot);
+      const result = resolveAppUrlToDistPath("app://daintree/path\\file.txt", distRoot);
       expect(result.error).toBe("Invalid path separator");
       expect(result.filePath).toBe("");
     });
 
     it("should ignore query strings and hashes", () => {
-      const result = resolveAppUrlToDistPath("app://canopy/app.js?v=123#anchor", distRoot);
+      const result = resolveAppUrlToDistPath("app://daintree/app.js?v=123#anchor", distRoot);
       expect(result.error).toBeUndefined();
       expect(result.filePath).toBe(path.join(distRoot, "app.js"));
     });
 
     it("should validate hostname when expectedHostname option is provided", () => {
-      const result = resolveAppUrlToDistPath("app://canopy/index.html", distRoot, {
-        expectedHostname: "canopy",
+      const result = resolveAppUrlToDistPath("app://daintree/index.html", distRoot, {
+        expectedHostname: "daintree",
       });
       expect(result.error).toBeUndefined();
       expect(result.filePath).toBe(path.join(distRoot, "index.html"));
@@ -145,7 +148,7 @@ describe("appProtocol utilities", () => {
 
     it("should reject incorrect hostname when expectedHostname option is provided", () => {
       const result = resolveAppUrlToDistPath("app://wrong/index.html", distRoot, {
-        expectedHostname: "canopy",
+        expectedHostname: "daintree",
       });
       expect(result.error).toBe("Invalid host");
       expect(result.filePath).toBe("");

@@ -290,7 +290,7 @@ describe("GitHubListItem", () => {
     );
     const checkboxes = container.querySelectorAll("[aria-hidden='true']");
     const checked = Array.from(checkboxes).find((el) =>
-      (el.getAttribute("class") ?? "").includes("bg-canopy-accent")
+      (el.getAttribute("class") ?? "").includes("bg-daintree-accent")
     );
     expect(checked).not.toBeUndefined();
   });

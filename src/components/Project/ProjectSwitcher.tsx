@@ -123,7 +123,7 @@ export function ProjectSwitcher() {
     const totalActive = bgProjects.reduce((sum, p) => sum + p.activeAgentCount, 0);
 
     if (totalWaiting > 0) return { color: "bg-state-waiting", pulse: false, count: totalWaiting };
-    if (totalActive > 0) return { color: "bg-canopy-accent", pulse: true, count: totalActive };
+    if (totalActive > 0) return { color: "bg-daintree-accent", pulse: true, count: totalActive };
     return null;
   }, [projectSwitcher.results]);
 
@@ -258,7 +258,7 @@ export function ProjectSwitcher() {
                   )}
 
                   <div className="flex flex-col min-w-0 gap-0.5">
-                    <span className="truncate font-semibold text-canopy-text text-sm leading-none">
+                    <span className="truncate font-semibold text-daintree-text text-sm leading-none">
                       {currentProject.name}
                     </span>
                     <span className="truncate font-mono text-xs text-text-secondary">

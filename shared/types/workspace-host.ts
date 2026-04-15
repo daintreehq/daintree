@@ -115,7 +115,7 @@ export interface WorktreeSnapshot {
   /** Resource status from the last manual status check */
   resourceStatus?: WorktreeResourceStatus;
 
-  /** Connect command from .canopy/config.json resource block */
+  /** Connect command from .daintree/config.json resource block */
   resourceConnectCommand?: string;
 
   /** Whether this worktree's project has a resource config block */

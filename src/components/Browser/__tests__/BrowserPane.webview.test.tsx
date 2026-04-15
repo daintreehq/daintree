@@ -512,7 +512,7 @@ describe("BrowserPane webview lifecycle regression", () => {
 
       await act(async () => {
         window.dispatchEvent(
-          new CustomEvent("canopy:browser-capture-screenshot", {
+          new CustomEvent("daintree:browser-capture-screenshot", {
             detail: { id: "browser-panel-1" },
           })
         );
@@ -534,7 +534,7 @@ describe("BrowserPane webview lifecycle regression", () => {
 
       await act(async () => {
         window.dispatchEvent(
-          new CustomEvent("canopy:browser-capture-screenshot", {
+          new CustomEvent("daintree:browser-capture-screenshot", {
             detail: { id: "browser-panel-1" },
           })
         );
@@ -559,7 +559,7 @@ describe("BrowserPane webview lifecycle regression", () => {
 
       await act(async () => {
         window.dispatchEvent(
-          new CustomEvent("canopy:browser-capture-screenshot", {
+          new CustomEvent("daintree:browser-capture-screenshot", {
             detail: { id: "browser-panel-1" },
           })
         );
@@ -621,7 +621,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       // User navigates before any dom-ready fires
       act(() => {
         window.dispatchEvent(
-          new CustomEvent("canopy:browser-navigate", {
+          new CustomEvent("daintree:browser-navigate", {
             detail: { id: "browser-panel-1", url: "http://localhost:9999" },
           })
         );

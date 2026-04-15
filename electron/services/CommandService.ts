@@ -1,10 +1,10 @@
 /**
  * Command registry and execution service.
- * Manages registration, retrieval, and execution of Canopy commands.
+ * Manages registration, retrieval, and execution of Daintree commands.
  */
 
 import type {
-  CanopyCommand,
+  DaintreeCommand,
   CommandContext,
   CommandManifestEntry,
   CommandResult,
@@ -17,7 +17,7 @@ import { substituteTemplateVariables } from "../../shared/utils/promptTemplate.j
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 class CommandServiceImpl {
-  private commands = new Map<string, CanopyCommand>();
+  private commands = new Map<string, DaintreeCommand>();
 
   /**
    * Load command overrides for a project.
@@ -44,12 +44,12 @@ class CommandServiceImpl {
    * @throws Error if command with same ID is already registered
    */
   register<TArgs = Record<string, unknown>, TResult = unknown>(
-    command: CanopyCommand<TArgs, TResult>
+    command: DaintreeCommand<TArgs, TResult>
   ): void {
     if (this.commands.has(command.id)) {
       throw new Error(`Command "${command.id}" is already registered`);
     }
-    this.commands.set(command.id, command as CanopyCommand);
+    this.commands.set(command.id, command as DaintreeCommand);
   }
 
   /**
@@ -64,7 +64,7 @@ class CommandServiceImpl {
    * Get a command by ID.
    * @returns The command or undefined if not found
    */
-  get(id: string): CanopyCommand | undefined {
+  get(id: string): DaintreeCommand | undefined {
     return this.commands.get(id);
   }
 
@@ -504,7 +504,7 @@ class CommandServiceImpl {
   /**
    * Get the builder configuration for a command.
    */
-  getBuilder(id: string): CanopyCommand["builder"] | undefined {
+  getBuilder(id: string): DaintreeCommand["builder"] | undefined {
     const command = this.commands.get(id);
     return command?.builder;
   }

@@ -23,7 +23,7 @@ interface MigratePayload {
   firstRunToastSeen: boolean;
 }
 
-const SKIP_E2E = process.env.CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS === "1";
+const SKIP_E2E = process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1";
 
 function getOnboardingState(): OnboardingState {
   if (SKIP_E2E) {
@@ -90,21 +90,25 @@ export function registerOnboardingHandlers(): () => void {
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_GET));
 
   ipcMain.handle(CHANNELS.ONBOARDING_MIGRATE, (_event, payload: unknown) => {
+    // TODO(0.9.0): Remove this temporary Canopy -> Daintree onboarding
+    // localStorage migration after the 0.8.x upgrade window closes.
     const state = getOnboardingState();
     if (state.migratedFromLocalStorage) return state;
 
-    const p = payload as MigratePayload;
+    const p = (payload ?? {}) as Partial<MigratePayload>;
     const telemetryState = store.get("telemetry");
     const telemetrySeen = telemetryState?.hasSeenPrompt ?? false;
+    const agentSelectionDismissed = p.agentSelectionDismissed === true;
+    const agentSetupComplete = p.agentSetupComplete === true;
+    const firstRunToastSeen = p.firstRunToastSeen === true;
 
-    const allPreviouslyComplete =
-      telemetrySeen && p.agentSelectionDismissed && p.agentSetupComplete;
+    const allPreviouslyComplete = telemetrySeen && agentSelectionDismissed && agentSetupComplete;
 
     const updated: OnboardingState = {
       ...state,
       completed: allPreviouslyComplete,
       currentStep: allPreviouslyComplete ? null : state.currentStep,
-      firstRunToastSeen: p.firstRunToastSeen || state.firstRunToastSeen,
+      firstRunToastSeen: firstRunToastSeen || state.firstRunToastSeen,
       migratedFromLocalStorage: true,
       checklist: allPreviouslyComplete
         ? {

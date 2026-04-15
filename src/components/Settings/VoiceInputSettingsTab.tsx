@@ -184,7 +184,7 @@ export function VoiceInputSettingsTab() {
   if (loadState === "loading") {
     return (
       <div className="flex items-center justify-center h-32">
-        <div className="text-canopy-text/60 text-sm">Loading voice input settings...</div>
+        <div className="text-daintree-text/60 text-sm">Loading voice input settings...</div>
       </div>
     );
   }
@@ -193,7 +193,7 @@ export function VoiceInputSettingsTab() {
     return (
       <div className="flex flex-col items-center justify-center h-32 gap-3">
         <div className="text-status-error text-sm">Could not load voice input settings.</div>
-        <p className="text-xs text-canopy-text/50">Restart Canopy and try again.</p>
+        <p className="text-xs text-daintree-text/50">Restart Daintree and try again.</p>
       </div>
     );
   }
@@ -343,7 +343,7 @@ export function VoiceInputSettingsTab() {
 
                   <CorePromptViewer />
 
-                  <p className="text-xs text-canopy-text/40">
+                  <p className="text-xs text-daintree-text/40">
                     Your project name and custom dictionary are included automatically. Prompt
                     caching keeps costs minimal.
                   </p>
@@ -423,8 +423,8 @@ function ApiKeyRow({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <label className="text-sm text-canopy-text/70 flex items-center gap-2">
-          <Key className="w-3.5 h-3.5 text-canopy-text/50" aria-hidden="true" />
+        <label className="text-sm text-daintree-text/70 flex items-center gap-2">
+          <Key className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
           {label}
         </label>
         <div className="flex items-center gap-2">
@@ -436,7 +436,7 @@ function ApiKeyRow({
           ) : (
             <button
               onClick={() => window.electron?.system?.openExternal(helpUrl)}
-              className="text-xs text-canopy-accent hover:underline flex items-center gap-1"
+              className="text-xs text-daintree-accent hover:underline flex items-center gap-1"
             >
               {helpLabel}
               <ExternalLink className="w-3 h-3" />
@@ -458,7 +458,7 @@ function ApiKeyRow({
               }
             }}
             placeholder={value ? "Enter new key to replace" : placeholder}
-            className="w-full bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors"
+            className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-daintree-text placeholder:text-text-muted focus:outline-none focus:border-daintree-accent transition-colors"
             autoComplete="new-password"
             spellCheck={false}
             disabled={validation === "testing"}
@@ -466,7 +466,7 @@ function ApiKeyRow({
           <button
             type="button"
             onClick={() => setShowKey((v) => !v)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-canopy-text/40 hover:text-canopy-text/70"
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-daintree-text/40 hover:text-daintree-text/70"
             aria-label={showKey ? "Hide API key" : "Show API key"}
           >
             {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
@@ -477,7 +477,7 @@ function ApiKeyRow({
           disabled={validation === "testing" || !keyInput.trim()}
           size="sm"
           variant="outline"
-          className="text-canopy-text border-canopy-border hover:bg-canopy-border"
+          className="text-daintree-text border-daintree-border hover:bg-daintree-border"
         >
           {validation === "testing" ? <Spinner size="sm" /> : "Save"}
         </Button>
@@ -486,7 +486,7 @@ function ApiKeyRow({
             onClick={handleClear}
             variant="outline"
             size="sm"
-            className="text-canopy-text/50 border-canopy-border hover:text-status-error hover:border-status-error/30"
+            className="text-daintree-text/50 border-daintree-border hover:text-status-error hover:border-status-error/30"
           >
             Clear
           </Button>
@@ -529,7 +529,7 @@ function MicPermissionRow({
   const ua = navigator.userAgent;
   const isMac = ua.includes("Mac OS X");
   const isWindows = ua.includes("Windows");
-  const appName = process.env.NODE_ENV === "development" ? "Electron" : "Canopy";
+  const appName = process.env.NODE_ENV === "development" ? "Electron" : "Daintree";
 
   const statusDisplay = (() => {
     switch (status) {
@@ -540,7 +540,7 @@ function MicPermissionRow({
           actions: (
             <button
               onClick={onRefresh}
-              className="text-xs text-canopy-text/40 hover:text-canopy-text/70 transition-colors"
+              className="text-xs text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
             >
               Re-check
             </button>
@@ -566,14 +566,14 @@ function MicPermissionRow({
             <div className="flex gap-2">
               <button
                 onClick={onOpenSettings}
-                className="text-xs text-canopy-accent hover:underline flex items-center gap-1"
+                className="text-xs text-daintree-accent hover:underline flex items-center gap-1"
               >
                 Open {settingsLabel}
                 <ExternalLink className="w-3 h-3" />
               </button>
               <button
                 onClick={onRefresh}
-                className="text-xs text-canopy-text/40 hover:text-canopy-text/70 transition-colors"
+                className="text-xs text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
               >
                 Re-check
               </button>
@@ -593,7 +593,7 @@ function MicPermissionRow({
                   variant="outline"
                   onClick={onRequest}
                   disabled={isRequesting}
-                  className="text-canopy-text border-canopy-border hover:bg-canopy-border"
+                  className="text-daintree-text border-daintree-border hover:bg-daintree-border"
                 >
                   {isRequesting ? (
                     <Spinner size="sm" />
@@ -610,13 +610,13 @@ function MicPermissionRow({
         };
       default:
         return {
-          dot: "bg-canopy-text/30",
+          dot: "bg-daintree-text/30",
           text: "Microphone status unknown",
           description: "Permission will be requested when you start recording.",
           actions: (
             <button
               onClick={onRefresh}
-              className="text-xs text-canopy-text/40 hover:text-canopy-text/70 transition-colors"
+              className="text-xs text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
             >
               Re-check
             </button>
@@ -629,15 +629,15 @@ function MicPermissionRow({
     <div className="space-y-1">
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2">
-          <Shield className="w-3.5 h-3.5 text-canopy-text/50" aria-hidden="true" />
-          <span className="text-sm text-canopy-text/70">Microphone</span>
+          <Shield className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
+          <span className="text-sm text-daintree-text/70">Microphone</span>
           <span className={cn("w-2 h-2 rounded-full shrink-0", statusDisplay.dot)} />
-          <span className="text-xs text-canopy-text/50">{statusDisplay.text}</span>
+          <span className="text-xs text-daintree-text/50">{statusDisplay.text}</span>
         </div>
         {statusDisplay.actions}
       </div>
       {statusDisplay.description && (
-        <p className="text-xs text-canopy-text/40 ml-[22px]">{statusDisplay.description}</p>
+        <p className="text-xs text-daintree-text/40 ml-[22px]">{statusDisplay.description}</p>
       )}
     </div>
   );
@@ -694,10 +694,10 @@ function DictionarySection({
 }) {
   return (
     <div className="space-y-2">
-      <label className="text-sm text-canopy-text/70 flex items-center gap-2">
-        <BookText className="w-3.5 h-3.5 text-canopy-text/50" aria-hidden="true" />
+      <label className="text-sm text-daintree-text/70 flex items-center gap-2">
+        <BookText className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
         Custom Dictionary
-        <span className="text-xs tabular-nums text-canopy-text/30">
+        <span className="text-xs tabular-nums text-daintree-text/30">
           {words.length > 0 && `${words.length}/100`}
         </span>
       </label>
@@ -715,14 +715,14 @@ function DictionarySection({
             }
           }}
           placeholder="Add term…"
-          className="flex-1 bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors"
+          className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-muted focus:outline-none focus:border-daintree-accent transition-colors"
         />
         <Button
           onClick={onAdd}
           disabled={!newWord.trim()}
           size="sm"
           variant="outline"
-          className="text-canopy-text border-canopy-border hover:bg-canopy-border"
+          className="text-daintree-text border-daintree-border hover:bg-daintree-border"
         >
           <Plus className="h-3.5 w-3.5" />
           Add
@@ -734,13 +734,13 @@ function DictionarySection({
           {words.map((word) => (
             <span
               key={word}
-              className="inline-flex items-center gap-1 rounded-full border border-canopy-border bg-canopy-bg px-2.5 py-0.5 text-xs text-canopy-text"
+              className="inline-flex items-center gap-1 rounded-full border border-daintree-border bg-daintree-bg px-2.5 py-0.5 text-xs text-daintree-text"
             >
               {word}
               <button
                 type="button"
                 onClick={() => onRemove(word)}
-                className="text-canopy-text/30 hover:text-canopy-text/70 transition-colors"
+                className="text-daintree-text/30 hover:text-daintree-text/70 transition-colors"
                 aria-label={`Remove ${word}`}
               >
                 <X className="h-2.5 w-2.5" />
@@ -749,7 +749,7 @@ function DictionarySection({
           ))}
         </div>
       ) : (
-        <p className="text-xs text-canopy-text/40 select-text">
+        <p className="text-xs text-daintree-text/40 select-text">
           Domain-specific terms sent to Deepgram to boost recognition accuracy.
         </p>
       )}
@@ -789,13 +789,13 @@ function CorePromptViewer() {
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-1.5 text-xs text-canopy-text/40 hover:text-canopy-text/60 transition-colors"
+        className="flex items-center gap-1.5 text-xs text-daintree-text/40 hover:text-daintree-text/60 transition-colors"
       >
         {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
         Inspect core prompt
       </button>
       {expanded && (
-        <pre className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text/50 whitespace-pre-wrap overflow-y-auto max-h-48 select-text">
+        <pre className="bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-daintree-text/50 whitespace-pre-wrap overflow-y-auto max-h-48 select-text">
           {CORE_CORRECTION_PROMPT}
         </pre>
       )}

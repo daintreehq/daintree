@@ -30,7 +30,7 @@ const LAUNCHER_CONFIG: Record<
   },
 };
 
-const toolbarIconButtonClass = "toolbar-icon-button text-canopy-text transition-colors";
+const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
 
 interface ToolbarLauncherButtonProps {
   type: LauncherType;

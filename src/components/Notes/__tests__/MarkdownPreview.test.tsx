@@ -54,9 +54,9 @@ describe("MarkdownPreview", () => {
     expect(mockOpenExternal).not.toHaveBeenCalled();
   });
 
-  it("applies prose-canopy class", () => {
+  it("applies prose-daintree class", () => {
     const { container } = render(<MarkdownPreview content="text" />);
-    expect(container.firstElementChild?.classList.contains("prose-canopy")).toBe(true);
+    expect(container.firstElementChild?.classList.contains("prose-daintree")).toBe(true);
   });
 
   it("forwards ref", () => {

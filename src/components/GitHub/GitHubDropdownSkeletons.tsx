@@ -59,14 +59,14 @@ export function GitHubResourceListSkeleton({
             )}
           >
             <Search
-              className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
+              className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none"
               aria-hidden="true"
             />
             <span className="flex-1 min-w-0 text-sm text-muted-foreground select-none">
               Search {type === "issue" ? "issues" : "pull requests"}...
             </span>
           </div>
-          <div className="flex items-center justify-center w-7 h-7 rounded shrink-0 text-canopy-text/60">
+          <div className="flex items-center justify-center w-7 h-7 rounded shrink-0 text-daintree-text/60">
             <Filter className="w-3.5 h-3.5" />
           </div>
         </div>
@@ -81,7 +81,7 @@ export function GitHubResourceListSkeleton({
               className={cn(
                 "flex-1 px-3 py-1 text-xs font-medium rounded text-center",
                 tab.id === "open"
-                  ? "bg-canopy-accent/10 text-canopy-accent"
+                  ? "bg-daintree-accent/10 text-daintree-accent"
                   : "text-muted-foreground"
               )}
             >

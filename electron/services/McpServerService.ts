@@ -14,9 +14,44 @@ import type { ActionManifestEntry, ActionDispatchResult } from "../../shared/typ
 import { store } from "../store.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 
-const DISCOVERY_DIR = path.join(os.homedir(), ".canopy");
+const DISCOVERY_DIR = path.join(os.homedir(), ".daintree");
+const LEGACY_DISCOVERY_DIR = path.join(os.homedir(), ".canopy");
 const DISCOVERY_FILE = path.join(DISCOVERY_DIR, "mcp.json");
-const MCP_SERVER_KEY = "canopy";
+const MCP_SERVER_KEY = "daintree";
+
+// TODO(0.9.0): Remove this temporary Canopy -> Daintree discovery-dir rename
+// after the 0.8.x migration window closes.
+// One-shot rebrand migration: rename ~/.canopy -> ~/.daintree if the new dir
+// doesn't exist yet and the old one does. Success and "nothing-to-do"
+// outcomes are cached; transient failures are not, so retries stay possible.
+let discoverySettled = false;
+async function migrateDiscoveryDir(): Promise<void> {
+  if (discoverySettled) return;
+  try {
+    await fs.access(DISCOVERY_DIR);
+    discoverySettled = true;
+    return;
+  } catch {
+    /* fall through */
+  }
+  try {
+    const stat = await fs.lstat(LEGACY_DISCOVERY_DIR);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      discoverySettled = true;
+      return;
+    }
+  } catch {
+    discoverySettled = true; // Legacy dir absent — nothing to do.
+    return;
+  }
+  try {
+    await fs.rename(LEGACY_DISCOVERY_DIR, DISCOVERY_DIR);
+    discoverySettled = true;
+    console.log(`[daintree] Migrated ${LEGACY_DISCOVERY_DIR} -> ${DISCOVERY_DIR}`);
+  } catch {
+    /* transient failure — leave uncached so writeDiscoveryFile() retries */
+  }
+}
 const DEFAULT_PORT = 45454;
 const MAX_PORT_RETRIES = 10;
 
@@ -125,7 +160,7 @@ export class McpServerService {
   }
 
   async generateApiKey(): Promise<string> {
-    const key = `canopy_${randomUUID().replace(/-/g, "")}`;
+    const key = `daintree_${randomUUID().replace(/-/g, "")}`;
     store.set("mcpServer", { ...this.getConfig(), apiKey: key });
     if (this.isRunning) {
       await this.writeDiscoveryFile();
@@ -384,7 +419,7 @@ export class McpServerService {
 
   private createSessionServer(): Server {
     const server = new Server(
-      { name: "Canopy", version: "1.0.0" },
+      { name: "Daintree", version: "1.0.0" },
       { capabilities: { tools: {} } }
     );
 
@@ -498,7 +533,7 @@ export class McpServerService {
 
     properties["_meta"] = {
       type: "object",
-      description: "Reserved Canopy MCP metadata.",
+      description: "Reserved Daintree MCP metadata.",
       properties: {
         confirmed: {
           type: "boolean",
@@ -615,6 +650,7 @@ export class McpServerService {
   private async writeDiscoveryFile(): Promise<void> {
     if (!this.port) return;
     try {
+      await migrateDiscoveryDir();
       await fs.mkdir(DISCOVERY_DIR, { recursive: true });
 
       let existing: Record<string, unknown> = {};

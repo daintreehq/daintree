@@ -21,19 +21,24 @@ function createMockSession() {
   };
 }
 
-const { defaultSession, browserSession, portalSession, canopyAppSession, sessionCreatedListeners } =
-  vi.hoisted(() => {
-    return {
-      defaultSession: createMockSession(),
-      browserSession: createMockSession(),
-      portalSession: createMockSession(),
-      canopyAppSession: createMockSession(),
-      sessionCreatedListeners: [] as Array<
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (ses: any) => void
-      >,
-    };
-  });
+const {
+  defaultSession,
+  browserSession,
+  portalSession,
+  daintreeAppSession,
+  sessionCreatedListeners,
+} = vi.hoisted(() => {
+  return {
+    defaultSession: createMockSession(),
+    browserSession: createMockSession(),
+    portalSession: createMockSession(),
+    daintreeAppSession: createMockSession(),
+    sessionCreatedListeners: [] as Array<
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (ses: any) => void
+    >,
+  };
+});
 
 vi.mock("electron", () => ({
   app: {
@@ -57,7 +62,7 @@ vi.mock("electron", () => ({
     fromPartition: vi.fn((partition: string) => {
       if (partition === "persist:browser") return browserSession;
       if (partition === "persist:portal") return portalSession;
-      if (partition === "persist:canopy-app") return canopyAppSession;
+      if (partition === "persist:daintree") return daintreeAppSession;
       return createMockSession();
     }),
   },
@@ -100,7 +105,7 @@ describe("setupPermissionLockdown", () => {
     _resetPermissionLockdownForTesting();
   });
 
-  it("configures handlers on default, browser, portal, and canopy-app sessions", () => {
+  it("configures handlers on default, browser, portal, and daintree-app sessions", () => {
     setupPermissionLockdown();
 
     expect(defaultSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
@@ -109,8 +114,8 @@ describe("setupPermissionLockdown", () => {
     expect(browserSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
     expect(portalSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
     expect(portalSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
-    expect(canopyAppSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
-    expect(canopyAppSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
+    expect(daintreeAppSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
+    expect(daintreeAppSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
   });
 
   describe("default session (trusted)", () => {
@@ -159,25 +164,27 @@ describe("setupPermissionLockdown", () => {
     it("check handler allows trusted permissions", () => {
       setupPermissionLockdown();
       const handler = getCheckHandler(defaultSession);
-      expect(handler(mockWebContents, "clipboard-read", "app://canopy", {})).toBe(true);
-      expect(handler(mockWebContents, "clipboard-sanitized-write", "app://canopy", {})).toBe(true);
-      expect(handler(mockWebContents, "media", "app://canopy", {})).toBe(true);
+      expect(handler(mockWebContents, "clipboard-read", "app://daintree", {})).toBe(true);
+      expect(handler(mockWebContents, "clipboard-sanitized-write", "app://daintree", {})).toBe(
+        true
+      );
+      expect(handler(mockWebContents, "media", "app://daintree", {})).toBe(true);
     });
 
     it("check handler denies untrusted permissions", () => {
       setupPermissionLockdown();
       const handler = getCheckHandler(defaultSession);
-      expect(handler(mockWebContents, "geolocation", "app://canopy", {})).toBe(false);
-      expect(handler(mockWebContents, "midi", "app://canopy", {})).toBe(false);
-      expect(handler(mockWebContents, "serial", "app://canopy", {})).toBe(false);
-      expect(handler(mockWebContents, "hid", "app://canopy", {})).toBe(false);
+      expect(handler(mockWebContents, "geolocation", "app://daintree", {})).toBe(false);
+      expect(handler(mockWebContents, "midi", "app://daintree", {})).toBe(false);
+      expect(handler(mockWebContents, "serial", "app://daintree", {})).toBe(false);
+      expect(handler(mockWebContents, "hid", "app://daintree", {})).toBe(false);
     });
 
     it("check handler works when webContents is null", () => {
       setupPermissionLockdown();
       const handler = getCheckHandler(defaultSession);
-      expect(handler(null, "clipboard-read", "app://canopy", {})).toBe(true);
-      expect(handler(null, "geolocation", "app://canopy", {})).toBe(false);
+      expect(handler(null, "clipboard-read", "app://daintree", {})).toBe(true);
+      expect(handler(null, "geolocation", "app://daintree", {})).toBe(false);
     });
   });
 
@@ -238,10 +245,10 @@ describe("setupPermissionLockdown", () => {
     });
   });
 
-  describe("canopy-app session (trusted)", () => {
+  describe("daintree-app session (trusted)", () => {
     it("allows clipboard-read, clipboard-sanitized-write, and media", () => {
       setupPermissionLockdown();
-      const handler = getRequestHandler(canopyAppSession);
+      const handler = getRequestHandler(daintreeAppSession);
       expect(testPermissionRequest(handler, "clipboard-read")).toBe(true);
       expect(testPermissionRequest(handler, "clipboard-sanitized-write")).toBe(true);
       expect(testPermissionRequest(handler, "media")).toBe(true);
@@ -249,7 +256,7 @@ describe("setupPermissionLockdown", () => {
 
     it("denies untrusted permissions", () => {
       setupPermissionLockdown();
-      const handler = getRequestHandler(canopyAppSession);
+      const handler = getRequestHandler(daintreeAppSession);
       expect(testPermissionRequest(handler, "geolocation")).toBe(false);
       expect(testPermissionRequest(handler, "notifications")).toBe(false);
       expect(testPermissionRequest(handler, "fileSystem")).toBe(false);
@@ -257,10 +264,10 @@ describe("setupPermissionLockdown", () => {
 
     it("check handler grants trusted and denies untrusted", () => {
       setupPermissionLockdown();
-      const handler = getCheckHandler(canopyAppSession);
-      expect(handler(mockWebContents, "clipboard-read", "app://canopy", {})).toBe(true);
-      expect(handler(mockWebContents, "media", "app://canopy", {})).toBe(true);
-      expect(handler(mockWebContents, "geolocation", "app://canopy", {})).toBe(false);
+      const handler = getCheckHandler(daintreeAppSession);
+      expect(handler(mockWebContents, "clipboard-read", "app://daintree", {})).toBe(true);
+      expect(handler(mockWebContents, "media", "app://daintree", {})).toBe(true);
+      expect(handler(mockWebContents, "geolocation", "app://daintree", {})).toBe(false);
     });
   });
 
@@ -303,17 +310,17 @@ describe("setupPermissionLockdown", () => {
       expect(testPermissionRequest(handler, "clipboard-read")).toBe(false);
     });
 
-    it("does not double-lock canopy-app partition via session-created (eagerly locked)", () => {
+    it("does not double-lock daintree-app partition via session-created (eagerly locked)", () => {
       setupPermissionLockdown();
-      const dynamicCanopySession = createMockSession();
-      Object.defineProperty(dynamicCanopySession, "partition", {
-        value: "persist:canopy-app",
+      const dynamicDaintreeSession = createMockSession();
+      Object.defineProperty(dynamicDaintreeSession, "partition", {
+        value: "persist:daintree",
       });
 
-      sessionCreatedListeners[0](dynamicCanopySession);
+      sessionCreatedListeners[0](dynamicDaintreeSession);
 
-      expect(dynamicCanopySession.setPermissionRequestHandler).not.toHaveBeenCalled();
-      expect(dynamicCanopySession.setPermissionCheckHandler).not.toHaveBeenCalled();
+      expect(dynamicDaintreeSession.setPermissionRequestHandler).not.toHaveBeenCalled();
+      expect(dynamicDaintreeSession.setPermissionCheckHandler).not.toHaveBeenCalled();
     });
 
     it("handles sessions with missing partition property", () => {
@@ -390,7 +397,7 @@ describe("setupPermissionLockdown", () => {
       setupPermissionLockdown();
 
       const handler = getRequestHandler(defaultSession);
-      testPermissionRequest(handler, "clipboard-read", "app://canopy");
+      testPermissionRequest(handler, "clipboard-read", "app://daintree");
 
       expect(warnSpy).not.toHaveBeenCalled();
       warnSpy.mockRestore();
@@ -401,7 +408,7 @@ describe("setupPermissionLockdown", () => {
       setupPermissionLockdown();
 
       const handler = getCheckHandler(defaultSession);
-      handler(mockWebContents, "clipboard-read", "app://canopy", {});
+      handler(mockWebContents, "clipboard-read", "app://daintree", {});
 
       expect(warnSpy).not.toHaveBeenCalled();
       warnSpy.mockRestore();

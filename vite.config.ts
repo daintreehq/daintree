@@ -19,8 +19,8 @@ const DEV_CSP = [
   `script-src 'self' ${devServerOrigins.join(" ")} 'unsafe-eval'`,
   `style-src 'self' ${devServerOrigins.join(" ")} 'unsafe-inline'`,
   "font-src 'self' data:",
-  `connect-src 'self' ${devServerOrigins.join(" ")} ${devServerWebSocketOrigins.join(" ")} canopy-file:`,
-  `img-src 'self' ${devServerOrigins.join(" ")} https://avatars.githubusercontent.com canopy-file: data:`,
+  `connect-src 'self' ${devServerOrigins.join(" ")} ${devServerWebSocketOrigins.join(" ")} daintree-file:`,
+  `img-src 'self' ${devServerOrigins.join(" ")} https://avatars.githubusercontent.com daintree-file: data:`,
   "frame-src 'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
 ].join("; ");
 
@@ -29,8 +29,8 @@ const PROD_CSP = [
   "script-src 'self' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
-  "connect-src 'self' canopy-file:",
-  "img-src 'self' https://avatars.githubusercontent.com canopy-file: data: blob:",
+  "connect-src 'self' daintree-file:",
+  "img-src 'self' https://avatars.githubusercontent.com daintree-file: data: blob:",
   "frame-src 'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
   "worker-src 'self' blob:",
   "object-src 'none'",
@@ -61,7 +61,7 @@ function cspTransformPlugin(): Plugin {
 }
 
 export default defineConfig(({ mode }) => ({
-  envPrefix: ["VITE_", "CANOPY_"],
+  envPrefix: ["VITE_", "DAINTREE_"],
   plugins: [
     react(),
     babel({

@@ -101,10 +101,10 @@ const SortableTab = memo(function SortableTab({
             "group relative flex items-center gap-2 px-3 py-1.5 text-xs font-medium cursor-pointer select-none transition",
             "rounded-full border shadow-[var(--theme-shadow-ambient)]",
             "min-w-[80px] max-w-[200px]",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
             isActive
-              ? "bg-tint/[0.08] text-canopy-text border-canopy-accent/40 ring-1 ring-inset ring-canopy-accent/30"
-              : "bg-overlay-subtle text-canopy-text/70 border-divider hover:bg-overlay-medium hover:text-canopy-text",
+              ? "bg-tint/[0.08] text-daintree-text border-daintree-accent/40 ring-1 ring-inset ring-daintree-accent/30"
+              : "bg-overlay-subtle text-daintree-text/70 border-divider hover:bg-overlay-medium hover:text-daintree-text",
             isDragging &&
               "opacity-80 scale-105 shadow-[var(--theme-shadow-floating)] cursor-grabbing"
           )}
@@ -125,8 +125,8 @@ const SortableTab = memo(function SortableTab({
             className={cn(
               "p-0.5 rounded-full transition-colors ml-1",
               isActive
-                ? "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/[0.06]"
-                : "text-canopy-text/40 hover:text-canopy-text hover:bg-tint/[0.06] opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                ? "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]"
+                : "text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
             )}
           >
             <X className="w-3 h-3" />
@@ -231,7 +231,7 @@ export function PortalToolbar({
   };
 
   return (
-    <div className="flex flex-col bg-canopy-bg border-b border-canopy-border">
+    <div className="flex flex-col bg-daintree-bg border-b border-daintree-border">
       {/* Top Row: Navigation Controls */}
       <div className="flex items-center justify-between px-2 py-1.5">
         <div className="flex items-center gap-0.5">
@@ -242,7 +242,7 @@ export function PortalToolbar({
                   onClick={onGoBack}
                   disabled={!activeTabId}
                   aria-label="Go back"
-                  className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <ArrowLeft className="w-3.5 h-3.5" />
                 </button>
@@ -257,7 +257,7 @@ export function PortalToolbar({
                   onClick={onGoForward}
                   disabled={!activeTabId}
                   aria-label="Go forward"
-                  className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
@@ -272,7 +272,7 @@ export function PortalToolbar({
                   onClick={onReload}
                   disabled={!activeTabId}
                   aria-label="Reload"
-                  className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <RotateCw className="w-3.5 h-3.5" />
                 </button>
@@ -287,7 +287,7 @@ export function PortalToolbar({
                   onClick={onCopyUrl}
                   disabled={!activeTabId || !hasActiveUrl}
                   aria-label="Copy URL"
-                  className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Link2 className="w-3.5 h-3.5" />
                 </button>
@@ -302,7 +302,7 @@ export function PortalToolbar({
                   onClick={onOpenExternal}
                   disabled={!activeTabId || !hasActiveUrl}
                   aria-label="Open in external browser"
-                  className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                 </button>
@@ -319,7 +319,7 @@ export function PortalToolbar({
                 <button
                   onClick={onClose}
                   aria-label="Close portal"
-                  className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-canopy-text transition-colors ml-1"
+                  className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors ml-1"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -389,7 +389,7 @@ export function PortalToolbar({
                           defaultNewTabUrl,
                         });
                       }}
-                      className="flex items-center justify-center w-8 h-[26px] rounded-full bg-overlay-subtle hover:bg-overlay-soft text-canopy-text/70 hover:text-canopy-text border border-divider transition"
+                      className="flex items-center justify-center w-8 h-[26px] rounded-full bg-overlay-subtle hover:bg-overlay-soft text-daintree-text/70 hover:text-daintree-text border border-divider transition"
                       aria-label="New Tab"
                       aria-haspopup="menu"
                     >

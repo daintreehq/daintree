@@ -11,7 +11,7 @@ describe("readInRepoProjectIdentity", () => {
   let identityFiles: ProjectIdentityFiles;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-test-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-test-"));
     identityFiles = new ProjectIdentityFiles();
   });
 
@@ -20,7 +20,7 @@ describe("readInRepoProjectIdentity", () => {
   });
 
   async function writeProjectJson(content: string): Promise<void> {
-    const dir = path.join(tmpDir, ".canopy");
+    const dir = path.join(tmpDir, ".daintree");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "project.json"), content, "utf-8");
   }

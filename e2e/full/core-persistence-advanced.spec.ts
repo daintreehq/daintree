@@ -20,7 +20,7 @@ test.describe.serial("Persistence: Layout & Window across restart", () => {
   let ctx: AppContext | null = null;
 
   test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-persist-layout-"));
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-persist-layout-"));
     fixtureDir = createFixtureRepo({ name: "persist-layout" });
   });
 
@@ -110,7 +110,7 @@ test.describe.serial("Persistence: Theme, Notifications & Keybindings across res
   let ctx: AppContext | null = null;
 
   test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-persist-global-"));
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-persist-global-"));
   });
 
   test.afterAll(async () => {

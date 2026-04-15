@@ -37,9 +37,9 @@ const TabButton = memo(function TabButton({
       onClick={onClick}
       className={cn(
         "px-3 py-1.5 text-sm font-medium transition-colors relative rounded",
-        "hover:text-canopy-text hover:bg-overlay-soft",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2 focus-visible:ring-offset-canopy-sidebar",
-        isActive ? "text-canopy-text" : "text-canopy-text/65"
+        "hover:text-daintree-text hover:bg-overlay-soft",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2 focus-visible:ring-offset-daintree-sidebar",
+        isActive ? "text-daintree-text" : "text-daintree-text/65"
       )}
       role="tab"
       aria-selected={isActive}
@@ -51,7 +51,7 @@ const TabButton = memo(function TabButton({
           {badge}
         </span>
       )}
-      {isActive && <div className="absolute bottom-0 left-0 right-0 h-px bg-canopy-accent/70" />}
+      {isActive && <div className="absolute bottom-0 left-0 right-0 h-px bg-daintree-accent/70" />}
     </button>
   );
 });
@@ -182,8 +182,8 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       <div
         className={cn(
           "group h-3 cursor-ns-resize transition-colors flex items-center justify-center",
-          "hover:bg-overlay-soft focus-visible:outline-none focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
-          isResizing && "bg-canopy-accent/20"
+          "hover:bg-overlay-soft focus-visible:outline-none focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-daintree-accent/50",
+          isResizing && "bg-daintree-accent/20"
         )}
         onMouseDown={handleResizeStart}
         onKeyDown={handleKeyDown}
@@ -198,14 +198,14 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
         <div
           className={cn(
             "w-10 h-px rounded-full transition-[height] duration-150 delay-100 group-hover:h-0.5",
-            "bg-canopy-text/15",
-            "group-hover:bg-canopy-text/30 group-focus-visible:bg-canopy-accent",
-            isResizing && "bg-canopy-accent"
+            "bg-daintree-text/15",
+            "group-hover:bg-daintree-text/30 group-focus-visible:bg-daintree-accent",
+            isResizing && "bg-daintree-accent"
           )}
         />
       </div>
 
-      <div className="flex items-center justify-between px-4 h-10 border-b border-[var(--dock-border)] bg-canopy-sidebar/50 shrink-0">
+      <div className="flex items-center justify-between px-4 h-10 border-b border-[var(--dock-border)] bg-daintree-sidebar/50 shrink-0">
         <div className="flex items-center gap-2" role="tablist" aria-label="Diagnostics tabs">
           {tabs.map((tab) => (
             <TabButton
@@ -229,7 +229,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
               <TooltipTrigger asChild>
                 <button
                   onClick={closeDock}
-                  className="p-1.5 hover:bg-tint/[0.06] rounded-[var(--radius-md)] transition-colors text-canopy-text/60 hover:text-canopy-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                  className="p-1.5 hover:bg-tint/[0.06] rounded-[var(--radius-md)] transition-colors text-daintree-text/60 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
                   aria-label="Close diagnostics dock"
                 >
                   <X className="w-4 h-4" />

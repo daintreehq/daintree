@@ -14,7 +14,7 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
 
   // Fallback: render simple background if terminal data unavailable
   if (!activeTerminal) {
-    return <div className={cn("h-full rounded-[var(--radius-lg)] bg-canopy-bg/50", className)} />;
+    return <div className={cn("h-full rounded-[var(--radius-lg)] bg-daintree-bg/50", className)} />;
   }
 
   const { title, type, kind, agentId, detectedProcessId } = activeTerminal;
@@ -23,7 +23,7 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
     <div
       className={cn(
         "h-full w-full rounded flex flex-col overflow-hidden",
-        "border border-canopy-accent/40 bg-canopy-accent/5",
+        "border border-daintree-accent/40 bg-daintree-accent/5",
         "animate-in fade-in duration-200",
         className
       )}
@@ -33,10 +33,10 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
       <div
         className={cn(
           "flex items-center gap-2 px-3 h-7 shrink-0 font-mono text-xs",
-          "bg-canopy-accent/10 border-b border-canopy-accent/10"
+          "bg-daintree-accent/10 border-b border-daintree-accent/10"
         )}
       >
-        <span className="shrink-0 flex items-center justify-center text-canopy-accent/80">
+        <span className="shrink-0 flex items-center justify-center text-daintree-accent/80">
           <TerminalIcon
             type={type}
             kind={kind}
@@ -45,7 +45,7 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
             className="w-3.5 h-3.5"
           />
         </span>
-        <span className="font-medium text-canopy-accent/80 truncate opacity-80">{title}</span>
+        <span className="font-medium text-daintree-accent/80 truncate opacity-80">{title}</span>
       </div>
 
       {/* Panel-specific placeholder body */}

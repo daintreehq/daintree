@@ -26,7 +26,7 @@ interface AppConfigReloadListenerState {
   subscribed: boolean;
 }
 
-const APP_CONFIG_RELOAD_LISTENER_STATE_KEY = "__canopyAppConfigReloadListenerState";
+const APP_CONFIG_RELOAD_LISTENER_STATE_KEY = "__daintreeAppConfigReloadListenerState";
 
 function getAppConfigReloadListenerState(): AppConfigReloadListenerState {
   const target = globalThis as typeof globalThis & {
@@ -49,7 +49,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
   actions.set("app.newWindow", () => ({
     id: "app.newWindow",
     title: "New Window",
-    description: "Open a new Canopy window",
+    description: "Open a new Daintree window",
     category: "app",
     kind: "command",
     danger: "safe",
@@ -136,7 +136,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      window.dispatchEvent(new CustomEvent("canopy:open-theme-palette"));
+      window.dispatchEvent(new CustomEvent("daintree:open-theme-palette"));
     },
   }));
 

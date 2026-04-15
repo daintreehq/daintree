@@ -35,15 +35,15 @@ function RecipeListItem({
         onClick={onClick}
         className={cn(
           "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] border flex items-center gap-2",
-          "border-canopy-border/40 hover:border-canopy-border/60",
-          "bg-canopy-bg hover:bg-surface transition-colors",
-          isSelected && "border-canopy-accent/60 bg-canopy-accent/10"
+          "border-daintree-border/40 hover:border-daintree-border/60",
+          "bg-daintree-bg hover:bg-surface transition-colors",
+          isSelected && "border-daintree-accent/60 bg-daintree-accent/10"
         )}
         aria-selected={isSelected}
         role="option"
       >
-        <Settings2 className="w-4 h-4 text-canopy-text/50" />
-        <span className="text-sm text-canopy-text/70">Customize…</span>
+        <Settings2 className="w-4 h-4 text-daintree-text/50" />
+        <span className="text-sm text-daintree-text/70">Customize…</span>
       </button>
     );
   }
@@ -61,27 +61,27 @@ function RecipeListItem({
       onClick={onClick}
       className={cn(
         "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] border flex flex-col gap-0.5",
-        "border-canopy-border/40 hover:border-canopy-border/60",
-        "bg-canopy-bg hover:bg-surface transition-colors",
-        isSelected && "border-canopy-accent/60 bg-canopy-accent/10"
+        "border-daintree-border/40 hover:border-daintree-border/60",
+        "bg-daintree-bg hover:bg-surface transition-colors",
+        isSelected && "border-daintree-accent/60 bg-daintree-accent/10"
       )}
       aria-selected={isSelected}
       role="option"
     >
       <div className="flex items-center justify-between text-sm">
-        <span className="font-medium text-canopy-text">{recipe.name}</span>
+        <span className="font-medium text-daintree-text">{recipe.name}</span>
         <div className="flex items-center gap-1">
           {uniqueTypes.map((type) => (
             <span
               key={type}
-              className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-canopy-accent/10 text-canopy-text/60 text-[11px]"
+              className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-daintree-accent/10 text-daintree-text/60 text-[11px]"
             >
               {type}
             </span>
           ))}
         </div>
       </div>
-      <div className="text-[11px] text-canopy-text/50">
+      <div className="text-[11px] text-daintree-text/50">
         {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
       </div>
     </button>
@@ -135,13 +135,13 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
       totalResults={palette.totalResults}
       afterList={
         showAssignToggle ? (
-          <div className="px-3 py-2 border-t border-canopy-border/40">
-            <label className="flex items-center gap-2 cursor-pointer text-sm text-canopy-text/70">
+          <div className="px-3 py-2 border-t border-daintree-border/40">
+            <label className="flex items-center gap-2 cursor-pointer text-sm text-daintree-text/70">
               <input
                 type="checkbox"
                 checked={palette.assignToSelf}
                 onChange={(e) => palette.setAssignToSelf(e.target.checked)}
-                className="w-3.5 h-3.5 rounded border-canopy-border bg-canopy-bg checked:bg-canopy-accent"
+                className="w-3.5 h-3.5 rounded border-daintree-border bg-daintree-bg checked:bg-daintree-accent"
               />
               Assign issue to me
             </label>
@@ -149,15 +149,15 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
         ) : undefined
       }
       footer={
-        <div className="flex items-center gap-3 text-xs text-canopy-text/40">
+        <div className="flex items-center gap-3 text-xs text-daintree-text/40">
           <span>
-            <kbd className="px-1 py-0.5 rounded bg-canopy-bg border border-canopy-border/40 text-[11px]">
+            <kbd className="px-1 py-0.5 rounded bg-daintree-bg border border-daintree-border/40 text-[11px]">
               ↵
             </kbd>{" "}
             {palette.isPending ? "Creating…" : "Create"}
           </span>
           <span>
-            <kbd className="px-1 py-0.5 rounded bg-canopy-bg border border-canopy-border/40 text-[11px]">
+            <kbd className="px-1 py-0.5 rounded bg-daintree-bg border border-daintree-border/40 text-[11px]">
               Esc
             </kbd>{" "}
             Cancel

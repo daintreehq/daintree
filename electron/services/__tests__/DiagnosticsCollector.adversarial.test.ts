@@ -22,7 +22,7 @@ const shared = vi.hoisted(() => ({
 vi.mock("electron", () => ({
   app: {
     getVersion: vi.fn(() => "1.0.0"),
-    getName: vi.fn(() => "Canopy"),
+    getName: vi.fn(() => "Daintree"),
     getPath: vi.fn((name: string) => `/paths/${name}`),
     getAppPath: vi.fn(() => "/app"),
     getGPUFeatureStatus: vi.fn(() => ({ webgl: "enabled" })),
@@ -254,7 +254,7 @@ describe("DiagnosticsCollector adversarial", () => {
     };
 
     expect(payload.tools).toEqual({ error: "timed out" });
-    expect(payload.metadata.appName).toBe("Canopy");
+    expect(payload.metadata.appName).toBe("Daintree");
   });
 
   it("EVENT_BUFFER_THROW_CONTAINED", async () => {

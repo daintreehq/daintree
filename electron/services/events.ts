@@ -27,7 +27,7 @@ export interface EventMetadata {
  * Metadata mapping for all event types.
  * Single source of truth for event categorization and validation requirements.
  */
-export const EVENT_META: Record<keyof CanopyEventMap, EventMetadata> = {
+export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
   // System events
   "sys:ready": {
     category: "system",
@@ -323,12 +323,12 @@ export const EVENT_META: Record<keyof CanopyEventMap, EventMetadata> = {
   },
 };
 
-export function getEventCategory(eventType: keyof CanopyEventMap): EventCategory {
+export function getEventCategory(eventType: keyof DaintreeEventMap): EventCategory {
   return EVENT_META[eventType]?.category ?? "system";
 }
 
-export function getEventTypesForCategory(category: EventCategory): Array<keyof CanopyEventMap> {
-  return (Object.keys(EVENT_META) as Array<keyof CanopyEventMap>).filter(
+export function getEventTypesForCategory(category: EventCategory): Array<keyof DaintreeEventMap> {
+  return (Object.keys(EVENT_META) as Array<keyof DaintreeEventMap>).filter(
     (key) => EVENT_META[key].category === category
   );
 }
@@ -341,11 +341,11 @@ export type WithBase<T> = T & BaseEventPayload;
  */
 export type WithContext<T> = T & BaseEventPayload;
 
-export type SystemEventType = Extract<keyof CanopyEventMap, `sys:${string}`>;
-export type AgentEventType = Extract<keyof CanopyEventMap, `agent:${string}`>;
-export type TaskEventType = Extract<keyof CanopyEventMap, `task:${string}`>;
-export type FileEventType = Extract<keyof CanopyEventMap, `file:${string}`>;
-export type UIEventType = Extract<keyof CanopyEventMap, `ui:${string}`>;
+export type SystemEventType = Extract<keyof DaintreeEventMap, `sys:${string}`>;
+export type AgentEventType = Extract<keyof DaintreeEventMap, `agent:${string}`>;
+export type TaskEventType = Extract<keyof DaintreeEventMap, `task:${string}`>;
+export type FileEventType = Extract<keyof DaintreeEventMap, `file:${string}`>;
+export type UIEventType = Extract<keyof DaintreeEventMap, `ui:${string}`>;
 
 export type ModalId = "worktree" | "command-palette";
 export interface ModalContextMap {
@@ -429,7 +429,7 @@ export interface WorktreeSelectByNamePayload {
   query: string;
 }
 
-export type CanopyEventMap = {
+export type DaintreeEventMap = {
   "sys:ready": { cwd: string };
   "sys:refresh": void;
   "sys:quit": void;
@@ -756,11 +756,11 @@ export const BRIDGED_EVENT_TYPES = [
   "terminal:state-changed",
   "agent:completed",
   "agent:killed",
-] as const satisfies ReadonlyArray<keyof CanopyEventMap>;
+] as const satisfies ReadonlyArray<keyof DaintreeEventMap>;
 
 export type BridgedEventType = (typeof BRIDGED_EVENT_TYPES)[number];
 
-export const ALL_EVENT_TYPES: Array<keyof CanopyEventMap> = [
+export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "sys:ready",
   "sys:refresh",
   "sys:quit",
@@ -812,15 +812,15 @@ export const ALL_EVENT_TYPES: Array<keyof CanopyEventMap> = [
 export class TypedEventBus {
   private bus = new EventEmitter();
 
-  private debugEnabled = process.env.CANOPY_DEBUG_EVENTS === "1";
+  private debugEnabled = process.env.DAINTREE_DEBUG_EVENTS === "1";
 
   constructor() {
     this.bus.setMaxListeners(100);
   }
 
-  on<K extends keyof CanopyEventMap>(
+  on<K extends keyof DaintreeEventMap>(
     event: K,
-    listener: CanopyEventMap[K] extends void ? () => void : (payload: CanopyEventMap[K]) => void
+    listener: DaintreeEventMap[K] extends void ? () => void : (payload: DaintreeEventMap[K]) => void
   ) {
     this.bus.on(event, listener as (...args: any[]) => void);
     return () => {
@@ -828,16 +828,16 @@ export class TypedEventBus {
     };
   }
 
-  off<K extends keyof CanopyEventMap>(
+  off<K extends keyof DaintreeEventMap>(
     event: K,
-    listener: CanopyEventMap[K] extends void ? () => void : (payload: CanopyEventMap[K]) => void
+    listener: DaintreeEventMap[K] extends void ? () => void : (payload: DaintreeEventMap[K]) => void
   ) {
     this.bus.off(event, listener as (...args: any[]) => void);
   }
 
-  emit<K extends keyof CanopyEventMap>(
+  emit<K extends keyof DaintreeEventMap>(
     event: K,
-    ...args: CanopyEventMap[K] extends void ? [] : [CanopyEventMap[K]]
+    ...args: DaintreeEventMap[K] extends void ? [] : [DaintreeEventMap[K]]
   ) {
     if (this.debugEnabled) {
       console.log("[events]", event, args[0]);

@@ -2,6 +2,6 @@ sandbox = "full"
 writable_roots = []
 allowed_commands = ["gh"]
 
-[mcp_servers.canopy-docs]
-url = "https://canopyide.com/api/mcp"
+[mcp_servers.daintree-docs]
+url = "https://daintree.org/api/mcp"
 enabled = true

@@ -8,7 +8,7 @@ import {
   DEFAULT_DANGEROUS_ARGS,
 } from "@shared/types";
 import { RotateCcw, ExternalLink } from "lucide-react";
-import { CanopyAgentIcon } from "@/components/icons";
+import { DaintreeAgentIcon } from "@/components/icons";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
@@ -111,7 +111,7 @@ export function AgentSettings({
 
   if (agentOptions.length === 0) {
     return (
-      <div className="text-sm text-canopy-text/60">
+      <div className="text-sm text-daintree-text/60">
         No agents registered. Add agents to the registry to configure them here.
       </div>
     );
@@ -124,7 +124,7 @@ export function AgentSettings({
           <div className="text-status-error text-sm">Settings load timed out</div>
           <button
             onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
-            className="text-xs px-3 py-1.5 bg-canopy-accent/10 hover:bg-canopy-accent/20 text-canopy-accent rounded transition-colors"
+            className="text-xs px-3 py-1.5 bg-daintree-accent/10 hover:bg-daintree-accent/20 text-daintree-accent rounded transition-colors"
           >
             Reload Application
           </button>
@@ -133,7 +133,7 @@ export function AgentSettings({
     }
     return (
       <div className="flex items-center justify-center h-32">
-        <div className="text-canopy-text/60 text-sm">Loading settings...</div>
+        <div className="text-daintree-text/60 text-sm">Loading settings...</div>
       </div>
     );
   }
@@ -144,7 +144,7 @@ export function AgentSettings({
         <div className="text-status-error text-sm">{loadError || "Failed to load settings"}</div>
         <button
           onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
-          className="text-xs px-3 py-1.5 bg-canopy-accent/10 hover:bg-canopy-accent/20 text-canopy-accent rounded transition-colors"
+          className="text-xs px-3 py-1.5 bg-daintree-accent/10 hover:bg-daintree-accent/20 text-daintree-accent rounded transition-colors"
         >
           Reload Application
         </button>
@@ -158,7 +158,7 @@ export function AgentSettings({
         <div className="flex items-center justify-between">
           <div>
             <h4 className="text-sm font-medium mb-1">CLI Agents</h4>
-            <p className="text-xs text-canopy-text/50 select-text">
+            <p className="text-xs text-daintree-text/50 select-text">
               Configure global agent preferences and per-agent settings
             </p>
           </div>
@@ -166,11 +166,11 @@ export function AgentSettings({
             variant="ghost"
             size="sm"
             onClick={() => {
-              window.dispatchEvent(new CustomEvent("canopy:open-agent-setup-wizard"));
+              window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
             }}
-            className="text-canopy-text/60 hover:text-canopy-text shrink-0"
+            className="text-daintree-text/60 hover:text-daintree-text shrink-0"
           >
-            <CanopyAgentIcon className="w-3.5 h-3.5" />
+            <DaintreeAgentIcon className="w-3.5 h-3.5" />
             Run Setup Wizard
           </Button>
         </div>
@@ -185,23 +185,23 @@ export function AgentSettings({
         {isGeneralActive && (
           <div
             id="agents-general"
-            className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4"
+            className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4"
           >
-            <div className="pb-3 border-b border-canopy-border">
-              <h4 className="text-sm font-medium text-canopy-text">Global Agent Settings</h4>
-              <p className="text-xs text-canopy-text/50 mt-0.5 select-text">
+            <div className="pb-3 border-b border-daintree-border">
+              <h4 className="text-sm font-medium text-daintree-text">Global Agent Settings</h4>
+              <p className="text-xs text-daintree-text/50 mt-0.5 select-text">
                 Settings that apply across all agents
               </p>
             </div>
 
             <div id="agents-default-agent" className="space-y-2">
-              <label className="text-sm font-medium text-canopy-text block">Default agent</label>
+              <label className="text-sm font-medium text-daintree-text block">Default agent</label>
               <select
                 value={defaultAgent ?? ""}
                 onChange={(e) =>
                   setDefaultAgent(e.target.value ? (e.target.value as DefaultAgentId) : undefined)
                 }
-                className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent focus:outline-none transition-colors"
               >
                 <option value="">None (first available)</option>
                 {agentOptions.map((agent) => (
@@ -210,7 +210,7 @@ export function AgentSettings({
                   </option>
                 ))}
               </select>
-              <p className="text-xs text-canopy-text/40 select-text">
+              <p className="text-xs text-daintree-text/40 select-text">
                 Agent used for the help dock button (⌘⇧H) and automated workflows ("What's Next?",
                 onboarding, project explanations). Distinct from the Portal "Default New Tab Agent"
                 which controls the browser panel opened by the + button.
@@ -230,7 +230,7 @@ export function AgentSettings({
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="text-canopy-text/50 hover:text-canopy-text"
+                    className="text-daintree-text/50 hover:text-daintree-text"
                     onClick={async () => {
                       const url = activeAgent.usageUrl?.trim();
                       if (!url) return;
@@ -255,7 +255,7 @@ export function AgentSettings({
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="text-canopy-text/50 hover:text-canopy-text"
+                  className="text-daintree-text/50 hover:text-daintree-text"
                   onClick={async () => {
                     await reset(activeAgent.id);
                     onSettingsChange?.();
@@ -306,7 +306,7 @@ export function AgentSettings({
               {activeEntry.dangerousEnabled && defaultDangerousArg && (
                 <div className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
                   <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
-                  <span className="text-xs text-canopy-text/40">added to command</span>
+                  <span className="text-xs text-daintree-text/40">added to command</span>
                 </div>
               )}
             </div>
@@ -395,15 +395,15 @@ export function AgentSettings({
             })()}
 
             {/* Custom Arguments */}
-            <div id="agents-custom-args" className="space-y-2 pt-2 border-t border-canopy-border">
-              <label className="text-sm font-medium text-canopy-text">Custom Arguments</label>
+            <div id="agents-custom-args" className="space-y-2 pt-2 border-t border-daintree-border">
+              <label className="text-sm font-medium text-daintree-text">Custom Arguments</label>
               <input
-                className="w-full rounded-[var(--radius-md)] border border-border-strong bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-text-muted"
+                className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-muted"
                 value={activeEntry.customFlags ?? ""}
                 onChange={(e) => updateAgent(activeAgent.id, { customFlags: e.target.value })}
                 placeholder="--verbose --max-tokens=4096"
               />
-              <p className="text-xs text-canopy-text/40 select-text">
+              <p className="text-xs text-daintree-text/40 select-text">
                 Extra CLI flags appended when launching
               </p>
             </div>

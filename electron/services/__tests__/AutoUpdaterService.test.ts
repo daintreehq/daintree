@@ -466,7 +466,7 @@ describe("AutoUpdaterService", () => {
   describe("Windows portable guard", () => {
     it("registers only channel-preference IPC handlers on Windows portable", () => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-      process.env.PORTABLE_EXECUTABLE_FILE = "C:\\portable\\canopy.exe";
+      process.env.PORTABLE_EXECUTABLE_FILE = "C:\\portable\\daintree.exe";
 
       autoUpdaterService.initialize();
 
@@ -485,7 +485,7 @@ describe("AutoUpdaterService", () => {
 
       expect(autoUpdaterMock.setFeedURL).toHaveBeenCalledWith({
         provider: "generic",
-        url: "https://updates.canopyide.com/releases/",
+        url: "https://updates.daintree.org/releases/",
         channel: "latest",
       });
       expect(autoUpdaterMock.allowDowngrade).toBe(true);
@@ -497,7 +497,7 @@ describe("AutoUpdaterService", () => {
 
       expect(autoUpdaterMock.setFeedURL).toHaveBeenCalledWith({
         provider: "generic",
-        url: "https://updates.canopyide.com/nightly/",
+        url: "https://updates.daintree.org/nightly/",
         channel: "nightly",
       });
     });
@@ -534,7 +534,7 @@ describe("AutoUpdaterService", () => {
       expect(storeMock.set).toHaveBeenCalledWith("updateChannel", "nightly");
       expect(autoUpdaterMock.setFeedURL).toHaveBeenCalledWith({
         provider: "generic",
-        url: "https://updates.canopyide.com/nightly/",
+        url: "https://updates.daintree.org/nightly/",
         channel: "nightly",
       });
     });

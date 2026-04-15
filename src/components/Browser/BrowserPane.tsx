@@ -601,29 +601,31 @@ export function BrowserPane({
     };
 
     const controller = new AbortController();
-    window.addEventListener("canopy:reload-browser", handleReloadEvent, {
+    window.addEventListener("daintree:reload-browser", handleReloadEvent, {
       signal: controller.signal,
     });
-    window.addEventListener("canopy:browser-navigate", handleNavigateEvent, {
+    window.addEventListener("daintree:browser-navigate", handleNavigateEvent, {
       signal: controller.signal,
     });
-    window.addEventListener("canopy:browser-back", handleBackEvent, { signal: controller.signal });
-    window.addEventListener("canopy:browser-forward", handleForwardEvent, {
+    window.addEventListener("daintree:browser-back", handleBackEvent, {
       signal: controller.signal,
     });
-    window.addEventListener("canopy:browser-set-zoom", handleSetZoomEvent, {
+    window.addEventListener("daintree:browser-forward", handleForwardEvent, {
       signal: controller.signal,
     });
-    window.addEventListener("canopy:browser-capture-screenshot", handleCaptureScreenshotEvent, {
+    window.addEventListener("daintree:browser-set-zoom", handleSetZoomEvent, {
       signal: controller.signal,
     });
-    window.addEventListener("canopy:browser-toggle-console", handleToggleConsoleEvent, {
+    window.addEventListener("daintree:browser-capture-screenshot", handleCaptureScreenshotEvent, {
       signal: controller.signal,
     });
-    window.addEventListener("canopy:browser-clear-console", handleClearConsoleEvent, {
+    window.addEventListener("daintree:browser-toggle-console", handleToggleConsoleEvent, {
       signal: controller.signal,
     });
-    window.addEventListener("canopy:browser-toggle-devtools", handleToggleDevToolsEvent, {
+    window.addEventListener("daintree:browser-clear-console", handleClearConsoleEvent, {
+      signal: controller.signal,
+    });
+    window.addEventListener("daintree:browser-toggle-devtools", handleToggleDevToolsEvent, {
       signal: controller.signal,
     });
     return () => controller.abort();
@@ -755,10 +757,10 @@ export function BrowserPane({
         )}
       >
         {!hasValidUrl ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
             <div className="flex flex-col items-center text-center max-w-md">
-              <h3 className="text-sm font-medium text-canopy-text/70 mb-1">Localhost Browser</h3>
-              <p className="text-xs text-canopy-text/50 mb-4 leading-relaxed">
+              <h3 className="text-sm font-medium text-daintree-text/70 mb-1">Localhost Browser</h3>
+              <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
                 Preview your local development server. Enter a localhost URL in the address bar
                 above to get started.
               </p>
@@ -768,7 +770,7 @@ export function BrowserPane({
                     key={example}
                     type="button"
                     onClick={() => handleNavigate(`http://${example}`)}
-                    className="px-3 py-1.5 text-xs font-mono text-canopy-text/50 bg-overlay-soft hover:bg-overlay-medium border border-overlay rounded-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                    className="px-3 py-1.5 text-xs font-mono text-daintree-text/50 bg-overlay-soft hover:bg-overlay-medium border border-overlay rounded-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
                   >
                     {example}
                   </button>
@@ -777,35 +779,37 @@ export function BrowserPane({
             </div>
           </div>
         ) : !hasBeenVisible ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text">
-            <p className="text-xs text-canopy-text/50">
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text">
+            <p className="text-xs text-daintree-text/50">
               Browser will load when this panel is first viewed
             </p>
           </div>
         ) : loadError ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
             <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
-            <h3 className="text-sm font-medium text-canopy-text/70 mb-1">Unable to Display Page</h3>
-            <p className="text-xs text-canopy-text/50 text-center mb-3 max-w-md">{loadError}</p>
+            <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
+              Unable to Display Page
+            </h3>
+            <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">{loadError}</p>
             <button
               type="button"
               onClick={handleOpenExternal}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-overlay-soft transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-overlay-soft transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
             >
-              <ExternalLink className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
-              <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
+              <ExternalLink className="h-3.5 w-3.5 text-daintree-text/50 group-hover:text-daintree-text/70 transition-colors" />
+              <span className="text-xs text-daintree-text/50 group-hover:text-daintree-text/70 transition-colors">
                 Open in External Browser
               </span>
             </button>
           </div>
         ) : isEvicted ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
-            <p className="text-xs text-canopy-text/50">Reclaimed for memory</p>
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
+            <p className="text-xs text-daintree-text/50">Reclaimed for memory</p>
           </div>
         ) : (
           <>
             {blockedNav && (
-              <div className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-canopy-text/80">
+              <div className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-daintree-text/80">
                 <ExternalLink className="h-3.5 w-3.5 shrink-0 text-status-warning" />
                 <span className="truncate flex-1">
                   Navigation to external site blocked:{" "}
@@ -828,7 +832,7 @@ export function BrowserPane({
                       );
                       setBlockedNav(null);
                     }}
-                    className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-canopy-text/90 transition-colors"
+                    className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-daintree-text/90 transition-colors"
                   >
                     Open in External Browser
                   </button>
@@ -836,7 +840,7 @@ export function BrowserPane({
                 <button
                   type="button"
                   onClick={() => setBlockedNav(null)}
-                  className="shrink-0 text-canopy-text/40 hover:text-canopy-text/70 transition-colors"
+                  className="shrink-0 text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
                   aria-label="Dismiss"
                 >
                   ×
@@ -846,7 +850,7 @@ export function BrowserPane({
             <div className="relative flex-1 min-h-0">
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
               {isLoading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-canopy-bg z-10">
+                <div className="absolute inset-0 flex items-center justify-center bg-daintree-bg z-10">
                   <Spinner size="2xl" className="text-status-info" />
                 </div>
               )}

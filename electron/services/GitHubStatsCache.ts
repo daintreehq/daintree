@@ -7,13 +7,13 @@ import os from "os";
 function getUserDataPath(): string {
   // Priority 1: Environment variable (set by main process for utility processes)
   // Validate that it's an absolute path to prevent project root pollution
-  if (process.env.CANOPY_USER_DATA) {
-    const userDataPath = process.env.CANOPY_USER_DATA;
+  if (process.env.DAINTREE_USER_DATA) {
+    const userDataPath = process.env.DAINTREE_USER_DATA;
     if (path.isAbsolute(userDataPath)) {
       return userDataPath;
     }
     console.warn(
-      `[GitHubStatsCache] CANOPY_USER_DATA is not absolute: ${userDataPath}, falling back`
+      `[GitHubStatsCache] DAINTREE_USER_DATA is not absolute: ${userDataPath}, falling back`
     );
   }
 
@@ -25,7 +25,7 @@ function getUserDataPath(): string {
   } catch {
     // Priority 3: Platform-specific fallback to standard application data directory
     // This handles edge cases where Electron is unavailable but we still want caching
-    const appName = "Canopy";
+    const appName = "Daintree";
     const homedir = os.homedir();
 
     // Validate homedir is available (can fail in constrained environments)

@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import { randomUUID } from "crypto";
 import type { IPty } from "node-pty";
 import { PtyManager } from "../../PtyManager.js";
-import { events, type CanopyEventMap } from "../../events.js";
+import { events, type DaintreeEventMap } from "../../events.js";
 
 export interface MockPtyOptions {
   cols?: number;
@@ -108,7 +108,7 @@ export async function waitForAgentStateChange(
     }, timeout);
 
     // Note: agent:state-changed events use terminalId, not id
-    const handler = (data: CanopyEventMap["agent:state-changed"]) => {
+    const handler = (data: DaintreeEventMap["agent:state-changed"]) => {
       if (data.terminalId === terminalId) {
         // If targetState is specified, only resolve when we reach that state
         if (targetState && data.state !== targetState) {

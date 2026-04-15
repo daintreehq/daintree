@@ -137,15 +137,15 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         </div>
 
         <div className="space-y-4">
-          <p className="text-sm text-canopy-text/80">
+          <p className="text-sm text-daintree-text/80">
             Are you sure you want to delete{" "}
-            <span className="font-mono font-medium text-canopy-text">
+            <span className="font-mono font-medium text-daintree-text">
               {worktree.isMainWorktree ? worktree.name : worktree.branch || worktree.name}
             </span>
             ?
           </p>
 
-          <div className="text-xs text-canopy-text/60 bg-canopy-bg/50 p-3 rounded border border-canopy-border font-mono break-all">
+          <div className="text-xs text-daintree-text/60 bg-daintree-bg/50 p-3 rounded border border-daintree-border font-mono break-all">
             {worktree.path}
           </div>
 
@@ -182,9 +182,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 setForce(e.target.checked);
                 setError(null);
               }}
-              className="rounded border-canopy-border bg-canopy-bg text-status-error focus:ring-status-error"
+              className="rounded border-daintree-border bg-daintree-bg text-status-error focus:ring-status-error"
             />
-            <span className="text-sm text-canopy-text">
+            <span className="text-sm text-daintree-text">
               {hasTrackedChanges && hasUntrackedFiles
                 ? "Force delete (lose uncommitted changes and untracked files)"
                 : hasUntrackedFiles
@@ -198,9 +198,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               type="checkbox"
               checked={closeTerminals}
               onChange={(e) => setCloseTerminals(e.target.checked)}
-              className="rounded border-canopy-border bg-canopy-bg text-canopy-accent focus:ring-canopy-accent"
+              className="rounded border-daintree-border bg-daintree-bg text-daintree-accent focus:ring-daintree-accent"
             />
-            <span className="text-sm text-canopy-text">
+            <span className="text-sm text-daintree-text">
               Close all terminals{hasTerminals ? ` (${terminalCounts.total})` : ""}
             </span>
           </label>
@@ -216,18 +216,18 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                     disarm();
                   }
                 }}
-                className="mt-0.5 rounded border-canopy-border bg-canopy-bg text-status-error focus:ring-status-error"
+                className="mt-0.5 rounded border-daintree-border bg-daintree-bg text-status-error focus:ring-status-error"
               />
-              <span className="text-sm text-canopy-text">
+              <span className="text-sm text-daintree-text">
                 <span className="flex items-center gap-1.5">
                   <WorktreeIcon className="w-3.5 h-3.5" />
                   Delete branch{" "}
-                  <code className="text-xs bg-canopy-bg/50 px-1.5 py-0.5 rounded border border-canopy-border">
+                  <code className="text-xs bg-daintree-bg/50 px-1.5 py-0.5 rounded border border-daintree-border">
                     {worktree.branch}
                   </code>
                 </span>
                 {deleteBranch && (
-                  <span className="block text-xs text-canopy-text/60 mt-1">
+                  <span className="block text-xs text-daintree-text/60 mt-1">
                     {force
                       ? "Branch will be force-deleted (git branch -D)"
                       : "Safe delete - fails if branch has unmerged changes"}

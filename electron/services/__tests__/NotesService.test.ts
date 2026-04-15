@@ -21,7 +21,7 @@ describe("NotesService", () => {
   let service: NotesService;
 
   beforeEach(async () => {
-    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-notes-service-"));
+    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-notes-service-"));
     service = new NotesService(userDataDir, projectId);
   });
 
@@ -30,7 +30,7 @@ describe("NotesService", () => {
   });
 
   it("stores notes under userData/notes/projectId, not in project directory", async () => {
-    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-project-"));
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-project-"));
     try {
       await service.create("Test note", "project");
 
@@ -39,12 +39,12 @@ describe("NotesService", () => {
       expect(files.length).toBe(1);
       expect(files[0]).toMatch(/\.md$/);
 
-      // Ensure no .canopy directory was created in any project-like dir
-      const canopyExists = await fs
-        .access(path.join(projectDir, ".canopy"))
+      // Ensure no .daintree directory was created in any project-like dir
+      const daintreeExists = await fs
+        .access(path.join(projectDir, ".daintree"))
         .then(() => true)
         .catch(() => false);
-      expect(canopyExists).toBe(false);
+      expect(daintreeExists).toBe(false);
     } finally {
       await fs.rm(projectDir, { recursive: true, force: true });
     }

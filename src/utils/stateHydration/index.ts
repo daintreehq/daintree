@@ -23,7 +23,7 @@ import {
   isRendererPerfCaptureEnabled,
   RENDERER_T0,
 } from "@/utils/performance";
-import { isCanopyEnvEnabled } from "@/utils/env";
+import { isDaintreeEnvEnabled } from "@/utils/env";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import {
   type TerminalRestoreTask,
@@ -45,8 +45,8 @@ import {
   buildArgsForNonPtyRecreation,
   buildArgsForOrphanedTerminal,
 } from "./statePatcher";
-const CLIPBOARD_DIR_NAME = "canopy-clipboard";
-const VERBOSE_HYDRATION_LOGGING = isCanopyEnvEnabled("CANOPY_VERBOSE");
+const CLIPBOARD_DIR_NAME = "daintree-clipboard";
+const VERBOSE_HYDRATION_LOGGING = isDaintreeEnvEnabled("DAINTREE_VERBOSE");
 
 function logHydrationInfo(message: string, context?: Record<string, unknown>): void {
   if (!VERBOSE_HYDRATION_LOGGING) return;
@@ -325,7 +325,7 @@ export async function hydrateAppState(
           `Found ${backendTerminals.length} running terminals for project ${currentProjectId}`
         );
 
-        if (isCanopyEnvEnabled("CANOPY_VERBOSE")) {
+        if (isDaintreeEnvEnabled("DAINTREE_VERBOSE")) {
           logDebug(`Project: ${currentProjectId.slice(0, 8)}`);
           logDebug("Backend terminals", {
             terminals: backendTerminals.map((t) => ({
@@ -901,13 +901,13 @@ export async function hydrateAppState(
     });
 
     if (isRendererPerfCaptureEnabled() && window.electron?.perf) {
-      const marks = window.__CANOPY_PERF_MARKS__ ?? [];
+      const marks = window.__DAINTREE_PERF_MARKS__ ?? [];
       window.electron.perf.flushMarks({
         marks,
         rendererTimeOrigin: performance.timeOrigin,
         rendererT0: RENDERER_T0,
       });
-      window.__CANOPY_PERF_MARKS__ = [];
+      window.__DAINTREE_PERF_MARKS__ = [];
     }
   }
 }

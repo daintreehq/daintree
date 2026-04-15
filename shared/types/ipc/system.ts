@@ -183,7 +183,7 @@ export interface AgentInstallProgressEvent {
   stream: "stdout" | "stderr";
 }
 
-/** Status of the installed Canopy CLI tool */
+/** Status of the installed Daintree CLI tool */
 export interface CliInstallStatus {
   /** Whether the CLI script is installed */
   installed: boolean;

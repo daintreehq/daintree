@@ -25,18 +25,18 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
 
   it("primary title text uses at least /90 opacity", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("text-canopy-text/90");
+    expect(content).toContain("text-daintree-text/90");
   });
 
   it("no card text uses /50 or /60 opacity (below secondary floor)", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).not.toContain("text-canopy-text/50");
-    expect(content).not.toContain("text-canopy-text/60");
+    expect(content).not.toContain("text-daintree-text/50");
+    expect(content).not.toContain("text-daintree-text/60");
   });
 
   it("coaching line uses at least /80 opacity", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("text-canopy-text/80");
+    expect(content).toContain("text-daintree-text/80");
   });
 
   it("coaching line does not use italic styling", async () => {
@@ -67,21 +67,21 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
 describe("PulseSummary — visual contrast (issue #2645)", () => {
   it("Stat non-highlight text uses /75 opacity (not /60)", async () => {
     const content = await readFile(SUMMARY_PATH, "utf-8");
-    expect(content).toContain("text-canopy-text/75");
-    expect(content).not.toContain("text-canopy-text/60");
+    expect(content).toContain("text-daintree-text/75");
+    expect(content).not.toContain("text-daintree-text/60");
   });
 
   it("Stat label uses /55 opacity floor (not /40)", async () => {
     const content = await readFile(SUMMARY_PATH, "utf-8");
-    expect(content).toContain("text-canopy-text/55");
-    expect(content).not.toContain("text-canopy-text/40");
+    expect(content).toContain("text-daintree-text/55");
+    expect(content).not.toContain("text-daintree-text/40");
   });
 
   it("delta row does not use opacity below the /55 tertiary floor", async () => {
     const content = await readFile(SUMMARY_PATH, "utf-8");
-    expect(content).not.toContain("text-canopy-text/30");
-    expect(content).not.toContain("text-canopy-text/40");
-    expect(content).not.toContain("text-canopy-text/50");
+    expect(content).not.toContain("text-daintree-text/30");
+    expect(content).not.toContain("text-daintree-text/40");
+    expect(content).not.toContain("text-daintree-text/50");
   });
 
   it("delta insertions/deletions use at least /80 semantic colour", async () => {

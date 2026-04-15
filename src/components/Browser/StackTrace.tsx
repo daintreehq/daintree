@@ -15,7 +15,7 @@ export function StackTrace({ stackTrace }: StackTraceProps) {
       <button
         type="button"
         onClick={() => setIsExpanded((prev) => !prev)}
-        className="text-[10px] text-canopy-text/40 hover:text-canopy-text/60 transition-colors select-none"
+        className="text-[10px] text-daintree-text/40 hover:text-daintree-text/60 transition-colors select-none"
       >
         <span className="mr-0.5">{isExpanded ? "▼" : "▶"}</span>
         stack trace
@@ -23,8 +23,8 @@ export function StackTrace({ stackTrace }: StackTraceProps) {
       {isExpanded && (
         <div className="pl-3 border-l border-tint/10 mt-0.5 select-text">
           {stackTrace.callFrames.map((frame, i) => (
-            <div key={i} className="text-canopy-text/40 text-[10px] leading-relaxed">
-              <span className="text-canopy-text/50">{frame.functionName || "(anonymous)"}</span>
+            <div key={i} className="text-daintree-text/40 text-[10px] leading-relaxed">
+              <span className="text-daintree-text/50">{frame.functionName || "(anonymous)"}</span>
               {frame.url && (
                 <span>
                   {" "}

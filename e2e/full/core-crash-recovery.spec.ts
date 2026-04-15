@@ -98,7 +98,7 @@ test.describe.serial("Core: Crash Recovery", () => {
   let userDataDir: string;
 
   test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-crash-"));
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-crash-"));
     seedCrashData(userDataDir);
     ctx = await launchApp({
       userDataDir,
@@ -320,7 +320,7 @@ test.describe.serial("Core: Crash Recovery — Panel Restoration", () => {
   let fixtureDir: string;
 
   test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-restore-"));
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-restore-"));
     fixtureDir = createFixtureRepo({ name: "restore-test" });
 
     // Session 1: Launch, onboard project, close — establishes project in DB

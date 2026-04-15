@@ -28,15 +28,15 @@ export const QuickSwitcherItem = React.memo(function QuickSwitcherItem({
         "transition-colors",
         "border",
         isSelected
-          ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-          : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
+          ? "bg-overlay-soft border-overlay text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
+          : "border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
       )}
       onClick={() => onSelect(item)}
       aria-selected={isSelected}
       aria-label={item.title}
       role="option"
     >
-      <span className="shrink-0 text-canopy-text/70" aria-hidden="true">
+      <span className="shrink-0 text-daintree-text/70" aria-hidden="true">
         {item.type === "terminal" ? (
           <TerminalIcon
             type={item.terminalType}
@@ -52,12 +52,12 @@ export const QuickSwitcherItem = React.memo(function QuickSwitcherItem({
 
       <div className="flex-1 min-w-0 overflow-hidden">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-canopy-text truncate">{item.title}</span>
+          <span className="text-sm font-medium text-daintree-text truncate">{item.title}</span>
           <span
             className={cn(
               "shrink-0 px-1.5 py-0.5 text-xs rounded-[var(--radius-sm)] border",
               item.type === "terminal"
-                ? "bg-canopy-accent/10 text-canopy-accent border-canopy-accent/30"
+                ? "bg-daintree-accent/10 text-daintree-accent border-daintree-accent/30"
                 : "bg-status-success/10 text-status-success border-status-success/30"
             )}
           >
@@ -68,7 +68,7 @@ export const QuickSwitcherItem = React.memo(function QuickSwitcherItem({
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <div className="text-xs text-canopy-text/50 truncate">{item.subtitle}</div>
+                <div className="text-xs text-daintree-text/50 truncate">{item.subtitle}</div>
               </TooltipTrigger>
               <TooltipContent side="bottom">{item.subtitle}</TooltipContent>
             </Tooltip>

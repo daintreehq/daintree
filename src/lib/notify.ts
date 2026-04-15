@@ -95,7 +95,7 @@ export function _setQuietUntil(ts: number): void {
 }
 
 /**
- * The single public API for creating any notification in Canopy.
+ * The single public API for creating any notification in Daintree.
  *
  * Every call:
  * 1. Adds a persistent entry to the notification center history
@@ -175,7 +175,7 @@ export function notify(payload: NotifyPayload): string {
 
   if (shouldNative && historyMessage && typeof window !== "undefined") {
     window.electron?.notification?.showNative?.({
-      title: title ?? "Canopy",
+      title: title ?? "Daintree",
       body: historyMessage,
     });
   }

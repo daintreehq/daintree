@@ -158,11 +158,11 @@ test.describe.serial("Core: PTY Resilience", () => {
     await waitForTerminalText(floodPanel, "pty-resilience", T_LONG);
 
     // Capture the shell PID
-    await runTerminalCommand(window, floodPanel, "echo CANOPY_PID_$$");
-    await waitForTerminalText(floodPanel, "CANOPY_PID_", T_LONG);
+    await runTerminalCommand(window, floodPanel, "echo DAINTREE_PID_$$");
+    await waitForTerminalText(floodPanel, "DAINTREE_PID_", T_LONG);
 
     const text = await getTerminalText(floodPanel);
-    const pidMatch = text.match(/CANOPY_PID_(\d+)/);
+    const pidMatch = text.match(/DAINTREE_PID_(\d+)/);
     expect(pidMatch).toBeTruthy();
     const capturedPid = Number(pidMatch![1]);
     expect(capturedPid).toBeGreaterThan(0);

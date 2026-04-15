@@ -145,7 +145,7 @@ interface ProjectStoreListenerState {
   removedRegistered: boolean;
 }
 
-const PROJECT_STORE_LISTENER_STATE_KEY = "__canopyProjectStoreListenerState";
+const PROJECT_STORE_LISTENER_STATE_KEY = "__daintreeProjectStoreListenerState";
 
 let projectTransitionRequestId = 0;
 let projectListRequestId = 0;

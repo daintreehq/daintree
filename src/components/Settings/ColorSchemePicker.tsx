@@ -173,9 +173,9 @@ export function ColorSchemePicker() {
             const resolved = resolveSchemeForPreview(scheme, appThemeId);
             return (
               <div className="flex items-center gap-1.5">
-                <span className="text-xs text-canopy-text truncate">{scheme.name}</span>
+                <span className="text-xs text-daintree-text truncate">{scheme.name}</span>
                 {resolved.type === "light" && (
-                  <span className="text-[10px] text-canopy-text/50 shrink-0">light</span>
+                  <span className="text-[10px] text-daintree-text/50 shrink-0">light</span>
                 )}
               </div>
             );
@@ -197,9 +197,9 @@ export function ColorSchemePicker() {
             const resolved = resolveSchemeForPreview(scheme, appThemeId);
             return (
               <div className="flex items-center gap-1.5">
-                <span className="text-xs text-canopy-text truncate">{scheme.name}</span>
+                <span className="text-xs text-daintree-text truncate">{scheme.name}</span>
                 {resolved.type === "light" && (
-                  <span className="text-[10px] text-canopy-text/50 shrink-0">light</span>
+                  <span className="text-[10px] text-daintree-text/50 shrink-0">light</span>
                 )}
               </div>
             );
@@ -209,7 +209,7 @@ export function ColorSchemePicker() {
       )}
       <button
         onClick={handleImport}
-        className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
+        className="text-xs text-daintree-accent hover:text-daintree-accent/80 transition-colors"
       >
         Import color scheme...
       </button>

@@ -1,7 +1,7 @@
 import {
   events,
   ALL_EVENT_TYPES,
-  type CanopyEventMap,
+  type DaintreeEventMap,
   EVENT_META,
   getEventCategory,
 } from "./events.js";
@@ -10,7 +10,7 @@ import type { EventRecord, EventCategory } from "../../shared/types/index.js";
 export type { EventRecord };
 
 export interface FilterOptions {
-  types?: Array<keyof CanopyEventMap>;
+  types?: Array<keyof DaintreeEventMap>;
   category?: EventCategory;
   categories?: EventCategory[];
   worktreeId?: string;
@@ -71,8 +71,8 @@ export class EventBuffer {
     };
   }
 
-  private sanitizePayload(eventType: keyof CanopyEventMap, payload: any): any {
-    const sensitiveEventTypes: Array<keyof CanopyEventMap> = ["agent:output", "task:created"];
+  private sanitizePayload(eventType: keyof DaintreeEventMap, payload: any): any {
+    const sensitiveEventTypes: Array<keyof DaintreeEventMap> = ["agent:output", "task:created"];
 
     if (!sensitiveEventTypes.includes(eventType)) {
       return payload;
@@ -95,7 +95,7 @@ export class EventBuffer {
     return payload;
   }
 
-  private validatePayload(eventType: keyof CanopyEventMap, payload: any): void {
+  private validatePayload(eventType: keyof DaintreeEventMap, payload: any): void {
     const meta = EVENT_META[eventType];
     if (!meta) {
       return;
@@ -193,7 +193,7 @@ export class EventBuffer {
 
     if (options.types && options.types.length > 0) {
       filtered = filtered.filter((event) =>
-        options.types!.includes(event.type as keyof CanopyEventMap)
+        options.types!.includes(event.type as keyof DaintreeEventMap)
       );
     }
 

@@ -20,7 +20,7 @@ describe("CopyTreeService adversarial", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-copytree-adv-"));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-copytree-adv-"));
     vi.clearAllMocks();
     configCreateMock.mockResolvedValue(undefined);
   });

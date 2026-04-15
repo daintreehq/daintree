@@ -105,7 +105,7 @@ describe("approval prompt detection via hint patterns", () => {
   it("detects 'Approve Once' in visible lines", () => {
     const config = approvalConfig();
     const lines = [
-      "Canopy wants to run: rm -rf /tmp/test",
+      "Daintree wants to run: rm -rf /tmp/test",
       "Approve Once",
       "Approve This Session",
       "Reject",

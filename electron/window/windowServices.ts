@@ -900,7 +900,7 @@ export async function setupWindowServices(
   if (!stopEventLoopLagMonitor) {
     stopEventLoopLagMonitor = startEventLoopLagMonitor();
   }
-  if (process.env.CANOPY_PERF_CAPTURE === "1" && !stopProcessMemoryMonitor) {
+  if (process.env.DAINTREE_PERF_CAPTURE === "1" && !stopProcessMemoryMonitor) {
     stopProcessMemoryMonitor = startProcessMemoryMonitor();
   }
 

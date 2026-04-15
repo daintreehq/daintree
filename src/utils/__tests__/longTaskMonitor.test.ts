@@ -57,7 +57,7 @@ describe("startLongTaskMonitor", () => {
     });
   }
 
-  it("starts without CANOPY_PERF_CAPTURE and returns cleanup", () => {
+  it("starts without DAINTREE_PERF_CAPTURE and returns cleanup", () => {
     const stop = startLongTaskMonitor();
     expect(typeof stop).toBe("function");
     expect(observerCallback).not.toBeNull();

@@ -127,23 +127,23 @@ describe("useFindInPage", () => {
     expect(result.current.activeMatch).toBe(0);
   });
 
-  it("opens find bar on canopy:find-in-panel when focused", () => {
+  it("opens find bar on daintree:find-in-panel when focused", () => {
     const webview = createMockWebview();
     const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
 
     act(() => {
-      window.dispatchEvent(new Event("canopy:find-in-panel"));
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
     });
 
     expect(result.current.isOpen).toBe(true);
   });
 
-  it("does not open find bar on canopy:find-in-panel when not focused", () => {
+  it("does not open find bar on daintree:find-in-panel when not focused", () => {
     const webview = createMockWebview();
     const { result } = renderHook(() => useFindInPage("panel-1", webview, true, false));
 
     act(() => {
-      window.dispatchEvent(new Event("canopy:find-in-panel"));
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
     });
 
     expect(result.current.isOpen).toBe(false);

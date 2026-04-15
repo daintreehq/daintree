@@ -51,7 +51,7 @@ export function enforceIpcSenderValidation(): void {
           serialized.context = undefined;
           serialized.cause = undefined;
           serialized.properties = undefined;
-          return { __canopyIpcEnvelope: true as const, ok: false as const, error: serialized };
+          return { __daintreeIpcEnvelope: true as const, ok: false as const, error: serialized };
         }
         return wrapError(error);
       }
@@ -86,7 +86,7 @@ export function enforceIpcSenderValidation(): void {
             serialized.context = undefined;
             serialized.cause = undefined;
             serialized.properties = undefined;
-            return { __canopyIpcEnvelope: true as const, ok: false as const, error: serialized };
+            return { __daintreeIpcEnvelope: true as const, ok: false as const, error: serialized };
           }
           return wrapError(error);
         }
@@ -232,8 +232,8 @@ export function setupPermissionLockdown(): void {
 
   // Shared project session — all project views share this single partition for V8 code cache reuse
   lockdownTrustedPermissions(
-    session.fromPartition("persist:canopy-app"),
-    "canopy-app",
+    session.fromPartition("persist:daintree"),
+    "daintree-app",
     TRUSTED_SESSION_PERMISSIONS
   );
 

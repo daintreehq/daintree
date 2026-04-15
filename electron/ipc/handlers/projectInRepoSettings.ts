@@ -110,7 +110,7 @@ export function registerProjectInRepoSettingsHandlers(_deps: HandlerDependencies
     });
     await projectStore.writeInRepoSettings(project.path, settings);
 
-    // Sync existing project recipes to .canopy/recipes/
+    // Sync existing project recipes to .daintree/recipes/
     const recipes = await projectStore.getRecipes(projectId);
     for (const recipe of recipes) {
       await projectStore.writeInRepoRecipe(project.path, recipe);
@@ -118,7 +118,7 @@ export function registerProjectInRepoSettingsHandlers(_deps: HandlerDependencies
 
     return projectStore.updateProject(projectId, {
       inRepoSettings: true,
-      canopyConfigPresent: true,
+      daintreeConfigPresent: true,
     });
   };
   ipcMain.handle(CHANNELS.PROJECT_ENABLE_IN_REPO_SETTINGS, handleProjectEnableInRepoSettings);

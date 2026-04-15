@@ -5,17 +5,20 @@ import fs from "fs/promises";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { UTF8_BOM } from "./projectStorePaths.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
+import { ensureDaintreeDirMigrated } from "./projectDirMigration.js";
 
 const MAX_PROJECT_NAME_LENGTH = 100;
-const CANOPY_PROJECT_JSON = ".canopy/project.json";
-const CANOPY_SETTINGS_JSON = ".canopy/settings.json";
-const CANOPY_RECIPES_DIR = ".canopy/recipes";
+const DAINTREE_DIR = ".daintree";
+const DAINTREE_PROJECT_JSON = `${DAINTREE_DIR}/project.json`;
+const DAINTREE_SETTINGS_JSON = `${DAINTREE_DIR}/settings.json`;
+const DAINTREE_RECIPES_DIR = `${DAINTREE_DIR}/recipes`;
 
 export class ProjectIdentityFiles {
   async readInRepoProjectIdentity(
     projectPath: string
   ): Promise<{ name?: string; emoji?: string; color?: string; found: boolean }> {
-    const filePath = path.join(projectPath, CANOPY_PROJECT_JSON);
+    await ensureDaintreeDirMigrated(projectPath);
+    const filePath = path.join(projectPath, DAINTREE_PROJECT_JSON);
     try {
       let content = await fs.readFile(filePath, "utf-8");
       if (content.startsWith(UTF8_BOM)) {
@@ -53,13 +56,13 @@ export class ProjectIdentityFiles {
     }
   }
 
-  private async assertCanopyDirNotSymlink(projectPath: string): Promise<void> {
-    const canopyDir = path.join(projectPath, ".canopy");
+  private async assertDaintreeDirNotSymlink(projectPath: string): Promise<void> {
+    const daintreeDir = path.join(projectPath, DAINTREE_DIR);
     try {
-      const stat = await fs.lstat(canopyDir);
+      const stat = await fs.lstat(daintreeDir);
       if (stat.isSymbolicLink()) {
         throw new Error(
-          `.canopy/ in ${projectPath} is a symbolic link — refusing to write to prevent path traversal`
+          `${DAINTREE_DIR}/ in ${projectPath} is a symbolic link — refusing to write to prevent path traversal`
         );
       }
     } catch (error) {
@@ -72,9 +75,10 @@ export class ProjectIdentityFiles {
     projectPath: string,
     data: { name?: string; emoji?: string; color?: string }
   ): Promise<void> {
-    await this.assertCanopyDirNotSymlink(projectPath);
-    const canopyDir = path.join(projectPath, ".canopy");
-    const filePath = path.join(projectPath, CANOPY_PROJECT_JSON);
+    await ensureDaintreeDirMigrated(projectPath);
+    await this.assertDaintreeDirNotSymlink(projectPath);
+    const daintreeDir = path.join(projectPath, DAINTREE_DIR);
+    const filePath = path.join(projectPath, DAINTREE_PROJECT_JSON);
 
     const payload: { version: 1; name?: string; emoji?: string; color?: string } = { version: 1 };
     if (data.name !== undefined) payload.name = data.name;
@@ -83,7 +87,7 @@ export class ProjectIdentityFiles {
 
     const attemptWrite = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {
-        await fs.mkdir(canopyDir, { recursive: true });
+        await fs.mkdir(daintreeDir, { recursive: true });
       }
       await resilientAtomicWriteFile(filePath, JSON.stringify(payload, null, 2), "utf-8");
     };
@@ -94,7 +98,7 @@ export class ProjectIdentityFiles {
       const isEnoent = error instanceof Error && "code" in error && error.code === "ENOENT";
       if (!isEnoent) {
         console.error(
-          `[ProjectIdentityFiles] Failed to write .canopy/project.json for ${projectPath}:`,
+          `[ProjectIdentityFiles] Failed to write ${DAINTREE_PROJECT_JSON} for ${projectPath}:`,
           error
         );
         throw error;
@@ -103,7 +107,7 @@ export class ProjectIdentityFiles {
         await attemptWrite(true);
       } catch (retryError) {
         console.error(
-          `[ProjectIdentityFiles] Failed to write .canopy/project.json for ${projectPath}:`,
+          `[ProjectIdentityFiles] Failed to write ${DAINTREE_PROJECT_JSON} for ${projectPath}:`,
           retryError
         );
         throw retryError;
@@ -112,9 +116,10 @@ export class ProjectIdentityFiles {
   }
 
   async writeInRepoSettings(projectPath: string, settings: ProjectSettings): Promise<void> {
-    await this.assertCanopyDirNotSymlink(projectPath);
-    const canopyDir = path.join(projectPath, ".canopy");
-    const filePath = path.join(projectPath, CANOPY_SETTINGS_JSON);
+    await ensureDaintreeDirMigrated(projectPath);
+    await this.assertDaintreeDirNotSymlink(projectPath);
+    const daintreeDir = path.join(projectPath, DAINTREE_DIR);
+    const filePath = path.join(projectPath, DAINTREE_SETTINGS_JSON);
 
     const payload: {
       version: 1;
@@ -158,7 +163,7 @@ export class ProjectIdentityFiles {
 
     const attemptWrite = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {
-        await fs.mkdir(canopyDir, { recursive: true });
+        await fs.mkdir(daintreeDir, { recursive: true });
       }
       await resilientAtomicWriteFile(filePath, JSON.stringify(payload, null, 2), "utf-8");
     };
@@ -169,7 +174,7 @@ export class ProjectIdentityFiles {
       const isEnoent = error instanceof Error && "code" in error && error.code === "ENOENT";
       if (!isEnoent) {
         console.error(
-          `[ProjectIdentityFiles] Failed to write .canopy/settings.json for ${projectPath}:`,
+          `[ProjectIdentityFiles] Failed to write ${DAINTREE_SETTINGS_JSON} for ${projectPath}:`,
           error
         );
         throw error;
@@ -178,7 +183,7 @@ export class ProjectIdentityFiles {
         await attemptWrite(true);
       } catch (retryError) {
         console.error(
-          `[ProjectIdentityFiles] Failed to write .canopy/settings.json for ${projectPath}:`,
+          `[ProjectIdentityFiles] Failed to write ${DAINTREE_SETTINGS_JSON} for ${projectPath}:`,
           retryError
         );
         throw retryError;
@@ -187,15 +192,15 @@ export class ProjectIdentityFiles {
   }
 
   async writeInRepoRecipe(projectPath: string, recipe: TerminalRecipe): Promise<void> {
-    await this.assertCanopyDirNotSymlink(projectPath);
-    const recipesDir = path.join(projectPath, CANOPY_RECIPES_DIR);
+    await ensureDaintreeDirMigrated(projectPath);
+    await this.assertDaintreeDirNotSymlink(projectPath);
+    const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
 
-    // Also guard the recipes subdirectory against symlink attacks
     try {
       const stat = await fs.lstat(recipesDir);
       if (stat.isSymbolicLink()) {
         throw new Error(
-          `.canopy/recipes/ in ${projectPath} is a symbolic link — refusing to write`
+          `${DAINTREE_RECIPES_DIR}/ in ${projectPath} is a symbolic link — refusing to write`
         );
       }
     } catch (error) {
@@ -205,7 +210,6 @@ export class ProjectIdentityFiles {
     const filename = safeRecipeFilename(recipe.name);
     const filePath = path.join(recipesDir, filename);
 
-    // Strip fields that shouldn't be shared: projectId, worktreeId, source, and env values
     const { projectId: _, worktreeId: _w, ...shareable } = recipe;
     const sanitizedTerminals = shareable.terminals.map((t) => {
       if (!t.env || Object.keys(t.env).length === 0) return t;
@@ -234,7 +238,8 @@ export class ProjectIdentityFiles {
   }
 
   async readInRepoRecipes(projectPath: string): Promise<TerminalRecipe[]> {
-    const recipesDir = path.join(projectPath, CANOPY_RECIPES_DIR);
+    await ensureDaintreeDirMigrated(projectPath);
+    const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
     let entries;
     try {
       entries = await fs.readdir(recipesDir, { withFileTypes: true });
@@ -257,7 +262,6 @@ export class ProjectIdentityFiles {
         ) {
           continue;
         }
-        // Assign a stable ID based on filename so it's consistent across loads
         if (!parsed.id) {
           parsed.id = `inrepo-${entry.name.replace(/\.json$/, "")}`;
         }
@@ -273,14 +277,15 @@ export class ProjectIdentityFiles {
   }
 
   async deleteInRepoRecipe(projectPath: string, recipeName: string): Promise<void> {
-    await this.assertCanopyDirNotSymlink(projectPath);
-    const recipesDir = path.join(projectPath, CANOPY_RECIPES_DIR);
+    await ensureDaintreeDirMigrated(projectPath);
+    await this.assertDaintreeDirNotSymlink(projectPath);
+    const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
 
     try {
       const stat = await fs.lstat(recipesDir);
       if (stat.isSymbolicLink()) {
         throw new Error(
-          `.canopy/recipes/ in ${projectPath} is a symbolic link — refusing to delete`
+          `${DAINTREE_RECIPES_DIR}/ in ${projectPath} is a symbolic link — refusing to delete`
         );
       }
     } catch (error) {

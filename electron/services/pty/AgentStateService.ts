@@ -217,7 +217,7 @@ export class AgentStateService {
   ): boolean {
     // Validate session token if provided
     if (spawnedAt !== undefined && terminal.spawnedAt !== spawnedAt) {
-      if (process.env.CANOPY_VERBOSE) {
+      if (process.env.DAINTREE_VERBOSE) {
         console.log(
           `[AgentStateService] Rejected stale state transition for ${terminal.id} ` +
             `(session ${spawnedAt} vs current ${terminal.spawnedAt})`

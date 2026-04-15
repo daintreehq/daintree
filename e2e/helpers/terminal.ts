@@ -18,7 +18,7 @@ export async function getTerminalText(panelLocator: Locator): Promise<string> {
 
   // Try buffer API first (works with all renderers including WebGL)
   const bufferText = await page.evaluate((id) => {
-    const reader = (window as unknown as Record<string, unknown>).__canopyReadTerminalBuffer;
+    const reader = (window as unknown as Record<string, unknown>).__daintreeReadTerminalBuffer;
     if (typeof reader === "function") return reader(id) as string;
     return null;
   }, panelId);
@@ -56,7 +56,7 @@ export async function getTerminalBufferLength(panelLocator: Locator): Promise<nu
   if (!panelId) return 0;
 
   return page.evaluate((id) => {
-    const fn = (window as unknown as Record<string, unknown>).__canopyGetTerminalBufferLength;
+    const fn = (window as unknown as Record<string, unknown>).__daintreeGetTerminalBufferLength;
     if (typeof fn === "function") return fn(id) as number;
     return 0;
   }, panelId);
@@ -67,7 +67,7 @@ export async function selectAllTerminalText(panelLocator: Locator): Promise<void
   const panelId = await getPanelId(panelLocator);
   if (!panelId) throw new Error("Could not resolve panel ID for selectAll");
   const ok = await page.evaluate((id) => {
-    const fn = (window as unknown as Record<string, unknown>).__canopySelectTerminalAll;
+    const fn = (window as unknown as Record<string, unknown>).__daintreeSelectTerminalAll;
     if (typeof fn === "function") return fn(id) as boolean;
     return false;
   }, panelId);
@@ -80,7 +80,7 @@ export async function triggerTerminalLink(panelLocator: Locator, url: string): P
   if (!panelId) return "missing-panel";
   return page.evaluate(
     ({ id, linkUrl }) => {
-      const fn = (window as unknown as Record<string, unknown>).__canopyTriggerTerminalLink;
+      const fn = (window as unknown as Record<string, unknown>).__daintreeTriggerTerminalLink;
       if (typeof fn === "function") return fn(id, linkUrl) as string;
       return "missing-bridge";
     },

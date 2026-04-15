@@ -170,9 +170,9 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                         type="button"
                         onClick={scrollLeft}
                         className={cn(
-                          "pointer-events-auto p-1.5 text-canopy-text/60 hover:text-canopy-text",
+                          "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
                           "rounded-[var(--radius-md)] transition-colors",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
                         )}
                         aria-label="Scroll left"
                       >
@@ -191,7 +191,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
               className={cn(
                 "flex items-center gap-[var(--dock-gap)] overflow-x-auto overscroll-x-none flex-1 min-h-[var(--dock-item-height)] no-scrollbar scroll-smooth px-1",
                 isOver &&
-                  "bg-overlay-soft ring-2 ring-canopy-accent/30 ring-inset rounded-[var(--radius-md)]"
+                  "bg-overlay-soft ring-2 ring-daintree-accent/30 ring-inset rounded-[var(--radius-md)]"
               )}
             >
               <SortableContext
@@ -246,9 +246,9 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                         type="button"
                         onClick={scrollRight}
                         className={cn(
-                          "pointer-events-auto p-1.5 text-canopy-text/60 hover:text-canopy-text",
+                          "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
                           "rounded-[var(--radius-md)] transition-colors",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
                         )}
                         aria-label="Scroll right"
                       >

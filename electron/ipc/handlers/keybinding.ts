@@ -84,7 +84,7 @@ export function registerKeybindingHandlers(_deps: HandlerDependencies): () => vo
     const parentWindow = getWindowForWebContents(_event.sender);
     const saveOpts: Electron.SaveDialogOptions = {
       title: "Export Keyboard Shortcuts",
-      defaultPath: "canopy-keybindings.json",
+      defaultPath: "daintree-keybindings.json",
       filters: [{ name: "Keybinding Profile", extensions: ["json"] }],
     };
 

@@ -21,7 +21,7 @@ interface CacheEntry {
 const CACHE_TTL_MS = 60_000;
 const MAX_CACHE_SIZE = 100;
 const MAX_COMMITS_FOR_HEATMAP = 20_000;
-const VERBOSE_PROJECT_PULSE_LOGGING = process.env.CANOPY_VERBOSE === "1";
+const VERBOSE_PROJECT_PULSE_LOGGING = process.env.DAINTREE_VERBOSE === "1";
 
 function logProjectPulseDebug(message: string, context?: Record<string, unknown>): void {
   if (!VERBOSE_PROJECT_PULSE_LOGGING) return;

@@ -228,7 +228,7 @@ describe("wrapSuccess", () => {
   it("creates a success envelope", () => {
     const envelope = wrapSuccess({ foo: "bar" });
 
-    expect(envelope.__canopyIpcEnvelope).toBe(true);
+    expect(envelope.__daintreeIpcEnvelope).toBe(true);
     expect(envelope.ok).toBe(true);
     expect(envelope.data).toEqual({ foo: "bar" });
   });
@@ -252,7 +252,7 @@ describe("wrapError", () => {
   it("creates an error envelope", () => {
     const envelope = wrapError(new Error("oops"));
 
-    expect(envelope.__canopyIpcEnvelope).toBe(true);
+    expect(envelope.__daintreeIpcEnvelope).toBe(true);
     expect(envelope.ok).toBe(false);
     expect(envelope.error.message).toBe("oops");
   });
@@ -284,7 +284,7 @@ describe("isIpcEnvelope", () => {
 
   it("returns false for plain objects", () => {
     expect(isIpcEnvelope({ ok: true, data: "test" })).toBe(false);
-    expect(isIpcEnvelope({ __canopyIpcEnvelope: false })).toBe(false);
+    expect(isIpcEnvelope({ __daintreeIpcEnvelope: false })).toBe(false);
   });
 
   it("returns false for primitives", () => {

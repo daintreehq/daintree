@@ -202,13 +202,13 @@ export function setupBrowserWindow(
   // electron.launch() receives a CDP 'page' target and resolves.
   // Without this, the BW stays at about:blank (no Target.targetCreated event)
   // and electron.launch() times out after the WebContentsView migration.
-  if (process.env.CANOPY_E2E_MODE) {
+  if (process.env.DAINTREE_E2E_MODE) {
     win.loadURL("data:text/html,<!doctype html><html><body></body></html>");
   }
 
   // ── Create WebContentsView for the React app ──
   // All project views share a single session partition for V8 code cache reuse.
-  const viewSession = session.fromPartition("persist:canopy-app");
+  const viewSession = session.fromPartition("persist:daintree");
   const dist = getDistPath();
   if (dist) registerProtocolsForSession(viewSession, dist);
 
@@ -312,7 +312,7 @@ export function setupBrowserWindow(
       appWebContents.loadURL(`${devServerUrl}${qs}`);
     } else {
       console.log("[MAIN] Loading production build via app:// protocol");
-      appWebContents.loadURL(`app://canopy/index.html${qs}`);
+      appWebContents.loadURL(`app://daintree/index.html${qs}`);
     }
   };
 
@@ -522,7 +522,7 @@ export function setupBrowserWindow(
       const devServerUrl = getDevServerUrl();
       return `${devServerUrl}/recovery.html?${params}`;
     }
-    return `app://canopy/recovery.html?${params}`;
+    return `app://daintree/recovery.html?${params}`;
   }
 
   return {

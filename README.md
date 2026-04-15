@@ -1,23 +1,23 @@
-# Canopy
+# Daintree
 
 **A habitat for your AI coding agents.**
 
-Canopy is a desktop environment where multiple AI agents work side by side — isolated, observable, and under your control. Instead of juggling terminal windows and manually wiring context between tools, Canopy gives your agents a stable place to run while you focus on reviewing their work.
+Daintree is a desktop environment where multiple AI agents work side by side — isolated, observable, and under your control. Instead of juggling terminal windows and manually wiring context between tools, Daintree gives your agents a stable place to run while you focus on reviewing their work.
 
 It works with any CLI agent — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex](https://github.com/openai/codex), [OpenCode](https://github.com/anomalyco/opencode), [Cursor Agent](https://docs.cursor.com/agent), [Kiro CLI](https://kiro.dev/docs/cli/chat/) — and stays out of the way.
 
 ---
 
-## Why Canopy
+## Why Daintree
 
 Running AI agents in parallel is becoming the standard workflow. But the tooling around it hasn't caught up. You end up with a dozen terminal tabs, no visibility into what each agent is doing, and no clean way to review or merge the results.
 
-Canopy solves this by providing:
+Daintree solves this by providing:
 
 - **Automatic isolation** — Each task gets its own git worktree. Agents never collide.
 - **Visibility at a glance** — See what every agent is doing, which ones need input, and what's changed across all branches.
-- **Review-first workflows** — The bottleneck isn't generation speed, it's reviewing what agents produce. Canopy is built around making that fast.
-- **Zero lock-in** — Your machine, your keys, your choice of agents. Canopy is agent-agnostic by design.
+- **Review-first workflows** — The bottleneck isn't generation speed, it's reviewing what agents produce. Daintree is built around making that fast.
+- **Zero lock-in** — Your machine, your keys, your choice of agents. Daintree is agent-agnostic by design.
 
 ---
 
@@ -25,15 +25,15 @@ Canopy solves this by providing:
 
 ### Worktree Dashboard
 
-View all git worktrees in a single dashboard with real-time status. Canopy auto-detects associated Pull Requests and Issues from branch names, shows commit-based summaries of changes, and manages dev server lifecycles per worktree.
+View all git worktrees in a single dashboard with real-time status. Daintree auto-detects associated Pull Requests and Issues from branch names, shows commit-based summaries of changes, and manages dev server lifecycles per worktree.
 
 ### Agent Orchestration
 
-Run multiple agents in a panel grid. Canopy tracks agent state automatically — `idle`, `working`, `waiting`, `completed`, `failed` — via output analysis. A notification strip alerts you the moment any agent needs human input, so you can walk away and come back when there's something to review.
+Run multiple agents in a panel grid. Daintree tracks agent state automatically — `idle`, `working`, `waiting`, `completed`, `failed` — via output analysis. A notification strip alerts you the moment any agent needs human input, so you can walk away and come back when there's something to review.
 
 ### Context Injection
 
-Inject codebase context into any agent's terminal with a single click. Built on [CopyTree](https://github.com/gregpriday/copytree), Canopy generates structured context in a format optimized for AI consumption. Select specific files or folders, and the context flows directly into the active session.
+Inject codebase context into any agent's terminal with a single click. Built on [CopyTree](https://github.com/gregpriday/copytree), Daintree generates structured context in a format optimized for AI consumption. Select specific files or folders, and the context flows directly into the active session.
 
 ### Multi-Panel Environment
 
@@ -45,7 +45,7 @@ Configurable multi-terminal launch presets. Define a recipe with any combination
 
 ### MCP Server
 
-Canopy exposes all of its actions as tools via the [Model Context Protocol](https://modelcontextprotocol.io/). Any MCP-compatible agent can discover and invoke Canopy actions — creating worktrees, spawning terminals, injecting context, or running git operations — without leaving their session.
+Daintree exposes all of its actions as tools via the [Model Context Protocol](https://modelcontextprotocol.io/). Any MCP-compatible agent can discover and invoke Daintree actions — creating worktrees, spawning terminals, injecting context, or running git operations — without leaving their session.
 
 ### GitHub Integration
 
@@ -72,7 +72,7 @@ Adaptive performance management with three profiles — Performance, Balanced, a
 
 ```bash
 git clone https://github.com/canopyide/canopy.git
-cd canopy
+cd daintree
 npm install
 ```
 
@@ -88,14 +88,14 @@ This starts both the Vite renderer and Electron main process.
 
 ### Configure
 
-Canopy works immediately for terminal management. For AI features, open **Settings** (bottom-left sidebar):
+Daintree works immediately for terminal management. For AI features, open **Settings** (bottom-left sidebar):
 
 1. **GitHub Token** — Enables PR/issue detection without rate limits
 2. **Agent Settings** — Configure default models and flags for each agent CLI
 
 ### Install Agent CLIs
 
-Canopy works with any agent you have installed:
+Daintree works with any agent you have installed:
 
 ```bash
 npm install -g @anthropic-ai/claude-code    # Claude Code
@@ -110,7 +110,7 @@ curl -fsSL https://cli.kiro.dev/install | bash  # Kiro CLI (macOS/Linux)
 
 ## Architecture
 
-Canopy uses a three-process Electron architecture:
+Daintree uses a three-process Electron architecture:
 
 ```
 Main Process (electron/)            Renderer (src/)
@@ -170,7 +170,7 @@ npm run package:linux # Linux (AppImage, deb)
 ## Project Structure
 
 ```
-canopy/
+daintree/
 ├── electron/                # Main process
 │   ├── main.ts              # Entry point
 │   ├── preload.cts          # IPC bridge (contextBridge, 56 namespaces)

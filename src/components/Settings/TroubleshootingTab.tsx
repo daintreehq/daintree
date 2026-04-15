@@ -48,7 +48,7 @@ function SystemHealthSection() {
         size="sm"
         onClick={() => void runCheck()}
         disabled={isChecking}
-        className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text mb-3"
+        className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text mb-3"
       >
         <RotateCw className={cn("w-4 h-4", isChecking && "animate-spin")} />
         {isChecking ? "Checking…" : result ? "Re-run Check" : "Run Health Check"}
@@ -62,16 +62,16 @@ function SystemHealthSection() {
             return (
               <div
                 key={check.tool}
-                className="flex items-center gap-2.5 px-3 py-2 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30"
+                className="flex items-center gap-2.5 px-3 py-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30"
               >
                 {check.available ? (
                   <CircleCheck className="w-3.5 h-3.5 text-status-success shrink-0" />
                 ) : (
                   <CircleX className="w-3.5 h-3.5 text-status-error shrink-0" />
                 )}
-                <span className="text-sm text-canopy-text">{label}</span>
+                <span className="text-sm text-daintree-text">{label}</span>
                 {check.version && (
-                  <span className="text-xs text-canopy-text/40">v{check.version}</span>
+                  <span className="text-xs text-daintree-text/40">v{check.version}</span>
                 )}
                 {!check.available && (
                   <span className="ml-auto text-xs text-status-error">Not found</span>
@@ -112,7 +112,7 @@ function DownloadDiagnosticsSection() {
         size="sm"
         onClick={() => void handleDownload()}
         disabled={isDownloading}
-        className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text mb-3"
+        className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text mb-3"
       >
         <Download className={cn("w-4 h-4", isDownloading && "animate-spin")} />
         {isDownloading ? "Collecting..." : "Download Diagnostics"}
@@ -218,7 +218,7 @@ export function TroubleshootingTab() {
     if (!newEnabled) {
       if (typeof window !== "undefined") {
         window.dispatchEvent(
-          new CustomEvent("canopy:debug-toggle", { detail: { enabled: false } })
+          new CustomEvent("daintree:debug-toggle", { detail: { enabled: false } })
         );
       }
       setAutoOpenDiagnostics(false);
@@ -330,7 +330,7 @@ export function TroubleshootingTab() {
             onClick={() =>
               void actionService.dispatch("logs.openFile", undefined, { source: "user" })
             }
-            className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text"
+            className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
           >
             <FileText />
             Open Log File
@@ -339,7 +339,7 @@ export function TroubleshootingTab() {
             variant="outline"
             size="sm"
             onClick={handleClearLogs}
-            className="text-status-error border-canopy-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+            className="text-status-error border-daintree-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
           >
             <Trash2 />
             Clear Logs
@@ -361,7 +361,7 @@ export function TroubleshootingTab() {
           ariaLabel="Developer Mode Toggle"
         />
 
-        <div className="ml-4 space-y-3 border-l-2 border-canopy-border pl-4">
+        <div className="ml-4 space-y-3 border-l-2 border-daintree-border pl-4">
           <SettingsSwitchCard
             variant="compact"
             title="Auto-Open Diagnostics Dock"
@@ -403,23 +403,23 @@ export function TroubleshootingTab() {
           </div>
         )}
 
-        <div className="p-3 bg-canopy-border/30 rounded-[var(--radius-md)]">
-          <h5 className="text-xs font-medium text-canopy-text mb-2">
+        <div className="p-3 bg-daintree-border/30 rounded-[var(--radius-md)]">
+          <h5 className="text-xs font-medium text-daintree-text mb-2">
             Advanced: Persistent Verbose Logging
           </h5>
-          <p className="text-xs text-canopy-text/60 mb-2 select-text">
+          <p className="text-xs text-daintree-text/60 mb-2 select-text">
             Use the toggle above for quick debugging. For persistent verbose logs across restarts,
             launch the app with environment variables:
           </p>
-          <code className="block text-xs bg-canopy-bg p-2 rounded border border-canopy-border font-mono text-canopy-text">
-            CANOPY_DEBUG=1 npm run dev
+          <code className="block text-xs bg-daintree-bg p-2 rounded border border-daintree-border font-mono text-daintree-text">
+            DAINTREE_DEBUG=1 npm run dev
           </code>
         </div>
       </SettingsSection>
 
       <div className="space-y-2">
-        <h4 className="text-sm font-medium text-canopy-text">Keyboard Shortcuts</h4>
-        <p className="text-xs text-canopy-text/50 select-text">
+        <h4 className="text-sm font-medium text-daintree-text">Keyboard Shortcuts</h4>
+        <p className="text-xs text-daintree-text/50 select-text">
           Use Cmd+Option+I (Mac) or Ctrl+Shift+I (Windows/Linux) to open DevTools.
         </p>
       </div>

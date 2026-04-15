@@ -95,7 +95,7 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
         }),
     }),
     {
-      name: "canopy-url-history",
+      name: "daintree-url-history",
       storage: createSafeJSONStorage(),
       partialize: (state) => ({ entries: state.entries }),
     }

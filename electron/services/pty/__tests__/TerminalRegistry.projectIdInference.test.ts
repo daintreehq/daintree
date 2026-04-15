@@ -46,7 +46,7 @@ function createMockTerminalProcess(options: {
 
 describe("TerminalRegistry projectId inference", () => {
   it("counts terminals without projectId using .git directory root hashing", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "canopy-terminal-registry-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-terminal-registry-"));
     try {
       fs.mkdirSync(path.join(root, ".git"));
       const subdir = path.join(root, "subdir");
@@ -71,7 +71,7 @@ describe("TerminalRegistry projectId inference", () => {
   });
 
   it("infers main projectId for linked worktrees via commondir", () => {
-    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "canopy-terminal-registry-wt-"));
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-terminal-registry-wt-"));
     try {
       const mainRoot = path.join(sandbox, "main");
       const commonGitDir = path.join(mainRoot, ".git");

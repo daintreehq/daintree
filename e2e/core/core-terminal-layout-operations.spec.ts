@@ -18,7 +18,7 @@ let fixtureDir: string;
 
 async function dispatchAction(page: Page, actionId: string, args?: unknown): Promise<unknown> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return page.evaluate(([id, a]) => (window as any).__canopyDispatchAction(id, a), [
+  return page.evaluate(([id, a]) => (window as any).__daintreeDispatchAction(id, a), [
     actionId,
     args,
   ] as const);

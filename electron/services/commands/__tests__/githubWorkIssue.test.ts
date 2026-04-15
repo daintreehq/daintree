@@ -68,15 +68,15 @@ describe("githubWorkIssueCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hasGitHubTokenMock.mockReturnValue(true);
-    getRepoContextMock.mockResolvedValue({ owner: "canopy", repo: "app" });
-    getIssueUrlMock.mockResolvedValue("https://github.com/canopy/app/issues/55");
+    getRepoContextMock.mockResolvedValue({ owner: "daintree", repo: "app" });
+    getIssueUrlMock.mockResolvedValue("https://github.com/daintree/app/issues/55");
     createClientMock.mockReturnValue(
       vi.fn().mockResolvedValue({
         repository: {
           issue: {
             number: 55,
             title: "!!!",
-            url: "https://github.com/canopy/app/issues/55",
+            url: "https://github.com/daintree/app/issues/55",
             state: "OPEN",
           },
         },
@@ -127,6 +127,6 @@ describe("githubWorkIssueCommand", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.data?.issueUrl).toBe("https://github.com/canopy/app/issues/55");
+    expect(result.data?.issueUrl).toBe("https://github.com/daintree/app/issues/55");
   });
 });

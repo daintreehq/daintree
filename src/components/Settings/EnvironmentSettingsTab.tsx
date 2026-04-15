@@ -193,7 +193,7 @@ export function EnvironmentSettingsTab() {
       <div className="space-y-3">
         <div className="space-y-2">
           {envRows.length === 0 ? (
-            <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+            <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
               No environment variables configured yet
             </div>
           ) : (
@@ -207,8 +207,8 @@ export function EnvironmentSettingsTab() {
                 <div key={envVar.id}>
                   <div
                     className={cn(
-                      "flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border",
-                      error ? "border-status-error/40" : "border-canopy-border"
+                      "flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-daintree-bg border",
+                      error ? "border-status-error/40" : "border-daintree-border"
                     )}
                   >
                     <input
@@ -217,11 +217,11 @@ export function EnvironmentSettingsTab() {
                       onChange={(e) => updateRow(index, "key", e.target.value)}
                       spellCheck={false}
                       autoCapitalize="none"
-                      className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                      className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
                       placeholder="VARIABLE_NAME"
                       aria-label="Environment variable name"
                     />
-                    <span className="text-canopy-text/60">=</span>
+                    <span className="text-daintree-text/60">=</span>
                     <div className="flex-1 relative">
                       <input
                         type={shouldMask ? "password" : "text"}
@@ -231,7 +231,7 @@ export function EnvironmentSettingsTab() {
                         autoCapitalize="none"
                         autoComplete={isSensitive ? "new-password" : "off"}
                         className={cn(
-                          "w-full bg-canopy-sidebar border border-border-strong rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30",
+                          "w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30",
                           isSensitive && "pr-8"
                         )}
                         placeholder="value"
@@ -241,14 +241,14 @@ export function EnvironmentSettingsTab() {
                         <button
                           type="button"
                           onClick={() => toggleVisibility(envVar.id)}
-                          className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-canopy-border/50 transition-colors"
+                          className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-daintree-border/50 transition-colors"
                           aria-pressed={isVisible}
                           aria-label={`${isVisible ? "Hide" : "Show"} value${envVar.key ? ` for ${envVar.key}` : ""}`}
                         >
                           {isVisible ? (
-                            <EyeOff className="h-4 w-4 text-canopy-text/60" />
+                            <EyeOff className="h-4 w-4 text-daintree-text/60" />
                           ) : (
-                            <Eye className="h-4 w-4 text-canopy-text/60" />
+                            <Eye className="h-4 w-4 text-daintree-text/60" />
                           )}
                         </button>
                       )}

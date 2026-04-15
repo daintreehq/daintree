@@ -13,7 +13,7 @@ describe("resilientAtomicWriteFile", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "canopy-atomic-test-"));
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "daintree-atomic-test-"));
   });
 
   afterEach(async () => {
@@ -67,7 +67,7 @@ describe("resilientAtomicWriteFileSync", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(path.join(os.tmpdir(), "canopy-atomic-sync-test-"));
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "daintree-atomic-sync-test-"));
   });
 
   afterEach(() => {
@@ -100,7 +100,7 @@ describe("resilientDirectWriteFile", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "canopy-direct-test-"));
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "daintree-direct-test-"));
   });
 
   afterEach(async () => {

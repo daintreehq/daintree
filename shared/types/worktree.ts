@@ -103,7 +103,7 @@ export interface Worktree {
   /** Timestamp when worktree directory was created (milliseconds since epoch, for sorting) */
   createdAt?: number;
 
-  /** Content from .git/canopy/note file (for AI agent status communication) */
+  /** Content from .git/daintree/note file (for AI agent status communication) */
   aiNote?: string;
 
   /** Timestamp when the note file was last modified (milliseconds since epoch) */
@@ -151,7 +151,7 @@ export interface Worktree {
   /** Resource status from the last manual status check */
   resourceStatus?: WorktreeResourceStatus;
 
-  /** Connect command from .canopy/config.json resource block */
+  /** Connect command from .daintree/config.json resource block */
   resourceConnectCommand?: string;
 
   /** Whether this worktree's project has a resource config block */

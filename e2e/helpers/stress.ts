@@ -79,7 +79,7 @@ export async function measureMainMemory(
   return app.evaluate(async (_, forceGc) => {
     if (forceGc) {
       const g = globalThis as unknown as Record<string, unknown>;
-      const gcFn = (typeof g.__canopy_gc === "function" ? g.__canopy_gc : g.gc) as
+      const gcFn = (typeof g.__daintree_gc === "function" ? g.__daintree_gc : g.gc) as
         | (() => void)
         | undefined;
       if (gcFn) {
@@ -263,19 +263,19 @@ export async function startFrameProbe(page: Page): Promise<void> {
     };
     requestAnimationFrame(loop);
     const w = window as unknown as Record<string, unknown>;
-    w.__canopyFrameProbe = { timestamps, stop: () => (running = false) };
+    w.__daintreeFrameProbe = { timestamps, stop: () => (running = false) };
   });
 }
 
 export async function stopFrameProbe(page: Page): Promise<FrameProbeResult> {
   return page.evaluate(() => {
     const w = window as unknown as Record<string, unknown>;
-    const probe = w.__canopyFrameProbe as { timestamps: number[]; stop: () => void } | undefined;
+    const probe = w.__daintreeFrameProbe as { timestamps: number[]; stop: () => void } | undefined;
     if (!probe) return { sampleCount: 0, maxGapMs: 0, avgGapMs: 0, p95GapMs: 0 };
 
     probe.stop();
     const ts = probe.timestamps;
-    delete w.__canopyFrameProbe;
+    delete w.__daintreeFrameProbe;
 
     if (ts.length < 2) return { sampleCount: ts.length, maxGapMs: 0, avgGapMs: 0, p95GapMs: 0 };
 

@@ -102,22 +102,22 @@ export function ProjectOnboardingWizard({
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" dismissible={!isSaving}>
       <AppDialog.Body>
         <div className="mb-6">
-          <h2 className="text-lg font-semibold text-canopy-text">Set up your project</h2>
-          <p className="text-sm text-canopy-text/60 mt-1">
+          <h2 className="text-lg font-semibold text-daintree-text">Set up your project</h2>
+          <p className="text-sm text-daintree-text/60 mt-1">
             Configure the essentials for your new project. You can change these anytime in settings.
           </p>
         </div>
 
         {!isInitialized && (
-          <div className="text-sm text-canopy-text/60 text-center py-8">
+          <div className="text-sm text-daintree-text/60 text-center py-8">
             Loading project settings...
           </div>
         )}
         <div className={`space-y-6 ${!isInitialized ? "hidden" : ""}`}>
           {/* Identity */}
-          <div className="pb-6 border-b border-canopy-border">
-            <h3 className="text-sm font-semibold text-canopy-text/80 mb-3">Project Identity</h3>
-            <div className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
+          <div className="pb-6 border-b border-daintree-border">
+            <h3 className="text-sm font-semibold text-daintree-text/80 mb-3">Project Identity</h3>
+            <div className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border">
               <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
                 <PopoverTrigger asChild>
                   <button
@@ -146,7 +146,7 @@ export function ProjectOnboardingWizard({
               <div className="flex-1 min-w-0">
                 <label
                   htmlFor="onboarding-project-name"
-                  className="text-xs font-medium text-canopy-text/60 mb-1 ml-1 block"
+                  className="text-xs font-medium text-daintree-text/60 mb-1 ml-1 block"
                 >
                   Project Name
                 </label>
@@ -155,7 +155,7 @@ export function ProjectOnboardingWizard({
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full bg-transparent border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition placeholder:text-text-muted"
+                  className="w-full bg-transparent border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
                   placeholder="My Project"
                 />
               </div>
@@ -168,7 +168,7 @@ export function ProjectOnboardingWizard({
               type="button"
               onClick={() => setIsAdvancedOpen(!isAdvancedOpen)}
               aria-expanded={isAdvancedOpen}
-              className="flex items-center gap-2 text-sm text-canopy-text/60 hover:text-canopy-text transition-colors w-full text-left"
+              className="flex items-center gap-2 text-sm text-daintree-text/60 hover:text-daintree-text transition-colors w-full text-left"
             >
               {isAdvancedOpen ? (
                 <ChevronDown className="h-4 w-4 shrink-0" />
@@ -183,11 +183,11 @@ export function ProjectOnboardingWizard({
               <div className="mt-4 space-y-6 pl-6">
                 {/* Dev Server */}
                 <div>
-                  <h3 className="text-sm font-semibold text-canopy-text/80 mb-1 flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-daintree-text/80 mb-1 flex items-center gap-2">
                     <Rocket className="h-4 w-4" />
                     Dev Server
                   </h3>
-                  <p className="text-xs text-canopy-text/60 mb-3">
+                  <p className="text-xs text-daintree-text/60 mb-3">
                     Command to start your development server (e.g.{" "}
                     <code className="font-mono">npm run dev</code>).
                   </p>
@@ -195,7 +195,7 @@ export function ProjectOnboardingWizard({
                     type="text"
                     value={devServerCommand}
                     onChange={(e) => setDevServerCommand(e.target.value)}
-                    className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition placeholder:text-text-muted"
+                    className="w-full bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-muted"
                     placeholder="npm run dev"
                     spellCheck={false}
                     autoCapitalize="off"
@@ -206,18 +206,18 @@ export function ProjectOnboardingWizard({
 
                 {/* Run Commands */}
                 <div>
-                  <h3 className="text-sm font-semibold text-canopy-text/80 mb-1 flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-daintree-text/80 mb-1 flex items-center gap-2">
                     <SquareTerminal className="h-4 w-4" />
                     Run Commands
                   </h3>
-                  <p className="text-xs text-canopy-text/60 mb-3">
+                  <p className="text-xs text-daintree-text/60 mb-3">
                     Quick-access commands for building, testing, and deploying.
                   </p>
                   <div className="space-y-2">
                     {runCommands.map((cmd, index) => (
                       <div
                         key={cmd.id}
-                        className="p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
+                        className="p-3 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border"
                       >
                         <div className="flex items-start gap-2">
                           <div className="flex-1 min-w-0 space-y-1">
@@ -231,7 +231,7 @@ export function ProjectOnboardingWizard({
                                   return updated;
                                 });
                               }}
-                              className="w-full bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                              className="w-full bg-transparent border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
                               placeholder="Command name"
                               aria-label="Run command name"
                             />
@@ -245,7 +245,7 @@ export function ProjectOnboardingWizard({
                                   return updated;
                                 });
                               }}
-                              className="w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-xs text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                              className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-xs text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
                               placeholder="npm run build"
                               aria-label="Run command"
                             />
@@ -266,7 +266,7 @@ export function ProjectOnboardingWizard({
                                 }
                               }}
                               disabled={index === 0}
-                              className="p-1 rounded hover:bg-canopy-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                              className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                               aria-label="Move up"
                             >
                               <ChevronUp className="h-3.5 w-3.5" />
@@ -286,7 +286,7 @@ export function ProjectOnboardingWizard({
                                 }
                               }}
                               disabled={index === runCommands.length - 1}
-                              className="p-1 rounded hover:bg-canopy-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                              className="p-1 rounded hover:bg-daintree-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                               aria-label="Move down"
                             >
                               <ChevronDown className="h-3.5 w-3.5" />
@@ -328,7 +328,7 @@ export function ProjectOnboardingWizard({
 
       {saveError && (
         <div
-          className="shrink-0 px-6 py-3 border-t border-canopy-border text-sm text-status-error bg-status-error/10"
+          className="shrink-0 px-6 py-3 border-t border-daintree-border text-sm text-status-error bg-status-error/10"
           role="alert"
         >
           {saveError}

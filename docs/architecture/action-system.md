@@ -1,6 +1,6 @@
 # Action System Architecture
 
-The Action System is Canopy's central orchestration layer for all UI operations. It provides a unified, typed API that powers menus, keybindings, context menus, and—critically—AI agent automation.
+The Action System is Daintree's central orchestration layer for all UI operations. It provides a unified, typed API that powers menus, keybindings, context menus, and—critically—AI agent automation.
 
 ## Core Philosophy
 

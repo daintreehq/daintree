@@ -12,16 +12,16 @@ export interface FaultDelayConfig {
 export type FaultConfig = FaultErrorConfig | FaultDelayConfig;
 
 declare global {
-  var __canopyFaultRegistry: Record<string, FaultConfig> | undefined;
+  var __daintreeFaultRegistry: Record<string, FaultConfig> | undefined;
 }
 
-export const FAULT_MODE_ENABLED = process.env.CANOPY_E2E_FAULT_MODE === "1";
+export const FAULT_MODE_ENABLED = process.env.DAINTREE_E2E_FAULT_MODE === "1";
 
 function ensureRegistry(): Record<string, FaultConfig> {
-  if (!globalThis.__canopyFaultRegistry) {
-    globalThis.__canopyFaultRegistry = {};
+  if (!globalThis.__daintreeFaultRegistry) {
+    globalThis.__daintreeFaultRegistry = {};
   }
-  return globalThis.__canopyFaultRegistry;
+  return globalThis.__daintreeFaultRegistry;
 }
 
 export function initFaultRegistry(): void {
@@ -31,7 +31,7 @@ export function initFaultRegistry(): void {
 
 export function getFault(channel: string): FaultConfig | undefined {
   if (!FAULT_MODE_ENABLED) return undefined;
-  return globalThis.__canopyFaultRegistry?.[channel];
+  return globalThis.__daintreeFaultRegistry?.[channel];
 }
 
 export function setFault(channel: string, config: FaultConfig): void {
@@ -41,18 +41,18 @@ export function setFault(channel: string, config: FaultConfig): void {
 
 export function clearFault(channel: string): void {
   if (!FAULT_MODE_ENABLED) return;
-  const registry = globalThis.__canopyFaultRegistry;
+  const registry = globalThis.__daintreeFaultRegistry;
   if (registry) delete registry[channel];
 }
 
 export function clearAllFaults(): void {
   if (!FAULT_MODE_ENABLED) return;
-  globalThis.__canopyFaultRegistry = {};
+  globalThis.__daintreeFaultRegistry = {};
 }
 
 export async function applyInvokeFault(channel: string): Promise<void> {
   if (!FAULT_MODE_ENABLED) return;
-  const fault = globalThis.__canopyFaultRegistry?.[channel];
+  const fault = globalThis.__daintreeFaultRegistry?.[channel];
   if (!fault) return;
 
   if (fault.kind === "delay") {

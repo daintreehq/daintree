@@ -96,7 +96,7 @@ function snapshotsEqual<T>(left: T[] | undefined, right: T[]): boolean {
 
 function shouldCollectPersistencePerf(): boolean {
   if (typeof window === "undefined") return false;
-  return isRendererPerfCaptureEnabled() || Array.isArray(window.__CANOPY_PERF_MARKS__);
+  return isRendererPerfCaptureEnabled() || Array.isArray(window.__DAINTREE_PERF_MARKS__);
 }
 
 const PERF_TEXT_ENCODER = new TextEncoder();

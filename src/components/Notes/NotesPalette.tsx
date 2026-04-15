@@ -15,7 +15,7 @@ import CodeMirror from "@uiw/react-codemirror";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { EditorView } from "@codemirror/view";
-import { canopyTheme } from "./editorTheme";
+import { daintreeTheme } from "./editorTheme";
 import { notesTypographyExtension } from "./codeBlockExtension";
 import { MarkdownToolbar } from "./MarkdownToolbar";
 import {
@@ -216,17 +216,17 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
           <div
             ref={dialogRef}
             className={cn(
-              "w-full max-w-2xl mx-4 bg-canopy-bg border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden",
+              "w-full max-w-2xl mx-4 bg-daintree-bg border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden",
               "motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-200",
               "flex flex-col h-[80vh] max-h-[900px]"
             )}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="px-3 py-1.5 border-b border-canopy-border flex items-center justify-between shrink-0">
+            <div className="px-3 py-1.5 border-b border-daintree-border flex items-center justify-between shrink-0">
               <div className="flex items-center gap-3">
-                <span className="text-[11px] text-canopy-text/50">Notes</span>
-                <span className="text-[11px] text-canopy-text/50 font-mono">
+                <span className="text-[11px] text-daintree-text/50">Notes</span>
+                <span className="text-[11px] text-daintree-text/50 font-mono">
                   {keybindingService.getDisplayCombo("notes.openPalette") || "⌘⇧N"}
                 </span>
               </div>
@@ -254,7 +254,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                       <button
                         type="button"
                         onClick={actions.handleClose}
-                        className="p-1 rounded-[var(--radius-sm)] text-canopy-text/50 hover:text-canopy-text hover:bg-tint/5 transition-colors"
+                        className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-daintree-text hover:bg-tint/5 transition-colors"
                         aria-label="Close"
                       >
                         <X size={16} />
@@ -269,8 +269,8 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
             {/* Split pane content */}
             <div className="flex flex-1 min-h-0">
               {/* Notes list sidebar */}
-              <div className="w-64 border-r border-canopy-border flex flex-col shrink-0">
-                <div className="p-2 border-b border-canopy-border space-y-1.5">
+              <div className="w-64 border-r border-daintree-border flex flex-col shrink-0">
+                <div className="p-2 border-b border-daintree-border space-y-1.5">
                   <div className="flex items-center gap-1.5">
                     <input
                       ref={inputRef}
@@ -279,13 +279,13 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                       onChange={(e) => search.setQuery(e.target.value)}
                       onKeyDown={actions.handleKeyDown}
                       placeholder="Search notes..."
-                      className="flex-1 min-w-0 px-3 py-2 text-sm bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-md)] text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent/40 focus:ring-1 focus:ring-canopy-accent/20"
+                      className="flex-1 min-w-0 px-3 py-2 text-sm bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-md)] text-daintree-text placeholder:text-daintree-text/40 focus:outline-none focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/20"
                     />
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <button
                           type="button"
-                          className="shrink-0 p-2 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-sidebar text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-sidebar/80 transition-colors"
+                          className="shrink-0 p-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-sidebar text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-sidebar/80 transition-colors"
                           aria-label="Sort notes"
                         >
                           <ArrowUpDown size={14} />
@@ -315,8 +315,8 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                         className={cn(
                           "shrink-0 px-2 py-0.5 rounded-full text-[11px] transition-colors",
                           search.selectedTag === null
-                            ? "bg-canopy-accent/20 text-canopy-accent"
-                            : "bg-canopy-border/50 text-canopy-text/50 hover:text-canopy-text hover:bg-canopy-border"
+                            ? "bg-daintree-accent/20 text-daintree-accent"
+                            : "bg-daintree-border/50 text-daintree-text/50 hover:text-daintree-text hover:bg-daintree-border"
                         )}
                       >
                         All
@@ -331,8 +331,8 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                           className={cn(
                             "shrink-0 px-2 py-0.5 rounded-full text-[11px] transition-colors",
                             search.selectedTag === tag
-                              ? "bg-canopy-accent/20 text-canopy-accent"
-                              : "bg-canopy-border/50 text-canopy-text/50 hover:text-canopy-text hover:bg-canopy-border"
+                              ? "bg-daintree-accent/20 text-daintree-accent"
+                              : "bg-daintree-border/50 text-daintree-text/50 hover:text-daintree-text hover:bg-daintree-border"
                           )}
                         >
                           {tag}
@@ -344,7 +344,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
 
                 <ScrollShadow className="flex-1" ref={listRef} role="listbox">
                   {isLoading || search.isSearching ? (
-                    <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
+                    <div className="px-3 py-8 text-center text-daintree-text/50 text-sm">
                       Loading...
                     </div>
                   ) : showCreateItem ? (
@@ -353,17 +353,17 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                       aria-selected={actions.selectedIndex === 0}
                       className={cn(
                         "relative flex items-center gap-2 px-3 py-1.5 cursor-pointer transition-colors",
-                        "bg-overlay-soft text-canopy-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                        "bg-overlay-soft text-daintree-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
                       )}
                       onClick={() => actions.handleCreateNote(trimmedQuery)}
                     >
-                      <Plus className="shrink-0 w-3.5 h-3.5 text-canopy-accent" />
+                      <Plus className="shrink-0 w-3.5 h-3.5 text-daintree-accent" />
                       <span className="text-sm font-medium truncate">
                         Create &ldquo;{createDisplayTitle}&rdquo;
                       </span>
                     </div>
                   ) : search.visibleNotes.length === 0 ? (
-                    <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
+                    <div className="px-3 py-8 text-center text-daintree-text/50 text-sm">
                       {search.selectedTag ? "No notes with this tag" : "No notes yet"}
                     </div>
                   ) : (
@@ -387,7 +387,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
               <div className="flex-1 flex flex-col min-w-0">
                 {selectedNote ? (
                   <>
-                    <div className="px-3 h-9 border-b border-canopy-border flex items-center justify-between shrink-0 bg-overlay-subtle">
+                    <div className="px-3 h-9 border-b border-daintree-border flex items-center justify-between shrink-0 bg-overlay-subtle">
                       <TooltipProvider>
                         <Tooltip open={titleEdit.isEditingHeaderTitle ? false : undefined}>
                           <TooltipTrigger asChild>
@@ -423,15 +423,15 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                               className={cn(
                                 "flex-1 mr-3 text-sm font-medium px-1.5 py-1 border rounded appearance-none focus:outline-none box-border",
                                 titleEdit.isEditingHeaderTitle
-                                  ? "bg-canopy-bg/60 border-canopy-accent/50 text-canopy-text cursor-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
-                                  : "bg-transparent border-transparent text-canopy-text truncate cursor-text hover:text-canopy-text"
+                                  ? "bg-daintree-bg/60 border-daintree-accent/50 text-daintree-text cursor-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                                  : "bg-transparent border-transparent text-daintree-text truncate cursor-text hover:text-daintree-text"
                               )}
                             />
                           </TooltipTrigger>
                           <TooltipContent side="bottom">Double-click to rename</TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
-                      <div className="flex items-center rounded-[var(--radius-sm)] border border-canopy-border/50 overflow-hidden mr-1 shrink-0">
+                      <div className="flex items-center rounded-[var(--radius-sm)] border border-daintree-border/50 overflow-hidden mr-1 shrink-0">
                         {(
                           [
                             { mode: "edit" as const, icon: PenLine, label: "Edit" },
@@ -441,7 +441,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                           <button
                             key={mode}
                             onClick={() => setPaletteViewMode(mode)}
-                            className={`px-1.5 py-1 text-xs transition-colors ${paletteViewMode === mode ? "bg-canopy-text/10 text-canopy-text" : "text-canopy-text/40 hover:text-canopy-text/70 hover:bg-canopy-text/5"}`}
+                            className={`px-1.5 py-1 text-xs transition-colors ${paletteViewMode === mode ? "bg-daintree-text/10 text-daintree-text" : "text-daintree-text/40 hover:text-daintree-text/70 hover:bg-daintree-text/5"}`}
                             aria-label={label}
                             aria-pressed={paletteViewMode === mode}
                           >
@@ -455,7 +455,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                             type="button"
                             onClick={() => handleOpenAsPanel("grid")}
                             disabled={isOpeningPanel}
-                            className="p-1.5 rounded-l-[var(--radius-sm)] text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-text/10 transition-colors flex items-center gap-1.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="p-1.5 rounded-l-[var(--radius-sm)] text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-text/10 transition-colors flex items-center gap-1.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1 disabled:opacity-50 disabled:cursor-not-allowed"
                             aria-label="Open in grid (Shift+Enter)"
                           >
                             <ExternalLink size={14} />
@@ -464,7 +464,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                             <button
                               type="button"
                               disabled={isOpeningPanel}
-                              className="p-1.5 pl-1 pr-1.5 rounded-r-[var(--radius-sm)] text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-text/10 transition-colors border-l border-canopy-border/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                              className="p-1.5 pl-1 pr-1.5 rounded-r-[var(--radius-sm)] text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-text/10 transition-colors border-l border-daintree-border/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1 disabled:opacity-50 disabled:cursor-not-allowed"
                               aria-label="More options"
                             >
                               <ChevronDown size={12} />
@@ -474,13 +474,13 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                         <DropdownMenuContent align="end" className="min-w-[140px]">
                           <DropdownMenuItem onSelect={() => handleOpenAsPanel("grid")}>
                             Open in Grid
-                            <span className="ml-auto text-[10px] font-mono text-canopy-text/40">
+                            <span className="ml-auto text-[10px] font-mono text-daintree-text/40">
                               ⇧⏎
                             </span>
                           </DropdownMenuItem>
                           <DropdownMenuItem onSelect={() => handleOpenAsPanel("dock")}>
                             Open in Dock
-                            <span className="ml-auto text-[10px] font-mono text-canopy-text/40">
+                            <span className="ml-auto text-[10px] font-mono text-daintree-text/40">
                               ⇧⌘⏎
                             </span>
                           </DropdownMenuItem>
@@ -489,18 +489,18 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                     </div>
 
                     {editor.noteMetadata && (
-                      <div className="px-3 py-1.5 border-b border-canopy-border flex items-center gap-1.5 flex-wrap bg-overlay-subtle/50">
-                        <Tag size={12} className="text-canopy-text/40 shrink-0" />
+                      <div className="px-3 py-1.5 border-b border-daintree-border flex items-center gap-1.5 flex-wrap bg-overlay-subtle/50">
+                        <Tag size={12} className="text-daintree-text/40 shrink-0" />
                         {(editor.noteMetadata.tags ?? []).map((tag) => (
                           <span
                             key={tag}
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-canopy-accent/10 text-canopy-accent text-[11px]"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-daintree-accent/10 text-daintree-accent text-[11px]"
                           >
                             {tag}
                             <button
                               type="button"
                               onClick={() => editor.handleRemoveTag(tag)}
-                              className="hover:text-canopy-text transition-colors"
+                              className="hover:text-daintree-text transition-colors"
                               aria-label={`Remove tag ${tag}`}
                             >
                               <X size={10} />
@@ -519,7 +519,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                             }
                           }}
                           placeholder={editor.noteMetadata.tags?.length ? "" : "Add tags..."}
-                          className="flex-1 min-w-[60px] bg-transparent text-[11px] text-canopy-text placeholder:text-canopy-text/30 focus:outline-none py-0.5"
+                          className="flex-1 min-w-[60px] bg-transparent text-[11px] text-daintree-text placeholder:text-daintree-text/30 focus:outline-none py-0.5"
                         />
                       </div>
                     )}
@@ -543,7 +543,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
 
                     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
                       {editor.isLoadingContent ? (
-                        <div className="flex items-center justify-center h-full text-canopy-text/50 text-sm">
+                        <div className="flex items-center justify-center h-full text-daintree-text/50 text-sm">
                           Loading...
                         </div>
                       ) : paletteViewMode === "preview" ? (
@@ -551,11 +551,11 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                       ) : (
                         <>
                           {!editor.hasConflict && <MarkdownToolbar editorViewRef={editorViewRef} />}
-                          <div className="flex-1 overflow-hidden text-[13px] [&_.cm-editor]:h-full [&_.cm-scroller]:p-4 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic">
+                          <div className="flex-1 overflow-hidden text-[13px] [&_.cm-editor]:h-full [&_.cm-scroller]:p-4 [&_.cm-placeholder]:text-daintree-text/30 [&_.cm-placeholder]:italic">
                             <CodeMirror
                               value={editor.noteContent}
                               height="100%"
-                              theme={canopyTheme}
+                              theme={daintreeTheme}
                               extensions={extensions}
                               onChange={editor.handleContentChange}
                               onCreateEditor={(view) => {
@@ -577,12 +577,12 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                     </div>
                   </>
                 ) : (
-                  <div className="flex-1 flex flex-col items-center justify-center text-canopy-text/30">
+                  <div className="flex-1 flex flex-col items-center justify-center text-daintree-text/30">
                     <StickyNote width={32} height={32} className="mb-3" />
                     <p className="text-sm">Select a note to view</p>
                     <p className="text-xs mt-2">
                       or press{" "}
-                      <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/40 text-[11px]">
+                      <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/40 text-[11px]">
                         ⌘N
                       </kbd>{" "}
                       to create one

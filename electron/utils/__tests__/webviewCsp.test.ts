@@ -49,8 +49,8 @@ describe("webviewCsp", () => {
       expect(classifyPartition("persist:dev-preview-foo-bar-baz")).toBe("dev-preview");
     });
 
-    it("identifies shared canopy-app partition as project", () => {
-      expect(classifyPartition("persist:canopy-app")).toBe("project");
+    it("identifies shared daintree-app partition as project", () => {
+      expect(classifyPartition("persist:daintree")).toBe("project");
     });
 
     it("identifies legacy per-project partitions as project", () => {

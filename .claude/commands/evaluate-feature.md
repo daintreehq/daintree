@@ -1,11 +1,11 @@
 ---
-description: Evaluate whether a proposed feature belongs in Canopy
+description: Evaluate whether a proposed feature belongs in Daintree
 argument-hint: <feature proposal text>
 ---
 
 # Feature Evaluation Command
 
-You are the **Canopy Feature Gatekeeper**. Your job is to rigorously evaluate whether a proposed feature belongs in this project. You must explore the codebase, understand the existing patterns, and make an informed recommendation.
+You are the **Daintree Feature Gatekeeper**. Your job is to rigorously evaluate whether a proposed feature belongs in this project. You must explore the codebase, understand the existing patterns, and make an informed recommendation.
 
 **Your default answer should be NO.** In the age of AI coding assistants, feature bloat is the new technical debt. Because we _can_ build anything quickly, the discipline lies entirely in what we choose _not_ to build.
 
@@ -15,23 +15,23 @@ $ARGUMENTS
 
 ---
 
-## The Canopy Philosophy
+## The Daintree Philosophy
 
 > _"You can do anything, but you cannot do everything."_
 
-### What Canopy IS
+### What Daintree IS
 
-**Canopy is the Orchestration Layer for AI Coding Agents.**
+**Daintree is the Orchestration Layer for AI Coding Agents.**
 
 It is the orchestration layer where you _direct_ agent work, monitor agent fleets, and intervene when agents need help. It exists to bridge the gap between human intent, codebase context, and agent execution.
 
-**The Metaphor:** If VS Code is the workbench where you craft the part, Canopy is the Air Traffic Control tower where you coordinate the fleet.
+**The Metaphor:** If VS Code is the workbench where you craft the part, Daintree is the Air Traffic Control tower where you coordinate the fleet.
 
-**Canopy is NOT an IDE (like VS Code). It is NOT a Terminal (like iTerm). It is NOT a chat UI (like ChatGPT). It is a Delegation and Orchestration Layer.**
+**Daintree is NOT an IDE (like VS Code). It is NOT a Terminal (like iTerm). It is NOT a chat UI (like ChatGPT). It is a Delegation and Orchestration Layer.**
 
-### What Canopy Does Today
+### What Daintree Does Today
 
-Canopy has evolved significantly. Here is the actual feature surface:
+Daintree has evolved significantly. Here is the actual feature surface:
 
 **Agent Management:**
 
@@ -64,7 +64,7 @@ Canopy has evolved significantly. Here is the actual feature surface:
 **Project Management:**
 
 - Multi-project support with project switching
-- In-repo `.canopy/project.json` for portable project identity
+- In-repo `.daintree/project.json` for portable project identity
 - Project Pulse for activity monitoring
 - Welcome screen and onboarding wizard
 - First-run CLI agent setup wizard with embedded terminal
@@ -79,7 +79,7 @@ Canopy has evolved significantly. Here is the actual feature surface:
 - Terminal recipes with variable replacement
 - Notification center
 - Crash reporting (opt-in Sentry)
-- Installable `canopy` CLI tool
+- Installable `daintree` CLI tool
 - Hibernation (save/restore terminal state)
 
 ### Core Pillars (Updated)
@@ -88,7 +88,7 @@ Canopy has evolved significantly. Here is the actual feature surface:
 2. **Agent State Intelligence** — Know when agents are working, waiting, stuck, or completed — and react automatically
 3. **Worktree Orchestration** — Partition work across git worktrees, monitor status, compare results
 4. **Context Injection** — Generate and inject the right codebase context into agents via CopyTree
-5. **Review & Intervention** — Review agent output, stage changes, diff across worktrees, and push — without leaving Canopy
+5. **Review & Intervention** — Review agent output, stage changes, diff across worktrees, and push — without leaving Daintree
 6. **Dev Server Management** — Auto-detect and manage dev servers per worktree with embedded preview
 
 **Brand Voice:** "Calm partner" — helpful, not flashy. Reduces cognitive load. Opinionated defaults.
@@ -134,9 +134,9 @@ If the feature **already exists completely**, stop here and report that.
 
 ### Phase 2: Mission Alignment
 
-**Goal:** Assess whether this feature aligns with Canopy's mission.
+**Goal:** Assess whether this feature aligns with Daintree's mission.
 
-**Canopy's Mission Questions:**
+**Daintree's Mission Questions:**
 
 1. Does this enhance AI agent orchestration workflows?
 2. Does this integrate with terminals, worktrees, agent state, or context injection?
@@ -146,7 +146,7 @@ If the feature **already exists completely**, stop here and report that.
 
 ### The Green Light Test (Must satisfy AT LEAST 2)
 
-A feature belongs in Canopy ONLY if it satisfies **at least two** of these criteria:
+A feature belongs in Daintree ONLY if it satisfies **at least two** of these criteria:
 
 | #   | Criterion                         | Description                                                                                 |
 | --- | --------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -159,7 +159,7 @@ A feature belongs in Canopy ONLY if it satisfies **at least two** of these crite
 
 ### The Red Light Test (Automatic Rejection)
 
-Canopy **explicitly rejects** features that:
+Daintree **explicitly rejects** features that:
 
 | Anti-Pattern                      | Why                                                                                                                                                                                                                       |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -176,28 +176,28 @@ Canopy **explicitly rejects** features that:
 - One-off utilities without workflow integration
 - Anything easily done with a shell alias
 - Features better handled by external tools (VS Code, SourceTree, Postman)
-- Features that only benefit single-agent, single-worktree workflows (too simple for Canopy)
+- Features that only benefit single-agent, single-worktree workflows (too simple for Daintree)
 
 ### The Workshop vs Orchestration Layer Question
 
 Ask yourself:
 
-> _"Does this feature belong in the Workshop (VS Code) or the Orchestration Layer (Canopy)?"_
+> _"Does this feature belong in the Workshop (VS Code) or the Orchestration Layer (Daintree)?"_
 
 If the answer is **Workshop**, we don't build the feature. At most, we build a **button that opens the Workshop** to the right place (like the existing "Open in Editor" integration).
 
 ### The Automation Gradient
 
-Canopy features should trend toward automation, not interaction. For any proposed feature, ask where it falls:
+Daintree features should trend toward automation, not interaction. For any proposed feature, ask where it falls:
 
-| Level          | Description                                         | Canopy Fit                     |
-| -------------- | --------------------------------------------------- | ------------------------------ |
-| **Manual**     | User must perform action every time                 | Poor — should be a shell alias |
-| **Assisted**   | Canopy detects something, user acts                 | Acceptable — bridges the gap   |
-| **Reactive**   | Canopy detects and responds with minimal user input | Good — reduces cognitive load  |
-| **Autonomous** | Canopy handles it entirely, user is notified        | Excellent — true orchestration |
+| Level          | Description                                           | Daintree Fit                   |
+| -------------- | ----------------------------------------------------- | ------------------------------ |
+| **Manual**     | User must perform action every time                   | Poor — should be a shell alias |
+| **Assisted**   | Daintree detects something, user acts                 | Acceptable — bridges the gap   |
+| **Reactive**   | Daintree detects and responds with minimal user input | Good — reduces cognitive load  |
+| **Autonomous** | Daintree handles it entirely, user is notified        | Excellent — true orchestration |
 
-Features at the "Manual" level rarely belong in Canopy. Features at "Reactive" or "Autonomous" level are strong candidates.
+Features at the "Manual" level rarely belong in Daintree. Features at "Reactive" or "Autonomous" level are strong candidates.
 
 **Report:**
 
@@ -231,7 +231,7 @@ If the feature **fails** the Green Light test (score < 2) or **triggers** any Re
 
 ### Phase 3: Architectural Fit
 
-**Goal:** Assess whether this feature fits Canopy's architecture.
+**Goal:** Assess whether this feature fits Daintree's architecture.
 
 **Explore the architecture:**
 
@@ -239,7 +239,7 @@ If the feature **fails** the Green Light test (score < 2) or **triggers** any Re
 2. Check `electron/ipc/channels.ts` to understand IPC patterns
 3. Look at a similar feature's implementation as a reference
 
-**Canopy's 4-Layer Pattern:**
+**Daintree's 4-Layer Pattern:**
 Every feature follows: **Service → IPC → Store → UI**
 
 1. **Service** (`electron/services/`) — Business logic, system operations (~60 services)
@@ -314,9 +314,9 @@ IMPLEMENTATION ASSESSMENT
 
 **Value Questions:**
 
-1. How often would users encounter this need? (Consider: Canopy users run 2-10 agents in parallel across multiple worktrees)
+1. How often would users encounter this need? (Consider: Daintree users run 2-10 agents in parallel across multiple worktrees)
 2. How painful is the current alternative (if any)?
-3. Does this differentiate Canopy from "just use tmux + multiple terminals"?
+3. Does this differentiate Daintree from "just use tmux + multiple terminals"?
 4. Does this deepen the core value proposition of orchestration?
 5. Would this feature make sense as a Pro/paid feature (aggregation across worktrees)?
 
@@ -328,7 +328,7 @@ IMPLEMENTATION ASSESSMENT
 4. Could this become technical debt?
 
 **The Solo Developer Test:**
-Canopy is maintained by a small team. Every feature added is a feature that must be maintained, debugged across 3 platforms, and kept compatible with 4+ CLI agents that each have their own update cadence. Features must earn their keep.
+Daintree is maintained by a small team. Every feature added is a feature that must be maintained, debugged across 3 platforms, and kept compatible with 4+ CLI agents that each have their own update cadence. Features must earn their keep.
 
 **Report:**
 
@@ -370,7 +370,7 @@ RECOMMENDATION:
 [If APPROVE]: Proceed with implementation. Key integration points: [list]
 [If APPROVE WITH CHANGES]: Modify proposal as follows: [specifics]
 [If DEFER]: Revisit when: [conditions]
-[If REJECT]: Does not fit Canopy because: [clear reasons]
+[If REJECT]: Does not fit Daintree because: [clear reasons]
 
 SUGGESTED ALTERNATIVES (if applicable):
 - [Alternative approach 1]
@@ -470,7 +470,7 @@ For **REJECT**:
 
 **Remember:**
 
-- Canopy is opinionated. Not every good feature belongs here.
+- Daintree is opinionated. Not every good feature belongs here.
 - Feature bloat is the new technical debt.
 - Just because we _can_ build something doesn't mean we _should_.
 - The goal is a focused, cohesive tool for AI agent orchestration, not a general-purpose IDE.
@@ -480,7 +480,7 @@ For **REJECT**:
 
 ## Reference: Decision Examples
 
-These reflect actual decisions made in Canopy's development:
+These reflect actual decisions made in Daintree's development:
 
 | Feature Proposal               | Decision                 | Reasoning                                                               |
 | ------------------------------ | ------------------------ | ----------------------------------------------------------------------- |

@@ -31,7 +31,7 @@ export function PanelLimitConfirmDialog() {
       variant="info"
     >
       {memoryMB != null && (
-        <p className="text-xs text-canopy-text/60 tabular-nums">
+        <p className="text-xs text-daintree-text/60 tabular-nums">
           Current memory usage: {Math.round(memoryMB)} MB
         </p>
       )}

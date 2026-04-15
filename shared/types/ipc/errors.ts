@@ -13,13 +13,13 @@ export interface SerializedError {
 }
 
 export interface IpcSuccessEnvelope<T = unknown> {
-  __canopyIpcEnvelope: true;
+  __daintreeIpcEnvelope: true;
   ok: true;
   data: T;
 }
 
 export interface IpcErrorEnvelope {
-  __canopyIpcEnvelope: true;
+  __daintreeIpcEnvelope: true;
   ok: false;
   error: SerializedError;
 }
@@ -30,7 +30,7 @@ export function isIpcEnvelope(value: unknown): value is IpcEnvelope {
   return (
     value !== null &&
     typeof value === "object" &&
-    (value as Record<string, unknown>).__canopyIpcEnvelope === true
+    (value as Record<string, unknown>).__daintreeIpcEnvelope === true
   );
 }
 

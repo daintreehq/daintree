@@ -30,7 +30,7 @@ const GITHUB_LIGHT_TOKENS: Pick<
   "github-draft": "#8B949E",
 };
 
-export function createCanopyTokens(
+export function createDaintreeTokens(
   type: "dark" | "light",
   tokens: Partial<AppColorSchemeTokens> &
     Pick<
@@ -263,8 +263,8 @@ function withAlpha(color: string, alpha: number): string {
 }
 
 const INTERNAL_LIGHT_FALLBACK_SOURCE: BuiltInThemeSource = {
-  id: "canopy-light-base",
-  name: "Canopy Light Base",
+  id: "daintree-light-base",
+  name: "Daintree Light Base",
   type: "light",
   builtin: true,
   palette: {
@@ -406,7 +406,7 @@ export function normalizeAccentHex(value: unknown): string | null {
 
 /**
  * Derive the six accent tokens from a single user-picked hex color. Mirrors
- * the formulas in `createCanopyTokens` so the override is indistinguishable
+ * the formulas in `createDaintreeTokens` so the override is indistinguishable
  * from a theme's native accent.
  *
  * - `accent-primary`: the hex itself
@@ -625,7 +625,7 @@ function compilePaletteToTokens(palette: ThemePalette): AppColorSchemeTokens {
               dialog: "0 12px 32px rgba(0, 0, 0, 0.15)",
             };
 
-  return createCanopyTokens(palette.type, {
+  return createDaintreeTokens(palette.type, {
     "surface-grid": palette.surfaces.grid,
     "surface-sidebar": palette.surfaces.sidebar,
     "surface-canvas": palette.surfaces.canvas,

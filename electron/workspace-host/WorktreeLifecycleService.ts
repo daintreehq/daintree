@@ -31,14 +31,14 @@ export type ResourceConfig = z.infer<typeof ResourceConfigSchema>;
 
 const ResourcesConfigSchema = z.record(z.string(), ResourceConfigSchema);
 
-const CanopyLifecycleConfigSchema = z.object({
+const DaintreeLifecycleConfigSchema = z.object({
   setup: z.array(z.string()).optional(),
   teardown: z.array(z.string()).optional(),
   resource: ResourceConfigSchema.optional(),
   resources: ResourcesConfigSchema.optional(),
 });
 
-export type CanopyLifecycleConfig = z.infer<typeof CanopyLifecycleConfigSchema>;
+export type DaintreeLifecycleConfig = z.infer<typeof DaintreeLifecycleConfigSchema>;
 
 /** Variables available for {{variable}} substitution in lifecycle commands. */
 export interface LifecycleVariables {
@@ -93,21 +93,21 @@ export class WorktreeLifecycleService {
 
   /**
    * Load the merged lifecycle config for a worktree, using the priority chain:
-   * 1. User-level: ~/.canopy/projects/<sanitized-rootPath>/config.json
-   * 2. Worktree-level: <worktreePath>/.canopy/config.json
-   * 3. Main repo level: <projectRootPath>/.canopy/config.json
+   * 1. User-level: ~/.daintree/projects/<sanitized-rootPath>/config.json
+   * 2. Worktree-level: <worktreePath>/.daintree/config.json
+   * 3. Main repo level: <projectRootPath>/.daintree/config.json
    *
    * The first existing, valid config file found (highest priority first) wins completely.
    */
   async loadConfig(
     worktreePath: string,
     projectRootPath: string
-  ): Promise<CanopyLifecycleConfig | null> {
+  ): Promise<DaintreeLifecycleConfig | null> {
     const sanitizedRoot = projectRootPath.replace(/[/\\:*?"<>|]/g, "_");
     const candidates = [
-      pathJoin(this.homeDir, ".canopy", "projects", sanitizedRoot, "config.json"),
-      pathJoin(worktreePath, ".canopy", "config.json"),
-      pathJoin(projectRootPath, ".canopy", "config.json"),
+      pathJoin(this.homeDir, ".daintree", "projects", sanitizedRoot, "config.json"),
+      pathJoin(worktreePath, ".daintree", "config.json"),
+      pathJoin(projectRootPath, ".daintree", "config.json"),
     ];
 
     for (const configPath of candidates) {
@@ -121,7 +121,7 @@ export class WorktreeLifecycleService {
         continue;
       }
 
-      const result = CanopyLifecycleConfigSchema.safeParse(raw);
+      const result = DaintreeLifecycleConfigSchema.safeParse(raw);
       if (!result.success) {
         console.warn("[WorktreeLifecycle] Invalid config at:", configPath, result.error.message);
         continue;
@@ -162,13 +162,13 @@ export class WorktreeLifecycleService {
   }
 
   /**
-   * Copy .canopy/ from the main repo to the new worktree.
+   * Copy .daintree/ from the main repo to the new worktree.
    * Skips if source does not exist. Existing files in dest are never overwritten
    * so worktree-level overrides are preserved.
    */
-  async copyCanopyDir(srcPath: string, destPath: string): Promise<void> {
-    const src = pathJoin(srcPath, ".canopy");
-    const dest = pathJoin(destPath, ".canopy");
+  async copyDaintreeDir(srcPath: string, destPath: string): Promise<void> {
+    const src = pathJoin(srcPath, ".daintree");
+    const dest = pathJoin(destPath, ".daintree");
 
     if (!(await fileExists(src))) {
       return;
@@ -178,13 +178,13 @@ export class WorktreeLifecycleService {
       // force:false preserves any files already present in dest (e.g. worktree-level overrides)
       await cp(src, dest, { recursive: true, force: false, errorOnExist: false });
     } catch (err) {
-      console.warn("[WorktreeLifecycle] Failed to copy .canopy dir:", err);
+      console.warn("[WorktreeLifecycle] Failed to copy .daintree dir:", err);
     }
   }
 
   /**
    * Run an array of shell commands sequentially in a given directory.
-   * Each command is spawned with a minimal env + CANOPY_* vars.
+   * Each command is spawned with a minimal env + DAINTREE_* vars.
    * A shared timeout covers the entire set of commands.
    * On Unix, process group kill terminates the whole tree; on Windows, taskkill /T is used.
    */
@@ -376,8 +376,8 @@ export class WorktreeLifecycleService {
   ): Promise<Record<string, ResourceConfig> | null> {
     const sanitizedRoot = projectRootPath.replace(/[/\\:*?"<>|]/g, "_");
     const candidates = [
-      pathJoin(this.homeDir, ".canopy", "projects", sanitizedRoot, "settings.json"),
-      pathJoin(projectRootPath, ".canopy", "settings.json"),
+      pathJoin(this.homeDir, ".daintree", "projects", sanitizedRoot, "settings.json"),
+      pathJoin(projectRootPath, ".daintree", "settings.json"),
     ];
     for (const settingsPath of candidates) {
       if (!(await fileExists(settingsPath))) continue;
@@ -414,26 +414,26 @@ export class WorktreeLifecycleService {
     extraEnv?: Record<string, string>
   ): Record<string, string> {
     const env: Record<string, string> = {
-      ...(extraEnv ?? {}), // project vars first — CANOPY_* below will override
+      ...(extraEnv ?? {}), // project vars first — DAINTREE_* below will override
       CI: "true",
       NONINTERACTIVE: "1",
       GIT_TERMINAL_PROMPT: "0",
       DEBIAN_FRONTEND: "noninteractive",
-      CANOPY_WORKTREE_PATH: worktreePath,
-      CANOPY_PROJECT_ROOT: projectRootPath,
-      CANOPY_WORKTREE_NAME: worktreeName,
+      DAINTREE_WORKTREE_PATH: worktreePath,
+      DAINTREE_PROJECT_ROOT: projectRootPath,
+      DAINTREE_WORKTREE_NAME: worktreeName,
     };
     if (branch) {
-      env.CANOPY_BRANCH = branch;
+      env.DAINTREE_BRANCH = branch;
     }
     if (resource?.provider) {
-      env.CANOPY_RESOURCE_PROVIDER = resource.provider;
+      env.DAINTREE_RESOURCE_PROVIDER = resource.provider;
     }
     if (resource?.endpoint) {
-      env.CANOPY_RESOURCE_ENDPOINT = resource.endpoint;
+      env.DAINTREE_RESOURCE_ENDPOINT = resource.endpoint;
     }
     if (resource?.lastOutput) {
-      env.CANOPY_RESOURCE_STATUS = resource.lastOutput;
+      env.DAINTREE_RESOURCE_STATUS = resource.lastOutput;
     }
     return env;
   }

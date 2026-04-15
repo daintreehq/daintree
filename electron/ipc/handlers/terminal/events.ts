@@ -4,7 +4,7 @@
 
 import { CHANNELS } from "../../channels.js";
 import { broadcastToRenderer } from "../../utils.js";
-import { events, type CanopyEventMap } from "../../../services/events.js";
+import { events, type DaintreeEventMap } from "../../../services/events.js";
 import type { HandlerDependencies } from "../../types.js";
 
 export function registerTerminalEventHandlers(deps: HandlerDependencies): () => void {
@@ -93,7 +93,7 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   // Terminal activity
   const unsubTerminalActivity = events.on(
     "terminal:activity",
-    (payload: CanopyEventMap["terminal:activity"]) => {
+    (payload: DaintreeEventMap["terminal:activity"]) => {
       broadcastToRenderer(CHANNELS.TERMINAL_ACTIVITY, payload);
     }
   );

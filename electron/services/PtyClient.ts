@@ -293,13 +293,13 @@ export class PtyClient extends EventEmitter {
 
     try {
       this.child = utilityProcess.fork(hostPath, [], {
-        serviceName: "canopy-pty-host",
+        serviceName: "daintree-pty-host",
         stdio: "pipe",
         cwd: os.homedir(),
         execArgv: [`--max-old-space-size=${this.config.memoryLimitMb}`],
         env: {
           ...(process.env as Record<string, string>),
-          CANOPY_USER_DATA: app.getPath("userData"),
+          DAINTREE_USER_DATA: app.getPath("userData"),
         },
       });
       console.log(`[PtyClient] Pty Host started with ${this.config.memoryLimitMb}MB memory limit`);
@@ -750,7 +750,7 @@ export class PtyClient extends EventEmitter {
         try {
           process.kill(pid, "SIGKILL");
         } catch (error) {
-          if (process.env.CANOPY_VERBOSE) {
+          if (process.env.DAINTREE_VERBOSE) {
             console.warn(`[PtyClient] Failed to kill orphaned PTY pid=${pid}:`, error);
           }
         }
@@ -797,7 +797,7 @@ export class PtyClient extends EventEmitter {
 
     try {
       this.child.postMessage({ type: "connect-port", windowId }, [port]);
-      if (process.env.CANOPY_VERBOSE) {
+      if (process.env.DAINTREE_VERBOSE) {
         console.log(`[PtyClient] MessagePort forwarded to Pty Host for window ${windowId}`);
       }
       // Re-send project context for this window (handles page reload case where

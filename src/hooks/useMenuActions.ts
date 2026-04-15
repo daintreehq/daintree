@@ -74,7 +74,7 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
         }
 
         if (action === "show-getting-started") {
-          window.dispatchEvent(new CustomEvent("canopy:show-getting-started"));
+          window.dispatchEvent(new CustomEvent("daintree:show-getting-started"));
           return;
         }
 

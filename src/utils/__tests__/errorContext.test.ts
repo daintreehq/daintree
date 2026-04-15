@@ -14,7 +14,7 @@ function makeError(
 }
 
 describe("classifyError", () => {
-  describe("tier 1: error.name (Canopy error classes)", () => {
+  describe("tier 1: error.name (Daintree error classes)", () => {
     it("classifies GitError by name regardless of message", () => {
       expect(classifyError(makeError("fetch something", { name: "GitError" }))).toBe("git");
     });

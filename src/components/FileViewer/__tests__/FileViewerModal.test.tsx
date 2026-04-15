@@ -101,7 +101,7 @@ describe("FileViewerModal", () => {
     await waitFor(() => {
       const img = screen.getByRole("img");
       expect(img).toBeTruthy();
-      expect(img.getAttribute("src")).toContain("canopy-file://load");
+      expect(img.getAttribute("src")).toContain("daintree-file://load");
       expect(img.getAttribute("src")).toContain(encodeURIComponent("/project/assets/logo.png"));
     });
 
@@ -183,7 +183,7 @@ describe("FileViewerModal", () => {
       const img = screen.getByRole("img");
       expect(img).toBeTruthy();
       const src = img.getAttribute("src")!;
-      expect(src).toContain("canopy-file://load");
+      expect(src).toContain("daintree-file://load");
       expect(src).toContain(encodeURIComponent("/Users/someone/Desktop/photo.png"));
       expect(src).toContain(encodeURIComponent("/Users/someone/Desktop"));
       expect(src).not.toContain(encodeURIComponent("/project"));

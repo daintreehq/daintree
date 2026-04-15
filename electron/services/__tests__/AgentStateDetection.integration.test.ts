@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { PtyManager } from "../PtyManager.js";
-import { events, type CanopyEventMap } from "../events.js";
+import { events, type DaintreeEventMap } from "../events.js";
 
 // Type for agent:state-changed event handler
-type AgentStateChangedHandler = (payload: CanopyEventMap["agent:state-changed"]) => void;
+type AgentStateChangedHandler = (payload: DaintreeEventMap["agent:state-changed"]) => void;
 
 let PtyManagerClass: any;
 let testUtils: any;
@@ -569,10 +569,10 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       const backgroundedEvents: string[] = [];
       const foregroundedEvents: string[] = [];
 
-      const bgHandler = (data: CanopyEventMap["terminal:backgrounded"]) => {
+      const bgHandler = (data: DaintreeEventMap["terminal:backgrounded"]) => {
         backgroundedEvents.push(data.id);
       };
-      const fgHandler = (data: CanopyEventMap["terminal:foregrounded"]) => {
+      const fgHandler = (data: DaintreeEventMap["terminal:foregrounded"]) => {
         foregroundedEvents.push(data.id);
       };
 

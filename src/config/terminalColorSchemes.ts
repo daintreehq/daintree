@@ -40,7 +40,7 @@ export const ANSI_COLOR_KEYS = [
 
 export type AnsiColorKey = (typeof ANSI_COLOR_KEYS)[number];
 
-export const DEFAULT_SCHEME_ID = "canopy";
+export const DEFAULT_SCHEME_ID = "match-app-theme";
 
 const defaultAppScheme = resolveAppTheme(DEFAULT_APP_THEME_ID);
 const daintreeAppScheme = resolveAppTheme("daintree");
@@ -48,7 +48,7 @@ const bondiAppScheme = resolveAppTheme("bondi");
 
 export const BUILT_IN_SCHEMES: TerminalColorScheme[] = [
   {
-    id: "canopy",
+    id: "match-app-theme",
     name: "Match App Theme",
     type: defaultAppScheme.type,
     builtin: true,
@@ -99,8 +99,8 @@ export const BUILT_IN_SCHEMES: TerminalColorScheme[] = [
     },
   },
   {
-    id: "canopy-ember",
-    name: "Canopy Ember",
+    id: "daintree-ember",
+    name: "Daintree Ember",
     type: "dark",
     builtin: true,
     colors: {

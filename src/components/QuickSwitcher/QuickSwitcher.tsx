@@ -75,11 +75,11 @@ export function QuickSwitcher({
       noMatchMessage={`No items match "${query}"`}
       totalResults={totalResults}
       emptyContent={
-        <p className="mt-2 text-xs text-canopy-text/40">
+        <p className="mt-2 text-xs text-daintree-text/40">
           {newTerminalShortcut ? (
             <>
               Press{" "}
-              <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+              <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60">
                 {newTerminalShortcut}
               </kbd>{" "}
               to create a terminal.

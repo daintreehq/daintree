@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
-import type { CanopyEventMap } from "../events.js";
+import type { DaintreeEventMap } from "../events.js";
 import type { PRCheckCandidate } from "../github/types.js";
 
 function makeWorktreeSnapshot(
@@ -53,7 +53,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    const detected: CanopyEventMap["sys:pr:detected"][] = [];
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
     const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
 
     pullRequestService.initialize("/repo");
@@ -135,7 +135,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    const cleared: CanopyEventMap["sys:pr:cleared"][] = [];
+    const cleared: DaintreeEventMap["sys:pr:cleared"][] = [];
     const unsubscribeCleared = events.on("sys:pr:cleared", (payload) => cleared.push(payload));
 
     pullRequestService.initialize("/repo");
@@ -540,7 +540,7 @@ describe("PullRequestService", () => {
     const { pullRequestService } = await import("../PullRequestService.js");
     const { events } = await import("../events.js");
 
-    const detected: CanopyEventMap["sys:pr:detected"][] = [];
+    const detected: DaintreeEventMap["sys:pr:detected"][] = [];
     const unsubDetected = events.on("sys:pr:detected", (p) => detected.push(p));
 
     pullRequestService.initialize("/repo");

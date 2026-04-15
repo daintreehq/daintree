@@ -74,7 +74,7 @@ export class PtyManager extends EventEmitter {
     for (const terminal of this.registry.getAll()) {
       terminal.setSabModeEnabled(enabled);
     }
-    if (process.env.CANOPY_VERBOSE) {
+    if (process.env.DAINTREE_VERBOSE) {
       logDebug(`SAB mode ${enabled ? "enabled" : "disabled"}`);
     }
   }
@@ -99,7 +99,7 @@ export class PtyManager extends EventEmitter {
     const previousProjectId = this.activeProjectId;
     this.activeProjectId = projectId;
 
-    if (process.env.CANOPY_VERBOSE) {
+    if (process.env.DAINTREE_VERBOSE) {
       logDebug(`Active project changed: ${previousProjectId || "none"} → ${projectId || "none"}`);
     }
   }
@@ -142,7 +142,7 @@ export class PtyManager extends EventEmitter {
 
     const replayed = terminal.replayHistory(maxLines);
 
-    if (process.env.CANOPY_VERBOSE && replayed > 0) {
+    if (process.env.DAINTREE_VERBOSE && replayed > 0) {
       logDebug(`Replayed ${replayed} lines for terminal ${terminalId}`);
     }
 
@@ -163,7 +163,7 @@ export class PtyManager extends EventEmitter {
       }
     }
 
-    if (process.env.CANOPY_VERBOSE) {
+    if (process.env.DAINTREE_VERBOSE) {
       logDebug(`Replayed history for ${count} terminals in project ${projectId}`);
     }
 

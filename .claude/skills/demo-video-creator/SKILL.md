@@ -1,11 +1,11 @@
 ---
 name: demo-video-creator
-description: Guide for writing and recording Canopy demo videos. Use when creating demo scenarios, working with the Stage DSL, or recording screen captures.
+description: Guide for writing and recording Daintree demo videos. Use when creating demo scenarios, working with the Stage DSL, or recording screen captures.
 ---
 
 # Demo Video Creator
 
-Create polished demo videos of Canopy by writing scenario scripts and recording them with the built-in capture pipeline.
+Create polished demo videos of Daintree by writing scenario scripts and recording them with the built-in capture pipeline.
 
 ## Workflow
 

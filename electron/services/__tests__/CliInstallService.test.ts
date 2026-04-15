@@ -40,7 +40,7 @@ vi.mock("os", () => ({
 const originalPlatform = process.platform;
 
 // Use path.join so the separator matches what CliInstallService produces at runtime
-const SOURCE_SCRIPT = path.join("/repo", "scripts", "canopy-cli.sh");
+const SOURCE_SCRIPT = path.join("/repo", "scripts", "daintree-cli.sh");
 
 describe("CliInstallService", () => {
   beforeEach(() => {
@@ -74,11 +74,11 @@ describe("CliInstallService", () => {
 
     expect(appMock.app.getAppPath).toHaveBeenCalled();
     expect(fsMock.existsSync).toHaveBeenCalledWith(SOURCE_SCRIPT);
-    expect(fsMock.symlinkSync).toHaveBeenCalledWith(SOURCE_SCRIPT, "/usr/local/bin/canopy");
+    expect(fsMock.symlinkSync).toHaveBeenCalledWith(SOURCE_SCRIPT, "/usr/local/bin/daintree");
     expect(result).toEqual({
       installed: true,
       upToDate: true,
-      path: "/usr/local/bin/canopy",
+      path: "/usr/local/bin/daintree",
     });
   });
 
@@ -87,7 +87,7 @@ describe("CliInstallService", () => {
       (target) => target === SOURCE_SCRIPT || target === "/usr/local/bin"
     );
     fsMock.symlinkSync.mockImplementation((_sourcePath, targetPath) => {
-      if (targetPath === "/usr/local/bin/canopy") {
+      if (targetPath === "/usr/local/bin/daintree") {
         throw new Error("EACCES");
       }
     });
@@ -96,17 +96,20 @@ describe("CliInstallService", () => {
     const result = await install();
 
     expect(fsMock.mkdirSync).toHaveBeenCalledWith("/home/test/.local/bin", { recursive: true });
-    expect(fsMock.symlinkSync).toHaveBeenCalledWith(SOURCE_SCRIPT, "/home/test/.local/bin/canopy");
-    expect(result.path).toBe("/home/test/.local/bin/canopy");
+    expect(fsMock.symlinkSync).toHaveBeenCalledWith(
+      SOURCE_SCRIPT,
+      "/home/test/.local/bin/daintree"
+    );
+    expect(result.path).toBe("/home/test/.local/bin/daintree");
   });
 
   it("reports up-to-date status when installed symlink matches source", async () => {
-    fsMock.existsSync.mockImplementation((target) => target === "/usr/local/bin/canopy");
+    fsMock.existsSync.mockImplementation((target) => target === "/usr/local/bin/daintree");
     fsMock.lstatSync.mockImplementation((targetPath) => ({
-      isSymbolicLink: () => targetPath === "/usr/local/bin/canopy",
+      isSymbolicLink: () => targetPath === "/usr/local/bin/daintree",
     }));
     fsMock.realpathSync.mockImplementation((targetPath) => {
-      if (targetPath === "/usr/local/bin/canopy") return SOURCE_SCRIPT;
+      if (targetPath === "/usr/local/bin/daintree") return SOURCE_SCRIPT;
       return targetPath;
     });
 
@@ -116,15 +119,15 @@ describe("CliInstallService", () => {
     expect(status).toEqual({
       installed: true,
       upToDate: true,
-      path: "/usr/local/bin/canopy",
+      path: "/usr/local/bin/daintree",
     });
   });
 
   it("reports outdated status for legacy copied installs that differ from source", async () => {
-    fsMock.existsSync.mockImplementation((target) => target === "/usr/local/bin/canopy");
+    fsMock.existsSync.mockImplementation((target) => target === "/usr/local/bin/daintree");
     fsMock.readFileSync.mockImplementation((targetPath) => {
       if (targetPath === SOURCE_SCRIPT) return "new script";
-      if (targetPath === "/usr/local/bin/canopy") return "old script";
+      if (targetPath === "/usr/local/bin/daintree") return "old script";
       throw new Error("ENOENT");
     });
 
@@ -134,14 +137,14 @@ describe("CliInstallService", () => {
     expect(status).toEqual({
       installed: true,
       upToDate: false,
-      path: "/usr/local/bin/canopy",
+      path: "/usr/local/bin/daintree",
     });
   });
 
   describe("AppImage mode (Linux)", () => {
-    const APPIMAGE_PATH = "/home/test/Canopy-x86_64.AppImage";
-    const WRAPPER_DIR = path.join("/home/test", ".local", "share", "canopy");
-    const WRAPPER_PATH = path.join(WRAPPER_DIR, "canopy-cli.sh");
+    const APPIMAGE_PATH = "/home/test/Daintree-x86_64.AppImage";
+    const WRAPPER_DIR = path.join("/home/test", ".local", "share", "daintree");
+    const WRAPPER_PATH = path.join(WRAPPER_DIR, "daintree-cli.sh");
 
     beforeEach(() => {
       Object.defineProperty(process, "platform", { value: "linux", writable: true });
@@ -169,16 +172,16 @@ describe("CliInstallService", () => {
         expect.stringContaining(APPIMAGE_PATH),
         { mode: 0o755 }
       );
-      expect(fsMock.symlinkSync).toHaveBeenCalledWith(WRAPPER_PATH, "/usr/local/bin/canopy");
+      expect(fsMock.symlinkSync).toHaveBeenCalledWith(WRAPPER_PATH, "/usr/local/bin/daintree");
       expect(result).toEqual({
         installed: true,
         upToDate: true,
-        path: "/usr/local/bin/canopy",
+        path: "/usr/local/bin/daintree",
       });
     });
 
     it("shell-escapes AppImage paths containing single quotes", async () => {
-      process.env.APPIMAGE = "/home/test/it's a Canopy.AppImage";
+      process.env.APPIMAGE = "/home/test/it's a Daintree.AppImage";
       fsMock.existsSync.mockImplementation(
         (target) => target === WRAPPER_PATH || target === "/usr/local/bin"
       );
@@ -189,13 +192,13 @@ describe("CliInstallService", () => {
       const writeCall = fsMock.writeFileSync.mock.calls.find((call) => call[0] === WRAPPER_PATH);
       expect(writeCall).toBeDefined();
       const content = writeCall![1] as string;
-      expect(content).toContain("it'\\''s a Canopy");
+      expect(content).toContain("it'\\''s a Daintree");
     });
 
     it("respects XDG_DATA_HOME override", async () => {
       process.env.XDG_DATA_HOME = "/custom/data";
-      const customWrapperDir = path.join("/custom/data", "canopy");
-      const customWrapperPath = path.join(customWrapperDir, "canopy-cli.sh");
+      const customWrapperDir = path.join("/custom/data", "daintree");
+      const customWrapperPath = path.join(customWrapperDir, "daintree-cli.sh");
 
       fsMock.existsSync.mockImplementation(
         (target) => target === customWrapperPath || target === "/usr/local/bin"
@@ -213,12 +216,12 @@ describe("CliInstallService", () => {
     });
 
     it("reports up-to-date when symlink points to stable wrapper path", async () => {
-      fsMock.existsSync.mockImplementation((target) => target === "/usr/local/bin/canopy");
+      fsMock.existsSync.mockImplementation((target) => target === "/usr/local/bin/daintree");
       fsMock.lstatSync.mockImplementation((targetPath) => ({
-        isSymbolicLink: () => targetPath === "/usr/local/bin/canopy",
+        isSymbolicLink: () => targetPath === "/usr/local/bin/daintree",
       }));
       fsMock.realpathSync.mockImplementation((targetPath) => {
-        if (targetPath === "/usr/local/bin/canopy") return WRAPPER_PATH;
+        if (targetPath === "/usr/local/bin/daintree") return WRAPPER_PATH;
         return targetPath;
       });
 
@@ -228,14 +231,14 @@ describe("CliInstallService", () => {
       expect(status).toEqual({
         installed: true,
         upToDate: true,
-        path: "/usr/local/bin/canopy",
+        path: "/usr/local/bin/daintree",
       });
     });
 
     it("does not use AppImage path when APPIMAGE env is not set (deb regression guard)", async () => {
       delete process.env.APPIMAGE;
 
-      const PACKAGED_SOURCE = path.join("/mock-resources", "canopy-cli.sh");
+      const PACKAGED_SOURCE = path.join("/mock-resources", "daintree-cli.sh");
       Object.defineProperty(process, "resourcesPath", {
         value: "/mock-resources",
         writable: true,
@@ -248,8 +251,8 @@ describe("CliInstallService", () => {
       const { install } = await import("../CliInstallService.js");
       const result = await install();
 
-      expect(fsMock.symlinkSync).toHaveBeenCalledWith(PACKAGED_SOURCE, "/usr/local/bin/canopy");
-      expect(result.path).toBe("/usr/local/bin/canopy");
+      expect(fsMock.symlinkSync).toHaveBeenCalledWith(PACKAGED_SOURCE, "/usr/local/bin/daintree");
+      expect(result.path).toBe("/usr/local/bin/daintree");
     });
 
     it("wrapper content includes --cli-path argument forwarding", async () => {

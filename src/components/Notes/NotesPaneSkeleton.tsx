@@ -24,7 +24,7 @@ export function NotesPaneSkeleton() {
       </div>
 
       {/* Content area — empty, no animation */}
-      <div className="flex-1 min-h-0 bg-canopy-bg" />
+      <div className="flex-1 min-h-0 bg-daintree-bg" />
     </div>
   );
 }

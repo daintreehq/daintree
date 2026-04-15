@@ -117,9 +117,9 @@ describe("extractTerminalIdentifiers", () => {
 describe("assembleKeyterms", () => {
   it("preserves custom dictionary with highest priority", async () => {
     const result = await assembleKeyterms({
-      customDictionary: ["Canopy", "Deepgram", "xterm"],
+      customDictionary: ["Daintree", "Deepgram", "xterm"],
     });
-    expect(result[0]).toBe("Canopy");
+    expect(result[0]).toBe("Daintree");
     expect(result[1]).toBe("Deepgram");
     expect(result[2]).toBe("xterm");
   });
@@ -127,9 +127,9 @@ describe("assembleKeyterms", () => {
   it("adds project name tokens", async () => {
     const result = await assembleKeyterms({
       customDictionary: [],
-      projectName: "CanopyEditor",
+      projectName: "DaintreeEditor",
     });
-    expect(result).toContain("CanopyEditor");
+    expect(result).toContain("DaintreeEditor");
   });
 
   it("adds branch name tokens when projectPath provided", async () => {
@@ -155,9 +155,9 @@ describe("assembleKeyterms", () => {
 
   it("deduplicates case-insensitively", async () => {
     const result = await assembleKeyterms({
-      customDictionary: ["Canopy", "canopy", "CANOPY"],
+      customDictionary: ["Daintree", "daintree", "FOREST"],
     });
-    expect(result.filter((t) => t.toLowerCase() === "canopy").length).toBe(1);
+    expect(result.filter((t) => t.toLowerCase() === "daintree").length).toBe(1);
   });
 
   it("caps at 80 keyterms", async () => {

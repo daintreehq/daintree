@@ -186,6 +186,8 @@ export interface StoreSchema {
     firstRunToastSeen: boolean;
     newsletterPromptSeen: boolean;
     waitingNudgeSeen: boolean;
+    // TODO(0.9.0): Remove after deleting onboarding:migrate and the renderer
+    // localStorage import path for old Canopy onboarding keys.
     migratedFromLocalStorage: boolean;
     checklist: {
       dismissed: boolean;
@@ -326,7 +328,7 @@ const storeOptions = {
     shortcutHintCounts: {},
     updateChannel: "stable" as const,
   },
-  cwd: process.env.CANOPY_USER_DATA,
+  cwd: process.env.DAINTREE_USER_DATA,
 };
 
 function getElectronUserDataPath(): string | undefined {

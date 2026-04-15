@@ -29,23 +29,23 @@ export function MarkdownToolbar({ editorViewRef }: MarkdownToolbarProps) {
   };
 
   return (
-    <div className="flex items-center gap-0.5 px-2 py-1 border-b border-canopy-border/50 shrink-0">
+    <div className="flex items-center gap-0.5 px-2 py-1 border-b border-daintree-border/50 shrink-0">
       {BUTTONS.map(({ action, icon: Icon, label }) => (
         <button
           key={action}
           onPointerDown={(e) => handleAction(e, action)}
-          className="p-1 rounded-[var(--radius-sm)] text-canopy-text/40 hover:text-canopy-text/70 hover:bg-canopy-text/5 transition-colors"
+          className="p-1 rounded-[var(--radius-sm)] text-daintree-text/40 hover:text-daintree-text/70 hover:bg-daintree-text/5 transition-colors"
           aria-label={label}
         >
           <Icon className="w-3.5 h-3.5" />
         </button>
       ))}
-      <div className="w-px h-3.5 bg-canopy-border/50 mx-0.5" />
+      <div className="w-px h-3.5 bg-daintree-border/50 mx-0.5" />
       {BLOCK_BUTTONS.map(({ action, icon: Icon, label }) => (
         <button
           key={action}
           onPointerDown={(e) => handleAction(e, action)}
-          className="p-1 rounded-[var(--radius-sm)] text-canopy-text/40 hover:text-canopy-text/70 hover:bg-canopy-text/5 transition-colors"
+          className="p-1 rounded-[var(--radius-sm)] text-daintree-text/40 hover:text-daintree-text/70 hover:bg-daintree-text/5 transition-colors"
           aria-label={label}
         >
           <Icon className="w-3.5 h-3.5" />

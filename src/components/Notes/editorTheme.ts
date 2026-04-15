@@ -2,7 +2,7 @@ import { createTheme } from "@uiw/codemirror-themes";
 import { tags as t } from "@lezer/highlight";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 
-export const canopyTheme = createTheme({
+export const daintreeTheme = createTheme({
   theme: "dark",
   settings: {
     background: "var(--theme-surface-canvas)",

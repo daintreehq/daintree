@@ -182,7 +182,7 @@ export class ProjectStateManager {
     }
 
     if (!existsSync(filePath)) {
-      if (process.env.CANOPY_VERBOSE) {
+      if (process.env.DAINTREE_VERBOSE) {
         console.log(`[ProjectStateManager] No state file to clear for project ${projectId}`);
       }
       this.invalidateProjectStateCache(projectId);
@@ -192,7 +192,7 @@ export class ProjectStateManager {
     try {
       await resilientUnlink(filePath);
       this.invalidateProjectStateCache(projectId);
-      if (process.env.CANOPY_VERBOSE) {
+      if (process.env.DAINTREE_VERBOSE) {
         console.log(`[ProjectStateManager] Cleared state for project ${projectId}`);
       }
     } catch (error) {

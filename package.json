@@ -1,8 +1,8 @@
 {
-  "name": "canopy-app",
-  "productName": "Canopy",
+  "name": "daintree",
+  "productName": "Daintree",
   "version": "0.6.0",
-  "description": "Canopy IDE - An Electron-based development environment",
+  "description": "Daintree IDE - An Electron-based development environment",
   "author": {
     "name": "Greg Priday",
     "email": "greg@siteorigin.com"
@@ -17,8 +17,8 @@
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "dev:fresh": "cross-env CANOPY_RESET_DATA=1 node scripts/dev.mjs",
-    "dev:perf": "cross-env CANOPY_PERF_CAPTURE=1 CANOPY_PERF_METRICS_FILE=perf-metrics.ndjson node scripts/dev.mjs",
+    "dev:fresh": "cross-env DAINTREE_RESET_DATA=1 node scripts/dev.mjs",
+    "dev:perf": "cross-env DAINTREE_PERF_CAPTURE=1 DAINTREE_PERF_METRICS_FILE=perf-metrics.ndjson node scripts/dev.mjs",
     "dev:vite": "vite",
     "dev:electron": "nodemon --delay 500ms --watch dist-electron/.build-ready.js --ext js --exec \"cross-env NODE_ENV=development electron .\"",
     "build:main": "cross-env NODE_ENV=production node scripts/build-main.mjs",
@@ -189,15 +189,15 @@
   },
   "build": {
     "asar": true,
-    "appId": "com.canopyide.app",
+    "appId": "org.daintree.app",
     "publish": [
       {
         "provider": "generic",
-        "url": "https://updates.canopyide.com/releases/"
+        "url": "https://updates.daintree.org/releases/"
       }
     ],
     "electronUpdaterCompatibility": ">=2.16",
-    "productName": "Canopy",
+    "productName": "Daintree",
     "npmRebuild": true,
     "electronLanguages": [
       "en-US"
@@ -240,8 +240,8 @@
     "mac": {
       "extraResources": [
         {
-          "from": "scripts/canopy-cli.sh",
-          "to": "canopy-cli.sh"
+          "from": "scripts/daintree-cli.sh",
+          "to": "daintree-cli.sh"
         }
       ],
       "x64ArchFiles": "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/**",
@@ -255,7 +255,7 @@
       "extendInfo": {
         "CFBundleIconName": "Icon",
         "NSPrefersDisplaySafeAreaCompatibilityMode": false,
-        "NSMicrophoneUsageDescription": "Canopy uses the microphone for voice dictation into terminal inputs."
+        "NSMicrophoneUsageDescription": "Daintree uses the microphone for voice dictation into terminal inputs."
       },
       "target": [
         {
@@ -321,7 +321,7 @@
     },
     "linux": {
       "icon": "build/icon.png",
-      "executableName": "canopy-app",
+      "executableName": "daintree",
       "target": [
         "AppImage",
         "deb"
@@ -329,17 +329,17 @@
       "category": "Development",
       "desktop": {
         "entry": {
-          "StartupWMClass": "canopy-app"
+          "StartupWMClass": "daintree"
         }
       },
       "extraResources": [
         {
-          "from": "scripts/canopy-cli.sh",
-          "to": "canopy-cli.sh"
+          "from": "scripts/daintree-cli.sh",
+          "to": "daintree-cli.sh"
         },
         {
-          "from": "build/linux/canopy.apparmor",
-          "to": "canopy.apparmor"
+          "from": "build/linux/daintree.apparmor",
+          "to": "daintree.apparmor"
         }
       ]
     },

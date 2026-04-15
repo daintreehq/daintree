@@ -19,12 +19,12 @@ test.describe.serial("Core: Error Boundaries", () => {
 
     // Arm the fault injector — next React re-render will throw
     await window.evaluate(() => {
-      window.__CANOPY_E2E_FAULT__ = { renderError: true };
+      window.__DAINTREE_E2E_FAULT__ = { renderError: true };
     });
 
     // Trigger re-render of the E2EFaultInjector component
     await window.evaluate(() => {
-      window.dispatchEvent(new Event("__canopy_e2e_trigger_render__"));
+      window.dispatchEvent(new Event("__daintree_e2e_trigger_render__"));
     });
 
     // Wait for the error fallback to appear
@@ -49,7 +49,7 @@ test.describe.serial("Core: Error Boundaries", () => {
 
     // Clear the fault BEFORE clicking restart, or it will re-throw immediately
     await window.evaluate(() => {
-      delete window.__CANOPY_E2E_FAULT__;
+      delete window.__DAINTREE_E2E_FAULT__;
     });
 
     await window.locator(SEL.errorBoundary.restartButton).click();
@@ -70,7 +70,7 @@ test.describe.serial("Core: Error Boundaries", () => {
 
     // Get baseline error count
     const baselineCount = await window.evaluate(() => {
-      return window.__CANOPY_E2E_ERROR_STORE__?.().length ?? 0;
+      return window.__DAINTREE_E2E_ERROR_STORE__?.().length ?? 0;
     });
 
     // Fire-and-forget unhandled rejection via setTimeout
@@ -85,7 +85,7 @@ test.describe.serial("Core: Error Boundaries", () => {
       .poll(
         async () => {
           return window.evaluate(() => {
-            const errors = window.__CANOPY_E2E_ERROR_STORE__?.() ?? [];
+            const errors = window.__DAINTREE_E2E_ERROR_STORE__?.() ?? [];
             return errors.find(
               (e) =>
                 e.source === "Renderer Promise Rejection" &&
@@ -99,7 +99,7 @@ test.describe.serial("Core: Error Boundaries", () => {
 
     // Verify error count increased
     const newCount = await window.evaluate(() => {
-      return window.__CANOPY_E2E_ERROR_STORE__?.().length ?? 0;
+      return window.__DAINTREE_E2E_ERROR_STORE__?.().length ?? 0;
     });
     expect(newCount).toBeGreaterThan(baselineCount);
   });

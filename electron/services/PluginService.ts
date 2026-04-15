@@ -25,7 +25,7 @@ export class PluginService {
   private pluginsRoot: string;
 
   constructor(pluginsRoot?: string) {
-    this.pluginsRoot = pluginsRoot ?? path.join(os.homedir(), ".canopy", "plugins");
+    this.pluginsRoot = pluginsRoot ?? path.join(os.homedir(), ".daintree", "plugins");
   }
 
   async initialize(): Promise<void> {

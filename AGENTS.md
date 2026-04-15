@@ -1,4 +1,4 @@
-# Canopy — Codex Agent Guide
+# Daintree — Codex Agent Guide
 
 You will be asked for implementation guides and code reviews. This file gives you the code structure and conventions needed to respond quickly and accurately.
 
@@ -62,7 +62,7 @@ src/                         # Renderer (React 19)
     └── electron.d.ts        # window.electron types
 ```
 
-Tests live in `__tests__/` folders beside source files. `.canopy/recipes/*.json` files are intentionally tracked in git.
+Tests live in `__tests__/` folders beside source files. `.daintree/recipes/*.json` files are intentionally tracked in git.
 
 ## Key Architecture
 

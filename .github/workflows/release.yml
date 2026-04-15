@@ -258,7 +258,7 @@ jobs:
           WEBSITE_WEBHOOK_SECRET: ${{ secrets.WEBSITE_WEBHOOK_SECRET }}
         run: |
           sleep 1
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://canopyide.com/api/refresh-releases \
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://daintree.org/api/refresh-releases \
             -H "Authorization: Bearer ${WEBSITE_WEBHOOK_SECRET}")
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           BODY=$(echo "$RESPONSE" | sed '$d')

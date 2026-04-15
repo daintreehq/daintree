@@ -2,7 +2,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import type { IDisposable } from "@xterm/xterm";
 import type { ManagedTerminal } from "./types";
 
-const WEBGL_DISABLED = import.meta.env.CANOPY_DISABLE_WEBGL === "1";
+const WEBGL_DISABLED = import.meta.env.DAINTREE_DISABLE_WEBGL === "1";
 
 interface WebGLEntry {
   addon: WebglAddon;

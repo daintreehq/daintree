@@ -40,7 +40,7 @@ function ciStatusIcon(status: ProjectHealthData["ciStatus"]) {
     case "expected":
       return <Clock className="w-2.5 h-2.5 text-status-warning" />;
     default:
-      return <CircleMinus className="w-2.5 h-2.5 text-canopy-text/40" />;
+      return <CircleMinus className="w-2.5 h-2.5 text-daintree-text/40" />;
   }
 }
 
@@ -75,7 +75,7 @@ export const MainWorktreeSummaryRows = memo(function MainWorktreeSummaryRows({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="flex items-center gap-2 text-[10px] text-canopy-text/60"
+              className="flex items-center gap-2 text-[10px] text-daintree-text/60"
               data-testid="aggregate-worktree-row"
             >
               <span className="flex items-center gap-0.5">
@@ -125,7 +125,7 @@ export const MainWorktreeSummaryRows = memo(function MainWorktreeSummaryRows({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="flex items-center gap-2 text-[10px] text-canopy-text/60"
+              className="flex items-center gap-2 text-[10px] text-daintree-text/60"
               data-testid="github-pulse-row"
             >
               <span className="flex items-center gap-0.5">

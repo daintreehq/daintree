@@ -14,7 +14,7 @@ import type { CliAvailability } from "@shared/types";
 import { isAgentInstalled, isAgentReady } from "../../../shared/utils/agentAvailability";
 import { Sparkles, ChevronLeft, ChevronRight, ArrowRight, Check, Sun, Moon } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion, type Variants } from "framer-motion";
-import { CanopyAgentIcon } from "@/components/icons";
+import { DaintreeAgentIcon } from "@/components/icons";
 import { UI_ENTER_DURATION, UI_EXIT_DURATION } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
@@ -58,7 +58,7 @@ function ThemeMockup({ scheme }: { scheme: AppColorScheme }) {
         </div>
         <div className="flex-1" />
         <div className="text-[6px] font-medium tracking-wide" style={{ color: t["text-muted"] }}>
-          Canopy
+          Daintree
         </div>
         <div className="flex-1" />
       </div>
@@ -527,11 +527,11 @@ export function AgentSetupWizard({
       dismissible={!isSaving}
     >
       <AppDialog.Header>
-        <AppDialog.Title icon={<CanopyAgentIcon className="w-5 h-5 text-canopy-accent" />}>
+        <AppDialog.Title icon={<DaintreeAgentIcon className="w-5 h-5 text-daintree-accent" />}>
           Agent Setup
         </AppDialog.Title>
         <div className="flex items-center gap-3">
-          <span className="text-xs text-canopy-text/40">
+          <span className="text-xs text-daintree-text/40">
             {stepNumber + 1} of {totalSteps}
           </span>
           <AppDialog.CloseButton />
@@ -594,10 +594,10 @@ export function AgentSetupWizard({
                 key={i}
                 className={`w-1.5 h-1.5 rounded-full transition-colors ${
                   i === stepNumber
-                    ? "bg-canopy-accent"
+                    ? "bg-daintree-accent"
                     : i < stepNumber
-                      ? "bg-canopy-accent/40"
-                      : "bg-canopy-text/15"
+                      ? "bg-daintree-accent/40"
+                      : "bg-daintree-text/15"
                 }`}
               />
             ))}
@@ -607,7 +607,7 @@ export function AgentSetupWizard({
               <Button
                 variant="ghost"
                 onClick={handleBack}
-                className="text-canopy-text/70"
+                className="text-daintree-text/70"
                 disabled={isSaving}
               >
                 <ChevronLeft className="w-4 h-4" />
@@ -620,7 +620,7 @@ export function AgentSetupWizard({
                   variant="ghost"
                   onClick={handleSelectionSkip}
                   disabled={isSaving}
-                  className="text-canopy-text/60"
+                  className="text-daintree-text/60"
                 >
                   Skip
                 </Button>
@@ -701,18 +701,18 @@ function SelectionStep({
 
       {isFirstRun ? (
         <div>
-          <h3 className="text-base font-semibold text-canopy-text mb-2">Welcome to Canopy</h3>
-          <p className="text-sm text-canopy-text/60">
+          <h3 className="text-base font-semibold text-daintree-text mb-2">Welcome to Daintree</h3>
+          <p className="text-sm text-daintree-text/60">
             Pick a theme, choose your agents, and you&apos;re ready to go.
           </p>
         </div>
       ) : (
         <div>
-          <h3 className="text-base font-semibold text-canopy-text mb-2">Choose your AI agents</h3>
-          <p className="text-sm text-canopy-text/60">
+          <h3 className="text-base font-semibold text-daintree-text mb-2">Choose your AI agents</h3>
+          <p className="text-sm text-daintree-text/60">
             Select the agents you want in your workflow. Already-installed agents are pre-selected.
             You can change this anytime from{" "}
-            <span className="text-canopy-text/80">Settings &gt; Agents</span>.
+            <span className="text-daintree-text/80">Settings &gt; Agents</span>.
           </p>
         </div>
       )}
@@ -730,25 +730,25 @@ function SelectionStep({
                   className={cn(
                     "flex flex-col gap-2 p-3 rounded-[var(--radius-md)] border-2 transition-colors text-left",
                     isSelected
-                      ? "border-canopy-accent bg-canopy-accent/10"
-                      : "border-canopy-border bg-canopy-bg hover:border-canopy-text/30"
+                      ? "border-daintree-accent bg-daintree-accent/10"
+                      : "border-daintree-border bg-daintree-bg hover:border-daintree-text/30"
                   )}
                 >
                   <ThemeMockup scheme={scheme} />
                   <div className="flex items-center justify-between px-0.5">
                     <div className="flex items-center gap-1.5">
                       {isDark ? (
-                        <Moon className="w-3 h-3 text-canopy-text/50" />
+                        <Moon className="w-3 h-3 text-daintree-text/50" />
                       ) : (
-                        <Sun className="w-3 h-3 text-canopy-text/50" />
+                        <Sun className="w-3 h-3 text-daintree-text/50" />
                       )}
-                      <span className="text-sm font-medium text-canopy-text">{scheme.name}</span>
-                      <span className="text-xs text-canopy-text/50">
+                      <span className="text-sm font-medium text-daintree-text">{scheme.name}</span>
+                      <span className="text-xs text-daintree-text/50">
                         {isDark ? "Dark" : "Light"}
                       </span>
                     </div>
                     {isSelected && (
-                      <div className="w-4 h-4 rounded-full bg-canopy-accent flex items-center justify-center">
+                      <div className="w-4 h-4 rounded-full bg-daintree-accent flex items-center justify-center">
                         <Check className="w-2.5 h-2.5 text-accent-primary-foreground" />
                       </div>
                     )}
@@ -757,7 +757,7 @@ function SelectionStep({
               );
             })}
           </div>
-          <p className="text-xs text-canopy-text/50 text-center">
+          <p className="text-xs text-daintree-text/50 text-center">
             More themes available in Settings → Appearance
           </p>
         </>
@@ -766,14 +766,14 @@ function SelectionStep({
       {isFirstRun && (
         <div className="flex items-center gap-2 py-1">
           <div className="h-px flex-1 bg-border-divider" />
-          <span className="text-[11px] text-canopy-text/40 font-medium">Agents</span>
+          <span className="text-[11px] text-daintree-text/40 font-medium">Agents</span>
           <div className="h-px flex-1 bg-border-divider" />
         </div>
       )}
 
       {isLoading ? (
         <div className="flex items-center justify-center py-8">
-          <Spinner size="lg" className="text-canopy-text/40" />
+          <Spinner size="lg" className="text-daintree-text/40" />
         </div>
       ) : (
         <div className="space-y-2">
@@ -793,7 +793,7 @@ function SelectionStep({
             <>
               <div className="flex items-center gap-2 py-1">
                 <div className="h-px flex-1 bg-border-divider" />
-                <span className="text-[11px] text-canopy-text/40 font-medium">More agents</span>
+                <span className="text-[11px] text-daintree-text/40 font-medium">More agents</span>
                 <div className="h-px flex-1 bg-border-divider" />
               </div>
 
@@ -817,10 +817,10 @@ function SelectionStep({
       )}
 
       {isFirstRun && onTelemetryChange != null && (
-        <div className="flex items-center justify-between gap-3 pt-4 border-t border-canopy-border">
+        <div className="flex items-center justify-between gap-3 pt-4 border-t border-daintree-border">
           <div>
-            <p className="text-sm font-medium text-canopy-text">Help improve Canopy</p>
-            <p className="text-xs text-canopy-text/50">
+            <p className="text-sm font-medium text-daintree-text">Help improve Daintree</p>
+            <p className="text-xs text-daintree-text/50">
               Send anonymous crash reports. No file contents or credentials.
             </p>
           </div>
@@ -832,7 +832,7 @@ function SelectionStep({
             onClick={() => onTelemetryChange(!telemetryEnabled)}
             className={cn(
               "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
-              telemetryEnabled ? "bg-canopy-accent" : "bg-canopy-border"
+              telemetryEnabled ? "bg-daintree-accent" : "bg-daintree-border"
             )}
           >
             <span
@@ -840,7 +840,7 @@ function SelectionStep({
                 "pointer-events-none inline-block h-4 w-4 rounded-full shadow transform transition-transform mt-0.5",
                 telemetryEnabled
                   ? "translate-x-4 ml-0.5 bg-text-inverse"
-                  : "translate-x-0 ml-0.5 bg-canopy-text"
+                  : "translate-x-0 ml-0.5 bg-daintree-text"
               )}
             />
           </button>
@@ -859,8 +859,8 @@ function CompleteStep({ installedAgents }: { installedAgents: string[] }) {
         <div className="w-12 h-12 rounded-full bg-status-success/15 flex items-center justify-center mx-auto mb-4">
           <Sparkles className="w-6 h-6 text-status-success" />
         </div>
-        <h3 className="text-base font-semibold text-canopy-text mb-2">Setup Complete</h3>
-        <p className="text-sm text-canopy-text/60">
+        <h3 className="text-base font-semibold text-daintree-text mb-2">Setup Complete</h3>
+        <p className="text-sm text-daintree-text/60">
           {installedAgents.length > 0
             ? `You have ${installedAgents.length} agent${installedAgents.length === 1 ? "" : "s"} ready to use. Launch them from the toolbar or with keyboard shortcuts.`
             : "No agents were installed. You can install them later from Settings > Agents."}
@@ -880,9 +880,11 @@ function CompleteStep({ installedAgents }: { installedAgents: string[] }) {
                 className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-status-success/20 bg-status-success/5"
               >
                 <Icon size={18} brandColor={agent.color} />
-                <span className="text-sm text-canopy-text font-medium">{agent.name}</span>
+                <span className="text-sm text-daintree-text font-medium">{agent.name}</span>
                 {agent.shortcut && (
-                  <span className="text-[11px] text-canopy-text/40 ml-auto">{agent.shortcut}</span>
+                  <span className="text-[11px] text-daintree-text/40 ml-auto">
+                    {agent.shortcut}
+                  </span>
                 )}
               </div>
             );
@@ -890,7 +892,7 @@ function CompleteStep({ installedAgents }: { installedAgents: string[] }) {
         </div>
       )}
 
-      <p className="text-xs text-canopy-text/40">
+      <p className="text-xs text-daintree-text/40">
         You can re-run this wizard from Settings &gt; Agents
       </p>
     </div>

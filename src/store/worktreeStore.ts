@@ -418,7 +418,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 
   openCreateDialog: (initialIssue = null, options) => {
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
-      window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
+      window.dispatchEvent(new Event("daintree:toggle-focus-mode"));
     }
     set({
       createDialog: {
@@ -433,7 +433,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 
   openCreateDialogForPR: (pr) => {
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
-      window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
+      window.dispatchEvent(new Event("daintree:toggle-focus-mode"));
     }
     set({
       createDialog: {
@@ -459,14 +459,14 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 
   openBulkCreateDialog: (selectedIssues) => {
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
-      window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
+      window.dispatchEvent(new Event("daintree:toggle-focus-mode"));
     }
     set({ bulkCreateDialog: { isOpen: true, mode: "issue", selectedIssues, selectedPRs: [] } });
   },
 
   openBulkCreateDialogForPRs: (selectedPRs) => {
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
-      window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
+      window.dispatchEvent(new Event("daintree:toggle-focus-mode"));
     }
     set({ bulkCreateDialog: { isOpen: true, mode: "pr", selectedIssues: [], selectedPRs } });
   },
@@ -476,7 +476,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 
   openQuickCreate: (context) => {
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
-      window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
+      window.dispatchEvent(new Event("daintree:toggle-focus-mode"));
     }
     set({
       quickCreate: {

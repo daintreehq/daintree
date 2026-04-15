@@ -187,7 +187,7 @@ describe("buildRemoteComputeBlock", () => {
     expect(block).toContain(
       "Run remote commands: ssh -i key.pem root@ec2-1-2-3-4.compute.amazonaws.com"
     );
-    expect(block).toContain('canopy-remote "<command>"');
+    expect(block).toContain('daintree-remote "<command>"');
   });
 
   it("includes informational Remote Compute block without connect command when status is provisioning", () => {
@@ -204,7 +204,7 @@ describe("buildRemoteComputeBlock", () => {
     expect(block).toContain("Status: provisioning");
     expect(block).toContain("Resource is not yet available for remote execution");
     expect(block).not.toContain("Run remote commands:");
-    expect(block).not.toContain("canopy-remote");
+    expect(block).not.toContain("daintree-remote");
   });
 
   it("shows error status without connect command when status is error", () => {

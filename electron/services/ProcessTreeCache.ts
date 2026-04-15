@@ -139,7 +139,7 @@ export class ProcessTreeCache {
       this.lastError = null;
     } catch (error) {
       this.lastError = error instanceof Error ? error : new Error(String(error));
-      if (process.env.CANOPY_VERBOSE) {
+      if (process.env.DAINTREE_VERBOSE) {
         console.error("[ProcessTreeCache] Refresh failed:", error);
       }
     } finally {

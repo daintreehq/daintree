@@ -130,7 +130,7 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
       resetAllWorktreeRatios: () => set({ ratioByWorktreeId: {} }),
     }),
     {
-      name: "canopy-two-pane-split",
+      name: "daintree-two-pane-split",
       version: 1,
       storage: createSafeJSONStorage(),
       migrate: (persisted: unknown, fromVersion: number) => {

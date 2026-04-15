@@ -148,21 +148,21 @@ function SortableButtonItem({
     <div
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30"
+      className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30"
     >
       <div
         {...(isVisible ? { ...attributes, ...listeners } : {})}
         className={cn(isVisible ? "cursor-grab active:cursor-grabbing" : "cursor-default")}
       >
         <GripVertical
-          className={cn("h-4 w-4", isVisible ? "text-canopy-text/50" : "text-canopy-text/20")}
+          className={cn("h-4 w-4", isVisible ? "text-daintree-text/50" : "text-daintree-text/20")}
         />
       </div>
       <div className="flex items-center gap-2 flex-1">
-        <div className="text-canopy-text">{metadata.icon}</div>
+        <div className="text-daintree-text">{metadata.icon}</div>
         <div className="flex-1">
-          <div className="text-sm font-medium text-canopy-text">{metadata.label}</div>
-          <div className="text-xs text-canopy-text/50 select-text">{metadata.description}</div>
+          <div className="text-sm font-medium text-daintree-text">{metadata.label}</div>
+          <div className="text-xs text-daintree-text/50 select-text">{metadata.description}</div>
         </div>
       </div>
       <input
@@ -170,7 +170,7 @@ function SortableButtonItem({
         checked={isVisible}
         onChange={() => onToggle(buttonId)}
         aria-label={`Toggle ${metadata.label} visibility`}
-        className="w-4 h-4 rounded border-border-strong bg-canopy-bg text-canopy-accent focus:ring-canopy-accent focus:ring-2"
+        className="w-4 h-4 rounded border-border-strong bg-daintree-bg text-daintree-accent focus:ring-daintree-accent focus:ring-2"
       />
     </div>
   );
@@ -334,7 +334,9 @@ export function ToolbarSettingsTab() {
           />
 
           <div className="space-y-2">
-            <label className="text-sm font-medium text-canopy-text block">Default selection</label>
+            <label className="text-sm font-medium text-daintree-text block">
+              Default selection
+            </label>
             <select
               value={launcher.defaultSelection ?? ""}
               onChange={(e) =>
@@ -342,7 +344,7 @@ export function ToolbarSettingsTab() {
                   e.target.value ? (e.target.value as typeof launcher.defaultSelection) : undefined
                 )
               }
-              className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+              className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent focus:outline-none transition-colors"
             >
               <option value="">None (first available)</option>
               <option value="terminal">Terminal</option>
@@ -354,7 +356,7 @@ export function ToolbarSettingsTab() {
               <option value="browser">Browser</option>
               <option value="dev-server">Dev Preview</option>
             </select>
-            <p className="text-xs text-canopy-text/40 select-text">
+            <p className="text-xs text-daintree-text/40 select-text">
               Default option to highlight when opening the launcher palette
             </p>
           </div>
@@ -365,8 +367,8 @@ export function ToolbarSettingsTab() {
         <button
           onClick={reset}
           className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border",
-            "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/5 transition-colors"
+            "flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-daintree-border",
+            "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/5 transition-colors"
           )}
         >
           <RotateCcw className="w-3.5 h-3.5" />

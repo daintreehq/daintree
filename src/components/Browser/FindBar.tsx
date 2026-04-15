@@ -41,7 +41,7 @@ export function FindBar({ find }: FindBarProps) {
   };
 
   return (
-    <div className="absolute top-2 right-2 z-20 flex items-center gap-1 rounded-md bg-surface-panel-elevated border border-canopy-border shadow-[var(--theme-shadow-floating)] px-2 py-1">
+    <div className="absolute top-2 right-2 z-20 flex items-center gap-1 rounded-md bg-surface-panel-elevated border border-daintree-border shadow-[var(--theme-shadow-floating)] px-2 py-1">
       <input
         ref={inputRef}
         type="text"
@@ -56,11 +56,11 @@ export function FindBar({ find }: FindBarProps) {
           setQuery(e.currentTarget.value);
         }}
         placeholder="Find in page"
-        className="w-44 bg-transparent text-xs text-canopy-text placeholder:text-canopy-text/40 outline-none"
+        className="w-44 bg-transparent text-xs text-daintree-text placeholder:text-daintree-text/40 outline-none"
         spellCheck={false}
       />
       {query && (
-        <span className="text-[10px] text-canopy-text/50 tabular-nums whitespace-nowrap mr-0.5">
+        <span className="text-[10px] text-daintree-text/50 tabular-nums whitespace-nowrap mr-0.5">
           {matchCount > 0 ? `${activeMatch} / ${matchCount}` : "No results"}
         </span>
       )}
@@ -68,7 +68,7 @@ export function FindBar({ find }: FindBarProps) {
         type="button"
         onClick={goPrev}
         disabled={matchCount === 0}
-        className="p-0.5 rounded hover:bg-tint/10 disabled:opacity-30 text-canopy-text/70"
+        className="p-0.5 rounded hover:bg-tint/10 disabled:opacity-30 text-daintree-text/70"
         aria-label="Previous match"
       >
         <ChevronUp className="w-3.5 h-3.5" />
@@ -77,7 +77,7 @@ export function FindBar({ find }: FindBarProps) {
         type="button"
         onClick={goNext}
         disabled={matchCount === 0}
-        className="p-0.5 rounded hover:bg-tint/10 disabled:opacity-30 text-canopy-text/70"
+        className="p-0.5 rounded hover:bg-tint/10 disabled:opacity-30 text-daintree-text/70"
         aria-label="Next match"
       >
         <ChevronDown className="w-3.5 h-3.5" />
@@ -85,7 +85,7 @@ export function FindBar({ find }: FindBarProps) {
       <button
         type="button"
         onClick={close}
-        className="p-0.5 rounded hover:bg-tint/10 text-canopy-text/70"
+        className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/70"
         aria-label="Close find bar"
       >
         <X className="w-3.5 h-3.5" />

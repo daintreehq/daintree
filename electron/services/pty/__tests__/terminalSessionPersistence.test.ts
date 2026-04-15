@@ -41,15 +41,15 @@ function createMockHeadless(bufferType: "normal" | "alternate" = "normal") {
 
 describe("terminalSessionPersistence", () => {
   let userDataDir: string;
-  const previousUserData = process.env.CANOPY_USER_DATA;
+  const previousUserData = process.env.DAINTREE_USER_DATA;
 
   beforeEach(async () => {
-    userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "canopy-session-persist-"));
-    process.env.CANOPY_USER_DATA = userDataDir;
+    userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "daintree-session-persist-"));
+    process.env.DAINTREE_USER_DATA = userDataDir;
   });
 
   afterEach(async () => {
-    process.env.CANOPY_USER_DATA = previousUserData;
+    process.env.DAINTREE_USER_DATA = previousUserData;
     await fsp.rm(userDataDir, { recursive: true, force: true });
   });
 

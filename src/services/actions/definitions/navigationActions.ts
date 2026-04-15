@@ -91,7 +91,7 @@ export function registerNavigationActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      window.dispatchEvent(new CustomEvent("canopy:find-in-panel"));
+      window.dispatchEvent(new CustomEvent("daintree:find-in-panel"));
     },
   }));
 }

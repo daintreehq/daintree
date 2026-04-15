@@ -1,5 +1,5 @@
 import type { ThemePalette } from "./palette.js";
-import { createCanopyTokens } from "./themes.js";
+import { createDaintreeTokens } from "./themes.js";
 import type { AppColorSchemeTokens } from "./types.js";
 
 export function createSemanticTokens(palette: ThemePalette): AppColorSchemeTokens {
@@ -31,7 +31,7 @@ export function createSemanticTokens(palette: ThemePalette): AppColorSchemeToken
               dialog: "0 12px 32px rgba(0, 0, 0, 0.15)",
             };
 
-  return createCanopyTokens(palette.type, {
+  return createDaintreeTokens(palette.type, {
     "surface-grid": palette.surfaces.grid,
     "surface-sidebar": palette.surfaces.sidebar,
     "surface-canvas": palette.surfaces.canvas,

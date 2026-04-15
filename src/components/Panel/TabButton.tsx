@@ -93,7 +93,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     };
 
     const controller = new AbortController();
-    window.addEventListener("canopy:rename-terminal", handleRenameEvent, {
+    window.addEventListener("daintree:rename-terminal", handleRenameEvent, {
       signal: controller.signal,
     });
     return () => controller.abort();
@@ -227,10 +227,10 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
             className={cn(
               "flex items-center gap-1.5 px-2 py-1 text-xs font-medium select-none cursor-pointer group/tab",
               "border-r border-divider transition-colors",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
               isActive
-                ? "bg-tint/[0.04] text-canopy-text"
-                : "text-canopy-text/60 hover:text-canopy-text hover:bg-overlay-subtle"
+                ? "bg-tint/[0.04] text-daintree-text"
+                : "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-subtle"
             )}
             data-tab-id={id}
             {...mergedAttributes}
@@ -258,7 +258,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                 onClick={handleInputClick}
                 onDoubleClick={handleInputDoubleClick}
                 onPointerDown={handleInputPointerDown}
-                className="text-xs bg-canopy-bg/80 border border-canopy-accent/50 px-1 h-4 min-w-[60px] max-w-[100px] text-canopy-text select-text focus-visible:outline focus-visible:outline-1 focus-visible:outline-canopy-accent"
+                className="text-xs bg-daintree-bg/80 border border-daintree-accent/50 px-1 h-4 min-w-[60px] max-w-[100px] text-daintree-text select-text focus-visible:outline focus-visible:outline-1 focus-visible:outline-daintree-accent"
                 aria-label={`Rename tab ${title}`}
               />
             ) : (
@@ -293,8 +293,8 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                       "shrink-0 p-0.5 -mr-1 rounded transition-colors",
                       "opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100",
                       "hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)]",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1",
-                      "text-canopy-text/40 hover:text-status-error"
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1",
+                      "text-daintree-text/40 hover:text-status-error"
                     )}
                     aria-label={`Close ${title}`}
                     type="button"

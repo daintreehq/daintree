@@ -47,7 +47,7 @@ async function pollForAppWindow(app: ElectronApplication, timeoutMs: number): Pr
     let fallback: Page | null = null;
     for (const w of app.windows()) {
       const url = w.url();
-      if (url.startsWith("app://canopy/") || url.includes("localhost")) {
+      if (url.startsWith("app://daintree/") || url.includes("localhost")) {
         if (url.includes("projectId=")) return w;
         fallback = w;
       }
@@ -73,7 +73,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), "canopy-e2e-"));
+    const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), "daintree-e2e-"));
     const args = [`--user-data-dir=${userDataDir}`, ROOT];
 
     if (process.env.CI) {
@@ -113,12 +113,13 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         ...process.env,
         ...options.env,
         NODE_ENV: "production",
-        CANOPY_E2E_MODE: "1",
-        CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS: options.env?.CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS ?? "1",
-        CANOPY_DISABLE_WEBGL: "1",
+        DAINTREE_E2E_MODE: "1",
+        DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS:
+          options.env?.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS ?? "1",
+        DAINTREE_DISABLE_WEBGL: "1",
         ...(isWindowsCI
           ? {
-              CANOPY_E2E_DEFER_RENDERER_LOAD: "1",
+              DAINTREE_E2E_DEFER_RENDERER_LOAD: "1",
             }
           : {}),
       };
@@ -262,7 +263,7 @@ export async function getActiveAppWindow(
 
     for (const w of app.windows()) {
       const url = w.url();
-      if (!(url.startsWith("app://canopy/") || url.includes("localhost"))) continue;
+      if (!(url.startsWith("app://daintree/") || url.includes("localhost"))) continue;
 
       // Best match: a project view that the main process currently has
       // attached to the BrowserWindow.

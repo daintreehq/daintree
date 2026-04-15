@@ -44,8 +44,8 @@ async function findAvailablePort(host, startPort) {
 }
 
 async function main() {
-  const host = process.env.CANOPY_DEV_SERVER_HOST?.trim() || DEFAULT_HOST;
-  const requestedPort = parsePort(process.env.CANOPY_DEV_SERVER_PORT) ?? DEFAULT_PORT;
+  const host = process.env.DAINTREE_DEV_SERVER_HOST?.trim() || DEFAULT_HOST;
+  const requestedPort = parsePort(process.env.DAINTREE_DEV_SERVER_PORT) ?? DEFAULT_PORT;
   const port = await findAvailablePort(host, requestedPort);
   const devServerUrl = `http://${host}:${port}`;
 
@@ -59,9 +59,9 @@ async function main() {
 
   const sharedEnv = {
     ...process.env,
-    CANOPY_DEV_SERVER_HOST: host,
-    CANOPY_DEV_SERVER_PORT: String(port),
-    CANOPY_DEV_SERVER_URL: devServerUrl,
+    DAINTREE_DEV_SERVER_HOST: host,
+    DAINTREE_DEV_SERVER_PORT: String(port),
+    DAINTREE_DEV_SERVER_URL: devServerUrl,
   };
   delete sharedEnv.ELECTRON_RUN_AS_NODE;
   delete sharedEnv.ATOM_SHELL_INTERNAL_RUN_AS_NODE;

@@ -160,8 +160,8 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
           .catch(console.error);
       }
     };
-    window.addEventListener("canopy:show-getting-started", handleShow);
-    return () => window.removeEventListener("canopy:show-getting-started", handleShow);
+    window.addEventListener("daintree:show-getting-started", handleShow);
+    return () => window.removeEventListener("daintree:show-getting-started", handleShow);
   }, []);
 
   // Notify when onboarding completes — show checklist in the same session

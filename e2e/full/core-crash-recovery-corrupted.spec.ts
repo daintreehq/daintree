@@ -103,7 +103,7 @@ test.describe.serial("Core: Crash Recovery — corrupted running.lock", () => {
   let userDataDir: string;
 
   test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-corrupt-marker-"));
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-corrupt-marker-"));
     seedCorruptedMarker(userDataDir);
     ctx = await launchApp({
       userDataDir,
@@ -133,7 +133,7 @@ test.describe.serial("Core: Crash Recovery — corrupted session backup", () => 
   let userDataDir: string;
 
   test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-corrupt-backup-"));
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-corrupt-backup-"));
     seedValidMarkerWithCorruptBackup(userDataDir);
     ctx = await launchApp({
       userDataDir,
@@ -175,7 +175,7 @@ test.describe.serial("Core: Crash Recovery — stale tmp file", () => {
   let userDataDir: string;
 
   test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-stale-tmp-"));
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-stale-tmp-"));
     seedStaleTmpOnly(userDataDir);
     ctx = await launchApp({
       userDataDir,
@@ -205,7 +205,7 @@ test.describe.serial("Core: Crash Recovery — panel with non-existent worktreeI
   let userDataDir: string;
 
   test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-bogus-wt-"));
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-bogus-wt-"));
     seedPanelWithBogusWorktree(userDataDir);
     ctx = await launchApp({
       userDataDir,

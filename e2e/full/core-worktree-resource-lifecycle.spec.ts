@@ -33,10 +33,10 @@ const BRANCH = "e2e/resource-lifecycle";
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
 function writeResourceConfig(repoDir: string) {
-  const canopyDir = path.join(repoDir, ".canopy");
-  fs.mkdirSync(canopyDir, { recursive: true });
+  const daintreeDir = path.join(repoDir, ".daintree");
+  fs.mkdirSync(daintreeDir, { recursive: true });
 
-  const stateFile = path.join(canopyDir, "resource-state.json");
+  const stateFile = path.join(daintreeDir, "resource-state.json");
 
   const config = {
     setup: [],
@@ -55,13 +55,13 @@ function writeResourceConfig(repoDir: string) {
     },
   };
 
-  fs.writeFileSync(path.join(canopyDir, "config.json"), JSON.stringify(config, null, 2));
+  fs.writeFileSync(path.join(daintreeDir, "config.json"), JSON.stringify(config, null, 2));
 
   execFileSync("git", ["add", "-A"], { cwd: repoDir, stdio: "ignore" });
   execFileSync("git", ["commit", "-m", "add resource config"], { cwd: repoDir, stdio: "ignore" });
 }
 
-/** Helper to create a worktree (local mode — lifecycle commands come from .canopy/config.json) */
+/** Helper to create a worktree (local mode — lifecycle commands come from .daintree/config.json) */
 async function createWorktree(
   window: Awaited<ReturnType<typeof launchApp>>["window"],
   branch: string
@@ -424,7 +424,7 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
   test("unhealthy status JSON is reflected in badge", async () => {
     const { window } = ctx;
 
-    const stateFile = path.join(fixtureDir, ".canopy", "resource-state.json");
+    const stateFile = path.join(fixtureDir, ".daintree", "resource-state.json");
     fs.writeFileSync(stateFile, JSON.stringify({ status: "unhealthy" }));
 
     await ensureWindowFocused(ctx.app);
@@ -450,7 +450,7 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
 
     // Write non-JSON content; the status command (cat) will exit 0 but output isn't valid JSON.
     // Per the implementation, exit 0 + non-JSON → "unknown" (neutral badge).
-    const stateFile = path.join(fixtureDir, ".canopy", "resource-state.json");
+    const stateFile = path.join(fixtureDir, ".daintree", "resource-state.json");
     fs.writeFileSync(stateFile, "not valid json");
 
     await ensureWindowFocused(ctx.app);
@@ -471,9 +471,9 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
       .toBe("unknown");
   });
 
-  // ---- CANOPY_* env vars are injected into lifecycle commands ----
+  // ---- DAINTREE_* env vars are injected into lifecycle commands ----
 
-  test("CANOPY_* env vars are available in lifecycle commands", async () => {
+  test("DAINTREE_* env vars are available in lifecycle commands", async () => {
     const { window } = ctx;
 
     // Find the worktree path from git (each worktree has its own working tree)
@@ -493,26 +493,26 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
     }
     expect(worktreePath.length).toBeGreaterThan(0);
 
-    // Write the modified config directly to the worktree's .canopy dir
-    const wtCanopyDir = path.join(worktreePath, ".canopy");
-    fs.mkdirSync(wtCanopyDir, { recursive: true });
-    const wtConfigPath = path.join(wtCanopyDir, "config.json");
-    const markerFile = path.join(wtCanopyDir, "env-marker.txt");
+    // Write the modified config directly to the worktree's .daintree dir
+    const wtDaintreeDir = path.join(worktreePath, ".daintree");
+    fs.mkdirSync(wtDaintreeDir, { recursive: true });
+    const wtConfigPath = path.join(wtDaintreeDir, "config.json");
+    const markerFile = path.join(wtDaintreeDir, "env-marker.txt");
 
-    const mainCanopyDir = path.join(fixtureDir, ".canopy");
-    const originalConfig = fs.readFileSync(path.join(mainCanopyDir, "config.json"), "utf-8");
+    const mainDaintreeDir = path.join(fixtureDir, ".daintree");
+    const originalConfig = fs.readFileSync(path.join(mainDaintreeDir, "config.json"), "utf-8");
     const config = JSON.parse(originalConfig);
 
-    // Modify status command to dump CANOPY_* env vars into a marker file,
+    // Modify status command to dump DAINTREE_* env vars into a marker file,
     // then still output valid JSON for the badge
     config.resource.status = [
-      `printf '%s\\n%s\\n%s' "$CANOPY_WORKTREE_NAME" "$CANOPY_WORKTREE_PATH" "$CANOPY_PROJECT_ROOT" > "${markerFile}"`,
-      `cat "${path.join(mainCanopyDir, "resource-state.json")}" 2>/dev/null || printf '{"status":"unknown"}'`,
+      `printf '%s\\n%s\\n%s' "$DAINTREE_WORKTREE_NAME" "$DAINTREE_WORKTREE_PATH" "$DAINTREE_PROJECT_ROOT" > "${markerFile}"`,
+      `cat "${path.join(mainDaintreeDir, "resource-state.json")}" 2>/dev/null || printf '{"status":"unknown"}'`,
     ].join(" && ");
 
     // Ensure the state file exists so badge shows something
     fs.writeFileSync(
-      path.join(mainCanopyDir, "resource-state.json"),
+      path.join(mainDaintreeDir, "resource-state.json"),
       JSON.stringify({ status: "ready" })
     );
     fs.writeFileSync(wtConfigPath, JSON.stringify(config, null, 2));
@@ -542,11 +542,11 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
       .toBe(true);
 
     const marker = fs.readFileSync(markerFile, "utf-8").trim().split("\n");
-    // CANOPY_WORKTREE_NAME should be set (worktree name or branch)
+    // DAINTREE_WORKTREE_NAME should be set (worktree name or branch)
     expect(marker[0]?.length).toBeGreaterThan(0);
-    // CANOPY_WORKTREE_PATH should be a real path
+    // DAINTREE_WORKTREE_PATH should be a real path
     expect(marker[1]?.length).toBeGreaterThan(0);
-    // CANOPY_PROJECT_ROOT should match the fixture dir (resolve symlinks for macOS /private/var)
+    // DAINTREE_PROJECT_ROOT should match the fixture dir (resolve symlinks for macOS /private/var)
     expect(fs.realpathSync(marker[2]!)).toBe(fs.realpathSync(fixtureDir));
 
     // Clean up: remove modified config and marker from worktree
@@ -575,13 +575,13 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
     }
     expect(worktreePath.length).toBeGreaterThan(0);
 
-    // Write modified config directly to the worktree's .canopy dir
-    const wtCanopyDir = path.join(worktreePath, ".canopy");
-    fs.mkdirSync(wtCanopyDir, { recursive: true });
-    const wtConfigPath = path.join(wtCanopyDir, "config.json");
+    // Write modified config directly to the worktree's .daintree dir
+    const wtDaintreeDir = path.join(worktreePath, ".daintree");
+    fs.mkdirSync(wtDaintreeDir, { recursive: true });
+    const wtConfigPath = path.join(wtDaintreeDir, "config.json");
 
-    const mainCanopyDir = path.join(fixtureDir, ".canopy");
-    const originalConfig = fs.readFileSync(path.join(mainCanopyDir, "config.json"), "utf-8");
+    const mainDaintreeDir = path.join(fixtureDir, ".daintree");
+    const originalConfig = fs.readFileSync(path.join(mainDaintreeDir, "config.json"), "utf-8");
     const config = JSON.parse(originalConfig);
 
     config.resource.connect = `echo BRANCH={{branch}} PATH={{worktree_path}} PROJECT={{project_root}}; bash --norc --noprofile`;
@@ -673,8 +673,8 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
     const { window } = ctx;
 
     // Temporarily update config.json to have a failing teardown
-    const canopyDir = path.join(fixtureDir, ".canopy");
-    const configPath = path.join(canopyDir, "config.json");
+    const daintreeDir = path.join(fixtureDir, ".daintree");
+    const configPath = path.join(daintreeDir, "config.json");
     const originalConfig = fs.readFileSync(configPath, "utf-8");
 
     const failConfig = JSON.parse(originalConfig);

@@ -6,7 +6,7 @@ const waitingConfig: StatusContainerConfig = {
   icon: STATE_ICONS.waiting,
   iconColor: "text-status-warning",
   badgeColor: "bg-status-warning",
-  badgeTextColor: "text-canopy-bg",
+  badgeTextColor: "text-daintree-bg",
   headerLabel: "Waiting For Input",
   buttonLabel: "Waiting",
   statusAriaLabel: "Waiting for input",

@@ -119,7 +119,7 @@ export function getAgentSettingsEntry(
 }
 
 export interface GenerateAgentFlagsOptions {
-  /** Absolute path to the clipboard temp directory (e.g. /tmp/canopy-clipboard) */
+  /** Absolute path to the clipboard temp directory (e.g. /tmp/daintree-clipboard) */
   clipboardDirectory?: string;
 }
 

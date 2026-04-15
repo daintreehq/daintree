@@ -90,12 +90,12 @@ export function WorktreeSidebarSearchBar({ inputRef }: WorktreeSidebarSearchBarP
         role="search"
         className={cn(
           "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)]",
-          "bg-canopy-bg border border-canopy-border",
-          "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
+          "bg-daintree-bg border border-daintree-border",
+          "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
         )}
       >
         <Search
-          className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
+          className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none"
           aria-hidden="true"
         />
         <input
@@ -106,14 +106,14 @@ export function WorktreeSidebarSearchBar({ inputRef }: WorktreeSidebarSearchBarP
           onKeyDown={handleKeyDown}
           placeholder="Search worktrees..."
           aria-label="Search worktrees"
-          className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder-canopy-text/40 focus:outline-none"
+          className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder-daintree-text/40 focus:outline-none"
         />
         <div className="flex shrink-0 items-center gap-0.5">
           {showClear && (
             <button
               type="button"
               onClick={handleClear}
-              className="flex items-center justify-center w-5 h-5 rounded text-canopy-text/40 hover:text-canopy-text"
+              className="flex items-center justify-center w-5 h-5 rounded text-daintree-text/40 hover:text-daintree-text"
               aria-label="Clear search and filters"
             >
               <X className="w-3 h-3" />

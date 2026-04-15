@@ -3,7 +3,7 @@
  *
  * Receives sound trigger events from main process via IPC and plays
  * WAV files through a singleton AudioContext. Sounds are fetched via
- * the canopy-file:// protocol and decoded AudioBuffers are cached
+ * the daintree-file:// protocol and decoded AudioBuffers are cached
  * for instant replay.
  */
 
@@ -35,7 +35,7 @@ async function getBuffer(ctx: AudioContext, soundFile: string): Promise<AudioBuf
 
   try {
     const dir = await ensureSoundsDir();
-    const url = `canopy-file://?path=${encodeURIComponent(`${dir}/${soundFile}`)}&root=${encodeURIComponent(dir)}`;
+    const url = `daintree-file://?path=${encodeURIComponent(`${dir}/${soundFile}`)}&root=${encodeURIComponent(dir)}`;
     const response = await fetch(url);
     if (!response.ok) return null;
 

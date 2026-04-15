@@ -49,12 +49,12 @@ describe("SettingsSwitchCard", () => {
     return track?.firstElementChild ?? null;
   };
 
-  it("uses bg-canopy-text on the thumb in the OFF state for WCAG 1.4.11 contrast", () => {
+  it("uses bg-daintree-text on the thumb in the OFF state for WCAG 1.4.11 contrast", () => {
     const { container } = render(<SettingsSwitchCard {...defaultProps} isEnabled={false} />);
     const thumb = getThumb(container);
     expect(thumb).not.toBeNull();
     const classes = thumb?.className.split(/\s+/) ?? [];
-    expect(classes).toContain("bg-canopy-text");
+    expect(classes).toContain("bg-daintree-text");
     expect(classes).not.toContain("bg-text-inverse");
   });
 
@@ -64,6 +64,6 @@ describe("SettingsSwitchCard", () => {
     expect(thumb).not.toBeNull();
     const classes = thumb?.className.split(/\s+/) ?? [];
     expect(classes).toContain("bg-text-inverse");
-    expect(classes).not.toContain("bg-canopy-text");
+    expect(classes).not.toContain("bg-daintree-text");
   });
 });

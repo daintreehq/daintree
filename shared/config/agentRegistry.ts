@@ -231,7 +231,7 @@ export interface AgentConfig {
   env?: Record<string, string>;
   /**
    * Resume configuration for restoring a previous agent session.
-   * When present, Canopy can resume a prior session using the stored session ID
+   * When present, Daintree can resume a prior session using the stored session ID
    * instead of starting fresh.
    */
   resume?: {
@@ -294,7 +294,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         ],
       },
       troubleshooting: [
-        "Restart Canopy after installation to update PATH",
+        "Restart Daintree after installation to update PATH",
         "Ensure Node.js and npm are installed first",
         "Verify installation with: claude --version",
         "Run 'claude auth login' to authenticate after installing",
@@ -443,7 +443,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         ],
       },
       troubleshooting: [
-        "Restart Canopy after installation to update PATH",
+        "Restart Daintree after installation to update PATH",
         "Verify installation with: gemini --version",
         "Run 'gemini auth login' after installing to authenticate",
       ],
@@ -595,7 +595,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         ],
       },
       troubleshooting: [
-        "Restart Canopy after installation to update PATH",
+        "Restart Daintree after installation to update PATH",
         "Verify installation with: codex --version",
         "Run 'codex auth login' after installing to authenticate",
       ],
@@ -771,7 +771,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         ],
       },
       troubleshooting: [
-        "Restart Canopy after installation to update PATH",
+        "Restart Daintree after installation to update PATH",
         "Ensure Node.js is installed for npm-based installation",
         "Verify installation with: opencode --version",
         "Run '/connect' in OpenCode to configure LLM provider",
@@ -917,7 +917,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         ],
       },
       troubleshooting: [
-        "Restart Canopy after installation to update PATH",
+        "Restart Daintree after installation to update PATH",
         "Verify installation with: cursor-agent -v",
         "Run 'cursor-agent login' to authenticate after installing",
       ],
@@ -1018,7 +1018,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         ],
       },
       troubleshooting: [
-        "Restart Canopy after installation to update PATH",
+        "Restart Daintree after installation to update PATH",
         "Verify installation with: kiro-cli --version",
         "Kiro CLI is only supported on macOS and Linux",
         "Authenticate after installing via Kiro's login flow",
@@ -1184,7 +1184,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         ],
       },
       troubleshooting: [
-        "Restart Canopy after installation to update PATH",
+        "Restart Daintree after installation to update PATH",
         "Verify installation with: copilot --version",
         "Run 'copilot login' to authenticate after installing",
       ],

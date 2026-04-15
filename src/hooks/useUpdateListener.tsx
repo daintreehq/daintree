@@ -9,7 +9,7 @@ function DownloadProgress({ percent }: { percent: number }) {
       <span>{pct}% complete</span>
       <div className="h-1 w-full rounded-full bg-tint/10 overflow-hidden">
         <div
-          className="h-full rounded-full bg-canopy-accent transition-[width] duration-300 ease-out"
+          className="h-full rounded-full bg-daintree-accent transition-[width] duration-300 ease-out"
           style={{ width: `${percent}%` }}
         />
       </div>

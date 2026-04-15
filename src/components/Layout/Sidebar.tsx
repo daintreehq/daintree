@@ -107,7 +107,7 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
             "relative shrink-0 flex flex-col outline-none",
             "surface-chrome",
             "border-r border-divider",
-            "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset",
+            "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset",
             className
           )}
           style={{ width }}
@@ -128,8 +128,8 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
             tabIndex={0}
             className={cn(
               "group absolute top-0 -right-1.5 w-3 h-full cursor-col-resize flex items-center justify-center z-50",
-              "hover:bg-overlay-soft transition-colors focus-visible:outline-none focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
-              isResizing && "bg-canopy-accent/20"
+              "hover:bg-overlay-soft transition-colors focus-visible:outline-none focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-daintree-accent/50",
+              isResizing && "bg-daintree-accent/20"
             )}
             onMouseDown={startResizing}
             onKeyDown={handleKeyDown}
@@ -139,9 +139,9 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
             <div
               className={cn(
                 "w-px h-8 rounded-full transition-[width] duration-150 delay-100 group-hover:w-0.5",
-                "bg-canopy-text/20",
-                "group-hover:bg-canopy-text/35 group-focus-visible:bg-canopy-accent",
-                isResizing && "bg-canopy-accent"
+                "bg-daintree-text/20",
+                "group-hover:bg-daintree-text/35 group-focus-visible:bg-daintree-accent",
+                isResizing && "bg-daintree-accent"
               )}
             />
           </div>

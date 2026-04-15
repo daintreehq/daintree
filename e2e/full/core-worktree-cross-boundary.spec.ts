@@ -36,7 +36,7 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
     // layout momentarily activates and crashes the Electron process.
     await ctx.window.evaluate(() => {
       localStorage.setItem(
-        "canopy-two-pane-split",
+        "daintree-two-pane-split",
         JSON.stringify({
           state: {
             config: { enabled: false, defaultRatio: 0.5, preferPreview: false },

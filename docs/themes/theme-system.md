@@ -1,11 +1,11 @@
 # Theme System
 
-Canopy's theming system is a three-layer pipeline shared between the renderer and main process:
+Daintree's theming system is a three-layer pipeline shared between the renderer and main process:
 
 1. `ThemePalette`
    Theme authors define the visual foundation in `shared/theme/palette.ts`: surfaces, text, accent, status, activity, terminal colors, syntax colors, and a small `strategy` object.
 2. Semantic tokens
-   `createSemanticTokens()` in `shared/theme/semantic.ts` compiles a palette into the stable app token contract (`AppColorSchemeTokens` in `shared/theme/types.ts`). Internally this calls `createCanopyTokens()` in `shared/theme/themes.ts` which derives ~100 tokens from ~40 required palette inputs.
+   `createSemanticTokens()` in `shared/theme/semantic.ts` compiles a palette into the stable app token contract (`AppColorSchemeTokens` in `shared/theme/types.ts`). Internally this calls `createDaintreeTokens()` in `shared/theme/themes.ts` which derives ~100 tokens from ~40 required palette inputs.
 3. Component public vars
    Individual UI areas expose their own override surface through CSS variables such as `--toolbar-bg`, `--toolbar-project-bg`, `--settings-dialog-bg`, `--pulse-card-bg`, and `--panel-grid-bg`.
 
@@ -125,25 +125,25 @@ Extensions are applied as bare CSS custom properties on `:root` (e.g., `"toolbar
 
 ## File Map
 
-| File                                  | Purpose                                                                   |
-| ------------------------------------- | ------------------------------------------------------------------------- |
-| `shared/theme/palette.ts`             | `ThemePalette` and `ThemeStrategy` types                                  |
-| `shared/theme/types.ts`               | `APP_THEME_TOKEN_KEYS`, `AppThemeTokenKey`, `AppColorScheme`              |
-| `shared/theme/semantic.ts`            | `createSemanticTokens()` — palette to tokens compiler                     |
-| `shared/theme/themes.ts`              | `createCanopyTokens()`, `BUILT_IN_APP_SCHEMES`, `createThemeFromSource()` |
-| `shared/theme/contrast.ts`            | `getThemeContrastWarnings()` WCAG validation                              |
-| `shared/theme/builtInThemeSources.ts` | `BuiltInThemeSource` interface + re-export                                |
-| `shared/theme/builtInThemes/index.ts` | Theme manifest array                                                      |
-| `shared/theme/builtInThemes/*.ts`     | Individual built-in theme definitions                                     |
-| `shared/theme/terminal.ts`            | Maps resolved app tokens to xterm `ITheme`                                |
-| `shared/theme/entityColors.ts`        | Panel brand colors, branch type Tailwind classes                          |
-| `src/theme/applyAppTheme.ts`          | DOM injection of CSS vars, CVD overrides                                  |
-| `src/index.css`                       | Tailwind v4 `@theme inline` mappings                                      |
-| `src/store/appThemeStore.ts`          | Renderer theme state (Zustand)                                            |
-| `src/config/terminalColorSchemes.ts`  | Terminal-specific color scheme library                                    |
-| `electron/utils/appThemeImporter.ts`  | JSON import with normalization and validation                             |
-| `src/styles/components/toolbar.css`   | Toolbar component vars                                                    |
-| `src/styles/components/sidebar.css`   | Sidebar/worktree component vars                                           |
-| `src/styles/components/settings.css`  | Settings dialog component vars                                            |
-| `src/styles/components/pulse.css`     | Pulse component vars                                                      |
-| `src/styles/components/panels.css`    | Panel shell component vars                                                |
+| File                                  | Purpose                                                                     |
+| ------------------------------------- | --------------------------------------------------------------------------- |
+| `shared/theme/palette.ts`             | `ThemePalette` and `ThemeStrategy` types                                    |
+| `shared/theme/types.ts`               | `APP_THEME_TOKEN_KEYS`, `AppThemeTokenKey`, `AppColorScheme`                |
+| `shared/theme/semantic.ts`            | `createSemanticTokens()` — palette to tokens compiler                       |
+| `shared/theme/themes.ts`              | `createDaintreeTokens()`, `BUILT_IN_APP_SCHEMES`, `createThemeFromSource()` |
+| `shared/theme/contrast.ts`            | `getThemeContrastWarnings()` WCAG validation                                |
+| `shared/theme/builtInThemeSources.ts` | `BuiltInThemeSource` interface + re-export                                  |
+| `shared/theme/builtInThemes/index.ts` | Theme manifest array                                                        |
+| `shared/theme/builtInThemes/*.ts`     | Individual built-in theme definitions                                       |
+| `shared/theme/terminal.ts`            | Maps resolved app tokens to xterm `ITheme`                                  |
+| `shared/theme/entityColors.ts`        | Panel brand colors, branch type Tailwind classes                            |
+| `src/theme/applyAppTheme.ts`          | DOM injection of CSS vars, CVD overrides                                    |
+| `src/index.css`                       | Tailwind v4 `@theme inline` mappings                                        |
+| `src/store/appThemeStore.ts`          | Renderer theme state (Zustand)                                              |
+| `src/config/terminalColorSchemes.ts`  | Terminal-specific color scheme library                                      |
+| `electron/utils/appThemeImporter.ts`  | JSON import with normalization and validation                               |
+| `src/styles/components/toolbar.css`   | Toolbar component vars                                                      |
+| `src/styles/components/sidebar.css`   | Sidebar/worktree component vars                                             |
+| `src/styles/components/settings.css`  | Settings dialog component vars                                              |
+| `src/styles/components/pulse.css`     | Pulse component vars                                                        |
+| `src/styles/components/panels.css`    | Panel shell component vars                                                  |

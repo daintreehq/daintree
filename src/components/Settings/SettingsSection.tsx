@@ -16,7 +16,7 @@ export function SettingsSection({
   icon: Icon,
   title,
   description,
-  iconColor = "text-canopy-text/70",
+  iconColor = "text-daintree-text/70",
   children,
   id,
   badge,
@@ -28,17 +28,17 @@ export function SettingsSection({
       <div>
         <h4
           id={headingId}
-          className="text-sm font-medium text-canopy-text mb-1.5 flex items-center gap-2 flex-wrap"
+          className="text-sm font-medium text-daintree-text mb-1.5 flex items-center gap-2 flex-wrap"
         >
           <Icon className={cn("w-4 h-4", iconColor)} aria-hidden="true" />
           {title}
           {badge && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-canopy-accent/10 border border-canopy-border/50 text-canopy-text/50 uppercase tracking-wide">
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-daintree-accent/10 border border-daintree-border/50 text-daintree-text/50 uppercase tracking-wide">
               {badge}
             </span>
           )}
         </h4>
-        <p className="text-xs text-canopy-text/50 select-text">{description}</p>
+        <p className="text-xs text-daintree-text/50 select-text">{description}</p>
       </div>
       {children}
     </div>

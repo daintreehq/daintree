@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
 export function getEmergencyLogPath(): string {
-  const userData = process.env.CANOPY_USER_DATA;
+  const userData = process.env.DAINTREE_USER_DATA;
   const logDir = userData
     ? path.join(userData, "logs")
     : process.env.NODE_ENV === "development"
