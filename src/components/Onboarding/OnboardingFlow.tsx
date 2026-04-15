@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isCanopyEnvEnabled } from "@/utils/env";
+import { isDaintreeEnvEnabled } from "@/utils/env";
 import { AgentSetupWizard } from "@/components/Setup/AgentSetupWizard";
 import { actionService } from "@/services/ActionService";
 import type { OnboardingState } from "@shared/types";
 import type { CliAvailability } from "@shared/types";
 
-const SKIP_FIRST_RUN_DIALOGS = isCanopyEnvEnabled("CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS");
+const SKIP_FIRST_RUN_DIALOGS = isDaintreeEnvEnabled("DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS");
 
 const LEGACY_KEYS = {
   agentSelection: "canopy:agent-selection-dismissed",

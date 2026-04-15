@@ -14,20 +14,20 @@ import {
 
 describe("agentSessionHistory", () => {
   let userDataDir: string;
-  const previousUserData = process.env.CANOPY_USER_DATA;
+  const previousUserData = process.env.DAINTREE_USER_DATA;
 
   beforeEach(async () => {
     userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "canopy-session-history-"));
-    process.env.CANOPY_USER_DATA = userDataDir;
+    process.env.DAINTREE_USER_DATA = userDataDir;
   });
 
   afterEach(async () => {
-    process.env.CANOPY_USER_DATA = previousUserData;
+    process.env.DAINTREE_USER_DATA = previousUserData;
     await fsp.rm(userDataDir, { recursive: true, force: true });
   });
 
-  it("returns null path when CANOPY_USER_DATA is not set", () => {
-    delete process.env.CANOPY_USER_DATA;
+  it("returns null path when DAINTREE_USER_DATA is not set", () => {
+    delete process.env.DAINTREE_USER_DATA;
     expect(getSessionHistoryPath()).toBeNull();
   });
 

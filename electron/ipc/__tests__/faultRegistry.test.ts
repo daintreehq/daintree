@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 describe("faultRegistry (env enabled)", () => {
   beforeEach(() => {
     vi.resetModules();
-    vi.stubEnv("CANOPY_E2E_FAULT_MODE", "1");
+    vi.stubEnv("DAINTREE_E2E_FAULT_MODE", "1");
     globalThis.__canopyFaultRegistry = undefined;
   });
 
@@ -90,7 +90,7 @@ describe("faultRegistry (env enabled)", () => {
 describe("faultRegistry (env disabled)", () => {
   beforeEach(() => {
     vi.resetModules();
-    vi.stubEnv("CANOPY_E2E_FAULT_MODE", "");
+    vi.stubEnv("DAINTREE_E2E_FAULT_MODE", "");
     globalThis.__canopyFaultRegistry = undefined;
   });
 

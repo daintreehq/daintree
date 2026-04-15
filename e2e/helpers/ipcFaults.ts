@@ -14,7 +14,7 @@ export async function injectFault(
     (_modules, { channel, message, code }) => {
       const registry = globalThis.__canopyFaultRegistry;
       if (!registry)
-        throw new Error("Fault mode not enabled — launch with CANOPY_E2E_FAULT_MODE=1");
+        throw new Error("Fault mode not enabled — launch with DAINTREE_E2E_FAULT_MODE=1");
       registry[channel] = { kind: "error", message, ...(code ? { code } : {}) };
     },
     { channel, message, code }
@@ -34,7 +34,7 @@ export async function injectDelay(
     (_modules, { channel, delayMs }) => {
       const registry = globalThis.__canopyFaultRegistry;
       if (!registry)
-        throw new Error("Fault mode not enabled — launch with CANOPY_E2E_FAULT_MODE=1");
+        throw new Error("Fault mode not enabled — launch with DAINTREE_E2E_FAULT_MODE=1");
       registry[channel] = { kind: "delay", delayMs };
     },
     { channel, delayMs }
@@ -124,7 +124,7 @@ export async function getTotalMainListeners(
 
 /**
  * Snapshot renderer-side ipcRenderer listener counts for a set of channels.
- * Requires the app to be launched with CANOPY_E2E_FAULT_MODE=1.
+ * Requires the app to be launched with DAINTREE_E2E_FAULT_MODE=1.
  */
 export async function getRendererListenerSnapshot(
   window: Page,
@@ -132,9 +132,9 @@ export async function getRendererListenerSnapshot(
 ): Promise<Record<string, number>> {
   return window.evaluate((chs) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- E2E test bridge
-    const bridge = (window as any).__CANOPY_E2E_IPC__;
+    const bridge = (window as any).__DAINTREE_E2E_IPC__;
     if (!bridge)
-      throw new Error("E2E IPC bridge not available — launch with CANOPY_E2E_FAULT_MODE=1");
+      throw new Error("E2E IPC bridge not available — launch with DAINTREE_E2E_FAULT_MODE=1");
     const snap: Record<string, number> = {};
     for (const ch of chs) snap[ch] = bridge.getRendererListenerCount(ch);
     return snap;

@@ -4,7 +4,7 @@ declare global {
   var process:
     | {
         env?: {
-          CANOPY_VERBOSE?: string;
+          DAINTREE_VERBOSE?: string;
         };
       }
     | undefined;

@@ -414,25 +414,33 @@ export class WorktreeLifecycleService {
     extraEnv?: Record<string, string>
   ): Record<string, string> {
     const env: Record<string, string> = {
-      ...(extraEnv ?? {}), // project vars first — CANOPY_* below will override
+      ...(extraEnv ?? {}), // project vars first — DAINTREE_* below will override
       CI: "true",
       NONINTERACTIVE: "1",
       GIT_TERMINAL_PROMPT: "0",
       DEBIAN_FRONTEND: "noninteractive",
+      DAINTREE_WORKTREE_PATH: worktreePath,
+      DAINTREE_PROJECT_ROOT: projectRootPath,
+      DAINTREE_WORKTREE_NAME: worktreeName,
+      // Legacy dual-emit — remove after one release cycle.
       CANOPY_WORKTREE_PATH: worktreePath,
       CANOPY_PROJECT_ROOT: projectRootPath,
       CANOPY_WORKTREE_NAME: worktreeName,
     };
     if (branch) {
+      env.DAINTREE_BRANCH = branch;
       env.CANOPY_BRANCH = branch;
     }
     if (resource?.provider) {
+      env.DAINTREE_RESOURCE_PROVIDER = resource.provider;
       env.CANOPY_RESOURCE_PROVIDER = resource.provider;
     }
     if (resource?.endpoint) {
+      env.DAINTREE_RESOURCE_ENDPOINT = resource.endpoint;
       env.CANOPY_RESOURCE_ENDPOINT = resource.endpoint;
     }
     if (resource?.lastOutput) {
+      env.DAINTREE_RESOURCE_STATUS = resource.lastOutput;
       env.CANOPY_RESOURCE_STATUS = resource.lastOutput;
     }
     return env;

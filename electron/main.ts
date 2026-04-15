@@ -178,7 +178,7 @@ if (!gotTheLock) {
         // originating project view survives a switch into a freshly added
         // project view. Increase the cache only when the e2e harness flag is
         // set so production behavior is unchanged.
-        (process.env.CANOPY_E2E_MODE ? 4 : undefined),
+        (process.env.DAINTREE_E2E_MODE ? 4 : undefined),
       onViewEvicted: (wcId) => {
         getWorkspaceClientRef()?.removeDirectPort(wcId);
         getWorktreePortBrokerRef()?.closePortsForView(wcId);

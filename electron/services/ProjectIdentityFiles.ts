@@ -7,15 +7,15 @@ import { UTF8_BOM } from "./projectStorePaths.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
 
 const MAX_PROJECT_NAME_LENGTH = 100;
-const CANOPY_PROJECT_JSON = ".canopy/project.json";
-const CANOPY_SETTINGS_JSON = ".canopy/settings.json";
-const CANOPY_RECIPES_DIR = ".canopy/recipes";
+const DAINTREE_PROJECT_JSON = ".canopy/project.json";
+const DAINTREE_SETTINGS_JSON = ".canopy/settings.json";
+const DAINTREE_RECIPES_DIR = ".canopy/recipes";
 
 export class ProjectIdentityFiles {
   async readInRepoProjectIdentity(
     projectPath: string
   ): Promise<{ name?: string; emoji?: string; color?: string; found: boolean }> {
-    const filePath = path.join(projectPath, CANOPY_PROJECT_JSON);
+    const filePath = path.join(projectPath, DAINTREE_PROJECT_JSON);
     try {
       let content = await fs.readFile(filePath, "utf-8");
       if (content.startsWith(UTF8_BOM)) {
@@ -74,7 +74,7 @@ export class ProjectIdentityFiles {
   ): Promise<void> {
     await this.assertCanopyDirNotSymlink(projectPath);
     const canopyDir = path.join(projectPath, ".canopy");
-    const filePath = path.join(projectPath, CANOPY_PROJECT_JSON);
+    const filePath = path.join(projectPath, DAINTREE_PROJECT_JSON);
 
     const payload: { version: 1; name?: string; emoji?: string; color?: string } = { version: 1 };
     if (data.name !== undefined) payload.name = data.name;
@@ -114,7 +114,7 @@ export class ProjectIdentityFiles {
   async writeInRepoSettings(projectPath: string, settings: ProjectSettings): Promise<void> {
     await this.assertCanopyDirNotSymlink(projectPath);
     const canopyDir = path.join(projectPath, ".canopy");
-    const filePath = path.join(projectPath, CANOPY_SETTINGS_JSON);
+    const filePath = path.join(projectPath, DAINTREE_SETTINGS_JSON);
 
     const payload: {
       version: 1;
@@ -188,7 +188,7 @@ export class ProjectIdentityFiles {
 
   async writeInRepoRecipe(projectPath: string, recipe: TerminalRecipe): Promise<void> {
     await this.assertCanopyDirNotSymlink(projectPath);
-    const recipesDir = path.join(projectPath, CANOPY_RECIPES_DIR);
+    const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
 
     // Also guard the recipes subdirectory against symlink attacks
     try {
@@ -234,7 +234,7 @@ export class ProjectIdentityFiles {
   }
 
   async readInRepoRecipes(projectPath: string): Promise<TerminalRecipe[]> {
-    const recipesDir = path.join(projectPath, CANOPY_RECIPES_DIR);
+    const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
     let entries;
     try {
       entries = await fs.readdir(recipesDir, { withFileTypes: true });
@@ -274,7 +274,7 @@ export class ProjectIdentityFiles {
 
   async deleteInRepoRecipe(projectPath: string, recipeName: string): Promise<void> {
     await this.assertCanopyDirNotSymlink(projectPath);
-    const recipesDir = path.join(projectPath, CANOPY_RECIPES_DIR);
+    const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
 
     try {
       const stat = await fs.lstat(recipesDir);

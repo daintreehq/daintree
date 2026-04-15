@@ -506,7 +506,7 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
     // Modify status command to dump CANOPY_* env vars into a marker file,
     // then still output valid JSON for the badge
     config.resource.status = [
-      `printf '%s\\n%s\\n%s' "$CANOPY_WORKTREE_NAME" "$CANOPY_WORKTREE_PATH" "$CANOPY_PROJECT_ROOT" > "${markerFile}"`,
+      `printf '%s\\n%s\\n%s' "$DAINTREE_WORKTREE_NAME" "$DAINTREE_WORKTREE_PATH" "$DAINTREE_PROJECT_ROOT" > "${markerFile}"`,
       `cat "${path.join(mainCanopyDir, "resource-state.json")}" 2>/dev/null || printf '{"status":"unknown"}'`,
     ].join(" && ");
 
@@ -542,11 +542,11 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
       .toBe(true);
 
     const marker = fs.readFileSync(markerFile, "utf-8").trim().split("\n");
-    // CANOPY_WORKTREE_NAME should be set (worktree name or branch)
+    // DAINTREE_WORKTREE_NAME should be set (worktree name or branch)
     expect(marker[0]?.length).toBeGreaterThan(0);
-    // CANOPY_WORKTREE_PATH should be a real path
+    // DAINTREE_WORKTREE_PATH should be a real path
     expect(marker[1]?.length).toBeGreaterThan(0);
-    // CANOPY_PROJECT_ROOT should match the fixture dir (resolve symlinks for macOS /private/var)
+    // DAINTREE_PROJECT_ROOT should match the fixture dir (resolve symlinks for macOS /private/var)
     expect(fs.realpathSync(marker[2]!)).toBe(fs.realpathSync(fixtureDir));
 
     // Clean up: remove modified config and marker from worktree

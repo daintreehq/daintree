@@ -62,7 +62,7 @@ export class PtyPool {
 
     await Promise.all(promises);
 
-    if (process.env.CANOPY_VERBOSE) {
+    if (process.env.DAINTREE_VERBOSE) {
       console.log(
         `[PtyPool] Warmed ${needed} terminals in ${this.defaultCwd} (pool size: ${this.pool.size})`
       );
@@ -91,7 +91,7 @@ export class PtyPool {
       const dataDisposable = ptyProcess.onData(() => {});
 
       ptyProcess.onExit(({ exitCode }) => {
-        if (process.env.CANOPY_VERBOSE) {
+        if (process.env.DAINTREE_VERBOSE) {
           console.log(`[PtyPool] Pooled PTY ${id} exited with code ${exitCode}`);
         }
         const entry = this.pool.get(id);
@@ -123,7 +123,7 @@ export class PtyPool {
         dataDisposable,
       });
 
-      if (process.env.CANOPY_VERBOSE) {
+      if (process.env.DAINTREE_VERBOSE) {
         console.log(`[PtyPool] Created pooled PTY ${id}, pool size: ${this.pool.size}`);
       }
     } catch (error) {
@@ -138,7 +138,7 @@ export class PtyPool {
     }
 
     if (this.pool.size === 0) {
-      if (process.env.CANOPY_VERBOSE) {
+      if (process.env.DAINTREE_VERBOSE) {
         console.log("[PtyPool] Pool empty, returning null");
       }
       return null;
@@ -164,7 +164,7 @@ export class PtyPool {
 
     entry.dataDisposable.dispose();
 
-    if (process.env.CANOPY_VERBOSE) {
+    if (process.env.DAINTREE_VERBOSE) {
       console.log(`[PtyPool] Acquired PTY ${id}, ${this.pool.size} remaining`);
     }
 
@@ -192,7 +192,7 @@ export class PtyPool {
 
     Promise.all(promises)
       .then(() => {
-        if (process.env.CANOPY_VERBOSE) {
+        if (process.env.DAINTREE_VERBOSE) {
           console.log(`[PtyPool] Refilled ${needed} entries, pool size: ${this.pool.size}`);
         }
       })
@@ -257,13 +257,13 @@ export class PtyPool {
       try {
         entry.process.kill();
       } catch (error) {
-        if (process.env.CANOPY_VERBOSE) {
+        if (process.env.DAINTREE_VERBOSE) {
           console.warn("[PtyPool] Error killing pooled PTY during drain:", error);
         }
       }
     }
 
-    if (process.env.CANOPY_VERBOSE) {
+    if (process.env.DAINTREE_VERBOSE) {
       console.log(
         `[PtyPool] Drained ${snapshot.length} entries; refilling at ${nextCwd} (epoch ${this.drainEpoch})`
       );
@@ -289,7 +289,7 @@ export class PtyPool {
       try {
         entry.dataDisposable.dispose();
         entry.process.kill();
-        if (process.env.CANOPY_VERBOSE) {
+        if (process.env.DAINTREE_VERBOSE) {
           console.log(`[PtyPool] Killed pooled PTY ${id}`);
         }
       } catch (error) {

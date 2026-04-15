@@ -21,7 +21,7 @@ describe("devServer config", () => {
 
   it("supports explicit dev server URL overrides", () => {
     const env = {
-      CANOPY_DEV_SERVER_URL: "http://localhost:6123",
+      DAINTREE_DEV_SERVER_URL: "http://localhost:6123",
     };
 
     expect(getDevServerUrl(env)).toBe("http://localhost:6123");
@@ -34,9 +34,9 @@ describe("devServer config", () => {
 
   it("falls back to host and port env when URL override is invalid", () => {
     const env = {
-      CANOPY_DEV_SERVER_HOST: "localhost",
-      CANOPY_DEV_SERVER_PORT: "6124",
-      CANOPY_DEV_SERVER_URL: "notaurl",
+      DAINTREE_DEV_SERVER_HOST: "localhost",
+      DAINTREE_DEV_SERVER_PORT: "6124",
+      DAINTREE_DEV_SERVER_URL: "notaurl",
     };
 
     expect(getDevServerConfig(env)).toEqual({

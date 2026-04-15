@@ -61,7 +61,7 @@ function cspTransformPlugin(): Plugin {
 }
 
 export default defineConfig(({ mode }) => ({
-  envPrefix: ["VITE_", "CANOPY_"],
+  envPrefix: ["VITE_", "DAINTREE_", "CANOPY_"],
   plugins: [
     react(),
     babel({

@@ -14,13 +14,13 @@ describe("GitHubStatsCache", () => {
     vi.setSystemTime(new Date("2025-02-01T12:00:00.000Z"));
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "canopy-gh-stats-cache-"));
     cacheFilePath = path.join(userDataDir, "github-stats-cache.json");
-    process.env.CANOPY_USER_DATA = userDataDir;
+    process.env.DAINTREE_USER_DATA = userDataDir;
   });
 
   afterEach(async () => {
     const { GitHubStatsCache } = await import("../GitHubStatsCache.js");
     GitHubStatsCache.resetInstance();
-    delete process.env.CANOPY_USER_DATA;
+    delete process.env.DAINTREE_USER_DATA;
     vi.useRealTimers();
     vi.resetModules();
     fs.rmSync(userDataDir, { recursive: true, force: true });

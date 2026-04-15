@@ -61,7 +61,7 @@ const { isCanopyEnvEnabledMock } = vi.hoisted(() => ({
   isCanopyEnvEnabledMock: vi.fn((_key: string): boolean => false),
 }));
 vi.mock("@/utils/env", () => ({
-  isCanopyEnvEnabled: (key: string) => isCanopyEnvEnabledMock(key),
+  isDaintreeEnvEnabled: (key: string) => isCanopyEnvEnabledMock(key),
 }));
 
 vi.mock("@/components/Setup/AgentSetupWizard", () => ({
@@ -286,7 +286,7 @@ describe("OnboardingFlow resume and legacy steps", () => {
     });
   });
 
-  it("renders nothing and skips hydration when CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS is enabled", async () => {
+  it("renders nothing and skips hydration when DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS is enabled", async () => {
     // The component reads SKIP_FIRST_RUN_DIALOGS at module load, so we flip
     // the mock, reset the module cache, and re-import.
     isCanopyEnvEnabledMock.mockReturnValue(true);

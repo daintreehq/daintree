@@ -812,7 +812,7 @@ export const ALL_EVENT_TYPES: Array<keyof CanopyEventMap> = [
 export class TypedEventBus {
   private bus = new EventEmitter();
 
-  private debugEnabled = process.env.CANOPY_DEBUG_EVENTS === "1";
+  private debugEnabled = process.env.DAINTREE_DEBUG_EVENTS === "1";
 
   constructor() {
     this.bus.setMaxListeners(100);

@@ -326,7 +326,7 @@ const storeOptions = {
     shortcutHintCounts: {},
     updateChannel: "stable" as const,
   },
-  cwd: process.env.CANOPY_USER_DATA,
+  cwd: process.env.DAINTREE_USER_DATA,
 };
 
 function getElectronUserDataPath(): string | undefined {

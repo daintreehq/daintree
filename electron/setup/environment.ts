@@ -24,7 +24,7 @@ export let exposeGc: (() => void) | undefined;
 try {
   nodeV8.setFlagsFromString("--expose_gc");
   exposeGc = vm.runInNewContext("gc") as () => void;
-  (globalThis as Record<string, unknown>).__canopy_gc = exposeGc;
+  (globalThis as Record<string, unknown>).__daintree_gc = exposeGc;
 } catch {
   // GC exposure not available — non-critical
 }
@@ -53,7 +53,7 @@ if (gpuHardwareAccelerationDisabled) {
 
 // Handle --reset-data: wipe userData before Chromium acquires file locks
 const shouldResetData =
-  process.argv.includes("--reset-data") || process.env.CANOPY_RESET_DATA === "1";
+  process.argv.includes("--reset-data") || process.env.DAINTREE_RESET_DATA === "1";
 if (shouldResetData) {
   const userDataPath = app.getPath("userData");
   if (fs.existsSync(userDataPath)) {

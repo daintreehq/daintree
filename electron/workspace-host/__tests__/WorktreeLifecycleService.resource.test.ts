@@ -636,47 +636,47 @@ describe("WorktreeLifecycleService — Resource Config", () => {
         NONINTERACTIVE: "1",
         GIT_TERMINAL_PROMPT: "0",
         DEBIAN_FRONTEND: "noninteractive",
-        CANOPY_WORKTREE_PATH: "/worktrees/feat",
-        CANOPY_PROJECT_ROOT: "/project",
-        CANOPY_WORKTREE_NAME: "feature/resource-lifecycle",
+        DAINTREE_WORKTREE_PATH: "/worktrees/feat",
+        DAINTREE_PROJECT_ROOT: "/project",
+        DAINTREE_WORKTREE_NAME: "feature/resource-lifecycle",
       });
     });
 
-    it("includes CANOPY_BRANCH when branch is provided", () => {
+    it("includes DAINTREE_BRANCH when branch is provided", () => {
       const env = service.buildEnv(
         "/worktrees/feat",
         "/project",
         "feature/lifecycle",
         "feature/lifecycle"
       );
-      expect(env.CANOPY_BRANCH).toBe("feature/lifecycle");
+      expect(env.DAINTREE_BRANCH).toBe("feature/lifecycle");
     });
 
-    it("omits CANOPY_BRANCH when branch is undefined", () => {
+    it("omits DAINTREE_BRANCH when branch is undefined", () => {
       const env = service.buildEnv("/worktrees/feat", "/project", "feature/lifecycle");
-      expect(env).not.toHaveProperty("CANOPY_BRANCH");
+      expect(env).not.toHaveProperty("DAINTREE_BRANCH");
     });
 
-    it("includes CANOPY_RESOURCE_PROVIDER when resource provider is provided", () => {
+    it("includes DAINTREE_RESOURCE_PROVIDER when resource provider is provided", () => {
       const env = service.buildEnv("/worktrees/feat", "/project", "feature/lifecycle", undefined, {
         provider: "akash",
       });
-      expect(env.CANOPY_RESOURCE_PROVIDER).toBe("akash");
+      expect(env.DAINTREE_RESOURCE_PROVIDER).toBe("akash");
     });
 
-    it("includes CANOPY_RESOURCE_ENDPOINT when resource endpoint is provided", () => {
+    it("includes DAINTREE_RESOURCE_ENDPOINT when resource endpoint is provided", () => {
       const env = service.buildEnv("/worktrees/feat", "/project", "feature/lifecycle", undefined, {
         endpoint: "https://app.example.com",
       });
-      expect(env.CANOPY_RESOURCE_ENDPOINT).toBe("https://app.example.com");
+      expect(env.DAINTREE_RESOURCE_ENDPOINT).toBe("https://app.example.com");
     });
 
-    it("includes CANOPY_RESOURCE_STATUS when resource lastOutput is provided", () => {
+    it("includes DAINTREE_RESOURCE_STATUS when resource lastOutput is provided", () => {
       const jsonOutput = '{"status":"ready","endpoint":"10.0.0.1"}';
       const env = service.buildEnv("/worktrees/feat", "/project", "feature/lifecycle", undefined, {
         lastOutput: jsonOutput,
       });
-      expect(env.CANOPY_RESOURCE_STATUS).toBe(jsonOutput);
+      expect(env.DAINTREE_RESOURCE_STATUS).toBe(jsonOutput);
     });
 
     it("includes all three resource vars when all provided", () => {
@@ -686,25 +686,25 @@ describe("WorktreeLifecycleService — Resource Config", () => {
         endpoint: "https://fly.example.com",
         lastOutput: jsonOutput,
       });
-      expect(env.CANOPY_RESOURCE_PROVIDER).toBe("fly");
-      expect(env.CANOPY_RESOURCE_ENDPOINT).toBe("https://fly.example.com");
-      expect(env.CANOPY_RESOURCE_STATUS).toBe(jsonOutput);
+      expect(env.DAINTREE_RESOURCE_PROVIDER).toBe("fly");
+      expect(env.DAINTREE_RESOURCE_ENDPOINT).toBe("https://fly.example.com");
+      expect(env.DAINTREE_RESOURCE_STATUS).toBe(jsonOutput);
     });
 
     it("omits resource vars when resource parameter is undefined", () => {
       const env = service.buildEnv("/worktrees/feat", "/project", "feature/lifecycle");
-      expect(env).not.toHaveProperty("CANOPY_RESOURCE_PROVIDER");
-      expect(env).not.toHaveProperty("CANOPY_RESOURCE_ENDPOINT");
-      expect(env).not.toHaveProperty("CANOPY_RESOURCE_STATUS");
+      expect(env).not.toHaveProperty("DAINTREE_RESOURCE_PROVIDER");
+      expect(env).not.toHaveProperty("DAINTREE_RESOURCE_ENDPOINT");
+      expect(env).not.toHaveProperty("DAINTREE_RESOURCE_STATUS");
     });
 
     it("omits individual resource vars when their values are undefined", () => {
       const env = service.buildEnv("/worktrees/feat", "/project", "feature/lifecycle", undefined, {
         provider: "fly",
       });
-      expect(env.CANOPY_RESOURCE_PROVIDER).toBe("fly");
-      expect(env).not.toHaveProperty("CANOPY_RESOURCE_ENDPOINT");
-      expect(env).not.toHaveProperty("CANOPY_RESOURCE_STATUS");
+      expect(env.DAINTREE_RESOURCE_PROVIDER).toBe("fly");
+      expect(env).not.toHaveProperty("DAINTREE_RESOURCE_ENDPOINT");
+      expect(env).not.toHaveProperty("DAINTREE_RESOURCE_STATUS");
     });
   });
 

@@ -98,13 +98,13 @@ describe("filterEnvironment", () => {
   it("strips CANOPY_* vars from inherited env (anti-spoofing)", () => {
     const env = {
       PATH: "/usr/bin",
-      CANOPY_PANE_ID: "spoofed-id",
-      CANOPY_PROJECT_ID: "spoofed-project",
+      DAINTREE_PANE_ID: "spoofed-id",
+      DAINTREE_PROJECT_ID: "spoofed-project",
     };
     const result = filterEnvironment(env);
     expect(result.PATH).toBe("/usr/bin");
-    expect(result.CANOPY_PANE_ID).toBeUndefined();
-    expect(result.CANOPY_PROJECT_ID).toBeUndefined();
+    expect(result.DAINTREE_PANE_ID).toBeUndefined();
+    expect(result.DAINTREE_PROJECT_ID).toBeUndefined();
   });
 
   it("handles empty input", () => {
@@ -126,8 +126,8 @@ describe("injectCanopyMetadata", () => {
       cwd: "/Users/test/project",
     });
 
-    expect(result.CANOPY_PANE_ID).toBe("pane-123");
-    expect(result.CANOPY_CWD).toBe("/Users/test/project");
+    expect(result.DAINTREE_PANE_ID).toBe("pane-123");
+    expect(result.DAINTREE_CWD).toBe("/Users/test/project");
     expect(result.PATH).toBe("/usr/bin");
   });
 
@@ -142,21 +142,21 @@ describe("injectCanopyMetadata", () => {
       }
     );
 
-    expect(result.CANOPY_PROJECT_ID).toBe("proj-abc");
-    expect(result.CANOPY_WORKTREE_ID).toBe("wt-xyz");
+    expect(result.DAINTREE_PROJECT_ID).toBe("proj-abc");
+    expect(result.DAINTREE_WORKTREE_ID).toBe("wt-xyz");
   });
 
   it("omits projectId and worktreeId keys when undefined", () => {
     const result = injectCanopyMetadata({}, { paneId: "p1", cwd: "/cwd" });
 
-    expect("CANOPY_PROJECT_ID" in result).toBe(false);
-    expect("CANOPY_WORKTREE_ID" in result).toBe(false);
+    expect("DAINTREE_PROJECT_ID" in result).toBe(false);
+    expect("DAINTREE_WORKTREE_ID" in result).toBe(false);
   });
 
   it("does not mutate the input env", () => {
     const env = { PATH: "/usr/bin" };
     injectCanopyMetadata(env, { paneId: "x", cwd: "/c" });
-    expect("CANOPY_PANE_ID" in env).toBe(false);
+    expect("DAINTREE_PANE_ID" in env).toBe(false);
   });
 });
 
@@ -236,7 +236,7 @@ describe("filterEnvironment + injectCanopyMetadata integration", () => {
       DATABASE_URL: "postgres://localhost/dev",
       MY_CUSTOM_TOKEN: "tok_abc123",
       // Pre-existing CANOPY_ vars should be stripped
-      CANOPY_PANE_ID: "old-id",
+      DAINTREE_PANE_ID: "old-id",
     };
 
     const filtered = filterEnvironment(shellEnv);
@@ -261,8 +261,8 @@ describe("filterEnvironment + injectCanopyMetadata integration", () => {
     expect(final.MY_CUSTOM_TOKEN).toBeUndefined();
 
     // CANOPY_* freshly injected (not spoofed)
-    expect(final.CANOPY_PANE_ID).toBe("new-pane-id");
-    expect(final.CANOPY_CWD).toBe("/Users/dev/project");
-    expect(final.CANOPY_PROJECT_ID).toBe("proj-1");
+    expect(final.DAINTREE_PANE_ID).toBe("new-pane-id");
+    expect(final.DAINTREE_CWD).toBe("/Users/dev/project");
+    expect(final.DAINTREE_PROJECT_ID).toBe("proj-1");
   });
 });

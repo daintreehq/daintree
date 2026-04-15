@@ -11,7 +11,7 @@ async function resetRateLimits(app: AppContext["app"]): Promise<void> {
   await app.evaluate(() => {
     const fn = (globalThis as any).__canopyResetRateLimits;
     if (!fn)
-      throw new Error("Rate limit reset not available — launch with CANOPY_E2E_FAULT_MODE=1");
+      throw new Error("Rate limit reset not available — launch with DAINTREE_E2E_FAULT_MODE=1");
     fn();
   });
 }
@@ -32,7 +32,7 @@ async function killTerminals(page: AppContext["window"], ids: string[]): Promise
 test.describe.serial("Core: Rate Limiting", () => {
   test.beforeAll(async () => {
     repoPath = createFixtureRepo({ name: "rate-limit-test" });
-    ctx = await launchApp({ env: { CANOPY_E2E_FAULT_MODE: "1" } });
+    ctx = await launchApp({ env: { DAINTREE_E2E_FAULT_MODE: "1" } });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, repoPath, "RateLimitTest");
   });
 

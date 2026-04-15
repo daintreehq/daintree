@@ -117,20 +117,20 @@ test.describe.serial("Nightly: Memory Leak Detection", () => {
     await test.step(`inject ${ERROR_INJECT_COUNT} errors`, async () => {
       for (let i = 0; i < ERROR_INJECT_COUNT; i++) {
         await window.evaluate((idx) => {
-          window.__CANOPY_E2E_ADD_ERROR__?.(`Stress error ${idx}`);
+          window.__DAINTREE_E2E_ADD_ERROR__?.(`Stress error ${idx}`);
         }, i);
       }
     });
 
     await test.step("verify error store is bounded", async () => {
-      const errors = await window.evaluate(() => window.__CANOPY_E2E_ERROR_STORE__?.() ?? []);
+      const errors = await window.evaluate(() => window.__DAINTREE_E2E_ERROR_STORE__?.() ?? []);
       console.log(`[errors] store size after ${ERROR_INJECT_COUNT} injections: ${errors.length}`);
       expect(errors.length).toBe(MAX_ERRORS);
     });
 
     await test.step("clear all and verify empty", async () => {
-      await window.evaluate(() => window.__CANOPY_E2E_CLEAR_ERRORS__?.());
-      const errors = await window.evaluate(() => window.__CANOPY_E2E_ERROR_STORE__?.() ?? []);
+      await window.evaluate(() => window.__DAINTREE_E2E_CLEAR_ERRORS__?.());
+      const errors = await window.evaluate(() => window.__DAINTREE_E2E_ERROR_STORE__?.() ?? []);
       expect(errors.length).toBe(0);
     });
   });

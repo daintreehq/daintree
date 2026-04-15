@@ -209,9 +209,9 @@ describe("WorktreeLifecycleService", () => {
         NONINTERACTIVE: "1",
         GIT_TERMINAL_PROMPT: "0",
         DEBIAN_FRONTEND: "noninteractive",
-        CANOPY_WORKTREE_PATH: "/worktrees/feat",
-        CANOPY_PROJECT_ROOT: "/project",
-        CANOPY_WORKTREE_NAME: "feature/my-branch",
+        DAINTREE_WORKTREE_PATH: "/worktrees/feat",
+        DAINTREE_PROJECT_ROOT: "/project",
+        DAINTREE_WORKTREE_NAME: "feature/my-branch",
       });
     });
   });
@@ -322,7 +322,7 @@ describe("WorktreeLifecycleService", () => {
 
       await service.runCommands(["echo test"], {
         cwd: "/test",
-        env: { CANOPY_WORKTREE_PATH: "/wt" },
+        env: { DAINTREE_WORKTREE_PATH: "/wt" },
         onProgress: vi.fn(),
       });
 
@@ -330,7 +330,7 @@ describe("WorktreeLifecycleService", () => {
         "echo test",
         expect.objectContaining({
           env: expect.objectContaining({
-            CANOPY_WORKTREE_PATH: "/wt",
+            DAINTREE_WORKTREE_PATH: "/wt",
             PATH: expect.any(String),
             HOME: expect.any(String),
           }),
@@ -344,7 +344,7 @@ describe("WorktreeLifecycleService", () => {
 
       await service.runCommands(["echo test"], {
         cwd: "/test",
-        env: { CANOPY_WORKTREE_PATH: "/wt" },
+        env: { DAINTREE_WORKTREE_PATH: "/wt" },
         onProgress: vi.fn(),
       });
 
@@ -352,7 +352,7 @@ describe("WorktreeLifecycleService", () => {
         "echo test",
         expect.objectContaining({
           env: expect.objectContaining({
-            CANOPY_WORKTREE_PATH: "/wt",
+            DAINTREE_WORKTREE_PATH: "/wt",
             PATH: expect.any(String),
             USERPROFILE: expect.any(String),
           }),
@@ -473,7 +473,7 @@ describe("WorktreeLifecycleService", () => {
 
         await service.runCommands(["echo test"], {
           cwd: "/test",
-          env: { CANOPY_WORKTREE_PATH: "/wt" },
+          env: { DAINTREE_WORKTREE_PATH: "/wt" },
           onProgress: vi.fn(),
         });
 

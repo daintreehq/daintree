@@ -315,7 +315,7 @@ export class ProjectStore {
       }
     }
 
-    if (process.env.CANOPY_VERBOSE) {
+    if (process.env.DAINTREE_VERBOSE) {
       console.log(
         "[ProjectStore] getAllProjects statuses:",
         rows.map((r) => ({ name: r.name, status: r.status }))
@@ -525,7 +525,7 @@ export class ProjectStore {
         .run();
     });
 
-    if (process.env.CANOPY_VERBOSE) {
+    if (process.env.DAINTREE_VERBOSE) {
       const updatedPrevious = previousProjectId ? this.getProjectById(previousProjectId) : null;
       console.log(`[ProjectStore] setCurrentProject complete:`, {
         newCurrentId: projectId,

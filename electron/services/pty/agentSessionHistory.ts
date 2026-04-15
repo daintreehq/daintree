@@ -13,7 +13,7 @@ const HISTORY_FILENAME = "agent-session-history.json";
 export { MAX_RECORDS_PER_WORKTREE, SESSION_HISTORY_TTL_MS };
 
 function getUserDataDir(): string | null {
-  return process.env.CANOPY_USER_DATA || null;
+  return process.env.DAINTREE_USER_DATA || null;
 }
 
 export function getSessionHistoryPath(userData?: string): string | null {

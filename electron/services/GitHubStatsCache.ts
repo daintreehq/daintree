@@ -7,13 +7,13 @@ import os from "os";
 function getUserDataPath(): string {
   // Priority 1: Environment variable (set by main process for utility processes)
   // Validate that it's an absolute path to prevent project root pollution
-  if (process.env.CANOPY_USER_DATA) {
-    const userDataPath = process.env.CANOPY_USER_DATA;
+  if (process.env.DAINTREE_USER_DATA) {
+    const userDataPath = process.env.DAINTREE_USER_DATA;
     if (path.isAbsolute(userDataPath)) {
       return userDataPath;
     }
     console.warn(
-      `[GitHubStatsCache] CANOPY_USER_DATA is not absolute: ${userDataPath}, falling back`
+      `[GitHubStatsCache] DAINTREE_USER_DATA is not absolute: ${userDataPath}, falling back`
     );
   }
 

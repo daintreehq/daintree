@@ -276,7 +276,7 @@ export class WorkspaceHostProcess extends EventEmitter {
         cwd: os.homedir(),
         env: {
           ...(process.env as Record<string, string>),
-          CANOPY_USER_DATA: app.getPath("userData"),
+          DAINTREE_USER_DATA: app.getPath("userData"),
         },
       });
     } catch (error) {

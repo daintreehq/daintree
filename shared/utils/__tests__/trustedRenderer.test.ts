@@ -3,19 +3,19 @@ import { isTrustedRendererUrl, getTrustedOrigins } from "../trustedRenderer.js";
 
 describe("trustedRenderer", () => {
   const originalNodeEnv = process.env.NODE_ENV;
-  const originalDevServerUrl = process.env.CANOPY_DEV_SERVER_URL;
+  const originalDevServerUrl = process.env.DAINTREE_DEV_SERVER_URL;
 
   beforeEach(() => {
     process.env.NODE_ENV = "development";
-    delete process.env.CANOPY_DEV_SERVER_URL;
+    delete process.env.DAINTREE_DEV_SERVER_URL;
   });
 
   afterEach(() => {
     process.env.NODE_ENV = originalNodeEnv;
     if (originalDevServerUrl === undefined) {
-      delete process.env.CANOPY_DEV_SERVER_URL;
+      delete process.env.DAINTREE_DEV_SERVER_URL;
     } else {
-      process.env.CANOPY_DEV_SERVER_URL = originalDevServerUrl;
+      process.env.DAINTREE_DEV_SERVER_URL = originalDevServerUrl;
     }
   });
 
@@ -87,7 +87,7 @@ describe("trustedRenderer", () => {
     });
 
     it("should allow an env-configured dev origin", () => {
-      process.env.CANOPY_DEV_SERVER_URL = "http://127.0.0.1:6123";
+      process.env.DAINTREE_DEV_SERVER_URL = "http://127.0.0.1:6123";
 
       expect(isTrustedRendererUrl("http://127.0.0.1:6123")).toBe(true);
       expect(isTrustedRendererUrl("http://localhost:6123")).toBe(true);

@@ -412,7 +412,7 @@ export function TroubleshootingTab() {
             launch the app with environment variables:
           </p>
           <code className="block text-xs bg-canopy-bg p-2 rounded border border-canopy-border font-mono text-canopy-text">
-            CANOPY_DEBUG=1 npm run dev
+            DAINTREE_DEBUG=1 npm run dev
           </code>
         </div>
       </SettingsSection>

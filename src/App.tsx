@@ -143,14 +143,14 @@ function App() {
   useResourceProfile();
 
   useEffect(() => {
-    window.__CANOPY_E2E_ERROR_STORE__ = () =>
+    window.__DAINTREE_E2E_ERROR_STORE__ = () =>
       useErrorStore.getState().errors.map((e) => ({
         id: e.id,
         source: e.source,
         message: e.message,
         fromPreviousSession: e.fromPreviousSession,
       }));
-    window.__CANOPY_E2E_ADD_ERROR__ = (message: string) => {
+    window.__DAINTREE_E2E_ADD_ERROR__ = (message: string) => {
       useErrorStore.getState().addError({
         type: "unknown",
         message,
@@ -158,13 +158,13 @@ function App() {
         source: "e2e-test",
       });
     };
-    window.__CANOPY_E2E_CLEAR_ERRORS__ = () => {
+    window.__DAINTREE_E2E_CLEAR_ERRORS__ = () => {
       useErrorStore.getState().clearAll();
     };
     return () => {
-      delete window.__CANOPY_E2E_ERROR_STORE__;
-      delete window.__CANOPY_E2E_ADD_ERROR__;
-      delete window.__CANOPY_E2E_CLEAR_ERRORS__;
+      delete window.__DAINTREE_E2E_ERROR_STORE__;
+      delete window.__DAINTREE_E2E_ADD_ERROR__;
+      delete window.__DAINTREE_E2E_CLEAR_ERRORS__;
     };
   }, []);
 
@@ -330,7 +330,7 @@ function App() {
       // that expect a clean post-onboarding state. The behaviour is locally
       // observable only when an agent CLI (e.g., Claude) is installed, so
       // tests pass on CI but fail on dev machines without this guard.
-      if (typeof window !== "undefined" && window.__CANOPY_E2E_MODE__) {
+      if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__) {
         return;
       }
 

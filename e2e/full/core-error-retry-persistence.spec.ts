@@ -76,7 +76,7 @@ async function emitRetryProgress(
 
 async function getStoreErrorId(window: Page, message: string): Promise<string> {
   const id = await window.evaluate((msg) => {
-    const errors = (window as any).__CANOPY_E2E_ERROR_STORE__?.() ?? [];
+    const errors = (window as any).__DAINTREE_E2E_ERROR_STORE__?.() ?? [];
     const found = errors.find((e: any) => e.message === msg);
     return found?.id ?? null;
   }, message);
@@ -107,7 +107,7 @@ let ctx: AppContext;
 
 test.describe.serial("Core: Error Retry & Cancellation", () => {
   test.beforeAll(async () => {
-    ctx = await launchApp({ env: { CANOPY_E2E_FAULT_MODE: "1" } });
+    ctx = await launchApp({ env: { DAINTREE_E2E_FAULT_MODE: "1" } });
   });
 
   test.afterEach(async () => {
@@ -275,7 +275,7 @@ test.describe.serial("Core: Error Persistence Across Restart", () => {
 
     // Verify fromPreviousSession flag via the E2E probe
     const fromPrevSession = await ctx.window.evaluate(() => {
-      const errors = (window as any).__CANOPY_E2E_ERROR_STORE__?.() ?? [];
+      const errors = (window as any).__DAINTREE_E2E_ERROR_STORE__?.() ?? [];
       const found = errors.find(
         (e: any) => e.message === "Critical config error from previous session"
       );

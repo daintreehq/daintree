@@ -2020,7 +2020,7 @@ ${connectCommand} "$@"
 
   private async loadProjectEnvVars(projectRootPath: string): Promise<Record<string, string>> {
     try {
-      const userDataDir = process.env.CANOPY_USER_DATA ?? "";
+      const userDataDir = process.env.DAINTREE_USER_DATA ?? "";
       const projectId = generateProjectId(projectRootPath);
       const filePath = settingsFilePath(userDataDir, projectId);
       if (!filePath) return {};

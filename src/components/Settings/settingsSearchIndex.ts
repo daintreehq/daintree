@@ -1112,7 +1112,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
       "logging",
       "diagnostics",
       "devtools",
-      "CANOPY_DEBUG",
+      "DAINTREE_DEBUG",
     ],
   },
   {

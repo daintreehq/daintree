@@ -2888,9 +2888,9 @@ ipcRenderer.on(CHANNELS.WINDOW_RECLAIM_MEMORY, () => {
 });
 
 // E2E test bridge: expose renderer-side IPC listener introspection in fault mode.
-// Gated by CANOPY_E2E_FAULT_MODE to avoid production surface area.
-if (process.env.CANOPY_E2E_FAULT_MODE === "1") {
-  contextBridge.exposeInMainWorld("__CANOPY_E2E_IPC__", {
+// Gated by DAINTREE_E2E_FAULT_MODE to avoid production surface area.
+if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
+  contextBridge.exposeInMainWorld("__DAINTREE_E2E_IPC__", {
     getRendererListenerCount: (channel: string) => ipcRenderer.listenerCount(channel),
   });
 }
@@ -2899,8 +2899,8 @@ if (process.env.CANOPY_E2E_FAULT_MODE === "1") {
 // Used by the renderer to suppress side effects (like the auto-launched
 // primary agent at the end of onboarding) that would otherwise pollute
 // panel-count assertions in tests.
-if (process.env.CANOPY_E2E_MODE === "1") {
-  contextBridge.exposeInMainWorld("__CANOPY_E2E_MODE__", true);
+if (process.env.DAINTREE_E2E_MODE === "1") {
+  contextBridge.exposeInMainWorld("__DAINTREE_E2E_MODE__", true);
 }
 
 // E2E test bridge: expose the "skip first-run dialogs" flag to the renderer at
@@ -2909,6 +2909,6 @@ if (process.env.CANOPY_E2E_MODE === "1") {
 // only set when the E2E harness launches Electron. The sandboxed renderer
 // cannot read `process.env` directly, so the preload (which does have a
 // polyfilled `process.env` even under sandbox: true) is the propagation point.
-if (process.env.CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS === "1") {
-  contextBridge.exposeInMainWorld("__CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS__", true);
+if (process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1") {
+  contextBridge.exposeInMainWorld("__DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__", true);
 }

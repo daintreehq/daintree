@@ -145,7 +145,7 @@ export function acquirePtyProcess(
       }
     }
 
-    if (process.env.CANOPY_VERBOSE) {
+    if (process.env.DAINTREE_VERBOSE) {
       console.log(`[TerminalProcess] Acquired terminal ${id} from pool (instant spawn)`);
     }
 

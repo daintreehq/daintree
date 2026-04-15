@@ -135,33 +135,33 @@ if [[ "$(uname)" == "Darwin" ]]; then
 fi
 
 # --- Linux: locate the canopy-app binary ---
-CANOPY_BIN=""
+DAINTREE_BIN=""
 
 # 1. Script-relative: works for both .deb (/opt/Canopy/) and AppImage FUSE mount
 _candidate="$(dirname "$(dirname "$SCRIPT_PATH")")/canopy-app"
 if [[ -x "$_candidate" ]]; then
-  CANOPY_BIN="$_candidate"
+  DAINTREE_BIN="$_candidate"
 fi
 
 # 2. $APPDIR set by AppImage runtime — points to the FUSE mount root
-if [[ -z "$CANOPY_BIN" && -n "${APPDIR:-}" && -x "$APPDIR/canopy-app" ]]; then
-  CANOPY_BIN="$APPDIR/canopy-app"
+if [[ -z "$DAINTREE_BIN" && -n "${APPDIR:-}" && -x "$APPDIR/canopy-app" ]]; then
+  DAINTREE_BIN="$APPDIR/canopy-app"
 fi
 
 # 3. Hardcoded .deb install location
-if [[ -z "$CANOPY_BIN" && -x "/opt/Canopy/canopy-app" ]]; then
-  CANOPY_BIN="/opt/Canopy/canopy-app"
+if [[ -z "$DAINTREE_BIN" && -x "/opt/Canopy/canopy-app" ]]; then
+  DAINTREE_BIN="/opt/Canopy/canopy-app"
 fi
 
 # 4. PATH lookup (last resort)
-if [[ -z "$CANOPY_BIN" ]] && command -v canopy-app &>/dev/null; then
-  CANOPY_BIN="$(command -v canopy-app)"
+if [[ -z "$DAINTREE_BIN" ]] && command -v canopy-app &>/dev/null; then
+  DAINTREE_BIN="$(command -v canopy-app)"
 fi
 
-if [[ -z "$CANOPY_BIN" ]]; then
+if [[ -z "$DAINTREE_BIN" ]]; then
   echo "canopy: Canopy executable not found." >&2
   exit 1
 fi
 
-"$CANOPY_BIN" --cli-path "$ABSOLUTE_PATH" &
+"$DAINTREE_BIN" --cli-path "$ABSOLUTE_PATH" &
 exit 0

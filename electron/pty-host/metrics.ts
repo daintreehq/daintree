@@ -1,3 +1,3 @@
 export function metricsEnabled(): boolean {
-  return process.env.CANOPY_TERMINAL_METRICS === "1";
+  return process.env.DAINTREE_TERMINAL_METRICS === "1";
 }

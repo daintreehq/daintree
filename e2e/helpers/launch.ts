@@ -113,12 +113,13 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         ...process.env,
         ...options.env,
         NODE_ENV: "production",
-        CANOPY_E2E_MODE: "1",
-        CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS: options.env?.CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS ?? "1",
-        CANOPY_DISABLE_WEBGL: "1",
+        DAINTREE_E2E_MODE: "1",
+        DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS:
+          options.env?.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS ?? "1",
+        DAINTREE_DISABLE_WEBGL: "1",
         ...(isWindowsCI
           ? {
-              CANOPY_E2E_DEFER_RENDERER_LOAD: "1",
+              DAINTREE_E2E_DEFER_RENDERER_LOAD: "1",
             }
           : {}),
       };

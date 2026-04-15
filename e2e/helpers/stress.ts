@@ -79,7 +79,7 @@ export async function measureMainMemory(
   return app.evaluate(async (_, forceGc) => {
     if (forceGc) {
       const g = globalThis as unknown as Record<string, unknown>;
-      const gcFn = (typeof g.__canopy_gc === "function" ? g.__canopy_gc : g.gc) as
+      const gcFn = (typeof g.__daintree_gc === "function" ? g.__daintree_gc : g.gc) as
         | (() => void)
         | undefined;
       if (gcFn) {

@@ -11,7 +11,7 @@ export interface RestoreResult {
 }
 
 export const TERMINAL_SESSION_PERSISTENCE_ENABLED: boolean =
-  process.env.CANOPY_TERMINAL_SESSION_PERSISTENCE !== "0";
+  process.env.DAINTREE_TERMINAL_SESSION_PERSISTENCE !== "0";
 export const SESSION_SNAPSHOT_DEBOUNCE_MS = 5000;
 export const SESSION_SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024;
 
@@ -31,7 +31,7 @@ const EVICTION_TTL_BUFFER_MS = 30_000; // 30s clock-skew safety buffer
 const STAT_CHUNK_SIZE = 10;
 
 export function getSessionDir(): string | null {
-  const userData = process.env.CANOPY_USER_DATA;
+  const userData = process.env.DAINTREE_USER_DATA;
   if (!userData) return null;
   return path.join(userData, "terminal-sessions");
 }

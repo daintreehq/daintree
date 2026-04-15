@@ -452,17 +452,17 @@ describe("reset-data", () => {
     vi.resetAllMocks();
     Object.defineProperty(process, "platform", { value: "darwin", writable: true });
     process.argv = ["electron", "main.js"];
-    delete process.env.CANOPY_RESET_DATA;
+    delete process.env.DAINTREE_RESET_DATA;
   });
 
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
     process.argv = originalArgv;
-    delete process.env.CANOPY_RESET_DATA;
+    delete process.env.DAINTREE_RESET_DATA;
   });
 
-  it("wipes userData when CANOPY_RESET_DATA=1 is set", async () => {
-    process.env.CANOPY_RESET_DATA = "1";
+  it("wipes userData when DAINTREE_RESET_DATA=1 is set", async () => {
+    process.env.DAINTREE_RESET_DATA = "1";
     fsMock.existsSync.mockReturnValue(true);
     fsMock.readdirSync.mockReturnValue(["Local Storage", "config.json"]);
 
@@ -505,7 +505,7 @@ describe("reset-data", () => {
   });
 
   it("skips wipe when userData directory does not exist", async () => {
-    process.env.CANOPY_RESET_DATA = "1";
+    process.env.DAINTREE_RESET_DATA = "1";
     fsMock.existsSync.mockImplementation((p: string) => {
       if (p.includes("gpu-disabled.flag")) return false;
       return false; // userData path does not exist
@@ -517,7 +517,7 @@ describe("reset-data", () => {
   });
 
   it("continues wiping other entries when rmSync throws on one", async () => {
-    process.env.CANOPY_RESET_DATA = "1";
+    process.env.DAINTREE_RESET_DATA = "1";
     fsMock.existsSync.mockReturnValue(true);
     fsMock.readdirSync.mockReturnValue(["locked-file", "deletable-file"]);
     fsMock.rmSync
@@ -539,8 +539,8 @@ describe("reset-data", () => {
     });
   });
 
-  it("ignores CANOPY_RESET_DATA values other than '1'", async () => {
-    process.env.CANOPY_RESET_DATA = "true";
+  it("ignores DAINTREE_RESET_DATA values other than '1'", async () => {
+    process.env.DAINTREE_RESET_DATA = "true";
     fsMock.existsSync.mockReturnValue(true);
 
     await import("../environment.js");

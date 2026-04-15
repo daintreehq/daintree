@@ -44,7 +44,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
       const serializedState = await ptyClient.getSerializedStateAsync(terminalId);
 
-      if (process.env.CANOPY_VERBOSE) {
+      if (process.env.DAINTREE_VERBOSE) {
         logDebug(
           `terminal:getSerializedState(${terminalId}): ${serializedState ? `${serializedState.length} bytes` : "null"}`
         );

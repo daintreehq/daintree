@@ -142,7 +142,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
 
     // Debug: log projectId assignment
-    if (process.env.CANOPY_VERBOSE) {
+    if (process.env.DAINTREE_VERBOSE) {
       console.log(`[TerminalSpawn] Spawning terminal ${id.slice(0, 8)}:`, {
         projectId: projectId?.slice(0, 8) ?? "undefined",
         projectName: resolvedProject?.name ?? "none",

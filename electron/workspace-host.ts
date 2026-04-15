@@ -10,7 +10,10 @@ for (const stream of [process.stdout, process.stderr]) {
 }
 
 import { MessagePort } from "node:worker_threads";
+import { applyLegacyEnvAliases } from "../shared/utils/envCompat.js";
 import { initializeLogger } from "./utils/logger.js";
+
+applyLegacyEnvAliases();
 import { copyTreeService } from "./services/CopyTreeService.js";
 import { fileTreeService } from "./services/FileTreeService.js";
 import { projectPulseService } from "./services/ProjectPulseService.js";
@@ -24,8 +27,8 @@ if (!process.parentPort) {
   throw new Error("[WorkspaceHost] Must run in UtilityProcess context");
 }
 
-if (process.env.CANOPY_USER_DATA) {
-  initializeLogger(process.env.CANOPY_USER_DATA);
+if (process.env.DAINTREE_USER_DATA) {
+  initializeLogger(process.env.DAINTREE_USER_DATA);
 }
 
 const port = process.parentPort as unknown as MessagePort;

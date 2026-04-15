@@ -12,20 +12,20 @@ import type {
 declare global {
   interface Window {
     electron: ElectronAPI;
-    __CANOPY_E2E_FAULT__?: { renderError?: boolean };
-    __CANOPY_E2E_ERROR_STORE__?: () => Array<{
+    __DAINTREE_E2E_FAULT__?: { renderError?: boolean };
+    __DAINTREE_E2E_ERROR_STORE__?: () => Array<{
       id: string;
       source?: string;
       message: string;
       fromPreviousSession?: boolean;
     }>;
-    __CANOPY_E2E_ADD_ERROR__?: (message: string) => void;
-    __CANOPY_E2E_CLEAR_ERRORS__?: () => void;
-    __CANOPY_E2E_IPC__?: {
+    __DAINTREE_E2E_ADD_ERROR__?: (message: string) => void;
+    __DAINTREE_E2E_CLEAR_ERRORS__?: () => void;
+    __DAINTREE_E2E_IPC__?: {
       getRendererListenerCount: (channel: string) => number;
     };
-    __CANOPY_E2E_MODE__?: boolean;
-    __CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS__?: boolean;
+    __DAINTREE_E2E_MODE__?: boolean;
+    __DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__?: boolean;
   }
 }
 

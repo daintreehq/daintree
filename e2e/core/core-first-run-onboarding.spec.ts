@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 
-const FIRST_RUN_ENV = { CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS: "0" };
+const FIRST_RUN_ENV = { DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS: "0" };
 
 test.describe.serial("First-run onboarding flow", () => {
   let userDataDir: string;

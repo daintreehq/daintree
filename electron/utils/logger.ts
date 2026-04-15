@@ -91,8 +91,8 @@ export function pruneOldLogs(basePath: string, retentionDays: number | 0): void 
 
 function getLogDirectory(): string {
   // Priority 1: Environment variable (Utility Processes)
-  if (process.env.CANOPY_USER_DATA) {
-    return join(process.env.CANOPY_USER_DATA, "logs");
+  if (process.env.DAINTREE_USER_DATA) {
+    return join(process.env.DAINTREE_USER_DATA, "logs");
   }
 
   // Priority 2: Explicitly initialized path (Main Process)
@@ -128,9 +128,9 @@ const SENSITIVE_KEYS = new Set([
   "privatekey",
 ]);
 
-const IS_DEBUG_BOOT = process.env.NODE_ENV === "development" || Boolean(process.env.CANOPY_DEBUG);
+const IS_DEBUG_BOOT = process.env.NODE_ENV === "development" || Boolean(process.env.DAINTREE_DEBUG);
 const IS_TEST = process.env.NODE_ENV === "test";
-const ENABLE_FILE_LOGGING = !IS_TEST && process.env.CANOPY_DISABLE_FILE_LOGGING !== "1";
+const ENABLE_FILE_LOGGING = !IS_TEST && process.env.DAINTREE_DISABLE_FILE_LOGGING !== "1";
 
 let verboseLogging = IS_DEBUG_BOOT;
 

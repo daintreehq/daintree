@@ -227,8 +227,8 @@ test.describe.serial("Core: Process Cleanup on Shutdown", () => {
 
     // Wait for shell ready using sentinel
     await window.waitForTimeout(2000);
-    await runTerminalCommand(window, panel, "echo CANOPY_READY");
-    await waitForTerminalText(panel, "CANOPY_READY", T_LONG);
+    await runTerminalCommand(window, panel, "echo DAINTREE_READY");
+    await waitForTerminalText(panel, "DAINTREE_READY", T_LONG);
 
     // Run a SIGTERM-resistant blocking command to stress the shutdown path
     await window.waitForTimeout(T_SETTLE);

@@ -202,7 +202,7 @@ export function setupBrowserWindow(
   // electron.launch() receives a CDP 'page' target and resolves.
   // Without this, the BW stays at about:blank (no Target.targetCreated event)
   // and electron.launch() times out after the WebContentsView migration.
-  if (process.env.CANOPY_E2E_MODE) {
+  if (process.env.DAINTREE_E2E_MODE) {
     win.loadURL("data:text/html,<!doctype html><html><body></body></html>");
   }
 

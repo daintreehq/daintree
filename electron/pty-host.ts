@@ -22,6 +22,10 @@ for (const stream of [process.stdout, process.stderr]) {
 
 import { MessagePort } from "node:worker_threads";
 import os from "node:os";
+import { applyLegacyEnvAliases } from "../shared/utils/envCompat.js";
+
+applyLegacyEnvAliases();
+
 import { PtyManager } from "./services/PtyManager.js";
 import { PtyPool, getPtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
@@ -440,7 +444,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     const analysisPacket = packetFramer.frame(id, data);
     if (analysisPacket) {
       const analysisWritten = analysisBuffer.write(analysisPacket);
-      if (analysisWritten === 0 && process.env.CANOPY_VERBOSE) {
+      if (analysisWritten === 0 && process.env.DAINTREE_VERBOSE) {
         console.log(`[PtyHost] Analysis buffer full - dropping frame for terminal ${id}`);
       }
     }

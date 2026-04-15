@@ -23,7 +23,7 @@ interface MigratePayload {
   firstRunToastSeen: boolean;
 }
 
-const SKIP_E2E = process.env.CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS === "1";
+const SKIP_E2E = process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS === "1";
 
 function getOnboardingState(): OnboardingState {
   if (SKIP_E2E) {

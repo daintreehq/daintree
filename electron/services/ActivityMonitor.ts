@@ -963,7 +963,7 @@ export class ActivityMonitor {
     try {
       return this.processStateValidator.hasActiveChildren();
     } catch (error) {
-      if (process.env.CANOPY_VERBOSE) {
+      if (process.env.DAINTREE_VERBOSE) {
         console.warn("[ActivityMonitor] Process state validation failed:", error);
       }
       return true;
@@ -977,7 +977,7 @@ export class ActivityMonitor {
     try {
       return this.processStateValidator.getDescendantsCpuUsage();
     } catch (error) {
-      if (process.env.CANOPY_VERBOSE) {
+      if (process.env.DAINTREE_VERBOSE) {
         console.warn("[ActivityMonitor] CPU usage query failed:", error);
       }
       return null;

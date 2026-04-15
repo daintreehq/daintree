@@ -46,7 +46,7 @@ function normalizeDevServerUrl(url: string): DevServerConfig | null {
 }
 
 export function getDevServerConfig(env: EnvLike = process.env): DevServerConfig {
-  const explicitUrl = env.CANOPY_DEV_SERVER_URL?.trim();
+  const explicitUrl = env.DAINTREE_DEV_SERVER_URL?.trim();
   if (explicitUrl) {
     const normalized = normalizeDevServerUrl(explicitUrl);
     if (normalized) {
@@ -54,8 +54,8 @@ export function getDevServerConfig(env: EnvLike = process.env): DevServerConfig 
     }
   }
 
-  const host = env.CANOPY_DEV_SERVER_HOST?.trim() || DEFAULT_DEV_SERVER_HOST;
-  const port = parsePort(env.CANOPY_DEV_SERVER_PORT) ?? DEFAULT_DEV_SERVER_PORT;
+  const host = env.DAINTREE_DEV_SERVER_HOST?.trim() || DEFAULT_DEV_SERVER_HOST;
+  const port = parsePort(env.DAINTREE_DEV_SERVER_PORT) ?? DEFAULT_DEV_SERVER_PORT;
 
   return {
     host,

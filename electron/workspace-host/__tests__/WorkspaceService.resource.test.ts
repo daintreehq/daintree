@@ -404,7 +404,7 @@ describe("WorkspaceService.runResourceAction", () => {
       await setupConfig({
         resource: {
           status: "check-status",
-          connect: "ssh -i key.pem root@${CANOPY_RESOURCE_ENDPOINT}",
+          connect: "ssh -i key.pem root@${DAINTREE_RESOURCE_ENDPOINT}",
           provision: ["provision-cmd"],
         },
       });
@@ -442,7 +442,7 @@ describe("WorkspaceService.runResourceAction", () => {
       await setupConfig({
         resource: {
           status: "check-status",
-          connect: "ssh root@${CANOPY_RESOURCE_ENDPOINT}",
+          connect: "ssh root@${DAINTREE_RESOURCE_ENDPOINT}",
           provision: ["provision-cmd"],
         },
       });
@@ -471,7 +471,7 @@ describe("WorkspaceService.runResourceAction", () => {
       await setupConfig({
         resource: {
           status: "check-status",
-          connect: "ssh root@${CANOPY_RESOURCE_ENDPOINT}",
+          connect: "ssh root@${DAINTREE_RESOURCE_ENDPOINT}",
           provision: ["provision-cmd"],
         },
       });

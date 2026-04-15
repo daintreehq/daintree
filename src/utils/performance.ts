@@ -1,5 +1,5 @@
 import type { PerfMarkName } from "@shared/perf/marks";
-import { isCanopyEnvEnabled } from "./env";
+import { isDaintreeEnvEnabled } from "./env";
 
 type PerfRecord = {
   mark: PerfMarkName | string;
@@ -10,14 +10,14 @@ type PerfRecord = {
 
 declare global {
   interface Window {
-    __CANOPY_PERF_MARKS__?: PerfRecord[];
+    __DAINTREE_PERF_MARKS__?: PerfRecord[];
   }
 }
 
 export const RENDERER_T0 = typeof performance !== "undefined" ? performance.now() : Date.now();
 
 export function isRendererPerfCaptureEnabled(): boolean {
-  return isCanopyEnvEnabled("CANOPY_PERF_CAPTURE");
+  return isDaintreeEnvEnabled("DAINTREE_PERF_CAPTURE");
 }
 
 export function markRendererPerformance(
@@ -27,7 +27,7 @@ export function markRendererPerformance(
   if (typeof window === "undefined") return;
 
   const captureEnabled = isRendererPerfCaptureEnabled();
-  const hasConsumerBuffer = Array.isArray(window.__CANOPY_PERF_MARKS__);
+  const hasConsumerBuffer = Array.isArray(window.__DAINTREE_PERF_MARKS__);
   if (!captureEnabled && !hasConsumerBuffer) {
     return;
   }
@@ -42,11 +42,11 @@ export function markRendererPerformance(
     meta,
   };
 
-  if (!window.__CANOPY_PERF_MARKS__) {
-    window.__CANOPY_PERF_MARKS__ = [];
+  if (!window.__DAINTREE_PERF_MARKS__) {
+    window.__DAINTREE_PERF_MARKS__ = [];
   }
 
-  window.__CANOPY_PERF_MARKS__.push(payload);
+  window.__DAINTREE_PERF_MARKS__.push(payload);
 
   if (captureEnabled) {
     console.debug("[perf]", payload.mark, payload.meta ?? {});

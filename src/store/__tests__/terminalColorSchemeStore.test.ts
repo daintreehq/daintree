@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { getTerminalScrollbarDefaults } from "@shared/theme";
-import { CANOPY_TERMINAL_THEME } from "@/utils/terminalTheme";
+import { DAINTREE_TERMINAL_THEME } from "@/utils/terminalTheme";
 import {
   DEFAULT_SCHEME_ID,
   getMappedTerminalScheme,
@@ -285,7 +285,7 @@ describe("terminalColorSchemeStore", () => {
 
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
 
-    expect(theme).toEqual(CANOPY_TERMINAL_THEME);
+    expect(theme).toEqual(DAINTREE_TERMINAL_THEME);
   });
 
   describe("recentSchemeIds LRU", () => {

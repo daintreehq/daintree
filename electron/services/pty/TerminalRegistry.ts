@@ -142,7 +142,7 @@ export class TerminalRegistry {
   } {
     // Debug: log all terminals and their projectIds
     const allTerminals = Array.from(this.terminals.values());
-    if (process.env.CANOPY_VERBOSE) {
+    if (process.env.DAINTREE_VERBOSE) {
       console.log(`[TerminalRegistry] getProjectStats for ${projectId.slice(0, 8)}:`, {
         totalTerminals: allTerminals.length,
         terminalProjectIds: allTerminals.map((t) => {
@@ -178,7 +178,7 @@ export class TerminalRegistry {
       {} as Record<string, number>
     );
 
-    if (process.env.CANOPY_VERBOSE) {
+    if (process.env.DAINTREE_VERBOSE) {
       console.log(`[TerminalRegistry] Stats result for ${projectId.slice(0, 8)}:`, {
         matchingTerminals: projectTerminals.length,
         terminalTypes,

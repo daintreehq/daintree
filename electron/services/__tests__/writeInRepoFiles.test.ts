@@ -5,9 +5,9 @@ import os from "os";
 import type { ProjectSettings, TerminalRecipe } from "../../types/index.js";
 import { ProjectIdentityFiles } from "../ProjectIdentityFiles.js";
 
-const CANOPY_PROJECT_JSON = ".canopy/project.json";
-const CANOPY_SETTINGS_JSON = ".canopy/settings.json";
-const CANOPY_RECIPES_DIR = ".canopy/recipes";
+const DAINTREE_PROJECT_JSON = ".canopy/project.json";
+const DAINTREE_SETTINGS_JSON = ".canopy/settings.json";
+const DAINTREE_RECIPES_DIR = ".canopy/recipes";
 
 function makeSettings(overrides: Partial<ProjectSettings> = {}): ProjectSettings {
   return { runCommands: [], ...overrides };
@@ -33,20 +33,24 @@ describe("writeInRepoProjectIdentity", () => {
       color: "blue",
     });
 
-    const filePath = path.join(tmpDir, CANOPY_PROJECT_JSON);
+    const filePath = path.join(tmpDir, DAINTREE_PROJECT_JSON);
     const content = JSON.parse(await fs.readFile(filePath, "utf-8"));
     expect(content).toEqual({ version: 1, name: "My App", emoji: "🚀", color: "blue" });
   });
 
   it("writes version: 1 in all cases", async () => {
     await identityFiles.writeInRepoProjectIdentity(tmpDir, {});
-    const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_PROJECT_JSON), "utf-8"));
+    const content = JSON.parse(
+      await fs.readFile(path.join(tmpDir, DAINTREE_PROJECT_JSON), "utf-8")
+    );
     expect(content.version).toBe(1);
   });
 
   it("omits undefined fields from output", async () => {
     await identityFiles.writeInRepoProjectIdentity(tmpDir, { name: "Only Name" });
-    const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_PROJECT_JSON), "utf-8"));
+    const content = JSON.parse(
+      await fs.readFile(path.join(tmpDir, DAINTREE_PROJECT_JSON), "utf-8")
+    );
     expect(content).toEqual({ version: 1, name: "Only Name" });
     expect(content).not.toHaveProperty("emoji");
     expect(content).not.toHaveProperty("color");
@@ -55,7 +59,9 @@ describe("writeInRepoProjectIdentity", () => {
   it("overwrites existing file with new values", async () => {
     await identityFiles.writeInRepoProjectIdentity(tmpDir, { name: "Old Name", emoji: "🌲" });
     await identityFiles.writeInRepoProjectIdentity(tmpDir, { name: "New Name", emoji: "🚀" });
-    const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_PROJECT_JSON), "utf-8"));
+    const content = JSON.parse(
+      await fs.readFile(path.join(tmpDir, DAINTREE_PROJECT_JSON), "utf-8")
+    );
     expect(content.name).toBe("New Name");
     expect(content.emoji).toBe("🚀");
   });
@@ -70,7 +76,7 @@ describe("writeInRepoProjectIdentity", () => {
 
   it("writes pretty-printed JSON (2-space indent)", async () => {
     await identityFiles.writeInRepoProjectIdentity(tmpDir, { name: "Formatted" });
-    const raw = await fs.readFile(path.join(tmpDir, CANOPY_PROJECT_JSON), "utf-8");
+    const raw = await fs.readFile(path.join(tmpDir, DAINTREE_PROJECT_JSON), "utf-8");
     expect(raw).toContain("\n");
     expect(raw).toContain("  ");
   });
@@ -78,7 +84,9 @@ describe("writeInRepoProjectIdentity", () => {
   it("works when .canopy/ already exists", async () => {
     await fs.mkdir(path.join(tmpDir, ".canopy"), { recursive: true });
     await identityFiles.writeInRepoProjectIdentity(tmpDir, { name: "Existing Dir" });
-    const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_PROJECT_JSON), "utf-8"));
+    const content = JSON.parse(
+      await fs.readFile(path.join(tmpDir, DAINTREE_PROJECT_JSON), "utf-8")
+    );
     expect(content.name).toBe("Existing Dir");
   });
 });
@@ -106,7 +114,7 @@ describe("writeInRepoSettings", () => {
       })
     );
 
-    const filePath = path.join(tmpDir, CANOPY_SETTINGS_JSON);
+    const filePath = path.join(tmpDir, DAINTREE_SETTINGS_JSON);
     const content = JSON.parse(await fs.readFile(filePath, "utf-8"));
     expect(content.version).toBe(1);
     expect(content.runCommands).toHaveLength(1);
@@ -116,13 +124,17 @@ describe("writeInRepoSettings", () => {
 
   it("omits machine-local fields: devServerDismissed", async () => {
     await identityFiles.writeInRepoSettings(tmpDir, makeSettings({ devServerDismissed: true }));
-    const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8"));
+    const content = JSON.parse(
+      await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
+    );
     expect(content).not.toHaveProperty("devServerDismissed");
   });
 
   it("omits machine-local fields: devServerAutoDetected", async () => {
     await identityFiles.writeInRepoSettings(tmpDir, makeSettings({ devServerAutoDetected: true }));
-    const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8"));
+    const content = JSON.parse(
+      await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
+    );
     expect(content).not.toHaveProperty("devServerAutoDetected");
   });
 
@@ -134,7 +146,9 @@ describe("writeInRepoSettings", () => {
         secureEnvironmentVariables: ["DB_PASS"],
       })
     );
-    const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8"));
+    const content = JSON.parse(
+      await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
+    );
     expect(content).not.toHaveProperty("environmentVariables");
     expect(content).not.toHaveProperty("secureEnvironmentVariables");
   });
@@ -144,7 +158,9 @@ describe("writeInRepoSettings", () => {
       tmpDir,
       makeSettings({ projectIconSvg: "<svg>...</svg>" })
     );
-    const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8"));
+    const content = JSON.parse(
+      await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
+    );
     expect(content).not.toHaveProperty("projectIconSvg");
   });
 
@@ -153,7 +169,9 @@ describe("writeInRepoSettings", () => {
       tmpDir,
       makeSettings({ copyTreeSettings: { maxFileSize: 50000 } })
     );
-    const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8"));
+    const content = JSON.parse(
+      await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
+    );
     expect(content.copyTreeSettings).toEqual({ maxFileSize: 50000 });
   });
 
@@ -172,14 +190,16 @@ describe("writeInRepoSettings", () => {
         runCommands: [{ id: "build", name: "Build", command: "npm run build" }],
       })
     );
-    const raw = await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8");
+    const raw = await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8");
     expect(raw).toContain("\n");
     expect(raw).toContain("  ");
   });
 
   it("omits runCommands from output when empty", async () => {
     await identityFiles.writeInRepoSettings(tmpDir, makeSettings());
-    const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8"));
+    const content = JSON.parse(
+      await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
+    );
     expect(content).not.toHaveProperty("runCommands");
   });
 });
@@ -210,7 +230,7 @@ describe("writeInRepoRecipe", () => {
 
   it("creates .canopy/recipes/ directory and writes recipe file", async () => {
     await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ name: "My Recipe" }));
-    const filePath = path.join(tmpDir, CANOPY_RECIPES_DIR, "my-recipe.json");
+    const filePath = path.join(tmpDir, DAINTREE_RECIPES_DIR, "my-recipe.json");
     const content = JSON.parse(await fs.readFile(filePath, "utf-8"));
     expect(content.name).toBe("My Recipe");
     expect(content.terminals).toHaveLength(1);
@@ -221,7 +241,7 @@ describe("writeInRepoRecipe", () => {
       tmpDir,
       makeRecipe({ projectId: "proj-1", worktreeId: "wt-1" })
     );
-    const filePath = path.join(tmpDir, CANOPY_RECIPES_DIR, "test-recipe.json");
+    const filePath = path.join(tmpDir, DAINTREE_RECIPES_DIR, "test-recipe.json");
     const content = JSON.parse(await fs.readFile(filePath, "utf-8"));
     expect(content).not.toHaveProperty("projectId");
     expect(content).not.toHaveProperty("worktreeId");
@@ -234,14 +254,14 @@ describe("writeInRepoRecipe", () => {
         terminals: [{ type: "terminal", env: { API_KEY: "secret123", DB_HOST: "localhost" } }],
       })
     );
-    const filePath = path.join(tmpDir, CANOPY_RECIPES_DIR, "test-recipe.json");
+    const filePath = path.join(tmpDir, DAINTREE_RECIPES_DIR, "test-recipe.json");
     const content = JSON.parse(await fs.readFile(filePath, "utf-8"));
     expect(content.terminals[0].env).toEqual({ API_KEY: "", DB_HOST: "" });
   });
 
   it("writes pretty-printed JSON", async () => {
     await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe());
-    const filePath = path.join(tmpDir, CANOPY_RECIPES_DIR, "test-recipe.json");
+    const filePath = path.join(tmpDir, DAINTREE_RECIPES_DIR, "test-recipe.json");
     const raw = await fs.readFile(filePath, "utf-8");
     expect(raw).toContain("\n");
     expect(raw).toContain("  ");
@@ -253,7 +273,7 @@ describe("writeInRepoRecipe", () => {
       tmpDir,
       makeRecipe({ name: "Same Name", id: "recipe-2" })
     );
-    const filePath = path.join(tmpDir, CANOPY_RECIPES_DIR, "same-name.json");
+    const filePath = path.join(tmpDir, DAINTREE_RECIPES_DIR, "same-name.json");
     const content = JSON.parse(await fs.readFile(filePath, "utf-8"));
     expect(content.id).toBe("recipe-2");
   });
@@ -278,7 +298,7 @@ describe("readInRepoRecipes", () => {
   });
 
   it("reads valid recipe files", async () => {
-    const recipesDir = path.join(tmpDir, CANOPY_RECIPES_DIR);
+    const recipesDir = path.join(tmpDir, DAINTREE_RECIPES_DIR);
     await fs.mkdir(recipesDir, { recursive: true });
     await fs.writeFile(
       path.join(recipesDir, "my-recipe.json"),
@@ -296,7 +316,7 @@ describe("readInRepoRecipes", () => {
   });
 
   it("skips malformed JSON files", async () => {
-    const recipesDir = path.join(tmpDir, CANOPY_RECIPES_DIR);
+    const recipesDir = path.join(tmpDir, DAINTREE_RECIPES_DIR);
     await fs.mkdir(recipesDir, { recursive: true });
     await fs.writeFile(path.join(recipesDir, "bad.json"), "not json", "utf-8");
     await fs.writeFile(
@@ -310,7 +330,7 @@ describe("readInRepoRecipes", () => {
   });
 
   it("skips files missing required fields", async () => {
-    const recipesDir = path.join(tmpDir, CANOPY_RECIPES_DIR);
+    const recipesDir = path.join(tmpDir, DAINTREE_RECIPES_DIR);
     await fs.mkdir(recipesDir, { recursive: true });
     await fs.writeFile(
       path.join(recipesDir, "no-name.json"),
@@ -327,7 +347,7 @@ describe("readInRepoRecipes", () => {
   });
 
   it("assigns stable ID from filename when missing", async () => {
-    const recipesDir = path.join(tmpDir, CANOPY_RECIPES_DIR);
+    const recipesDir = path.join(tmpDir, DAINTREE_RECIPES_DIR);
     await fs.mkdir(recipesDir, { recursive: true });
     await fs.writeFile(
       path.join(recipesDir, "my-recipe.json"),
@@ -355,7 +375,7 @@ describe("deleteInRepoRecipe", () => {
   it("deletes an existing recipe file", async () => {
     await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ name: "To Delete" }));
     await identityFiles.deleteInRepoRecipe(tmpDir, "To Delete");
-    const recipesDir = path.join(tmpDir, CANOPY_RECIPES_DIR);
+    const recipesDir = path.join(tmpDir, DAINTREE_RECIPES_DIR);
     const files = await fs.readdir(recipesDir);
     expect(files).toHaveLength(0);
   });

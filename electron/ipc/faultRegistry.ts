@@ -15,7 +15,7 @@ declare global {
   var __canopyFaultRegistry: Record<string, FaultConfig> | undefined;
 }
 
-export const FAULT_MODE_ENABLED = process.env.CANOPY_E2E_FAULT_MODE === "1";
+export const FAULT_MODE_ENABLED = process.env.DAINTREE_E2E_FAULT_MODE === "1";
 
 function ensureRegistry(): Record<string, FaultConfig> {
   if (!globalThis.__canopyFaultRegistry) {

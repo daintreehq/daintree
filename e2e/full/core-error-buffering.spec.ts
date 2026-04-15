@@ -49,7 +49,7 @@ async function flushBufferedErrors(app: ElectronApplication): Promise<void> {
 
 async function getErrorStoreErrors(window: Page): Promise<Array<{ id: string; message: string }>> {
   return window.evaluate(() => {
-    return (window as any).__CANOPY_E2E_ERROR_STORE__?.() ?? [];
+    return (window as any).__DAINTREE_E2E_ERROR_STORE__?.() ?? [];
   });
 }
 
@@ -76,7 +76,7 @@ let ctx: AppContext;
 
 test.describe.serial("Core: Error Buffering Flush", () => {
   test.beforeAll(async () => {
-    ctx = await launchApp({ env: { CANOPY_E2E_FAULT_MODE: "1" } });
+    ctx = await launchApp({ env: { DAINTREE_E2E_FAULT_MODE: "1" } });
   });
 
   test.afterEach(async () => {
