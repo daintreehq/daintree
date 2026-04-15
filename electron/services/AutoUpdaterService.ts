@@ -7,6 +7,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { getCrashRecoveryService } from "./CrashRecoveryService.js";
 import { store } from "../store.js";
+import { PRODUCT_NAME } from "../utils/productBranding.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 // The legacy Canopy variant uses its own updater feed and does not ship a
@@ -34,10 +35,14 @@ class AutoUpdaterService {
   private downloadedHandler: ((info: UpdateInfo) => void) | null = null;
 
   private configureFeedForChannel(channel: "stable" | "nightly"): void {
+    // The legacy Canopy variant has no nightly channel — pin to stable so the
+    // updater fetches latest-*.yml (not nightly-*.yml, which would 404 on the
+    // Canopy feed).
+    const effectiveChannel: "stable" | "nightly" = IS_LEGACY_BUILD ? "stable" : channel;
     autoUpdater.setFeedURL({
       provider: "generic",
-      url: channel === "nightly" ? NIGHTLY_FEED_URL : STABLE_FEED_URL,
-      channel: channel === "nightly" ? "nightly" : "latest",
+      url: effectiveChannel === "nightly" ? NIGHTLY_FEED_URL : STABLE_FEED_URL,
+      channel: effectiveChannel === "nightly" ? "nightly" : "latest",
     });
     autoUpdater.allowDowngrade = true;
   }
@@ -150,7 +155,7 @@ class AutoUpdaterService {
           broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
             type: "info",
             title: "No Updates Available",
-            message: `Daintree ${app.getVersion()} is the latest version.`,
+            message: `${PRODUCT_NAME} ${app.getVersion()} is the latest version.`,
           });
         }
       };

@@ -9,13 +9,14 @@ import { getWindowRegistry, getProjectViewManager } from "./window/windowRef.js"
 import { autoUpdaterService } from "./services/AutoUpdaterService.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
+import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 
 app.setAboutPanelOptions({
-  applicationName: "Daintree",
+  applicationName: PRODUCT_NAME,
   applicationVersion: app.getVersion(),
   version: "Beta",
-  copyright: `© ${new Date().getFullYear()} Daintree.org Team`,
-  website: "https://github.com/canopyide/canopy",
+  copyright: `© ${new Date().getFullYear()} ${PRODUCT_COPYRIGHT_ORG}`,
+  website: PRODUCT_WEBSITE,
 });
 
 function convertShortcutToAccelerator(shortcut: string): string {
@@ -332,7 +333,7 @@ export function createApplicationMenu(
         },
         { type: "separator" },
         {
-          label: "Install Daintree Command Line Tool",
+          label: `Install ${PRODUCT_NAME} Command Line Tool`,
           enabled: process.platform === "darwin" || process.platform === "linux",
           click: async (_item, browserWindow) => {
             const targetWin = getTargetBrowserWindow(browserWindow);
@@ -344,7 +345,7 @@ export function createApplicationMenu(
                   wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
                     type: "success",
                     title: "CLI Installed",
-                    message: `The \`daintree\` command is now available at ${status.path}`,
+                    message: `The \`${PRODUCT_NAME.toLowerCase() === "canopy" ? "canopy-app" : "daintree"}\` command is now available at ${status.path}`,
                   });
                 }
               }

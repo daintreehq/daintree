@@ -282,6 +282,9 @@ export function AppLayout({
       style={{
         height: "100vh",
         width: "100vw",
+        // Legacy Canopy build: reserve space for the permanent migration bar
+        // so bottom controls (status bar, dock tabs) stay clickable.
+        paddingBottom: IS_LEGACY_BUILD ? "var(--legacy-migration-bar-height, 40px)" : undefined,
         backgroundColor: "var(--color-daintree-bg)",
         display: "flex",
         flexDirection: "column",

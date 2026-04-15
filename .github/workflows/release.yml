@@ -423,7 +423,10 @@ jobs:
 
   publish-canopy:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-canopy, e2e-core-gate, e2e-online-gate]
+    # Intentionally NOT gated on e2e-core-gate / e2e-online-gate — those only
+    # exercise the Daintree variant, so blocking Canopy publish on them couples
+    # two independent release channels. Canopy ships on its own build health.
+    needs: [build-canopy]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
 
