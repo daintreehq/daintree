@@ -50,11 +50,9 @@ export async function ensureDaintreeDirMigrated(projectPath: string): Promise<vo
   try {
     await fs.rename(canopyPath, daintreePath);
     settledPaths.add(projectPath);
-    // eslint-disable-next-line no-console
     console.log(`[daintree] Migrated ${canopyPath} -> ${daintreePath}`);
   } catch (error) {
     // Transient failure — leave uncached so a subsequent call can retry.
-    // eslint-disable-next-line no-console
     console.warn(`[daintree] Failed to migrate ${canopyPath}:`, error);
   }
 }

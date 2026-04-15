@@ -45,7 +45,6 @@ async function migrateDiscoveryDir(): Promise<void> {
   try {
     await fs.rename(LEGACY_DISCOVERY_DIR, DISCOVERY_DIR);
     discoverySettled = true;
-    // eslint-disable-next-line no-console
     console.log(`[daintree] Migrated ${LEGACY_DISCOVERY_DIR} -> ${DISCOVERY_DIR}`);
   } catch {
     /* transient failure — leave uncached so writeDiscoveryFile() retries */
