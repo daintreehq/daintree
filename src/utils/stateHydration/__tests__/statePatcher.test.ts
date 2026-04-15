@@ -224,6 +224,24 @@ describe("buildArgsForBackendTerminal", () => {
     );
     expect(result.title).toBe("Shell");
   });
+
+  it("prefers saved worktreeId over stale backend worktreeId", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", kind: "agent", title: "Claude", worktreeId: "wt-original" },
+      { id: "t1", location: "grid", worktreeId: "wt-dragged" },
+      "/p"
+    );
+    expect(result.worktreeId).toBe("wt-dragged");
+  });
+
+  it("falls back to backend worktreeId when saved worktreeId is missing", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", kind: "terminal", title: "Shell", worktreeId: "wt-backend" },
+      { id: "t1", location: "grid" },
+      "/p"
+    );
+    expect(result.worktreeId).toBe("wt-backend");
+  });
 });
 
 describe("buildArgsForReconnectedFallback", () => {
@@ -242,8 +260,26 @@ describe("buildArgsForReconnectedFallback", () => {
     expect(result.existingId).toBe("t1");
     expect(result.cwd).toBe("/reconnected");
     expect(result.title).toBe("Old Title");
-    expect(result.worktreeId).toBe("wt1");
+    expect(result.worktreeId).toBe("wt-old");
     expect(result.location).toBe("dock");
+  });
+
+  it("prefers saved worktreeId over stale reconnected worktreeId", () => {
+    const result = buildArgsForReconnectedFallback(
+      { id: "t1", cwd: "/p", kind: "agent", title: "Claude", worktreeId: "wt-original" },
+      { id: "t1", location: "grid", worktreeId: "wt-dragged" },
+      "/p"
+    );
+    expect(result.worktreeId).toBe("wt-dragged");
+  });
+
+  it("falls back to reconnected worktreeId when saved worktreeId is missing", () => {
+    const result = buildArgsForReconnectedFallback(
+      { id: "t1", cwd: "/p", kind: "terminal", title: "Shell", worktreeId: "wt-reconnected" },
+      { id: "t1", location: "grid" },
+      "/p"
+    );
+    expect(result.worktreeId).toBe("wt-reconnected");
   });
 
   it("falls back to saved fields when reconnected is missing data", () => {
