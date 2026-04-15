@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 /** Normalize a path to forward slashes for cross-platform mock matching */
 const n = (p: string) => (p as string).replace(/\\/g, "/");
