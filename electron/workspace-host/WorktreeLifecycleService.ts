@@ -435,7 +435,8 @@ export class WorktreeLifecycleService {
       const key = name.toLowerCase() as keyof LifecycleVariables;
       const value = vars[key];
       if (value == null) return match;
-      if (key === "branch-slug") return value;
+      if (key === "branch-slug")
+        return /^[a-z0-9-]*$/.test(value) ? value : shellEscapeValue(value);
       return shellEscapeValue(value);
     });
     return result;
@@ -446,11 +447,11 @@ export class WorktreeLifecycleService {
  * Shell-escape a value for safe interpolation into a command string run with
  * `shell: true`. On Unix (/bin/sh), wraps in single quotes with embedded
  * single-quote escaping. On Windows (cmd.exe), wraps in double quotes with
- * embedded double-quote escaping.
+ * percent and double-quote escaping (cmd.exe expands %VAR% inside quotes).
  */
 function shellEscapeValue(value: string): string {
   if (process.platform === "win32") {
-    return '"' + value.replace(/"/g, '""') + '"';
+    return '"' + value.replace(/%/g, "%%").replace(/"/g, '""') + '"';
   }
   return "'" + value.replace(/'/g, "'\\''") + "'";
 }

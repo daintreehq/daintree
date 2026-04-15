@@ -866,6 +866,24 @@ describe("WorktreeLifecycleService — Resource Config", () => {
         });
         expect(result).toBe("curl 'http://ok | cat /etc/passwd'");
       });
+
+      it("escapes Windows %VAR% environment variable expansion", () => {
+        setPlatform("win32");
+        const result = service.substituteVariables("deploy {{branch}}", {
+          ...baseVars,
+          branch: "feat/%CD%",
+        });
+        expect(result).toBe('deploy "feat/%%CD%%"');
+      });
+
+      it("falls back to escaping branch-slug if it contains unexpected characters", () => {
+        setPlatform("darwin");
+        const result = service.substituteVariables("deploy {branch-slug}", {
+          ...baseVars,
+          "branch-slug": "bad; rm -rf /",
+        });
+        expect(result).toBe("deploy 'bad; rm -rf /'");
+      });
     });
   });
 
