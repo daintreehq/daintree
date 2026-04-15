@@ -58,6 +58,7 @@ export interface RunCommandsOptions {
   cwd: string;
   env: Record<string, string>;
   timeoutMs?: number;
+  signal?: AbortSignal;
   onProgress: (commandIndex: number, totalCommands: number, command: string) => void;
 }
 
@@ -66,6 +67,7 @@ export interface RunCommandsResult {
   output: string;
   error?: string;
   timedOut?: boolean;
+  aborted?: boolean;
 }
 
 async function fileExists(p: string): Promise<boolean> {
@@ -187,7 +189,7 @@ export class WorktreeLifecycleService {
    * On Unix, process group kill terminates the whole tree; on Windows, taskkill /T is used.
    */
   async runCommands(commands: string[], options: RunCommandsOptions): Promise<RunCommandsResult> {
-    const { cwd, env, onProgress, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
+    const { cwd, env, onProgress, timeoutMs = DEFAULT_TIMEOUT_MS, signal } = options;
 
     if (!commands.length) {
       return { success: true, output: "" };
@@ -197,6 +199,15 @@ export class WorktreeLifecycleService {
     const deadline = Date.now() + timeoutMs;
 
     for (let i = 0; i < commands.length; i++) {
+      if (signal?.aborted) {
+        return {
+          success: false,
+          output: tailOutput(outputChunks),
+          aborted: true,
+          error: "Aborted",
+        };
+      }
+
       const command = commands[i];
       const remainingMs = deadline - Date.now();
 
@@ -211,7 +222,23 @@ export class WorktreeLifecycleService {
 
       onProgress(i, commands.length, command);
 
-      const result = await this.runSingleCommand(command, cwd, env, remainingMs, outputChunks);
+      const result = await this.runSingleCommand(
+        command,
+        cwd,
+        env,
+        remainingMs,
+        outputChunks,
+        signal
+      );
+
+      if (result.aborted) {
+        return {
+          success: false,
+          output: tailOutput(outputChunks),
+          aborted: true,
+          error: "Aborted",
+        };
+      }
 
       if (!result.success) {
         return {
@@ -231,8 +258,13 @@ export class WorktreeLifecycleService {
     cwd: string,
     env: Record<string, string>,
     timeoutMs: number,
-    outputChunks: string[]
-  ): Promise<{ success: boolean; timedOut?: boolean; error?: string }> {
+    outputChunks: string[],
+    signal?: AbortSignal
+  ): Promise<{ success: boolean; timedOut?: boolean; aborted?: boolean; error?: string }> {
+    if (signal?.aborted) {
+      return Promise.resolve({ success: false, aborted: true, error: "Aborted" });
+    }
+
     const isWin = process.platform === "win32";
 
     return new Promise((resolve) => {
@@ -244,6 +276,7 @@ export class WorktreeLifecycleService {
       });
 
       let timedOut = false;
+      let aborted = false;
 
       const killProcess = () => {
         if (isWin) {
@@ -280,6 +313,15 @@ export class WorktreeLifecycleService {
         }, 5_000);
       };
 
+      const onAbort = () => {
+        aborted = true;
+        killProcess();
+      };
+
+      if (signal) {
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+
       const timeoutHandle = setTimeout(() => {
         timedOut = true;
         killProcess();
@@ -295,11 +337,18 @@ export class WorktreeLifecycleService {
 
       child.on("error", (err) => {
         clearTimeout(timeoutHandle);
+        signal?.removeEventListener("abort", onAbort);
         resolve({ success: false, error: err.message });
       });
 
       child.on("close", (code) => {
         clearTimeout(timeoutHandle);
+        signal?.removeEventListener("abort", onAbort);
+
+        if (aborted) {
+          resolve({ success: false, aborted: true, error: "Aborted" });
+          return;
+        }
 
         if (timedOut) {
           resolve({
