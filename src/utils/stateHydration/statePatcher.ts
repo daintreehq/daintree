@@ -209,7 +209,7 @@ export function buildArgsForReconnectedFallback(
     agentId,
     title: saved.title ?? reconnectedTerminal.title,
     cwd,
-    worktreeId: reconnectedTerminal.worktreeId ?? saved.worktreeId,
+    worktreeId: saved.worktreeId ?? reconnectedTerminal.worktreeId,
     location,
     existingId: reconnectedTerminal.id,
     agentState: reconnectedTerminal.agentState,

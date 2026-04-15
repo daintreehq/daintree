@@ -516,7 +516,7 @@ export async function hydrateAppState(
                       restoreTasks.push({
                         terminalId: restoredTerminalId,
                         label: saved.id,
-                        worktreeId: reconnectedTerminal.worktreeId ?? saved.worktreeId,
+                        worktreeId: reconnectArgs.worktreeId,
                         location,
                       });
                     } else {
