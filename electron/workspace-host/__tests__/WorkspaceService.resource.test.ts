@@ -1292,3 +1292,230 @@ describe("WorkspaceService.runLifecycleSetup — resource config caching", () =>
     expect(monitor.resourceConnectCommand).toBe("ssh user@host");
   });
 });
+
+describe("WorkspaceService.runResourceAction — concurrency", () => {
+  let service: WorkspaceService;
+  let mockSendEvent: ReturnType<typeof vi.fn>;
+  let WorktreeMonitorClass: typeof WorktreeMonitor;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockSendEvent = vi.fn();
+
+    const WorkspaceServiceModule = await import("../WorkspaceService.js");
+    service = new WorkspaceServiceModule.WorkspaceService(
+      mockSendEvent as unknown as (event: WorkspaceHostEvent) => void
+    );
+
+    const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
+    WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
+
+    service["projectRootPath"] = "/test/root";
+    service["git"] = mockSimpleGit as unknown as SimpleGit;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function createAndRegisterMonitor(overrides: Partial<Worktree> = {}): WorktreeMonitor {
+    const wt = createTestWorktree(overrides);
+    const monitor = new WorktreeMonitorClass(
+      wt,
+      {
+        basePollingInterval: 10000,
+        adaptiveBackoff: false,
+        pollIntervalMax: 30000,
+        circuitBreakerThreshold: 3,
+        gitWatchEnabled: false,
+      },
+      { onUpdate: vi.fn() },
+      "main"
+    );
+    service["monitors"].set(wt.id, monitor);
+    return monitor;
+  }
+
+  async function setupConfig(config: Record<string, unknown>) {
+    const fsModule = await import("fs/promises");
+    const mockAccess = vi.mocked(fsModule.access);
+    const mockReadFile = vi.mocked(fsModule.readFile);
+
+    mockAccess.mockImplementation(async (p: unknown) => {
+      if (n(p as string).endsWith("/test/root/.canopy/config.json")) return undefined;
+      throw new Error("ENOENT");
+    });
+    mockReadFile.mockResolvedValue(JSON.stringify(config) as never);
+  }
+
+  /** Creates a deferred promise pair — caller controls when the spawn child resolves. */
+  function makeDeferredSpawnChild() {
+    let resolveChild!: () => void;
+    const childDone = new Promise<void>((r) => {
+      resolveChild = r;
+    });
+    const invoked = { count: 0 };
+
+    const factory = () => {
+      invoked.count++;
+      const child = {
+        pid: 99,
+        stdout: {
+          on: vi.fn((event: string, cb: (data: Buffer) => void) => {
+            if (event === "data") {
+              childDone.then(() => cb(Buffer.from('{"status":"ready"}')));
+            }
+          }),
+        },
+        stderr: { on: vi.fn() },
+        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          if (event === "close") childDone.then(() => cb(0));
+        }),
+        kill: vi.fn(),
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return child as any;
+    };
+
+    return { factory, resolveChild, invoked };
+  }
+
+  it("serializes two manual actions on the same worktree", async () => {
+    createAndRegisterMonitor();
+    await setupConfig({
+      resource: { provision: ["deploy"], status: "check" },
+    });
+
+    const executionOrder: string[] = [];
+    const deferred1 = makeDeferredSpawnChild();
+    const deferred2 = makeDeferredSpawnChild();
+    let callCount = 0;
+
+    const childProcessModule = await import("child_process");
+    vi.mocked(childProcessModule.spawn).mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        executionOrder.push("action1-start");
+        return deferred1.factory();
+      }
+      executionOrder.push("action2-start");
+      return deferred2.factory();
+    });
+
+    // Fire both actions concurrently
+    const p1 = service.runResourceAction("req-c1", "/test/worktree", "provision");
+    const p2 = service.runResourceAction("req-c2", "/test/worktree", "provision");
+
+    // Give first action time to start
+    await new Promise((r) => setTimeout(r, 20));
+    expect(executionOrder).toEqual(["action1-start"]);
+
+    // Complete first action
+    deferred1.resolveChild();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(executionOrder).toContain("action2-start");
+
+    // Complete second action
+    deferred2.resolveChild();
+    await Promise.all([p1, p2]);
+
+    expect(executionOrder).toEqual(["action1-start", "action2-start"]);
+  });
+
+  it("auto-poll skips when a manual action is in-flight", async () => {
+    createAndRegisterMonitor();
+    await setupConfig({
+      resource: { provision: ["deploy"], status: "check" },
+    });
+
+    const deferred = makeDeferredSpawnChild();
+    const childProcessModule = await import("child_process");
+    vi.mocked(childProcessModule.spawn).mockImplementation(deferred.factory);
+
+    // Start a manual provision action (holds the queue)
+    const provisionPromise = service.runResourceAction("req-m1", "/test/worktree", "provision");
+
+    // Give it time to start
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Auto-poll should skip silently (no event emitted)
+    await service.runResourceAction(
+      "auto-status-/test/worktree",
+      "/test/worktree",
+      "status",
+      undefined,
+      { origin: "auto-poll" }
+    );
+
+    // Only one spawn invocation (the manual action), poll was skipped
+    expect(deferred.invoked.count).toBe(1);
+
+    // No status result event emitted for the skipped poll
+    const statusResults = mockSendEvent.mock.calls.filter(
+      (c: unknown[]) => (c[0] as { requestId?: string }).requestId === "auto-status-/test/worktree"
+    );
+    expect(statusResults).toHaveLength(0);
+
+    deferred.resolveChild();
+    await provisionPromise;
+  });
+
+  it("actions on different worktrees run concurrently", async () => {
+    createAndRegisterMonitor({ id: "/test/wt-a", path: "/test/wt-a", name: "wt-a" });
+    createAndRegisterMonitor({ id: "/test/wt-b", path: "/test/wt-b", name: "wt-b" });
+    await setupConfig({
+      resource: { provision: ["deploy"], status: "check" },
+    });
+
+    const deferredA = makeDeferredSpawnChild();
+    const deferredB = makeDeferredSpawnChild();
+    let callCount = 0;
+
+    const childProcessModule = await import("child_process");
+    vi.mocked(childProcessModule.spawn).mockImplementation(() => {
+      callCount++;
+      return callCount === 1 ? deferredA.factory() : deferredB.factory();
+    });
+
+    // Fire both concurrently on different worktrees
+    const pA = service.runResourceAction("req-a", "/test/wt-a", "provision");
+    const pB = service.runResourceAction("req-b", "/test/wt-b", "provision");
+
+    // Give time for both to start
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Both should have started (independent queues)
+    expect(callCount).toBe(2);
+
+    deferredA.resolveChild();
+    deferredB.resolveChild();
+    await Promise.all([pA, pB]);
+  });
+
+  it("cleanup aborts in-flight action silently on worktree removal", async () => {
+    createAndRegisterMonitor();
+    await setupConfig({
+      resource: { provision: ["deploy"], status: "check" },
+    });
+
+    const deferred = makeDeferredSpawnChild();
+    const childProcessModule = await import("child_process");
+    vi.mocked(childProcessModule.spawn).mockImplementation(deferred.factory);
+
+    // Start an action that will be held open
+    const actionPromise = service.runResourceAction("req-abort", "/test/worktree", "provision");
+
+    // Give it time to start
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Simulate worktree removal — triggers cleanupResourceActionState
+    service["cleanupResourceActionState"]("/test/worktree");
+
+    deferred.resolveChild();
+    await actionPromise;
+
+    // Queue and controller should be cleaned up
+    expect(service["resourceActionQueues"].has("/test/worktree")).toBe(false);
+    expect(service["resourceActionAbortControllers"].has("/test/worktree")).toBe(false);
+  });
+});

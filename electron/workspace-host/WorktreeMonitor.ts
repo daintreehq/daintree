@@ -43,7 +43,7 @@ export interface WorktreeMonitorCallbacks {
   onError?: (worktreeId: string, error: Error) => void;
   onBranchChanged?: (worktreeId: string, newBranch: string) => void;
   onExternalRemoval?: (worktreeId: string) => void;
-  onResourceStatusPoll?: (worktreeId: string) => void;
+  onResourceStatusPoll?: (worktreeId: string) => Promise<unknown> | void;
 }
 
 export class WorktreeMonitor {
@@ -390,7 +390,7 @@ export class WorktreeMonitor {
     if (this.resourcePollIntervalMs <= 0 || !this._hasResourceConfig || !this._hasStatusCommand)
       return;
 
-    this.resourcePollTimer = setTimeout(() => {
+    this.resourcePollTimer = setTimeout(async () => {
       this.resourcePollTimer = null;
       if (
         this._isRunning &&
@@ -398,7 +398,12 @@ export class WorktreeMonitor {
         this._hasStatusCommand &&
         this.resourcePollIntervalMs > 0
       ) {
-        this.callbacks.onResourceStatusPoll?.(this.id);
+        try {
+          await this.callbacks.onResourceStatusPoll?.(this.id);
+        } catch {
+          // Poll callback failure — swallowed intentionally
+        }
+        if (!this._isRunning) return;
         this.scheduleResourcePoll();
       }
     }, this.resourcePollIntervalMs);

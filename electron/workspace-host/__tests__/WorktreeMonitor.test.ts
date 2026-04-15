@@ -787,4 +787,112 @@ describe("WorktreeMonitor", () => {
       expect(snapshot.hasTeardownCommand).toBe(true);
     });
   });
+
+  describe("resource poll timer — await-before-rearm", () => {
+    it("does not re-arm until the poll callback resolves", async () => {
+      let resolveCallback!: () => void;
+      const pollPromise = new Promise<void>((r) => {
+        resolveCallback = r;
+      });
+      let callCount = 0;
+
+      const callbacks = makeCallbacks({
+        onResourceStatusPoll: vi.fn(() => {
+          callCount++;
+          return pollPromise;
+        }),
+      });
+
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      monitor.startWithoutGitStatus();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+      monitor.setResourcePollInterval(5000);
+
+      // Fire the first timer
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(callCount).toBe(1);
+
+      // Advance past another interval — should NOT fire again because callback hasn't resolved
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(callCount).toBe(1);
+
+      // Resolve the first callback — timer should re-arm
+      resolveCallback();
+      await vi.advanceTimersByTimeAsync(1);
+
+      // Now advance past the re-armed interval
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(callCount).toBe(2);
+
+      monitor.stop();
+    });
+
+    it("stop() during awaited callback prevents re-arm", async () => {
+      let resolveCallback!: () => void;
+      const pollPromise = new Promise<void>((r) => {
+        resolveCallback = r;
+      });
+      let callCount = 0;
+
+      const callbacks = makeCallbacks({
+        onResourceStatusPoll: vi.fn(() => {
+          callCount++;
+          return pollPromise;
+        }),
+      });
+
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      monitor.startWithoutGitStatus();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+      monitor.setResourcePollInterval(5000);
+
+      // Fire the timer
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(callCount).toBe(1);
+
+      // Stop the monitor while the callback is in-flight
+      monitor.stop();
+
+      // Resolve the callback — should NOT re-arm because _isRunning is false
+      resolveCallback();
+      await vi.advanceTimersByTimeAsync(1);
+
+      // Advance well past the interval — no second call
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(callCount).toBe(1);
+    });
+
+    it("poll re-arms correctly when callback resolves quickly", async () => {
+      let callCount = 0;
+
+      const callbacks = makeCallbacks({
+        onResourceStatusPoll: vi.fn(() => {
+          callCount++;
+          return Promise.resolve();
+        }),
+      });
+
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      monitor.startWithoutGitStatus();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+      monitor.setResourcePollInterval(5000);
+
+      // Fire first poll
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(callCount).toBe(1);
+
+      // Fire second poll (re-armed after first resolved)
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(callCount).toBe(2);
+
+      // Fire third poll
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(callCount).toBe(3);
+
+      monitor.stop();
+    });
+  });
 });

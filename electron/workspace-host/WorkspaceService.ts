@@ -75,6 +75,8 @@ export class WorkspaceService {
   private listService = new WorktreeListService();
   private prService: PRIntegrationService;
   private _shutdownController = new AbortController();
+  private resourceActionQueues = new Map<string, PQueue>();
+  private resourceActionAbortControllers = new Map<string, AbortController>();
 
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
     this.prService = new PRIntegrationService(pullRequestService, events, {
@@ -239,6 +241,7 @@ export class WorkspaceService {
           this.activeWorktreeId = null;
         }
 
+        this.cleanupResourceActionState(id);
         monitor.stop();
         this.monitors.delete(id);
         clearGitDirCache(monitor.path);
@@ -337,7 +340,13 @@ export class WorkspaceService {
               this.handleExternalWorktreeRemoval(worktreeId);
             },
             onResourceStatusPoll: (worktreeId) => {
-              void this.runResourceAction(`auto-status-${worktreeId}`, worktreeId, "status");
+              return this.runResourceAction(
+                `auto-status-${worktreeId}`,
+                worktreeId,
+                "status",
+                undefined,
+                { origin: "auto-poll" }
+              );
             },
           },
           this.mainBranch,
@@ -484,6 +493,7 @@ export class WorkspaceService {
       this.activeWorktreeId = null;
     }
 
+    this.cleanupResourceActionState(worktreeId);
     monitor.stop();
     this.monitors.delete(worktreeId);
 
@@ -1155,6 +1165,7 @@ export class WorkspaceService {
       // Clean up the monitor immediately after worktree removal succeeds,
       // before attempting branch deletion — so the monitor doesn't linger
       // if branch deletion fails.
+      this.cleanupResourceActionState(worktreeId);
       monitor.stop();
       this.monitors.delete(worktreeId);
 
@@ -1541,11 +1552,43 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     });
   }
 
+  private getResourceActionQueue(worktreeId: string): PQueue {
+    let queue = this.resourceActionQueues.get(worktreeId);
+    if (!queue) {
+      queue = new PQueue({ concurrency: 1 });
+      this.resourceActionQueues.set(worktreeId, queue);
+    }
+    return queue;
+  }
+
+  private getResourceActionAbortController(worktreeId: string): AbortController {
+    let controller = this.resourceActionAbortControllers.get(worktreeId);
+    if (!controller) {
+      controller = new AbortController();
+      this.resourceActionAbortControllers.set(worktreeId, controller);
+    }
+    return controller;
+  }
+
+  private cleanupResourceActionState(worktreeId: string): void {
+    const controller = this.resourceActionAbortControllers.get(worktreeId);
+    if (controller) {
+      controller.abort();
+      this.resourceActionAbortControllers.delete(worktreeId);
+    }
+    const queue = this.resourceActionQueues.get(worktreeId);
+    if (queue) {
+      queue.clear();
+      this.resourceActionQueues.delete(worktreeId);
+    }
+  }
+
   async runResourceAction(
     requestId: string,
     worktreeId: string,
     action: "provision" | "teardown" | "resume" | "pause" | "status",
-    environmentId?: string
+    environmentId?: string,
+    options?: { origin?: "auto-poll" }
   ): Promise<{ success: boolean; error?: string; output?: string }> {
     const monitor = this.monitors.get(worktreeId);
     if (!monitor) {
@@ -1566,6 +1609,54 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         error: "No project root path",
       });
       return { success: false, error: "No project root path" };
+    }
+
+    const queue = this.getResourceActionQueue(worktreeId);
+
+    // Auto-poll: skip if any resource action is already in-flight or queued
+    if (options?.origin === "auto-poll" && (queue.pending > 0 || queue.size > 0)) {
+      return { success: true };
+    }
+
+    const controller = this.getResourceActionAbortController(worktreeId);
+
+    const queued = await queue
+      .add(
+        () =>
+          this._executeResourceAction(
+            requestId,
+            worktreeId,
+            action,
+            environmentId,
+            controller.signal
+          ),
+        { signal: controller.signal }
+      )
+      .catch(() => undefined);
+
+    return queued ?? { success: false, error: "Aborted" };
+  }
+
+  private async _executeResourceAction(
+    requestId: string,
+    worktreeId: string,
+    action: "provision" | "teardown" | "resume" | "pause" | "status",
+    environmentId: string | undefined,
+    signal: AbortSignal
+  ): Promise<{ success: boolean; error?: string; output?: string }> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor || !this.projectRootPath) {
+      return { success: false, error: "Worktree not found" };
+    }
+
+    if (signal.aborted) {
+      this.sendEvent({
+        type: "resource-action-result",
+        requestId,
+        success: false,
+        error: "Aborted",
+      });
+      return { success: false, error: "Aborted" };
     }
 
     const config = await this.lifecycleService.loadConfig(monitor.path, this.projectRootPath);
@@ -1702,12 +1793,27 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         cwd: monitor.path,
         env,
         timeoutMs: statusTimeoutMs,
+        signal,
         onProgress: () => {},
       });
 
+      if (result.aborted) {
+        this.sendEvent({
+          type: "resource-action-result",
+          requestId,
+          success: false,
+          error: "Aborted",
+        });
+        return { success: false, error: "Aborted" };
+      }
+
+      // Re-read monitor after await — it may have been removed during the command
+      const statusMonitor = this.monitors.get(worktreeId);
+      if (!statusMonitor) return { success: false, error: "Worktree removed" };
+
       try {
         const parsed = JSON.parse(result.output);
-        monitor.setResourceStatus({
+        statusMonitor.setResourceStatus({
           lastStatus: parsed.status ?? "unhealthy",
           lastOutput: result.output,
           lastCheckedAt: Date.now(),
@@ -1718,7 +1824,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         // Non-JSON output: if command succeeded (exit 0), treat as "unknown" (neutral) rather
         // than "unhealthy" — the script may not emit JSON but still indicates a live resource.
         // Only mark "unhealthy" when the command itself failed (non-zero exit).
-        monitor.setResourceStatus({
+        statusMonitor.setResourceStatus({
           lastStatus: result.success ? "unknown" : "unhealthy",
           lastOutput: result.output,
           lastCheckedAt: Date.now(),
@@ -1726,37 +1832,37 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       }
 
       // Re-substitute connect command with endpoint from status
-      const statusEndpoint = monitor.resourceStatus?.endpoint;
-      if (statusEndpoint && resourceConfig.connect) {
+      const statusEndpoint = statusMonitor.resourceStatus?.endpoint;
+      if (statusEndpoint && resourceConfig.connect && this.projectRootPath) {
         const varsWithEndpoint = this.lifecycleService.buildVariables(
-          monitor.path,
+          statusMonitor.path,
           this.projectRootPath,
-          monitor.name,
-          monitor.branch,
+          statusMonitor.name,
+          statusMonitor.branch,
           statusEndpoint
         );
-        monitor.setResourceConnectCommand(
+        statusMonitor.setResourceConnectCommand(
           this.lifecycleService.substituteVariables(resourceConfig.connect, varsWithEndpoint)
         );
       }
 
-      if (statusEndpoint && monitor.resourceStatus?.lastStatus === "ready") {
-        const resolvedConnect = monitor.resourceConnectCommand;
+      if (statusEndpoint && statusMonitor.resourceStatus?.lastStatus === "ready") {
+        const resolvedConnect = statusMonitor.resourceConnectCommand;
         if (resolvedConnect) {
-          await this.generateRemoteWrapper(monitor.path, resolvedConnect, statusEndpoint);
+          await this.generateRemoteWrapper(statusMonitor.path, resolvedConnect, statusEndpoint);
         }
       }
 
-      monitor.setLifecycleStatus({
+      statusMonitor.setLifecycleStatus({
         phase: "resource-status",
         state: result.timedOut ? "timed-out" : result.success ? "success" : "failed",
         totalCommands: 1,
         output: result.output,
         error: result.error,
-        startedAt: monitor.lifecycleStatus?.startedAt ?? Date.now(),
+        startedAt: statusMonitor.lifecycleStatus?.startedAt ?? Date.now(),
         completedAt: Date.now(),
       });
-      this.emitUpdate(monitor);
+      this.emitUpdate(statusMonitor);
 
       this.sendEvent({
         type: "resource-action-result",
@@ -1814,6 +1920,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       cwd: monitor.path,
       env,
       timeoutMs,
+      signal,
       onProgress: (commandIndex, totalCommands, command) => {
         const m = this.monitors.get(worktreeId);
         if (m) {
@@ -1829,6 +1936,8 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         }
       },
     });
+
+    if (result.aborted) return { success: false, error: "Aborted" };
 
     const finalMonitor = this.monitors.get(worktreeId);
     if (finalMonitor) {
@@ -1935,6 +2044,9 @@ ${connectCommand} "$@"
   dispose(): void {
     this._shutdownController.abort();
     this.prService.cleanup();
+    for (const id of this.monitors.keys()) {
+      this.cleanupResourceActionState(id);
+    }
     for (const monitor of this.monitors.values()) {
       monitor.stop();
     }
