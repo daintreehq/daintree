@@ -2,6 +2,9 @@ import { defineConfig } from "vitest/config";
 import path from "path";
 
 export default defineConfig({
+  define: {
+    IS_LEGACY_BUILD: JSON.stringify(process.env.BUILD_VARIANT === "canopy"),
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

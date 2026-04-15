@@ -13,14 +13,20 @@ const devServerConfig = getDevServerConfig();
 const devServerOrigins = getDevServerOrigins();
 const devServerWebSocketOrigins = getDevServerWebSocketOrigins();
 
+const IS_LEGACY_BUILD = process.env.BUILD_VARIANT === "canopy";
+// Custom protocol schemes used by the app's file handlers. Legacy builds also
+// register canopy-file:// so existing Canopy users can still resolve assets
+// encoded under the old scheme.
+const FILE_SCHEMES = IS_LEGACY_BUILD ? "daintree-file: canopy-file:" : "daintree-file:";
+
 // CSP definitions for development and production
 const DEV_CSP = [
   `default-src 'self' ${devServerOrigins.join(" ")} ${devServerWebSocketOrigins.join(" ")}`,
   `script-src 'self' ${devServerOrigins.join(" ")} 'unsafe-eval'`,
   `style-src 'self' ${devServerOrigins.join(" ")} 'unsafe-inline'`,
   "font-src 'self' data:",
-  `connect-src 'self' ${devServerOrigins.join(" ")} ${devServerWebSocketOrigins.join(" ")} daintree-file:`,
-  `img-src 'self' ${devServerOrigins.join(" ")} https://avatars.githubusercontent.com daintree-file: data:`,
+  `connect-src 'self' ${devServerOrigins.join(" ")} ${devServerWebSocketOrigins.join(" ")} ${FILE_SCHEMES}`,
+  `img-src 'self' ${devServerOrigins.join(" ")} https://avatars.githubusercontent.com ${FILE_SCHEMES} data:`,
   "frame-src 'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
 ].join("; ");
 
@@ -29,8 +35,8 @@ const PROD_CSP = [
   "script-src 'self' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
-  "connect-src 'self' daintree-file:",
-  "img-src 'self' https://avatars.githubusercontent.com daintree-file: data: blob:",
+  `connect-src 'self' ${FILE_SCHEMES}`,
+  `img-src 'self' https://avatars.githubusercontent.com ${FILE_SCHEMES} data: blob:`,
   "frame-src 'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
   "worker-src 'self' blob:",
   "object-src 'none'",
@@ -62,6 +68,9 @@ function cspTransformPlugin(): Plugin {
 
 export default defineConfig(({ mode }) => ({
   envPrefix: ["VITE_", "DAINTREE_"],
+  define: {
+    IS_LEGACY_BUILD: JSON.stringify(IS_LEGACY_BUILD),
+  },
   plugins: [
     react(),
     babel({

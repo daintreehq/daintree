@@ -39,6 +39,7 @@ import { removeStartupSkeleton } from "./utils/removeStartupSkeleton";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
 import { SafeModeBanner } from "./components/Recovery/SafeModeBanner";
+import { LegacyMigrationBar } from "./components/LegacyMigration/LegacyMigrationBar";
 import {
   useAppHydration,
   useProjectSwitchRehydration,
@@ -474,6 +475,10 @@ function App() {
     <ErrorBoundary variant="fullscreen" componentName="App">
       <E2EFaultInjector />
       {isSafeMode && <SafeModeBanner />}
+      {/* Legacy Canopy build: permanent, non-dismissible migration bar pinned
+          to the bottom of the window. In Daintree builds the constant is
+          false and tree-shaking removes this branch entirely. */}
+      {IS_LEGACY_BUILD && <LegacyMigrationBar />}
       <DndProvider>
         <VoiceRecordingAnnouncer />
         <AccessibilityAnnouncer />

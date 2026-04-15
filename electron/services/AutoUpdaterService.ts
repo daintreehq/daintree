@@ -9,8 +9,15 @@ import { getCrashRecoveryService } from "./CrashRecoveryService.js";
 import { store } from "../store.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
-const STABLE_FEED_URL = "https://updates.daintree.org/releases/";
-const NIGHTLY_FEED_URL = "https://updates.daintree.org/nightly/";
+// The legacy Canopy variant uses its own updater feed and does not ship a
+// nightly channel — nightly falls back to the Canopy stable feed so a user
+// who previously opted into nightly doesn't get stranded.
+const STABLE_FEED_URL = IS_LEGACY_BUILD
+  ? "https://updates.canopyide.com/releases/"
+  : "https://updates.daintree.org/releases/";
+const NIGHTLY_FEED_URL = IS_LEGACY_BUILD
+  ? "https://updates.canopyide.com/releases/"
+  : "https://updates.daintree.org/nightly/";
 const { autoUpdater } = electronUpdater;
 
 class AutoUpdaterService {

@@ -4,8 +4,16 @@ import os from "os";
 import { app } from "electron";
 import type { CliInstallStatus } from "../../shared/types/ipc/system.js";
 
-const INSTALL_TARGETS_MACOS = ["/usr/local/bin/daintree", `${os.homedir()}/.local/bin/daintree`];
-const INSTALL_TARGETS_LINUX = ["/usr/local/bin/daintree", `${os.homedir()}/.local/bin/daintree`];
+const CLI_COMMAND_NAME = IS_LEGACY_BUILD ? "canopy-app" : "daintree";
+const CLI_SCRIPT_FILE = IS_LEGACY_BUILD ? "canopy-cli.sh" : "daintree-cli.sh";
+const INSTALL_TARGETS_MACOS = [
+  `/usr/local/bin/${CLI_COMMAND_NAME}`,
+  `${os.homedir()}/.local/bin/${CLI_COMMAND_NAME}`,
+];
+const INSTALL_TARGETS_LINUX = [
+  `/usr/local/bin/${CLI_COMMAND_NAME}`,
+  `${os.homedir()}/.local/bin/${CLI_COMMAND_NAME}`,
+];
 const SYMLINK_FALLBACK_ERROR_CODES = new Set(["EINVAL", "ENOSYS", "EOPNOTSUPP", "EPERM"]);
 
 function isAppImage(): boolean {
@@ -18,11 +26,11 @@ function isAppImage(): boolean {
 
 function getAppImageWrapperDir(): string {
   const xdgDataHome = process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
-  return path.join(xdgDataHome, "daintree");
+  return path.join(xdgDataHome, CLI_COMMAND_NAME);
 }
 
 function getAppImageWrapperPath(): string {
-  return path.join(getAppImageWrapperDir(), "daintree-cli.sh");
+  return path.join(getAppImageWrapperDir(), CLI_SCRIPT_FILE);
 }
 
 function generateAppImageWrapper(appImagePath: string): string {
@@ -61,10 +69,11 @@ function getScriptSourcePath(): string {
     return getAppImageWrapperPath();
   }
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, "daintree-cli.sh");
+    return path.join(process.resourcesPath, CLI_SCRIPT_FILE);
   }
   // Dev: app path points at project root when running `electron .`
-  return path.join(app.getAppPath(), "scripts", "daintree-cli.sh");
+  const devDir = IS_LEGACY_BUILD ? path.join("scripts", "legacy") : "scripts";
+  return path.join(app.getAppPath(), devDir, CLI_SCRIPT_FILE);
 }
 
 function readFileIfExists(filePath: string): string | null {

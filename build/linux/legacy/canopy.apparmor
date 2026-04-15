@@ -1,0 +1,7 @@
+abi <abi/4.0>,
+include <tunables/global>
+
+profile canopy-app /opt/Canopy/canopy-app flags=(unconfined) {
+  userns,
+  include if exists <local/canopy-app>
+}
