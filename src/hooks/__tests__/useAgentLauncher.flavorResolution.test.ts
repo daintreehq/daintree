@@ -14,8 +14,12 @@ import type { AgentFlavor } from "@/config/agents";
 
 const getMergedFlavorMock = vi.hoisted(() =>
   vi.fn<
-    [string, string | undefined, AgentFlavor[] | undefined, AgentFlavor[] | undefined],
-    AgentFlavor | undefined
+    (
+      agentId: string,
+      flavorId: string | undefined,
+      customFlavors: AgentFlavor[] | undefined,
+      ccrFlavors: AgentFlavor[] | undefined
+    ) => AgentFlavor | undefined
   >()
 );
 

@@ -1097,6 +1097,10 @@ export interface ElectronAPI {
           description?: string;
           env?: Record<string, string>;
           args?: string[];
+          color?: string;
+          dangerousEnabled?: boolean;
+          customFlags?: string;
+          inlineMode?: boolean;
         }>;
       }) => void
     ): () => void;
@@ -1108,6 +1112,10 @@ export interface ElectronAPI {
         description?: string;
         env?: Record<string, string>;
         args?: string[];
+        color?: string;
+        dangerousEnabled?: boolean;
+        customFlags?: string;
+        inlineMode?: boolean;
       }>
     >;
   };

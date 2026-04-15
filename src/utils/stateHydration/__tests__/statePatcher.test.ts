@@ -34,7 +34,8 @@ const buildResumeCommandMock = vi.fn(
 
 const generateAgentCommandMock = vi.hoisted(() =>
   vi.fn(
-    (base: string, _settings: unknown, _id: string, _opts: unknown): string => `${base} --generated`
+    (base: string, _entry?: unknown, _agentId?: string, _options?: unknown): string =>
+      `${base} --generated`
   )
 );
 
@@ -42,8 +43,8 @@ vi.mock("@shared/types", async () => {
   const actual = await vi.importActual<typeof import("@shared/types")>("@shared/types");
   return {
     ...actual,
-    generateAgentCommand: (...args: unknown[]) =>
-      generateAgentCommandMock(...(args as [string, unknown, string, unknown])),
+    generateAgentCommand: (base: string, entry: unknown, agentId: string, options: unknown) =>
+      generateAgentCommandMock(base, entry, agentId, options),
     buildResumeCommand: (...args: unknown[]) =>
       buildResumeCommandMock(...(args as [string, string, string[]?])),
   };
