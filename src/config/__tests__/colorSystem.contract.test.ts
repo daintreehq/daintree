@@ -68,7 +68,7 @@ describe("color system contract", () => {
 
   it("uses only exported theme-style color utilities in renderer source", () => {
     const utilityRegex =
-      /\b(?:bg|text|border|ring|outline|placeholder|fill|stroke)-((?:canopy|surface|text|accent|status|activity|category|github|overlay|scrim|state|server|terminal|cat)[a-z0-9-]*)(?:\/[^\s"'`)]+)?/g;
+      /\b(?:bg|text|border|ring|outline|placeholder|fill|stroke)-((?:daintree|surface|text|accent|status|activity|category|github|overlay|scrim|state|server|terminal|cat)[a-z0-9-]*)(?:\/[^\s"'`)]+)?/g;
 
     const missing = new Map<string, string[]>();
 

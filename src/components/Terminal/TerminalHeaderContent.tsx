@@ -199,7 +199,7 @@ function TerminalHeaderContentComponent({
               </div>
               {(agentState === "completed" || agentState === "exited") && sessionCost != null && (
                 <span
-                  className="text-[11px] text-canopy-text/50 font-mono shrink-0"
+                  className="text-[11px] text-daintree-text/50 font-mono shrink-0"
                   style={{ fontVariantNumeric: "tabular-nums" }}
                 >
                   ${sessionCost.toFixed(2)}
@@ -224,10 +224,12 @@ function TerminalHeaderContentComponent({
                 {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
               </span>
               {lastStateChange != null && lastStateChange > 0 && (
-                <span className="text-canopy-text/60">Since: {formatTimeAgo(lastStateChange)}</span>
+                <span className="text-daintree-text/60">
+                  Since: {formatTimeAgo(lastStateChange)}
+                </span>
               )}
               {sessionCost != null && (
-                <span className="text-canopy-text/60 tabular-nums">
+                <span className="text-daintree-text/60 tabular-nums">
                   Cost: ${sessionCost.toFixed(2)}
                   {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)} tokens`}
                 </span>
@@ -251,7 +253,7 @@ function TerminalHeaderContentComponent({
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="px-3 py-1 rounded-full text-[11px] font-mono bg-overlay-soft text-canopy-text/60 border border-divider truncate max-w-[20rem]">
+              <span className="px-3 py-1 rounded-full text-[11px] font-mono bg-overlay-soft text-daintree-text/60 border border-divider truncate max-w-[20rem]">
                 {lastCommand}
               </span>
             </TooltipTrigger>
@@ -273,7 +275,7 @@ function TerminalHeaderContentComponent({
           <Tooltip>
             <TooltipTrigger asChild>
               <div
-                className="inline-flex items-center gap-1 text-xs font-sans bg-canopy-accent/15 text-canopy-text px-1.5 py-0.5 rounded ml-1"
+                className="inline-flex items-center gap-1 text-xs font-sans bg-daintree-accent/15 text-daintree-text px-1.5 py-0.5 rounded ml-1"
                 role="status"
                 aria-live="polite"
               >
@@ -335,7 +337,7 @@ function TerminalHeaderContentComponent({
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
-              <div className="flex items-center text-canopy-text/50 shrink-0" role="status">
+              <div className="flex items-center text-daintree-text/50 shrink-0" role="status">
                 <Lock className="w-3.5 h-3.5" aria-hidden="true" />
               </div>
             </TooltipTrigger>
@@ -353,7 +355,7 @@ function TerminalHeaderContentComponent({
                 className={cn(
                   "inline-flex items-center gap-1 text-[11px] font-mono shrink-0 ml-1",
                   {
-                    "text-canopy-text/40":
+                    "text-daintree-text/40":
                       getResourceSeverity(resourceState.cpuPercent, resourceState.memoryKb) ===
                       "muted",
                     "text-status-warning":
@@ -382,7 +384,7 @@ function TerminalHeaderContentComponent({
                 {resourceState.breakdown.length > 0 && (
                   <table className="text-xs" style={{ fontVariantNumeric: "tabular-nums" }}>
                     <thead>
-                      <tr className="text-canopy-text/60">
+                      <tr className="text-daintree-text/60">
                         <th className="text-left pr-2">PID</th>
                         <th className="text-left pr-2">Name</th>
                         <th className="text-right pr-2">CPU</th>
@@ -392,7 +394,7 @@ function TerminalHeaderContentComponent({
                     <tbody>
                       {resourceState.breakdown.map((p) => (
                         <tr key={p.pid}>
-                          <td className="pr-2 text-canopy-text/60">{p.pid}</td>
+                          <td className="pr-2 text-daintree-text/60">{p.pid}</td>
                           <td className="pr-2 truncate max-w-[8rem]">{p.comm}</td>
                           <td className="text-right pr-2">{p.cpuPercent.toFixed(1)}%</td>
                           <td className="text-right">{formatMemory(p.memoryKb)}</td>

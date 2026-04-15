@@ -230,7 +230,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     scope: "renderer",
     run: async () => {
       window.dispatchEvent(
-        new CustomEvent("canopy:open-settings-tab", {
+        new CustomEvent("daintree:open-settings-tab", {
           detail: { tab: "project:general" },
         })
       );

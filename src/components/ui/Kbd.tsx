@@ -10,8 +10,8 @@ export function Kbd({ children, className }: KbdProps) {
     <kbd
       className={cn(
         "px-1.5 py-0.5 rounded text-xs font-mono",
-        "bg-canopy-border text-canopy-text/70",
-        "border border-canopy-border/60",
+        "bg-daintree-border text-daintree-text/70",
+        "border border-daintree-border/60",
         className
       )}
     >

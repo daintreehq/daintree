@@ -142,7 +142,7 @@ export function WorktreeSettingsTab() {
     return (
       <div className="flex items-center justify-center py-12">
         <Spinner size="lg" />
-        <span className="ml-2 text-sm text-canopy-text/60">Loading settings...</span>
+        <span className="ml-2 text-sm text-daintree-text/60">Loading settings...</span>
       </div>
     );
   }
@@ -156,7 +156,7 @@ export function WorktreeSettingsTab() {
       >
         <div className="space-y-4">
           <div className="space-y-2">
-            <label htmlFor="path-pattern" className="block text-sm font-medium text-canopy-text">
+            <label htmlFor="path-pattern" className="block text-sm font-medium text-daintree-text">
               Pattern
             </label>
             <div className="flex gap-2">
@@ -169,9 +169,9 @@ export function WorktreeSettingsTab() {
                   setError(null);
                 }}
                 className={cn(
-                  "flex-1 px-3 py-1.5 bg-canopy-bg border rounded-[var(--radius-md)] text-canopy-text font-mono text-sm",
-                  "focus:outline-none focus:ring-2 focus:ring-canopy-accent",
-                  !validation.valid ? "border-status-error/50" : "border-canopy-border"
+                  "flex-1 px-3 py-1.5 bg-daintree-bg border rounded-[var(--radius-md)] text-daintree-text font-mono text-sm",
+                  "focus:outline-none focus:ring-2 focus:ring-daintree-accent",
+                  !validation.valid ? "border-status-error/50" : "border-daintree-border"
                 )}
                 placeholder="{parent-dir}/{base-folder}-worktrees/{branch-slug}"
               />
@@ -180,7 +180,7 @@ export function WorktreeSettingsTab() {
                   <TooltipTrigger asChild>
                     <button
                       onClick={handleReset}
-                      className="px-3 py-1.5 border border-canopy-border rounded-[var(--radius-md)] text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50 transition-colors"
+                      className="px-3 py-1.5 border border-daintree-border rounded-[var(--radius-md)] text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors"
                       aria-label="Reset to default"
                     >
                       <RotateCcw className="w-4 h-4" />
@@ -207,31 +207,31 @@ export function WorktreeSettingsTab() {
           </div>
 
           <div className="space-y-2">
-            <span className="block text-xs font-medium text-canopy-text/70">
+            <span className="block text-xs font-medium text-daintree-text/70">
               Available variables:
             </span>
             <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="flex items-center gap-2 p-2 bg-canopy-bg/50 rounded-[var(--radius-md)] border border-canopy-border">
-                <code className="text-canopy-accent">{"{base-folder}"}</code>
-                <span className="text-canopy-text/50">Repository folder name</span>
+              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
+                <code className="text-daintree-accent">{"{base-folder}"}</code>
+                <span className="text-daintree-text/50">Repository folder name</span>
               </div>
-              <div className="flex items-center gap-2 p-2 bg-canopy-bg/50 rounded-[var(--radius-md)] border border-canopy-border">
-                <code className="text-canopy-accent">{"{branch-slug}"}</code>
-                <span className="text-canopy-text/50">Sanitized branch name</span>
+              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
+                <code className="text-daintree-accent">{"{branch-slug}"}</code>
+                <span className="text-daintree-text/50">Sanitized branch name</span>
               </div>
-              <div className="flex items-center gap-2 p-2 bg-canopy-bg/50 rounded-[var(--radius-md)] border border-canopy-border">
-                <code className="text-canopy-accent">{"{repo-name}"}</code>
-                <span className="text-canopy-text/50">Repository name</span>
+              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
+                <code className="text-daintree-accent">{"{repo-name}"}</code>
+                <span className="text-daintree-text/50">Repository name</span>
               </div>
-              <div className="flex items-center gap-2 p-2 bg-canopy-bg/50 rounded-[var(--radius-md)] border border-canopy-border">
-                <code className="text-canopy-accent">{"{parent-dir}"}</code>
-                <span className="text-canopy-text/50">Parent directory path</span>
+              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
+                <code className="text-daintree-accent">{"{parent-dir}"}</code>
+                <span className="text-daintree-text/50">Parent directory path</span>
               </div>
             </div>
           </div>
 
           <div className="space-y-2">
-            <span className="block text-xs font-medium text-canopy-text/70">Presets:</span>
+            <span className="block text-xs font-medium text-daintree-text/70">Presets:</span>
             <div className="flex flex-wrap gap-2">
               {PATTERN_PRESETS.map((preset) => (
                 <TooltipProvider key={preset.label}>
@@ -242,8 +242,8 @@ export function WorktreeSettingsTab() {
                         className={cn(
                           "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors",
                           pattern === preset.pattern
-                            ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-                            : "border-canopy-border text-canopy-text/70 hover:bg-canopy-border/50"
+                            ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                            : "border-daintree-border text-daintree-text/70 hover:bg-daintree-border/50"
                         )}
                       >
                         {preset.label}
@@ -257,20 +257,20 @@ export function WorktreeSettingsTab() {
           </div>
 
           {validation.valid && preview && (
-            <div className="space-y-2 p-3 bg-canopy-bg/50 rounded-[var(--radius-md)] border border-canopy-border">
-              <span className="block text-xs font-medium text-canopy-text/70">Preview:</span>
+            <div className="space-y-2 p-3 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
+              <span className="block text-xs font-medium text-daintree-text/70">Preview:</span>
               <div className="text-xs space-y-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-canopy-text/50">Repository:</span>
-                  <code className="text-canopy-text">{sampleRootPath}</code>
+                  <span className="text-daintree-text/50">Repository:</span>
+                  <code className="text-daintree-text">{sampleRootPath}</code>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-canopy-text/50">Branch:</span>
-                  <code className="text-canopy-text">{SAMPLE_BRANCH}</code>
+                  <span className="text-daintree-text/50">Branch:</span>
+                  <code className="text-daintree-text">{SAMPLE_BRANCH}</code>
                 </div>
-                <div className="flex items-center gap-2 pt-1 border-t border-canopy-border mt-1">
-                  <span className="text-canopy-text/50">Result:</span>
-                  <code className="text-canopy-accent break-all">{preview}</code>
+                <div className="flex items-center gap-2 pt-1 border-t border-daintree-border mt-1">
+                  <span className="text-daintree-text/50">Result:</span>
+                  <code className="text-daintree-accent break-all">{preview}</code>
                 </div>
               </div>
             </div>
@@ -291,15 +291,15 @@ export function WorktreeSettingsTab() {
               className={cn(
                 "px-4 py-1.5 text-sm font-medium rounded-[var(--radius-md)] transition-colors",
                 hasChanges && validation.valid
-                  ? "bg-canopy-accent text-canopy-bg hover:bg-canopy-accent/90"
-                  : "bg-canopy-border text-canopy-text/50 cursor-not-allowed"
+                  ? "bg-daintree-accent text-daintree-bg hover:bg-daintree-accent/90"
+                  : "bg-daintree-border text-daintree-text/50 cursor-not-allowed"
               )}
             >
               {isSaving ? "Saving..." : "Save Changes"}
             </button>
           </div>
 
-          <p className="text-xs text-canopy-text/40">
+          <p className="text-xs text-daintree-text/40">
             The path pattern determines where new worktrees are created when you use the New
             Worktree dialog. Relative paths (starting with . or ..) are resolved from the repository
             root.

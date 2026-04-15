@@ -33,7 +33,7 @@ export function registerFileActions(actions: ActionRegistry, _callbacks: ActionC
     run: async (args: unknown) => {
       const { path, rootPath, line, col } = args as z.infer<typeof viewArgsSchema>;
       window.dispatchEvent(
-        new CustomEvent("canopy:view-file", {
+        new CustomEvent("daintree:view-file", {
           detail: { path, rootPath, line, col },
         })
       );

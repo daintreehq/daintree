@@ -19,8 +19,8 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
       style={{
         width: 240,
         height: 140,
-        backgroundColor: "var(--color-canopy-sidebar)",
-        border: "1px solid var(--color-canopy-border)",
+        backgroundColor: "var(--color-daintree-sidebar)",
+        border: "1px solid var(--color-daintree-border)",
         borderRadius: "var(--radius-lg)",
         boxShadow: "0 8px 24px rgba(0, 0, 0, 0.6)",
         overflow: "visible",
@@ -36,8 +36,8 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
             position: "absolute",
             top: -8,
             right: -8,
-            backgroundColor: "var(--color-canopy-accent)",
-            color: "var(--color-canopy-bg)",
+            backgroundColor: "var(--color-daintree-accent)",
+            color: "var(--color-daintree-bg)",
             borderRadius: "9999px",
             padding: "2px 6px",
             fontSize: 10,
@@ -59,7 +59,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
         style={{
           height: 24,
           padding: "0 8px",
-          backgroundColor: "var(--color-canopy-border)",
+          backgroundColor: "var(--color-daintree-border)",
           borderBottom: "1px solid var(--color-surface-highlight)",
           display: "flex",
           alignItems: "center",
@@ -73,7 +73,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
             width: 8,
             height: 8,
             borderRadius: "50%",
-            backgroundColor: brandColor || "var(--color-canopy-text)",
+            backgroundColor: brandColor || "var(--color-daintree-text)",
             flexShrink: 0,
           }}
         />
@@ -84,7 +84,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
             fontFamily: '"JetBrains Mono", monospace',
             fontSize: 11,
             fontWeight: 500,
-            color: "var(--color-canopy-text)",
+            color: "var(--color-daintree-text)",
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",

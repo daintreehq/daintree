@@ -394,7 +394,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
           className={cn(
             "relative flex flex-col",
             "w-[min(720px,calc(100vw-80px))] max-h-[calc(100vh-80px)] min-h-[320px]",
-            "bg-canopy-bg rounded-xl",
+            "bg-daintree-bg rounded-xl",
             "border border-divider",
             "shadow-[var(--theme-shadow-dialog)]",
             "motion-safe:animate-in motion-safe:zoom-in-95 motion-safe:duration-200"
@@ -406,14 +406,14 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
             <div className="flex items-center gap-2 min-w-0">
               <h2
                 id="review-hub-title"
-                className="text-canopy-text font-semibold text-sm tracking-wide shrink-0"
+                className="text-daintree-text font-semibold text-sm tracking-wide shrink-0"
               >
                 Review & Commit
               </h2>
               {status?.currentBranch && (
                 <span
                   title={status.currentBranch}
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] text-canopy-text/60 font-mono truncate max-w-[200px]"
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] text-daintree-text/60 font-mono truncate max-w-[200px]"
                 >
                   <GitBranch className="w-3 h-3 shrink-0" />
                   <span className="truncate">{status.currentBranch}</span>
@@ -427,7 +427,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                     "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono",
                     "bg-tint/[0.07] border border-tint/[0.08]",
                     "hover:bg-tint/[0.12] transition-colors cursor-pointer",
-                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent"
+                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent"
                   )}
                   aria-label={`Open pull request #${worktreePR.prNumber} on GitHub`}
                 >
@@ -452,8 +452,8 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                   >
                     #{worktreePR.prNumber}
                   </span>
-                  <span className="text-canopy-text/40">·</span>
-                  <span className="text-canopy-text/60">
+                  <span className="text-daintree-text/40">·</span>
+                  <span className="text-daintree-text/60">
                     {worktreePR.prState === "merged"
                       ? "merged"
                       : worktreePR.prState === "closed"
@@ -463,7 +463,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                 </button>
               )}
               {status?.hasRemote && !worktreePR && (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] text-canopy-text/40">
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] text-daintree-text/40">
                   <GitPullRequest className="w-3 h-3 shrink-0" />
                   <span>No PR</span>
                 </span>
@@ -481,10 +481,10 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                   onClick={() => handleDiffModeChange("working-tree")}
                   className={cn(
                     "px-2 py-1 transition-colors",
-                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent",
+                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent",
                     diffMode === "working-tree"
-                      ? "bg-tint/[0.12] text-canopy-text"
-                      : "text-canopy-text/50 hover:text-canopy-text hover:bg-tint/[0.06]"
+                      ? "bg-tint/[0.12] text-daintree-text"
+                      : "text-daintree-text/50 hover:text-daintree-text hover:bg-tint/[0.06]"
                   )}
                   aria-pressed={diffMode === "working-tree"}
                 >
@@ -495,11 +495,11 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                   disabled={!status?.currentBranch || status.currentBranch === mainBranch}
                   className={cn(
                     "px-2 py-1 transition-colors border-l border-tint/[0.08]",
-                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent",
+                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent",
                     "disabled:opacity-40 disabled:cursor-not-allowed",
                     diffMode === "base-branch"
-                      ? "bg-tint/[0.12] text-canopy-text"
-                      : "text-canopy-text/50 hover:text-canopy-text hover:bg-tint/[0.06]"
+                      ? "bg-tint/[0.12] text-daintree-text"
+                      : "text-daintree-text/50 hover:text-daintree-text hover:bg-tint/[0.06]"
                   )}
                   aria-pressed={diffMode === "base-branch"}
                 >
@@ -513,8 +513,8 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                   disabled={loading}
                   className={cn(
                     "p-1.5 rounded transition-colors",
-                    "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/[0.06]",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                    "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
                   )}
                   aria-label="Refresh"
                 >
@@ -531,8 +531,8 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                 onClick={onClose}
                 className={cn(
                   "p-1.5 rounded transition-colors",
-                  "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/[0.06]",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                  "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
                 )}
                 aria-label="Close"
                 data-testid="review-hub-close"
@@ -566,7 +566,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
               /* Base-branch diff panel */
               baseBranchLoading ? (
                 <div className="flex items-center justify-center py-12">
-                  <Spinner size="lg" className="text-canopy-text/40" />
+                  <Spinner size="lg" className="text-daintree-text/40" />
                 </div>
               ) : baseBranchError ? (
                 <div className="p-4 text-xs text-status-error">
@@ -576,15 +576,15 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                   </Button>
                 </div>
               ) : baseBranchFiles !== null && baseBranchFiles.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-canopy-text/50">
-                  <CheckSquare className="w-8 h-8 mb-2 text-canopy-text/30" />
+                <div className="flex flex-col items-center justify-center py-12 text-daintree-text/50">
+                  <CheckSquare className="w-8 h-8 mb-2 text-daintree-text/30" />
                   <p className="text-sm">No changes vs {mainBranch}</p>
                   <p className="text-xs mt-1">This branch has no commits ahead of {mainBranch}</p>
                 </div>
               ) : baseBranchFiles !== null ? (
                 <div>
                   <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle border-b border-divider">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-canopy-text/60">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
                       Changed vs {mainBranch}
                       <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
                         {baseBranchFiles.length}
@@ -601,7 +601,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                           className={cn(
                             "w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-xs",
                             "hover:bg-tint/[0.05] transition-colors",
-                            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent"
+                            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent"
                           )}
                         >
                           <span
@@ -612,11 +612,14 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                           >
                             {label}
                           </span>
-                          <FileIcon className="w-3 h-3 shrink-0 text-canopy-text/40" />
-                          <span className="text-canopy-text/80 truncate min-w-0" title={file.path}>
+                          <FileIcon className="w-3 h-3 shrink-0 text-daintree-text/40" />
+                          <span
+                            className="text-daintree-text/80 truncate min-w-0"
+                            title={file.path}
+                          >
                             {file.path.split(/[/\\]/).filter(Boolean).pop()}
                           </span>
-                          <span className="text-canopy-text/30 truncate min-w-0 text-[10px] ml-auto pl-2">
+                          <span className="text-daintree-text/30 truncate min-w-0 text-[10px] ml-auto pl-2">
                             {/[/\\]/.test(file.path)
                               ? file.path.substring(
                                   0,
@@ -635,7 +638,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
               <>
                 {loading && !status ? (
                   <div className="flex items-center justify-center py-12">
-                    <Spinner size="lg" className="text-canopy-text/40" />
+                    <Spinner size="lg" className="text-daintree-text/40" />
                   </div>
                 ) : loadError ? (
                   <div className="p-4 text-xs text-status-error">
@@ -645,8 +648,8 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                     </Button>
                   </div>
                 ) : status && totalChanges === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-canopy-text/50">
-                    <CheckSquare className="w-8 h-8 mb-2 text-canopy-text/30" />
+                  <div className="flex flex-col items-center justify-center py-12 text-daintree-text/50">
+                    <CheckSquare className="w-8 h-8 mb-2 text-daintree-text/30" />
                     <p className="text-sm">Working tree clean</p>
                     <p className="text-xs mt-1">No changes to commit</p>
                   </div>
@@ -661,7 +664,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                             {status.conflicted.length} conflicted file
                             {status.conflicted.length !== 1 ? "s" : ""}
                           </span>
-                          <span className="text-canopy-text/60 ml-1">
+                          <span className="text-daintree-text/60 ml-1">
                             — resolve conflicts before committing
                           </span>
                         </div>
@@ -671,7 +674,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                     {/* Staged section */}
                     <div className="border-b border-divider">
                       <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
-                        <span className="text-[11px] font-semibold uppercase tracking-wider text-canopy-text/60">
+                        <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
                           Staged
                           <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
                             {status.staged.length}
@@ -702,7 +705,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                           ))}
                         </div>
                       ) : (
-                        <div className="px-4 py-3 text-xs text-canopy-text/40 italic">
+                        <div className="px-4 py-3 text-xs text-daintree-text/40 italic">
                           No staged files
                         </div>
                       )}
@@ -711,7 +714,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                     {/* Unstaged section */}
                     <div>
                       <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
-                        <span className="text-[11px] font-semibold uppercase tracking-wider text-canopy-text/60">
+                        <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
                           Changes
                           <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
                             {status.unstaged.length}
@@ -742,7 +745,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                           ))}
                         </div>
                       ) : (
-                        <div className="px-4 py-3 text-xs text-canopy-text/40 italic">
+                        <div className="px-4 py-3 text-xs text-daintree-text/40 italic">
                           No unstaged changes
                         </div>
                       )}

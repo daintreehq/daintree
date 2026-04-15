@@ -377,12 +377,12 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           <button
             className={cn(
               "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
-              "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-canopy-text/70",
-              "hover:text-canopy-text hover:bg-[var(--dock-item-bg-hover)]",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+              "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-daintree-text/70",
+              "hover:text-daintree-text hover:bg-[var(--dock-item-bg-hover)]",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
               "cursor-grab active:cursor-grabbing",
               isOpen &&
-                "bg-[var(--dock-item-bg-active)] text-canopy-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-canopy-accent/30",
+                "bg-[var(--dock-item-bg-active)] text-daintree-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-daintree-accent/30",
               !isOpen &&
                 showDockAgentHighlights &&
                 blockedState === "waiting" &&
@@ -422,7 +422,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             </span>
 
             {/* Tab count indicator */}
-            <span className="text-[10px] text-canopy-text/40 tabular-nums shrink-0">
+            <span className="text-[10px] text-daintree-text/40 tabular-nums shrink-0">
               ({panels.length})
             </span>
 
@@ -432,7 +432,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <span className="truncate flex-1 min-w-0 text-[11px] text-canopy-text/50 font-mono">
+                      <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
                         {commandText}
                       </span>
                     </TooltipTrigger>
@@ -471,7 +471,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
       </TerminalContextMenu>
 
       <PopoverContent
-        className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 bg-canopy-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
+        className="w-[700px] max-w-[90vw] h-[500px] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
         side="top"
         align="start"
         sideOffset={10}
@@ -504,7 +504,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
             <div
               ref={tabListRef}
-              className="flex items-center border-b border-divider bg-canopy-sidebar shrink-0"
+              className="flex items-center border-b border-divider bg-daintree-sidebar shrink-0"
               role="tablist"
               aria-label="Dock panel tabs"
               onKeyDown={handleTabListKeyDown}
@@ -534,7 +534,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                         handleAddTab();
                       }}
                       onPointerDown={(e) => e.stopPropagation()}
-                      className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+                      className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
                       aria-label="Duplicate panel as new tab"
                       type="button"
                     >

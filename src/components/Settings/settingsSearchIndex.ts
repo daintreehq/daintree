@@ -205,7 +205,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     subtab: "overview",
     subtabLabel: "Overview",
     section: "About",
-    title: "About Canopy",
+    title: "About Daintree",
     description: "App version and description",
     keywords: ["version", "about", "info", "beta"],
   },
@@ -1194,7 +1194,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     section: "MCP Server",
     title: "Enable MCP Server",
     description:
-      "Start a local MCP server so AI agents can invoke Canopy actions (open terminals, inject context, switch worktrees, etc.)",
+      "Start a local MCP server so AI agents can invoke Daintree actions (open terminals, inject context, switch worktrees, etc.)",
     keywords: ["mcp", "server", "agent", "local", "tools", "automation", "api", "enable"],
   },
   {
@@ -1300,7 +1300,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     section: "In-Repo Settings",
     title: "In-Repo Settings",
     description: "Store project settings in the repository for team sharing",
-    keywords: ["repo", "repository", "shared", "team", "canopy.json"],
+    keywords: ["repo", "repository", "shared", "team", "daintree.json"],
   },
   {
     id: "tab-nav-project:context",

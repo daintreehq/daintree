@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo } from "react";
 import { X, FilterX } from "lucide-react";
-import { WorktreeOverviewIcon, CanopyAgentIcon } from "@/components/icons";
+import { WorktreeOverviewIcon, DaintreeAgentIcon } from "@/components/icons";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
@@ -132,14 +132,14 @@ function EmptyWorktreeState() {
   const createWorktreeShortcut = useKeybindingDisplay("worktree.createDialog.open");
 
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-3 text-canopy-text/50">
-      <WorktreeOverviewIcon className="w-8 h-8 text-canopy-text/30" />
-      <p className="text-sm font-medium text-canopy-text/70">No worktrees yet</p>
-      <p className="text-xs text-canopy-text/40">
+    <div className="flex flex-col items-center justify-center h-full gap-3 text-daintree-text/50">
+      <WorktreeOverviewIcon className="w-8 h-8 text-daintree-text/30" />
+      <p className="text-sm font-medium text-daintree-text/70">No worktrees yet</p>
+      <p className="text-xs text-daintree-text/40">
         {createWorktreeShortcut ? (
           <>
             Press{" "}
-            <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+            <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60">
               {createWorktreeShortcut}
             </kbd>{" "}
             to create a worktree.
@@ -407,7 +407,7 @@ export function WorktreeOverviewModal({
             "relative flex flex-col",
             "w-[calc(100vw-80px)] h-[calc(100vh-80px)]",
             "max-w-[1800px] max-h-[1200px]",
-            "bg-canopy-bg rounded-xl",
+            "bg-daintree-bg rounded-xl",
             "border border-divider",
             "shadow-[var(--theme-shadow-dialog)]",
             "motion-safe:animate-in motion-safe:zoom-in-95 motion-safe:duration-200"
@@ -417,14 +417,14 @@ export function WorktreeOverviewModal({
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-divider shrink-0">
             <div className="flex items-center gap-3">
-              <WorktreeOverviewIcon className="w-5 h-5 text-canopy-text/60" />
+              <WorktreeOverviewIcon className="w-5 h-5 text-daintree-text/60" />
               <h2
                 id="worktree-overview-title"
-                className="text-canopy-text font-semibold text-base tracking-wide"
+                className="text-daintree-text font-semibold text-base tracking-wide"
               >
                 Worktrees Overview
               </h2>
-              <span className="text-canopy-text/50 text-sm tabular-nums">
+              <span className="text-daintree-text/50 text-sm tabular-nums">
                 ({filteredWorktrees.length}
                 {filteredWorktrees.length !== worktrees.length && ` of ${worktrees.length}`})
               </span>
@@ -463,22 +463,22 @@ export function WorktreeOverviewModal({
                       onClick={() => setHideMainWorktree(!hideMainWorktree)}
                       className={cn(
                         "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-colors",
-                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent",
                         hideMainWorktree
-                          ? "bg-tint/[0.06] text-canopy-text/40 hover:text-canopy-text/60"
-                          : "bg-tint/[0.10] text-canopy-text/70 hover:text-canopy-text/90"
+                          ? "bg-tint/[0.06] text-daintree-text/40 hover:text-daintree-text/60"
+                          : "bg-tint/[0.10] text-daintree-text/70 hover:text-daintree-text/90"
                       )}
                     >
-                      <CanopyAgentIcon
+                      <DaintreeAgentIcon
                         className={cn(
                           "w-3 h-3 transition-colors",
-                          hideMainWorktree ? "text-canopy-text/30" : "text-canopy-text/50"
+                          hideMainWorktree ? "text-daintree-text/30" : "text-daintree-text/50"
                         )}
                       />
                       <span
                         className={cn(
                           "transition",
-                          hideMainWorktree && "line-through decoration-canopy-text/30"
+                          hideMainWorktree && "line-through decoration-daintree-text/30"
                         )}
                       >
                         main
@@ -500,10 +500,10 @@ export function WorktreeOverviewModal({
                       onClick={clearAllFilters}
                       className={cn(
                         "flex items-center gap-1.5 px-2 py-1.5 rounded text-xs",
-                        "text-canopy-text/60 hover:text-canopy-text",
+                        "text-daintree-text/60 hover:text-daintree-text",
                         "hover:bg-tint/[0.06]",
                         "transition-colors",
-                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
                       )}
                       aria-label="Clear all filters"
                     >
@@ -520,9 +520,9 @@ export function WorktreeOverviewModal({
                 onClick={onClose}
                 className={cn(
                   "p-2 rounded-lg transition-colors",
-                  "text-canopy-text/60 hover:text-canopy-text",
+                  "text-daintree-text/60 hover:text-daintree-text",
                   "hover:bg-tint/[0.06]",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
                 )}
                 aria-label="Close overview"
               >
@@ -536,10 +536,10 @@ export function WorktreeOverviewModal({
             {worktrees.length === 0 ? (
               <EmptyWorktreeState />
             ) : filteredWorktrees.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full gap-4 text-canopy-text/50">
-                <FilterX className="w-12 h-12 text-canopy-text/30" />
+              <div className="flex flex-col items-center justify-center h-full gap-4 text-daintree-text/50">
+                <FilterX className="w-12 h-12 text-daintree-text/30" />
                 <div className="text-center">
-                  <p className="text-sm font-medium text-canopy-text/70">
+                  <p className="text-sm font-medium text-daintree-text/70">
                     No worktrees match filters
                   </p>
                   <p className="text-xs mt-1">
@@ -556,10 +556,10 @@ export function WorktreeOverviewModal({
                 {groupedSections.map((section: GroupedSection<WorktreeState>) => (
                   <div key={section.type}>
                     <div className="flex items-center gap-2 mb-3">
-                      <h3 className="text-xs font-medium text-canopy-text/60 uppercase tracking-wider">
+                      <h3 className="text-xs font-medium text-daintree-text/60 uppercase tracking-wider">
                         {section.displayName}
                       </h3>
-                      <span className="text-xs text-canopy-text/40">
+                      <span className="text-xs text-daintree-text/40">
                         ({section.worktrees.length})
                       </span>
                     </div>
@@ -581,9 +581,9 @@ export function WorktreeOverviewModal({
                           className={cn(
                             "rounded-lg overflow-hidden",
                             "border border-divider",
-                            "bg-canopy-sidebar/50",
+                            "bg-daintree-sidebar/50",
                             "transition duration-200",
-                            "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
+                            "hover:border-daintree-accent/50 hover:shadow-lg hover:shadow-daintree-accent/5",
                             worktree.id === activeWorktreeId &&
                               "border-[var(--color-state-active)]/70 shadow-md"
                           )}
@@ -628,9 +628,9 @@ export function WorktreeOverviewModal({
                     className={cn(
                       "rounded-lg overflow-hidden",
                       "border border-divider",
-                      "bg-canopy-sidebar/50",
+                      "bg-daintree-sidebar/50",
                       "transition duration-200",
-                      "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
+                      "hover:border-daintree-accent/50 hover:shadow-lg hover:shadow-daintree-accent/5",
                       worktree.id === activeWorktreeId &&
                         "border-[var(--color-state-active)]/70 shadow-md"
                     )}
@@ -659,7 +659,7 @@ export function WorktreeOverviewModal({
 
           {/* Footer hint */}
           <div className="px-6 py-3 border-t border-divider shrink-0">
-            <div className="flex items-center justify-center gap-4 text-xs text-canopy-text/40">
+            <div className="flex items-center justify-center gap-4 text-xs text-daintree-text/40">
               <span>
                 <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-[10px]">Esc</kbd> to close
               </span>

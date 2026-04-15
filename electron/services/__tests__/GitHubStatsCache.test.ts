@@ -12,7 +12,7 @@ describe("GitHubStatsCache", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-02-01T12:00:00.000Z"));
-    userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "canopy-gh-stats-cache-"));
+    userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-gh-stats-cache-"));
     cacheFilePath = path.join(userDataDir, "github-stats-cache.json");
     process.env.DAINTREE_USER_DATA = userDataDir;
   });

@@ -46,7 +46,7 @@ export function buildRemoteComputeBlock(worktree: {
   const connectCommand = worktree.resourceConnectCommand;
 
   if (lastStatus === "ready" && endpoint && connectCommand) {
-    return `\n\n## Remote Compute\nProvider: ${provider} | Status: ${lastStatus} | Endpoint: ${endpoint}\nRun remote commands: ${connectCommand}\nOr use the wrapper: canopy-remote "<command>"\n`;
+    return `\n\n## Remote Compute\nProvider: ${provider} | Status: ${lastStatus} | Endpoint: ${endpoint}\nRun remote commands: ${connectCommand}\nOr use the wrapper: daintree-remote "<command>"\n`;
   }
 
   if (lastStatus) {
@@ -307,7 +307,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       const os = await import("os");
       const path = await import("path");
 
-      const tempDir = path.join(os.tmpdir(), "canopy-context");
+      const tempDir = path.join(os.tmpdir(), "daintree-context");
       await fs.mkdir(tempDir, { recursive: true });
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");

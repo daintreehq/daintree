@@ -6,11 +6,11 @@ interface CanopyIconProps {
   style?: React.CSSProperties;
 }
 
-export function CanopyIcon({ className, size = 16, style }: CanopyIconProps) {
+export function DaintreeIcon({ className, size = 16, style }: CanopyIconProps) {
   return (
     <svg
       viewBox="0 0 177.31 132.85"
-      aria-label="Canopy Logo"
+      aria-label="Daintree Logo"
       width={size}
       height={size}
       fill="currentColor"
@@ -27,4 +27,4 @@ export function CanopyIcon({ className, size = 16, style }: CanopyIconProps) {
   );
 }
 
-export default CanopyIcon;
+export default DaintreeIcon;

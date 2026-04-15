@@ -263,8 +263,8 @@ function withAlpha(color: string, alpha: number): string {
 }
 
 const INTERNAL_LIGHT_FALLBACK_SOURCE: BuiltInThemeSource = {
-  id: "canopy-light-base",
-  name: "Canopy Light Base",
+  id: "daintree-light-base",
+  name: "Daintree Light Base",
   type: "light",
   builtin: true,
   palette: {

@@ -265,7 +265,7 @@ AppDialog.Header = function AppDialogHeader({ children, className }: AppDialogHe
   return (
     <div
       className={cn(
-        "px-6 py-4 border-b border-canopy-border dialog-header flex items-center justify-between shrink-0",
+        "px-6 py-4 border-b border-daintree-border dialog-header flex items-center justify-between shrink-0",
         className
       )}
     >
@@ -285,7 +285,7 @@ AppDialog.Title = function AppDialogTitle({ children, icon, className }: AppDial
   return (
     <h2
       id={context?.titleId}
-      className={cn("text-lg font-semibold text-canopy-text flex items-center gap-2", className)}
+      className={cn("text-lg font-semibold text-daintree-text flex items-center gap-2", className)}
     >
       {icon}
       {children}
@@ -304,8 +304,8 @@ AppDialog.CloseButton = function AppDialogCloseButton({ className }: AppDialogCl
       type="button"
       onClick={context?.onClose}
       className={cn(
-        "text-canopy-text/60 hover:text-canopy-text hover:bg-overlay-strong transition-colors p-1 rounded",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+        "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-strong transition-colors p-1 rounded",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
         className
       )}
       aria-label="Close dialog"
@@ -374,7 +374,7 @@ AppDialog.Footer = function AppDialogFooter({
   return (
     <div
       className={cn(
-        "px-6 py-4 border-t border-canopy-border flex justify-end gap-3 shrink-0",
+        "px-6 py-4 border-t border-daintree-border flex justify-end gap-3 shrink-0",
         className
       )}
     >
@@ -384,7 +384,7 @@ AppDialog.Footer = function AppDialogFooter({
           variant="ghost"
           onClick={secondaryAction.onClick}
           disabled={secondaryAction.disabled || secondaryAction.loading}
-          className="text-canopy-text/70 hover:text-canopy-text"
+          className="text-daintree-text/70 hover:text-daintree-text"
         >
           {secondaryAction.loading && <Spinner />}
           {secondaryAction.label}
@@ -415,7 +415,7 @@ AppDialog.Description = function AppDialogDescription({
 }: AppDialogDescriptionProps) {
   const context = useContext(AppDialogContext);
   return (
-    <p id={context?.descriptionId} className={cn("text-sm text-canopy-text/70", className)}>
+    <p id={context?.descriptionId} className={cn("text-sm text-daintree-text/70", className)}>
       {children}
     </p>
   );

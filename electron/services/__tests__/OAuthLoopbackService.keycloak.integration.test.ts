@@ -25,13 +25,13 @@ import { createServer } from "http";
 // ---------------------------------------------------------------------------
 
 const KEYCLOAK_IMAGE = "quay.io/keycloak/keycloak:26.1";
-const CONTAINER_NAME = "canopy-oauth-test-kc";
+const CONTAINER_NAME = "daintree-oauth-test-kc";
 const KC_PORT = 18080;
 const KC_ADMIN_USER = "admin";
 const KC_ADMIN_PASS = "admin";
 const KC_BASE = `http://127.0.0.1:${KC_PORT}`;
 
-const REALM = "canopy-test";
+const REALM = "daintree-test";
 const CLIENT_ID = "test-frontend";
 const TEST_USER = "testuser";
 const TEST_PASS = "testpass123";

@@ -31,7 +31,7 @@ describe("probeDb", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "canopy-db-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-db-test-"));
     vi.clearAllMocks();
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
@@ -104,7 +104,7 @@ describe("attemptRecovery", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "canopy-db-recovery-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-db-recovery-"));
     vi.clearAllMocks();
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -120,7 +120,7 @@ describe("attemptRecovery", () => {
   });
 
   it("quarantines corrupt DB, WAL, SHM and restores from backup", () => {
-    const dbPath = path.join(tmpDir, "canopy.db");
+    const dbPath = path.join(tmpDir, "daintree.db");
     const backupPath = dbPath + ".backup";
 
     fs.writeFileSync(dbPath, "corrupt");
@@ -141,7 +141,7 @@ describe("attemptRecovery", () => {
   });
 
   it("returns false when no backup exists", () => {
-    const dbPath = path.join(tmpDir, "canopy.db");
+    const dbPath = path.join(tmpDir, "daintree.db");
     fs.writeFileSync(dbPath, "corrupt");
 
     const result = attemptRecovery(dbPath);
@@ -151,7 +151,7 @@ describe("attemptRecovery", () => {
   });
 
   it("returns false when backup is also corrupt", () => {
-    const dbPath = path.join(tmpDir, "canopy.db");
+    const dbPath = path.join(tmpDir, "daintree.db");
     const backupPath = dbPath + ".backup";
 
     fs.writeFileSync(dbPath, "corrupt");

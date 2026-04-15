@@ -4,7 +4,7 @@ import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const SELECT_CLASSES =
-  "w-full bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 pr-8 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
+  "w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 pr-8 py-1.5 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
 
 interface SettingsSelectProps extends Omit<ComponentPropsWithoutRef<"select">, "id"> {
   label: string;
@@ -42,20 +42,20 @@ export function SettingsSelect({
   return (
     <div className="group flex flex-col gap-2">
       <div className="flex items-center gap-2">
-        <label htmlFor={id} className="text-sm text-canopy-text/70">
+        <label htmlFor={id} className="text-sm text-daintree-text/70">
           {label}
         </label>
         {isModified && (
-          <span className="w-1.5 h-1.5 rounded-full bg-canopy-accent" aria-hidden="true" />
+          <span className="w-1.5 h-1.5 rounded-full bg-daintree-accent" aria-hidden="true" />
         )}
         {showReset && (
           <button
             type="button"
             aria-label={resetAriaLabel ?? `Reset ${label} to default`}
             className={cn(
-              "p-0.5 rounded-sm text-canopy-text/40 hover:text-canopy-accent",
+              "p-0.5 rounded-sm text-daintree-text/40 hover:text-daintree-accent",
               "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
               "transition-colors"
             )}
             onClick={onReset}
@@ -80,7 +80,7 @@ export function SettingsSelect({
         {children}
       </select>
       {description && !error && (
-        <p id={descriptionId} className="text-xs text-canopy-text/40 select-text">
+        <p id={descriptionId} className="text-xs text-daintree-text/40 select-text">
           {description}
         </p>
       )}

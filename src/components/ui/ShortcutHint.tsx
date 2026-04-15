@@ -77,8 +77,8 @@ export function ShortcutHint() {
       <div
         className={cn(
           "flex items-center gap-2 px-3 py-1.5",
-          "rounded-[var(--radius-lg)] bg-canopy-sidebar/95 border border-[var(--border-overlay)] shadow-[var(--theme-shadow-floating)]",
-          "text-xs text-canopy-text/70",
+          "rounded-[var(--radius-lg)] bg-daintree-sidebar/95 border border-[var(--border-overlay)] shadow-[var(--theme-shadow-floating)]",
+          "text-xs text-daintree-text/70",
           "transition duration-150",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
           isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1"

@@ -114,7 +114,7 @@ const IssueBadge = memo(function IssueBadge({
             if (isActive) onOpen?.();
           }}
           className={cn(
-            "flex items-center gap-1.5 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0",
+            "flex items-center gap-1.5 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
             isHeadline ? "text-[13px]" : "text-xs"
           )}
           aria-disabled={!isActive || undefined}
@@ -209,7 +209,7 @@ const PRBadge = memo(function PRBadge({
           onClick={() => {
             if (isActive) onOpen?.();
           }}
-          className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0"
+          className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0"
           aria-disabled={!isActive || undefined}
           aria-label={`Open ${prStateLabel} pull request #${prNumber} on GitHub`}
         >
@@ -392,13 +392,13 @@ export function WorktreeHeader({
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isMainWorktree && (
             <Sprout
-              className="w-3.5 h-3.5 text-canopy-text/60 shrink-0 pointer-events-none"
+              className="w-3.5 h-3.5 text-daintree-text/60 shrink-0 pointer-events-none"
               aria-hidden="true"
             />
           )}
           {isPinned && !isMainWorktree && (
             <Pin
-              className="w-3 h-3 text-canopy-text/40 shrink-0 pointer-events-none"
+              className="w-3 h-3 text-daintree-text/40 shrink-0 pointer-events-none"
               aria-label="Pinned"
             />
           )}
@@ -411,7 +411,7 @@ export function WorktreeHeader({
               const iconClass = cn(
                 "w-3 h-3 shrink-0",
                 isLifecycleRunning
-                  ? "animate-pulse text-canopy-accent"
+                  ? "animate-pulse text-daintree-accent"
                   : resourceStatusColor === "green"
                     ? "text-terminal-bright-green"
                     : resourceStatusColor === "yellow"
@@ -419,8 +419,8 @@ export function WorktreeHeader({
                       : resourceStatusColor === "red"
                         ? "text-status-error"
                         : resourceStatusColor === "neutral" || resourceStatusLabel
-                          ? "text-canopy-accent/70"
-                          : "text-canopy-text/30"
+                          ? "text-daintree-accent/70"
+                          : "text-daintree-text/30"
               );
               const hasDetails =
                 resourceStatusLabel ||
@@ -444,7 +444,7 @@ export function WorktreeHeader({
                 <Popover>
                   <PopoverTrigger asChild>
                     <button
-                      className="shrink-0 rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent"
+                      className="shrink-0 rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent"
                       aria-label={`${worktree.worktreeMode} environment status`}
                     >
                       <EnvironmentIcon className={iconClass} />
@@ -595,7 +595,7 @@ export function WorktreeHeader({
           {canCollapse && (
             <button
               onClick={onToggleCollapse}
-              className="sidebar-action-button p-1.5 text-canopy-text/60 hover:text-text-primary rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+              className="sidebar-action-button p-1.5 text-daintree-text/60 hover:text-text-primary rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
               aria-expanded={!isCollapsed}
               aria-controls={isCollapsed ? undefined : contentId}
               aria-label={isCollapsed ? "Expand card" : "Collapse card"}
@@ -615,7 +615,7 @@ export function WorktreeHeader({
                 <DropdownMenuTrigger asChild>
                   <button
                     onClick={(e) => e.stopPropagation()}
-                    className="sidebar-action-button p-1.5 text-canopy-text/60 hover:text-text-primary rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                    className="sidebar-action-button p-1.5 text-daintree-text/60 hover:text-text-primary rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
                     aria-label="More actions"
                     data-testid="worktree-actions-menu"
                   >
@@ -741,7 +741,7 @@ export function WorktreeHeader({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span
-                    className="flex items-center gap-1.5 text-[10px] text-canopy-text/50"
+                    className="flex items-center gap-1.5 text-[10px] text-daintree-text/50"
                     data-testid="aggregate-worktree-row"
                   >
                     <span className="flex items-center gap-0.5">
@@ -871,11 +871,11 @@ export function WorktreeHeader({
                 onClick={() => {
                   if (isActive) badges.onOpenPlan?.();
                 }}
-                className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors text-canopy-text/70 hover:text-canopy-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors text-daintree-text/70 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
                 aria-disabled={!isActive || undefined}
                 aria-label="View agent plan file"
               >
-                <FileText className="w-3 h-3 shrink-0 text-canopy-accent/70" aria-hidden="true" />
+                <FileText className="w-3 h-3 shrink-0 text-daintree-accent/70" aria-hidden="true" />
                 <span className={cn("font-mono", underlineOnHover && "hover:underline")}>
                   {worktree.planFilePath ?? "Plan"}
                 </span>

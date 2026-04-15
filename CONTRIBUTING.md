@@ -1,6 +1,6 @@
-# Contributing to Canopy
+# Contributing to Daintree
 
-Thanks for your interest in contributing. Canopy is an Electron-based workspace for orchestrating AI coding agents, and we welcome bug fixes, features, tests, and docs from the community.
+Thanks for your interest in contributing. Daintree is an Electron-based workspace for orchestrating AI coding agents, and we welcome bug fixes, features, tests, and docs from the community.
 
 This document is the rulebook. If something here is unclear or seems wrong, open an issue — the contribution guide is code too.
 
@@ -11,8 +11,8 @@ Be kind, be specific, assume good faith. Harassment, personal attacks, and bad-f
 ## Getting set up
 
 ```bash
-git clone https://github.com/daintree/canopy.git
-cd canopy
+git clone https://github.com/canopyide/canopy.git
+cd daintree
 npm install        # runs the postinstall rebuild for node-pty
 npm run dev        # Main + Renderer with HMR
 ```
@@ -36,7 +36,7 @@ npm run rebuild    # rebuild native modules against Electron
 
 ## Branching model
 
-Canopy uses **Gitflow**.
+Daintree uses **Gitflow**.
 
 - **All PRs target `develop`.** Never open a PR against `main`. `main` only receives merges from release branches.
 - Branch naming: `feat/short-description`, `fix/issue-1234-short-description`, `refactor/...`, `docs/...`, `test/...`.
@@ -102,7 +102,7 @@ Resolves #<issue-number>
 - Anything you _couldn't_ test and why (be honest — "verified in CI" is fine)
 ```
 
-Real examples of this format are plentiful in the merged PR history (e.g. daintree/canopy#5106, daintree/canopy#5102, daintree/canopy#5092) — read a few before opening yours.
+Real examples of this format are plentiful in the merged PR history (e.g. canopyide/canopy#5106, canopyide/canopy#5102, canopyide/canopy#5092) — read a few before opening yours.
 
 Rules:
 
@@ -129,7 +129,7 @@ Tests live in `__tests__/` folders next to the code they cover. Vitest for unit/
 
 ## Code style
 
-Canopy optimizes for **high signal-to-noise**. Code should be obvious enough that it doesn't need narration.
+Daintree optimizes for **high signal-to-noise**. Code should be obvious enough that it doesn't need narration.
 
 - **Minimal comments.** Comment _why_, not _what_. Don't write docstrings for self-evident functions. No decorative headers or banner comments.
 - **No `any`.** Use `unknown` and narrow, or define the real type. If you genuinely need `any`, leave a comment explaining why.
@@ -142,12 +142,12 @@ Formatting is handled by Prettier and ESLint — don't hand-format. Run `npm run
 
 ## Electron specifics
 
-Canopy is a multi-process Electron app. A few things that will get a PR rejected on first pass if you miss them:
+Daintree is a multi-process Electron app. A few things that will get a PR rejected on first pass if you miss them:
 
 - **Renderer has no Node access.** All native/system calls go through the preload bridge (`electron/preload.cts`) using `contextBridge.exposeInMainWorld`. Don't enable `nodeIntegration`. Don't use the deprecated `remote` module.
 - **IPC is typed end-to-end.** New channels go in `electron/ipc/channels.ts`, handlers in `electron/ipc/handlers/<domain>.ts`, preload exposure in `electron/preload.cts`, and renderer types in `src/types/electron.d.ts`. Skipping any layer breaks the build.
 - **Main vs renderer boundary matters.** Services that touch `node-pty`, `simple-git`, or the filesystem belong in `electron/services/`. React, Zustand, and xterm belong in `src/`. Shared types go in `shared/`.
-- **Version pinning is load-bearing.** Canopy is on **Electron 41**, **@xterm/xterm 6.0**, **@xterm/addon-fit 0.11**, and **React 19**. There are real breaking changes between these and older versions — research against the correct version when reading docs or advice.
+- **Version pinning is load-bearing.** Daintree is on **Electron 41**, **@xterm/xterm 6.0**, **@xterm/addon-fit 0.11**, and **React 19**. There are real breaking changes between these and older versions — research against the correct version when reading docs or advice.
 - **Actions go through `ActionService`.** If you're adding a user-facing operation, add it to `shared/types/actions.ts` and create a definition in `src/services/actions/definitions/`. Don't wire menus or keybindings to raw handlers.
 
 ## Review etiquette
@@ -174,7 +174,7 @@ Releases are cut from `develop` into a release branch, tagged, and merged to `ma
 
 - **Found a bug?** Open an issue with a reproduction.
 - **Have a feature idea?** Open an issue describing the problem first, not the solution.
-- **Not sure if something belongs in Canopy?** See `docs/feature-curation.md`, then ask on the issue.
+- **Not sure if something belongs in Daintree?** See `docs/feature-curation.md`, then ask on the issue.
 - **Stuck on something in this guide?** Open an issue tagged `docs` and we'll fix the guide.
 
 Thanks for contributing.

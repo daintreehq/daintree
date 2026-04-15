@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Generate Canopy notification sounds.
+ * Generate Daintree notification sounds.
  *
  * Design language: "digital ecology" — organic strike transients,
  * FM-synthesis body with woody inharmonicity, subtle natural-space
@@ -569,7 +569,7 @@ class BrownNoise {
 }
 
 // ---------------------------------------------------------------------------
-// Canopy note synthesizer
+// Daintree note synthesizer
 //
 // Architecture: serial excitation.  The FM "digital shimmer" and mallet
 // noise are combined into a composite excitation signal that is fed INTO
@@ -851,7 +851,7 @@ function writeWav(samples, filePath) {
 }
 
 // ---------------------------------------------------------------------------
-// Sound definitions — the Canopy palette
+// Sound definitions — the Daintree palette
 //
 // Design principles:
 //   1. Earthy core — modal wood resonators are the primary voice

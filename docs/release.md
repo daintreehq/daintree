@@ -75,12 +75,12 @@ Artifacts are uploaded to Cloudflare R2 via AWS CLI:
 
 ### R2 Secrets
 
-| Secret                 | Description                    |
-| ---------------------- | ------------------------------ |
-| `R2_ACCESS_KEY_ID`     | R2 access key                  |
-| `R2_SECRET_ACCESS_KEY` | R2 secret key                  |
-| `R2_ENDPOINT`          | R2 endpoint URL                |
-| `R2_BUCKET`            | Bucket name (`canopy-updates`) |
+| Secret                 | Description                      |
+| ---------------------- | -------------------------------- |
+| `R2_ACCESS_KEY_ID`     | R2 access key                    |
+| `R2_SECRET_ACCESS_KEY` | R2 secret key                    |
+| `R2_ENDPOINT`          | R2 endpoint URL                  |
+| `R2_BUCKET`            | Bucket name (`daintree-updates`) |
 
 ## Entitlements
 

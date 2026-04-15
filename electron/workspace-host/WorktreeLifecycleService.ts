@@ -38,7 +38,7 @@ const CanopyLifecycleConfigSchema = z.object({
   resources: ResourcesConfigSchema.optional(),
 });
 
-export type CanopyLifecycleConfig = z.infer<typeof CanopyLifecycleConfigSchema>;
+export type DaintreeLifecycleConfig = z.infer<typeof CanopyLifecycleConfigSchema>;
 
 /** Variables available for {{variable}} substitution in lifecycle commands. */
 export interface LifecycleVariables {
@@ -102,7 +102,7 @@ export class WorktreeLifecycleService {
   async loadConfig(
     worktreePath: string,
     projectRootPath: string
-  ): Promise<CanopyLifecycleConfig | null> {
+  ): Promise<DaintreeLifecycleConfig | null> {
     const sanitizedRoot = projectRootPath.replace(/[/\\:*?"<>|]/g, "_");
     const candidates = [
       pathJoin(this.homeDir, ".daintree", "projects", sanitizedRoot, "config.json"),
@@ -166,7 +166,7 @@ export class WorktreeLifecycleService {
    * Skips if source does not exist. Existing files in dest are never overwritten
    * so worktree-level overrides are preserved.
    */
-  async copyCanopyDir(srcPath: string, destPath: string): Promise<void> {
+  async copyDaintreeDir(srcPath: string, destPath: string): Promise<void> {
     const src = pathJoin(srcPath, ".daintree");
     const dest = pathJoin(destPath, ".daintree");
 

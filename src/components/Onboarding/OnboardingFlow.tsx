@@ -8,9 +8,9 @@ import type { CliAvailability } from "@shared/types";
 const SKIP_FIRST_RUN_DIALOGS = isDaintreeEnvEnabled("DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS");
 
 const LEGACY_KEYS = {
-  agentSelection: "canopy:agent-selection-dismissed",
-  agentSetup: "canopy:agent-setup-complete",
-  firstRunToast: "canopy:first-run-toast",
+  agentSelection: "daintree:agent-selection-dismissed",
+  agentSetup: "daintree:agent-setup-complete",
+  firstRunToast: "daintree:first-run-toast",
 } as const;
 
 type OnboardingStep = "agentSetup";
@@ -103,8 +103,8 @@ export function OnboardingFlow({
       returnToPaletteRef.current = detail?.returnToPanelPalette === true;
       setManualWizardOpen(true);
     };
-    window.addEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
-    return () => window.removeEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
+    window.addEventListener("daintree:open-agent-setup-wizard", handleOpenWizard);
+    return () => window.removeEventListener("daintree:open-agent-setup-wizard", handleOpenWizard);
   }, []);
 
   // Auto-open wizard when onboarding is complete but no agents are selected

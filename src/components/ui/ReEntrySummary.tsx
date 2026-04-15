@@ -95,7 +95,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
           "rounded-[var(--radius-sm)] border-l-[3px] border border-tint/[0.08]",
           "bg-surface-panel/85 backdrop-blur-xl",
           "px-3 py-2.5 pr-2",
-          "text-sm text-canopy-text",
+          "text-sm text-daintree-text",
           "shadow-[var(--theme-shadow-floating)]",
           "ring-1 ring-inset ring-tint/[0.05]",
           "transition-[transform,opacity] duration-300 ease-out",
@@ -108,7 +108,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
         onMouseLeave={() => setIsPaused(false)}
       >
         <div className="flex items-start justify-between gap-2">
-          <h4 className="font-medium leading-tight tracking-tight text-xs text-canopy-text">
+          <h4 className="font-medium leading-tight tracking-tight text-xs text-daintree-text">
             While you were away
           </h4>
           <button
@@ -118,9 +118,9 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
             className={cn(
               "shrink-0 rounded-[var(--radius-xs)]",
               "h-6 w-6 flex items-center justify-center",
-              "text-canopy-text/40 transition-colors duration-150",
-              "hover:text-canopy-text/80 hover:bg-tint/10",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+              "text-daintree-text/40 transition-colors duration-150",
+              "hover:text-daintree-text/80 hover:bg-tint/10",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
             )}
           >
             <X className="h-3.5 w-3.5" />
@@ -133,7 +133,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
               key={line.text}
               className={cn(
                 "flex items-center gap-1.5 text-xs",
-                line.emphasis ? "text-canopy-text" : "text-canopy-text/70"
+                line.emphasis ? "text-daintree-text" : "text-daintree-text/70"
               )}
             >
               <line.icon className="h-3.5 w-3.5 shrink-0" />
@@ -149,9 +149,9 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
             className={cn(
               "px-2.5 py-1 rounded-[var(--radius-xs)]",
               "text-xs font-medium",
-              "bg-canopy-accent/10 text-canopy-accent",
-              "hover:bg-canopy-accent/20 transition-colors",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+              "bg-daintree-accent/10 text-daintree-accent",
+              "hover:bg-daintree-accent/20 transition-colors",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
             )}
           >
             Open Notifications
@@ -163,9 +163,9 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
               className={cn(
                 "px-2.5 py-1 rounded-[var(--radius-xs)]",
                 "text-xs font-medium",
-                "bg-tint/5 text-canopy-text/70",
-                "hover:bg-tint/10 hover:text-canopy-text transition-colors",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+                "bg-tint/5 text-daintree-text/70",
+                "hover:bg-tint/10 hover:text-daintree-text transition-colors",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
               )}
             >
               Go to Worktree

@@ -30,7 +30,7 @@ test.describe("Core: Process Cleanup", () => {
     test.setTimeout(240_000);
 
     const fixtureDir = createFixtureRepo({ name: "process-cleanup" });
-    const userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-cleanup-"));
+    const userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-cleanup-"));
     let ptyPid = 0;
     let descendants: number[] = [];
 
@@ -103,7 +103,7 @@ test.describe("Core: Process Cleanup", () => {
     test.setTimeout(180_000);
 
     const fixtureDir = createFixtureRepo({ name: "process-cleanup-unclean" });
-    const userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-unclean-"));
+    const userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-unclean-"));
     let orphanPid = 0;
 
     try {

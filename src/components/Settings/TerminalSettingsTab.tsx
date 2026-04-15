@@ -509,7 +509,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           />
 
           {hardwareInfo && hardwareInfo.totalMemoryBytes > 0 && (
-            <div className="flex items-center gap-2 text-xs text-canopy-text/50">
+            <div className="flex items-center gap-2 text-xs text-daintree-text/50">
               <Cpu className="w-3 h-3" />
               <span>
                 Detected: {Math.round(hardwareInfo.totalMemoryBytes / (1024 * 1024 * 1024))} GB RAM,{" "}
@@ -520,7 +520,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
           <button
             onClick={() => void resetToHardwareDefaults()}
-            className="flex items-center gap-2 text-xs text-canopy-text/50 hover:text-canopy-text/70 transition-colors"
+            className="flex items-center gap-2 text-xs text-daintree-text/50 hover:text-daintree-text/70 transition-colors"
           >
             <RotateCcw className="w-3 h-3" />
             <span>Reset to hardware-recommended defaults</span>
@@ -550,8 +550,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 className={cn(
                   "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
                   cachedProjectViews === value
-                    ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-                    : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"
+                    ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                    : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                 )}
               >
                 <span className="text-xs font-medium">{label}</span>
@@ -590,7 +590,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             }
           />
 
-          <div className="ml-4 border-l-2 border-canopy-border pl-4">
+          <div className="ml-4 border-l-2 border-daintree-border pl-4">
             <SettingsSwitchCard
               icon={MousePointerClick}
               title={hybridInputAutoFocus ? "Auto-Focus Input" : "Auto-Focus Terminal"}
@@ -641,7 +641,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               onReset={() => setTwoPaneSplitEnabled(true)}
             />
 
-            <div className="ml-4 space-y-3 border-l-2 border-canopy-border pl-4">
+            <div className="ml-4 space-y-3 border-l-2 border-daintree-border pl-4">
               <SettingsSwitchCard
                 icon={Monitor}
                 title={
@@ -666,7 +666,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   !twoPaneSplitConfig.enabled && "opacity-50 pointer-events-none"
                 )}
               >
-                <label htmlFor="default-ratio-slider" className="text-sm text-canopy-text/70">
+                <label htmlFor="default-ratio-slider" className="text-sm text-daintree-text/70">
                   Default Ratio
                 </label>
                 <div className="flex items-center gap-4">
@@ -678,18 +678,18 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                     value={Math.round(twoPaneSplitConfig.defaultRatio * 100)}
                     onChange={(e) => setDefaultRatio(Number(e.target.value) / 100)}
                     aria-valuetext={`${Math.round(twoPaneSplitConfig.defaultRatio * 100)} percent left, ${Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)} percent right`}
-                    className="flex-1 accent-canopy-accent"
+                    className="flex-1 accent-daintree-accent"
                     disabled={!twoPaneSplitConfig.enabled}
                   />
                   <span
-                    className="text-xs text-canopy-text/70 font-mono w-16 text-right"
+                    className="text-xs text-daintree-text/70 font-mono w-16 text-right"
                     aria-hidden="true"
                   >
                     {Math.round(twoPaneSplitConfig.defaultRatio * 100)}/
                     {Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)}
                   </span>
                 </div>
-                <p className="text-xs text-canopy-text/40 select-text">
+                <p className="text-xs text-daintree-text/40 select-text">
                   Default split ratio when no worktree-specific ratio is saved.
                 </p>
               </div>
@@ -698,9 +698,9 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 onClick={resetAllWorktreeRatios}
                 disabled={!twoPaneSplitConfig.enabled}
                 className={cn(
-                  "flex items-center gap-2 text-xs text-canopy-text/50 transition-colors",
+                  "flex items-center gap-2 text-xs text-daintree-text/50 transition-colors",
                   twoPaneSplitConfig.enabled
-                    ? "hover:text-canopy-text/70"
+                    ? "hover:text-daintree-text/70"
                     : "opacity-50 cursor-not-allowed"
                 )}
               >
@@ -724,8 +724,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   className={cn(
                     "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-colors",
                     layoutConfig.strategy === id
-                      ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-                      : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"
+                      ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                      : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                   )}
                 >
                   <Icon className="w-6 h-6 mb-2" />
@@ -752,7 +752,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               />
             )}
 
-            <p className="text-xs text-canopy-text/40 leading-relaxed select-text">
+            <p className="text-xs text-daintree-text/40 leading-relaxed select-text">
               {layoutConfig.strategy === "automatic" &&
                 "Uses a balanced square grid that adapts to the number of terminals (1-4 terminals use 2 columns, 5+ use up to 4 columns)."}
               {layoutConfig.strategy === "fixed-columns" &&
@@ -785,8 +785,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
                   performanceMode && "opacity-50 cursor-not-allowed",
                   scrollbackLines === value
-                    ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-                    : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"
+                    ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                    : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                 )}
               >
                 <span className="text-xs font-medium">{label}</span>
@@ -795,14 +795,14 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             ))}
           </div>
 
-          <div className="text-xs text-canopy-text/50 space-y-1.5 bg-canopy-bg/50 rounded-[var(--radius-md)] p-3">
-            <div className="font-medium text-canopy-text/70 mb-2">
+          <div className="text-xs text-daintree-text/50 space-y-1.5 bg-daintree-bg/50 rounded-[var(--radius-md)] p-3">
+            <div className="font-medium text-daintree-text/70 mb-2">
               Effective limits per type{performanceMode ? " (performance mode)" : ""}:
             </div>
             {scrollbackLimits.map(({ label, limit }) => (
               <div key={label} className="flex justify-between">
                 <span>{label}</span>
-                <span className="font-mono text-canopy-text/70">
+                <span className="font-mono text-daintree-text/70">
                   {limit.toLocaleString()} lines
                 </span>
               </div>
@@ -811,7 +811,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
           <button
             onClick={() => setShowMemoryDetails(!showMemoryDetails)}
-            className="flex items-center gap-1.5 text-xs text-canopy-text/50 hover:text-canopy-text/70 transition-colors"
+            className="flex items-center gap-1.5 text-xs text-daintree-text/50 hover:text-daintree-text/70 transition-colors"
             aria-expanded={showMemoryDetails}
             aria-controls="memory-details"
           >
@@ -824,14 +824,14 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
           {showMemoryDetails && (
             <div
               id="memory-details"
-              className="text-xs text-canopy-text/50 space-y-1.5 bg-canopy-bg/50 rounded-[var(--radius-md)] p-3"
+              className="text-xs text-daintree-text/50 space-y-1.5 bg-daintree-bg/50 rounded-[var(--radius-md)] p-3"
             >
-              <div className="font-medium text-canopy-text/70 mb-2">
+              <div className="font-medium text-daintree-text/70 mb-2">
                 Typical session (8 agents, 8 shells):
               </div>
               <div className="flex justify-between">
                 <span>Agent terminals (8)</span>
-                <span className="font-mono text-canopy-text/70">
+                <span className="font-mono text-daintree-text/70">
                   {formatBytes(
                     (memoryEstimate.perType.claude ?? 0) +
                       (memoryEstimate.perType.gemini ?? 0) +
@@ -842,13 +842,13 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               </div>
               <div className="flex justify-between">
                 <span>Terminals (8)</span>
-                <span className="font-mono text-canopy-text/70">
+                <span className="font-mono text-daintree-text/70">
                   {formatBytes(memoryEstimate.perType.terminal ?? 0)}
                 </span>
               </div>
-              <div className="flex justify-between pt-1.5 border-t border-canopy-border mt-1.5">
-                <span className="font-medium text-canopy-text/70">Total estimated</span>
-                <span className="font-mono font-medium text-canopy-accent">
+              <div className="flex justify-between pt-1.5 border-t border-daintree-border mt-1.5">
+                <span className="font-medium text-daintree-text/70">Total estimated</span>
+                <span className="font-mono font-medium text-daintree-accent">
                   {formatBytes(memoryEstimate.total)}
                 </span>
               </div>
@@ -881,8 +881,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 className={cn(
                   "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
                   screenReaderMode === value
-                    ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-                    : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"
+                    ? "bg-daintree-accent/10 border-daintree-accent text-daintree-accent"
+                    : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
                 )}
               >
                 <span className="text-xs font-medium">{label}</span>
@@ -891,7 +891,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             ))}
           </div>
 
-          <p className="text-xs text-canopy-text/50 leading-relaxed select-text">
+          <p className="text-xs text-daintree-text/50 leading-relaxed select-text">
             Screen reader mode adds an accessible DOM overlay to each terminal, which has a
             performance cost. For best results, only enable when using a screen reader.
           </p>

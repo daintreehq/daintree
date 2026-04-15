@@ -154,7 +154,7 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
       workingDirectory: string
     ) => void;
 
-    handler({}, ["canopy", "--cli-path", "/path/to/repo"], "/");
+    handler({}, ["daintree", "--cli-path", "/path/to/repo"], "/");
 
     expect(onCreateWindowForPath).toHaveBeenCalledWith("/path/to/repo");
     expect(handleDirectoryOpen).not.toHaveBeenCalled();
@@ -179,7 +179,7 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
       workingDirectory: string
     ) => void;
 
-    handler({}, ["canopy", "--cli-path", "/path/to/repo"], "/");
+    handler({}, ["daintree", "--cli-path", "/path/to/repo"], "/");
 
     expect(handleDirectoryOpen).toHaveBeenCalledWith("/path/to/repo", mainWindow, undefined);
   });
@@ -198,7 +198,7 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
       workingDirectory: string
     ) => void;
 
-    handler({}, ["canopy", "--cli-path", "/pending/path"], "/");
+    handler({}, ["daintree", "--cli-path", "/pending/path"], "/");
 
     expect(onCreateWindowForPath).not.toHaveBeenCalled();
     expect(handleDirectoryOpen).not.toHaveBeenCalled();
@@ -223,7 +223,7 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
       workingDirectory: string
     ) => void;
 
-    handler({}, ["canopy"], "/");
+    handler({}, ["daintree"], "/");
 
     expect(mainWindow.focus).toHaveBeenCalled();
     expect(handleDirectoryOpen).not.toHaveBeenCalled();
@@ -247,7 +247,7 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
       workingDirectory: string
     ) => void;
 
-    handler({}, ["canopy"], "/");
+    handler({}, ["daintree"], "/");
 
     expect(mainWindow.restore).toHaveBeenCalled();
     expect(mainWindow.focus).toHaveBeenCalled();

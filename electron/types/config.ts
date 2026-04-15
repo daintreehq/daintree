@@ -1,11 +1,11 @@
 /**
- * Configuration runtime values for Canopy
+ * Configuration runtime values for Daintree
  *
  * Type definitions are imported from @shared/types.
  * This file contains only the DEFAULT_CONFIG constant.
  */
 
-import type { CanopyConfig } from "../../shared/types/index.js";
+import type { DaintreeConfig } from "../../shared/types/index.js";
 
 export type {
   OpenerConfig,
@@ -18,10 +18,10 @@ export type {
   UIConfig,
   WorktreesConfig,
   GitDisplayConfig,
-  CanopyConfig,
+  DaintreeConfig,
 } from "../../shared/types/index.js";
 
-export const DEFAULT_CONFIG: CanopyConfig = {
+export const DEFAULT_CONFIG: DaintreeConfig = {
   editor: "code",
   editorArgs: ["-r"],
   theme: "auto",
@@ -89,6 +89,6 @@ export const DEFAULT_CONFIG: CanopyConfig = {
   },
   note: {
     enabled: true,
-    filename: "canopy/note",
+    filename: "daintree/note",
   },
 };

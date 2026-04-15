@@ -722,7 +722,7 @@ describe("ActivityMonitor", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         getVisibleLines: () => [
-          "Canopy wants to run: rm -rf /tmp",
+          "Daintree wants to run: rm -rf /tmp",
           "Approve Once",
           "Approve This Session",
           "Reject",
@@ -2483,7 +2483,7 @@ describe("ActivityMonitor", () => {
       const visibleLines = [
         "           Claude Code v2.1.37",
         " ▐▛███▜▌   Opus 4.6 · Claude Max",
-        "▝▜█████▛▘  ~/Projects/Canopy/canopy-electron",
+        "▝▜█████▛▘  ~/Projects/Daintree/daintree-electron",
         "  ▘▘ ▝▝    Opus 4.6 is here · $50 free extra usage",
         "",
         "─────────────────────────────────────────────────────────────────",

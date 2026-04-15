@@ -73,7 +73,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), "canopy-e2e-"));
+    const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), "daintree-e2e-"));
     const args = [`--user-data-dir=${userDataDir}`, ROOT];
 
     if (process.env.CI) {

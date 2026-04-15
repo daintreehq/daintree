@@ -252,7 +252,7 @@ describe("useOrchestrationMilestones", () => {
     expect(worktreeSubscribers).toHaveLength(0);
     expect(recipeSubscribers).toHaveLength(0);
     expect(window.removeEventListener).toHaveBeenCalledWith(
-      "canopy:context-injected",
+      "daintree:context-injected",
       expect.any(Function)
     );
   });

@@ -23,7 +23,7 @@ test.describe.serial("Core: Shell & Settings", () => {
   test.describe.serial("App Shell", () => {
     test("app launches with correct title and version", async () => {
       const title = await ctx.window.title();
-      expect(title).toContain("Canopy");
+      expect(title).toContain("Daintree");
 
       const version = await ctx.app.evaluate(({ app }) => app.getVersion());
       expect(version).toMatch(/^\d+\.\d+\.\d+/);

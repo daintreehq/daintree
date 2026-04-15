@@ -512,8 +512,8 @@ function BulkCommandPaletteInner() {
               key={m}
               className={`px-3 py-1 text-xs rounded-[var(--radius-md)] transition-colors ${
                 mode === m
-                  ? "bg-canopy-accent text-text-inverse"
-                  : "bg-canopy-sidebar text-canopy-text/60 hover:text-canopy-text"
+                  ? "bg-daintree-accent text-text-inverse"
+                  : "bg-daintree-sidebar text-daintree-text/60 hover:text-daintree-text"
               }`}
               onClick={() => setMode(m)}
             >
@@ -529,11 +529,11 @@ function BulkCommandPaletteInner() {
             <div className="flex items-center gap-2 mb-2">
               <button
                 onClick={() => setStep("select")}
-                className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
+                className="text-xs text-daintree-accent hover:text-daintree-accent/80 transition-colors"
               >
                 &larr; Back
               </button>
-              <span className="text-xs text-canopy-text/50">
+              <span className="text-xs text-daintree-text/50">
                 Preview &mdash; {selectedRows.length} worktree
                 {selectedRows.length !== 1 ? "s" : ""}
               </span>
@@ -542,10 +542,10 @@ function BulkCommandPaletteInner() {
               previewEntries.map((entry) => (
                 <div
                   key={entry.row.id}
-                  className="rounded-[var(--radius-md)] border border-canopy-border p-2 text-xs"
+                  className="rounded-[var(--radius-md)] border border-daintree-border p-2 text-xs"
                 >
-                  <div className="font-medium text-canopy-text mb-1">{entry.row.branch}</div>
-                  <div className="font-mono text-canopy-text/70 break-all">
+                  <div className="font-medium text-daintree-text mb-1">{entry.row.branch}</div>
+                  <div className="font-mono text-daintree-text/70 break-all">
                     {entry.resolvedText}
                   </div>
                   {entry.unresolvedVars.length > 0 && (
@@ -557,17 +557,17 @@ function BulkCommandPaletteInner() {
               ))}
             {mode === "recipe" && selectedRecipe && (
               <>
-                <div className="text-xs text-canopy-text/60 mb-1">
-                  Recipe: <span className="text-canopy-text">{selectedRecipe.name}</span> &mdash;{" "}
+                <div className="text-xs text-daintree-text/60 mb-1">
+                  Recipe: <span className="text-daintree-text">{selectedRecipe.name}</span> &mdash;{" "}
                   {selectedRecipe.terminals.length} terminal
                   {selectedRecipe.terminals.length !== 1 ? "s" : ""}
                 </div>
                 {selectedRows.map((row) => (
                   <div
                     key={row.id}
-                    className="rounded-[var(--radius-md)] border border-canopy-border p-2 text-xs"
+                    className="rounded-[var(--radius-md)] border border-daintree-border p-2 text-xs"
                   >
-                    <div className="font-medium text-canopy-text">{row.branch}</div>
+                    <div className="font-medium text-daintree-text">{row.branch}</div>
                   </div>
                 ))}
               </>
@@ -576,7 +576,7 @@ function BulkCommandPaletteInner() {
         ) : (
           <>
             {/* Action config — above worktree list */}
-            <div className="px-3 py-2 border-b border-canopy-border">
+            <div className="px-3 py-2 border-b border-daintree-border">
               {mode === "keystroke" ? (
                 pendingDestructive ? (
                   <div className="flex items-center gap-2 py-1">
@@ -595,7 +595,7 @@ function BulkCommandPaletteInner() {
                     </button>
                     <button
                       onClick={() => setPendingDestructive(false)}
-                      className="px-2 py-0.5 text-xs rounded-[var(--radius-md)] text-canopy-text/50 hover:text-canopy-text transition-colors"
+                      className="px-2 py-0.5 text-xs rounded-[var(--radius-md)] text-daintree-text/50 hover:text-daintree-text transition-colors"
                     >
                       Cancel
                     </button>
@@ -608,8 +608,8 @@ function BulkCommandPaletteInner() {
                         onClick={() => setKeystrokePreset(preset)}
                         className={`px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors ${
                           keystrokePreset === preset
-                            ? "border-canopy-accent bg-canopy-accent/10 text-canopy-accent"
-                            : "border-canopy-border text-canopy-text/60 hover:text-canopy-text hover:border-canopy-text/30"
+                            ? "border-daintree-accent bg-daintree-accent/10 text-daintree-accent"
+                            : "border-daintree-border text-daintree-text/60 hover:text-daintree-text hover:border-daintree-text/30"
                         }`}
                       >
                         {KEYSTROKE_LABELS[preset]}
@@ -655,10 +655,10 @@ function BulkCommandPaletteInner() {
                       }}
                       onBlur={() => setShowHistory(false)}
                       placeholder="Type a command..."
-                      className="w-full px-3 py-2 text-sm bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-md)] text-canopy-text placeholder:italic placeholder:text-canopy-text/30 focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/20"
+                      className="w-full px-3 py-2 text-sm bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-md)] text-daintree-text placeholder:italic placeholder:text-daintree-text/30 focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/20"
                     />
                     {showHistory && commandText === "" && (
-                      <div className="absolute left-0 right-0 top-full mt-1 bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-md)] shadow-lg z-10 max-h-40 overflow-y-auto">
+                      <div className="absolute left-0 right-0 top-full mt-1 bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-md)] shadow-lg z-10 max-h-40 overflow-y-auto">
                         {historyEntries.slice(0, 8).map((entry) => (
                           <button
                             key={entry.id}
@@ -667,7 +667,7 @@ function BulkCommandPaletteInner() {
                               setCommandText(entry.prompt);
                               setShowHistory(false);
                             }}
-                            className="w-full text-left px-3 py-1.5 text-xs text-canopy-text/70 hover:bg-tint/[0.06] truncate"
+                            className="w-full text-left px-3 py-1.5 text-xs text-daintree-text/70 hover:bg-tint/[0.06] truncate"
                           >
                             {entry.prompt}
                           </button>
@@ -684,13 +684,13 @@ function BulkCommandPaletteInner() {
                             e.preventDefault();
                             handleInsertVariable(v.name);
                           }}
-                          className="px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)] border border-canopy-border text-canopy-text/50 hover:text-canopy-accent hover:border-canopy-accent/40 transition-colors font-mono"
+                          className="px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)] border border-daintree-border text-daintree-text/50 hover:text-daintree-accent hover:border-daintree-accent/40 transition-colors font-mono"
                         >
                           {`{{${v.name}}}`}
                         </button>
                       ))}
                     </div>
-                    <p className="text-[10px] text-canopy-text/30 mt-1">
+                    <p className="text-[10px] text-daintree-text/30 mt-1">
                       Click to insert &middot; Variables resolve per worktree
                     </p>
                   </div>
@@ -698,7 +698,9 @@ function BulkCommandPaletteInner() {
               ) : (
                 <div className="space-y-1">
                   {projectRecipes.length === 0 ? (
-                    <div className="text-xs text-canopy-text/40 py-1">No project-wide recipes</div>
+                    <div className="text-xs text-daintree-text/40 py-1">
+                      No project-wide recipes
+                    </div>
                   ) : (
                     <div className="flex flex-wrap gap-1.5">
                       {projectRecipes.map((recipe) => (
@@ -707,8 +709,8 @@ function BulkCommandPaletteInner() {
                           onClick={() => setSelectedRecipeId(recipe.id)}
                           className={`px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors ${
                             selectedRecipeId === recipe.id
-                              ? "border-canopy-accent bg-canopy-accent/10 text-canopy-accent"
-                              : "border-canopy-border text-canopy-text/60 hover:text-canopy-text hover:border-canopy-text/30"
+                              ? "border-daintree-accent bg-daintree-accent/10 text-daintree-accent"
+                              : "border-daintree-border text-daintree-text/60 hover:text-daintree-text hover:border-daintree-text/30"
                           }`}
                         >
                           {recipe.name}
@@ -722,7 +724,7 @@ function BulkCommandPaletteInner() {
 
             {/* Worktree list */}
             {rows.length === 0 ? (
-              <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
+              <div className="px-3 py-8 text-center text-daintree-text/50 text-sm">
                 No worktrees available
               </div>
             ) : (
@@ -730,11 +732,11 @@ function BulkCommandPaletteInner() {
                 <div className="flex items-center gap-1 px-3 py-1.5">
                   <button
                     onClick={toggleAll}
-                    className="text-xs text-canopy-text/50 hover:text-canopy-text transition-colors"
+                    className="text-xs text-daintree-text/50 hover:text-daintree-text transition-colors"
                   >
                     {allEnabledSelected ? "Deselect All" : "Select All"}
                   </button>
-                  <span className="text-canopy-text/20 mx-1">|</span>
+                  <span className="text-daintree-text/20 mx-1">|</span>
                   {STATE_PRESETS.map((preset) => {
                     const count = presetCounts[preset.label];
                     return (
@@ -742,10 +744,10 @@ function BulkCommandPaletteInner() {
                         key={preset.label}
                         onClick={() => applyPreset(preset)}
                         disabled={count === 0}
-                        className={`px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)] border border-canopy-border transition-colors ${
+                        className={`px-1.5 py-0.5 text-[10px] rounded-[var(--radius-sm)] border border-daintree-border transition-colors ${
                           count === 0
-                            ? "opacity-40 cursor-not-allowed text-canopy-text/50"
-                            : "text-canopy-text/50 hover:text-canopy-text hover:border-canopy-text/30"
+                            ? "opacity-40 cursor-not-allowed text-daintree-text/50"
+                            : "text-daintree-text/50 hover:text-daintree-text hover:border-daintree-text/30"
                         }`}
                       >
                         {preset.label} ({count})
@@ -779,9 +781,9 @@ function BulkCommandPaletteInner() {
                           row.disabled
                             ? "opacity-40 cursor-not-allowed border-transparent"
                             : allSelected
-                              ? "border-canopy-accent/40 bg-canopy-accent/10"
+                              ? "border-daintree-accent/40 bg-daintree-accent/10"
                               : someSelected
-                                ? "border-canopy-accent/20 bg-canopy-accent/5"
+                                ? "border-daintree-accent/20 bg-daintree-accent/5"
                                 : "border-transparent hover:bg-tint/[0.06]"
                         }`}
                       >
@@ -792,7 +794,7 @@ function BulkCommandPaletteInner() {
                             disabled={!canExpand}
                             aria-label={isExpanded ? "Collapse terminals" : "Expand terminals"}
                             data-testid={`bulk-worktree-expand-${row.id}`}
-                            className={`shrink-0 w-4 h-4 flex items-center justify-center text-canopy-text/50 hover:text-canopy-text transition-colors ${
+                            className={`shrink-0 w-4 h-4 flex items-center justify-center text-daintree-text/50 hover:text-daintree-text transition-colors ${
                               canExpand ? "" : "invisible"
                             }`}
                           >
@@ -819,14 +821,14 @@ function BulkCommandPaletteInner() {
                             type="button"
                             onClick={() => !row.disabled && toggleWorktree(row)}
                             disabled={row.disabled}
-                            className="flex-1 min-w-0 text-left text-sm text-canopy-text truncate"
+                            className="flex-1 min-w-0 text-left text-sm text-daintree-text truncate"
                           >
                             {row.branch}
                           </button>
                           {StateIcon && (
                             <StateIcon className={`w-3.5 h-3.5 shrink-0 ${stateColor}`} />
                           )}
-                          <span className="text-xs text-canopy-text/40 shrink-0">
+                          <span className="text-xs text-daintree-text/40 shrink-0">
                             {row.agentTerminalCount}{" "}
                             {row.agentTerminalCount === 1 ? "agent" : "agents"}
                           </span>
@@ -859,7 +861,9 @@ function BulkCommandPaletteInner() {
                                       aria-setsize={row.terminals.length}
                                       data-testid={`bulk-terminal-row-${terminal.id}`}
                                       className={`px-2 py-1 rounded-[var(--radius-md)] flex items-center gap-2 ${
-                                        isSelected ? "bg-canopy-accent/10" : "hover:bg-tint/[0.04]"
+                                        isSelected
+                                          ? "bg-daintree-accent/10"
+                                          : "hover:bg-tint/[0.04]"
                                       }`}
                                     >
                                       <div
@@ -879,7 +883,7 @@ function BulkCommandPaletteInner() {
                                           type="button"
                                           onClick={() => toggleTerminal(terminal.id)}
                                           tabIndex={isExpanded ? 0 : -1}
-                                          className="flex-1 min-w-0 text-left text-xs text-canopy-text/80 truncate"
+                                          className="flex-1 min-w-0 text-left text-xs text-daintree-text/80 truncate"
                                         >
                                           {terminal.label}
                                         </button>
@@ -888,7 +892,7 @@ function BulkCommandPaletteInner() {
                                             className={`w-3 h-3 shrink-0 ${tStateColor}`}
                                           />
                                         )}
-                                        <span className="text-[10px] text-canopy-text/40 shrink-0">
+                                        <span className="text-[10px] text-daintree-text/40 shrink-0">
                                           {tStateLabel}
                                         </span>
                                       </div>
@@ -911,18 +915,18 @@ function BulkCommandPaletteInner() {
 
       <AppPaletteDialog.Footer>
         <div className="flex items-center justify-between w-full">
-          <span className="text-[10px] text-canopy-text/30 hidden sm:inline">
+          <span className="text-[10px] text-daintree-text/30 hidden sm:inline">
             ↑↓ Navigate &middot; Space Select &middot; ⌘↵ Send &middot; Esc Back
           </span>
           <div className="flex items-center gap-3">
-            <span className="text-xs text-canopy-text/50">
+            <span className="text-xs text-daintree-text/50">
               {selectedWorktreeCount} worktree{selectedWorktreeCount !== 1 ? "s" : ""},{" "}
               {selectedTerminalCount} agent{selectedTerminalCount !== 1 ? "s" : ""}
             </span>
             <button
               onClick={step === "preview" ? handleConfirm : handleSend}
               disabled={!canSend}
-              className="px-3 py-1 text-xs rounded-[var(--radius-md)] bg-canopy-accent text-text-inverse hover:bg-canopy-accent/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-3 py-1 text-xs rounded-[var(--radius-md)] bg-daintree-accent text-text-inverse hover:bg-daintree-accent/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {isSending ? "Sending..." : actionLabel}
             </button>

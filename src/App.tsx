@@ -379,7 +379,7 @@ function App() {
       }
     }
     terminalInstanceService.suppressResizesDuringLayoutTransition(gridIds, SIDEBAR_TOGGLE_LOCK_MS);
-    window.dispatchEvent(new CustomEvent("canopy:toggle-focus-mode"));
+    window.dispatchEvent(new CustomEvent("daintree:toggle-focus-mode"));
   }, []);
 
   useActionRegistry({
@@ -445,8 +445,8 @@ function App() {
 
   if (!isElectronAvailable()) {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-canopy-bg">
-        <div className="text-canopy-text/60 text-sm">
+      <div className="h-screen w-screen flex items-center justify-center bg-daintree-bg">
+        <div className="text-daintree-text/60 text-sm">
           Electron API not available - please run in Electron
         </div>
       </div>
@@ -455,7 +455,7 @@ function App() {
 
   if (crashState.status === "pending") {
     return (
-      <div className="h-screen w-screen bg-canopy-bg">
+      <div className="h-screen w-screen bg-daintree-bg">
         <CrashRecoveryDialog
           crash={crashState.crash}
           config={crashState.config}
@@ -467,7 +467,7 @@ function App() {
   }
 
   if (!crashResolved || !isStateLoaded) {
-    return <div className="h-screen w-screen bg-canopy-bg" />;
+    return <div className="h-screen w-screen bg-daintree-bg" />;
   }
 
   return (

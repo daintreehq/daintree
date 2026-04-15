@@ -69,7 +69,7 @@ function CIStatusIcon({ status }: { status: ProjectHealthData["ciStatus"] }) {
     case "expected":
       return <Clock className="w-3.5 h-3.5 text-status-warning" />;
     default:
-      return <CircleMinus className="w-3.5 h-3.5 text-canopy-text/40" />;
+      return <CircleMinus className="w-3.5 h-3.5 text-daintree-text/40" />;
   }
 }
 
@@ -233,11 +233,11 @@ function PulseSkeleton({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "pulse-card w-fit rounded-[var(--radius-lg)] border border-canopy-border",
+        "pulse-card w-fit rounded-[var(--radius-lg)] border border-daintree-border",
         className
       )}
     >
-      <div className="pulse-card-header px-4 py-3 border-b border-canopy-border flex items-center justify-between">
+      <div className="pulse-card-header px-4 py-3 border-b border-daintree-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded-[2px] pulse-skeleton-shimmer shrink-0" />
           <div className="h-4 pulse-skeleton-shimmer rounded w-36" />
@@ -264,7 +264,7 @@ function PulseSkeleton({ className }: { className?: string }) {
 
         <div className="h-3 pulse-skeleton-shimmer rounded w-72" />
 
-        <div className="border-t border-canopy-border pt-3">
+        <div className="border-t border-daintree-border pt-3">
           <div className="flex items-center gap-2">
             <div className="h-5 w-16 rounded-full pulse-skeleton-shimmer" />
             <div className="h-5 w-12 rounded-full pulse-skeleton-shimmer" />
@@ -273,7 +273,7 @@ function PulseSkeleton({ className }: { className?: string }) {
           </div>
         </div>
 
-        <div className="border-t border-canopy-border pt-3">
+        <div className="border-t border-daintree-border pt-3">
           <div className="flex items-center gap-4">
             <div className="h-4 pulse-skeleton-shimmer rounded w-20" />
             <div className="h-4 pulse-skeleton-shimmer rounded w-24" />
@@ -287,7 +287,7 @@ function PulseSkeleton({ className }: { className?: string }) {
 
 function HealthSectionSkeleton() {
   return (
-    <div className="border-t border-canopy-border pt-3 animate-pulse-delayed">
+    <div className="border-t border-daintree-border pt-3 animate-pulse-delayed">
       <div className="flex items-center gap-2">
         <div className="h-5 pulse-skeleton-shimmer rounded-full w-16" />
         <div className="h-5 pulse-skeleton-shimmer rounded-full w-12" />
@@ -300,8 +300,8 @@ function HealthSectionSkeleton() {
 
 function NoRemoteHint() {
   return (
-    <div className="border-t border-canopy-border pt-3">
-      <div className="flex items-center gap-2 text-xs text-canopy-text/75">
+    <div className="border-t border-daintree-border pt-3">
+      <div className="flex items-center gap-2 text-xs text-daintree-text/75">
         <Github className="w-3.5 h-3.5" />
         <span>Connect a GitHub remote for CI status, issues, and PRs</span>
       </div>
@@ -311,8 +311,8 @@ function NoRemoteHint() {
 
 function OfflineHint() {
   return (
-    <div className="border-t border-canopy-border pt-3">
-      <div className="flex items-center gap-2 text-xs text-canopy-text/75">
+    <div className="border-t border-daintree-border pt-3">
+      <div className="flex items-center gap-2 text-xs text-daintree-text/75">
         <WifiOff className="w-3.5 h-3.5" />
         <span>Offline — GitHub status unavailable</span>
       </div>
@@ -365,11 +365,11 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "pulse-card p-4 rounded-[var(--radius-lg)] border border-canopy-border",
+          "pulse-card p-4 rounded-[var(--radius-lg)] border border-daintree-border",
           className
         )}
       >
-        <div className="flex items-center gap-2 text-canopy-text/75">
+        <div className="flex items-center gap-2 text-daintree-text/75">
           <GitBranch className="w-4 h-4 text-status-info" aria-hidden="true" />
           <span className="text-xs">
             New repository — make your first commit to start tracking activity
@@ -385,17 +385,17 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "pulse-card p-4 rounded-[var(--radius-lg)] border border-canopy-border",
+          "pulse-card p-4 rounded-[var(--radius-lg)] border border-daintree-border",
           className
         )}
       >
         <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2 text-canopy-text/75" role="alert">
+          <div className="flex items-center gap-2 text-daintree-text/75" role="alert">
             <AlertCircle className="w-4 h-4 text-status-error" aria-hidden="true" />
             <span className="text-xs">{error}</span>
             <button
               onClick={handleRefresh}
-              className="pulse-control ml-auto rounded-md p-1 text-canopy-text/55 transition-colors hover:text-canopy-text/80"
+              className="pulse-control ml-auto rounded-md p-1 text-daintree-text/55 transition-colors hover:text-daintree-text/80"
               aria-label="Retry now"
             >
               <RefreshCw className="w-3 h-3" aria-hidden="true" />
@@ -403,7 +403,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           </div>
           {isRetrying && (
             <div
-              className="flex items-center gap-2 text-canopy-text/55"
+              className="flex items-center gap-2 text-daintree-text/55"
               role="status"
               aria-live="polite"
             >
@@ -425,15 +425,15 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   return (
     <div
       className={cn(
-        "pulse-card w-fit rounded-[var(--radius-lg)] border border-canopy-border",
+        "pulse-card w-fit rounded-[var(--radius-lg)] border border-daintree-border",
         className
       )}
     >
-      <div className="pulse-card-header px-4 py-3 border-b border-canopy-border flex items-center justify-between">
+      <div className="pulse-card-header px-4 py-3 border-b border-daintree-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <ProjectPulseIcon className="w-4 h-4 text-status-success" />
-          <span className="text-sm font-medium text-canopy-text/90">{title}</span>
-          {isLoading && <Spinner size="xs" className="text-canopy-text/55" />}
+          <span className="text-sm font-medium text-daintree-text/90">{title}</span>
+          {isLoading && <Spinner size="xs" className="text-daintree-text/55" />}
         </div>
 
         <div className="flex items-center gap-2">
@@ -451,8 +451,8 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
                   className={cn(
                     "rounded-md px-2 py-1 transition-colors",
                     isActive
-                      ? "text-canopy-accent border border-canopy-accent/25"
-                      : "pulse-control text-canopy-text/55 hover:text-canopy-text/80"
+                      ? "text-daintree-accent border border-daintree-accent/25"
+                      : "pulse-control text-daintree-text/55 hover:text-daintree-text/80"
                   )}
                   style={
                     isActive
@@ -475,7 +475,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <button
             onClick={handleRefresh}
             disabled={isLoading}
-            className="pulse-control rounded-md p-1.5 text-canopy-text/55 transition-colors hover:text-canopy-text/80 disabled:opacity-50"
+            className="pulse-control rounded-md p-1.5 text-daintree-text/55 transition-colors hover:text-daintree-text/80 disabled:opacity-50"
             aria-label="Refresh"
           >
             <RefreshCw className={cn("w-3 h-3", isLoading && "animate-spin")} />
@@ -486,10 +486,10 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       <div className="p-4 space-y-4">
         <PulseHeatmap cells={pulse.heatmap} rangeDays={pulse.rangeDays} />
 
-        <p className="text-xs text-canopy-text/80">{getCoachLine(pulse)}</p>
+        <p className="text-xs text-daintree-text/80">{getCoachLine(pulse)}</p>
 
         {health && !health.error && health.repoUrl ? (
-          <div className="border-t border-canopy-border pt-3">
+          <div className="border-t border-daintree-border pt-3">
             <HealthSignals health={health} rangeDays={rangeDays} />
           </div>
         ) : healthLoading ? (
@@ -500,7 +500,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <OfflineHint />
         ) : null}
 
-        <div className="border-t border-canopy-border pt-3">
+        <div className="border-t border-daintree-border pt-3">
           <PulseSummary pulse={pulse} />
         </div>
       </div>

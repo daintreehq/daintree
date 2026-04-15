@@ -7,8 +7,8 @@ import http from "http";
  * Simulates the real-world scenario:
  * 1. App redirects to external IdP (fake HTTP server)
  * 2. User "authenticates" (fake IdP auto-approves)
- * 3. IdP redirects to Canopy's loopback server with code + state
- * 4. Canopy captures the callback and builds the original callback URL
+ * 3. IdP redirects to Daintree's loopback server with code + state
+ * 4. Daintree captures the callback and builds the original callback URL
  *
  * No real Keycloak, no real browser — pure HTTP round-trip.
  */
@@ -21,7 +21,7 @@ vi.mock("electron", () => ({
     // Instead of opening a real browser, simulate the IdP redirect chain
     openExternal: vi.fn(async (url: string) => {
       capturedOpenExternalUrl = url;
-      // Parse the auth URL to extract redirect_uri (Canopy's loopback)
+      // Parse the auth URL to extract redirect_uri (Daintree's loopback)
       const parsed = new URL(url);
       const redirectUri = parsed.searchParams.get("redirect_uri");
       const state = parsed.searchParams.get("state");

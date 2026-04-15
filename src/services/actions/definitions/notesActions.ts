@@ -45,7 +45,7 @@ export function registerNotesActions(actions: ActionRegistry, _callbacks: Action
         | undefined) ?? {};
 
       if (!title) {
-        window.dispatchEvent(new CustomEvent("canopy:open-notes-palette"));
+        window.dispatchEvent(new CustomEvent("daintree:open-notes-palette"));
         return;
       }
 
@@ -114,7 +114,7 @@ export function registerNotesActions(actions: ActionRegistry, _callbacks: Action
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      window.dispatchEvent(new CustomEvent("canopy:open-notes-palette"));
+      window.dispatchEvent(new CustomEvent("daintree:open-notes-palette"));
     },
   }));
 
@@ -177,7 +177,7 @@ export function registerNotesActions(actions: ActionRegistry, _callbacks: Action
     run: async (args: unknown) => {
       const { notePath } = args as RevealArgs;
       window.dispatchEvent(
-        new CustomEvent("canopy:open-notes-palette", {
+        new CustomEvent("daintree:open-notes-palette", {
           detail: { highlightNotePath: notePath },
         })
       );

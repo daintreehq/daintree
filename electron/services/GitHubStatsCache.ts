@@ -25,7 +25,7 @@ function getUserDataPath(): string {
   } catch {
     // Priority 3: Platform-specific fallback to standard application data directory
     // This handles edge cases where Electron is unavailable but we still want caching
-    const appName = "Canopy";
+    const appName = "Daintree";
     const homedir = os.homedir();
 
     // Validate homedir is available (can fail in constrained environments)

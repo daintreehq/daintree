@@ -144,7 +144,7 @@ export function FixedDropdown({
       <div
         ref={contentRef}
         className={cn(
-          "absolute pointer-events-auto overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-canopy-text",
+          "absolute pointer-events-auto overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-daintree-text",
           "transition-[opacity,transform]",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
           isVisible

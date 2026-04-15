@@ -1,6 +1,6 @@
 /**
  * Command registry and execution service.
- * Manages registration, retrieval, and execution of Canopy commands.
+ * Manages registration, retrieval, and execution of Daintree commands.
  */
 
 import type {

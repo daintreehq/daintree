@@ -408,7 +408,7 @@ export class McpServerService {
 
   private createSessionServer(): Server {
     const server = new Server(
-      { name: "Canopy", version: "1.0.0" },
+      { name: "Daintree", version: "1.0.0" },
       { capabilities: { tools: {} } }
     );
 
@@ -522,7 +522,7 @@ export class McpServerService {
 
     properties["_meta"] = {
       type: "object",
-      description: "Reserved Canopy MCP metadata.",
+      description: "Reserved Daintree MCP metadata.",
       properties: {
         confirmed: {
           type: "boolean",

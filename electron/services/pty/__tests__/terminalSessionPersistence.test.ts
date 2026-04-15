@@ -44,7 +44,7 @@ describe("terminalSessionPersistence", () => {
   const previousUserData = process.env.DAINTREE_USER_DATA;
 
   beforeEach(async () => {
-    userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "canopy-session-persist-"));
+    userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "daintree-session-persist-"));
     process.env.DAINTREE_USER_DATA = userDataDir;
   });
 

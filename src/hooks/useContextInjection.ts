@@ -341,11 +341,11 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         });
 
         try {
-          localStorage.setItem("canopy:context-injected-once", "true");
+          localStorage.setItem("daintree:context-injected-once", "true");
         } catch {
           // silently fail
         }
-        window.dispatchEvent(new CustomEvent("canopy:context-injected"));
+        window.dispatchEvent(new CustomEvent("daintree:context-injected"));
         window.electron?.notification?.playUiEvent?.("context-injected").catch(() => {});
 
         if (currentErrorIdRef.current) {

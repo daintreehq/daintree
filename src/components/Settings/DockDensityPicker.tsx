@@ -20,15 +20,15 @@ export function DockDensityPicker() {
           onClick={() => setDockDensity(option.id)}
           className={cn(
             "flex-1 px-3 py-2 rounded-[var(--radius-md)] border text-sm transition-colors text-left",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
             dockDensity === option.id
-              ? "border-canopy-accent bg-canopy-accent/10 text-canopy-text"
-              : "border-canopy-border bg-canopy-bg text-text-secondary hover:border-canopy-text/30 hover:text-canopy-text"
+              ? "border-daintree-accent bg-daintree-accent/10 text-daintree-text"
+              : "border-daintree-border bg-daintree-bg text-text-secondary hover:border-daintree-text/30 hover:text-daintree-text"
           )}
           aria-pressed={dockDensity === option.id}
         >
           <div className="font-medium">{option.label}</div>
-          <div className="text-xs text-canopy-text/50 mt-0.5">{option.description}</div>
+          <div className="text-xs text-daintree-text/50 mt-0.5">{option.description}</div>
         </button>
       ))}
     </div>

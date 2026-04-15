@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Canopy CLI — opens a directory as a project in the Canopy app.
-# Usage: canopy [directory]   (defaults to current directory)
+# Daintree CLI — opens a directory as a project in the Daintree app.
+# Usage: daintree [directory]   (defaults to current directory)
 set -euo pipefail
 
 resolve_script_path() {
@@ -50,41 +50,41 @@ get_version() {
 case "${1:-}" in
   --help|-h)
     cat <<'USAGE'
-Usage: canopy [directory]
+Usage: daintree [directory]
 
-Open a directory as a project in Canopy.
+Open a directory as a project in Daintree.
 
 Arguments:
   directory    Path to open (defaults to current directory)
 
 Options:
   -h, --help       Show this help message
-  -v, --version    Show the Canopy CLI version
-  -s, --status     Check if Canopy is running
+  -v, --version    Show the Daintree CLI version
+  -s, --status     Check if Daintree is running
 
 Examples:
-  canopy .             Open the current directory
-  canopy ~/projects/my-app   Open a specific project
+  daintree .             Open the current directory
+  daintree ~/projects/my-app   Open a specific project
 USAGE
     exit 0
     ;;
   --version|-v)
-    echo "canopy $(get_version)"
+    echo "daintree $(get_version)"
     exit 0
     ;;
   --status|-s)
     if [[ "$(uname)" == "Darwin" ]]; then
-      if pgrep -f "Canopy.app/Contents/MacOS" &>/dev/null; then
-        echo "Canopy is running"
+      if pgrep -f "Daintree.app/Contents/MacOS" &>/dev/null; then
+        echo "Daintree is running"
         exit 0
       fi
     else
-      if pgrep -f "canopy-app" &>/dev/null; then
-        echo "Canopy is running"
+      if pgrep -f "daintree-app" &>/dev/null; then
+        echo "Daintree is running"
         exit 0
       fi
     fi
-    echo "Canopy is not running"
+    echo "Daintree is not running"
     exit 1
     ;;
 esac
@@ -94,11 +94,11 @@ TARGET="${1:-.}"
 ABSOLUTE_PATH="$(cd -- "$TARGET" 2>/dev/null && pwd -P)" || ABSOLUTE_PATH=""
 
 if [[ -z "$ABSOLUTE_PATH" || ! -d "$ABSOLUTE_PATH" ]]; then
-  echo "canopy: '$TARGET' is not a directory" >&2
+  echo "daintree: '$TARGET' is not a directory" >&2
   exit 1
 fi
 
-# --- macOS: locate the Canopy.app bundle ---
+# --- macOS: locate the Daintree.app bundle ---
 if [[ "$(uname)" == "Darwin" ]]; then
   # Prefer deriving the app path from the installed symlink target.
   APP_PATH=""
@@ -115,8 +115,8 @@ if [[ "$(uname)" == "Darwin" ]]; then
   # Fall back to common locations.
   if [[ -z "$APP_PATH" ]]; then
     for candidate in \
-      "$HOME/Applications/Canopy.app" \
-      "/Applications/Canopy.app"; do
+      "$HOME/Applications/Daintree.app" \
+      "/Applications/Daintree.app"; do
       if [[ -d "$candidate" ]]; then
         APP_PATH="$candidate"
         break
@@ -125,7 +125,7 @@ if [[ "$(uname)" == "Darwin" ]]; then
   fi
 
   if [[ -z "$APP_PATH" ]]; then
-    echo "canopy: Canopy.app not found. Please install Canopy first." >&2
+    echo "daintree: Daintree.app not found. Please install Daintree first." >&2
     exit 1
   fi
 
@@ -134,32 +134,32 @@ if [[ "$(uname)" == "Darwin" ]]; then
   exit 0
 fi
 
-# --- Linux: locate the canopy-app binary ---
+# --- Linux: locate the daintree-app binary ---
 DAINTREE_BIN=""
 
-# 1. Script-relative: works for both .deb (/opt/Canopy/) and AppImage FUSE mount
-_candidate="$(dirname "$(dirname "$SCRIPT_PATH")")/canopy-app"
+# 1. Script-relative: works for both .deb (/opt/Daintree/) and AppImage FUSE mount
+_candidate="$(dirname "$(dirname "$SCRIPT_PATH")")/daintree-app"
 if [[ -x "$_candidate" ]]; then
   DAINTREE_BIN="$_candidate"
 fi
 
 # 2. $APPDIR set by AppImage runtime — points to the FUSE mount root
-if [[ -z "$DAINTREE_BIN" && -n "${APPDIR:-}" && -x "$APPDIR/canopy-app" ]]; then
-  DAINTREE_BIN="$APPDIR/canopy-app"
+if [[ -z "$DAINTREE_BIN" && -n "${APPDIR:-}" && -x "$APPDIR/daintree-app" ]]; then
+  DAINTREE_BIN="$APPDIR/daintree-app"
 fi
 
 # 3. Hardcoded .deb install location
-if [[ -z "$DAINTREE_BIN" && -x "/opt/Canopy/canopy-app" ]]; then
-  DAINTREE_BIN="/opt/Canopy/canopy-app"
+if [[ -z "$DAINTREE_BIN" && -x "/opt/Daintree/daintree-app" ]]; then
+  DAINTREE_BIN="/opt/Daintree/daintree-app"
 fi
 
 # 4. PATH lookup (last resort)
-if [[ -z "$DAINTREE_BIN" ]] && command -v canopy-app &>/dev/null; then
-  DAINTREE_BIN="$(command -v canopy-app)"
+if [[ -z "$DAINTREE_BIN" ]] && command -v daintree-app &>/dev/null; then
+  DAINTREE_BIN="$(command -v daintree-app)"
 fi
 
 if [[ -z "$DAINTREE_BIN" ]]; then
-  echo "canopy: Canopy executable not found." >&2
+  echo "daintree: Daintree executable not found." >&2
   exit 1
 fi
 

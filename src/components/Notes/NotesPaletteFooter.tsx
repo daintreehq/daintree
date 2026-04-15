@@ -6,7 +6,7 @@ interface NotesPaletteFooterProps {
 
 export function NotesPaletteFooter({ hasSelection }: NotesPaletteFooterProps) {
   return (
-    <div className="px-3 py-2 border-t border-canopy-border bg-canopy-sidebar/50 text-xs text-canopy-text/50 flex items-center gap-4 shrink-0">
+    <div className="px-3 py-2 border-t border-daintree-border bg-daintree-sidebar/50 text-xs text-daintree-text/50 flex items-center gap-4 shrink-0">
       <PaletteFooterHints
         primaryHint={{ keys: ["↵"], label: "to select" }}
         hints={[

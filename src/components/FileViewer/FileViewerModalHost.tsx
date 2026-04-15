@@ -36,7 +36,7 @@ export function FileViewerModalHost() {
     };
 
     const controller = new AbortController();
-    window.addEventListener("canopy:view-file", handleOpen, { signal: controller.signal });
+    window.addEventListener("daintree:view-file", handleOpen, { signal: controller.signal });
     return () => controller.abort();
   }, []);
 

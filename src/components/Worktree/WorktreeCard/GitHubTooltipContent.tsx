@@ -19,7 +19,7 @@ interface TooltipLoadingProps {
 
 export const TooltipLoading = memo(function TooltipLoading({ type }: TooltipLoadingProps) {
   return (
-    <div className="flex items-center gap-2 text-canopy-text/70 py-1">
+    <div className="flex items-center gap-2 text-daintree-text/70 py-1">
       <Spinner size="xs" />
       <span className="text-xs">Loading {type} details...</span>
     </div>
@@ -59,14 +59,14 @@ export const IssueTooltipContent = memo(function IssueTooltipContent({
     <div className="space-y-2 max-w-[280px]">
       <div className="flex items-start gap-2">
         <span className={cn("text-xs font-medium shrink-0", stateColor)}>#{data.number}</span>
-        <span className="text-xs text-canopy-text/90 line-clamp-2">{data.title}</span>
+        <span className="text-xs text-daintree-text/90 line-clamp-2">{data.title}</span>
       </div>
 
       {data.bodyExcerpt && (
-        <p className="text-[11px] text-canopy-text/60 line-clamp-3">{data.bodyExcerpt}</p>
+        <p className="text-[11px] text-daintree-text/60 line-clamp-3">{data.bodyExcerpt}</p>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-canopy-text/50">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-daintree-text/50">
         <span className="flex items-center gap-1">
           <User className="w-3 h-3" />
           {data.author.login}
@@ -93,7 +93,9 @@ export const IssueTooltipContent = memo(function IssueTooltipContent({
             <LabelBadge key={label.name} name={label.name} color={label.color} />
           ))}
           {data.labels.length > 4 && (
-            <span className="text-[10px] text-canopy-text/40">+{data.labels.length - 4} more</span>
+            <span className="text-[10px] text-daintree-text/40">
+              +{data.labels.length - 4} more
+            </span>
           )}
         </div>
       )}
@@ -119,7 +121,7 @@ export const PRTooltipContent = memo(function PRTooltipContent({ data }: PRToolt
     <div className="space-y-2 max-w-[280px]">
       <div className="flex items-start gap-2">
         <span className={cn("text-xs font-medium shrink-0", stateColor)}>#{data.number}</span>
-        <span className="text-xs text-canopy-text/90 line-clamp-2">{data.title}</span>
+        <span className="text-xs text-daintree-text/90 line-clamp-2">{data.title}</span>
         <span
           className={cn(
             "text-[10px] px-1.5 py-0.5 rounded-full shrink-0 capitalize",
@@ -135,10 +137,10 @@ export const PRTooltipContent = memo(function PRTooltipContent({ data }: PRToolt
       </div>
 
       {data.bodyExcerpt && (
-        <p className="text-[11px] text-canopy-text/60 line-clamp-3">{data.bodyExcerpt}</p>
+        <p className="text-[11px] text-daintree-text/60 line-clamp-3">{data.bodyExcerpt}</p>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-canopy-text/50">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-daintree-text/50">
         <span className="flex items-center gap-1">
           <User className="w-3 h-3" />
           {data.author.login}
@@ -165,7 +167,9 @@ export const PRTooltipContent = memo(function PRTooltipContent({ data }: PRToolt
             <LabelBadge key={label.name} name={label.name} color={label.color} />
           ))}
           {data.labels.length > 4 && (
-            <span className="text-[10px] text-canopy-text/40">+{data.labels.length - 4} more</span>
+            <span className="text-[10px] text-daintree-text/40">
+              +{data.labels.length - 4} more
+            </span>
           )}
         </div>
       )}

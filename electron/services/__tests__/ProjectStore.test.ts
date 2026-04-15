@@ -93,7 +93,7 @@ describe("ProjectStore", () => {
   });
 
   describe("getProjectStateDir", () => {
-    const projectsConfigDir = path.resolve("/home/user/.config/canopy/projects");
+    const projectsConfigDir = path.resolve("/home/user/.config/daintree/projects");
 
     it("returns valid path for valid hex ID", () => {
       const validId = "a".repeat(64);
@@ -138,7 +138,7 @@ describe("ProjectStore", () => {
   });
 
   describe("path safety integration", () => {
-    const projectsConfigDir = path.resolve("/home/user/.config/canopy/projects");
+    const projectsConfigDir = path.resolve("/home/user/.config/daintree/projects");
 
     it("prevents accessing files outside projectsConfigDir", () => {
       const attacks = [
@@ -546,7 +546,7 @@ describe("relocateProject — ID derivation helpers (smoke tests only)", () => {
   });
 
   it("state dir path is computed correctly for new project ID", () => {
-    const projectsConfigDir = path.resolve("/home/user/.config/canopy/projects");
+    const projectsConfigDir = path.resolve("/home/user/.config/daintree/projects");
 
     const newPath = "/Users/foo/new-location";
     const newId = generateProjectId(newPath);

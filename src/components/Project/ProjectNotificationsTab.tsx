@@ -56,7 +56,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
   };
 
   if (!globalSettings) {
-    return <div className="text-sm text-canopy-text/50">Loading global settings…</div>;
+    return <div className="text-sm text-daintree-text/50">Loading global settings…</div>;
   }
 
   const effective = (key: keyof NotificationSettings) =>
@@ -64,7 +64,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
 
   return (
     <div className="space-y-6">
-      <div className="text-sm text-canopy-text/60 mb-4">
+      <div className="text-sm text-daintree-text/60 mb-4">
         Override global notification settings for this project. Unchecked overrides inherit the
         global default.
       </div>
@@ -116,7 +116,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
               onChange={(v) => setOverride("waitingEnabled", v)}
             />
             {(effective("waitingEnabled") as boolean) && (
-              <div className="ml-6 space-y-3 border-l border-canopy-border pl-4 mt-2">
+              <div className="ml-6 space-y-3 border-l border-daintree-border pl-4 mt-2">
                 <OverrideRow
                   label="Escalate if still waiting"
                   description="Fire an additional OS notification if a docked agent remains waiting"
@@ -159,7 +159,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
                       onChange={(e) =>
                         setOverride("waitingEscalationDelayMs", Number(e.target.value))
                       }
-                      className="px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                      className="px-3 py-2 text-sm rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg text-daintree-text focus:border-daintree-accent focus:outline-none transition-colors"
                     >
                       {ESCALATION_DELAY_OPTIONS.map(({ value, label }) => (
                         <option key={value} value={value}>
@@ -237,7 +237,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
                   <select
                     value={effective(field) as string}
                     onChange={(e) => setOverride(field, e.target.value)}
-                    className="flex-1 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                    className="flex-1 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg text-daintree-text focus:border-daintree-accent focus:outline-none transition-colors"
                   >
                     {AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => (
                       <option key={file} value={file}>
@@ -248,7 +248,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
                   <button
                     onClick={() => handlePreview(effective(field) as string)}
                     title={`Preview ${label.toLowerCase()}`}
-                    className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text hover:bg-tint/[0.06] transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg text-daintree-text hover:bg-tint/[0.06] transition-colors"
                   >
                     <Play className="h-3.5 w-3.5" />
                     Preview
@@ -282,15 +282,15 @@ function OverrideRow({
           type="checkbox"
           checked={isOverridden}
           onChange={(e) => onToggleOverride(e.target.checked)}
-          className="rounded border-canopy-border text-canopy-accent focus:ring-canopy-accent"
+          className="rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent"
         />
-        <span className="text-sm font-medium text-canopy-text">{label}</span>
+        <span className="text-sm font-medium text-daintree-text">{label}</span>
         {!isOverridden && (
-          <span className="text-xs text-canopy-text/40">(using global default)</span>
+          <span className="text-xs text-daintree-text/40">(using global default)</span>
         )}
       </label>
       {description && !isOverridden && (
-        <p className="text-xs text-canopy-text/50 ml-6">{description}</p>
+        <p className="text-xs text-daintree-text/50 ml-6">{description}</p>
       )}
       {isOverridden && <div className="ml-6">{children}</div>}
     </div>

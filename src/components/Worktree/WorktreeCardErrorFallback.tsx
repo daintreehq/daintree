@@ -5,7 +5,7 @@ export function WorktreeCardErrorFallback({ error, resetError }: ErrorFallbackPr
   return (
     <div className="flex items-center gap-2 px-4 py-3 border-b border-divider bg-[color-mix(in_oklab,var(--color-status-error)_6%,transparent)]">
       <TriangleAlert className="size-4 shrink-0 text-status-error" />
-      <span className="text-xs text-canopy-text/70 truncate flex-1">
+      <span className="text-xs text-daintree-text/70 truncate flex-1">
         {import.meta.env.DEV ? error.message : "Card failed to render"}
       </span>
       <button

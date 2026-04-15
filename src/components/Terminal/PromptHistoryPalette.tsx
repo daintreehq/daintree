@@ -67,19 +67,19 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
         className={cn(
           "flex items-center justify-between gap-2 px-3 py-2 rounded-[var(--radius-md)] cursor-pointer text-sm",
           isSelected
-            ? "bg-canopy-accent/15 text-canopy-text"
-            : "text-canopy-text/80 hover:bg-canopy-sidebar"
+            ? "bg-daintree-accent/15 text-daintree-text"
+            : "text-daintree-text/80 hover:bg-daintree-sidebar"
         )}
         onClick={() => selectEntry(item)}
       >
         <span className="truncate font-mono text-xs">{truncatePrompt(item.prompt)}</span>
         <div className="flex items-center gap-2 shrink-0">
           {item.agentId && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-canopy-border text-canopy-text/60">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-daintree-border text-daintree-text/60">
               {item.agentId}
             </span>
           )}
-          <span className="text-[10px] text-canopy-text/40">
+          <span className="text-[10px] text-daintree-text/40">
             {formatRelativeTime(item.addedAt)}
           </span>
         </div>
@@ -92,16 +92,16 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
     <div className="flex items-center justify-between w-full">
       <div className="flex items-center gap-4">
         <span>
-          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60">
             ↑
           </kbd>
-          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60 ml-1">
+          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60 ml-1">
             ↓
           </kbd>
           <span className="ml-1.5">navigate</span>
         </span>
         <span>
-          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+          <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60">
             Enter
           </kbd>
           <span className="ml-1.5">select</span>
@@ -110,7 +110,7 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
       <button
         type="button"
         onClick={toggleScope}
-        className="text-[11px] px-2 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border/50 hover:bg-canopy-border text-canopy-text/60 hover:text-canopy-text/80 transition-colors"
+        className="text-[11px] px-2 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border/50 hover:bg-daintree-border text-daintree-text/60 hover:text-daintree-text/80 transition-colors"
       >
         {scope === "project" ? "This project" : "All projects"}
       </button>
@@ -140,7 +140,7 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
       emptyMessage="No history yet"
       noMatchMessage="No prompts match your search"
       emptyContent={
-        <p className="mt-2 text-xs text-canopy-text/40">
+        <p className="mt-2 text-xs text-daintree-text/40">
           History appears here as you send prompts to agents.
         </p>
       }

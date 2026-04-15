@@ -1,6 +1,6 @@
 # Theme Token Reference
 
-Complete reference for Canopy's semantic token system. Every built-in and custom theme must provide values for all tokens. The `createCanopyTokens()` helper derives sensible defaults for most tokens from a smaller set of required palette values.
+Complete reference for Daintree's semantic token system. Every built-in and custom theme must provide values for all tokens. The `createCanopyTokens()` helper derives sensible defaults for most tokens from a smaller set of required palette values.
 
 ## Token Layers
 

@@ -690,7 +690,7 @@ export function registerPreferencesActions(
       }
 
       const helpPrompt =
-        "I need help with Canopy, an Electron-based IDE for orchestrating AI coding agents. Please briefly tell me how you can help.";
+        "I need help with Daintree, an Electron-based IDE for orchestrating AI coding agents. Please briefly tell me how you can help.";
 
       const { actionService } = await import("@/services/ActionService");
       const result = await actionService.dispatch<{ terminalId: string | null }>(
@@ -740,7 +740,7 @@ export function registerPreferencesActions(
   actions.set("app.quit", () => ({
     id: "app.quit",
     title: "Quit App",
-    description: "Quit Canopy",
+    description: "Quit Daintree",
     category: "app",
     kind: "command",
     danger: "confirm",
@@ -753,7 +753,7 @@ export function registerPreferencesActions(
   actions.set("app.forceQuit", () => ({
     id: "app.forceQuit",
     title: "Force Quit App",
-    description: "Force quit Canopy immediately (no graceful shutdown)",
+    description: "Force quit Daintree immediately (no graceful shutdown)",
     category: "app",
     kind: "command",
     danger: "confirm",

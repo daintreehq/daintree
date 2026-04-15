@@ -1,8 +1,8 @@
-# Canopy Help System
+# Daintree Help System
 
-Multi-agent help assistant workspace. Runs any supported AI coding agent (Claude Code, Gemini CLI, Codex CLI) in a sandboxed, read-only mode that answers user questions about Canopy using bundled documentation and a live MCP documentation server.
+Multi-agent help assistant workspace. Runs any supported AI coding agent (Claude Code, Gemini CLI, Codex CLI) in a sandboxed, read-only mode that answers user questions about Daintree using bundled documentation and a live MCP documentation server.
 
-Canopy launches agents in this directory automatically via the help panel — users don't need to `cd` here manually.
+Daintree launches agents in this directory automatically via the help panel — users don't need to `cd` here manually.
 
 ## Quick Start
 
@@ -14,7 +14,7 @@ gemini          # Gemini CLI
 codex           # Codex CLI
 ```
 
-Each agent auto-discovers its instruction file and config from the working directory, constrains itself to help-assistant mode, and connects to the `canopy-docs` MCP server for live documentation search.
+Each agent auto-discovers its instruction file and config from the working directory, constrains itself to help-assistant mode, and connects to the `daintree-docs` MCP server for live documentation search.
 
 ## Architecture
 
@@ -51,7 +51,7 @@ Adding a new agent requires three things:
 
 All three prompt files (`CLAUDE.md`, `GEMINI.md`, `AGENTS.md`) share the same core instructions with minor formatting differences per agent:
 
-- **Role override:** "You are a Canopy help assistant, NOT a general-purpose coding agent"
+- **Role override:** "You are a Daintree help assistant, NOT a general-purpose coding agent"
 - **Answer workflow:** Search via MCP (only documentation source), never fabricate
 - **Tone:** Concise, actionable, grounded in documentation
 - **Scope boundary:** If a question is outside docs, search GitHub issues or offer to file one
@@ -81,7 +81,7 @@ Each agent is restricted to read-only operations plus `gh` CLI access for GitHub
 
 ## MCP Documentation Server
 
-All agents connect to the `canopy-docs` MCP server at `https://daintree.org/api/mcp`. This is an HTTP-based MCP server hosted on the Canopy website that provides live semantic search across all published documentation.
+All agents connect to the `daintree-docs` MCP server at `https://daintree.org/api/mcp`. This is an HTTP-based MCP server hosted on the Daintree website that provides live semantic search across all published documentation.
 
 **Tools exposed by the server:**
 
@@ -100,12 +100,12 @@ All documentation is served exclusively through MCP — there are no bundled fal
 - Claude and Codex read from the shared `.mcp.json` in the workspace root
 - Gemini has MCP configured inline in `.gemini/settings.json`
 
-## How Canopy Launches Help Agents
+## How Daintree Launches Help Agents
 
-The main Canopy app launches help agents by spawning the agent CLI process with this directory as the working directory. The agent auto-discovers its config files and enters help mode. From the app side, this is handled by the help panel and `agent.launch` action. The help panel provides a dedicated UI for interacting with the help agent within Canopy itself.
+The main Daintree app launches help agents by spawning the agent CLI process with this directory as the working directory. The agent auto-discovers its config files and enters help mode. From the app side, this is handled by the help panel and `agent.launch` action. The help panel provides a dedicated UI for interacting with the help agent within Daintree itself.
 
 ## Maintenance
 
-- **Updating docs:** All documentation is served via the `canopy-docs` MCP server — keep the website docs up-to-date. The only file in `docs/` is `issue-guidelines.md`.
+- **Updating docs:** All documentation is served via the `daintree-docs` MCP server — keep the website docs up-to-date. The only file in `docs/` is `issue-guidelines.md`.
 - **Adding an agent:** Create a system prompt file, config file, and `.gitignore` entry following the pattern of existing agents.
-- **Testing:** Run any agent command from this directory and ask it questions about Canopy features to verify it responds correctly and stays in help-assistant mode.
+- **Testing:** Run any agent command from this directory and ask it questions about Daintree features to verify it responds correctly and stays in help-assistant mode.

@@ -56,7 +56,7 @@ const CREATE_TABLES_SQL = `
 let sharedInstance: { sqlite: Database.Database; db: AppDb } | null = null;
 
 export function getDbPath(): string {
-  return path.join(app.getPath("userData"), "canopy.db");
+  return path.join(app.getPath("userData"), "daintree.db");
 }
 
 export function getBackupPath(): string {

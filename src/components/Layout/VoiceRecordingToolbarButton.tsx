@@ -65,10 +65,10 @@ export function VoiceRecordingToolbarButton({
             className={cn(
               "toolbar-icon-button relative transition-colors mr-0.5",
               isRecording
-                ? "text-canopy-text hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
+                ? "text-daintree-text hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
                 : status === "connecting"
-                  ? "text-canopy-text/60 hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
-                  : "text-canopy-accent hover:text-canopy-accent"
+                  ? "text-daintree-text/60 hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
+                  : "text-daintree-accent hover:text-daintree-accent"
             )}
             aria-label={tooltipTitle}
           >
@@ -93,7 +93,7 @@ export function VoiceRecordingToolbarButton({
         </TooltipTrigger>
         <TooltipContent side="bottom" className="text-center">
           <div className="font-medium">{tooltipTitle}</div>
-          {tooltipExtra && <div className="text-[11px] text-canopy-text/60">{tooltipExtra}</div>}
+          {tooltipExtra && <div className="text-[11px] text-daintree-text/60">{tooltipExtra}</div>}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>

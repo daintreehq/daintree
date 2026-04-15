@@ -18,7 +18,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (targetId) {
         window.dispatchEvent(
-          new CustomEvent("canopy:reload-browser", { detail: { id: targetId } })
+          new CustomEvent("daintree:reload-browser", { detail: { id: targetId } })
         );
       }
     },
@@ -38,7 +38,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
       window.dispatchEvent(
-        new CustomEvent("canopy:browser-navigate", { detail: { id: targetId, url } })
+        new CustomEvent("daintree:browser-navigate", { detail: { id: targetId, url } })
       );
     },
   }));
@@ -56,7 +56,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
-      window.dispatchEvent(new CustomEvent("canopy:browser-back", { detail: { id: targetId } }));
+      window.dispatchEvent(new CustomEvent("daintree:browser-back", { detail: { id: targetId } }));
     },
   }));
 
@@ -73,7 +73,9 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
-      window.dispatchEvent(new CustomEvent("canopy:browser-forward", { detail: { id: targetId } }));
+      window.dispatchEvent(
+        new CustomEvent("daintree:browser-forward", { detail: { id: targetId } })
+      );
     },
   }));
 
@@ -144,7 +146,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
       window.dispatchEvent(
-        new CustomEvent("canopy:browser-set-zoom", { detail: { id: targetId, zoomFactor } })
+        new CustomEvent("daintree:browser-set-zoom", { detail: { id: targetId, zoomFactor } })
       );
     },
   }));
@@ -163,7 +165,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
       window.dispatchEvent(
-        new CustomEvent("canopy:browser-capture-screenshot", { detail: { id: targetId } })
+        new CustomEvent("daintree:browser-capture-screenshot", { detail: { id: targetId } })
       );
     },
   }));
@@ -182,7 +184,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
       window.dispatchEvent(
-        new CustomEvent("canopy:browser-toggle-console", { detail: { id: targetId } })
+        new CustomEvent("daintree:browser-toggle-console", { detail: { id: targetId } })
       );
     },
   }));
@@ -201,7 +203,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
       window.dispatchEvent(
-        new CustomEvent("canopy:browser-clear-console", { detail: { id: targetId } })
+        new CustomEvent("daintree:browser-clear-console", { detail: { id: targetId } })
       );
     },
   }));
@@ -220,7 +222,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (!targetId) return;
       window.dispatchEvent(
-        new CustomEvent("canopy:browser-toggle-devtools", { detail: { id: targetId } })
+        new CustomEvent("daintree:browser-toggle-devtools", { detail: { id: targetId } })
       );
     },
   }));

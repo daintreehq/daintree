@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { X, ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CanopyIcon } from "@/components/icons/CanopyIcon";
+import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { HelpAgentPicker } from "./HelpAgentPicker";
 import {
@@ -19,7 +19,7 @@ import type { TerminalType } from "@/types";
 
 const RESIZE_STEP = 10;
 
-const HELP_PROMPT = "I need help with Canopy. Please briefly tell me how you can help.";
+const HELP_PROMPT = "I need help with Daintree. Please briefly tell me how you can help.";
 
 function resolveAssistantModel(agentId: string): string | undefined {
   const settings = useAgentSettingsStore.getState().settings;
@@ -223,8 +223,8 @@ export function HelpPanel() {
     <div
       ref={panelRef}
       className={cn(
-        "flex flex-col h-full bg-canopy-bg relative",
-        "border-l border-canopy-border shadow-2xl"
+        "flex flex-col h-full bg-daintree-bg relative",
+        "border-l border-daintree-border shadow-2xl"
       )}
       style={{ width }}
     >
@@ -236,35 +236,35 @@ export function HelpPanel() {
         tabIndex={0}
         className={cn(
           "absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10",
-          "hover:bg-canopy-accent/20 active:bg-canopy-accent/30 transition-colors",
-          isResizing && "bg-canopy-accent/30"
+          "hover:bg-daintree-accent/20 active:bg-daintree-accent/30 transition-colors",
+          isResizing && "bg-daintree-accent/30"
         )}
         onMouseDown={handleResizeStart}
         onKeyDown={handleResizeKeyDown}
       />
 
       {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-canopy-border shrink-0">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-daintree-border shrink-0">
         {showTerminal && (
           <button
             type="button"
             onClick={handleBack}
-            className="p-1 rounded-[var(--radius-sm)] text-canopy-text/50 hover:text-canopy-text hover:bg-tint/8 transition-colors"
+            className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-daintree-text hover:bg-tint/8 transition-colors"
             aria-label="Back to agent picker"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
           </button>
         )}
         <div className="flex items-center min-w-0 flex-1">
-          <CanopyIcon className="w-4 h-4 text-canopy-text/50 shrink-0" />
-          <span className="ml-1.5 text-xs font-medium text-canopy-text/70 truncate">
-            Canopy Assistant
+          <DaintreeIcon className="w-4 h-4 text-daintree-text/50 shrink-0" />
+          <span className="ml-1.5 text-xs font-medium text-daintree-text/70 truncate">
+            Daintree Assistant
           </span>
         </div>
         <button
           type="button"
           onClick={handleClose}
-          className="p-1 rounded-[var(--radius-sm)] text-canopy-text/50 hover:text-canopy-text hover:bg-tint/8 transition-colors"
+          className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-daintree-text hover:bg-tint/8 transition-colors"
           aria-label="Close help panel"
         >
           <X className="w-3.5 h-3.5" />
@@ -289,7 +289,7 @@ export function HelpPanel() {
 
       {/* Bottom info bar */}
       {showTerminal && agentConfig && (
-        <div className="flex items-center justify-between px-3 py-1.5 border-t border-canopy-border shrink-0 text-[11px] text-canopy-text/40">
+        <div className="flex items-center justify-between px-3 py-1.5 border-t border-daintree-border shrink-0 text-[11px] text-daintree-text/40">
           <span className="flex items-center gap-1">
             Using
             <agentConfig.icon className="w-3.5 h-3.5" />
@@ -299,9 +299,9 @@ export function HelpPanel() {
             href="https://daintree.org"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1 hover:text-canopy-text/60 transition-colors"
+            className="flex items-center gap-1 hover:text-daintree-text/60 transition-colors"
           >
-            <CanopyIcon className="w-3.5 h-3.5" />
+            <DaintreeIcon className="w-3.5 h-3.5" />
             CanopyIDE.com
           </a>
         </div>

@@ -270,7 +270,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         className={cn(
           "flex flex-col h-full overflow-hidden group",
           location === "grid" && !isMaximized && "bg-surface",
-          (location === "dock" || isMaximized) && "bg-canopy-bg",
+          (location === "dock" || isMaximized) && "bg-daintree-bg",
           location === "grid" &&
             !isMaximized &&
             "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",

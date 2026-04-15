@@ -12,7 +12,7 @@ import type { AgentSettings, CliAvailability } from "@shared/types";
 import { generateAgentCommand, buildAgentLaunchFlags } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent, getAgentDisplayTitle } from "@/config/agents";
 
-const CLIPBOARD_DIR_NAME = "canopy-clipboard";
+const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 
 export interface LaunchAgentOptions {
   location?: AddPanelOptions["location"];

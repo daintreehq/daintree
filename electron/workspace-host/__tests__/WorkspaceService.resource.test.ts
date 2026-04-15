@@ -396,10 +396,10 @@ describe("WorkspaceService.runResourceAction", () => {
     });
   });
 
-  // --- canopy-remote wrapper generation ---
+  // --- daintree-remote wrapper generation ---
 
-  describe("canopy-remote wrapper generation on status ready", () => {
-    it("generates canopy-remote wrapper when status is ready with endpoint and connect command", async () => {
+  describe("daintree-remote wrapper generation on status ready", () => {
+    it("generates daintree-remote wrapper when status is ready with endpoint and connect command", async () => {
       createAndRegisterMonitor();
       await setupConfig({
         resource: {
@@ -423,7 +423,7 @@ describe("WorkspaceService.runResourceAction", () => {
       await service.runResourceAction("req-wrap1", "/test/worktree", "status");
 
       const canopyDir = pathJoin("/test/worktree", ".daintree");
-      const wrapperPath = pathJoin("/test/worktree", ".daintree", "canopy-remote");
+      const wrapperPath = pathJoin("/test/worktree", ".daintree", "daintree-remote");
       expect(mockMkdir).toHaveBeenCalledWith(canopyDir, { recursive: true });
       expect(mockWriteFile).toHaveBeenCalledWith(
         wrapperPath,
@@ -460,7 +460,7 @@ describe("WorkspaceService.runResourceAction", () => {
       await service.runResourceAction("req-wrap2", "/test/worktree", "status");
 
       expect(mockWriteFile).not.toHaveBeenCalledWith(
-        pathJoin("/test/worktree", ".daintree", "canopy-remote"),
+        pathJoin("/test/worktree", ".daintree", "daintree-remote"),
         expect.anything(),
         expect.anything()
       );
@@ -488,7 +488,7 @@ describe("WorkspaceService.runResourceAction", () => {
       await service.runResourceAction("req-wrap3", "/test/worktree", "status");
 
       expect(mockWriteFile).not.toHaveBeenCalledWith(
-        pathJoin("/test/worktree", ".daintree", "canopy-remote"),
+        pathJoin("/test/worktree", ".daintree", "daintree-remote"),
         expect.anything(),
         expect.anything()
       );
@@ -516,7 +516,7 @@ describe("WorkspaceService.runResourceAction", () => {
       await service.runResourceAction("req-wrap4", "/test/worktree", "status");
 
       expect(mockWriteFile).not.toHaveBeenCalledWith(
-        pathJoin("/test/worktree", ".daintree", "canopy-remote"),
+        pathJoin("/test/worktree", ".daintree", "daintree-remote"),
         expect.anything(),
         expect.anything()
       );

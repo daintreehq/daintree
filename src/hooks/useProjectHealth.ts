@@ -189,9 +189,9 @@ export function useProjectHealth(): UseProjectHealthReturn {
     const handleSidebarRefresh = () => {
       void refresh({ force: true });
     };
-    window.addEventListener("canopy:refresh-sidebar", handleSidebarRefresh);
+    window.addEventListener("daintree:refresh-sidebar", handleSidebarRefresh);
     return () => {
-      window.removeEventListener("canopy:refresh-sidebar", handleSidebarRefresh);
+      window.removeEventListener("daintree:refresh-sidebar", handleSidebarRefresh);
     };
   }, [refresh]);
 

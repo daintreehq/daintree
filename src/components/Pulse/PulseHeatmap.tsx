@@ -168,7 +168,7 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
                       }}
                       className={cn(
                         "rounded-[2px] shrink-0 border-0 p-0 cursor-default transition-[transform,background-color,box-shadow] duration-150",
-                        cell.isMostRecentActive && "ring-1 ring-canopy-accent/45 ring-offset-1"
+                        cell.isMostRecentActive && "ring-1 ring-daintree-accent/45 ring-offset-1"
                       )}
                       aria-label={`${formatted}: ${getTooltipText(cell)}`}
                       tabIndex={0}
@@ -176,7 +176,7 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
                   </TooltipTrigger>
                   <TooltipContent side="top" className="text-xs">
                     <span className="font-medium">{formatted}</span>
-                    <span className="ml-1 text-canopy-text/60">{getTooltipText(cell)}</span>
+                    <span className="ml-1 text-daintree-text/60">{getTooltipText(cell)}</span>
                   </TooltipContent>
                 </Tooltip>
               );

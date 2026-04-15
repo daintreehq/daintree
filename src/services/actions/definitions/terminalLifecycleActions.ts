@@ -156,7 +156,7 @@ export function registerTerminalLifecycleActions(
         usePanelStore.getState().updateTitle(targetId, name);
       } else {
         window.dispatchEvent(
-          new CustomEvent("canopy:rename-terminal", { detail: { id: targetId } })
+          new CustomEvent("daintree:rename-terminal", { detail: { id: targetId } })
         );
       }
     },
@@ -176,7 +176,7 @@ export function registerTerminalLifecycleActions(
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (targetId) {
         window.dispatchEvent(
-          new CustomEvent("canopy:open-terminal-info", { detail: { id: targetId } })
+          new CustomEvent("daintree:open-terminal-info", { detail: { id: targetId } })
         );
       }
     },
@@ -196,7 +196,7 @@ export function registerTerminalLifecycleActions(
       const targetId = terminalId ?? usePanelStore.getState().focusedId;
       if (targetId) {
         window.dispatchEvent(
-          new CustomEvent("canopy:open-terminal-info", { detail: { id: targetId } })
+          new CustomEvent("daintree:open-terminal-info", { detail: { id: targetId } })
         );
       }
     },

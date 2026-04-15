@@ -247,40 +247,42 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
   }, [commands, searchQuery, filterMode, hasOverride, isDisabledCommand]);
 
   if (isLoading) {
-    return <div className="text-sm text-canopy-text/60 text-center py-8">Loading commands...</div>;
+    return (
+      <div className="text-sm text-daintree-text/60 text-center py-8">Loading commands...</div>
+    );
   }
 
   if (commands.length === 0) {
     return (
-      <div className="text-sm text-canopy-text/60 text-center py-8">No commands available</div>
+      <div className="text-sm text-daintree-text/60 text-center py-8">No commands available</div>
     );
   }
 
   return (
     <div className="space-y-2">
       <div className="mb-4">
-        <h3 className="text-sm font-semibold text-canopy-text/80 mb-2">Command Overrides</h3>
-        <p className="text-xs text-canopy-text/60 select-text">
+        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2">Command Overrides</h3>
+        <p className="text-xs text-daintree-text/60 select-text">
           Customize command behavior for this project. Set default argument values, define custom
           prompts, or disable commands entirely.
         </p>
       </div>
 
       {/* Summary */}
-      <div className="text-xs text-canopy-text/60 mb-2">
+      <div className="text-xs text-daintree-text/60 mb-2">
         {overriddenCount} overridden, {disabledCount} disabled
       </div>
 
       {/* Search and Filters */}
       <div className="flex items-center gap-3 mb-3">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-canopy-text/60" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-daintree-text/60" />
           <input
             type="text"
             placeholder="Search commands..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-canopy-bg border border-border-strong rounded text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent"
+            className="w-full pl-9 pr-3 py-2 bg-daintree-bg border border-border-strong rounded text-sm text-daintree-text placeholder:text-text-muted focus:outline-none focus:border-daintree-accent"
             aria-label="Search commands"
           />
         </div>
@@ -292,8 +294,8 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
               className={cn(
                 "px-3 py-1.5 text-xs font-medium rounded transition-colors capitalize",
                 filterMode === mode
-                  ? "bg-canopy-accent text-canopy-bg"
-                  : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border"
+                  ? "bg-daintree-accent text-daintree-bg"
+                  : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
               )}
             >
               {mode}
@@ -304,7 +306,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
 
       <div className="space-y-1">
         {filteredCommands.length === 0 && (
-          <div className="text-sm text-canopy-text/60 text-center py-8">
+          <div className="text-sm text-daintree-text/60 text-center py-8">
             {searchQuery.trim()
               ? `No commands match "${searchQuery.trim()}"`
               : filterMode === "overridden"
@@ -328,21 +330,21 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
               className={cn(
                 "rounded-[var(--radius-md)] border transition-colors",
                 hasOverride(command.id)
-                  ? "border-canopy-accent/30 bg-canopy-accent/5"
-                  : "border-canopy-border bg-canopy-bg"
+                  ? "border-daintree-accent/30 bg-daintree-accent/5"
+                  : "border-daintree-border bg-daintree-bg"
               )}
             >
               <div className="flex items-center gap-2 p-3">
                 {canExpand && (
                   <button
                     onClick={() => toggleExpanded(command.id)}
-                    className="p-0.5 rounded hover:bg-canopy-border/50 transition-colors"
+                    className="p-0.5 rounded hover:bg-daintree-border/50 transition-colors"
                     aria-label={isExpanded ? "Collapse" : "Expand"}
                   >
                     {isExpanded ? (
-                      <ChevronDown className="h-4 w-4 text-canopy-text/60" />
+                      <ChevronDown className="h-4 w-4 text-daintree-text/60" />
                     ) : (
-                      <ChevronRight className="h-4 w-4 text-canopy-text/60" />
+                      <ChevronRight className="h-4 w-4 text-daintree-text/60" />
                     )}
                   </button>
                 )}
@@ -353,13 +355,13 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                     <span
                       className={cn(
                         "text-sm font-medium font-mono",
-                        isDisabled ? "text-canopy-text/40 line-through" : "text-canopy-text"
+                        isDisabled ? "text-daintree-text/40 line-through" : "text-daintree-text"
                       )}
                     >
                       {command.id}
                     </span>
                     {hasOverride(command.id) && (
-                      <span className="text-[11px] text-canopy-accent bg-canopy-accent/10 px-1.5 py-0.5 rounded font-medium">
+                      <span className="text-[11px] text-daintree-accent bg-daintree-accent/10 px-1.5 py-0.5 rounded font-medium">
                         {override?.prompt ? "Custom Prompt" : "Modified"}
                       </span>
                     )}
@@ -367,7 +369,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                   <p
                     className={cn(
                       "text-xs mt-0.5 select-text",
-                      isDisabled ? "text-canopy-text/30" : "text-canopy-text/60"
+                      isDisabled ? "text-daintree-text/30" : "text-daintree-text/60"
                     )}
                   >
                     {command.description}
@@ -424,7 +426,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
               </div>
 
               {isExpanded && !isDisabled && (
-                <div className="px-3 pb-3 pt-0 border-t border-canopy-border/50 mt-2">
+                <div className="px-3 pb-3 pt-0 border-t border-daintree-border/50 mt-2">
                   <div className="space-y-3 mt-3">
                     {/* Mode selector */}
                     <div className="flex gap-2">
@@ -434,8 +436,8 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                           className={cn(
                             "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
                             currentMode === "defaults"
-                              ? "bg-canopy-accent text-canopy-bg"
-                              : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border"
+                              ? "bg-daintree-accent text-daintree-bg"
+                              : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
                           )}
                         >
                           Default Values
@@ -446,8 +448,8 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                         className={cn(
                           "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
                           currentMode === "prompt"
-                            ? "bg-canopy-accent text-canopy-bg"
-                            : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border"
+                            ? "bg-daintree-accent text-daintree-bg"
+                            : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
                         )}
                       >
                         Custom Prompt
@@ -457,7 +459,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                     {/* Default Values Mode */}
                     {currentMode === "defaults" && hasArgs && (
                       <div className="space-y-3">
-                        <p className="text-xs text-canopy-text/60 select-text">
+                        <p className="text-xs text-daintree-text/60 select-text">
                           Set default values for command arguments. These values will be used when
                           the argument is not provided.
                         </p>
@@ -471,7 +473,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                               <div className="flex items-center gap-2">
                                 <label
                                   htmlFor={`${command.id}-${arg.name}`}
-                                  className="text-xs font-medium text-canopy-text/80"
+                                  className="text-xs font-medium text-daintree-text/80"
                                 >
                                   {arg.name}
                                   {arg.required && (
@@ -479,7 +481,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                   )}
                                 </label>
                                 {hasDefaultValue && (
-                                  <span className="text-[10px] text-canopy-accent bg-canopy-accent/10 px-1.5 py-0.5 rounded">
+                                  <span className="text-[10px] text-daintree-accent bg-daintree-accent/10 px-1.5 py-0.5 rounded">
                                     Custom
                                   </span>
                                 )}
@@ -491,13 +493,13 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                 onChange={(e) =>
                                   updateDefault(command.id, arg.name, e.target.value)
                                 }
-                                className="w-full bg-canopy-sidebar border border-border-strong rounded px-2 py-1.5 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                                className="w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1.5 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
                                 placeholder={
                                   arg.default ? `Default: ${arg.default}` : `Enter ${arg.name}`
                                 }
                               />
                               {arg.description && (
-                                <p className="text-xs text-canopy-text/50 select-text">
+                                <p className="text-xs text-daintree-text/50 select-text">
                                   {arg.description}
                                 </p>
                               )}
@@ -550,10 +552,10 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
   return (
     <div className="space-y-3">
       <div>
-        <p className="text-xs text-canopy-text/60 mb-2 select-text">
+        <p className="text-xs text-daintree-text/60 mb-2 select-text">
           Define a custom prompt to send to the agent instead of executing the default command
           behavior. Use template variables like{" "}
-          <code className="text-canopy-accent">
+          <code className="text-daintree-accent">
             {"{"}variableName{"}"}
           </code>{" "}
           to include argument values.
@@ -561,7 +563,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
 
         {args.length > 0 && (
           <div className="mb-3">
-            <p className="text-xs font-medium text-canopy-text/70 mb-1.5">Available variables:</p>
+            <p className="text-xs font-medium text-daintree-text/70 mb-1.5">Available variables:</p>
             <div className="flex flex-wrap gap-1.5">
               {args.map((arg) => (
                 <TooltipProvider key={arg.name}>
@@ -572,8 +574,8 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
                         className={cn(
                           "text-[11px] px-2 py-0.5 rounded font-mono transition-colors",
                           usedVariables.includes(arg.name)
-                            ? "bg-canopy-accent/20 text-canopy-accent border border-canopy-accent/30"
-                            : "bg-canopy-sidebar text-canopy-text/70 hover:bg-canopy-border border border-canopy-border"
+                            ? "bg-daintree-accent/20 text-daintree-accent border border-daintree-accent/30"
+                            : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border border border-daintree-border"
                         )}
                       >
                         {"{"}
@@ -593,7 +595,10 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
       </div>
 
       <div className="space-y-1.5">
-        <label htmlFor={`${commandId}-prompt`} className="text-xs font-medium text-canopy-text/80">
+        <label
+          htmlFor={`${commandId}-prompt`}
+          className="text-xs font-medium text-daintree-text/80"
+        >
           Custom Prompt
         </label>
         <textarea
@@ -601,10 +606,10 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className={cn(
-            "w-full bg-canopy-sidebar border rounded px-2 py-1.5 text-sm text-canopy-text font-mono focus:outline-none focus:ring-1 min-h-[120px] resize-y",
+            "w-full bg-daintree-sidebar border rounded px-2 py-1.5 text-sm text-daintree-text font-mono focus:outline-none focus:ring-1 min-h-[120px] resize-y",
             validation && !validation.valid
               ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
-              : "border-border-strong focus:border-canopy-accent focus:ring-canopy-accent/30"
+              : "border-border-strong focus:border-daintree-accent focus:ring-daintree-accent/30"
           )}
           placeholder={`Example: Work on issue {issueNumber}...\n\nUse {variableName} to include argument values.`}
         />
@@ -618,7 +623,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
       )}
 
       {value.trim() && (
-        <p className="text-xs text-canopy-text/50 select-text">
+        <p className="text-xs text-daintree-text/50 select-text">
           When this command is executed, the custom prompt will be sent to the agent instead of
           running the default command logic.
         </p>

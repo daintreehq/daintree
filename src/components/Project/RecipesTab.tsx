@@ -172,26 +172,26 @@ export function RecipesTab({
   return (
     <TooltipProvider delayDuration={400} skipDelayDuration={300}>
       <div className="mb-6">
-        <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <TerminalRecipeIcon className="h-4 w-4" />
           Terminal Recipes
         </h3>
-        <p className="text-xs text-canopy-text/60 mb-4">
+        <p className="text-xs text-daintree-text/60 mb-4">
           Manage saved terminal configurations. Recipes can spawn multiple terminals with predefined
           commands and settings.
         </p>
 
         <div className="space-y-2">
           {recipesLoading ? (
-            <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+            <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
               Loading recipes...
             </div>
           ) : recipes.length === 0 ? (
-            <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+            <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
               No recipes configured yet
             </div>
           ) : (
-            <div className="border border-canopy-border rounded-[var(--radius-md)] divide-y divide-canopy-border">
+            <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
               {recipes.map((recipe) => {
                 const exported = exportFeedback === recipe.id;
                 return (
@@ -364,14 +364,14 @@ export function RecipesTab({
         </AppDialog.Header>
 
         <AppDialog.Body>
-          <p className="text-sm text-canopy-text/60 mb-4">
+          <p className="text-sm text-daintree-text/60 mb-4">
             Paste the JSON configuration for the recipe you want to import.
           </p>
           <textarea
             value={importJson}
             onChange={(e) => setImportJson(e.target.value)}
             placeholder='{"name": "My Recipe", "terminals": [...]}'
-            className="w-full h-64 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-sm text-canopy-text font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent resize-none"
+            className="w-full h-64 px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-none focus:ring-2 focus:ring-daintree-accent resize-none"
             spellCheck={false}
           />
           {importError && (

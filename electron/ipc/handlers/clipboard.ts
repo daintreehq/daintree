@@ -6,7 +6,7 @@ import * as fs from "node:fs/promises";
 import * as crypto from "node:crypto";
 import * as os from "node:os";
 
-const CLIPBOARD_DIR_NAME = "canopy-clipboard";
+const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 function getClipboardDir(): string {

@@ -5,8 +5,8 @@ import { resolve } from "path";
 const FILE_PATH = resolve(__dirname, "../ArtifactOverlay.tsx");
 
 describe("ArtifactOverlay — contrast on neutral surfaces (issue #4611)", () => {
-  it("buttons on bg-canopy-border use canopy-text, not text-inverse", async () => {
+  it("buttons on bg-daintree-border use daintree-text, not text-inverse", async () => {
     const content = await readFile(FILE_PATH, "utf-8");
-    expect(content).not.toMatch(/bg-canopy-border[^"]*text-text-inverse/);
+    expect(content).not.toMatch(/bg-daintree-border[^"]*text-text-inverse/);
   });
 });

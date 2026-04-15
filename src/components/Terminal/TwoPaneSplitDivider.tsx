@@ -178,8 +178,8 @@ export function TwoPaneSplitDivider({
       tabIndex={0}
       className={cn(
         "group cursor-col-resize flex items-center justify-center z-10 shrink-0",
-        "hover:bg-overlay-soft transition-colors focus-visible:outline-none focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
-        isDragging && "bg-canopy-accent/20"
+        "hover:bg-overlay-soft transition-colors focus-visible:outline-none focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-daintree-accent/50",
+        isDragging && "bg-daintree-accent/20"
       )}
       style={{ width: DIVIDER_WIDTH_PX }}
       onMouseDown={handleMouseDown}
@@ -189,9 +189,9 @@ export function TwoPaneSplitDivider({
       <div
         className={cn(
           "w-px h-16 rounded-full transition-[width] duration-150 delay-100 group-hover:w-0.5",
-          "bg-canopy-text/20",
-          "group-hover:bg-canopy-text/35 group-focus-visible:bg-canopy-accent",
-          isDragging && "bg-canopy-accent"
+          "bg-daintree-text/20",
+          "group-hover:bg-daintree-text/35 group-focus-visible:bg-daintree-accent",
+          isDragging && "bg-daintree-accent"
         )}
       />
     </div>

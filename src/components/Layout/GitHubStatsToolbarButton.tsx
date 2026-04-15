@@ -194,7 +194,7 @@ export const GitHubStatsToolbarButton = memo(
                   if (willOpen) refreshStats({ force: true });
                 }}
                 className={cn(
-                  "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
+                  "h-full gap-2 rounded-none px-3 text-daintree-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
                   isTokenError && "opacity-40",
                   !isTokenError && stats?.issueCount === 0 && "opacity-50",
                   !isTokenError && isStale && "opacity-60",
@@ -284,7 +284,7 @@ export const GitHubStatsToolbarButton = memo(
                   if (willOpen) refreshStats({ force: true });
                 }}
                 className={cn(
-                  "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
+                  "h-full gap-2 rounded-none px-3 text-daintree-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
                   isTokenError && "opacity-40",
                   !isTokenError && stats?.prCount === 0 && "opacity-50",
                   !isTokenError && isStale && "opacity-60",
@@ -359,7 +359,7 @@ export const GitHubStatsToolbarButton = memo(
                   setCommitsOpen(!commitsOpen);
                 }}
                 className={cn(
-                  "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
+                  "h-full gap-2 rounded-none px-3 text-daintree-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
                   stats?.commitCount === 0 && "opacity-50",
                   commitsOpen &&
                     "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-border-strong"

@@ -81,7 +81,7 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       await panel.locator(SEL.terminal.xtermRows).click();
       await window.waitForTimeout(T_SETTLE);
       await expectTerminalFocused(panel);
-      await window.evaluate(() => window.dispatchEvent(new CustomEvent("canopy:find-in-panel")));
+      await window.evaluate(() => window.dispatchEvent(new CustomEvent("daintree:find-in-panel")));
 
       await expect(panel.locator(SEL.terminal.searchInput)).toBeVisible({ timeout: T_MEDIUM });
     });
@@ -129,7 +129,7 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
 
       await panel.locator(SEL.terminal.xtermRows).click();
       await window.waitForTimeout(T_SETTLE);
-      await window.evaluate(() => window.dispatchEvent(new CustomEvent("canopy:find-in-panel")));
+      await window.evaluate(() => window.dispatchEvent(new CustomEvent("daintree:find-in-panel")));
 
       const input = panel.locator(SEL.terminal.searchInput);
       await expect(input).toBeVisible({ timeout: T_MEDIUM });
@@ -159,7 +159,7 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       // Open search
       await panel.locator(SEL.terminal.xtermRows).click();
       await window.waitForTimeout(T_SETTLE);
-      await window.evaluate(() => window.dispatchEvent(new CustomEvent("canopy:find-in-panel")));
+      await window.evaluate(() => window.dispatchEvent(new CustomEvent("daintree:find-in-panel")));
       const input = panel.locator(SEL.terminal.searchInput);
       await expect(input).toBeVisible({ timeout: T_MEDIUM });
 
@@ -206,7 +206,7 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       // Open search
       await panel.locator(SEL.terminal.xtermRows).click();
       await window.waitForTimeout(T_SETTLE);
-      await window.evaluate(() => window.dispatchEvent(new CustomEvent("canopy:find-in-panel")));
+      await window.evaluate(() => window.dispatchEvent(new CustomEvent("daintree:find-in-panel")));
       const input = panel.locator(SEL.terminal.searchInput);
       await expect(input).toBeVisible({ timeout: T_MEDIUM });
 
@@ -255,7 +255,7 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       // Open search
       await panel.locator(SEL.terminal.xtermRows).click();
       await window.waitForTimeout(T_SETTLE);
-      await window.evaluate(() => window.dispatchEvent(new CustomEvent("canopy:find-in-panel")));
+      await window.evaluate(() => window.dispatchEvent(new CustomEvent("daintree:find-in-panel")));
       const input = panel.locator(SEL.terminal.searchInput);
       await expect(input).toBeVisible({ timeout: T_MEDIUM });
 

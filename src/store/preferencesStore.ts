@@ -49,7 +49,7 @@ export const usePreferencesStore = create<PreferencesState>()(
         })),
     }),
     {
-      name: "canopy-preferences",
+      name: "daintree-preferences",
       storage: createSafeJSONStorage(),
       version: 3,
       migrate: (persisted, version) => {

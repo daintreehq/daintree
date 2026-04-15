@@ -24,9 +24,9 @@ export function DockedContainer({ dockedCount, compact = false, onClick }: Docke
             aria-label={`Docked: ${dockedCount} terminal${dockedCount > 1 ? "s" : ""}`}
           >
             <span className="relative">
-              <PanelBottom className="w-3.5 h-3.5 text-canopy-accent" aria-hidden="true" />
+              <PanelBottom className="w-3.5 h-3.5 text-daintree-accent" aria-hidden="true" />
               {compact && dockedCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-canopy-accent text-[10px] font-bold tabular-nums text-canopy-bg shadow-sm">
+                <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-daintree-accent text-[10px] font-bold tabular-nums text-daintree-bg shadow-sm">
                   {dockedCount > 9 ? "9+" : dockedCount}
                 </span>
               )}

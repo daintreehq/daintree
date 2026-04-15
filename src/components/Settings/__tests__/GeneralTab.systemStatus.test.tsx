@@ -32,7 +32,7 @@ vi.mock("@/components/Settings/SettingsSwitchCard", () => ({
 }));
 
 vi.mock("@/components/icons", () => ({
-  CanopyIcon: () => null,
+  DaintreeIcon: () => null,
   ProjectPulseIcon: () => null,
 }));
 
@@ -174,7 +174,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     await renderGeneralTab();
 
     await waitFor(() => {
-      expect(screen.getByText(/Canopy supports 3 more agents/)).toBeTruthy();
+      expect(screen.getByText(/Daintree supports 3 more agents/)).toBeTruthy();
     });
   });
 
@@ -194,7 +194,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     await renderGeneralTab();
 
     await waitFor(() => {
-      expect(screen.getByText(/Canopy supports 1 more agent\b/)).toBeTruthy();
+      expect(screen.getByText(/Daintree supports 1 more agent\b/)).toBeTruthy();
     });
   });
 
@@ -218,7 +218,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
       expect(screen.getByText("Claude")).toBeTruthy();
     });
 
-    expect(screen.queryByText(/Canopy supports/)).toBeNull();
+    expect(screen.queryByText(/Daintree supports/)).toBeNull();
   });
 
   it("shows 'Needs setup' label for installed-but-not-ready agents", async () => {
@@ -268,7 +268,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     expect(screen.queryByText("Claude")).toBeNull();
   });
 
-  it("setup wizard button dispatches canopy:open-agent-setup-wizard CustomEvent", async () => {
+  it("setup wizard button dispatches daintree:open-agent-setup-wizard CustomEvent", async () => {
     setupDispatchMock(
       {
         claude: "missing",
@@ -291,7 +291,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     fireEvent.click(screen.getByText("Run setup wizard"));
 
     const wizardEvent = dispatchSpy.mock.calls.find(
-      ([event]) => event instanceof CustomEvent && event.type === "canopy:open-agent-setup-wizard"
+      ([event]) => event instanceof CustomEvent && event.type === "daintree:open-agent-setup-wizard"
     );
     expect(wizardEvent).toBeTruthy();
 
@@ -322,10 +322,10 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/Canopy supports 3 more agents/)).toBeTruthy();
+      expect(screen.getByText(/Daintree supports 3 more agents/)).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByText(/Canopy supports 3 more agents/));
+    fireEvent.click(screen.getByText(/Daintree supports 3 more agents/));
     expect(onNavigate).toHaveBeenCalledWith();
   });
 

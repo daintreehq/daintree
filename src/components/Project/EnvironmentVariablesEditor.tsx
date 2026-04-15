@@ -157,7 +157,7 @@ export function EnvironmentVariablesEditor({
     <div className="mb-6">
       {hasGlobals && (
         <>
-          <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
             <Globe className="h-4 w-4" />
             Inherited (Global)
           </h3>
@@ -168,18 +168,18 @@ export function EnvironmentVariablesEditor({
               return (
                 <div
                   key={`global-${key}`}
-                  className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border opacity-70"
+                  className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border opacity-70"
                 >
                   <span
                     className={cn(
-                      "flex-1 text-sm text-canopy-text font-mono px-2 py-1",
-                      isOverridden && "line-through text-canopy-text/40"
+                      "flex-1 text-sm text-daintree-text font-mono px-2 py-1",
+                      isOverridden && "line-through text-daintree-text/40"
                     )}
                   >
                     {key}
                   </span>
-                  <span className="text-canopy-text/60">=</span>
-                  <span className="flex-1 text-sm text-canopy-text/50 font-mono px-2 py-1">
+                  <span className="text-daintree-text/60">=</span>
+                  <span className="flex-1 text-sm text-daintree-text/50 font-mono px-2 py-1">
                     {isSensitive ? "********" : value}
                   </span>
                   {isOverridden ? (
@@ -187,7 +187,7 @@ export function EnvironmentVariablesEditor({
                       Overridden
                     </span>
                   ) : (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-canopy-accent/15 text-canopy-accent font-medium">
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-daintree-accent/15 text-daintree-accent font-medium">
                       Global
                     </span>
                   )}
@@ -195,15 +195,15 @@ export function EnvironmentVariablesEditor({
               );
             })}
           </div>
-          <div className="border-t border-canopy-border mb-4" />
+          <div className="border-t border-daintree-border mb-4" />
         </>
       )}
 
-      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+      <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
         <Key className="h-4 w-4" />
         Environment Variables
       </h3>
-      <p className="text-xs text-canopy-text/60 mb-4">
+      <p className="text-xs text-daintree-text/60 mb-4">
         Project-specific variables injected into new terminals. Names containing KEY, SECRET, TOKEN,
         or PASSWORD are securely stored <Lock className="inline h-3 w-3" />.
       </p>
@@ -231,7 +231,7 @@ export function EnvironmentVariablesEditor({
 
       <div className="space-y-2">
         {rows.length === 0 ? (
-          <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
+          <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
             No environment variables configured yet
           </div>
         ) : (
@@ -246,8 +246,8 @@ export function EnvironmentVariablesEditor({
               <div key={row.id}>
                 <div
                   className={cn(
-                    "flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border",
-                    error ? "border-status-error/40" : "border-canopy-border"
+                    "flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-daintree-bg border",
+                    error ? "border-status-error/40" : "border-daintree-border"
                   )}
                 >
                   {isSecured && (
@@ -268,11 +268,11 @@ export function EnvironmentVariablesEditor({
                     onChange={(e) => updateRow(index, "key", e.target.value)}
                     spellCheck={false}
                     autoCapitalize="none"
-                    className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
+                    className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
                     placeholder="VARIABLE_NAME"
                     aria-label="Environment variable name"
                   />
-                  <span className="text-canopy-text/60">=</span>
+                  <span className="text-daintree-text/60">=</span>
                   <div className="flex-1 relative">
                     <input
                       type={shouldMask ? "password" : "text"}
@@ -282,7 +282,7 @@ export function EnvironmentVariablesEditor({
                       autoCapitalize="none"
                       autoComplete={isSensitive ? "new-password" : "off"}
                       className={cn(
-                        "w-full bg-canopy-sidebar border border-border-strong rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30",
+                        "w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-none focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30",
                         isSensitive && "pr-8"
                       )}
                       placeholder="value"
@@ -292,14 +292,14 @@ export function EnvironmentVariablesEditor({
                       <button
                         type="button"
                         onClick={() => toggleVisibility(row.id)}
-                        className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-canopy-border/50 transition-colors"
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-daintree-border/50 transition-colors"
                         aria-pressed={isVisible}
                         aria-label={`${isVisible ? "Hide" : "Show"} value${row.key ? ` for ${row.key}` : ""}`}
                       >
                         {isVisible ? (
-                          <EyeOff className="h-4 w-4 text-canopy-text/60" />
+                          <EyeOff className="h-4 w-4 text-daintree-text/60" />
                         ) : (
-                          <Eye className="h-4 w-4 text-canopy-text/60" />
+                          <Eye className="h-4 w-4 text-daintree-text/60" />
                         )}
                       </button>
                     )}
@@ -325,7 +325,7 @@ export function EnvironmentVariablesEditor({
         </Button>
       </div>
 
-      <p className="text-xs text-canopy-text/60 mt-2">{helperText}</p>
+      <p className="text-xs text-daintree-text/60 mt-2">{helperText}</p>
 
       {saveError && <p className="text-xs text-status-error mt-2">{saveError}</p>}
 

@@ -77,7 +77,7 @@ test.describe.serial("Deletion Cleanup: Active project close clears UI", () => {
     // tab-group intermediate state, causing the Electron process to exit.
     await ctx.window.evaluate(() => {
       localStorage.setItem(
-        "canopy-two-pane-split",
+        "daintree-two-pane-split",
         JSON.stringify({
           state: {
             config: { enabled: false, defaultRatio: 0.5, preferPreview: false },
@@ -310,7 +310,7 @@ test.describe.serial("Deletion Cleanup: Background removal persists across resta
   const PROJECT_B = "Persist Remove";
 
   test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-deletion-persist-"));
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-deletion-persist-"));
     fixtureA = createFixtureRepo({ name: "persist-active" });
     fixtureB = createFixtureRepo({ name: "persist-remove" });
   });

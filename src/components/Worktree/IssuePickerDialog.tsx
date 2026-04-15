@@ -134,7 +134,7 @@ export function IssuePickerDialog({
 
       <div className="px-6 pt-4 pb-3 space-y-3 shrink-0">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-canopy-text/40" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-daintree-text/40" />
           <input
             ref={inputRef}
             type="text"
@@ -142,7 +142,7 @@ export function IssuePickerDialog({
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Search issues by title or number..."
-            className="w-full pl-10 pr-4 py-2 bg-tint/5 border border-canopy-border rounded-[var(--radius-md)] text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent"
+            className="w-full pl-10 pr-4 py-2 bg-tint/5 border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text placeholder:text-text-muted focus:outline-none focus:border-daintree-accent"
           />
         </div>
 
@@ -154,8 +154,8 @@ export function IssuePickerDialog({
               className={cn(
                 "px-3 py-1 text-xs rounded-full transition-colors capitalize",
                 stateFilter === state
-                  ? "bg-canopy-accent/20 text-canopy-accent"
-                  : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-tint/5"
+                  ? "bg-daintree-accent/20 text-daintree-accent"
+                  : "text-daintree-text/50 hover:text-daintree-text/80 hover:bg-tint/5"
               )}
             >
               {state}
@@ -166,14 +166,14 @@ export function IssuePickerDialog({
 
       <div className="flex-1 overflow-y-auto min-h-0 px-6 pb-4">
         {isLoading && issues.length === 0 ? (
-          <div className="flex items-center justify-center py-8 text-canopy-text/50">
+          <div className="flex items-center justify-center py-8 text-daintree-text/50">
             <Spinner size="lg" className="mr-2" />
             <span className="text-sm">Loading issues...</span>
           </div>
         ) : error ? (
           <div className="text-center py-8 text-sm text-status-error">{error}</div>
         ) : issues.length === 0 ? (
-          <div className="text-center py-8 text-sm text-canopy-text/50">
+          <div className="text-center py-8 text-sm text-daintree-text/50">
             {search ? "No issues match your search" : "No issues found"}
           </div>
         ) : (
@@ -189,7 +189,7 @@ export function IssuePickerDialog({
                   className={cn(
                     "w-full text-left px-3 py-2.5 rounded-[var(--radius-md)] transition-colors flex items-start gap-3",
                     index === selectedIndex
-                      ? "bg-canopy-accent/10 border border-canopy-accent/30"
+                      ? "bg-daintree-accent/10 border border-daintree-accent/30"
                       : "hover:bg-tint/5 border border-transparent",
                     isCurrentlyAttached && "ring-1 ring-status-success/30"
                   )}
@@ -201,14 +201,14 @@ export function IssuePickerDialog({
                   )}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm text-canopy-text truncate">{issue.title}</span>
+                      <span className="text-sm text-daintree-text truncate">{issue.title}</span>
                       {isCurrentlyAttached && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-success/10 text-status-success shrink-0">
                           attached
                         </span>
                       )}
                     </div>
-                    <span className="text-xs text-canopy-text/50 font-mono">#{issue.number}</span>
+                    <span className="text-xs text-daintree-text/50 font-mono">#{issue.number}</span>
                   </div>
                 </button>
               );
@@ -219,7 +219,7 @@ export function IssuePickerDialog({
 
       {currentIssueNumber && (
         <AppDialog.Footer>
-          <Button variant="ghost" onClick={handleDetach} className="text-canopy-text/70 mr-auto">
+          <Button variant="ghost" onClick={handleDetach} className="text-daintree-text/70 mr-auto">
             <Unlink className="w-4 h-4 mr-2" />
             Detach Issue
           </Button>

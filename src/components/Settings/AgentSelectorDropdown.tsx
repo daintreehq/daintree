@@ -102,9 +102,9 @@ export function AgentSelectorDropdown({
           aria-haspopup="listbox"
           className={cn(
             "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-            "border border-canopy-border bg-canopy-bg text-canopy-text",
-            "hover:border-canopy-accent/50 transition-colors",
-            "focus:outline-none focus:ring-2 focus:ring-canopy-accent/50"
+            "border border-daintree-border bg-daintree-bg text-daintree-text",
+            "hover:border-daintree-accent/50 transition-colors",
+            "focus:outline-none focus:ring-2 focus:ring-daintree-accent/50"
           )}
         >
           {selectedAgent ? (
@@ -115,7 +115,7 @@ export function AgentSelectorDropdown({
                 <span className="flex items-center gap-1">
                   {!selectedAgent.selected && (
                     <span
-                      className="w-1.5 h-1.5 rounded-full bg-canopy-text/30"
+                      className="w-1.5 h-1.5 rounded-full bg-daintree-text/30"
                       title="Not in workflow"
                     />
                   )}
@@ -130,14 +130,14 @@ export function AgentSelectorDropdown({
             </>
           ) : (
             <>
-              <Settings2 size={16} className="text-canopy-text/60" />
+              <Settings2 size={16} className="text-daintree-text/60" />
               <span className="flex-1 text-left truncate">General</span>
             </>
           )}
           <ChevronDown
             size={14}
             className={cn(
-              "shrink-0 text-canopy-text/40 transition-transform",
+              "shrink-0 text-daintree-text/40 transition-transform",
               open && "rotate-180"
             )}
           />
@@ -150,8 +150,8 @@ export function AgentSelectorDropdown({
         style={{ width: "var(--radix-popover-trigger-width)" }}
         onEscapeKeyDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-canopy-border">
-          <Search size={14} className="shrink-0 text-canopy-text/40" aria-hidden="true" />
+        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-daintree-border">
+          <Search size={14} className="shrink-0 text-daintree-text/40" aria-hidden="true" />
           <input
             ref={inputRef}
             type="text"
@@ -168,7 +168,7 @@ export function AgentSelectorDropdown({
             aria-activedescendant={
               items[activeIndex] ? `agent-selector-item-${items[activeIndex].id}` : undefined
             }
-            className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder:text-canopy-text/40 focus:outline-none"
+            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-daintree-text/40 focus:outline-none"
           />
         </div>
         <div role="listbox" id="agent-selector-list" className="overflow-y-auto max-h-60 p-1">
@@ -189,17 +189,17 @@ export function AgentSelectorDropdown({
                 onMouseEnter={() => setActiveIndex(index)}
                 className={cn(
                   "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm",
-                  isActive && "bg-canopy-accent/10",
-                  isSelected && "text-canopy-accent",
-                  !isActive && !isSelected && "text-canopy-text"
+                  isActive && "bg-daintree-accent/10",
+                  isSelected && "text-daintree-accent",
+                  !isActive && !isSelected && "text-daintree-text"
                 )}
               >
                 {item.kind === "general" ? (
                   <>
-                    <Settings2 size={16} className="shrink-0 text-canopy-text/60" />
+                    <Settings2 size={16} className="shrink-0 text-daintree-text/60" />
                     <div className="flex-1 min-w-0">
                       <div className="truncate">General</div>
-                      <div className="text-xs text-canopy-text/40 truncate">Global settings</div>
+                      <div className="text-xs text-daintree-text/40 truncate">Global settings</div>
                     </div>
                   </>
                 ) : (
@@ -210,7 +210,7 @@ export function AgentSelectorDropdown({
                       <span className="flex items-center gap-1 shrink-0">
                         {!item.agent.selected && (
                           <span
-                            className="w-1.5 h-1.5 rounded-full bg-canopy-text/30"
+                            className="w-1.5 h-1.5 rounded-full bg-daintree-text/30"
                             title="Not in workflow"
                           />
                         )}
@@ -228,7 +228,7 @@ export function AgentSelectorDropdown({
             );
           })}
           {items.length === 1 && filterQuery && (
-            <div className="px-2 py-3 text-xs text-canopy-text/40 text-center">
+            <div className="px-2 py-3 text-xs text-daintree-text/40 text-center">
               No agents match "{filterQuery}"
             </div>
           )}

@@ -68,7 +68,7 @@ export function ChordIndicator() {
     >
       <div
         className={cn(
-          "rounded-[var(--radius-lg)] bg-canopy-sidebar/95 border border-[var(--border-overlay)] shadow-xl",
+          "rounded-[var(--radius-lg)] bg-daintree-sidebar/95 border border-[var(--border-overlay)] shadow-xl",
           "transition duration-150",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
           isVisible ? "opacity-100 translate-y-0 scale-100" : "opacity-0 translate-y-2 scale-[0.96]"
@@ -80,9 +80,11 @@ export function ChordIndicator() {
           aria-live="polite"
           aria-atomic="true"
         >
-          <kbd className="text-sm font-semibold text-canopy-text tracking-wide">{displayChord}</kbd>
-          <span className="text-canopy-text/40">&mdash;</span>
-          <span className="text-xs text-canopy-text/50">Esc to cancel</span>
+          <kbd className="text-sm font-semibold text-daintree-text tracking-wide">
+            {displayChord}
+          </kbd>
+          <span className="text-daintree-text/40">&mdash;</span>
+          <span className="text-xs text-daintree-text/50">Esc to cancel</span>
         </div>
 
         {completions.length > 0 && (
@@ -90,7 +92,7 @@ export function ChordIndicator() {
             {Array.from(grouped.entries()).map(([category, items], groupIdx) => (
               <div key={category}>
                 {groupIdx > 0 && <div className="border-t border-[var(--border-overlay)] my-1.5" />}
-                <div className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/30 px-1 py-1">
+                <div className="text-[10px] font-medium uppercase tracking-wider text-daintree-text/30 px-1 py-1">
                   {category}
                 </div>
                 {items.map((c) => (
@@ -98,10 +100,10 @@ export function ChordIndicator() {
                     key={c.actionId || c.secondKey}
                     className="flex items-center gap-3 py-1 text-xs"
                   >
-                    <kbd className="min-w-[3rem] text-right font-medium text-canopy-text/80">
+                    <kbd className="min-w-[3rem] text-right font-medium text-daintree-text/80">
                       {c.isPrefix ? `${c.displayKey} +` : c.displayKey}
                     </kbd>
-                    <span className="text-canopy-text/50 truncate">{c.description}</span>
+                    <span className="text-daintree-text/50 truncate">{c.description}</span>
                   </div>
                 ))}
               </div>

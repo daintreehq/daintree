@@ -137,8 +137,8 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
           </div>
         )}
 
-        <div className="relative max-h-80 overflow-auto rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg">
-          <pre className="p-3 text-xs font-mono text-canopy-text/90 whitespace-pre-wrap break-words select-text">
+        <div className="relative max-h-80 overflow-auto rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg">
+          <pre className="p-3 text-xs font-mono text-daintree-text/90 whitespace-pre-wrap break-words select-text">
             {cleanStdout}
             {cleanStderr && (
               <>
@@ -148,7 +148,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
             )}
           </pre>
           {helpResult.truncated && (
-            <div className="sticky bottom-0 px-3 py-2 bg-canopy-bg/95 border-t border-canopy-border text-xs text-canopy-text/50">
+            <div className="sticky bottom-0 px-3 py-2 bg-daintree-bg/95 border-t border-daintree-border text-xs text-daintree-text/50">
               Output truncated (exceeded size limit)
             </div>
           )}
@@ -158,11 +158,11 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
   };
 
   return (
-    <div className="space-y-3 pt-4 border-t border-canopy-border">
+    <div className="space-y-3 pt-4 border-t border-daintree-border">
       <div className="flex items-center justify-between">
         <div>
-          <h5 className="text-sm font-medium text-canopy-text">Help Output</h5>
-          <p className="text-xs text-canopy-text/50 select-text">
+          <h5 className="text-sm font-medium text-daintree-text">Help Output</h5>
+          <p className="text-xs text-daintree-text/50 select-text">
             Available CLI flags for {agentName}
           </p>
         </div>
@@ -174,7 +174,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
               variant="ghost"
               onClick={() => void loadHelp(!!helpResult)}
               disabled={isLoading}
-              className="text-canopy-text/50 hover:text-canopy-text"
+              className="text-daintree-text/50 hover:text-daintree-text"
             >
               <RefreshCw size={14} />
               {helpResult ? "Refresh" : "Load"}
@@ -186,7 +186,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
                 variant="ghost"
                 onClick={() => void handleCopy()}
                 disabled={isLoading}
-                className="text-canopy-text/50 hover:text-canopy-text"
+                className="text-daintree-text/50 hover:text-daintree-text"
               >
                 <Copy size={14} />
                 {isCopied ? "Copied!" : "Copy"}
@@ -198,14 +198,14 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
 
       {isLoading && (
         <div className="flex items-center justify-center py-8">
-          <Spinner size="lg" className="text-canopy-text/40" />
+          <Spinner size="lg" className="text-daintree-text/40" />
         </div>
       )}
 
       {!isLoading && isAgentMissing(isCliAvailable ?? undefined) && isCliAvailable !== null && (
-        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-canopy-border bg-surface text-center space-y-2">
-          <p className="text-sm text-canopy-text/60">CLI not found</p>
-          <p className="text-xs text-canopy-text/40 select-text">
+        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-daintree-border bg-surface text-center space-y-2">
+          <p className="text-sm text-daintree-text/60">CLI not found</p>
+          <p className="text-xs text-daintree-text/40 select-text">
             {agentName} is not installed or not in your PATH
           </p>
           {usageUrl && (
@@ -213,7 +213,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
               size="sm"
               variant="ghost"
               onClick={() => window.electron.system.openExternal(usageUrl)}
-              className="text-canopy-accent hover:text-canopy-accent/80 mt-2"
+              className="text-daintree-accent hover:text-daintree-accent/80 mt-2"
             >
               Install Instructions
             </Button>

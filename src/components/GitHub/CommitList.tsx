@@ -177,7 +177,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
         variant="ghost"
         size="sm"
         onClick={handleRetry}
-        className="ml-auto h-6 text-xs text-muted-foreground hover:text-canopy-text shrink-0"
+        className="ml-auto h-6 text-xs text-muted-foreground hover:text-daintree-text shrink-0"
       >
         <RefreshCw className="h-3 w-3" />
         Retry
@@ -201,11 +201,11 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
           className={cn(
             "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)]",
             "bg-overlay-soft border border-[var(--border-overlay)]",
-            "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
+            "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
           )}
         >
           <Search
-            className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
+            className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none"
             aria-hidden="true"
           />
           <input
@@ -223,7 +223,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
             aria-controls={listId}
             aria-activedescendant={activeCommitId}
             aria-label="Search commits"
-            className="flex-1 min-w-0 text-sm bg-transparent text-canopy-text placeholder:text-muted-foreground focus:outline-none"
+            className="flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-muted-foreground focus:outline-none"
           />
         </div>
       </div>
@@ -275,8 +275,8 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
                   onClick={handleLoadMore}
                   disabled={loadingMore}
                   className={cn(
-                    "w-full text-muted-foreground hover:text-canopy-text",
-                    isLoadMoreActive && "ring-1 ring-canopy-accent text-canopy-text"
+                    "w-full text-muted-foreground hover:text-daintree-text",
+                    isLoadMoreActive && "ring-1 ring-daintree-accent text-daintree-text"
                   )}
                 >
                   {loadingMore ? (
@@ -299,7 +299,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
               variant="ghost"
               size="sm"
               onClick={handleRetry}
-              className="mt-2 text-muted-foreground hover:text-canopy-text"
+              className="mt-2 text-muted-foreground hover:text-daintree-text"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               Retry
@@ -315,7 +315,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
           variant="ghost"
           size="sm"
           onClick={handleViewOnGitHub}
-          className="text-muted-foreground hover:text-canopy-text"
+          className="text-muted-foreground hover:text-daintree-text"
         >
           <ExternalLink className="h-3.5 w-3.5" />
           View on GitHub
@@ -324,7 +324,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
           variant="ghost"
           size="sm"
           onClick={onClose}
-          className="text-muted-foreground hover:text-canopy-text"
+          className="text-muted-foreground hover:text-daintree-text"
         >
           Close
         </Button>

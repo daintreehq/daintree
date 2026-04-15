@@ -1,4 +1,4 @@
-# Canopy — Codex Agent Guide
+# Daintree — Codex Agent Guide
 
 You will be asked for implementation guides and code reviews. This file gives you the code structure and conventions needed to respond quickly and accurately.
 
@@ -10,7 +10,7 @@ Electron 41, React 19, Vite 8, TypeScript, Tailwind CSS v4, Zustand 5, node-pty,
 
 ## Repo
 
-Public repo: `daintree/canopy` — https://github.com/daintree/canopy
+Public repo: `canopyide/canopy` — https://github.com/canopyide/canopy
 
 ## Project Structure
 

@@ -1,5 +1,5 @@
 /**
- * Core command types for Canopy's global command system.
+ * Core command types for Daintree's global command system.
  * Commands are executable operations that can be invoked from terminals,
  * UI, or AI agents.
  */

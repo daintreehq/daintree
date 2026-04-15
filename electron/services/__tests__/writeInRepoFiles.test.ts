@@ -18,7 +18,7 @@ describe("writeInRepoProjectIdentity", () => {
   let identityFiles: ProjectIdentityFiles;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-write-test-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-write-test-"));
     identityFiles = new ProjectIdentityFiles();
   });
 
@@ -96,7 +96,7 @@ describe("writeInRepoSettings", () => {
   let identityFiles: ProjectIdentityFiles;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-settings-test-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-settings-test-"));
     identityFiles = new ProjectIdentityFiles();
   });
 
@@ -220,7 +220,7 @@ describe("writeInRepoRecipe", () => {
   let identityFiles: ProjectIdentityFiles;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-recipe-write-test-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-recipe-write-test-"));
     identityFiles = new ProjectIdentityFiles();
   });
 
@@ -284,7 +284,7 @@ describe("readInRepoRecipes", () => {
   let identityFiles: ProjectIdentityFiles;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-recipe-read-test-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-recipe-read-test-"));
     identityFiles = new ProjectIdentityFiles();
   });
 
@@ -364,7 +364,7 @@ describe("deleteInRepoRecipe", () => {
   let identityFiles: ProjectIdentityFiles;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-recipe-delete-test-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-recipe-delete-test-"));
     identityFiles = new ProjectIdentityFiles();
   });
 

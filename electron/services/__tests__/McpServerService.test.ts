@@ -349,7 +349,7 @@ describe("McpServerService", () => {
     expect(dangerousTool?.description).toContain("Requires explicit confirmation");
     expect(dangerousTool?.inputSchema.properties?._meta).toEqual({
       type: "object",
-      description: "Reserved Canopy MCP metadata.",
+      description: "Reserved Daintree MCP metadata.",
       properties: {
         confirmed: {
           type: "boolean",

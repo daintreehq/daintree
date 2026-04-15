@@ -29,8 +29,8 @@ export const ActionPaletteItem = React.memo(function ActionPaletteItem({
         "relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
         !item.enabled && "opacity-40 cursor-not-allowed",
         isSelected
-          ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-          : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
+          ? "bg-overlay-soft border-overlay text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
+          : "border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
       )}
       onClick={() => onSelect(item)}
     >
@@ -46,12 +46,12 @@ export const ActionPaletteItem = React.memo(function ActionPaletteItem({
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium truncate">{item.title}</div>
         {item.description && (
-          <div className="text-xs text-canopy-text/50 truncate">{item.description}</div>
+          <div className="text-xs text-daintree-text/50 truncate">{item.description}</div>
         )}
       </div>
 
       {item.keybinding && (
-        <span className="shrink-0 text-[11px] font-mono text-canopy-text/40">
+        <span className="shrink-0 text-[11px] font-mono text-daintree-text/40">
           {item.keybinding}
         </span>
       )}

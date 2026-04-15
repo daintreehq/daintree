@@ -1202,20 +1202,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               }
             />
             {isDragOverFiles && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-sm bg-canopy-bg/80 pointer-events-none">
-                <span className="text-xs font-medium text-canopy-accent">Drop to attach</span>
+              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-sm bg-daintree-bg/80 pointer-events-none">
+                <span className="text-xs font-medium text-daintree-accent">Drop to attach</span>
               </div>
             )}
             {isVoiceSubmitting && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-sm bg-canopy-bg/80 pointer-events-none">
-                <Loader2 className="h-4 w-4 animate-spin text-canopy-accent" />
+              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-sm bg-daintree-bg/80 pointer-events-none">
+                <Loader2 className="h-4 w-4 animate-spin text-daintree-accent" />
               </div>
             )}
             <button
               type="button"
               onClick={openPicker}
               disabled={disabled}
-              className="select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-canopy-accent/65 hover:text-canopy-accent/85 transition-colors cursor-pointer focus-visible:outline-none"
+              className="select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-daintree-accent/65 hover:text-daintree-accent/85 transition-colors cursor-pointer focus-visible:outline-none"
               aria-label="Open command picker"
             >
               ❯
@@ -1235,7 +1235,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 <button
                   type="button"
                   onClick={handlePopStash}
-                  className="flex items-center justify-center h-5 w-5 rounded-sm text-canopy-accent/55 hover:text-canopy-accent/80 hover:bg-tint/[0.06] transition-colors cursor-pointer"
+                  className="flex items-center justify-center h-5 w-5 rounded-sm text-daintree-accent/55 hover:text-daintree-accent/80 hover:bg-tint/[0.06] transition-colors cursor-pointer"
                   aria-label="Restore stashed input"
                   title="Restore stashed input (⌘⇧X)"
                 >
@@ -1301,7 +1301,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
             <div
               ref={modalEditorHostRef}
-              className="flex-1 min-h-[200px] overflow-auto text-canopy-text p-4"
+              className="flex-1 min-h-[200px] overflow-auto text-daintree-text p-4"
             />
           </div>
         </AppDialog>

@@ -49,7 +49,7 @@ describe("FileSearchService", () => {
 
   it("returns empty results when cwd does not exist", async () => {
     const service = await createService();
-    const missingDir = path.join(os.tmpdir(), "canopy-does-not-exist", `${Date.now()}`);
+    const missingDir = path.join(os.tmpdir(), "daintree-does-not-exist", `${Date.now()}`);
 
     await expect(service.search({ cwd: missingDir, query: "readme" })).resolves.toEqual([]);
   });

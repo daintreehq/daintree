@@ -98,7 +98,7 @@ export function startOAuthLoopback(
         callbackParams.get("error_description") || callbackParams.get("error") || "unknown error";
       const message = hasError
         ? `Authentication was not completed: ${escapeHtml(rawDetail)}`
-        : "You can close this tab and return to Canopy.";
+        : "You can close this tab and return to Daintree.";
 
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(

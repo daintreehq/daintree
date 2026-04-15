@@ -208,7 +208,7 @@ export function setupBrowserWindow(
 
   // ── Create WebContentsView for the React app ──
   // All project views share a single session partition for V8 code cache reuse.
-  const viewSession = session.fromPartition("persist:canopy-app");
+  const viewSession = session.fromPartition("persist:daintree-app");
   const dist = getDistPath();
   if (dist) registerProtocolsForSession(viewSession, dist);
 

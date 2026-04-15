@@ -19,7 +19,7 @@ describe("CopyTreeService", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-copytree-service-"));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-copytree-service-"));
     vi.clearAllMocks();
     configCreateMock.mockResolvedValue(undefined);
     copyMock.mockResolvedValue({

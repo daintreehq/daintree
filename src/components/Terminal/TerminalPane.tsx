@@ -395,8 +395,8 @@ function TerminalPaneComponent({
       });
     };
 
-    window.addEventListener("canopy:find-in-panel", handleFindInPanel);
-    return () => window.removeEventListener("canopy:find-in-panel", handleFindInPanel);
+    window.addEventListener("daintree:find-in-panel", handleFindInPanel);
+    return () => window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
   }, [isFocused]);
 
   const handleKeyDown = useCallback(
@@ -675,7 +675,7 @@ function TerminalPaneComponent({
       })()}
     >
       {terminalErrors.length > 0 && (
-        <div className="px-2 py-1 border-b border-canopy-border bg-[color-mix(in_oklab,var(--color-status-error)_5%,transparent)] space-y-1 shrink-0">
+        <div className="px-2 py-1 border-b border-daintree-border bg-[color-mix(in_oklab,var(--color-status-error)_5%,transparent)] space-y-1 shrink-0">
           {terminalErrors.slice(0, 2).map((error) => (
             <ErrorBanner
               key={error.id}
@@ -687,7 +687,7 @@ function TerminalPaneComponent({
             />
           ))}
           {terminalErrors.length > 2 && (
-            <div className="text-xs text-canopy-text/40 px-2">
+            <div className="text-xs text-daintree-text/40 px-2">
               +{terminalErrors.length - 2} more errors
             </div>
           )}
@@ -738,7 +738,7 @@ function TerminalPaneComponent({
         onDismiss={() => setDismissedRestartPrompt(true)}
       />
 
-      <div className="flex-1 min-h-0 bg-canopy-bg flex flex-col">
+      <div className="flex-1 min-h-0 bg-daintree-bg flex flex-col">
         <div className="flex-1 relative min-h-0">
           <div
             className={cn(
@@ -787,7 +787,7 @@ function TerminalPaneComponent({
                   <span className="text-text-inverse font-medium">Reconnecting...</span>
                 </div>
               ) : (
-                <div className="flex flex-col items-center gap-4 p-6 bg-canopy-sidebar border border-canopy-border rounded-xl shadow-[var(--theme-shadow-dialog)] max-w-md text-center">
+                <div className="flex flex-col items-center gap-4 p-6 bg-daintree-sidebar border border-daintree-border rounded-xl shadow-[var(--theme-shadow-dialog)] max-w-md text-center">
                   <div className="flex items-center gap-3 text-status-error">
                     <AlertTriangle className="w-6 h-6" />
                     <h3 className="font-semibold text-lg">
@@ -800,11 +800,11 @@ function TerminalPaneComponent({
                   </div>
 
                   {lastCrashType === "OUT_OF_MEMORY" && (
-                    <div className="text-sm text-canopy-text/80">
+                    <div className="text-sm text-daintree-text/80">
                       <p className="mb-3">
                         The terminal backend ran out of memory processing high-throughput output.
                       </p>
-                      <p className="font-medium text-canopy-text/90 mb-2">Suggestions:</p>
+                      <p className="font-medium text-daintree-text/90 mb-2">Suggestions:</p>
                       <ul className="list-disc list-inside text-left space-y-1">
                         <li>Reduce agent output volume</li>
                         <li>Split long-running tasks into smaller sessions</li>
@@ -814,7 +814,7 @@ function TerminalPaneComponent({
                   )}
 
                   {lastCrashType === "SIGNAL_TERMINATED" && (
-                    <p className="text-sm text-canopy-text/80">
+                    <p className="text-sm text-daintree-text/80">
                       The terminal backend became unresponsive and was automatically restarted by
                       the watchdog. Automatic recovery is in progress.
                     </p>
@@ -825,7 +825,7 @@ function TerminalPaneComponent({
                     !lastCrashType ||
                     (lastCrashType !== "OUT_OF_MEMORY" &&
                       lastCrashType !== "SIGNAL_TERMINATED")) && (
-                    <p className="text-sm text-canopy-text/80">
+                    <p className="text-sm text-daintree-text/80">
                       The terminal backend process terminated unexpectedly. Automatic recovery is in
                       progress.
                     </p>
@@ -840,7 +840,7 @@ function TerminalPaneComponent({
                         });
                       }}
                       disabled={isRestartingService}
-                      className="px-4 py-2 bg-canopy-accent/20 hover:bg-canopy-accent/30 text-canopy-accent rounded-lg border border-canopy-accent/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      className="px-4 py-2 bg-daintree-accent/20 hover:bg-daintree-accent/30 text-daintree-accent rounded-lg border border-daintree-accent/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
                       {isRestartingService ? (
                         <Spinner size="md" />
@@ -853,7 +853,7 @@ function TerminalPaneComponent({
                       onClick={() =>
                         void actionService.dispatch("ui.refresh", undefined, { source: "user" })
                       }
-                      className="px-4 py-2 bg-status-error/10 hover:bg-status-error/20 text-canopy-text/60 rounded-lg border border-canopy-border transition-colors text-sm"
+                      className="px-4 py-2 bg-status-error/10 hover:bg-status-error/20 text-daintree-text/60 rounded-lg border border-daintree-border transition-colors text-sm"
                     >
                       Restart Application
                     </button>

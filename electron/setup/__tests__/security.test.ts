@@ -57,7 +57,7 @@ vi.mock("electron", () => ({
     fromPartition: vi.fn((partition: string) => {
       if (partition === "persist:browser") return browserSession;
       if (partition === "persist:portal") return portalSession;
-      if (partition === "persist:canopy-app") return canopyAppSession;
+      if (partition === "persist:daintree-app") return canopyAppSession;
       return createMockSession();
     }),
   },
@@ -100,7 +100,7 @@ describe("setupPermissionLockdown", () => {
     _resetPermissionLockdownForTesting();
   });
 
-  it("configures handlers on default, browser, portal, and canopy-app sessions", () => {
+  it("configures handlers on default, browser, portal, and daintree-app sessions", () => {
     setupPermissionLockdown();
 
     expect(defaultSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
@@ -240,7 +240,7 @@ describe("setupPermissionLockdown", () => {
     });
   });
 
-  describe("canopy-app session (trusted)", () => {
+  describe("daintree-app session (trusted)", () => {
     it("allows clipboard-read, clipboard-sanitized-write, and media", () => {
       setupPermissionLockdown();
       const handler = getRequestHandler(canopyAppSession);
@@ -305,11 +305,11 @@ describe("setupPermissionLockdown", () => {
       expect(testPermissionRequest(handler, "clipboard-read")).toBe(false);
     });
 
-    it("does not double-lock canopy-app partition via session-created (eagerly locked)", () => {
+    it("does not double-lock daintree-app partition via session-created (eagerly locked)", () => {
       setupPermissionLockdown();
       const dynamicCanopySession = createMockSession();
       Object.defineProperty(dynamicCanopySession, "partition", {
-        value: "persist:canopy-app",
+        value: "persist:daintree-app",
       });
 
       sessionCreatedListeners[0](dynamicCanopySession);

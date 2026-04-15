@@ -6,7 +6,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { createTooltipWithShortcut } from "@/lib/platform";
 import { useKeybindingDisplay } from "@/hooks";
 
-const toolbarIconButtonClass = "toolbar-icon-button text-canopy-text transition-colors";
+const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
 
 interface ToolbarProblemsButtonProps {
   errorCount: number;

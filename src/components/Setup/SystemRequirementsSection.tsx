@@ -52,19 +52,19 @@ export function SystemRequirementsSection({
     : "";
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30">
+    <div className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30">
       <button
         type="button"
         onClick={() => setUserExpanded((v) => !v)}
         className="flex items-center gap-2.5 w-full px-3 py-2.5 text-left"
       >
         <ChevronDown
-          className={`w-3.5 h-3.5 text-canopy-text/40 shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
+          className={`w-3.5 h-3.5 text-daintree-text/40 shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
         />
-        <span className="text-sm font-medium text-canopy-text">System requirements</span>
+        <span className="text-sm font-medium text-daintree-text">System requirements</span>
 
         {isChecking && (
-          <span className="flex items-center gap-1.5 ml-auto text-[11px] text-canopy-text/40">
+          <span className="flex items-center gap-1.5 ml-auto text-[11px] text-daintree-text/40">
             <Loader2 className="w-3 h-3 animate-spin" />
             Checking...
           </span>
@@ -125,7 +125,7 @@ export function SystemRequirementsSection({
               {Array.from({ length: 4 }, (_, i) => (
                 <div
                   key={i}
-                  className="rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30 px-3 py-2.5 animate-pulse h-[52px]"
+                  className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 px-3 py-2.5 animate-pulse h-[52px]"
                 />
               ))}
             </div>
@@ -143,7 +143,7 @@ export function SystemRequirementsSection({
             type="button"
             onClick={() => void runCheck()}
             disabled={isChecking}
-            className="inline-flex items-center gap-1.5 text-xs text-canopy-text/50 hover:text-canopy-text disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="inline-flex items-center gap-1.5 text-xs text-daintree-text/50 hover:text-daintree-text disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <RotateCw className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`} />
             {isChecking ? "Checking..." : "Re-check"}

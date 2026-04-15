@@ -17,9 +17,9 @@ interface LogEntryProps {
 
 const LEVEL_COLORS: Record<LogLevel, { bg: string; text: string; border: string }> = {
   debug: {
-    bg: "bg-canopy-border/20",
-    text: "text-canopy-text/60",
-    border: "border-canopy-border/30",
+    bg: "bg-daintree-border/20",
+    text: "text-daintree-text/60",
+    border: "border-daintree-border/30",
   },
   info: {
     bg: "bg-status-info/20",
@@ -76,9 +76,9 @@ function LogEntryComponent({ entry, isExpanded, onToggle }: LogEntryProps) {
   return (
     <div
       className={cn(
-        "border-b border-canopy-border/50 py-1.5 px-2",
-        hasContext && "cursor-pointer hover:bg-canopy-border/30",
-        isExpanded && "bg-canopy-border/20"
+        "border-b border-daintree-border/50 py-1.5 px-2",
+        hasContext && "cursor-pointer hover:bg-daintree-border/30",
+        isExpanded && "bg-daintree-border/20"
       )}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
@@ -96,7 +96,7 @@ function LogEntryComponent({ entry, isExpanded, onToggle }: LogEntryProps) {
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="text-canopy-text/60 text-xs font-mono shrink-0">
+              <span className="text-daintree-text/60 text-xs font-mono shrink-0">
                 {formatTimestamp(entry.timestamp)}
               </span>
             </TooltipTrigger>
@@ -118,12 +118,12 @@ function LogEntryComponent({ entry, isExpanded, onToggle }: LogEntryProps) {
           <span className="text-github-merged text-xs font-mono shrink-0">[{entry.source}]</span>
         )}
 
-        <span className="text-canopy-text text-xs font-mono break-words min-w-0 flex-1">
+        <span className="text-daintree-text text-xs font-mono break-words min-w-0 flex-1">
           {entry.message}
         </span>
 
         {hasContext && (
-          <span className="text-canopy-text/60 text-xs shrink-0">{isExpanded ? "[-]" : "[+]"}</span>
+          <span className="text-daintree-text/60 text-xs shrink-0">{isExpanded ? "[-]" : "[+]"}</span>
         )}
       </div>
 
@@ -133,12 +133,12 @@ function LogEntryComponent({ entry, isExpanded, onToggle }: LogEntryProps) {
           className={cn(
             "mt-2 ml-[72px] p-2 rounded border text-xs font-mono overflow-x-auto",
             colors.border,
-            "bg-canopy-sidebar/50"
+            "bg-daintree-sidebar/50"
           )}
           role="region"
           aria-label="Log entry context"
         >
-          <pre className="text-canopy-text whitespace-pre-wrap select-text">{formatContext(entry.context!)}</pre>
+          <pre className="text-daintree-text whitespace-pre-wrap select-text">{formatContext(entry.context!)}</pre>
         </div>
       )}
     </div>

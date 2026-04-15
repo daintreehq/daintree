@@ -55,15 +55,15 @@ function formatUptime(seconds: number): string {
 }
 
 const STATE_DOT_CLASSES: Record<MemoryState, string> = {
-  normal: "bg-canopy-text/25",
-  elevated: "bg-canopy-text/25",
-  critical: "bg-canopy-text/25",
+  normal: "bg-daintree-text/25",
+  elevated: "bg-daintree-text/25",
+  critical: "bg-daintree-text/25",
 };
 
 const STATE_TEXT_CLASSES: Record<MemoryState, string> = {
-  normal: "text-canopy-text/30",
-  elevated: "text-canopy-text/30",
-  critical: "text-canopy-text/30",
+  normal: "text-daintree-text/30",
+  elevated: "text-daintree-text/30",
+  critical: "text-daintree-text/30",
 };
 
 const TREND_ARROWS: Record<TrendDirection, string> = {
@@ -96,19 +96,19 @@ function HeapBar({ heapStats }: { heapStats: HeapStats }) {
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between text-[10px]">
-        <span className="text-canopy-text/50">V8 Heap</span>
-        <span className="font-mono text-canopy-text/40">
+        <span className="text-daintree-text/50">V8 Heap</span>
+        <span className="font-mono text-daintree-text/40">
           {heapStats.usedMB.toFixed(0)} / {heapStats.limitMB}MB ({heapStats.percent.toFixed(0)}%)
         </span>
       </div>
-      <div className="h-1.5 rounded-full bg-canopy-text/5 overflow-hidden">
+      <div className="h-1.5 rounded-full bg-daintree-text/5 overflow-hidden">
         <div
           className={`h-full rounded-full transition-[width] ${barColor}`}
           style={{ width: `${Math.min(heapStats.percent, 100)}%` }}
         />
       </div>
       {heapStats.externalMB > 50 && (
-        <div className="text-[9px] text-canopy-text/30 font-mono">
+        <div className="text-[9px] text-daintree-text/30 font-mono">
           External: {heapStats.externalMB.toFixed(0)}MB
         </div>
       )}
@@ -119,17 +119,17 @@ function HeapBar({ heapStats }: { heapStats: HeapStats }) {
 function ProcessTable({ metrics }: { metrics: ProcessMetricEntry[] }) {
   return (
     <div className="space-y-1">
-      <div className="text-[10px] text-canopy-text/50 font-medium">Processes</div>
+      <div className="text-[10px] text-daintree-text/50 font-medium">Processes</div>
       <div className="space-y-px">
         {metrics.map((proc) => (
           <div
             key={proc.pid}
             className="flex items-center justify-between text-[10px] font-mono py-0.5"
           >
-            <span className="text-canopy-text/60 truncate max-w-[140px]">
-              {proc.name} <span className="text-canopy-text/25">({proc.pid})</span>
+            <span className="text-daintree-text/60 truncate max-w-[140px]">
+              {proc.name} <span className="text-daintree-text/25">({proc.pid})</span>
             </span>
-            <div className="flex gap-2 text-canopy-text/40 shrink-0">
+            <div className="flex gap-2 text-daintree-text/40 shrink-0">
               <span>{proc.memoryMB}MB</span>
               <span className="w-10 text-right">{proc.cpuPercent}%</span>
             </div>
@@ -153,15 +153,15 @@ function ProjectBreakdown({
 
   return (
     <div className="space-y-1">
-      <div className="text-[10px] text-canopy-text/50 font-medium">Projects</div>
+      <div className="text-[10px] text-daintree-text/50 font-medium">Projects</div>
       <div className="space-y-px">
         {entries.map((entry) => (
           <div
             key={entry.id}
             className="flex items-center justify-between text-[10px] font-mono py-0.5"
           >
-            <span className="text-canopy-text/60 truncate max-w-[140px]">{entry.name}</span>
-            <div className="flex gap-2 text-canopy-text/40 shrink-0">
+            <span className="text-daintree-text/60 truncate max-w-[140px]">{entry.name}</span>
+            <div className="flex gap-2 text-daintree-text/40 shrink-0">
               <span>{entry.stats.terminalCount} terms</span>
               <span>{entry.stats.estimatedMemoryMB}MB</span>
             </div>
@@ -195,14 +195,14 @@ function DiagnosticsSection({
   return (
     <div className="space-y-1">
       <button
-        className="text-[10px] text-canopy-text/50 font-medium hover:text-canopy-text/70 transition-colors flex items-center gap-1"
+        className="text-[10px] text-daintree-text/50 font-medium hover:text-daintree-text/70 transition-colors flex items-center gap-1"
         onClick={() => setExpanded(!expanded)}
       >
         <span className="text-[8px]">{expanded ? "\u25BC" : "\u25B6"}</span>
         Diagnostics
       </button>
       {expanded && (
-        <div className="space-y-1 text-[10px] font-mono text-canopy-text/40 pl-2">
+        <div className="space-y-1 text-[10px] font-mono text-daintree-text/40 pl-2">
           <div>{trendText}</div>
           <div>Uptime: {formatUptime(diagnosticsInfo.uptimeSeconds)}</div>
           {diagnosticsInfo.eventLoopP99Ms > 50 && (
@@ -324,13 +324,13 @@ export function ProjectResourceBadge() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button className="px-4 py-2 border-t border-divider surface-chrome flex items-center justify-between shrink-0 w-full hover:bg-canopy-text/[0.02] transition-colors cursor-pointer">
+        <button className="px-4 py-2 border-t border-divider surface-chrome flex items-center justify-between shrink-0 w-full hover:bg-daintree-text/[0.02] transition-colors cursor-pointer">
           <div className="flex items-center gap-2 min-w-0">
             <span
               key={memoryState}
               className={`inline-flex h-2 w-2 rounded-full ${STATE_DOT_CLASSES[memoryState]} animate-diagnostics-flash shrink-0`}
             />
-            <span className="text-[10px] tabular-nums text-canopy-text/40 font-medium truncate">
+            <span className="text-[10px] tabular-nums text-daintree-text/40 font-medium truncate">
               {stats.runningProjects} project{stats.runningProjects !== 1 ? "s" : ""} active
             </span>
           </div>
@@ -356,7 +356,7 @@ export function ProjectResourceBadge() {
               />
             </>
           ) : (
-            <div className="text-[10px] text-canopy-text/30 text-center py-2">Loading...</div>
+            <div className="text-[10px] text-daintree-text/30 text-center py-2">Loading...</div>
           )}
         </div>
       </PopoverContent>

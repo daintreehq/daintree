@@ -149,7 +149,7 @@ describe("CrashRecoveryDialog", () => {
   it("renders the dialog", () => {
     setup();
     expect(screen.getByTestId("crash-recovery-dialog")).toBeTruthy();
-    expect(screen.getByText("Canopy Crashed")).toBeTruthy();
+    expect(screen.getByText("Daintree Crashed")).toBeTruthy();
   });
 
   describe("with panels (selective restore)", () => {
@@ -317,7 +317,7 @@ describe("CrashRecoveryDialog", () => {
     fireEvent.click(screen.getByTestId("report-button"));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
     expect(window.electron.system.openExternal).toHaveBeenCalledWith(
-      "https://github.com/daintree/canopy/issues/new"
+      "https://github.com/canopyide/canopy/issues/new"
     );
   });
 
@@ -394,7 +394,7 @@ describe("CrashRecoveryDialog", () => {
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
     const clipText = (navigator.clipboard.writeText as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as string;
-    expect(clipText).toContain("Canopy 1.0.0");
+    expect(clipText).toContain("Daintree 1.0.0");
     expect(clipText).toContain("old crash");
     expect(clipText).not.toContain("Electron");
   });

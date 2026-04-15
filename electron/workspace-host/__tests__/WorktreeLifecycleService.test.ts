@@ -151,16 +151,16 @@ describe("WorktreeLifecycleService", () => {
     });
   });
 
-  describe("copyCanopyDir", () => {
+  describe("copyDaintreeDir", () => {
     it("does nothing if source .daintree does not exist", async () => {
       mockAccess.mockRejectedValue(new Error("ENOENT"));
-      await service.copyCanopyDir("/main/repo", "/new/worktree");
+      await service.copyDaintreeDir("/main/repo", "/new/worktree");
       expect(mockCp).not.toHaveBeenCalled();
     });
 
     it("copies .daintree from src to dest even if dest already exists (force:false preserves existing)", async () => {
       mockAccess.mockResolvedValue(undefined); // src exists
-      await service.copyCanopyDir("/main/repo", "/new/worktree");
+      await service.copyDaintreeDir("/main/repo", "/new/worktree");
       expect(mockCp).toHaveBeenCalledWith(
         path.join("/main/repo", ".daintree"),
         path.join("/new/worktree", ".daintree"),
@@ -178,7 +178,7 @@ describe("WorktreeLifecycleService", () => {
         throw new Error("ENOENT"); // dest does not
       });
 
-      await service.copyCanopyDir("/main/repo", "/new/worktree");
+      await service.copyDaintreeDir("/main/repo", "/new/worktree");
       expect(mockCp).toHaveBeenCalledWith(
         path.join("/main/repo", ".daintree"),
         path.join("/new/worktree", ".daintree"),
@@ -197,7 +197,7 @@ describe("WorktreeLifecycleService", () => {
       });
       mockCp.mockRejectedValue(new Error("Permission denied"));
 
-      await expect(service.copyCanopyDir("/main/repo", "/new/worktree")).resolves.toBeUndefined();
+      await expect(service.copyDaintreeDir("/main/repo", "/new/worktree")).resolves.toBeUndefined();
     });
   });
 

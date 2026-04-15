@@ -232,8 +232,8 @@ export function setupPermissionLockdown(): void {
 
   // Shared project session — all project views share this single partition for V8 code cache reuse
   lockdownTrustedPermissions(
-    session.fromPartition("persist:canopy-app"),
-    "canopy-app",
+    session.fromPartition("persist:daintree-app"),
+    "daintree-app",
     TRUSTED_SESSION_PERMISSIONS
   );
 

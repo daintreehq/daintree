@@ -209,12 +209,12 @@ describe("app.theme.pick", () => {
     });
   });
 
-  it("dispatches canopy:open-theme-palette event", async () => {
+  it("dispatches daintree:open-theme-palette event", async () => {
     const { pick } = getActions();
     await pick.run(undefined, stubCtx);
     expect(window.dispatchEvent).toHaveBeenCalledTimes(1);
     const event = (window.dispatchEvent as ReturnType<typeof vi.fn>).mock.calls[0][0] as Event;
-    expect(event.type).toBe("canopy:open-theme-palette");
+    expect(event.type).toBe("daintree:open-theme-palette");
   });
 
   it("has correct metadata", () => {

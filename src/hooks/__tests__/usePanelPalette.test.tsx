@@ -270,7 +270,7 @@ describe("usePanelPalette", () => {
     expect(selected).toBeNull();
     expect(dispatchSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "canopy:open-agent-setup-wizard",
+        type: "daintree:open-agent-setup-wizard",
         detail: { returnToPanelPalette: true },
       })
     );
@@ -294,7 +294,7 @@ describe("usePanelPalette", () => {
     expect(selected).toBeNull();
     expect(dispatchSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "canopy:open-agent-setup-wizard",
+        type: "daintree:open-agent-setup-wizard",
         detail: { returnToPanelPalette: true },
       })
     );
@@ -373,7 +373,7 @@ describe("usePanelPalette", () => {
       expect(selected).toBeNull();
       expect(dispatchSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: "canopy:open-agent-setup-wizard",
+          type: "daintree:open-agent-setup-wizard",
           detail: { returnToPanelPalette: true },
         })
       );

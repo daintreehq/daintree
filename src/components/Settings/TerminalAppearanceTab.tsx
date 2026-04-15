@@ -188,13 +188,13 @@ export function TerminalAppearanceTab({
                     }
                   }}
                   onBlur={handleFontSizeBlur}
-                  className="bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-24 focus:border-canopy-accent focus:outline-none transition-colors"
+                  className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text w-24 focus:border-daintree-accent focus:outline-none transition-colors"
                   aria-label="Terminal font size"
                   aria-invalid={fontSizeError != null || undefined}
                   aria-describedby={fontSizeError ? fontSizeErrorId : undefined}
                 />
-                <span className="text-sm text-canopy-text/50">px</span>
-                <span className="text-xs text-canopy-text/40 ml-auto">
+                <span className="text-sm text-daintree-text/50">px</span>
+                <span className="text-xs text-daintree-text/40 ml-auto">
                   Current: <span className="font-mono">{fontSize}px</span>
                 </span>
               </div>
@@ -208,13 +208,13 @@ export function TerminalAppearanceTab({
             <SettingsSection
               icon={CaseSensitive}
               title="Font Family"
-              description="JetBrains Mono is bundled with Canopy. If it is not available on your system, the terminal will fall back to your platform's monospace font."
+              description="JetBrains Mono is bundled with Daintree. If it is not available on your system, the terminal will fall back to your platform's monospace font."
             >
               <select
                 value={selectedFontFamilyId}
                 onChange={(e) => handleFontFamilyChange(e.target.value)}
                 className={cn(
-                  "bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+                  "bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text w-full focus:border-daintree-accent focus:outline-none transition-colors"
                 )}
                 aria-label="Terminal font family"
               >

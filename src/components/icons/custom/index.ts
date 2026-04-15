@@ -1,6 +1,6 @@
 export { MoveToDockIcon } from "./MoveToDockIcon";
 export { MoveToGridIcon } from "./MoveToGridIcon";
-export { CanopyAgentIcon } from "./CanopyAgentIcon";
+export { DaintreeAgentIcon } from "./DaintreeAgentIcon";
 export { AgentCompletedIcon } from "./AgentCompletedIcon";
 export { CopyTreeIcon } from "./CopyTreeIcon";
 export { SendToAgentIcon } from "./SendToAgentIcon";

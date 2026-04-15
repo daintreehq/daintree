@@ -1,6 +1,6 @@
 # Theme System
 
-Canopy's theming system is a three-layer pipeline shared between the renderer and main process:
+Daintree's theming system is a three-layer pipeline shared between the renderer and main process:
 
 1. `ThemePalette`
    Theme authors define the visual foundation in `shared/theme/palette.ts`: surfaces, text, accent, status, activity, terminal colors, syntax colors, and a small `strategy` object.

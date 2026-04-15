@@ -65,7 +65,7 @@ describe("browserActions adversarial", () => {
       type: string;
       detail: { id: string; url: string };
     };
-    expect(event.type).toBe("canopy:browser-navigate");
+    expect(event.type).toBe("daintree:browser-navigate");
     expect(event.detail).toEqual({ id: "b1", url: "https://a.example" });
   });
 
@@ -148,7 +148,7 @@ describe("browserActions adversarial", () => {
       type: string;
       detail: { id: string; zoomFactor: number };
     };
-    expect(event.type).toBe("canopy:browser-set-zoom");
+    expect(event.type).toBe("daintree:browser-set-zoom");
     expect(event.detail.zoomFactor).toBe(1.5);
   });
 

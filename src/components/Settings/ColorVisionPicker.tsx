@@ -45,11 +45,11 @@ function SwatchPreview() {
       {SWATCH_TOKENS.map((token, i) => (
         <div key={token.var} className="flex flex-col items-center gap-0.5">
           <div
-            className="w-6 h-6 rounded-sm border border-canopy-border/30"
+            className="w-6 h-6 rounded-sm border border-daintree-border/30"
             style={{ backgroundColor: colors[i] }}
             title={token.label}
           />
-          <span className="text-[9px] text-canopy-text/40">{token.label}</span>
+          <span className="text-[9px] text-daintree-text/40">{token.label}</span>
         </div>
       ))}
     </div>
@@ -79,7 +79,7 @@ export function ColorVisionPicker() {
         value={colorVisionMode}
         onChange={(e) => handleChange(e.target.value)}
         className={cn(
-          "bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+          "bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text w-full focus:border-daintree-accent focus:outline-none transition-colors"
         )}
         aria-label="Color vision mode"
       >

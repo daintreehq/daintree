@@ -21,8 +21,8 @@ type LevelFilter = ConsoleLevel | "all";
 
 const LEVEL_STYLES: Record<ConsoleLevel, { row: string; badge: string; label: string }> = {
   log: {
-    row: "text-canopy-text/80",
-    badge: "text-canopy-text/50 bg-canopy-text/10",
+    row: "text-daintree-text/80",
+    badge: "text-daintree-text/50 bg-daintree-text/10",
     label: "LOG",
   },
   info: {
@@ -84,7 +84,7 @@ function ConsoleRow({
       )}
       style={indentPx > 0 ? { paddingLeft: `${8 + indentPx}px` } : undefined}
     >
-      <span className="shrink-0 text-canopy-text/30 select-none tabular-nums">
+      <span className="shrink-0 text-daintree-text/30 select-none tabular-nums">
         {formatTime(msg.timestamp)}
       </span>
       <span
@@ -101,7 +101,7 @@ function ConsoleRow({
             <button
               type="button"
               onClick={onToggleGroup}
-              className="text-canopy-text/40 mr-1 select-none hover:text-canopy-text/60"
+              className="text-daintree-text/40 mr-1 select-none hover:text-daintree-text/60"
             >
               {isGroupCollapsed ? "▶" : "▼"}
             </button>
@@ -114,7 +114,7 @@ function ConsoleRow({
               </span>
             ))
           ) : (
-            <span className="text-canopy-text/50">{msg.summaryText}</span>
+            <span className="text-daintree-text/50">{msg.summaryText}</span>
           )}
         </div>
         {msg.stackTrace && <StackTrace stackTrace={msg.stackTrace} />}
@@ -249,13 +249,13 @@ export function ConsolePanel({ paneId, height = 200, webContentsId }: ConsolePan
   }, []);
 
   const buttonClass =
-    "px-2 py-0.5 rounded text-[10px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50";
+    "px-2 py-0.5 rounded text-[10px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-daintree-accent/50";
 
   return (
-    <div className="flex flex-col border-t border-overlay bg-canopy-bg" style={{ height }}>
+    <div className="flex flex-col border-t border-overlay bg-daintree-bg" style={{ height }}>
       {/* Toolbar */}
       <div className="flex items-center gap-1.5 px-2 py-1 border-b border-overlay bg-surface shrink-0">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-canopy-text/50 mr-1">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-daintree-text/50 mr-1">
           Console
         </span>
 
@@ -269,8 +269,8 @@ export function ConsolePanel({ paneId, height = 200, webContentsId }: ConsolePan
               className={cn(
                 buttonClass,
                 levelFilter === filter
-                  ? "bg-overlay-emphasis text-canopy-text"
-                  : "text-canopy-text/50 hover:bg-overlay-soft hover:text-canopy-text/70"
+                  ? "bg-overlay-emphasis text-daintree-text"
+                  : "text-daintree-text/50 hover:bg-overlay-soft hover:text-daintree-text/70"
               )}
             >
               {label}
@@ -290,7 +290,7 @@ export function ConsolePanel({ paneId, height = 200, webContentsId }: ConsolePan
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Filter…"
-          className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-[11px] rounded bg-canopy-bg border border-overlay focus:outline-none focus:border-border-strong text-canopy-text placeholder:text-canopy-text/30"
+          className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-[11px] rounded bg-daintree-bg border border-overlay focus:outline-none focus:border-border-strong text-daintree-text placeholder:text-daintree-text/30"
         />
 
         <div className="flex-1" />
@@ -303,7 +303,7 @@ export function ConsolePanel({ paneId, height = 200, webContentsId }: ConsolePan
                 <button
                   type="button"
                   onClick={handleScrollToBottom}
-                  className="p-1 rounded hover:bg-overlay-medium text-canopy-text/50 hover:text-canopy-text transition-colors"
+                  className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
                 >
                   <ChevronDown className="w-3.5 h-3.5" />
                 </button>
@@ -320,7 +320,7 @@ export function ConsolePanel({ paneId, height = 200, webContentsId }: ConsolePan
               <button
                 type="button"
                 onClick={() => clearMessages(paneId)}
-                className="p-1 rounded hover:bg-overlay-medium text-canopy-text/50 hover:text-canopy-text transition-colors"
+                className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
                 aria-label="Clear console"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -338,7 +338,7 @@ export function ConsolePanel({ paneId, height = 200, webContentsId }: ConsolePan
         className="flex-1 overflow-y-auto font-mono text-[11px] leading-relaxed"
       >
         {filtered.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-canopy-text/30 text-xs select-none">
+          <div className="flex items-center justify-center h-full text-daintree-text/30 text-xs select-none">
             {allMessages.length === 0 ? "No console output" : "No messages match filter"}
           </div>
         ) : (

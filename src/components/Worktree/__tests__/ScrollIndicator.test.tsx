@@ -84,7 +84,7 @@ describe("ScrollIndicator", () => {
     render(<ScrollIndicator direction="below" count={1} onClick={onClick} />);
     const button = screen.getByRole("button");
     expect(button.className).toContain("rounded-full");
-    expect(button.className).toContain("bg-canopy-bg/90");
+    expect(button.className).toContain("bg-daintree-bg/90");
   });
 
   it("uses translate-y-0 when visible (below)", () => {

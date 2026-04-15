@@ -165,8 +165,8 @@ export function CommandPicker({
         itemIdPrefix="command"
         renderBody={() => (
           <div className="flex flex-col items-center justify-center py-8 space-y-2">
-            <Spinner size="xl" className="text-canopy-text/40" />
-            <p className="text-sm text-canopy-text/50">Loading commands...</p>
+            <Spinner size="xl" className="text-daintree-text/40" />
+            <p className="text-sm text-daintree-text/50">Loading commands...</p>
           </div>
         )}
       />
@@ -192,7 +192,7 @@ export function CommandPicker({
             {category && (
               <div
                 className={cn(
-                  "px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider text-canopy-text/40",
+                  "px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider text-daintree-text/40",
                   index > 0 && "mt-2"
                 )}
               >
@@ -211,23 +211,23 @@ export function CommandPicker({
               className={cn(
                 "relative w-full flex flex-col gap-0.5 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
                 isSelected
-                  ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-                  : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text",
+                  ? "bg-overlay-soft border-overlay text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
+                  : "border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text",
                 !cmd.enabled && "opacity-50 cursor-not-allowed"
               )}
               onClick={() => cmd.enabled && onSelect(cmd)}
             >
               <div className="flex items-center justify-between">
-                <span className="font-mono text-sm text-canopy-text/90">/{cmd.id}</span>
+                <span className="font-mono text-sm text-daintree-text/90">/{cmd.id}</span>
                 {cmd.hasBuilder && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-canopy-accent/20 text-canopy-accent">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-daintree-accent/20 text-daintree-accent">
                     Builder
                   </span>
                 )}
               </div>
-              <div className="text-xs text-canopy-text/50 line-clamp-1">{cmd.description}</div>
+              <div className="text-xs text-daintree-text/50 line-clamp-1">{cmd.description}</div>
               {!cmd.enabled && cmd.disabledReason && (
-                <div className="text-[10px] text-canopy-text/40 italic">{cmd.disabledReason}</div>
+                <div className="text-[10px] text-daintree-text/40 italic">{cmd.disabledReason}</div>
               )}
             </button>
           </div>
@@ -243,7 +243,7 @@ export function CommandPicker({
       emptyMessage="No commands available"
       noMatchMessage={`No commands match "${query}"`}
       emptyContent={
-        <p className="mt-2 text-xs text-canopy-text/40">
+        <p className="mt-2 text-xs text-daintree-text/40">
           Commands are context-dependent and may vary by project.
         </p>
       }

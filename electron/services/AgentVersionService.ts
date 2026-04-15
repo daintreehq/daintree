@@ -273,7 +273,7 @@ export class AgentVersionService {
           signal: controller.signal,
           headers: {
             Accept: "application/vnd.github.v3+json",
-            "User-Agent": "Canopy-Electron",
+            "User-Agent": "Daintree-Electron",
           },
         });
 

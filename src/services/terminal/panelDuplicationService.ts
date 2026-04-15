@@ -20,7 +20,7 @@ async function resolveCommandForPanel(panel: TerminalInstance): Promise<string |
           systemClient.getTmpDir().catch(() => ""),
         ]);
         const entry = agentSettings?.agents?.[panel.agentId] ?? {};
-        const clipboardDirectory = tmpDir ? `${tmpDir}/canopy-clipboard` : undefined;
+        const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
         return generateAgentCommand(agentConfig.command, entry, panel.agentId, {
           interactive: true,
           clipboardDirectory,

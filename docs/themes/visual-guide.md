@@ -1,12 +1,12 @@
-# Canopy Visual Design Guide
+# Daintree Visual Design Guide
 
-This document paints a complete mental picture of every surface, component, and interaction in the Canopy app, explaining exactly how theme tokens map to what the user sees. Use this to evaluate theme designs without running the app.
+This document paints a complete mental picture of every surface, component, and interaction in the Daintree app, explaining exactly how theme tokens map to what the user sees. Use this to evaluate theme designs without running the app.
 
 ---
 
 ## 1. The Big Picture: App Shell
 
-Canopy is a full-screen Electron IDE that fills the entire window. The layout is a vertical stack:
+Daintree is a full-screen Electron IDE that fills the entire window. The layout is a vertical stack:
 
 ```
 +------------------------------------------------------------------+
@@ -228,7 +228,7 @@ Between the sidebar and content grid, there's a draggable resize handle:
 | (drag handle: 3px wide, visible on hover as a 2px rounded bar)
 ```
 
-The handle is nearly invisible by default (`text-canopy-text/20`), brightens on hover (`/35`), and turns accent-colored when actively dragging.
+The handle is nearly invisible by default (`text-daintree-text/20`), brightens on hover (`/35`), and turns accent-colored when actively dragging.
 
 ---
 
@@ -261,7 +261,7 @@ When no panels are open, the grid shows a welcome/dashboard view:
 ```
 +-----------------------------------------------+
 |                                                |
-|   :leaves: Canopy                              |
+|   :leaves: Daintree                              |
 |   Ready to work on [ProjectName]               |
 |                                                |
 |   +--Project Pulse Card--+                     |
@@ -357,7 +357,7 @@ The dock sits at the very bottom of the window. It's a horizontal bar showing mi
 ```
 
 ```css
-background: var(--dock-bg, var(--color-canopy-sidebar));
+background: var(--dock-bg, var(--color-daintree-sidebar));
 border-top: 1px solid var(--dock-border);
 box-shadow: var(--dock-shadow);
 ```
@@ -469,7 +469,7 @@ The settings dialog is split into two panes:
 |--------|                                  |
 | Panel  |  Each card uses:                 |
 | Wktree |  bg: settings-card-bg            |
-| Toolbar|  border: 1px canopy-border       |
+| Toolbar|  border: 1px daintree-border       |
 | Environ|  rounded corners                 |
 |--------|                                  |
 | CLI    |                                  |
@@ -541,10 +541,10 @@ Within some settings sections (e.g., General has Overview/Hibernation/Display), 
 The active subtab shows a 2px `accent-primary` colored line along the bottom:
 
 ```css
-isactive?"border-b-2 border-canopy-accent text-canopy-text": "border-b-2 border-transparent text-text-secondary";
+isactive?"border-b-2 border-daintree-accent text-daintree-text": "border-b-2 border-transparent text-text-secondary";
 ```
 
-Inactive tabs have a transparent bottom border (same 2px so layout doesn't shift) and use `text-secondary`. On hover, inactive tabs show `border-canopy-border` (a subtle gray line).
+Inactive tabs have a transparent bottom border (same 2px so layout doesn't shift) and use `text-secondary`. On hover, inactive tabs show `border-daintree-border` (a subtle gray line).
 
 ### Settings Cards
 

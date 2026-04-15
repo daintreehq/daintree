@@ -41,7 +41,7 @@ function createFileTooltipContent(token: AtFileToken): HTMLElement {
   container.className = "max-w-[300px]";
 
   const pathEl = document.createElement("p");
-  pathEl.className = "text-[11px] text-canopy-text/90 leading-snug font-mono break-all";
+  pathEl.className = "text-[11px] text-daintree-text/90 leading-snug font-mono break-all";
   pathEl.textContent = token.path;
   container.appendChild(pathEl);
 

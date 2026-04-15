@@ -7,7 +7,7 @@ vi.mock("@shared/config/agentIds", () => ({
 
 let useToolbarPreferencesStore: typeof import("../toolbarPreferencesStore").useToolbarPreferencesStore;
 
-const STORAGE_KEY = "canopy-toolbar-preferences";
+const STORAGE_KEY = "daintree-toolbar-preferences";
 
 let storage: Record<string, string> = {};
 

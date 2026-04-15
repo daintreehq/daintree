@@ -218,7 +218,7 @@ test.describe.serial("Core: Error Persistence Across Restart", () => {
   let ctx: AppContext | null = null;
 
   test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-error-persist-"));
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-error-persist-"));
   });
 
   test.afterAll(async () => {

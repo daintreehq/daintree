@@ -107,7 +107,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
             onClick={onToggleExpand}
             aria-expanded={true}
             aria-controls={detailsPanelId}
-            className="worktree-section-button flex w-full items-center justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-2.5 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
+            className="worktree-section-button flex w-full items-center justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-2.5 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
             id={`${detailsId}-button`}
           >
             <span className="text-xs font-medium text-text-muted">Details</span>
@@ -152,7 +152,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
             aria-controls={detailsPanelId}
             className={cn(
               "worktree-section-button flex min-w-0 flex-1 items-center justify-between px-3 py-2.5 text-left transition-colors",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
               onOpenReviewHub && hasChanges
                 ? "rounded-l-[var(--radius-lg)]"
                 : "rounded-[var(--radius-lg)]"
@@ -264,7 +264,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                             e.stopPropagation();
                             onResourceResume();
                           }}
-                          className="shrink-0 p-1 rounded transition-colors text-status-success/70 hover:text-status-success hover:bg-overlay-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                          className="shrink-0 p-1 rounded transition-colors text-status-success/70 hover:text-status-success hover:bg-overlay-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
                           aria-label="Resume Resource"
                         >
                           <Play className="w-3 h-3" />
@@ -281,7 +281,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                             e.stopPropagation();
                             onResourcePause();
                           }}
-                          className="shrink-0 p-1 rounded transition-colors text-status-error/70 hover:text-status-error hover:bg-overlay-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                          className="shrink-0 p-1 rounded transition-colors text-status-error/70 hover:text-status-error hover:bg-overlay-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
                           aria-label="Pause Resource"
                         >
                           <Square className="w-3 h-3" />
@@ -298,7 +298,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                             e.stopPropagation();
                             onResourceConnect!();
                           }}
-                          className="shrink-0 p-1 rounded transition-colors text-status-info/70 hover:text-status-info hover:bg-overlay-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                          className="shrink-0 p-1 rounded transition-colors text-status-info/70 hover:text-status-info hover:bg-overlay-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
                           aria-label="Connect to Resource"
                         >
                           <Plug className="w-3 h-3" />
@@ -337,7 +337,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     "shrink-0 border-l border-border-default px-2 py-1 transition-colors",
                     "text-[var(--color-state-active)]/70 hover:bg-[var(--color-state-active)]/10 hover:text-[var(--color-state-active)]",
                     "rounded-r-[var(--radius-lg)]",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent"
                   )}
                   aria-label="Open Review & Commit"
                 >

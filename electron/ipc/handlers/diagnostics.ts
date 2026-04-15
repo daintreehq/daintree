@@ -116,7 +116,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     const win = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
     const dialogOpts = {
       title: "Save Diagnostics",
-      defaultPath: `canopy-diagnostics-${timestamp}.json`,
+      defaultPath: `daintree-diagnostics-${timestamp}.json`,
       filters: [{ name: "JSON", extensions: ["json"] }],
     };
     const { filePath, canceled } = win

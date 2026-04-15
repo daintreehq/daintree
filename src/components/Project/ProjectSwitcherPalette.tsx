@@ -84,7 +84,7 @@ const StatusDot = memo(function StatusDot({ project }: { project: SearchableProj
   if (hasActive) {
     return (
       <div
-        className="w-1.5 h-1.5 rounded-full bg-canopy-accent animate-agent-pulse shrink-0"
+        className="w-1.5 h-1.5 rounded-full bg-daintree-accent animate-agent-pulse shrink-0"
         aria-label="Agents working"
       />
     );
@@ -107,7 +107,7 @@ const StatusDot = memo(function StatusDot({ project }: { project: SearchableProj
   }
   return (
     <div
-      className="w-1.5 h-1.5 rounded-full border border-canopy-text/20 shrink-0"
+      className="w-1.5 h-1.5 rounded-full border border-daintree-text/20 shrink-0"
       aria-label="Idle"
     />
   );
@@ -130,15 +130,15 @@ const ProjectListItem = memo(function ProjectListItem({
     if (project.isMissing)
       return { secondaryText: "Directory not found", secondaryClass: "text-status-warning/70" };
     if (project.activeAgentCount > 0)
-      return { secondaryText: "Agent working\u2026", secondaryClass: "text-canopy-accent/80" };
+      return { secondaryText: "Agent working\u2026", secondaryClass: "text-daintree-accent/80" };
     if (project.waitingAgentCount > 0)
       return { secondaryText: "Needs review", secondaryClass: "text-status-warning/80" };
     if (project.lastOpened > 0)
       return {
         secondaryText: formatTimeAgo(project.lastOpened),
-        secondaryClass: "text-canopy-text/50",
+        secondaryClass: "text-daintree-text/50",
       };
-    return { secondaryText: project.displayPath, secondaryClass: "text-canopy-text/50" };
+    return { secondaryText: project.displayPath, secondaryClass: "text-daintree-text/50" };
   })();
 
   const row = (
@@ -150,15 +150,15 @@ const ProjectListItem = memo(function ProjectListItem({
       className={cn(
         "group relative w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
         project.isActive
-          ? cn("text-canopy-text", isSelected && "bg-overlay-soft border-border-subtle")
+          ? cn("text-daintree-text", isSelected && "bg-overlay-soft border-border-subtle")
           : project.isMissing
             ? cn(
-                "text-canopy-text/50",
+                "text-daintree-text/50",
                 isSelected ? "bg-overlay-soft border-border-subtle" : "hover:bg-overlay-soft"
               )
             : isSelected
-              ? "bg-overlay-soft border-border-subtle text-canopy-text cursor-pointer"
-              : "text-canopy-text/70 hover:bg-overlay-soft hover:text-canopy-text cursor-pointer"
+              ? "bg-overlay-soft border-border-subtle text-daintree-text cursor-pointer"
+              : "text-daintree-text/70 hover:bg-overlay-soft hover:text-daintree-text cursor-pointer"
       )}
       onClick={() => !project.isActive && !project.isMissing && onSelect(project)}
     >
@@ -172,7 +172,7 @@ const ProjectListItem = memo(function ProjectListItem({
         style={{
           background: project.color
             ? `linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), ${getProjectGradient(project.color)}`
-            : "linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), var(--color-canopy-sidebar)",
+            : "linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), var(--color-daintree-sidebar)",
         }}
       >
         <span className="leading-none select-none filter drop-shadow-sm">{project.emoji}</span>
@@ -183,7 +183,7 @@ const ProjectListItem = memo(function ProjectListItem({
           <span
             className={cn(
               "truncate text-sm font-semibold leading-tight",
-              project.isActive || isSelected ? "text-canopy-text" : "text-canopy-text/85"
+              project.isActive || isSelected ? "text-daintree-text" : "text-daintree-text/85"
             )}
           >
             {project.name}
@@ -380,7 +380,7 @@ function ProjectListContent({
       <div ref={listRef} id="project-list" role="listbox" aria-label="Projects">
         {displayResults.length === 0 ? (
           <div className="p-2">
-            <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
+            <div className="px-3 py-8 text-center text-daintree-text/50 text-sm">
               {query.trim() ? (
                 <div>{`No projects match "${query}"`}</div>
               ) : mode === "modal" ? (
@@ -407,7 +407,7 @@ function ProjectListContent({
                   )}
                 >
                   {section.label && (
-                    <div className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-canopy-text/40 select-none">
+                    <div className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none">
                       {section.label}
                     </div>
                   )}
@@ -424,7 +424,8 @@ function ProjectListContent({
   );
 }
 
-const KBD_CLASS = "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60";
+const KBD_CLASS =
+  "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60";
 
 function ProjectSwitcherFooter({ mode }: { mode?: ProjectSwitcherMode }) {
   const modifiers = useModifierKeys();
@@ -443,14 +444,14 @@ function ProjectSwitcherFooter({ mode }: { mode?: ProjectSwitcherMode }) {
           <span className="ml-1.5">{hint.label}</span>
         </span>
         {mode !== "modal" && (
-          <span className="text-canopy-text/30">
+          <span className="text-daintree-text/30">
             <kbd className={KBD_CLASS}>⌘⌫</kbd>
             <span className="ml-1.5">Remove</span>
           </span>
         )}
       </div>
       {mode !== "modal" && (
-        <span className="text-canopy-text/30">
+        <span className="text-daintree-text/30">
           <span>Right-click for more</span>
         </span>
       )}
@@ -993,7 +994,7 @@ export function ProjectSwitcherPalette({
           <div className="space-y-3">
             <div>
               <div className="font-medium text-sm">{removeConfirmProject.name}</div>
-              <div className="text-xs text-canopy-text/50 font-mono mt-1">
+              <div className="text-xs text-daintree-text/50 font-mono mt-1">
                 {removeConfirmProject.path}
               </div>
             </div>
@@ -1032,7 +1033,7 @@ export function ProjectSwitcherPalette({
                     </div>
                   </div>
                 )}
-            <div className="text-xs text-canopy-text/60">
+            <div className="text-xs text-daintree-text/60">
               {removeConfirmProject.isActive
                 ? "The project will remain in your list and can be reopened at any time."
                 : "This project will be removed from your list. You can add it back later, but any running terminals or processes will need to be restarted."}

@@ -483,7 +483,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           systemClient.getTmpDir().catch(() => ""),
         ]);
         agentSettings = settings;
-        clipboardDirectory = tmpDir ? `${tmpDir}/canopy-clipboard` : undefined;
+        clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
       } catch (error) {
         console.warn("Failed to fetch agent settings for recipe:", error);
       }

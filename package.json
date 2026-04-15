@@ -1,8 +1,8 @@
 {
-  "name": "canopy-app",
-  "productName": "Canopy",
+  "name": "daintree-app",
+  "productName": "Daintree",
   "version": "0.6.0",
-  "description": "Canopy IDE - An Electron-based development environment",
+  "description": "Daintree IDE - An Electron-based development environment",
   "author": {
     "name": "Greg Priday",
     "email": "greg@siteorigin.com"
@@ -197,7 +197,7 @@
       }
     ],
     "electronUpdaterCompatibility": ">=2.16",
-    "productName": "Canopy",
+    "productName": "Daintree",
     "npmRebuild": true,
     "electronLanguages": [
       "en-US"
@@ -240,8 +240,8 @@
     "mac": {
       "extraResources": [
         {
-          "from": "scripts/canopy-cli.sh",
-          "to": "canopy-cli.sh"
+          "from": "scripts/daintree-cli.sh",
+          "to": "daintree-cli.sh"
         }
       ],
       "x64ArchFiles": "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/**",
@@ -255,7 +255,7 @@
       "extendInfo": {
         "CFBundleIconName": "Icon",
         "NSPrefersDisplaySafeAreaCompatibilityMode": false,
-        "NSMicrophoneUsageDescription": "Canopy uses the microphone for voice dictation into terminal inputs."
+        "NSMicrophoneUsageDescription": "Daintree uses the microphone for voice dictation into terminal inputs."
       },
       "target": [
         {
@@ -321,7 +321,7 @@
     },
     "linux": {
       "icon": "build/icon.png",
-      "executableName": "canopy-app",
+      "executableName": "daintree-app",
       "target": [
         "AppImage",
         "deb"
@@ -329,17 +329,17 @@
       "category": "Development",
       "desktop": {
         "entry": {
-          "StartupWMClass": "canopy-app"
+          "StartupWMClass": "daintree-app"
         }
       },
       "extraResources": [
         {
-          "from": "scripts/canopy-cli.sh",
-          "to": "canopy-cli.sh"
+          "from": "scripts/daintree-cli.sh",
+          "to": "daintree-cli.sh"
         },
         {
-          "from": "build/linux/canopy.apparmor",
-          "to": "canopy.apparmor"
+          "from": "build/linux/daintree.apparmor",
+          "to": "daintree.apparmor"
         }
       ]
     },

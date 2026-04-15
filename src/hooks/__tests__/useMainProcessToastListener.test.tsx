@@ -58,14 +58,14 @@ describe("useMainProcessToastListener", () => {
       capturedCallback!({
         type: "success",
         title: "CLI Installed",
-        message: "The canopy command is now available",
+        message: "The daintree command is now available",
       });
     });
 
     expect(notifyMock).toHaveBeenCalledWith({
       type: "success",
       title: "CLI Installed",
-      message: "The canopy command is now available",
+      message: "The daintree command is now available",
       action: undefined,
     });
   });

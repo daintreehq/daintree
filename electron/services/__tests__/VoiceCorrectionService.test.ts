@@ -109,17 +109,17 @@ describe("VoiceCorrectionService", () => {
 
     const svc = new VoiceCorrectionService();
     await svc.correct(
-      { rawText: "canopy is great" },
+      { rawText: "daintree is great" },
       {
         ...BASE_SETTINGS,
-        projectName: "Canopy",
-        customDictionary: ["Canopy", "Worktree"],
+        projectName: "Daintree",
+        customDictionary: ["Daintree", "Worktree"],
       }
     );
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(init.body as string);
-    expect(body.instructions).toContain("Canopy");
+    expect(body.instructions).toContain("Daintree");
     expect(body.instructions).toContain("Worktree");
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });

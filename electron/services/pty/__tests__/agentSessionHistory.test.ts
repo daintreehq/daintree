@@ -17,7 +17,7 @@ describe("agentSessionHistory", () => {
   const previousUserData = process.env.DAINTREE_USER_DATA;
 
   beforeEach(async () => {
-    userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "canopy-session-history-"));
+    userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "daintree-session-history-"));
     process.env.DAINTREE_USER_DATA = userDataDir;
   });
 

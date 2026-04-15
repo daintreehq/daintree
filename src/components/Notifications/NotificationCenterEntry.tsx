@@ -42,7 +42,7 @@ export function NotificationCenterEntry({
     <div
       className={cn(
         "group flex items-start gap-2.5 px-3 py-2 hover:bg-overlay-medium transition-colors border-l-2",
-        isNew ? "border-canopy-accent bg-canopy-accent/[0.04]" : "border-transparent"
+        isNew ? "border-daintree-accent bg-daintree-accent/[0.04]" : "border-transparent"
       )}
     >
       <div className={cn("mt-0.5 shrink-0", config.className)}>
@@ -50,11 +50,11 @@ export function NotificationCenterEntry({
       </div>
       <div className="flex-1 min-w-0">
         {entry.title && (
-          <p className="text-xs font-medium text-canopy-text truncate">{entry.title}</p>
+          <p className="text-xs font-medium text-daintree-text truncate">{entry.title}</p>
         )}
-        <p className="text-xs text-canopy-text/70 leading-snug break-words">{entry.message}</p>
+        <p className="text-xs text-daintree-text/70 leading-snug break-words">{entry.message}</p>
         {threadCount && threadCount > 1 && (
-          <p className="text-[10px] tabular-nums text-canopy-text/40 mt-0.5">
+          <p className="text-[10px] tabular-nums text-daintree-text/40 mt-0.5">
             {threadCount} events
           </p>
         )}
@@ -84,9 +84,9 @@ export function NotificationCenterEntry({
                     "h-6 rounded-[var(--radius-sm)] px-2 text-[11px] font-medium transition-colors",
                     isAvailable
                       ? action.variant === "secondary"
-                        ? "border border-canopy-text/20 text-canopy-text/70 hover:bg-overlay-medium"
-                        : "border border-canopy-accent/40 bg-canopy-accent/15 text-canopy-accent hover:bg-canopy-accent/25"
-                      : "border border-canopy-text/10 text-canopy-text/30 cursor-not-allowed"
+                        ? "border border-daintree-text/20 text-daintree-text/70 hover:bg-overlay-medium"
+                        : "border border-daintree-accent/40 bg-daintree-accent/15 text-daintree-accent hover:bg-daintree-accent/25"
+                      : "border border-daintree-text/10 text-daintree-text/30 cursor-not-allowed"
                   )}
                 >
                   {action.label}
@@ -97,11 +97,14 @@ export function NotificationCenterEntry({
         )}
       </div>
       <div className="shrink-0 flex items-center gap-1.5 mt-0.5">
-        <span className="text-[10px] text-canopy-text/40 tabular-nums">
+        <span className="text-[10px] text-daintree-text/40 tabular-nums">
           {formatRelativeTime(entry.timestamp)}
         </span>
         {isNew && (
-          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-canopy-accent shrink-0" />
+          <span
+            aria-hidden="true"
+            className="h-1.5 w-1.5 rounded-full bg-daintree-accent shrink-0"
+          />
         )}
         {onDismiss && (
           <button
@@ -111,7 +114,7 @@ export function NotificationCenterEntry({
               e.stopPropagation();
               onDismiss();
             }}
-            className="opacity-0 group-hover:opacity-100 focus:opacity-100 h-4 w-4 flex items-center justify-center rounded text-canopy-text/40 hover:text-canopy-text/70 transition-opacity"
+            className="opacity-0 group-hover:opacity-100 focus:opacity-100 h-4 w-4 flex items-center justify-center rounded text-daintree-text/40 hover:text-daintree-text/70 transition-opacity"
           >
             <X className="h-3 w-3" />
           </button>

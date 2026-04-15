@@ -1,16 +1,16 @@
 # GitHub Issue Guidelines
 
-When helping a user submit a feature request or bug report to the Canopy repository (`daintree/canopy`), use these guidelines to ensure the issue is well-scoped and likely to be accepted.
+When helping a user submit a feature request or bug report to the Daintree repository (`canopyide/canopy`), use these guidelines to ensure the issue is well-scoped and likely to be accepted.
 
-## What Canopy Is
+## What Daintree Is
 
-Canopy is a **desktop orchestration layer for AI coding agents**. It manages panels, terminals, worktrees, context injection, and automation workflows around CLI agents (Claude, Gemini, Codex, OpenCode, Cursor). It is NOT a code editor, Git GUI, or chat interface.
+Daintree is a **desktop orchestration layer for AI coding agents**. It manages panels, terminals, worktrees, context injection, and automation workflows around CLI agents (Claude, Gemini, Codex, OpenCode, Cursor). It is NOT a code editor, Git GUI, or chat interface.
 
 Issues must relate to orchestration concerns — how users launch, monitor, coordinate, and intervene with agents and their surrounding workflows.
 
 ## Feature Requests
 
-A good feature request must pass Canopy's **Green Light test** — it should satisfy at least two of these criteria:
+A good feature request must pass Daintree's **Green Light test** — it should satisfy at least two of these criteria:
 
 1. **Accelerates context injection** — Makes it faster to feed the right files, errors, diffs, or screenshots to an agent
 2. **Unblocks the agent** — Detects when an agent is stuck, waiting, or failed and helps the user intervene
@@ -23,9 +23,9 @@ A good feature request must pass Canopy's **Green Light test** — it should sat
 **Reject features that:**
 
 - Reinvent the code editor (use VS Code for editing)
-- Reinvent a Git GUI (Canopy does lightweight commit/push only)
+- Reinvent a Git GUI (Daintree does lightweight commit/push only)
 - Reinvent a chat UI (agents run in terminals, not chat bubbles)
-- Require excessive configuration (Canopy should work with zero config)
+- Require excessive configuration (Daintree should work with zero config)
 - Add decoration without conveying state or aiding workflows
 - Duplicate what the CLI agent already does well without adding orchestration value
 - Are one-off utilities better solved with a shell alias or external tool
@@ -47,7 +47,7 @@ Keep it concise. Don't over-specify implementation details — the maintainers k
 
 ## Bug Reports
 
-Bug reports are accepted when they describe a clear, reproducible problem with an existing Canopy feature.
+Bug reports are accepted when they describe a clear, reproducible problem with an existing Daintree feature.
 
 **Good bug reports include:**
 
@@ -72,7 +72,7 @@ Bug reports are accepted when they describe a clear, reproducible problem with a
 [What happens instead]
 
 ## Environment
-[OS, Canopy version if known]
+[OS, Daintree version if known]
 ```
 
 **Don't submit bug reports for:**

@@ -64,7 +64,7 @@ describe("useTerminalFileTransfer hook", () => {
       clipboard: {
         saveImage: vi.fn().mockResolvedValue({
           ok: true,
-          filePath: "/tmp/canopy-clipboard/clipboard-123-abc.png",
+          filePath: "/tmp/daintree-clipboard/clipboard-123-abc.png",
           thumbnailDataUrl: "data:image/png;base64,abc",
         }),
         thumbnailFromPath: vi.fn(),
@@ -152,7 +152,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     expect(terminalClient.write).toHaveBeenCalledWith(
       "term-1",
-      escapeShellArgOptional("/tmp/canopy-clipboard/clipboard-123-abc.png")
+      escapeShellArgOptional("/tmp/daintree-clipboard/clipboard-123-abc.png")
     );
     expect(terminalInstanceService.notifyUserInput).toHaveBeenCalledWith("term-1");
     expect(event.defaultPrevented).toBe(true);
@@ -171,7 +171,7 @@ describe("useTerminalFileTransfer hook", () => {
     });
 
     expect(onInput).toHaveBeenCalledWith(
-      escapeShellArgOptional("/tmp/canopy-clipboard/clipboard-123-abc.png")
+      escapeShellArgOptional("/tmp/daintree-clipboard/clipboard-123-abc.png")
     );
   });
 
@@ -219,7 +219,7 @@ describe("useTerminalFileTransfer hook", () => {
   it("image paste escapes paths with spaces", async () => {
     (window.electron.clipboard.saveImage as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: true,
-      filePath: "/tmp/canopy clipboard/my screenshot.png",
+      filePath: "/tmp/daintree clipboard/my screenshot.png",
       thumbnailDataUrl: "data:image/png;base64,abc",
     });
 
@@ -235,7 +235,7 @@ describe("useTerminalFileTransfer hook", () => {
 
     expect(terminalClient.write).toHaveBeenCalledWith(
       "term-1",
-      escapeShellArgOptional("/tmp/canopy clipboard/my screenshot.png")
+      escapeShellArgOptional("/tmp/daintree clipboard/my screenshot.png")
     );
   });
 

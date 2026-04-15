@@ -25,7 +25,7 @@ export function reduceScrollback(managed: ManagedTerminal, targetLines: number):
 
   if (scrollbackUsed > targetLines) {
     managed.terminal.write(
-      `\r\n\x1b[33m[Canopy] Scrollback reduced to ${targetLines} lines due to memory pressure. Older history is no longer available.\x1b[0m\r\n`
+      `\r\n\x1b[33m[Daintree] Scrollback reduced to ${targetLines} lines due to memory pressure. Older history is no longer available.\x1b[0m\r\n`
     );
   }
 }

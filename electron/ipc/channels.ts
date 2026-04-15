@@ -430,7 +430,7 @@ export const CHANNELS = {
   AGENT_CAPABILITIES_GET_AGENT_METADATA: "agent-capabilities:get-agent-metadata",
   AGENT_CAPABILITIES_IS_AGENT_ENABLED: "agent-capabilities:is-agent-enabled",
 
-  // Canopy CLI install channels
+  // Daintree CLI install channels
   CLI_INSTALL: "cli:install",
   CLI_GET_STATUS: "cli:get-status",
 

@@ -1,6 +1,6 @@
 # Assistant Listener Architecture
 
-The Canopy Assistant can subscribe to application events using the `register_listener` tool. This enables reactive workflows where the assistant monitors terminal agent state changes and responds appropriately.
+The Daintree Assistant can subscribe to application events using the `register_listener` tool. This enables reactive workflows where the assistant monitors terminal agent state changes and responds appropriately.
 
 ## Event Flow Architecture
 

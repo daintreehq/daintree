@@ -97,38 +97,38 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
           placeholder="Search shortcuts..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full px-4 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+          className="w-full px-4 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-daintree-accent"
         />
       </AppDialog.Header>
 
       <AppDialog.Body>
         {sortedCategories.length === 0 ? (
-          <div className="text-center text-canopy-text/60 py-8">
+          <div className="text-center text-daintree-text/60 py-8">
             No shortcuts found matching "{searchQuery}"
           </div>
         ) : (
           <div className="space-y-8">
             {sortedCategories.map((category) => (
               <div key={category}>
-                <h3 className="text-lg font-semibold text-canopy-text mb-3 pb-2 border-b border-canopy-border">
+                <h3 className="text-lg font-semibold text-daintree-text mb-3 pb-2 border-b border-daintree-border">
                   {category}
                 </h3>
                 <div className="space-y-2">
                   {filteredGroups[category].map((binding) => (
                     <div
                       key={binding.actionId}
-                      className="flex items-center justify-between py-2 px-3 rounded hover:bg-canopy-border/50"
+                      className="flex items-center justify-between py-2 px-3 rounded hover:bg-daintree-border/50"
                     >
                       <div className="flex-1">
-                        <div className="text-canopy-text font-medium">{binding.description}</div>
+                        <div className="text-daintree-text font-medium">{binding.description}</div>
                         {binding.scope !== "global" && (
-                          <div className="text-xs text-canopy-text/60 mt-1">
+                          <div className="text-xs text-daintree-text/60 mt-1">
                             Scope: {binding.scope}
                           </div>
                         )}
                       </div>
                       <div className="ml-4">
-                        <kbd className="px-3 py-1.5 bg-canopy-bg border border-canopy-border rounded text-sm font-mono text-canopy-text shadow-[var(--theme-shadow-ambient)]">
+                        <kbd className="px-3 py-1.5 bg-daintree-bg border border-daintree-border rounded text-sm font-mono text-daintree-text shadow-[var(--theme-shadow-ambient)]">
                           {keybindingService.getDisplayCombo(binding.actionId)}
                         </kbd>
                       </div>
@@ -141,9 +141,9 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
         )}
       </AppDialog.Body>
 
-      <AppDialog.Footer className="justify-center bg-canopy-bg/50">
-        <div className="text-sm text-canopy-text/60">
-          Press <kbd className="px-2 py-1 bg-canopy-border rounded text-xs">Esc</kbd> to close
+      <AppDialog.Footer className="justify-center bg-daintree-bg/50">
+        <div className="text-sm text-daintree-text/60">
+          Press <kbd className="px-2 py-1 bg-daintree-border rounded text-xs">Esc</kbd> to close
         </div>
       </AppDialog.Footer>
     </AppDialog>

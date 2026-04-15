@@ -13,8 +13,8 @@ describe("ContentGrid EmptyState — RecipeRunner integration", () => {
 
   it("tip text uses /70 opacity, not /60", async () => {
     const content = await readFile(GRID_PATH, "utf-8");
-    expect(content).toContain("text-canopy-text/70 text-center");
-    expect(content).not.toContain("text-canopy-text/60 text-center");
+    expect(content).toContain("text-daintree-text/70 text-center");
+    expect(content).not.toContain("text-daintree-text/60 text-center");
   });
 
   it("renders RecipeRunner component instead of inline recipe list", async () => {

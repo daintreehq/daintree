@@ -257,7 +257,10 @@ export function RecipeEditor({
 
       <AppDialog.Body>
         <div className="mb-4">
-          <label htmlFor="recipe-name" className="block text-sm font-medium text-canopy-text mb-1">
+          <label
+            htmlFor="recipe-name"
+            className="block text-sm font-medium text-daintree-text mb-1"
+          >
             Recipe Name
           </label>
           <input
@@ -267,16 +270,19 @@ export function RecipeEditor({
             value={recipeName}
             onChange={(e) => setRecipeName(e.target.value)}
             placeholder="e.g., Full Stack Dev"
-            className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+            className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent"
           />
         </div>
 
         <div className="mb-4">
-          <label htmlFor="recipe-scope" className="block text-sm font-medium text-canopy-text mb-1">
+          <label
+            htmlFor="recipe-scope"
+            className="block text-sm font-medium text-daintree-text mb-1"
+          >
             Scope
           </label>
           {recipe ? (
-            <div className="px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text text-sm opacity-75">
+            <div className="px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text text-sm opacity-75">
               {isInRepoRecipeId(recipe.id) || recipe.projectId !== undefined
                 ? "Project"
                 : "Global (all projects)"}
@@ -286,7 +292,7 @@ export function RecipeEditor({
               id="recipe-scope"
               value={scope}
               onChange={(e) => setScope(e.target.value as "global" | "project")}
-              className="w-full px-3 pr-8 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+              className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent"
             >
               <option value="project">Project (current project only)</option>
               <option value="global">Global (all projects)</option>
@@ -302,9 +308,9 @@ export function RecipeEditor({
               checked={showInEmptyState}
               onChange={(e) => setShowInEmptyState(e.target.checked)}
               aria-describedby="show-in-empty-state-help"
-              className="w-4 h-4 rounded border-canopy-border bg-canopy-bg checked:bg-canopy-accent checked:border-canopy-accent focus:ring-2 focus:ring-canopy-accent"
+              className="w-4 h-4 rounded border-daintree-border bg-daintree-bg checked:bg-daintree-accent checked:border-daintree-accent focus:ring-2 focus:ring-daintree-accent"
             />
-            <span className="text-sm font-medium text-canopy-text">Show in Empty State</span>
+            <span className="text-sm font-medium text-daintree-text">Show in Empty State</span>
           </label>
           <p
             id="show-in-empty-state-help"
@@ -315,7 +321,10 @@ export function RecipeEditor({
         </div>
 
         <div className="mb-4">
-          <label htmlFor="auto-assign" className="block text-sm font-medium text-canopy-text mb-1">
+          <label
+            htmlFor="auto-assign"
+            className="block text-sm font-medium text-daintree-text mb-1"
+          >
             Auto-assign Issue
           </label>
           <select
@@ -323,7 +332,7 @@ export function RecipeEditor({
             value={autoAssign}
             onChange={(e) => setAutoAssign(e.target.value as "always" | "never" | "prompt")}
             aria-describedby="auto-assign-help"
-            className="w-full px-3 pr-8 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+            className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent"
           >
             <option value="always">Always assign to me</option>
             <option value="prompt">Ask before assigning</option>
@@ -337,7 +346,7 @@ export function RecipeEditor({
 
         <div className="mb-4">
           <div className="flex items-center justify-between mb-2">
-            <label className="block text-sm font-medium text-canopy-text">
+            <label className="block text-sm font-medium text-daintree-text">
               Terminals ({terminals.length}/10)
             </label>
             <Button size="sm" onClick={handleAddTerminal} disabled={terminals.length >= 10}>
@@ -349,13 +358,13 @@ export function RecipeEditor({
             {terminals.map((terminal, index) => (
               <div
                 key={index}
-                className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-3"
+                className="bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] p-3"
               >
                 <div className="flex items-start gap-3">
                   <div className="flex-1">
                     <label
                       htmlFor={`terminal-type-${index}`}
-                      className="block text-xs font-medium text-canopy-text mb-1"
+                      className="block text-xs font-medium text-daintree-text mb-1"
                     >
                       Type
                     </label>
@@ -387,7 +396,7 @@ export function RecipeEditor({
                           return updated;
                         });
                       }}
-                      className="w-full px-2 pr-8 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                      className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
                     >
                       {TERMINAL_TYPES.map((type) => (
                         <option key={type} value={type}>
@@ -400,7 +409,7 @@ export function RecipeEditor({
                   <div className="flex-1">
                     <label
                       htmlFor={`terminal-title-${index}`}
-                      className="block text-xs font-medium text-canopy-text mb-1"
+                      className="block text-xs font-medium text-daintree-text mb-1"
                     >
                       Title (optional)
                     </label>
@@ -410,7 +419,7 @@ export function RecipeEditor({
                       value={terminal.title || ""}
                       onChange={(e) => handleTerminalChange(index, "title", e.target.value)}
                       placeholder="Default"
-                      className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                      className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
                     />
                   </div>
 
@@ -431,7 +440,7 @@ export function RecipeEditor({
                     <div className="mt-2">
                       <label
                         htmlFor={`terminal-command-${index}`}
-                        className="block text-xs font-medium text-canopy-text mb-1"
+                        className="block text-xs font-medium text-daintree-text mb-1"
                       >
                         Command (optional)
                       </label>
@@ -441,13 +450,13 @@ export function RecipeEditor({
                         value={terminal.command || ""}
                         onChange={(e) => handleTerminalChange(index, "command", e.target.value)}
                         placeholder="e.g., npm run dev"
-                        className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                        className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
                       />
                     </div>
                     <div className="mt-2">
                       <label
                         htmlFor={`terminal-exit-behavior-${index}`}
-                        className="block text-xs font-medium text-canopy-text mb-1"
+                        className="block text-xs font-medium text-daintree-text mb-1"
                       >
                         After Exit
                       </label>
@@ -462,7 +471,7 @@ export function RecipeEditor({
                           )
                         }
                         aria-describedby={`terminal-exit-behavior-help-${index}`}
-                        className="w-full px-2 pr-8 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                        className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
                       >
                         <option value="trash">Send to Trash (default)</option>
                         <option value="keep">Keep for Review</option>
@@ -483,7 +492,7 @@ export function RecipeEditor({
                     <div className="mt-2">
                       <label
                         htmlFor={`terminal-args-${index}`}
-                        className="block text-xs font-medium text-canopy-text mb-1"
+                        className="block text-xs font-medium text-daintree-text mb-1"
                       >
                         Arguments (optional)
                       </label>
@@ -494,7 +503,7 @@ export function RecipeEditor({
                         onChange={(e) => handleTerminalChange(index, "args", e.target.value)}
                         placeholder="e.g., --model claude-opus-4-5"
                         aria-describedby={`terminal-args-help-${index}`}
-                        className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                        className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
                       />
                       <p
                         id={`terminal-args-help-${index}`}
@@ -506,7 +515,7 @@ export function RecipeEditor({
                     <div className="mt-2">
                       <label
                         htmlFor={`terminal-initial-prompt-${index}`}
-                        className="block text-xs font-medium text-canopy-text mb-1"
+                        className="block text-xs font-medium text-daintree-text mb-1"
                       >
                         Initial Prompt (optional)
                       </label>
@@ -519,24 +528,24 @@ export function RecipeEditor({
                         placeholder="e.g., Review the latest changes and suggest improvements"
                         rows={2}
                         aria-describedby={`terminal-initial-prompt-help-${index}`}
-                        className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text resize-y min-h-[60px]"
+                        className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text resize-y min-h-[60px]"
                       />
                       <p
                         id={`terminal-initial-prompt-help-${index}`}
                         className="text-xs text-text-muted mt-1 select-text"
                       >
                         This prompt will be sent to the agent when it starts. Variables:{" "}
-                        <code className="text-canopy-text/70">{"{{issue_number}}"}</code>,{" "}
-                        <code className="text-canopy-text/70">{"{{pr_number}}"}</code>,{" "}
-                        <code className="text-canopy-text/70">{"{{number}}"}</code>,{" "}
-                        <code className="text-canopy-text/70">{"{{worktree_path}}"}</code>,{" "}
-                        <code className="text-canopy-text/70">{"{{branch_name}}"}</code>
+                        <code className="text-daintree-text/70">{"{{issue_number}}"}</code>,{" "}
+                        <code className="text-daintree-text/70">{"{{pr_number}}"}</code>,{" "}
+                        <code className="text-daintree-text/70">{"{{number}}"}</code>,{" "}
+                        <code className="text-daintree-text/70">{"{{worktree_path}}"}</code>,{" "}
+                        <code className="text-daintree-text/70">{"{{branch_name}}"}</code>
                       </p>
                     </div>
                     <div className="mt-2">
                       <label
                         htmlFor={`terminal-agent-exit-behavior-${index}`}
-                        className="block text-xs font-medium text-canopy-text mb-1"
+                        className="block text-xs font-medium text-daintree-text mb-1"
                       >
                         After Exit
                       </label>
@@ -551,7 +560,7 @@ export function RecipeEditor({
                           )
                         }
                         aria-describedby={`terminal-agent-exit-behavior-help-${index}`}
-                        className="w-full px-2 pr-8 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                        className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
                       >
                         <option value="keep">Keep for Review (default)</option>
                         <option value="trash">Send to Trash</option>
@@ -572,7 +581,7 @@ export function RecipeEditor({
                     <div className="mt-2">
                       <label
                         htmlFor={`terminal-dev-command-${index}`}
-                        className="block text-xs font-medium text-canopy-text mb-1"
+                        className="block text-xs font-medium text-daintree-text mb-1"
                       >
                         Dev Command (optional)
                       </label>
@@ -583,7 +592,7 @@ export function RecipeEditor({
                         onChange={(e) => handleTerminalChange(index, "devCommand", e.target.value)}
                         placeholder="e.g., npm run dev"
                         aria-describedby={`terminal-dev-command-help-${index}`}
-                        className="w-full px-2 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                        className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
                       />
                       <p
                         id={`terminal-dev-command-help-${index}`}
@@ -595,7 +604,7 @@ export function RecipeEditor({
                     <div className="mt-2">
                       <label
                         htmlFor={`terminal-dev-exit-behavior-${index}`}
-                        className="block text-xs font-medium text-canopy-text mb-1"
+                        className="block text-xs font-medium text-daintree-text mb-1"
                       >
                         After Exit
                       </label>
@@ -610,7 +619,7 @@ export function RecipeEditor({
                           )
                         }
                         aria-describedby={`terminal-dev-exit-behavior-help-${index}`}
-                        className="w-full px-2 pr-8 py-1.5 bg-canopy-sidebar border border-canopy-border rounded text-sm text-canopy-text"
+                        className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
                       >
                         <option value="trash">Send to Trash (default)</option>
                         <option value="keep">Keep for Review</option>

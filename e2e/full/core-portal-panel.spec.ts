@@ -80,7 +80,7 @@ test.describe.serial("Portal: Width persistence across restart", () => {
   let ctx: AppContext | null = null;
 
   test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-portal-persist-"));
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-portal-persist-"));
   });
 
   test.afterAll(async () => {

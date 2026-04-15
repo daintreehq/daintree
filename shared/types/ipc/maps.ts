@@ -1362,7 +1362,7 @@ export interface IpcInvokeMap {
     result: boolean;
   };
 
-  // Canopy CLI install channels
+  // Daintree CLI install channels
   "cli:install": {
     args: [];
     result: CliInstallStatus;

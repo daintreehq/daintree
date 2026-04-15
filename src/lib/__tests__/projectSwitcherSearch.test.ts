@@ -32,13 +32,13 @@ describe("scoreProjectQuery", () => {
   });
 
   it("scores exact name substring higher than path-only match", () => {
-    const nameMatch = scoreProjectQuery("canopy", "my-canopy-app", "/some/path");
-    const pathMatch = scoreProjectQuery("canopy", "other", "/long/path/to/canopy/stuff");
+    const nameMatch = scoreProjectQuery("daintree", "my-daintree-app", "/some/path");
+    const pathMatch = scoreProjectQuery("daintree", "other", "/long/path/to/daintree/stuff");
     expect(nameMatch).toBeGreaterThan(pathMatch);
   });
 
-  it("gives word boundary bonus: 'cp' matching canopy-project beats mid-word", () => {
-    const boundaryMatch = scoreProjectQuery("cp", "canopy-project", "/path");
+  it("gives word boundary bonus: 'cp' matching daintree-project beats mid-word", () => {
+    const boundaryMatch = scoreProjectQuery("cp", "daintree-project", "/path");
     const midWordMatch = scoreProjectQuery("cp", "script-producer", "/path");
     expect(boundaryMatch).toBeGreaterThan(midWordMatch);
   });
@@ -79,9 +79,9 @@ describe("scoreProjectQuery", () => {
 
 describe("rankProjectMatches", () => {
   const projects = [
-    makeProject({ id: "1", name: "canopy-app", path: "/repos/canopy-app", lastOpened: 100 }),
+    makeProject({ id: "1", name: "daintree-app", path: "/repos/daintree-app", lastOpened: 100 }),
     makeProject({ id: "2", name: "other-project", path: "/repos/other", lastOpened: 200 }),
-    makeProject({ id: "3", name: "my-canopy", path: "/repos/my-canopy", lastOpened: 50 }),
+    makeProject({ id: "3", name: "my-daintree", path: "/repos/my-daintree", lastOpened: 50 }),
   ];
 
   it("returns empty for empty query", () => {
@@ -95,9 +95,9 @@ describe("rankProjectMatches", () => {
   });
 
   it("ranks exact name substring matches first", () => {
-    const results = rankProjectMatches("canopy", projects);
+    const results = rankProjectMatches("daintree", projects);
     expect(results.length).toBeGreaterThanOrEqual(2);
-    expect(results[0].name).toContain("canopy");
+    expect(results[0].name).toContain("daintree");
   });
 
   it("uses frecencyScore as tiebreaker for equal text scores", () => {
@@ -120,8 +120,8 @@ describe("rankProjectMatches", () => {
   });
 
   it("trims whitespace from query before matching", () => {
-    const results = rankProjectMatches("  canopy  ", projects);
-    const resultsClean = rankProjectMatches("canopy", projects);
+    const results = rankProjectMatches("  daintree  ", projects);
+    const resultsClean = rankProjectMatches("daintree", projects);
     expect(results).toHaveLength(resultsClean.length);
     expect(results.map((r) => r.id)).toEqual(resultsClean.map((r) => r.id));
   });

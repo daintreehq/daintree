@@ -137,7 +137,7 @@ export function WorktreeDetails({
                 />
               ))}
               {worktreeErrors.length > 3 && (
-                <div className="text-[0.65rem] text-canopy-text/60 text-center">
+                <div className="text-[0.65rem] text-daintree-text/60 text-center">
                   +{worktreeErrors.length - 3} more errors
                 </div>
               )}
@@ -155,7 +155,7 @@ export function WorktreeDetails({
                       href={segment.content}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-status-info underline hover:brightness-110 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+                      className="text-status-info underline hover:brightness-110 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                       onClick={(e) => handleLinkClick(e, segment.content)}
                     >
                       {segment.content}
@@ -214,7 +214,7 @@ export function WorktreeDetails({
                 }}
                 className={cn(
                   "flex min-w-0 flex-1 items-center gap-1.5 truncate rounded text-left font-mono text-xs text-text-muted hover:text-text-secondary",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
                   isFocused && "text-text-secondary"
                 )}
               >
@@ -230,7 +230,7 @@ export function WorktreeDetails({
               <button
                 type="button"
                 onClick={handleCopyPath}
-                className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
                 aria-label={pathCopied ? "Path copied to clipboard" : "Copy path to clipboard"}
               >
                 {pathCopied ? (

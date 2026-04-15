@@ -20,7 +20,7 @@ import type { NotificationSettings } from "./ipc/api.js";
  */
 export type ProjectStatus = "active" | "background" | "closed" | "missing";
 
-/** Project (Git repository) managed by Canopy */
+/** Project (Git repository) managed by Daintree */
 export interface Project {
   /** Unique identifier (UUID or path hash) */
   id: string;

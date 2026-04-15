@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { CanopyIcon } from "@/components/icons/CanopyIcon";
+import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 
 export function HelpAgentDockButton() {
@@ -23,13 +23,14 @@ export function HelpAgentDockButton() {
             size="sm"
             className={cn(
               "px-2",
-              isOpen && "bg-canopy-border border-canopy-accent/40 ring-1 ring-canopy-accent/30"
+              isOpen &&
+                "bg-daintree-border border-daintree-accent/40 ring-1 ring-daintree-accent/30"
             )}
             onClick={handleClick}
             aria-label="Help Agent"
             aria-expanded={isOpen}
           >
-            <CanopyIcon className="w-3.5 h-3.5 text-canopy-text/50" />
+            <DaintreeIcon className="w-3.5 h-3.5 text-daintree-text/50" />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="top">

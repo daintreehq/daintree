@@ -68,17 +68,17 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
       </div>
 
       <div className="flex-1 min-w-0">
-        <div className="text-xs font-medium text-canopy-text/70 group-hover:text-canopy-text truncate transition-colors">
+        <div className="text-xs font-medium text-daintree-text/70 group-hover:text-daintree-text truncate transition-colors">
           {terminalName}
           {worktreeName ? (
-            <span className="text-canopy-text/50 ml-1 font-normal">({worktreeName})</span>
+            <span className="text-daintree-text/50 ml-1 font-normal">({worktreeName})</span>
           ) : isOrphan ? (
             <span className="text-status-warning/70 ml-1 font-normal text-[11px]">
               (deleted tree)
             </span>
           ) : null}
         </div>
-        <div className="text-[11px] text-canopy-text/40" aria-live="polite">
+        <div className="text-[11px] text-daintree-text/40" aria-live="polite">
           {seconds}s remaining
         </div>
       </div>

@@ -60,7 +60,7 @@ describe("terminalColorSchemeStore", () => {
     });
   });
 
-  it("defaults to canopy scheme", () => {
+  it("defaults to daintree scheme", () => {
     expect(useTerminalColorSchemeStore.getState().selectedSchemeId).toBe(DEFAULT_SCHEME_ID);
   });
 

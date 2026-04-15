@@ -23,7 +23,7 @@ import { ProjectFileStore } from "../ProjectFileStore.js";
 
 const VALID_ID = "a".repeat(64);
 const INVALID_ID_TRAVERSAL = "../../../etc/passwd";
-const CONFIG_DIR = path.normalize("/tmp/canopy-projects");
+const CONFIG_DIR = path.normalize("/tmp/daintree-projects");
 const EXPECTED_STATE_DIR = path.join(CONFIG_DIR, VALID_ID);
 const EXPECTED_RECIPES_FILE = path.join(EXPECTED_STATE_DIR, "recipes.json");
 

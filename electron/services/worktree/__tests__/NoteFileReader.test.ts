@@ -39,7 +39,7 @@ describe("NoteFileReader", () => {
   });
 
   it("returns the last non-empty line and timestamp", async () => {
-    const reader = new NoteFileReader("/repo", true, "canopy/note");
+    const reader = new NoteFileReader("/repo", true, "daintree/note");
 
     await expect(reader.read()).resolves.toEqual({
       content: "last line",
@@ -48,7 +48,7 @@ describe("NoteFileReader", () => {
   });
 
   it("truncates overly long last line", async () => {
-    const reader = new NoteFileReader("/repo", true, "canopy/note");
+    const reader = new NoteFileReader("/repo", true, "daintree/note");
     (fsPromisesMock.readFile as Mock).mockResolvedValue(`ok\n${"x".repeat(600)}`);
 
     const result = await reader.read();

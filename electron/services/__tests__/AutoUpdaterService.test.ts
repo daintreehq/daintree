@@ -466,7 +466,7 @@ describe("AutoUpdaterService", () => {
   describe("Windows portable guard", () => {
     it("registers only channel-preference IPC handlers on Windows portable", () => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-      process.env.PORTABLE_EXECUTABLE_FILE = "C:\\portable\\canopy.exe";
+      process.env.PORTABLE_EXECUTABLE_FILE = "C:\\portable\\daintree.exe";
 
       autoUpdaterService.initialize();
 

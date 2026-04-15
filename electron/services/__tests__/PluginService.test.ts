@@ -28,7 +28,7 @@ function writePlugin(name: string, manifest: Record<string, unknown>): Promise<v
 }
 
 beforeEach(async () => {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-plugin-test-"));
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-plugin-test-"));
   vi.clearAllMocks();
 });
 

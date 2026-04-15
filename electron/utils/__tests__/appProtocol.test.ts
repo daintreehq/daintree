@@ -85,7 +85,7 @@ describe("appProtocol utilities", () => {
     });
 
     it("should reject non-app:// protocol", () => {
-      const result = resolveAppUrlToDistPath("http://canopy/index.html", distRoot);
+      const result = resolveAppUrlToDistPath("http://daintree/index.html", distRoot);
       expect(result.error).toBe("Invalid protocol");
       expect(result.filePath).toBe("");
     });
@@ -140,7 +140,7 @@ describe("appProtocol utilities", () => {
 
     it("should validate hostname when expectedHostname option is provided", () => {
       const result = resolveAppUrlToDistPath("app://daintree/index.html", distRoot, {
-        expectedHostname: "canopy",
+        expectedHostname: "daintree",
       });
       expect(result.error).toBeUndefined();
       expect(result.filePath).toBe(path.join(distRoot, "index.html"));
@@ -148,7 +148,7 @@ describe("appProtocol utilities", () => {
 
     it("should reject incorrect hostname when expectedHostname option is provided", () => {
       const result = resolveAppUrlToDistPath("app://wrong/index.html", distRoot, {
-        expectedHostname: "canopy",
+        expectedHostname: "daintree",
       });
       expect(result.error).toBe("Invalid host");
       expect(result.filePath).toBe("");

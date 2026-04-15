@@ -94,7 +94,7 @@ function BuilderTextField({
 
   return (
     <div className="space-y-1.5">
-      <label htmlFor={inputId} className="block text-sm font-medium text-canopy-text">
+      <label htmlFor={inputId} className="block text-sm font-medium text-daintree-text">
         {field.label}
       </label>
       <input
@@ -108,15 +108,15 @@ function BuilderTextField({
         aria-invalid={error ? "true" : undefined}
         className={cn(
           "w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-          "bg-canopy-bg border text-canopy-text placeholder:text-text-muted",
+          "bg-daintree-bg border text-daintree-text placeholder:text-text-muted",
           "focus:outline-none focus:ring-1",
           error
             ? "border-status-error focus:border-status-error focus:ring-status-error"
-            : "border-canopy-border focus:border-canopy-accent focus:ring-canopy-accent"
+            : "border-daintree-border focus:border-daintree-accent focus:ring-daintree-accent"
         )}
       />
       {field.helpText && !error && (
-        <p id={helpId} className="text-xs text-canopy-text/50">
+        <p id={helpId} className="text-xs text-daintree-text/50">
           {field.helpText}
         </p>
       )}
@@ -147,7 +147,7 @@ function BuilderTextareaField({
 
   return (
     <div className="space-y-1.5">
-      <label htmlFor={inputId} className="block text-sm font-medium text-canopy-text">
+      <label htmlFor={inputId} className="block text-sm font-medium text-daintree-text">
         {field.label}
       </label>
       <textarea
@@ -160,15 +160,15 @@ function BuilderTextareaField({
         aria-invalid={error ? "true" : undefined}
         className={cn(
           "w-full px-3 py-2 text-sm rounded-[var(--radius-md)] resize-y min-h-[100px]",
-          "bg-canopy-bg border text-canopy-text placeholder:text-text-muted",
+          "bg-daintree-bg border text-daintree-text placeholder:text-text-muted",
           "focus:outline-none focus:ring-1",
           error
             ? "border-status-error focus:border-status-error focus:ring-status-error"
-            : "border-canopy-border focus:border-canopy-accent focus:ring-canopy-accent"
+            : "border-daintree-border focus:border-daintree-accent focus:ring-daintree-accent"
         )}
       />
       {field.helpText && !error && (
-        <p id={helpId} className="text-xs text-canopy-text/50">
+        <p id={helpId} className="text-xs text-daintree-text/50">
           {field.helpText}
         </p>
       )}
@@ -199,7 +199,7 @@ function BuilderSelectField({
 
   return (
     <div className="space-y-1.5">
-      <label htmlFor={inputId} className="block text-sm font-medium text-canopy-text">
+      <label htmlFor={inputId} className="block text-sm font-medium text-daintree-text">
         {field.label}
       </label>
       <select
@@ -210,11 +210,11 @@ function BuilderSelectField({
         aria-invalid={error ? "true" : undefined}
         className={cn(
           "w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-          "bg-canopy-bg border text-canopy-text",
+          "bg-daintree-bg border text-daintree-text",
           "focus:outline-none focus:ring-1",
           error
             ? "border-status-error focus:border-status-error focus:ring-status-error"
-            : "border-canopy-border focus:border-canopy-accent focus:ring-canopy-accent"
+            : "border-daintree-border focus:border-daintree-accent focus:ring-daintree-accent"
         )}
       >
         <option value="">{field.placeholder ?? "Select an option..."}</option>
@@ -225,7 +225,7 @@ function BuilderSelectField({
         ))}
       </select>
       {field.helpText && !error && (
-        <p id={helpId} className="text-xs text-canopy-text/50">
+        <p id={helpId} className="text-xs text-daintree-text/50">
           {field.helpText}
         </p>
       )}
@@ -256,16 +256,16 @@ function BuilderCheckboxField({
           checked={value}
           onChange={(e) => onChange(e.target.checked)}
           className={cn(
-            "h-4 w-4 rounded border-canopy-border bg-canopy-bg",
-            "text-canopy-accent focus:ring-canopy-accent focus:ring-offset-0",
+            "h-4 w-4 rounded border-daintree-border bg-daintree-bg",
+            "text-daintree-accent focus:ring-daintree-accent focus:ring-offset-0",
             "cursor-pointer"
           )}
         />
-        <span className="text-sm font-medium text-canopy-text group-hover:text-canopy-text/90">
+        <span className="text-sm font-medium text-daintree-text group-hover:text-daintree-text/90">
           {field.label}
         </span>
       </label>
-      {field.helpText && <p className="text-xs text-canopy-text/50 ml-7">{field.helpText}</p>}
+      {field.helpText && <p className="text-xs text-daintree-text/50 ml-7">{field.helpText}</p>}
     </div>
   );
 }
@@ -438,7 +438,7 @@ export function CommandBuilder({
         <div className="flex items-center gap-3">
           <AppDialog.Title>{command.label}</AppDialog.Title>
           {hasMultipleSteps && (
-            <span className="text-sm tabular-nums text-canopy-text/50">
+            <span className="text-sm tabular-nums text-daintree-text/50">
               Step {currentStepIndex + 1} of {steps.length}
             </span>
           )}
@@ -451,8 +451,8 @@ export function CommandBuilder({
           <div className="flex flex-col items-center justify-center py-8 space-y-4">
             <CheckCircle className="h-12 w-12 text-status-success" />
             <div className="text-center">
-              <h3 className="text-lg font-medium text-canopy-text">Command Executed</h3>
-              <p className="text-sm text-canopy-text/70 mt-1">
+              <h3 className="text-lg font-medium text-daintree-text">Command Executed</h3>
+              <p className="text-sm text-daintree-text/70 mt-1">
                 {executionResult.message ?? "The command completed successfully."}
               </p>
             </div>
@@ -461,8 +461,8 @@ export function CommandBuilder({
           <div className="flex flex-col items-center justify-center py-8 space-y-4">
             <AlertCircle className="h-12 w-12 text-status-error" />
             <div className="text-center">
-              <h3 className="text-lg font-medium text-canopy-text">Configuration Error</h3>
-              <p className="text-sm text-canopy-text/70 mt-1">
+              <h3 className="text-lg font-medium text-daintree-text">Configuration Error</h3>
+              <p className="text-sm text-daintree-text/70 mt-1">
                 This command has no builder steps configured.
               </p>
             </div>
@@ -472,10 +472,12 @@ export function CommandBuilder({
             {currentStep && (
               <>
                 {currentStep.title && (
-                  <h3 className="text-base font-semibold text-canopy-text">{currentStep.title}</h3>
+                  <h3 className="text-base font-semibold text-daintree-text">
+                    {currentStep.title}
+                  </h3>
                 )}
                 {currentStep.description && (
-                  <p className="text-sm text-canopy-text/70">{currentStep.description}</p>
+                  <p className="text-sm text-daintree-text/70">{currentStep.description}</p>
                 )}
 
                 <div className="space-y-4">
@@ -515,7 +517,7 @@ export function CommandBuilder({
                   variant="ghost"
                   onClick={handleBack}
                   disabled={isExecuting}
-                  className="text-canopy-text/70"
+                  className="text-daintree-text/70"
                 >
                   <ChevronLeft className="h-4 w-4" />
                   Back
@@ -527,7 +529,7 @@ export function CommandBuilder({
                 variant="ghost"
                 onClick={onCancel}
                 disabled={isExecuting}
-                className="text-canopy-text/70"
+                className="text-daintree-text/70"
               >
                 Cancel
               </Button>

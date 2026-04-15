@@ -148,7 +148,7 @@ function FileDiff({ file, viewType, language, rootPath }: FileDiffProps) {
   return (
     <div className="mb-2">
       {relPath && (
-        <div className="flex items-center justify-between px-3 py-1.5 bg-canopy-sidebar border-b border-canopy-border text-xs text-canopy-text/60 font-mono">
+        <div className="flex items-center justify-between px-3 py-1.5 bg-daintree-sidebar border-b border-daintree-border text-xs text-daintree-text/60 font-mono">
           <span className="truncate">{relPath}</span>
           <div className="flex items-center gap-2 shrink-0">
             {(additions > 0 || deletions > 0) && (
@@ -161,7 +161,7 @@ function FileDiff({ file, viewType, language, rootPath }: FileDiffProps) {
               <button
                 onClick={handleOpenInEditor}
                 title={`Open in editor${firstHunkLine ? ` at line ${firstHunkLine}` : ""}`}
-                className="ml-2 shrink-0 flex items-center gap-1 px-2 py-0.5 rounded hover:bg-tint/5 hover:text-canopy-text transition-colors"
+                className="ml-2 shrink-0 flex items-center gap-1 px-2 py-0.5 rounded hover:bg-tint/5 hover:text-daintree-text transition-colors"
               >
                 <ExternalLink className="w-3 h-3" />
                 Open

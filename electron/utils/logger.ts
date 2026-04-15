@@ -110,7 +110,7 @@ function getLogDirectory(): string {
 }
 
 export function getLogFilePath(): string {
-  return join(getLogDirectory(), "canopy.log");
+  return join(getLogDirectory(), "daintree.log");
 }
 
 const SENSITIVE_KEYS = new Set([

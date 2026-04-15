@@ -424,7 +424,7 @@ function PanelHeaderComponent({
   );
 
   const tabFadeFrom = isMaximized
-    ? "from-canopy-sidebar"
+    ? "from-daintree-sidebar"
     : location === "dock"
       ? "from-surface"
       : isFocused
@@ -438,7 +438,7 @@ function PanelHeaderComponent({
         "flex items-center justify-between px-3 shrink-0 text-xs transition-colors relative overflow-hidden group",
         "h-8 border-b border-divider",
         isMaximized
-          ? "h-10 bg-canopy-sidebar border-canopy-border"
+          ? "h-10 bg-daintree-sidebar border-daintree-border"
           : location === "dock"
             ? "bg-surface"
             : isFocused
@@ -472,7 +472,7 @@ function PanelHeaderComponent({
                       type="button"
                       onClick={tabsScrollLeft}
                       onPointerDown={(e) => e.stopPropagation()}
-                      className="pointer-events-auto p-1 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                      className="pointer-events-auto p-1 text-daintree-text/60 hover:text-daintree-text transition-colors"
                       aria-label="Scroll left"
                     >
                       <ChevronLeft className="w-3 h-3" aria-hidden="true" />
@@ -515,7 +515,7 @@ function PanelHeaderComponent({
                                 onAddTab();
                               }}
                               onPointerDown={(e) => e.stopPropagation()}
-                              className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+                              className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
                               aria-label="Duplicate panel as new tab"
                               type="button"
                             >
@@ -544,7 +544,7 @@ function PanelHeaderComponent({
                       type="button"
                       onClick={tabsScrollRight}
                       onPointerDown={(e) => e.stopPropagation()}
-                      className="pointer-events-auto p-1 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                      className="pointer-events-auto p-1 text-daintree-text/60 hover:text-daintree-text transition-colors"
                       aria-label="Scroll right"
                     >
                       <ChevronRight className="w-3 h-3" aria-hidden="true" />
@@ -567,7 +567,7 @@ function PanelHeaderComponent({
                   type="button"
                   onClick={tabsScrollLeft}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="pointer-events-auto p-1 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                  className="pointer-events-auto p-1 text-daintree-text/60 hover:text-daintree-text transition-colors"
                   aria-label="Scroll left"
                 >
                   <ChevronLeft className="w-3 h-3" aria-hidden="true" />
@@ -608,7 +608,7 @@ function PanelHeaderComponent({
                             onAddTab();
                           }}
                           onPointerDown={(e) => e.stopPropagation()}
-                          className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+                          className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
                           aria-label="Duplicate panel as new tab"
                           type="button"
                         >
@@ -634,7 +634,7 @@ function PanelHeaderComponent({
                   type="button"
                   onClick={tabsScrollRight}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="pointer-events-auto p-1 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                  className="pointer-events-auto p-1 text-daintree-text/60 hover:text-daintree-text transition-colors"
                   aria-label="Scroll right"
                 >
                   <ChevronRight className="w-3 h-3" aria-hidden="true" />
@@ -645,7 +645,7 @@ function PanelHeaderComponent({
         )
       ) : (
         <div className="flex items-center gap-2 min-w-0">
-          <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5 text-canopy-text">
+          <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5 text-daintree-text">
             <TerminalIcon
               type={type}
               kind={kind}
@@ -664,7 +664,7 @@ function PanelHeaderComponent({
               onChange={(e) => onEditingValueChange(e.target.value)}
               onKeyDown={onTitleInputKeyDown}
               onBlur={onTitleSave}
-              className="text-sm font-medium bg-canopy-bg/60 border border-canopy-accent/50 px-1 h-5 min-w-32 text-canopy-text select-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+              className="text-sm font-medium bg-daintree-bg/60 border border-daintree-accent/50 px-1 h-5 min-w-32 text-daintree-text select-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
               aria-label={getAriaLabel()}
             />
           ) : (
@@ -675,8 +675,8 @@ function PanelHeaderComponent({
                     <span
                       className={cn(
                         "text-xs font-medium font-sans select-none transition-colors",
-                        isFocused ? "text-canopy-text" : "text-canopy-text/70",
-                        onTitleChange && "cursor-text hover:text-canopy-text",
+                        isFocused ? "text-daintree-text" : "text-daintree-text/70",
+                        onTitleChange && "cursor-text hover:text-daintree-text",
                         isPinged &&
                           !isMaximized &&
                           (wasJustSelected ? "animate-eco-title-select" : "animate-eco-title")
@@ -703,7 +703,7 @@ function PanelHeaderComponent({
             <span
               role="status"
               aria-label="Watching — waiting for agent completion"
-              className="text-canopy-accent cursor-default"
+              className="text-daintree-accent cursor-default"
             >
               <WatchAlertIcon className="w-3 h-3 animate-pulse motion-reduce:animate-none" />
             </span>
@@ -720,7 +720,7 @@ function PanelHeaderComponent({
                       onAddTab();
                     }}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+                    className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
                     aria-label="Duplicate panel as new tab"
                     type="button"
                   >
@@ -756,7 +756,7 @@ function PanelHeaderComponent({
       {/* Centered Zen Mode indicator (only visible when maximized) */}
       {isMaximized && activeCount > 0 && (
         <div
-          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-3 text-canopy-text/40 select-none pointer-events-none"
+          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-3 text-daintree-text/40 select-none pointer-events-none"
           role="status"
           aria-live="polite"
         >
@@ -791,7 +791,7 @@ function PanelHeaderComponent({
                     <button
                       type="button"
                       onPointerDown={(e) => e.stopPropagation()}
-                      className="p-1.5 hover:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                      className="p-1.5 hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
                       aria-label="More panel actions"
                     >
                       <Ellipsis className="w-3 h-3" aria-hidden="true" />
@@ -947,7 +947,7 @@ function PanelHeaderComponent({
                     onMinimize!();
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                  className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
                   aria-label="Move to Dock"
                   data-testid="panel-move-to-dock"
                 >
@@ -972,7 +972,7 @@ function PanelHeaderComponent({
                     onMinimize();
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                  className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
                   aria-label="Collapse to Dock"
                   data-testid="panel-collapse-to-dock"
                 >
@@ -995,7 +995,7 @@ function PanelHeaderComponent({
                     onToggleMaximize();
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="flex items-center gap-1.5 px-2 py-1 bg-canopy-accent/10 text-canopy-accent hover:bg-canopy-accent/20 rounded transition-colors mr-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+                  className="flex items-center gap-1.5 px-2 py-1 bg-daintree-accent/10 text-daintree-accent hover:bg-daintree-accent/20 rounded transition-colors mr-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                   aria-label="Exit Focus mode and restore grid view"
                 >
                   <Minimize2 className="w-3.5 h-3.5" aria-hidden="true" />
@@ -1019,7 +1019,7 @@ function PanelHeaderComponent({
                       onToggleMaximize();
                     }}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                    className="p-1.5 hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
                     aria-label="Maximize"
                   >
                     <Maximize2 className="w-3 h-3" aria-hidden="true" />
@@ -1050,7 +1050,7 @@ function PanelHeaderComponent({
                   }
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="p-1.5 hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-error focus-visible:outline-offset-2 text-canopy-text/60 hover:text-status-error transition-colors"
+                className="p-1.5 hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-error focus-visible:outline-offset-2 text-daintree-text/60 hover:text-status-error transition-colors"
                 data-testid="panel-close"
                 aria-label={formatShortcutForTooltip(
                   "Close session. Hold Alt and click to force close without recovery."

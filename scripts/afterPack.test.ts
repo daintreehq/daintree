@@ -17,7 +17,7 @@ afterAll(() => {
   process.dlopen = originalDlopen;
 });
 
-function createContext(platform: string, appOutDir: string, appName = "Canopy") {
+function createContext(platform: string, appOutDir: string, appName = "Daintree") {
   return {
     appOutDir,
     electronPlatformName: platform,
@@ -64,7 +64,7 @@ describe("afterPack", () => {
   });
 
   describe("macOS", () => {
-    const unpackedBase = "/build/mac/Canopy.app/Contents/Resources/app.asar.unpacked";
+    const unpackedBase = "/build/mac/Daintree.app/Contents/Resources/app.asar.unpacked";
 
     it("should succeed when node-pty and better-sqlite3 exist", async () => {
       mockExistsSync.mockReturnValue(true);

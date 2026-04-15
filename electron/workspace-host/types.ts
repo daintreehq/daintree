@@ -1,1 +1,1 @@
-export const NOTE_PATH = "canopy/note";
+export const NOTE_PATH = "daintree/note";

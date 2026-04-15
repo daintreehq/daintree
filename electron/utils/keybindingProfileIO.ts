@@ -23,7 +23,7 @@ export function exportProfile(overrides: Record<string, string[]>): string {
     {
       schemaVersion: SCHEMA_VERSION,
       exportedAt: new Date().toISOString(),
-      app: "canopy",
+      app: "daintree",
       overrides,
     },
     null,

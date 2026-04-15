@@ -166,7 +166,7 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
         );
       })}
       {overflowCount > 0 && (
-        <div className="text-[10px] text-canopy-text/30 px-2 py-0.5 font-sans">
+        <div className="text-[10px] text-daintree-text/30 px-2 py-0.5 font-sans">
           +{overflowCount} more
         </div>
       )}
@@ -212,13 +212,13 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       <StatusDot status={status} />
 
       {/* Command */}
-      <span className="flex-1 truncate text-canopy-text/70" title={command}>
+      <span className="flex-1 truncate text-daintree-text/70" title={command}>
         {truncatedCommand}
       </span>
 
       {/* Elapsed time */}
       {isActive && (
-        <span className="text-[10px] text-canopy-text/30 tabular-nums shrink-0">
+        <span className="text-[10px] text-daintree-text/30 tabular-nums shrink-0">
           {formatElapsed(elapsed)}
         </span>
       )}
@@ -231,7 +231,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
               e.stopPropagation();
               onStop(terminal.id);
             }}
-            className="p-0.5 rounded hover:bg-tint/10 text-canopy-text/40 hover:text-status-error"
+            className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-status-error"
             aria-label="Stop task"
           >
             <X className="h-3 w-3" />
@@ -245,7 +245,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
                   e.stopPropagation();
                   onRestart(terminal.id);
                 }}
-                className="p-0.5 rounded hover:bg-tint/10 text-canopy-text/40 hover:text-canopy-text"
+                className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-daintree-text"
                 aria-label="Restart task"
               >
                 <RotateCw className="h-3 w-3" />
@@ -256,7 +256,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
                 e.stopPropagation();
                 onDismiss(terminal.id);
               }}
-              className="p-0.5 rounded hover:bg-tint/10 text-canopy-text/40 hover:text-canopy-text"
+              className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-daintree-text"
               aria-label="Dismiss"
             >
               <X className="h-3 w-3" />
@@ -268,7 +268,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
             e.stopPropagation();
             onFocus(terminal.id);
           }}
-          className="p-0.5 rounded hover:bg-tint/10 text-canopy-text/40 hover:text-canopy-text"
+          className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-daintree-text"
           aria-label="Focus terminal"
         >
           <Eye className="h-3 w-3" />

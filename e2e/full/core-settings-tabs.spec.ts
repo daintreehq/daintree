@@ -188,7 +188,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
     // Click "Errors Only" and verify it gets the selected border
     await errorsButton.click();
-    await expect(errorsButton).toHaveClass(/border-canopy-accent/, { timeout: T_SHORT });
+    await expect(errorsButton).toHaveClass(/border-daintree-accent/, { timeout: T_SHORT });
 
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });

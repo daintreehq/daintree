@@ -37,7 +37,7 @@ const STATUS_CONFIG: Record<
   },
   stopped: {
     icon: Circle,
-    iconClass: "text-canopy-text/40",
+    iconClass: "text-daintree-text/40",
     ariaLabel: "Dev server stopped",
   },
 };
@@ -94,15 +94,17 @@ export function DevPreviewToolbar({
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="text-xs font-mono text-canopy-text/50 truncate block">{url}</span>
+                <span className="text-xs font-mono text-daintree-text/50 truncate block">
+                  {url}
+                </span>
               </TooltipTrigger>
               <TooltipContent side="bottom">{url}</TooltipContent>
             </Tooltip>
           </TooltipProvider>
         ) : status === "error" || status === "stopped" ? (
-          <span className="text-xs text-canopy-text/30 italic">No URL</span>
+          <span className="text-xs text-daintree-text/30 italic">No URL</span>
         ) : (
-          <span className="text-xs text-canopy-text/30 italic">Detecting URL...</span>
+          <span className="text-xs text-daintree-text/30 italic">Detecting URL...</span>
         )}
       </div>
 

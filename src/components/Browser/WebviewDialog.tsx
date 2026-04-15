@@ -74,8 +74,8 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
       className="absolute inset-0 z-50 flex items-center justify-center bg-scrim-medium"
       onKeyDown={handleKeyDown}
     >
-      <div className="bg-canopy-bg border border-canopy-border rounded-lg shadow-[var(--theme-shadow-dialog)] max-w-sm w-full mx-4 p-4">
-        <p className="text-sm text-canopy-text whitespace-pre-wrap break-words mb-4">
+      <div className="bg-daintree-bg border border-daintree-border rounded-lg shadow-[var(--theme-shadow-dialog)] max-w-sm w-full mx-4 p-4">
+        <p className="text-sm text-daintree-text whitespace-pre-wrap break-words mb-4">
           {dialog.message}
         </p>
 
@@ -85,7 +85,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
-            className="w-full px-3 py-1.5 text-sm bg-canopy-sidebar border border-canopy-border rounded-md text-canopy-text focus:outline-none focus:ring-1 focus:ring-canopy-accent/50 mb-4"
+            className="w-full px-3 py-1.5 text-sm bg-daintree-sidebar border border-daintree-border rounded-md text-daintree-text focus:outline-none focus:ring-1 focus:ring-daintree-accent/50 mb-4"
           />
         )}
 
@@ -94,7 +94,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             <button
               type="button"
               onClick={handleCancel}
-              className="px-3 py-1.5 text-xs font-medium text-canopy-text/70 bg-canopy-bg hover:bg-tint/5 border border-canopy-border rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-canopy-accent/50"
+              className="px-3 py-1.5 text-xs font-medium text-daintree-text/70 bg-daintree-bg hover:bg-tint/5 border border-daintree-border rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-daintree-accent/50"
             >
               Cancel
             </button>
@@ -103,7 +103,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             ref={okRef}
             type="button"
             onClick={handleOk}
-            className="px-3 py-1.5 text-xs font-medium text-text-inverse bg-canopy-accent hover:bg-canopy-accent/90 rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-canopy-accent/50"
+            className="px-3 py-1.5 text-xs font-medium text-text-inverse bg-daintree-accent hover:bg-daintree-accent/90 rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-daintree-accent/50"
           >
             OK
           </button>

@@ -103,7 +103,7 @@ export function AgentTrayButton({
                 variant="ghost"
                 size="icon"
                 data-toolbar-item={dataToolbarItem}
-                className="toolbar-agent-button text-canopy-text hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] transition-colors"
+                className="toolbar-agent-button text-daintree-text hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] transition-colors"
                 aria-label="Agent tray"
               >
                 <Puzzle />
@@ -116,9 +116,9 @@ export function AgentTrayButton({
       <DropdownMenuContent align="start" sideOffset={4} className="min-w-[14rem]">
         {!hasAnyContent &&
           (isAvailabilityLoading ? (
-            <div className="px-2.5 py-2 text-xs text-canopy-text/60">Checking agents…</div>
+            <div className="px-2.5 py-2 text-xs text-daintree-text/60">Checking agents…</div>
           ) : (
-            <div className="px-2.5 py-2 text-xs text-canopy-text/60">No agents available</div>
+            <div className="px-2.5 py-2 text-xs text-daintree-text/60">No agents available</div>
           ))}
 
         {readyUnpinned.length > 0 && (
@@ -165,7 +165,7 @@ export function AgentTrayButton({
                   <row.Icon brandColor={getBrandColorHex(row.id)} />
                 </span>
                 <span className="flex-1">{row.name}</span>
-                <span className="ml-2 text-[11px] text-canopy-text/60">Set up</span>
+                <span className="ml-2 text-[11px] text-daintree-text/60">Set up</span>
               </DropdownMenuItem>
             ))}
           </>

@@ -87,7 +87,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         initialTerminals?: unknown;
       };
       window.dispatchEvent(
-        new CustomEvent("canopy:open-recipe-editor", {
+        new CustomEvent("daintree:open-recipe-editor", {
           detail: { worktreeId, recipeId, initialTerminals },
         })
       );
@@ -103,7 +103,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      window.dispatchEvent(new CustomEvent("canopy:open-recipe-manager"));
+      window.dispatchEvent(new CustomEvent("daintree:open-recipe-manager"));
     },
   }));
 
@@ -147,7 +147,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         throw new Error("No active terminals in this worktree to save");
       }
       window.dispatchEvent(
-        new CustomEvent("canopy:open-recipe-editor", {
+        new CustomEvent("daintree:open-recipe-editor", {
           detail: { worktreeId, initialTerminals: terminals },
         })
       );

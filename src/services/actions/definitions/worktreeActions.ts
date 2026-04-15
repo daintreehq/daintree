@@ -83,7 +83,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      window.dispatchEvent(new CustomEvent("canopy:refresh-sidebar"));
+      window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
       await Promise.allSettled([
         window.electron.worktreePort.request("refresh"),
         worktreeClient.refreshPullRequests(),

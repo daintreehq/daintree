@@ -82,7 +82,7 @@ function Toast({ notification }: { notification: Notification }) {
         "rounded-[var(--radius-sm)] border-l-[3px] border border-tint/[0.08]",
         "bg-surface-panel/85 backdrop-blur-xl",
         "px-3 py-2.5 pr-2",
-        "text-sm text-canopy-text",
+        "text-sm text-daintree-text",
         "shadow-[var(--theme-shadow-floating)]",
         "ring-1 ring-inset ring-tint/[0.05]",
         "transition-[transform,opacity] duration-300 ease-out",
@@ -102,11 +102,11 @@ function Toast({ notification }: { notification: Notification }) {
     >
       <div className="flex-1 space-y-1 min-w-0 py-0.5">
         {notification.title && (
-          <h4 className="font-medium leading-tight tracking-tight text-xs text-canopy-text">
+          <h4 className="font-medium leading-tight tracking-tight text-xs text-daintree-text">
             {notification.title}
           </h4>
         )}
-        <div className="text-xs text-canopy-text/70 leading-snug break-words">
+        <div className="text-xs text-daintree-text/70 leading-snug break-words">
           {notification.message}
         </div>
         {(() => {
@@ -128,9 +128,9 @@ function Toast({ notification }: { notification: Notification }) {
                   className={cn(
                     "px-2.5 py-1 rounded-[var(--radius-xs)]",
                     "text-xs font-medium",
-                    "bg-canopy-accent/10 text-canopy-accent",
-                    "hover:bg-canopy-accent/20 transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+                    "bg-daintree-accent/10 text-daintree-accent",
+                    "hover:bg-daintree-accent/20 transition-colors",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                   )}
                 >
                   {action.label}
@@ -148,9 +148,9 @@ function Toast({ notification }: { notification: Notification }) {
         className={cn(
           "shrink-0 rounded-[var(--radius-xs)]",
           "h-6 w-6 flex items-center justify-center",
-          "text-canopy-text/40 transition-colors duration-150",
-          "hover:text-canopy-text/80 hover:bg-tint/10",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+          "text-daintree-text/40 transition-colors duration-150",
+          "hover:text-daintree-text/80 hover:bg-tint/10",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
         )}
       >
         <X className="h-3.5 w-3.5" />

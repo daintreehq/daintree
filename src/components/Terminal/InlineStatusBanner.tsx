@@ -36,11 +36,11 @@ const SEVERITY_VAR: Record<"error" | "warning", string> = {
 function getButtonClasses(variant: ButtonVariant): string {
   switch (variant) {
     case "primary":
-      return "bg-canopy-border text-canopy-text hover:bg-canopy-border/80";
+      return "bg-daintree-border text-daintree-text hover:bg-daintree-border/80";
     case "accent":
-      return "bg-canopy-accent/10 text-canopy-accent hover:bg-canopy-accent/20";
+      return "bg-daintree-accent/10 text-daintree-accent hover:bg-daintree-accent/20";
     case "dismiss":
-      return "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/50";
+      return "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50";
     case "danger":
     case "dangerFilled":
       return "rounded transition-colors";

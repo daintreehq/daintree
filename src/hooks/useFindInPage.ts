@@ -129,13 +129,13 @@ export function useFindInPage(
     };
   }, [webviewElement, isOpen, query, safeFind]);
 
-  // Listen for canopy:find-in-panel (Cmd+F from keybinding when renderer has focus)
+  // Listen for daintree:find-in-panel (Cmd+F from keybinding when renderer has focus)
   useEffect(() => {
     if (!isFocused) return;
 
     const handler = () => open();
-    window.addEventListener("canopy:find-in-panel", handler);
-    return () => window.removeEventListener("canopy:find-in-panel", handler);
+    window.addEventListener("daintree:find-in-panel", handler);
+    return () => window.removeEventListener("daintree:find-in-panel", handler);
   }, [isFocused, open]);
 
   // Listen for find shortcuts forwarded from webview guest via main process IPC

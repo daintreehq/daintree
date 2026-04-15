@@ -23,7 +23,7 @@ describe("VoiceCorrectionService integration", () => {
         {
           model: "gpt-4o-mini",
           apiKey: OPENAI_API_KEY,
-          customDictionary: ["React", "Canopy"],
+          customDictionary: ["React", "Daintree"],
         }
       );
 
@@ -73,18 +73,18 @@ describe("VoiceCorrectionService integration", () => {
       svc = new VoiceCorrectionService();
 
       const result = await svc.correct(
-        { rawText: "we need to update the canopy work tree dashboard" },
+        { rawText: "we need to update the daintree work tree dashboard" },
         {
           model: "gpt-4o-mini",
           apiKey: OPENAI_API_KEY,
-          customDictionary: ["Canopy", "Worktree"],
+          customDictionary: ["Daintree", "Worktree"],
         }
       );
 
       expect(result).toBeTruthy();
-      expect(result.confirmedText).toContain("Canopy");
+      expect(result.confirmedText).toContain("Daintree");
 
-      console.log("Raw:      ", "we need to update the canopy work tree dashboard");
+      console.log("Raw:      ", "we need to update the daintree work tree dashboard");
       console.log("Corrected:", result.confirmedText);
     },
     15_000
@@ -101,7 +101,7 @@ describe("VoiceCorrectionService integration", () => {
         {
           model: "gpt-5-mini",
           apiKey: OPENAI_API_KEY,
-          customDictionary: ["React", "Canopy"],
+          customDictionary: ["React", "Daintree"],
         }
       );
 
@@ -183,7 +183,7 @@ describe("VoiceCorrectionService integration", () => {
         {
           model: "gpt-5-nano",
           apiKey: OPENAI_API_KEY,
-          customDictionary: ["React", "Canopy"],
+          customDictionary: ["React", "Daintree"],
         }
       );
 

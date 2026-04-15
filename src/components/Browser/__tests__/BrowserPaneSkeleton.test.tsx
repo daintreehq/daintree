@@ -33,7 +33,7 @@ describe("BrowserPaneSkeleton", () => {
 
   it("does not animate the content area", () => {
     const { container } = render(<BrowserPaneSkeleton />);
-    const contentArea = container.querySelector(".bg-canopy-bg");
+    const contentArea = container.querySelector(".bg-daintree-bg");
     expect(contentArea).toBeTruthy();
     expect(contentArea!.className).not.toContain("animate-pulse");
   });

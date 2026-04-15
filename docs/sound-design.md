@@ -1,10 +1,10 @@
 # Sound Design System
 
-This document covers how Canopy's notification sounds are generated, the design philosophy behind them, the synthesis architecture, and how to add or modify sounds in the future.
+This document covers how Daintree's notification sounds are generated, the design philosophy behind them, the synthesis architecture, and how to add or modify sounds in the future.
 
 ## Overview
 
-Canopy's notification sounds are procedurally generated from pure math by `scripts/generate-sounds.mjs`. No external audio files, sample libraries, or Web Audio API are used. The entire synthesis engine is a Node.js script that writes raw PCM samples into WAV buffers.
+Daintree's notification sounds are procedurally generated from pure math by `scripts/generate-sounds.mjs`. No external audio files, sample libraries, or Web Audio API are used. The entire synthesis engine is a Node.js script that writes raw PCM samples into WAV buffers.
 
 The sounds serve as **earcons** — short semantic audio cues that let users identify agent state changes without looking at the screen. They are designed for hundreds of repetitions per day across multi-hour coding sessions.
 
@@ -20,7 +20,7 @@ Builds are **deterministic** — a seeded PRNG (mulberry32, seed `0xCA0917`) rep
 
 ## Brand Identity: "Digital Ecology"
 
-Canopy's metaphor is a forest canopy — a living ecosystem where AI agents work like organisms. This is expressed literally in the DSP architecture: a digital FM shimmer is fed **into** a physically modeled wooden resonator, so the technology literally passes through the wood. The tail of every sound is purely organic — physically modeled wood resonance fading naturally. This is "digital ecology" expressed as signal flow.
+Daintree's metaphor is a forest daintree — a living ecosystem where AI agents work like organisms. This is expressed literally in the DSP architecture: a digital FM shimmer is fed **into** a physically modeled wooden resonator, so the technology literally passes through the wood. The tail of every sound is purely organic — physically modeled wood resonance fading naturally. This is "digital ecology" expressed as signal flow.
 
 ### Design Principles
 
@@ -212,7 +212,7 @@ Applied in order to the raw synthesis output:
 
 Psychoacoustic research shows that even at low repetition rates (minutes apart), subtle sound variation creates a subconscious "physical object" classification in the brain. Identical repetition triggers a "synthetic/machine" classification. This is the "nice car turn signal" effect — you don't consciously notice variation, but the product feels more alive.
 
-At Canopy's notification rate (every 2-12 minutes), sensory habituation is NOT the reason for variation — the auditory cortex fully recovers in 2-10 seconds. The value is purely in **perceived quality and craftsmanship**.
+At Daintree's notification rate (every 2-12 minutes), sensory habituation is NOT the reason for variation — the auditory cortex fully recovers in 2-10 seconds. The value is purely in **perceived quality and craftsmanship**.
 
 ### Variation Philosophy
 
@@ -294,7 +294,7 @@ The generator includes these reusable DSP building blocks:
 | `BrownNoise`                  | Integrated white noise (-6dB/octave)                                    |
 | `waveshape(x, drive, bias)`   | Asymmetric tanh soft-clip                                               |
 | `generateExcitation(n, opts)` | Composite mallet: brown noise + LF thump                                |
-| `canopyNote(freq, dur, opts)` | Full Canopy note synthesizer                                            |
+| `canopyNote(freq, dur, opts)` | Full Daintree note synthesizer                                          |
 | `sequence(notes, opts)`       | Multi-note sequencer with humanized timing                              |
 | `postProcess(samples, opts)`  | Full post-processing chain                                              |
 | `writeWav(samples, path)`     | 16-bit mono PCM WAV writer with TPDF dither                             |

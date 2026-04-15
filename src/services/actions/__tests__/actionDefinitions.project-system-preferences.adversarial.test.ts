@@ -398,7 +398,7 @@ describe("project action hardening", () => {
     const openSettings = await service.dispatch("project.settings.open");
     expect(openSettings).toEqual({ ok: true, result: undefined });
     expect(dispatchEvent).toHaveBeenCalledWith(expect.any(CustomEvent));
-    expect(dispatchEvent.mock.calls.at(-1)?.[0].type).toBe("canopy:open-settings-tab");
+    expect(dispatchEvent.mock.calls.at(-1)?.[0].type).toBe("daintree:open-settings-tab");
   });
 });
 

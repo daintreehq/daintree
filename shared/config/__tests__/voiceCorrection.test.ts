@@ -124,8 +124,8 @@ describe("buildCorrectionSystemPrompt", () => {
   });
 
   it("includes custom dictionary terms as required terms", () => {
-    const prompt = buildCorrectionSystemPrompt({ customDictionary: ["Canopy", "Worktree"] });
-    expect(prompt).toContain("Canopy");
+    const prompt = buildCorrectionSystemPrompt({ customDictionary: ["Daintree", "Worktree"] });
+    expect(prompt).toContain("Daintree");
     expect(prompt).toContain("Worktree");
     expect(prompt).toContain("REQUIRED TERMS");
   });
@@ -144,10 +144,10 @@ describe("buildCorrectionSystemPrompt", () => {
 
   it("excludes project directory from prompt when it matches project name", () => {
     const prompt = buildCorrectionSystemPrompt({
-      projectName: "canopy",
-      projectPath: "/Users/dev/canopy",
+      projectName: "daintree",
+      projectPath: "/Users/dev/daintree",
     });
-    // Directory "canopy" equals project name, so Repository line should be omitted
+    // Directory "daintree" equals project name, so Repository line should be omitted
     const projectSection = prompt.split("CURRENT PROJECT:")[1]?.split("\n\n")[0] ?? "";
     expect(projectSection).not.toContain("Repository:");
   });
@@ -171,8 +171,8 @@ describe("buildCorrectionSystemPrompt", () => {
 
   it("omits Repository line when Windows path directory matches project name", () => {
     const prompt = buildCorrectionSystemPrompt({
-      projectName: "canopy",
-      projectPath: "C:\\Users\\dev\\canopy",
+      projectName: "daintree",
+      projectPath: "C:\\Users\\dev\\daintree",
     });
     const projectSection = prompt.split("CURRENT PROJECT:")[1]?.split("\n\n")[0] ?? "";
     expect(projectSection).not.toContain("Repository:");
@@ -237,16 +237,16 @@ describe("buildMicroCorrectionSystemPrompt", () => {
   });
 
   it("includes project name when provided", () => {
-    const prompt = buildMicroCorrectionSystemPrompt({ projectName: "Canopy" });
-    expect(prompt).toContain("Canopy");
+    const prompt = buildMicroCorrectionSystemPrompt({ projectName: "Daintree" });
+    expect(prompt).toContain("Daintree");
     expect(prompt).toContain("CURRENT PROJECT");
   });
 
   it("includes custom dictionary as required terms", () => {
     const prompt = buildMicroCorrectionSystemPrompt({
-      customDictionary: ["Canopy", "Worktree"],
+      customDictionary: ["Daintree", "Worktree"],
     });
-    expect(prompt).toContain("Canopy");
+    expect(prompt).toContain("Daintree");
     expect(prompt).toContain("Worktree");
     expect(prompt).toContain("REQUIRED TERMS");
   });
@@ -282,8 +282,8 @@ describe("buildMicroCorrectionSystemPrompt", () => {
 
   it("omits Repository line when Windows path directory matches project name", () => {
     const prompt = buildMicroCorrectionSystemPrompt({
-      projectName: "canopy",
-      projectPath: "C:\\Users\\dev\\canopy",
+      projectName: "daintree",
+      projectPath: "C:\\Users\\dev\\daintree",
     });
     const projectSection = prompt.split("CURRENT PROJECT:")[1]?.split("\n\n")[0] ?? "";
     expect(projectSection).not.toContain("Repository:");

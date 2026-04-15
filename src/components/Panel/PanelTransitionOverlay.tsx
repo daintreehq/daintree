@@ -167,7 +167,7 @@ function TransitionGhost({ transition, onComplete }: TransitionGhostProps) {
   return (
     <div
       ref={elementRef}
-      className="absolute border-2 border-canopy-accent/50 bg-canopy-accent/10"
+      className="absolute border-2 border-daintree-accent/50 bg-daintree-accent/10"
       style={{
         transitionDuration: `${duration}ms`,
         transitionProperty: "left, top, width, height, opacity",

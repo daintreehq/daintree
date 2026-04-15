@@ -25,7 +25,7 @@ export function DockPlaceholder({ className }: DockPlaceholderProps) {
     <div
       className={cn(
         "flex flex-col gap-1 px-3 py-2 min-w-[120px] h-full",
-        "rounded border border-canopy-accent/30 bg-canopy-accent/5",
+        "rounded border border-daintree-accent/30 bg-daintree-accent/5",
         className
       )}
       aria-hidden="true"

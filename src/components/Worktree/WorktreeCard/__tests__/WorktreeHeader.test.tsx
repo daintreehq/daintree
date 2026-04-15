@@ -256,7 +256,7 @@ describe("WorktreeHeader primary worktree standard branch layout", () => {
   const mainWorktree: WorktreeState = {
     ...baseWorktree,
     isMainWorktree: true,
-    name: "canopy-app",
+    name: "daintree-app",
     branch: "main",
   };
 
@@ -268,7 +268,7 @@ describe("WorktreeHeader primary worktree standard branch layout", () => {
       branchLabel: "main",
     });
     const projectName = screen.getByTestId("primary-worktree-project-name");
-    expect(projectName.textContent).toBe("canopy-app");
+    expect(projectName.textContent).toBe("daintree-app");
   });
 
   it("renders branch label in secondary row", () => {
@@ -361,7 +361,7 @@ describe("WorktreeHeader primary worktree standard branch layout", () => {
     expect(screen.getByTestId("primary-worktree-project-name")).toBeDefined();
     // The branch "main" should only appear as the project name row, not a separate secondary element
     const allText = screen.getByTestId("primary-worktree-project-name").textContent;
-    expect(allText).toBe("canopy-app");
+    expect(allText).toBe("daintree-app");
   });
 });
 

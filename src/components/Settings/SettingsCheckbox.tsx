@@ -31,11 +31,11 @@ export function SettingsCheckbox({
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
         disabled={disabled}
-        className="w-4 h-4 mt-0.5 rounded border-border-strong bg-canopy-bg text-canopy-accent focus:ring-canopy-accent focus:ring-2 focus:ring-offset-0 disabled:opacity-50"
+        className="w-4 h-4 mt-0.5 rounded border-border-strong bg-daintree-bg text-daintree-accent focus:ring-daintree-accent focus:ring-2 focus:ring-offset-0 disabled:opacity-50"
       />
       <div className="flex-1">
-        <span className="text-sm font-medium text-canopy-text">{label}</span>
-        <p className="text-xs text-canopy-text/50 mt-0.5 select-text">{description}</p>
+        <span className="text-sm font-medium text-daintree-text">{label}</span>
+        <p className="text-xs text-daintree-text/50 mt-0.5 select-text">{description}</p>
       </div>
     </label>
   );

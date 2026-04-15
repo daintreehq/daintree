@@ -18,7 +18,7 @@ const ARTIFACT_TYPE_COLORS: Record<string, string> = {
   file: "border-state-working bg-[color-mix(in_oklab,var(--color-state-working)_10%,transparent)] text-state-working",
   summary:
     "border-status-warning bg-[color-mix(in_oklab,var(--color-status-warning)_10%,transparent)] text-status-warning",
-  other: "border-canopy-border bg-canopy-sidebar/10 text-canopy-text/60",
+  other: "border-daintree-border bg-daintree-sidebar/10 text-daintree-text/60",
 };
 
 const ARTIFACT_TYPE_ICONS: Record<string, string> = {
@@ -114,29 +114,29 @@ function ArtifactItem({
       >
         <div className="flex items-center gap-2 min-w-0">
           <span className={cn("font-mono text-xs shrink-0", colorClass.split(" ")[2])}>{icon}</span>
-          <span className="text-sm text-canopy-text font-medium truncate">{title}</span>
+          <span className="text-sm text-daintree-text font-medium truncate">{title}</span>
           {artifact.language && artifact.language !== artifact.type && (
-            <span className="text-xs text-canopy-text/40 shrink-0">{artifact.language}</span>
+            <span className="text-xs text-daintree-text/40 shrink-0">{artifact.language}</span>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className="text-xs text-canopy-text/40">
+          <span className="text-xs text-daintree-text/40">
             {lineCount} line{lineCount !== 1 ? "s" : ""}
           </span>
-          <span className="text-canopy-text/60">{isExpanded ? "▼" : "▶"}</span>
+          <span className="text-daintree-text/60">{isExpanded ? "▼" : "▶"}</span>
         </div>
       </button>
 
       {isExpanded && (
-        <div className="bg-canopy-bg/50">
+        <div className="bg-daintree-bg/50">
           <pre className="font-mono text-xs p-3 overflow-x-auto max-h-32 overflow-y-auto select-text">
-            <code className="text-canopy-text">
+            <code className="text-daintree-text">
               {previewLines.join("\n")}
-              {hasMore && <span className="text-canopy-text/40">{"\n"}...</span>}
+              {hasMore && <span className="text-daintree-text/40">{"\n"}...</span>}
             </code>
           </pre>
 
-          <div className="flex items-center gap-2 px-3 py-2 bg-canopy-sidebar/50 border-t border-canopy-border">
+          <div className="flex items-center gap-2 px-3 py-2 bg-daintree-sidebar/50 border-t border-daintree-border">
             <button
               onClick={handleCopy}
               disabled={isProcessing}
@@ -153,7 +153,7 @@ function ArtifactItem({
               disabled={isProcessing}
               className={cn(
                 "px-3 py-1 text-xs rounded transition-colors",
-                "bg-canopy-border hover:bg-[color-mix(in_oklab,var(--color-canopy-border)_100%,white_20%)] text-canopy-text",
+                "bg-daintree-border hover:bg-[color-mix(in_oklab,var(--color-daintree-border)_100%,white_20%)] text-daintree-text",
                 "disabled:opacity-50 disabled:cursor-not-allowed"
               )}
             >
@@ -169,7 +169,7 @@ function ArtifactItem({
                         disabled={isProcessing || !canApplyPatch}
                         className={cn(
                           "px-3 py-1 text-xs rounded transition-colors",
-                          "bg-status-success hover:brightness-110 text-canopy-bg",
+                          "bg-status-success hover:brightness-110 text-daintree-bg",
                           "disabled:opacity-50 disabled:cursor-not-allowed"
                         )}
                       >
@@ -339,15 +339,15 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
       ) : (
         <div
           className={cn(
-            "bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-lg)] shadow-[var(--theme-shadow-floating)]",
+            "bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-lg)] shadow-[var(--theme-shadow-floating)]",
             "w-96 max-h-96 flex flex-col overflow-hidden"
           )}
         >
-          <div className="bg-canopy-bg border-b border-canopy-border">
+          <div className="bg-daintree-bg border-b border-daintree-border">
             <div className="flex items-center justify-between px-4 py-3">
               <div className="flex items-center gap-2">
                 <span className="font-mono text-status-info">{"{ }"}</span>
-                <span className="text-sm font-medium tabular-nums text-canopy-text">
+                <span className="text-sm font-medium tabular-nums text-daintree-text">
                   {artifacts.length} Artifact{artifacts.length !== 1 ? "s" : ""}
                 </span>
               </div>
@@ -356,7 +356,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   type="button"
                   onClick={clearArtifacts}
                   disabled={isBulkActionRunning}
-                  className="text-xs text-canopy-text/40 hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="text-xs text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   aria-label="Clear all artifacts"
                 >
                   Clear
@@ -365,7 +365,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   type="button"
                   onClick={() => setIsExpanded(false)}
                   disabled={isBulkActionRunning}
-                  className="text-canopy-text/40 hover:text-canopy-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   aria-label="Close artifact overlay"
                 >
                   ×
@@ -400,8 +400,8 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                               className={cn(
                                 "px-2 py-1 text-xs rounded transition-colors",
                                 includeAllTypes
-                                  ? "bg-canopy-border text-canopy-text"
-                                  : "bg-canopy-sidebar text-canopy-text/60",
+                                  ? "bg-daintree-border text-daintree-text"
+                                  : "bg-daintree-sidebar text-daintree-text/60",
                                 "hover:brightness-110",
                                 "disabled:opacity-50 disabled:cursor-not-allowed"
                               )}
@@ -424,7 +424,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     disabled={isBulkActionRunning}
                     className={cn(
                       "px-3 py-1 text-xs rounded transition-colors",
-                      "bg-canopy-border hover:bg-[color-mix(in_oklab,var(--color-canopy-border)_100%,white_20%)] text-canopy-text",
+                      "bg-daintree-border hover:bg-[color-mix(in_oklab,var(--color-daintree-border)_100%,white_20%)] text-daintree-text",
                       "disabled:opacity-50 disabled:cursor-not-allowed"
                     )}
                   >
@@ -442,7 +442,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                             disabled={isBulkActionRunning || !canApplyAll}
                             className={cn(
                               "px-3 py-1 text-xs rounded transition-colors",
-                              "bg-status-success hover:brightness-110 text-canopy-bg",
+                              "bg-status-success hover:brightness-110 text-daintree-bg",
                               "disabled:opacity-50 disabled:cursor-not-allowed"
                             )}
                           >
@@ -457,7 +457,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   </TooltipProvider>
                 )}
                 {bulkProgress && (
-                  <span className="text-xs tabular-nums text-canopy-text/60 ml-auto">
+                  <span className="text-xs tabular-nums text-daintree-text/60 ml-auto">
                     {bulkProgress.action === "copy" && "Copying…"}
                     {bulkProgress.action === "save" &&
                       `Saving ${bulkProgress.current}/${bulkProgress.total}…`}

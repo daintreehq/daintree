@@ -89,13 +89,13 @@ export function NotificationSettingsTab() {
   };
 
   if (loadState === "loading") {
-    return <div className="text-sm text-canopy-text/50">Loading…</div>;
+    return <div className="text-sm text-daintree-text/50">Loading…</div>;
   }
 
   if (loadState === "error") {
     return (
-      <div className="text-sm text-canopy-text/60">
-        Could not load notification settings. Restart Canopy and try again.
+      <div className="text-sm text-daintree-text/60">
+        Could not load notification settings. Restart Daintree and try again.
       </div>
     );
   }
@@ -134,7 +134,7 @@ export function NotificationSettingsTab() {
               onChange={(v) => update({ waitingEnabled: v })}
             />
             {settings.waitingEnabled && (
-              <div className="ml-6 space-y-3 border-l border-canopy-border pl-4">
+              <div className="ml-6 space-y-3 border-l border-daintree-border pl-4">
                 <SettingsCheckbox
                   id="notif-waiting-escalation"
                   label="Escalate if still waiting"
@@ -144,13 +144,13 @@ export function NotificationSettingsTab() {
                 />
                 {settings.waitingEscalationEnabled && (
                   <div className="space-y-1">
-                    <label className="text-sm font-medium text-canopy-text block">
+                    <label className="text-sm font-medium text-daintree-text block">
                       Escalation delay
                     </label>
                     <select
                       value={settings.waitingEscalationDelayMs}
                       onChange={(e) => update({ waitingEscalationDelayMs: Number(e.target.value) })}
-                      className="px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                      className="px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent focus:outline-none transition-colors"
                     >
                       {ESCALATION_DELAY_OPTIONS.map(({ value, label }) => (
                         <option key={value} value={value}>
@@ -210,12 +210,12 @@ export function NotificationSettingsTab() {
                   ] as const
                 ).map(({ label, field }) => (
                   <div key={field} className="space-y-1">
-                    <label className="text-sm font-medium text-canopy-text block">{label}</label>
+                    <label className="text-sm font-medium text-daintree-text block">{label}</label>
                     <div className="flex items-center gap-2">
                       <select
                         value={settings[field]}
                         onChange={(e) => update({ [field]: e.target.value })}
-                        className="flex-1 px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                        className="flex-1 px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent focus:outline-none transition-colors"
                       >
                         {AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => (
                           <option key={file} value={file}>
@@ -226,7 +226,7 @@ export function NotificationSettingsTab() {
                       <button
                         onClick={() => handlePreview(settings[field])}
                         title={`Preview ${label.toLowerCase()}`}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text hover:bg-tint/[0.06] transition-colors"
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg text-daintree-text hover:bg-tint/[0.06] transition-colors"
                       >
                         <Play className="h-3.5 w-3.5" />
                         Preview

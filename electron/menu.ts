@@ -11,11 +11,11 @@ import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
 
 app.setAboutPanelOptions({
-  applicationName: "Canopy",
+  applicationName: "Daintree",
   applicationVersion: app.getVersion(),
   version: "Beta",
-  copyright: `© ${new Date().getFullYear()} Canopy Team`,
-  website: "https://github.com/daintree/canopy",
+  copyright: `© ${new Date().getFullYear()} Daintree Team`,
+  website: "https://github.com/canopyide/canopy",
 });
 
 function convertShortcutToAccelerator(shortcut: string): string {
@@ -332,7 +332,7 @@ export function createApplicationMenu(
         },
         { type: "separator" },
         {
-          label: "Install Canopy Command Line Tool",
+          label: "Install Daintree Command Line Tool",
           enabled: process.platform === "darwin" || process.platform === "linux",
           click: async (_item, browserWindow) => {
             const targetWin = getTargetBrowserWindow(browserWindow);
@@ -344,7 +344,7 @@ export function createApplicationMenu(
                   wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, {
                     type: "success",
                     title: "CLI Installed",
-                    message: `The \`canopy\` command is now available at ${status.path}`,
+                    message: `The \`daintree\` command is now available at ${status.path}`,
                   });
                 }
               }
@@ -394,7 +394,7 @@ export function createApplicationMenu(
         {
           label: "Learn More",
           click: async () => {
-            await shell.openExternal("https://github.com/daintree/canopy");
+            await shell.openExternal("https://github.com/canopyide/canopy");
           },
         },
         ...(process.platform !== "darwin" && app.isPackaged
@@ -415,7 +415,7 @@ export function createApplicationMenu(
 
   if (process.platform === "darwin") {
     template.unshift({
-      label: "Canopy",
+      label: "Daintree",
       submenu: [
         { role: "about" },
         ...(app.isPackaged

@@ -53,6 +53,6 @@ export function getMoreAgentsOption(): LaunchOption {
     type: "terminal",
     label: "More agents...",
     description: "Configure which agents appear in this menu",
-    icon: <Settings className="w-4 h-4 text-canopy-text/50" />,
+    icon: <Settings className="w-4 h-4 text-daintree-text/50" />,
   };
 }

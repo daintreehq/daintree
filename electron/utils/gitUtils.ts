@@ -59,7 +59,7 @@ export function clearGitDirCache(worktreePath?: string): void {
 
 export function getGitNotePath(
   worktreePath: string,
-  filename: string = "canopy/note"
+  filename: string = "daintree/note"
 ): string | null {
   const gitDir = getGitDir(worktreePath);
   return gitDir ? pathJoin(gitDir, filename) : null;

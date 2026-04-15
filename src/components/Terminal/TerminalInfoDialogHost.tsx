@@ -16,7 +16,9 @@ export function TerminalInfoDialogHost() {
     };
 
     const controller = new AbortController();
-    window.addEventListener("canopy:open-terminal-info", handleOpen, { signal: controller.signal });
+    window.addEventListener("daintree:open-terminal-info", handleOpen, {
+      signal: controller.signal,
+    });
     return () => controller.abort();
   }, []);
 

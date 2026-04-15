@@ -61,7 +61,7 @@ describe("fileActions adversarial", () => {
       type: string;
       detail: { path: string; rootPath?: string; line?: number; col?: number };
     };
-    expect(event.type).toBe("canopy:view-file");
+    expect(event.type).toBe("daintree:view-file");
     expect(event.detail).toEqual({
       path: "/a/b.ts",
       rootPath: "/a",

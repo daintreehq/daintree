@@ -103,7 +103,7 @@ export interface Worktree {
   /** Timestamp when worktree directory was created (milliseconds since epoch, for sorting) */
   createdAt?: number;
 
-  /** Content from .git/canopy/note file (for AI agent status communication) */
+  /** Content from .git/daintree/note file (for AI agent status communication) */
   aiNote?: string;
 
   /** Timestamp when the note file was last modified (milliseconds since epoch) */

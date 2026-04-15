@@ -14,7 +14,7 @@ test.describe.serial("Persistence: Settings across restart", () => {
   let ctx: AppContext | null = null;
 
   test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-persist-settings-"));
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-persist-settings-"));
   });
 
   test.afterAll(async () => {
@@ -77,7 +77,7 @@ test.describe.serial("Persistence: Project memory across restart", () => {
   let ctx: AppContext | null = null;
 
   test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-persist-project-"));
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-persist-project-"));
     fixtureDir = createFixtureRepo({ name: "persistence-test" });
   });
 

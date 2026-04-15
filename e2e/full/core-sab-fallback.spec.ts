@@ -45,7 +45,7 @@ test.describe.serial("Core: SAB Fallback (IPC-only terminal output)", () => {
     await panel.locator(SEL.terminal.xtermRows).click();
     await window.waitForTimeout(T_SETTLE);
     await expectTerminalFocused(panel);
-    await window.evaluate(() => window.dispatchEvent(new CustomEvent("canopy:find-in-panel")));
+    await window.evaluate(() => window.dispatchEvent(new CustomEvent("daintree:find-in-panel")));
 
     const searchInput = panel.locator(SEL.terminal.searchInput);
     await expect(searchInput).toBeVisible({ timeout: T_MEDIUM });

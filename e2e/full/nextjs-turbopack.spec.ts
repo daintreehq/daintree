@@ -12,7 +12,7 @@ let fixtureRepoPath: string;
 const PROJECT_NAME = "Next.js Turbopack Test";
 
 /**
- * E2E test for issue #4557: Next.js dev server CSS rendering in Canopy's webview.
+ * E2E test for issue #4557: Next.js dev server CSS rendering in Daintree's webview.
  *
  * Creates a fixture repo that mimics a Next.js project (package.json with
  * "dev": "next dev") and a fake `next` binary that:

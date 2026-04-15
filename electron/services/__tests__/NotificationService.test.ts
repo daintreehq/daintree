@@ -100,10 +100,10 @@ describe("NotificationService", () => {
 
     notificationService.updateNotifications({ waitingCount: 2 });
     vi.advanceTimersByTime(301);
-    expect(windowMock.setTitle).toHaveBeenCalledWith("(2) Canopy");
+    expect(windowMock.setTitle).toHaveBeenCalledWith("(2) Daintree");
 
     windowMock.trigger("focus");
-    expect(windowMock.setTitle).toHaveBeenCalledWith("Canopy");
+    expect(windowMock.setTitle).toHaveBeenCalledWith("Daintree");
   });
 
   it("does not throw if update is called after dispose", () => {
@@ -123,8 +123,8 @@ describe("NotificationService", () => {
     vi.advanceTimersByTime(301);
 
     // win2 is focused, so no title update should show count
-    expect(win1.setTitle).toHaveBeenCalledWith("Canopy");
-    expect(win2.setTitle).toHaveBeenCalledWith("Canopy");
+    expect(win1.setTitle).toHaveBeenCalledWith("Daintree");
+    expect(win2.setTitle).toHaveBeenCalledWith("Daintree");
     expect(electronMock.app.setBadgeCount).toHaveBeenCalledWith(0);
   });
 
@@ -139,8 +139,8 @@ describe("NotificationService", () => {
     notificationService.updateNotifications({ waitingCount: 5 });
     vi.advanceTimersByTime(301);
 
-    expect(win1.setTitle).toHaveBeenCalledWith("(5) Canopy");
-    expect(win2.setTitle).toHaveBeenCalledWith("(5) Canopy");
+    expect(win1.setTitle).toHaveBeenCalledWith("(5) Daintree");
+    expect(win2.setTitle).toHaveBeenCalledWith("(5) Daintree");
   });
 
   it("dispose detaches listeners from all tracked windows", () => {

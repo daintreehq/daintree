@@ -232,7 +232,7 @@ function buildSmokeTerminalSnapshot(id: string, cwd: string, title: string): Ter
 }
 
 async function runSmokeProjectPersistenceChecks(window: BrowserWindow): Promise<void> {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "canopy-smoke-project-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "daintree-smoke-project-"));
   const repoPath = path.join(tempRoot, "repo");
 
   let createdProjectId: string | null = null;

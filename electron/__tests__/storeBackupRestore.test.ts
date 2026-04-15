@@ -26,7 +26,7 @@ describe("Store backup/restore helpers", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-06-15T12:00:00.000Z"));
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "canopy-store-"));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-store-"));
     configPath = path.join(tempDir, "config.json");
   });
 
@@ -151,7 +151,7 @@ describe("initializeStore", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-06-15T12:00:00.000Z"));
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "canopy-store-init-"));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-store-init-"));
   });
 
   afterEach(() => {

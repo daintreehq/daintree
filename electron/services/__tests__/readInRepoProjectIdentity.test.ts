@@ -11,7 +11,7 @@ describe("readInRepoProjectIdentity", () => {
   let identityFiles: ProjectIdentityFiles;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-test-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-test-"));
     identityFiles = new ProjectIdentityFiles();
   });
 

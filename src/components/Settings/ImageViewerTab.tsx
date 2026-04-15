@@ -101,7 +101,7 @@ export function ImageViewerTab() {
 
   if (!activeProjectId) {
     return (
-      <div className="p-4 text-sm text-canopy-text/50">
+      <div className="p-4 text-sm text-daintree-text/50">
         Open a project to configure its image viewer preference.
       </div>
     );
@@ -116,7 +116,7 @@ export function ImageViewerTab() {
       >
         <div className="space-y-4">
           {isLoading ? (
-            <p className="text-xs text-canopy-text/40">Loading…</p>
+            <p className="text-xs text-daintree-text/40">Loading…</p>
           ) : (
             <>
               <div className="space-y-2">
@@ -127,11 +127,11 @@ export function ImageViewerTab() {
                     value="os"
                     checked={mode === "os"}
                     onChange={() => handleModeChange("os")}
-                    className="accent-canopy-accent"
+                    className="accent-daintree-accent"
                   />
-                  <span className="text-sm text-canopy-text">Use OS default</span>
+                  <span className="text-sm text-daintree-text">Use OS default</span>
                 </label>
-                <p className="text-xs text-canopy-text/40 ml-6">
+                <p className="text-xs text-daintree-text/40 ml-6">
                   Opens images with your system default viewer (Preview on macOS, Photos on
                   Windows).
                 </p>
@@ -143,23 +143,23 @@ export function ImageViewerTab() {
                     value="custom"
                     checked={mode === "custom"}
                     onChange={() => handleModeChange("custom")}
-                    className="accent-canopy-accent"
+                    className="accent-daintree-accent"
                   />
-                  <span className="text-sm text-canopy-text">Custom command</span>
+                  <span className="text-sm text-daintree-text">Custom command</span>
                 </label>
               </div>
 
               {mode === "custom" && (
                 <div className="space-y-1 ml-6">
-                  <label className="text-xs text-canopy-text/60">Command</label>
+                  <label className="text-xs text-daintree-text/60">Command</label>
                   <input
                     type="text"
                     value={customCommand}
                     onChange={(e) => handleCommandChange(e.target.value)}
                     placeholder="e.g. open -a Photoshop, gimp"
-                    className="w-full bg-canopy-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors font-mono"
+                    className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-none focus:border-daintree-accent transition-colors font-mono"
                   />
-                  <p className="text-xs text-canopy-text/40">
+                  <p className="text-xs text-daintree-text/40">
                     The file path will be appended as the last argument.
                   </p>
                 </div>
@@ -169,7 +169,7 @@ export function ImageViewerTab() {
                 <button
                   onClick={handleSave}
                   disabled={isSaving || isLoading}
-                  className="px-4 py-2 rounded-[var(--radius-md)] bg-canopy-accent text-canopy-bg text-sm font-medium hover:bg-canopy-accent/90 disabled:opacity-50 transition-colors"
+                  className="px-4 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-daintree-bg text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 transition-colors"
                 >
                   {isSaving ? "Saving…" : "Save"}
                 </button>

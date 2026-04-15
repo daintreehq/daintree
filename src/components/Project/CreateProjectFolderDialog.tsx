@@ -114,7 +114,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" dismissible={!isCreating}>
       <AppDialog.Header>
-        <AppDialog.Title icon={<FolderPlus className="h-5 w-5 text-canopy-accent" />}>
+        <AppDialog.Title icon={<FolderPlus className="h-5 w-5 text-daintree-accent" />}>
           Create New Project Folder
         </AppDialog.Title>
         {!isCreating && <AppDialog.CloseButton />}
@@ -122,7 +122,10 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
 
       <AppDialog.Body className="space-y-4">
         <div className="space-y-1.5">
-          <label className="text-sm font-medium text-canopy-text/80" htmlFor="create-folder-parent">
+          <label
+            className="text-sm font-medium text-daintree-text/80"
+            htmlFor="create-folder-parent"
+          >
             Location
           </label>
           <div className="flex gap-2">
@@ -131,7 +134,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
               type="text"
               readOnly
               value={parentPath}
-              className="flex-1 rounded-[var(--radius-md)] border border-canopy-border bg-muted/50 px-3 py-2 text-sm font-mono text-canopy-text/70 truncate"
+              className="flex-1 rounded-[var(--radius-md)] border border-daintree-border bg-muted/50 px-3 py-2 text-sm font-mono text-daintree-text/70 truncate"
               placeholder="Select parent directory..."
             />
             <Button
@@ -148,7 +151,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
         </div>
 
         <div className="space-y-1.5">
-          <label className="text-sm font-medium text-canopy-text/80" htmlFor="create-folder-name">
+          <label className="text-sm font-medium text-daintree-text/80" htmlFor="create-folder-name">
             Folder Name
           </label>
           <input
@@ -163,7 +166,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
             onKeyDown={handleKeyDown}
             aria-invalid={error != null}
             aria-describedby={error ? errorId : undefined}
-            className="w-full rounded-[var(--radius-md)] border border-canopy-border bg-muted/50 px-3 py-2 text-sm text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 focus:border-canopy-accent aria-invalid:border-status-error"
+            className="w-full rounded-[var(--radius-md)] border border-daintree-border bg-muted/50 px-3 py-2 text-sm text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent/50 focus:border-daintree-accent aria-invalid:border-status-error"
             placeholder="my-project"
             disabled={isCreating}
           />

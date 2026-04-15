@@ -77,7 +77,7 @@ function PreferredSchemePicker({
 }) {
   return (
     <div className="space-y-1">
-      <p className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/40">
+      <p className="text-[10px] font-medium uppercase tracking-wider text-daintree-text/40">
         {label}
       </p>
       <div className="flex flex-wrap gap-1.5">
@@ -89,8 +89,8 @@ function PreferredSchemePicker({
             className={cn(
               "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] border text-xs transition-colors",
               selectedId === scheme.id
-                ? "border-canopy-accent/30 bg-canopy-accent/10 text-canopy-text"
-                : "border-canopy-border text-canopy-text/70 hover:bg-surface-hover"
+                ? "border-daintree-accent/30 bg-daintree-accent/10 text-daintree-text"
+                : "border-daintree-border text-daintree-text/70 hover:bg-surface-hover"
             )}
           >
             <div
@@ -440,13 +440,13 @@ export function AppThemePicker() {
               )}
             />
             <div className="min-w-0">
-              <p className="text-xs text-canopy-text">{importMessage}</p>
+              <p className="text-xs text-daintree-text">{importMessage}</p>
               {importWarnings.length > 0 && (
                 <ul className="mt-1 space-y-1">
                   {importWarnings.map((warning, index) => (
                     <li
                       key={`${warning.message}-${index}`}
-                      className="text-[11px] text-canopy-text/60"
+                      className="text-[11px] text-daintree-text/60"
                     >
                       {warning.message}
                     </li>
@@ -466,7 +466,7 @@ export function AppThemePicker() {
         onClick={handleOpen}
         className={cn(
           "w-full flex items-center gap-3 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
-          "border-canopy-border bg-canopy-bg hover:border-canopy-text/30"
+          "border-daintree-border bg-daintree-bg hover:border-daintree-text/30"
         )}
       >
         <div className="relative shrink-0">
@@ -484,7 +484,7 @@ export function AppThemePicker() {
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="text-sm font-medium text-canopy-text truncate">
+            <span className="text-sm font-medium text-daintree-text truncate">
               {selectedScheme.name}
             </span>
             {selectedWarnings.length > 0 && (
@@ -495,7 +495,7 @@ export function AppThemePicker() {
             )}
           </div>
           {selectedScheme.location && (
-            <span className="text-xs text-canopy-text/50 truncate block">
+            <span className="text-xs text-daintree-text/50 truncate block">
               {selectedScheme.location}
             </span>
           )}
@@ -507,7 +507,7 @@ export function AppThemePicker() {
 
       <section
         aria-label="Accent color"
-        className="flex items-center gap-3 p-2 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg"
+        className="flex items-center gap-3 p-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg"
       >
         <label
           htmlFor="accent-color-override-input"
@@ -515,7 +515,7 @@ export function AppThemePicker() {
           style={{ width: 32, height: 32 }}
         >
           <div
-            className="w-full h-full rounded-md border border-canopy-border"
+            className="w-full h-full rounded-md border border-daintree-border"
             style={{ backgroundColor: effectiveAccent }}
             aria-hidden="true"
           />
@@ -531,8 +531,8 @@ export function AppThemePicker() {
           />
         </label>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-canopy-text">Accent color</div>
-          <div className="text-xs text-canopy-text/60">
+          <div className="text-sm font-medium text-daintree-text">Accent color</div>
+          <div className="text-xs text-daintree-text/60">
             {accentColorOverride
               ? `Overriding theme accent (${effectiveAccent})`
               : "Click the swatch to override the theme accent"}
@@ -543,7 +543,7 @@ export function AppThemePicker() {
             type="button"
             onClick={handleAccentReset}
             data-testid="accent-color-override-reset"
-            className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors shrink-0"
+            className="text-xs text-daintree-accent hover:text-daintree-accent/80 transition-colors shrink-0"
           >
             Reset to theme default
           </button>
@@ -581,7 +581,7 @@ export function AppThemePicker() {
               return (
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-medium text-canopy-text truncate">
+                    <span className="text-xs font-medium text-daintree-text truncate">
                       {scheme.name}
                     </span>
                     {warnings.length > 0 && (
@@ -592,7 +592,7 @@ export function AppThemePicker() {
                     )}
                   </div>
                   {scheme.location && (
-                    <span className="text-[11px] text-canopy-text/50 truncate block">
+                    <span className="text-[11px] text-daintree-text/50 truncate block">
                       {scheme.location}
                     </span>
                   )}
@@ -610,13 +610,13 @@ export function AppThemePicker() {
       <div className="flex items-center gap-3">
         <button
           onClick={handleExport}
-          className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
+          className="text-xs text-daintree-accent hover:text-daintree-accent/80 transition-colors"
         >
           Export app theme...
         </button>
         <button
           onClick={handleImport}
-          className="text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
+          className="text-xs text-daintree-accent hover:text-daintree-accent/80 transition-colors"
         >
           Import app theme...
         </button>
@@ -624,7 +624,7 @@ export function AppThemePicker() {
           <button
             type="button"
             onClick={handleShuffle}
-            className="ml-auto flex items-center gap-1.5 text-xs text-canopy-accent hover:text-canopy-accent/80 transition-colors"
+            className="ml-auto flex items-center gap-1.5 text-xs text-daintree-accent hover:text-daintree-accent/80 transition-colors"
           >
             <Shuffle className="h-3 w-3" />
             Random theme

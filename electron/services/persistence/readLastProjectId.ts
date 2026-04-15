@@ -15,7 +15,7 @@ import path from "path";
 
 export function readLastActiveProjectIdSync(): string | null {
   try {
-    const dbPath = path.join(app.getPath("userData"), "canopy.db");
+    const dbPath = path.join(app.getPath("userData"), "daintree.db");
 
     if (!fs.existsSync(dbPath)) {
       return null; // First launch — no database yet

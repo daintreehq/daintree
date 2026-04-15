@@ -320,7 +320,7 @@ export function Toolbar({
     [getToolbarItems, syncToolbarTabStops]
   );
 
-  const toolbarIconButtonClass = "toolbar-icon-button text-canopy-text transition-colors";
+  const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
   const toolbarDividerClass = "toolbar-divider w-px h-5 mx-1";
 
   const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
@@ -487,7 +487,7 @@ export function Toolbar({
                   disabled={isCopyingTree || !activeWorktree}
                   className={cn(
                     "toolbar-icon-button transition-colors",
-                    treeCopied ? "text-status-success bg-status-success/10" : "text-canopy-text",
+                    treeCopied ? "text-status-success bg-status-success/10" : "text-daintree-text",
                     isCopyingTree && "cursor-wait opacity-70",
                     !activeWorktree && "opacity-50"
                   )}
@@ -931,7 +931,7 @@ export function Toolbar({
                   <span className="text-base leading-none shrink-0" aria-label="Project emoji">
                     {currentProject.emoji}
                   </span>
-                  <span className="min-w-0 truncate text-xs font-semibold tracking-wide text-canopy-text">
+                  <span className="min-w-0 truncate text-xs font-semibold tracking-wide text-daintree-text">
                     {currentProject.name}
                   </span>
                   {branchName && (
@@ -947,10 +947,10 @@ export function Toolbar({
                 </>
               ) : (
                 <>
-                  <span className="text-xs font-medium text-canopy-text tracking-wide truncate min-w-0">
-                    Canopy
+                  <span className="text-xs font-medium text-daintree-text tracking-wide truncate min-w-0">
+                    Daintree
                   </span>
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent shrink-0">
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-daintree-accent/20 text-daintree-accent shrink-0">
                     Beta
                   </span>
                   <ChevronsUpDown className="toolbar-project-meta ml-0.5 h-3 w-3 shrink-0" />

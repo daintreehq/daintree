@@ -293,7 +293,7 @@ export class PtyClient extends EventEmitter {
 
     try {
       this.child = utilityProcess.fork(hostPath, [], {
-        serviceName: "canopy-pty-host",
+        serviceName: "daintree-pty-host",
         stdio: "pipe",
         cwd: os.homedir(),
         execArgv: [`--max-old-space-size=${this.config.memoryLimitMb}`],

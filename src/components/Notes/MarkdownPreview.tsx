@@ -14,7 +14,10 @@ export const MarkdownPreview = forwardRef<HTMLDivElement, MarkdownPreviewProps>(
     return (
       <div
         ref={ref}
-        className={cn("prose prose-sm prose-canopy max-w-none p-4 overflow-auto h-full", className)}
+        className={cn(
+          "prose prose-sm prose-daintree max-w-none p-4 overflow-auto h-full",
+          className
+        )}
       >
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}

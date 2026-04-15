@@ -373,8 +373,8 @@ export function PortalDock() {
           aria-label="Portal"
           data-macro-focus={isMacroFocused ? "true" : undefined}
           className={cn(
-            "flex flex-col h-full bg-canopy-bg relative portal-dock outline-none",
-            "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset"
+            "flex flex-col h-full bg-daintree-bg relative portal-dock outline-none",
+            "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60 data-[macro-focus=true]:ring-inset"
           )}
           style={{ width }}
           onFocus={handleDockFocus}
@@ -391,8 +391,8 @@ export function PortalDock() {
             tabIndex={0}
             className={cn(
               "group absolute -left-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-50",
-              "hover:bg-overlay-soft transition-colors focus:outline-none focus:bg-tint/[0.04] focus:ring-1 focus:ring-canopy-accent/50",
-              isResizing && "bg-canopy-accent/20"
+              "hover:bg-overlay-soft transition-colors focus:outline-none focus:bg-tint/[0.04] focus:ring-1 focus:ring-daintree-accent/50",
+              isResizing && "bg-daintree-accent/20"
             )}
             onMouseDown={handleResizeStart}
             onKeyDown={handleKeyDown}
@@ -400,9 +400,9 @@ export function PortalDock() {
             <div
               className={cn(
                 "w-px h-8 rounded-full transition-[width] duration-150 delay-100 group-hover:w-0.5",
-                "bg-canopy-text/20",
-                "group-hover:bg-canopy-text/35 group-focus:bg-canopy-accent",
-                isResizing && "bg-canopy-accent"
+                "bg-daintree-text/20",
+                "group-hover:bg-daintree-text/35 group-focus:bg-daintree-accent",
+                isResizing && "bg-daintree-accent"
               )}
             />
           </div>
@@ -432,7 +432,7 @@ export function PortalDock() {
             {showLaunchpad ? (
               <PortalLaunchpad links={enabledLinks} onOpenUrl={handleOpenUrl} />
             ) : (
-              <div className="flex-1 bg-canopy-sidebar" id="portal-placeholder" />
+              <div className="flex-1 bg-daintree-sidebar" id="portal-placeholder" />
             )}
           </div>
         </div>

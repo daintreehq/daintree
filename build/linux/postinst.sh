@@ -2,8 +2,8 @@
 set -e
 
 # Install AppArmor profile to allow unprivileged user namespaces (Ubuntu 24.04+)
-PROFILE_SRC="/opt/Canopy/resources/canopy.apparmor"
-PROFILE_DST="/etc/apparmor.d/canopy"
+PROFILE_SRC="/opt/Daintree/resources/daintree.apparmor"
+PROFILE_DST="/etc/apparmor.d/daintree"
 
 if [ -f "$PROFILE_SRC" ] && command -v apparmor_parser > /dev/null 2>&1; then
   cp "$PROFILE_SRC" "$PROFILE_DST" || true
@@ -11,11 +11,11 @@ if [ -f "$PROFILE_SRC" ] && command -v apparmor_parser > /dev/null 2>&1; then
 fi
 
 # Fix chrome-sandbox SUID permissions (fallback if AppArmor profile isn't loaded)
-SANDBOX="/opt/Canopy/chrome-sandbox"
+SANDBOX="/opt/Daintree/chrome-sandbox"
 if [ -f "$SANDBOX" ]; then
   chown root:root "$SANDBOX"
   chmod 4755 "$SANDBOX"
 fi
 
-# Symlink canopy-app binary into PATH for CLI discovery
-ln -sf /opt/Canopy/canopy-app /usr/bin/canopy-app
+# Symlink daintree-app binary into PATH for CLI discovery
+ln -sf /opt/Daintree/daintree-app /usr/bin/daintree-app

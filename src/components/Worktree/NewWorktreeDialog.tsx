@@ -68,7 +68,7 @@ function HighlightBranchText({
       nodes.push(text.substring(lastIndex, start));
     }
     nodes.push(
-      <mark key={i} className="bg-canopy-accent/25 text-inherit rounded-sm">
+      <mark key={i} className="bg-daintree-accent/25 text-inherit rounded-sm">
         {text.substring(start, clampedEnd + 1)}
       </mark>
     );
@@ -785,7 +785,7 @@ export function NewWorktreeDialog({
       data-testid="new-worktree-dialog"
     >
       <AppDialog.Header>
-        <AppDialog.Title icon={<WorktreeIcon className="w-5 h-5 text-canopy-accent" />}>
+        <AppDialog.Title icon={<WorktreeIcon className="w-5 h-5 text-daintree-accent" />}>
           {initialPR ? "Checkout PR Branch" : "Create New Worktree"}
         </AppDialog.Title>
         <AppDialog.CloseButton />
@@ -794,34 +794,34 @@ export function NewWorktreeDialog({
       <AppDialog.Body>
         {loading ? (
           <div className="flex items-center justify-center py-12">
-            <Spinner size="xl" className="text-canopy-accent" />
-            <span className="ml-2 text-sm text-canopy-text/60">Loading branches...</span>
+            <Spinner size="xl" className="text-daintree-accent" />
+            <span className="ml-2 text-sm text-daintree-text/60">Loading branches...</span>
           </div>
         ) : (
           <TooltipProvider>
             <div className="space-y-4">
               {initialPR ? (
-                <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-md)] bg-canopy-accent/5 border border-canopy-accent/20 text-sm min-w-0">
+                <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-md)] bg-daintree-accent/5 border border-daintree-accent/20 text-sm min-w-0">
                   <WorktreeIcon
-                    className="w-4 h-4 text-canopy-accent shrink-0"
+                    className="w-4 h-4 text-daintree-accent shrink-0"
                     aria-hidden="true"
                   />
-                  <span className="text-canopy-text/80 min-w-0 truncate">
-                    PR <span className="font-medium text-canopy-text">#{initialPR.number}</span> —{" "}
+                  <span className="text-daintree-text/80 min-w-0 truncate">
+                    PR <span className="font-medium text-daintree-text">#{initialPR.number}</span> —{" "}
                     {initialPR.title}
                   </span>
                 </div>
               ) : (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
-                    <label className="block text-sm font-medium text-canopy-text">
+                    <label className="block text-sm font-medium text-daintree-text">
                       Link Issue (Optional)
                     </label>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
                           type="button"
-                          className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
+                          className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
                           aria-label="Help for Link Issue field"
                           disabled={isPending}
                         >
@@ -844,7 +844,7 @@ export function NewWorktreeDialog({
               )}
 
               {!initialPR && canAssignIssue && (
-                <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-canopy-bg/50 border-canopy-border transition-colors">
+                <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-daintree-bg/50 border-daintree-border transition-colors">
                   {currentUserAvatar ? (
                     <img
                       src={`${currentUserAvatar}${currentUserAvatar.includes("?") ? "&" : "?"}s=64`}
@@ -852,14 +852,16 @@ export function NewWorktreeDialog({
                       className="w-8 h-8 rounded-full shrink-0"
                     />
                   ) : (
-                    <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-canopy-accent/10 text-canopy-accent">
+                    <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-daintree-accent/10 text-daintree-accent">
                       <UserPlus className="w-4 h-4" />
                     </div>
                   )}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-canopy-text">Assign to me</span>
-                      <span className="text-xs text-canopy-text/50 font-mono">@{currentUser}</span>
+                      <span className="text-sm font-medium text-daintree-text">Assign to me</span>
+                      <span className="text-xs text-daintree-text/50 font-mono">
+                        @{currentUser}
+                      </span>
                     </div>
                   </div>
                   <label className="relative inline-flex items-center cursor-pointer">
@@ -874,13 +876,13 @@ export function NewWorktreeDialog({
                     <div
                       className={cn(
                         "w-9 h-5 rounded-full transition-colors",
-                        "peer-focus-visible:ring-2 peer-focus-visible:ring-canopy-accent",
+                        "peer-focus-visible:ring-2 peer-focus-visible:ring-daintree-accent",
                         "after:content-[''] after:absolute after:top-0.5 after:left-0.5",
                         "after:rounded-full after:h-4 after:w-4",
                         "after:transition-transform after:duration-200",
                         assignWorktreeToSelf
-                          ? "bg-canopy-accent after:translate-x-4 after:bg-text-inverse"
-                          : "bg-canopy-border after:translate-x-0 after:bg-canopy-text",
+                          ? "bg-daintree-accent after:translate-x-4 after:bg-text-inverse"
+                          : "bg-daintree-border after:translate-x-0 after:bg-daintree-text",
                         isPending && "opacity-50 cursor-not-allowed"
                       )}
                     />
@@ -890,7 +892,7 @@ export function NewWorktreeDialog({
 
               {!initialPR && (
                 <div
-                  className="inline-flex rounded-[var(--radius-md)] bg-canopy-border/50 p-0.5"
+                  className="inline-flex rounded-[var(--radius-md)] bg-daintree-border/50 p-0.5"
                   role="radiogroup"
                   aria-label="Branch mode"
                 >
@@ -903,8 +905,8 @@ export function NewWorktreeDialog({
                     className={cn(
                       "px-3 py-1 text-sm font-medium rounded-[var(--radius-sm)] transition-colors",
                       branchMode === "new"
-                        ? "bg-canopy-bg text-canopy-text shadow-sm"
-                        : "text-canopy-text/60 hover:text-canopy-text"
+                        ? "bg-daintree-bg text-daintree-text shadow-sm"
+                        : "text-daintree-text/60 hover:text-daintree-text"
                     )}
                   >
                     New Branch
@@ -918,8 +920,8 @@ export function NewWorktreeDialog({
                     className={cn(
                       "px-3 py-1 text-sm font-medium rounded-[var(--radius-sm)] transition-colors",
                       branchMode === "existing"
-                        ? "bg-canopy-bg text-canopy-text shadow-sm"
-                        : "text-canopy-text/60 hover:text-canopy-text"
+                        ? "bg-daintree-bg text-daintree-text shadow-sm"
+                        : "text-daintree-text/60 hover:text-daintree-text"
                     )}
                   >
                     Existing Branch
@@ -932,7 +934,7 @@ export function NewWorktreeDialog({
                   <div className="flex items-center gap-2">
                     <label
                       htmlFor="base-branch"
-                      className="block text-sm font-medium text-canopy-text"
+                      className="block text-sm font-medium text-daintree-text"
                     >
                       Base Branch
                     </label>
@@ -940,7 +942,7 @@ export function NewWorktreeDialog({
                       <TooltipTrigger asChild>
                         <button
                           type="button"
-                          className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
+                          className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
                           aria-label="Help for Base Branch field"
                           disabled={isPending}
                         >
@@ -961,7 +963,7 @@ export function NewWorktreeDialog({
                         role="combobox"
                         aria-expanded={branchPickerOpen}
                         aria-haspopup="listbox"
-                        className="w-full justify-between bg-canopy-bg border-canopy-border text-canopy-text hover:bg-canopy-bg hover:text-canopy-text"
+                        className="w-full justify-between bg-daintree-bg border-daintree-border text-daintree-text hover:bg-daintree-bg hover:text-daintree-text"
                         disabled={isPending}
                       >
                         <span className="truncate">
@@ -975,7 +977,7 @@ export function NewWorktreeDialog({
                       align="start"
                       onEscapeKeyDown={(e) => e.stopPropagation()}
                     >
-                      <div className="flex items-center border-b border-canopy-border px-3">
+                      <div className="flex items-center border-b border-daintree-border px-3">
                         <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
                         <input
                           ref={branchInputRef}
@@ -1016,7 +1018,7 @@ export function NewWorktreeDialog({
                                   <div
                                     key={`section-${row.label}`}
                                     role="presentation"
-                                    className="px-2 py-1 text-xs font-medium text-canopy-text/50 uppercase tracking-wider"
+                                    className="px-2 py-1 text-xs font-medium text-daintree-text/50 uppercase tracking-wider"
                                   >
                                     {row.label}
                                   </div>
@@ -1042,9 +1044,9 @@ export function NewWorktreeDialog({
                                     handleBranchSelect(row);
                                   }}
                                   className={cn(
-                                    "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                                    row.name === baseBranch && "bg-canopy-border",
-                                    idx === selectedIndex && "bg-canopy-accent/10"
+                                    "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                                    row.name === baseBranch && "bg-daintree-border",
+                                    idx === selectedIndex && "bg-daintree-accent/10"
                                   )}
                                 >
                                   <span className="truncate">
@@ -1064,7 +1066,7 @@ export function NewWorktreeDialog({
                                       </span>
                                     )}
                                     {row.name === baseBranch && (
-                                      <Check className="h-4 w-4 text-canopy-accent" />
+                                      <Check className="h-4 w-4 text-daintree-accent" />
                                     )}
                                   </span>
                                 </div>
@@ -1074,7 +1076,7 @@ export function NewWorktreeDialog({
                         )}
                       </ScrollShadow>
                       {!branchQuery && branchOptions.length > 500 && (
-                        <div className="border-t border-canopy-border px-3 py-2 text-xs text-canopy-text/60">
+                        <div className="border-t border-daintree-border px-3 py-2 text-xs text-daintree-text/60">
                           Showing first 500 branches. Type to search.
                         </div>
                       )}
@@ -1085,7 +1087,7 @@ export function NewWorktreeDialog({
 
               {isExistingMode ? (
                 <div className="space-y-2">
-                  <label className="block text-sm font-medium text-canopy-text">
+                  <label className="block text-sm font-medium text-daintree-text">
                     Select Branch
                   </label>
                   <Popover
@@ -1098,16 +1100,16 @@ export function NewWorktreeDialog({
                         role="combobox"
                         aria-expanded={existingBranchPickerOpen}
                         aria-haspopup="listbox"
-                        className="w-full justify-between bg-canopy-bg border-canopy-border text-canopy-text hover:bg-canopy-bg hover:text-canopy-text"
+                        className="w-full justify-between bg-daintree-bg border-daintree-border text-daintree-text hover:bg-daintree-bg hover:text-daintree-text"
                         disabled={isPending}
                         data-testid="existing-branch-picker"
                       >
                         <span className="flex items-center gap-2 truncate">
-                          <GitBranch className="w-4 h-4 shrink-0 text-canopy-accent" />
+                          <GitBranch className="w-4 h-4 shrink-0 text-daintree-accent" />
                           {selectedExistingBranch ? (
                             <span className="font-mono text-sm">{selectedExistingBranch}</span>
                           ) : (
-                            <span className="text-canopy-text/60">Select a local branch...</span>
+                            <span className="text-daintree-text/60">Select a local branch...</span>
                           )}
                         </span>
                         <ChevronsUpDown className="opacity-50 shrink-0" />
@@ -1118,7 +1120,7 @@ export function NewWorktreeDialog({
                       align="start"
                       onEscapeKeyDown={(e) => e.stopPropagation()}
                     >
-                      <div className="flex items-center border-b border-canopy-border px-3">
+                      <div className="flex items-center border-b border-daintree-border px-3">
                         <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
                         <input
                           className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
@@ -1151,13 +1153,13 @@ export function NewWorktreeDialog({
                                 setCreationError(null);
                               }}
                               className={cn(
-                                "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border font-mono",
-                                branch.name === selectedExistingBranch && "bg-canopy-border"
+                                "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border font-mono",
+                                branch.name === selectedExistingBranch && "bg-daintree-border"
                               )}
                             >
                               <span className="truncate">{branch.name}</span>
                               {branch.name === selectedExistingBranch && (
-                                <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
+                                <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
                               )}
                             </div>
                           ))
@@ -1170,7 +1172,7 @@ export function NewWorktreeDialog({
                 <div className="space-y-2">
                   <label
                     htmlFor="new-branch"
-                    className="block text-sm font-medium text-canopy-text"
+                    className="block text-sm font-medium text-daintree-text"
                   >
                     New Branch Name
                   </label>
@@ -1191,7 +1193,7 @@ export function NewWorktreeDialog({
                           }}
                           onKeyDown={handlePrefixKeyDown}
                           placeholder="feature/add-user-auth"
-                          className="w-full px-3 pr-10 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent font-mono text-sm"
+                          className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent font-mono text-sm"
                           disabled={isPending}
                           aria-describedby={
                             branchWasAutoResolved ? "branch-resolved-hint" : undefined
@@ -1204,14 +1206,14 @@ export function NewWorktreeDialog({
                         {isCheckingBranch && (
                           <Spinner
                             size="md"
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-canopy-text/40 pointer-events-none"
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-daintree-text/40 pointer-events-none"
                           />
                         )}
                       </div>
                     </PopoverTrigger>
                     <PopoverContent
                       align="start"
-                      className="w-[var(--radix-popover-trigger-width)] p-0 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] shadow-[var(--theme-shadow-floating)]"
+                      className="w-[var(--radix-popover-trigger-width)] p-0 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] shadow-[var(--theme-shadow-floating)]"
                       onOpenAutoFocus={(e) => e.preventDefault()}
                       onEscapeKeyDown={(e) => e.stopPropagation()}
                     >
@@ -1223,7 +1225,7 @@ export function NewWorktreeDialog({
                         scrollClassName="p-1"
                       >
                         {prefixSuggestions.length === 0 ? (
-                          <div className="py-4 text-center text-sm text-canopy-text/60">
+                          <div className="py-4 text-center text-sm text-daintree-text/60">
                             No matching prefixes
                           </div>
                         ) : (
@@ -1234,14 +1236,14 @@ export function NewWorktreeDialog({
                               aria-selected={index === prefixSelectedIndex}
                               onClick={() => handlePrefixSelect(suggestion.type.prefix)}
                               className={cn(
-                                "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                                index === prefixSelectedIndex && "bg-canopy-accent/10"
+                                "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                                index === prefixSelectedIndex && "bg-daintree-accent/10"
                               )}
                             >
-                              <span className="font-mono text-canopy-accent">
+                              <span className="font-mono text-daintree-accent">
                                 {suggestion.type.prefix}/
                               </span>
-                              <span className="text-canopy-text/60">
+                              <span className="text-daintree-text/60">
                                 {suggestion.type.displayName}
                               </span>
                             </div>
@@ -1250,10 +1252,12 @@ export function NewWorktreeDialog({
                       </ScrollShadow>
                     </PopoverContent>
                   </Popover>
-                  <p className="text-xs text-canopy-text/60 select-text">
+                  <p className="text-xs text-daintree-text/60 select-text">
                     {parsedBranch.hasPrefix ? (
                       <>
-                        <span className="font-mono text-canopy-accent">{parsedBranch.prefix}/</span>
+                        <span className="font-mono text-daintree-accent">
+                          {parsedBranch.prefix}/
+                        </span>
                         <span className="font-mono">{parsedBranch.slug || "..."}</span>
                       </>
                     ) : (
@@ -1278,7 +1282,7 @@ export function NewWorktreeDialog({
                 <div className="flex items-center gap-2">
                   <label
                     htmlFor="worktree-path"
-                    className="block text-sm font-medium text-canopy-text"
+                    className="block text-sm font-medium text-daintree-text"
                   >
                     Worktree Path
                   </label>
@@ -1286,7 +1290,7 @@ export function NewWorktreeDialog({
                     <TooltipTrigger asChild>
                       <button
                         type="button"
-                        className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
+                        className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
                         aria-label="Help for Worktree Path field"
                         disabled={isPending}
                       >
@@ -1313,13 +1317,13 @@ export function NewWorktreeDialog({
                         setCreationError(null);
                       }}
                       placeholder="/path/to/worktree"
-                      className="w-full px-3 pr-10 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+                      className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent"
                       disabled={isPending}
                     />
                     {isGeneratingPath && (
                       <Spinner
                         size="md"
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-canopy-text/40 pointer-events-none"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-daintree-text/40 pointer-events-none"
                       />
                     )}
                   </div>
@@ -1371,10 +1375,10 @@ export function NewWorktreeDialog({
                     type="checkbox"
                     checked={fromRemote}
                     onChange={(e) => setFromRemote(e.target.checked)}
-                    className="rounded border-canopy-border text-canopy-accent focus:ring-canopy-accent"
+                    className="rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent"
                     disabled={isPending}
                   />
-                  <label htmlFor="from-remote" className="text-sm text-canopy-text select-none">
+                  <label htmlFor="from-remote" className="text-sm text-daintree-text select-none">
                     Create from remote branch
                   </label>
                 </div>
@@ -1383,14 +1387,14 @@ export function NewWorktreeDialog({
               {hasAnyEnvironments && (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
-                    <label className="block text-sm font-medium text-canopy-text">
+                    <label className="block text-sm font-medium text-daintree-text">
                       Environment
                     </label>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
                           type="button"
-                          className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
+                          className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
                           aria-label="Help for Environment field"
                           disabled={isPending}
                         >
@@ -1406,7 +1410,7 @@ export function NewWorktreeDialog({
                     </Tooltip>
                   </div>
                   <div
-                    className="inline-flex rounded-[var(--radius-md)] bg-canopy-border/50 p-0.5"
+                    className="inline-flex rounded-[var(--radius-md)] bg-daintree-border/50 p-0.5"
                     role="radiogroup"
                     aria-label="Worktree environment mode"
                   >
@@ -1419,8 +1423,8 @@ export function NewWorktreeDialog({
                       className={cn(
                         "px-3 py-1 text-sm font-medium rounded-[var(--radius-sm)] transition-colors",
                         worktreeMode === "local"
-                          ? "bg-canopy-bg text-canopy-text shadow-sm"
-                          : "text-canopy-text/60 hover:text-canopy-text"
+                          ? "bg-daintree-bg text-daintree-text shadow-sm"
+                          : "text-daintree-text/60 hover:text-daintree-text"
                       )}
                     >
                       Local
@@ -1436,8 +1440,8 @@ export function NewWorktreeDialog({
                         className={cn(
                           "px-3 py-1 text-sm font-medium rounded-[var(--radius-sm)] transition-colors",
                           worktreeMode === key
-                            ? "bg-canopy-bg text-canopy-text shadow-sm"
-                            : "text-canopy-text/60 hover:text-canopy-text"
+                            ? "bg-daintree-bg text-daintree-text shadow-sm"
+                            : "text-daintree-text/60 hover:text-daintree-text"
                         )}
                       >
                         {key}
@@ -1445,7 +1449,7 @@ export function NewWorktreeDialog({
                     ))}
                   </div>
                   {worktreeMode !== "local" && (
-                    <p className="text-xs text-canopy-text/50">
+                    <p className="text-xs text-daintree-text/50">
                       Provisions {worktreeMode} environment after worktree setup
                     </p>
                   )}
@@ -1457,7 +1461,7 @@ export function NewWorktreeDialog({
                   <div className="flex items-center gap-2">
                     <label
                       htmlFor="recipe-selector"
-                      className="block text-sm font-medium text-canopy-text"
+                      className="block text-sm font-medium text-daintree-text"
                     >
                       Run Recipe (Optional)
                     </label>
@@ -1465,7 +1469,7 @@ export function NewWorktreeDialog({
                       <TooltipTrigger asChild>
                         <button
                           type="button"
-                          className="text-canopy-text/40 hover:text-canopy-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent focus-visible:ring-offset-2"
+                          className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
                           aria-label="Help for Run Recipe field"
                           disabled={isPending}
                         >
@@ -1487,28 +1491,28 @@ export function NewWorktreeDialog({
                         aria-expanded={recipePickerOpen}
                         aria-haspopup="listbox"
                         aria-controls="recipe-list"
-                        className="w-full justify-between bg-canopy-bg border-canopy-border text-canopy-text hover:bg-canopy-bg hover:text-canopy-text"
+                        className="w-full justify-between bg-daintree-bg border-daintree-border text-daintree-text hover:bg-daintree-bg hover:text-daintree-text"
                         disabled={isPending}
                       >
                         <span className="flex items-center gap-2 truncate">
                           {selectedRecipeId === CLONE_LAYOUT_ID ? (
                             <>
-                              <Copy className="shrink-0 text-canopy-accent" />
+                              <Copy className="shrink-0 text-daintree-accent" />
                               <span>Clone current layout</span>
                             </>
                           ) : selectedRecipe ? (
                             <>
-                              <Play className="shrink-0 text-canopy-accent" />
+                              <Play className="shrink-0 text-daintree-accent" />
                               <span>{selectedRecipe.name}</span>
-                              <span className="text-xs text-canopy-text/50">
+                              <span className="text-xs text-daintree-text/50">
                                 ({selectedRecipe.terminals.length} terminal
                                 {selectedRecipe.terminals.length !== 1 ? "s" : ""})
                               </span>
                             </>
                           ) : (
                             <>
-                              <Play className="shrink-0 text-canopy-accent" />
-                              <span className="text-canopy-text/60">Empty</span>
+                              <Play className="shrink-0 text-daintree-accent" />
+                              <span className="text-daintree-text/60">Empty</span>
                             </>
                           )}
                         </span>
@@ -1551,16 +1555,16 @@ export function NewWorktreeDialog({
                             setRecipePickerOpen(false);
                           }}
                           className={cn(
-                            "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                            selectedRecipeId === CLONE_LAYOUT_ID && "bg-canopy-border"
+                            "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                            selectedRecipeId === CLONE_LAYOUT_ID && "bg-daintree-border"
                           )}
                         >
                           <div className="flex items-center gap-2">
-                            <Copy className="h-3.5 w-3.5 text-canopy-text/50" />
+                            <Copy className="h-3.5 w-3.5 text-daintree-text/50" />
                             <span>Clone current layout</span>
                           </div>
                           {selectedRecipeId === CLONE_LAYOUT_ID && (
-                            <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
+                            <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
                           )}
                         </div>
                         <div
@@ -1585,13 +1589,13 @@ export function NewWorktreeDialog({
                             setRecipePickerOpen(false);
                           }}
                           className={cn(
-                            "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                            selectedRecipeId === null && "bg-canopy-border"
+                            "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                            selectedRecipeId === null && "bg-daintree-border"
                           )}
                         >
-                          <span className="text-canopy-text/60">Empty</span>
+                          <span className="text-daintree-text/60">Empty</span>
                           {selectedRecipeId === null && (
-                            <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
+                            <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
                           )}
                         </div>
                         {globalRecipes.map((recipe) => (
@@ -1618,24 +1622,24 @@ export function NewWorktreeDialog({
                               setRecipePickerOpen(false);
                             }}
                             className={cn(
-                              "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                              recipe.id === selectedRecipeId && "bg-canopy-border"
+                              "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                              recipe.id === selectedRecipeId && "bg-daintree-border"
                             )}
                           >
                             <div className="flex items-center gap-2 min-w-0">
                               <span className="truncate">{recipe.name}</span>
-                              <span className="text-xs text-canopy-text/50 shrink-0">
+                              <span className="text-xs text-daintree-text/50 shrink-0">
                                 {recipe.terminals.length} terminal
                                 {recipe.terminals.length !== 1 ? "s" : ""}
                               </span>
                               {recipe.id === defaultRecipeId && (
-                                <span className="text-xs text-canopy-accent shrink-0">
+                                <span className="text-xs text-daintree-accent shrink-0">
                                   (default)
                                 </span>
                               )}
                             </div>
                             {recipe.id === selectedRecipeId && (
-                              <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
+                              <Check className="h-4 w-4 shrink-0 text-daintree-accent" />
                             )}
                           </div>
                         ))}
@@ -1688,11 +1692,11 @@ export function NewWorktreeDialog({
                   )}
                   {creationError.raw !== creationError.friendly && (
                     <details className="ml-6">
-                      <summary className="flex items-center gap-1 text-xs text-canopy-text/50 cursor-pointer select-none">
+                      <summary className="flex items-center gap-1 text-xs text-daintree-text/50 cursor-pointer select-none">
                         <ChevronDown className="w-3 h-3" />
                         Show details
                       </summary>
-                      <pre className="mt-1.5 overflow-x-auto rounded bg-status-error/5 p-2 font-mono text-[11px] text-canopy-text/50 whitespace-pre-wrap break-all select-text">
+                      <pre className="mt-1.5 overflow-x-auto rounded bg-status-error/5 p-2 font-mono text-[11px] text-daintree-text/50 whitespace-pre-wrap break-all select-text">
                         {creationError.raw}
                       </pre>
                     </details>
@@ -1707,7 +1711,7 @@ export function NewWorktreeDialog({
       <AppDialog.Footer>
         {isDismissing ? (
           <>
-            <span role="alert" className="flex-1 text-sm text-canopy-text/70">
+            <span role="alert" className="flex-1 text-sm text-daintree-text/70">
               Discard unsaved changes?
             </span>
             <Button

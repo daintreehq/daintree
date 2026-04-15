@@ -10,7 +10,7 @@ const openTerminal: Scene = async (stage) => {
 };
 
 const typeCommand: Scene = async (stage) => {
-  await stage.keyboard.type(SEL.terminal.xtermHelperTextarea, 'echo "Hello from Canopy!"', {
+  await stage.keyboard.type(SEL.terminal.xtermHelperTextarea, 'echo "Hello from Daintree!"', {
     cps: 12,
   });
   await stage.sleep(1500);

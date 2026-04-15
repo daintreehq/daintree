@@ -13,7 +13,7 @@ export interface WatchNotificationContext {
 }
 
 const DEBOUNCE_MS = 300;
-const DEFAULT_TITLE = "Canopy";
+const DEFAULT_TITLE = "Daintree";
 
 interface TrackedWindow {
   browserWindow: import("electron").BrowserWindow;

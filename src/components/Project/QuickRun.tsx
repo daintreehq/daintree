@@ -374,7 +374,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
             <span
               className={cn(
                 "truncate",
-                isWorktreeValid ? "text-canopy-text" : "text-canopy-text/50"
+                isWorktreeValid ? "text-daintree-text" : "text-daintree-text/50"
               )}
             >
               {activeWorktreeName}
@@ -395,7 +395,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
               <div
                 className={cn(
                   "relative flex items-center rounded-[var(--radius-md)] border border-border-subtle/50 bg-overlay-soft",
-                  "transition focus-within:border-canopy-accent/35 focus-within:ring-1 focus-within:ring-canopy-accent/12"
+                  "transition focus-within:border-daintree-accent/35 focus-within:ring-1 focus-within:ring-daintree-accent/12"
                 )}
               >
                 {/* Prompt Symbol */}
@@ -419,7 +419,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                   placeholder="Execute command..."
                   aria-label="Command input"
                   className={cn(
-                    "flex-1 bg-transparent py-2.5 text-xs font-mono text-canopy-text placeholder:text-text-muted",
+                    "flex-1 bg-transparent py-2.5 text-xs font-mono text-daintree-text placeholder:text-text-muted",
                     "focus:outline-none min-w-0"
                   )}
                   autoComplete="off"
@@ -437,7 +437,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           className={cn(
                             "p-1.5 rounded-[var(--radius-sm)] transition",
                             autoRestart
-                              ? "bg-canopy-accent/20 text-canopy-accent"
+                              ? "bg-daintree-accent/20 text-daintree-accent"
                               : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
                           )}
                           aria-label={autoRestart ? "Disable auto-restart" : "Enable auto-restart"}
@@ -462,7 +462,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           className={cn(
                             "p-1.5 rounded-[var(--radius-sm)] transition",
                             runAsDocked
-                              ? "bg-canopy-accent/20 text-canopy-accent"
+                              ? "bg-daintree-accent/20 text-daintree-accent"
                               : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
                           )}
                           aria-label={
@@ -532,7 +532,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           className={cn(
                             "group flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-mono transition-colors",
                             index === focusedSuggestionIndex
-                              ? "bg-accent-soft text-canopy-text"
+                              ? "bg-accent-soft text-daintree-text"
                               : "text-text-secondary hover:bg-overlay-soft"
                           )}
                           onClick={() => {
@@ -541,7 +541,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           }}
                         >
                           {item.type === "saved" ? (
-                            <Pin className="h-3 w-3 text-canopy-accent shrink-0 fill-canopy-accent" />
+                            <Pin className="h-3 w-3 text-daintree-accent shrink-0 fill-daintree-accent" />
                           ) : item.type === "history" ? (
                             <Clock className="h-3 w-3 opacity-40 shrink-0" />
                           ) : (
@@ -551,9 +551,9 @@ export function QuickRun({ projectId }: QuickRunProps) {
                             <div className="truncate">
                               <span
                                 className={cn(
-                                  "group-hover:text-canopy-text",
-                                  index === focusedSuggestionIndex ? "text-canopy-accent" : "",
-                                  item.type === "saved" ? "font-semibold text-canopy-text" : ""
+                                  "group-hover:text-daintree-text",
+                                  index === focusedSuggestionIndex ? "text-daintree-accent" : "",
+                                  item.type === "saved" ? "font-semibold text-daintree-text" : ""
                                 )}
                               >
                                 {item.type === "saved" ? item.label : item.value}
@@ -591,7 +591,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                                 className="ml-2 shrink-0 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-overlay-soft"
                                 aria-label="Pin this command"
                               >
-                                <Pin className="h-3 w-3 text-text-muted hover:text-canopy-accent" />
+                                <Pin className="h-3 w-3 text-text-muted hover:text-daintree-accent" />
                               </button>
                             )}
                           </div>

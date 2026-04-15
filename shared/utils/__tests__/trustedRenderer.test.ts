@@ -83,7 +83,7 @@ describe("trustedRenderer", () => {
     it("should normalize protocol and hostname to lowercase per URL spec", () => {
       expect(isTrustedRendererUrl("HTTP://localhost:5173")).toBe(true);
       expect(isTrustedRendererUrl("http://LOCALHOST:5173")).toBe(true);
-      expect(isTrustedRendererUrl("APP://canopy")).toBe(true);
+      expect(isTrustedRendererUrl("APP://daintree")).toBe(true);
     });
 
     it("should allow an env-configured dev origin", () => {

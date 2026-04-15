@@ -37,19 +37,19 @@ function ThemeListItem({
       aria-selected={isSelected}
       className={cn(
         "w-full text-left px-3 py-2 rounded-[var(--radius-md)] border flex items-center gap-3 transition-colors",
-        "border-canopy-border/40 hover:border-canopy-border/60 hover:bg-surface",
-        isSelected && "border-canopy-accent/60 bg-canopy-accent/10"
+        "border-daintree-border/40 hover:border-daintree-border/60 hover:bg-surface",
+        isSelected && "border-daintree-accent/60 bg-daintree-accent/10"
       )}
     >
       <PaletteStrip scheme={scheme} />
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-canopy-text truncate">{scheme.name}</div>
+        <div className="text-sm font-medium text-daintree-text truncate">{scheme.name}</div>
         {scheme.location && (
-          <div className="text-[11px] text-canopy-text/50 truncate">{scheme.location}</div>
+          <div className="text-[11px] text-daintree-text/50 truncate">{scheme.location}</div>
         )}
       </div>
       <div className="flex items-center gap-2 shrink-0">
-        <span className="text-[10px] uppercase tracking-wider text-canopy-text/40">
+        <span className="text-[10px] uppercase tracking-wider text-daintree-text/40">
           {scheme.type === "light" ? "Light" : "Dark"}
         </span>
         {isActive && (
@@ -104,7 +104,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       wasOpenRef.current = true;
       livePreviewReadyRef.current = false;
       // Reset search state: the palette is opened via paletteStore.openPalette
-      // (from the canopy:open-theme-palette event), bypassing useSearchablePalette's
+      // (from the daintree:open-theme-palette event), bypassing useSearchablePalette's
       // own open() which resets query + selectedIndex.
       setQuery("");
       // Seed selectedIndex to the currently active theme so the palette opens

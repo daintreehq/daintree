@@ -51,7 +51,7 @@ interface InfoSectionProps {
 function InfoSection({ title, children }: InfoSectionProps) {
   return (
     <div className="space-y-3">
-      <h3 className="text-sm font-semibold text-canopy-text/90 border-b border-canopy-border pb-2">
+      <h3 className="text-sm font-semibold text-daintree-text/90 border-b border-daintree-border pb-2">
         {title}
       </h3>
       <div className="space-y-2">{children}</div>
@@ -68,14 +68,16 @@ interface InfoRowProps {
 function InfoRow({ label, value, mono = false }: InfoRowProps) {
   const displayValue = value ?? "N/A";
   const valueElement = (
-    <span className={`text-canopy-text text-right select-text ${mono ? "font-mono text-xs" : ""}`}>
+    <span
+      className={`text-daintree-text text-right select-text ${mono ? "font-mono text-xs" : ""}`}
+    >
       {displayValue}
     </span>
   );
 
   return (
     <div className="flex justify-between items-start gap-4 text-sm">
-      <span className="text-canopy-text/70 shrink-0 select-none">{label}:</span>
+      <span className="text-daintree-text/70 shrink-0 select-none">{label}:</span>
       {typeof displayValue === "string" ? (
         <TooltipProvider>
           <Tooltip>
@@ -203,7 +205,7 @@ Performance & Diagnostics:
 
       <AppDialog.Body>
         {loading && (
-          <div className="text-center text-canopy-text/70 py-8" role="status" aria-live="polite">
+          <div className="text-center text-daintree-text/70 py-8" role="status" aria-live="polite">
             Loading terminal info...
           </div>
         )}

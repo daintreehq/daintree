@@ -45,7 +45,7 @@ import {
   buildArgsForNonPtyRecreation,
   buildArgsForOrphanedTerminal,
 } from "./statePatcher";
-const CLIPBOARD_DIR_NAME = "canopy-clipboard";
+const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 const VERBOSE_HYDRATION_LOGGING = isDaintreeEnvEnabled("DAINTREE_VERBOSE");
 
 function logHydrationInfo(message: string, context?: Record<string, unknown>): void {

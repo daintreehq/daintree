@@ -143,7 +143,7 @@ class AutoUpdaterService {
           broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
             type: "info",
             title: "No Updates Available",
-            message: `Canopy ${app.getVersion()} is the latest version.`,
+            message: `Daintree ${app.getVersion()} is the latest version.`,
           });
         }
       };

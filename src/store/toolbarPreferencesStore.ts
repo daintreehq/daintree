@@ -151,7 +151,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
       reset: () => set(DEFAULT_PREFERENCES),
     }),
     {
-      name: "canopy-toolbar-preferences",
+      name: "daintree-toolbar-preferences",
       version: 4,
       storage: createSafeJSONStorage(),
       migrate: (persisted, version) => {

@@ -83,9 +83,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     <div className="w-[360px] max-h-[420px] flex flex-col">
       <div className="flex items-center justify-between px-3 py-2 border-b border-divider">
         <div className="flex items-center gap-1.5">
-          <span className="text-xs font-medium text-canopy-text/80">Notifications</span>
+          <span className="text-xs font-medium text-daintree-text/80">Notifications</span>
           {entries.length > 0 && (
-            <div className="flex items-center rounded-md border border-canopy-text/10 overflow-hidden">
+            <div className="flex items-center rounded-md border border-daintree-text/10 overflow-hidden">
               <button
                 type="button"
                 onClick={() => {
@@ -94,8 +94,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 }}
                 className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
                   filter === "all"
-                    ? "bg-overlay-medium text-canopy-text/80"
-                    : "text-canopy-text/40 hover:text-canopy-text/60"
+                    ? "bg-overlay-medium text-daintree-text/80"
+                    : "text-daintree-text/40 hover:text-daintree-text/60"
                 }`}
               >
                 All
@@ -105,8 +105,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 onClick={() => setFilter("unread")}
                 className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
                   filter === "unread"
-                    ? "bg-overlay-medium text-canopy-text/80"
-                    : "text-canopy-text/40 hover:text-canopy-text/60"
+                    ? "bg-overlay-medium text-daintree-text/80"
+                    : "text-daintree-text/40 hover:text-daintree-text/60"
                 }`}
               >
                 Unread
@@ -121,7 +121,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               variant="ghost"
               size="xs"
               onClick={handleMarkAllRead}
-              className="text-canopy-text/50"
+              className="text-daintree-text/50"
             >
               <CheckCheck />
               Mark all read
@@ -139,7 +139,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 { source: "user" }
               );
             }}
-            className="text-canopy-text/50"
+            className="text-daintree-text/50"
           >
             <Settings2 />
             Configure
@@ -153,7 +153,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 clearAll();
                 onClose();
               }}
-              className="text-canopy-text/50"
+              className="text-daintree-text/50"
             >
               <Trash2 />
               Clear all
@@ -163,7 +163,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       </div>
       <div className="flex-1 overflow-y-auto">
         {groups.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-10 text-canopy-text/30">
+          <div className="flex flex-col items-center justify-center py-10 text-daintree-text/30">
             <Bell className="h-6 w-6 mb-2" />
             <span className="text-xs">
               {filter === "unread" && entries.length > 0

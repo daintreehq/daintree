@@ -9,7 +9,7 @@ describe("RunCommandDetector", () => {
   let detector: RunCommandDetector;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-run-cmd-"));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-run-cmd-"));
     detector = new RunCommandDetector();
   });
 
@@ -444,7 +444,7 @@ describe("RunCommandDetector", () => {
     });
 
     it("caches independently per project path", async () => {
-      const tempDir2 = await fs.mkdtemp(path.join(os.tmpdir(), "canopy-run-cmd-2-"));
+      const tempDir2 = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-run-cmd-2-"));
       try {
         await fs.writeFile(
           path.join(tempDir, "package.json"),

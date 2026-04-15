@@ -75,13 +75,13 @@ function OnboardingCard({
   return (
     <label
       className={cn(
-        "flex items-center gap-3 px-3 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30 cursor-pointer hover:bg-canopy-bg/60 transition-colors",
+        "flex items-center gap-3 px-3 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 cursor-pointer hover:bg-daintree-bg/60 transition-colors",
         compact ? "py-2" : "py-2.5"
       )}
     >
       <input
         type="checkbox"
-        className="w-4 h-4 accent-canopy-accent shrink-0"
+        className="w-4 h-4 accent-daintree-accent shrink-0"
         checked={isChecked}
         onChange={(e) => onToggle(agentId, e.target.checked)}
         disabled={isSaving}
@@ -96,7 +96,7 @@ function OnboardingCard({
       {installed ? (
         <span className="text-[11px] text-status-success font-medium shrink-0">Installed</span>
       ) : (
-        <span className="text-[11px] text-canopy-text/30 shrink-0">Not installed</span>
+        <span className="text-[11px] text-daintree-text/30 shrink-0">Not installed</span>
       )}
     </label>
   );
@@ -110,13 +110,13 @@ function ManagementCard({
   const { name, color, Icon } = identity;
 
   return (
-    <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4">
-      <div className="flex items-center justify-between pb-3 border-b border-canopy-border">
+    <div className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4">
+      <div className="flex items-center justify-between pb-3 border-b border-daintree-border">
         <div className="flex items-center gap-3">
           <Icon size={24} brandColor={color} />
           <div>
-            <h4 className="text-sm font-medium text-canopy-text">{name} Settings</h4>
-            <p className="text-xs text-canopy-text/50 select-text">
+            <h4 className="text-sm font-medium text-daintree-text">{name} Settings</h4>
+            <p className="text-xs text-daintree-text/50 select-text">
               Configure how {name.toLowerCase()} runs in terminals
             </p>
           </div>
@@ -153,9 +153,9 @@ export function AgentIdentityBlock({
         <Icon size={compact ? 16 : 18} brandColor={color} />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-canopy-text">{name}</div>
+        <div className="text-sm font-medium text-daintree-text">{name}</div>
         {description && (
-          <div className="text-[11px] text-canopy-text/40 truncate">{description}</div>
+          <div className="text-[11px] text-daintree-text/40 truncate">{description}</div>
         )}
       </div>
     </>
@@ -187,20 +187,20 @@ export function AgentInstallSection({
 
   if (isCliLoading) {
     return (
-      <div className="pt-4 border-t border-canopy-border">
-        <div className="text-xs text-canopy-text/40">Checking CLI availability...</div>
+      <div className="pt-4 border-t border-daintree-border">
+        <div className="text-xs text-daintree-text/40">Checking CLI availability...</div>
       </div>
     );
   }
 
   return (
-    <div id="agents-installation" className="space-y-3 pt-4 border-t border-canopy-border">
+    <div id="agents-installation" className="space-y-3 pt-4 border-t border-daintree-border">
       <div className="flex items-center justify-between">
         <div>
-          <h5 className="text-sm font-medium text-canopy-text">
+          <h5 className="text-sm font-medium text-daintree-text">
             {availability === "installed" ? "Authentication" : "Installation"}
           </h5>
-          <p className="text-xs text-canopy-text/50 select-text">
+          <p className="text-xs text-daintree-text/50 select-text">
             {availability === "installed"
               ? `${agentName} CLI found but not authenticated`
               : `${agentName} CLI not found`}
@@ -211,7 +211,7 @@ export function AgentInstallSection({
           variant="ghost"
           onClick={onRefresh}
           disabled={isRefreshingCli}
-          className="text-canopy-text/50 hover:text-canopy-text"
+          className="text-daintree-text/50 hover:text-daintree-text"
         >
           <RefreshCw size={14} className={cn("mr-1.5", isRefreshingCli && "animate-spin")} />
           Re-check
@@ -236,7 +236,7 @@ export function AgentInstallSection({
             agentConfig.install.troubleshooting.length > 0 && (
               <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
                 <div className="text-xs font-medium text-status-warning mb-1">Troubleshooting</div>
-                <ul className="space-y-0.5 text-xs text-canopy-text/60">
+                <ul className="space-y-0.5 text-xs text-daintree-text/60">
                   {agentConfig.install.troubleshooting.map((tip, tipIndex) => (
                     <li key={tipIndex}>
                       {"• "}
@@ -247,15 +247,15 @@ export function AgentInstallSection({
               </div>
             )}
 
-          <div className="px-3 py-2 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border/50">
-            <p className="text-xs text-canopy-text/40 select-text">
+          <div className="px-3 py-2 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-daintree-border/50">
+            <p className="text-xs text-daintree-text/40 select-text">
               Warning: Review commands before running them in your terminal
             </p>
           </div>
         </div>
       ) : hasInstallConfig?.docsUrl ? (
-        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-canopy-border bg-surface text-center">
-          <p className="text-xs text-canopy-text/60 mb-3">
+        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-daintree-border bg-surface text-center">
+          <p className="text-xs text-daintree-text/60 mb-3">
             No OS-specific install instructions available
           </p>
           <Button
@@ -265,15 +265,15 @@ export function AgentInstallSection({
               const url = agentConfig?.install?.docsUrl;
               if (url) void window.electron.system.openExternal(url);
             }}
-            className="text-canopy-accent hover:text-canopy-accent/80"
+            className="text-daintree-accent hover:text-daintree-accent/80"
           >
             <ExternalLink size={14} />
             Open Install Docs
           </Button>
         </div>
       ) : (
-        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-canopy-border bg-surface text-center">
-          <p className="text-xs text-canopy-text/60">
+        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-daintree-border bg-surface text-center">
+          <p className="text-xs text-daintree-text/60">
             No installation instructions configured for this agent
           </p>
         </div>
@@ -287,7 +287,7 @@ export function AgentInstallSection({
             const url = agentConfig?.install?.docsUrl;
             if (url) void window.electron.system.openExternal(url);
           }}
-          className="w-full text-canopy-text/50 hover:text-canopy-text"
+          className="w-full text-daintree-text/50 hover:text-daintree-text"
         >
           <ExternalLink size={14} />
           View Official Documentation

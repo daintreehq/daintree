@@ -43,8 +43,8 @@ const SendToAgentItemRow = React.memo(function SendToAgentItemRow({
         item.isInputLocked
           ? "opacity-40 cursor-not-allowed border-transparent"
           : isSelected
-            ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-            : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
+            ? "bg-overlay-soft border-overlay text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
+            : "border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
       )}
       onClick={() => !item.isInputLocked && onSelect(item)}
       aria-selected={isSelected}
@@ -52,7 +52,7 @@ const SendToAgentItemRow = React.memo(function SendToAgentItemRow({
       aria-label={item.title}
       role="option"
     >
-      <span className="shrink-0 text-canopy-text/70" aria-hidden="true">
+      <span className="shrink-0 text-daintree-text/70" aria-hidden="true">
         <TerminalIcon
           type={item.terminalType}
           kind={item.terminalKind}
@@ -63,14 +63,14 @@ const SendToAgentItemRow = React.memo(function SendToAgentItemRow({
       </span>
 
       <div className="flex-1 min-w-0 overflow-hidden">
-        <span className="text-sm font-medium text-canopy-text truncate block">{item.title}</span>
+        <span className="text-sm font-medium text-daintree-text truncate block">{item.title}</span>
         {item.subtitle && (
-          <span className="text-xs text-canopy-text/50 truncate block">{item.subtitle}</span>
+          <span className="text-xs text-daintree-text/50 truncate block">{item.subtitle}</span>
         )}
       </div>
 
       {item.isInputLocked && (
-        <Lock className="w-3.5 h-3.5 text-canopy-text/40 shrink-0" aria-hidden="true" />
+        <Lock className="w-3.5 h-3.5 text-daintree-text/40 shrink-0" aria-hidden="true" />
       )}
     </button>
   );
@@ -129,11 +129,11 @@ export function SendToAgentPalette({
       noMatchMessage={`No terminals match "${query}"`}
       totalResults={totalResults}
       emptyContent={
-        <p className="mt-2 text-xs text-canopy-text/40">
+        <p className="mt-2 text-xs text-daintree-text/40">
           {newTerminalShortcut ? (
             <>
               Press{" "}
-              <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+              <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60">
                 {newTerminalShortcut}
               </kbd>{" "}
               to create a new terminal.

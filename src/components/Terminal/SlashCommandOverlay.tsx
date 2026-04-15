@@ -71,7 +71,7 @@ export const SlashCommandOverlay = memo(function SlashCommandOverlay({
         pointer-events-none
         ${
           isValid
-            ? "bg-canopy-accent/20 text-canopy-accent border border-canopy-accent/30"
+            ? "bg-daintree-accent/20 text-daintree-accent border border-daintree-accent/30"
             : "bg-status-error/20 text-status-error border border-status-error/30"
         }
       `}

@@ -45,7 +45,7 @@ describe("SettingsInput", () => {
 
   it("shows modified indicator when isModified", () => {
     const { container } = render(<SettingsInput label="Name" isModified />);
-    const dot = container.querySelector(".bg-canopy-accent.rounded-full");
+    const dot = container.querySelector(".bg-daintree-accent.rounded-full");
     expect(dot).toBeTruthy();
   });
 

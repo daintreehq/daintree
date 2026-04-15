@@ -9,7 +9,7 @@ import { useNotificationSettingsStore } from "@/store/notificationSettingsStore"
 import { useUIStore } from "@/store/uiStore";
 import { useShallow } from "zustand/react/shallow";
 
-const toolbarIconButtonClass = "toolbar-icon-button text-canopy-text transition-colors";
+const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text transition-colors";
 
 export const NotificationCenterToolbarButton = memo(function NotificationCenterToolbarButton({
   "data-toolbar-item": dataToolbarItem,
@@ -55,7 +55,7 @@ export const NotificationCenterToolbarButton = memo(function NotificationCenterT
             >
               <Bell />
               {notificationUnreadCount > 0 && (
-                <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-canopy-accent text-[9px] font-bold tabular-nums text-canopy-bg px-0.5 leading-none">
+                <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-daintree-accent text-[9px] font-bold tabular-nums text-daintree-bg px-0.5 leading-none">
                   {notificationUnreadCount > 99 ? "99+" : notificationUnreadCount}
                 </span>
               )}

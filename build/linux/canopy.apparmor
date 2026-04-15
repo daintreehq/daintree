@@ -1,7 +1,7 @@
 abi <abi/4.0>,
 include <tunables/global>
 
-profile canopy /opt/Canopy/canopy-app flags=(unconfined) {
+profile daintree /opt/Daintree/daintree-app flags=(unconfined) {
   userns,
-  include if exists <local/canopy>
+  include if exists <local/daintree>
 }

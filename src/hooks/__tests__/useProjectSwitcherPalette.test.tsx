@@ -479,8 +479,8 @@ describe("useProjectSwitcherPalette", () => {
     const searchProjects = [
       {
         id: "project-1",
-        name: "canopy-app",
-        path: "/repos/canopy-app",
+        name: "daintree-app",
+        path: "/repos/daintree-app",
         emoji: "🌲",
         color: "#00aa00",
         lastOpened: 300,
@@ -499,8 +499,8 @@ describe("useProjectSwitcherPalette", () => {
       },
       {
         id: "project-3",
-        name: "my-canopy-tools",
-        path: "/repos/my-canopy-tools",
+        name: "my-daintree-tools",
+        path: "/repos/my-daintree-tools",
         emoji: "🌴",
         color: "#00cc00",
         lastOpened: 100,
@@ -525,12 +525,12 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       act(() => {
-        result.current.setQuery("canopy");
+        result.current.setQuery("daintree");
       });
 
       // Results should be available immediately — no waitFor needed
       expect(result.current.results.length).toBeGreaterThanOrEqual(2);
-      expect(result.current.results[0].name).toContain("canopy");
+      expect(result.current.results[0].name).toContain("daintree");
     });
 
     it("returns empty results for non-matching query", async () => {
@@ -571,7 +571,7 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       act(() => {
-        result.current.setQuery("canopy");
+        result.current.setQuery("daintree");
       });
       expect(result.current.results.length).toBeLessThan(3);
 

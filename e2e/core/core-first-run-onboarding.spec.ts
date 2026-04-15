@@ -13,7 +13,7 @@ test.describe.serial("First-run onboarding flow", () => {
   let ctx: AppContext | null = null;
 
   test.beforeAll(async () => {
-    userDataDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-first-run-"));
+    userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-first-run-"));
   });
 
   test.afterAll(async () => {

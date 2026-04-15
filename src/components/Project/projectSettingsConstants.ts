@@ -1,1 +1,1 @@
-export const GITIGNORE_SNIPPET = `# Canopy in-repo settings — safe to commit\n.daintree/project.json\n.daintree/settings.json\n\n# Canopy machine-local settings — do not commit\n.daintree/*.local.json`;
+export const GITIGNORE_SNIPPET = `# Daintree in-repo settings — safe to commit\n.daintree/project.json\n.daintree/settings.json\n\n# Daintree machine-local settings — do not commit\n.daintree/*.local.json`;

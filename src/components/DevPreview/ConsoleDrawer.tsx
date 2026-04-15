@@ -24,8 +24,8 @@ const STATUS_LABEL: Record<
 > = {
   stopped: {
     label: "Stopped",
-    textClass: "text-canopy-text/50",
-    dotClass: "bg-canopy-text/40",
+    textClass: "text-daintree-text/50",
+    dotClass: "bg-daintree-text/40",
   },
   starting: {
     label: "Starting",
@@ -98,7 +98,7 @@ export function ConsoleDrawer({
         <button
           type="button"
           onClick={toggleDrawer}
-          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 border-r border-overlay/70 px-3 py-1.5 text-xs font-semibold text-canopy-text/80 transition-colors hover:bg-overlay-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-status-info"
+          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 border-r border-overlay/70 px-3 py-1.5 text-xs font-semibold text-daintree-text/80 transition-colors hover:bg-overlay-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-status-info"
           aria-expanded={isOpen}
           aria-controls={`console-drawer-${terminalId}`}
           aria-label={toggleLabel}

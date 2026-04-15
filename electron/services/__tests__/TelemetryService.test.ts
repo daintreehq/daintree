@@ -41,14 +41,14 @@ import {
 
 describe("sanitizePath", () => {
   it("redacts macOS home dir username", () => {
-    expect(sanitizePath("/Users/johndoe/Projects/canopy/src/main.ts")).toBe(
-      "/Users/USER/Projects/canopy/src/main.ts"
+    expect(sanitizePath("/Users/johndoe/Projects/daintree/src/main.ts")).toBe(
+      "/Users/USER/Projects/daintree/src/main.ts"
     );
   });
 
   it("redacts actual os.homedir() value", () => {
     const home = os.homedir();
-    const result = sanitizePath(`${home}/Projects/canopy/src/main.ts`);
+    const result = sanitizePath(`${home}/Projects/daintree/src/main.ts`);
     expect(result).not.toContain(home);
   });
 
@@ -154,8 +154,8 @@ describe("markTelemetryPromptShown", () => {
 
 describe("sanitizeEvent (via beforeSend logic)", () => {
   it("sanitizes stack frame filenames", () => {
-    const filename = "/Users/johndoe/projects/canopy/electron/main.ts";
-    expect(sanitizePath(filename)).toBe("/Users/USER/projects/canopy/electron/main.ts");
+    const filename = "/Users/johndoe/projects/daintree/electron/main.ts";
+    expect(sanitizePath(filename)).toBe("/Users/USER/projects/daintree/electron/main.ts");
   });
 
   it("sanitizes error message text containing paths", () => {
@@ -166,8 +166,8 @@ describe("sanitizeEvent (via beforeSend logic)", () => {
   });
 
   it("sanitizes Windows-style forward-slash paths", () => {
-    expect(sanitizePath("C:/Users/bob/AppData/Roaming/canopy/log.txt")).toBe(
-      "C:/Users/USER/AppData/Roaming/canopy/log.txt"
+    expect(sanitizePath("C:/Users/bob/AppData/Roaming/daintree/log.txt")).toBe(
+      "C:/Users/USER/AppData/Roaming/daintree/log.txt"
     );
   });
 });

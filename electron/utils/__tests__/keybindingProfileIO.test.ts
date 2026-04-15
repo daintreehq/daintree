@@ -10,7 +10,7 @@ describe("exportProfile", () => {
   it("includes required top-level fields", () => {
     const profile = JSON.parse(exportProfile({}));
     expect(profile.schemaVersion).toBe(1);
-    expect(profile.app).toBe("canopy");
+    expect(profile.app).toBe("daintree");
     expect(typeof profile.exportedAt).toBe("string");
     expect(profile.overrides).toBeDefined();
   });
@@ -41,7 +41,7 @@ describe("importProfile", () => {
     return JSON.stringify({
       schemaVersion: 1,
       exportedAt: new Date().toISOString(),
-      app: "canopy",
+      app: "daintree",
       overrides,
       ...extra,
     });
@@ -89,7 +89,7 @@ describe("importProfile", () => {
   it("rejects unsupported schema version", () => {
     const json = JSON.stringify({
       schemaVersion: 99,
-      app: "canopy",
+      app: "daintree",
       exportedAt: "",
       overrides: {},
     });
@@ -106,7 +106,7 @@ describe("importProfile", () => {
   });
 
   it("rejects structurally invalid profile (missing overrides)", () => {
-    const json = JSON.stringify({ schemaVersion: 1, app: "canopy", exportedAt: "" });
+    const json = JSON.stringify({ schemaVersion: 1, app: "daintree", exportedAt: "" });
     const result = importProfile(json);
     expect(result.ok).toBe(false);
     expect(result.errors.length).toBeGreaterThan(0);
@@ -147,7 +147,7 @@ describe("importProfile", () => {
     const json = JSON.stringify({
       schemaVersion: 1,
       exportedAt: new Date().toISOString(),
-      app: "canopy",
+      app: "daintree",
       overrides: { "terminal.new": "Cmd+T" },
     });
     const result = importProfile(json);

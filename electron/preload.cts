@@ -2895,7 +2895,7 @@ if (process.env.DAINTREE_E2E_FAULT_MODE === "1") {
   });
 }
 
-// Generic e2e-mode flag — set whenever the test harness launches Canopy.
+// Generic e2e-mode flag — set whenever the test harness launches Daintree.
 // Used by the renderer to suppress side effects (like the auto-launched
 // primary agent at the end of onboarding) that would otherwise pollute
 // panel-count assertions in tests.

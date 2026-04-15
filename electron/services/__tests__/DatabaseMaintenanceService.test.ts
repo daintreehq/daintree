@@ -16,8 +16,8 @@ const mockSqlite = vi.hoisted(() => ({
 }));
 
 const mockDbModule = vi.hoisted(() => ({
-  getDbPath: vi.fn().mockReturnValue("/fake/canopy.db"),
-  getBackupPath: vi.fn().mockReturnValue("/fake/canopy.db.backup"),
+  getDbPath: vi.fn().mockReturnValue("/fake/daintree.db"),
+  getBackupPath: vi.fn().mockReturnValue("/fake/daintree.db.backup"),
   getSharedSqlite: vi.fn().mockReturnValue(mockSqlite),
   probeDb: vi.fn().mockReturnValue(true),
   attemptRecovery: vi.fn().mockReturnValue(true),
@@ -58,8 +58,8 @@ describe("DatabaseMaintenanceService", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.clearAllMocks();
     // Reset defaults after clearAllMocks
-    mockDbModule.getDbPath.mockReturnValue("/fake/canopy.db");
-    mockDbModule.getBackupPath.mockReturnValue("/fake/canopy.db.backup");
+    mockDbModule.getDbPath.mockReturnValue("/fake/daintree.db");
+    mockDbModule.getBackupPath.mockReturnValue("/fake/daintree.db.backup");
     mockDbModule.getSharedSqlite.mockReturnValue(mockSqlite);
     mockDbModule.probeDb.mockReturnValue(true);
     mockSqlite.backup.mockResolvedValue(undefined);
@@ -77,7 +77,7 @@ describe("DatabaseMaintenanceService", () => {
     const service = new DatabaseMaintenanceService();
     service.initialize();
 
-    expect(mockDbModule.probeDb).toHaveBeenCalledWith("/fake/canopy.db");
+    expect(mockDbModule.probeDb).toHaveBeenCalledWith("/fake/daintree.db");
     expect(mockDbModule.attemptRecovery).not.toHaveBeenCalled();
     void service.dispose();
   });
@@ -89,7 +89,7 @@ describe("DatabaseMaintenanceService", () => {
     const service = new DatabaseMaintenanceService();
     service.initialize();
 
-    expect(mockDbModule.attemptRecovery).toHaveBeenCalledWith("/fake/canopy.db");
+    expect(mockDbModule.attemptRecovery).toHaveBeenCalledWith("/fake/daintree.db");
     void service.dispose();
   });
 
