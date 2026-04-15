@@ -14,10 +14,10 @@ const devServerOrigins = getDevServerOrigins();
 const devServerWebSocketOrigins = getDevServerWebSocketOrigins();
 
 const IS_LEGACY_BUILD = process.env.BUILD_VARIANT === "canopy";
-// Custom protocol schemes used by the app's file handlers. Legacy builds also
-// register canopy-file:// so existing Canopy users can still resolve assets
-// encoded under the old scheme.
-const FILE_SCHEMES = IS_LEGACY_BUILD ? "daintree-file: canopy-file:" : "daintree-file:";
+// Custom protocol schemes used by the app's file handlers. Both schemes stay
+// whitelisted through the 0.8 migration window so Daintree can still load
+// persisted canopy-file:// URLs after a manual reinstall from Canopy.
+const FILE_SCHEMES = "daintree-file: canopy-file:";
 
 // CSP definitions for development and production
 const DEV_CSP = [

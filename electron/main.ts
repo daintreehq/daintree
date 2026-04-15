@@ -88,11 +88,9 @@ protocol.registerSchemesAsPrivileged([
       supportFetchAPI: true,
     },
   },
-  // canopy-file is registered unconditionally because registerSchemesAsPrivileged
-  // must run before app.ready — we can't branch on the variant here reliably
-  // across dev/packaged flows. The handler itself is only installed in the
-  // legacy Canopy variant; in Daintree builds the scheme is privileged but
-  // unhandled, which is harmless.
+  // canopy-file remains privileged during the 0.7/0.8 migration window so
+  // both the legacy Canopy build and the new Daintree build can resolve
+  // pre-rebrand links and persisted references.
   {
     scheme: "canopy-file",
     privileges: {
@@ -293,9 +291,7 @@ if (!gotTheLock) {
       setupPermissionLockdown();
       registerAppProtocol(distPath);
       registerDaintreeFileProtocol();
-      if (IS_LEGACY_BUILD) {
-        registerCanopyFileProtocol();
-      }
+      registerCanopyFileProtocol();
       setupWebviewCSP();
       await createWindow(undefined, lastActiveProjectId ?? undefined);
       getCrashLoopGuard().startStabilityTimer();

@@ -1,4 +1,11 @@
 const VALID_VARIANTS = ["daintree", "canopy"];
+const PACKAGE_VERSION = require("./package.json").version;
+
+function getPublishChannel(version) {
+  if (version.includes("-rc")) return "rc";
+  if (version.includes("-beta")) return "beta";
+  return "latest";
+}
 
 const VARIANTS = {
   daintree: {
@@ -44,12 +51,13 @@ module.exports = async function () {
   }
 
   const v = VARIANTS[variant];
+  const publishChannel = getPublishChannel(PACKAGE_VERSION);
 
   return {
     asar: true,
     appId: v.appId,
     productName: v.productName,
-    publish: [{ provider: "generic", url: v.publishUrl }],
+    publish: [{ provider: "generic", url: v.publishUrl, channel: publishChannel }],
     electronUpdaterCompatibility: ">=2.16",
     npmRebuild: true,
     electronLanguages: ["en-US"],

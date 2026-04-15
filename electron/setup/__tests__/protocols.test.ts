@@ -91,7 +91,12 @@ vi.mock("../../ipc/channels.js", () => ({
   },
 }));
 
-import { setupWebviewCSP } from "../protocols.js";
+import {
+  registerCanopyFileProtocol,
+  registerDaintreeFileProtocol,
+  registerProtocolsForSession,
+  setupWebviewCSP,
+} from "../protocols.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 
 const mockedGetWebviewDialogService = vi.mocked(getWebviewDialogService);
@@ -625,5 +630,33 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(event.preventDefault).toHaveBeenCalledTimes(1);
       expect(mockSend).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("protocol registration", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("registers both file protocol aliases on per-project sessions", async () => {
+    const { session } = await import("electron");
+    const handle = vi.fn();
+    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
+
+    registerProtocolsForSession(mockSession, "/tmp/dist");
+
+    expect(handle).toHaveBeenCalledWith("app", expect.any(Function));
+    expect(handle).toHaveBeenCalledWith("daintree-file", expect.any(Function));
+    expect(handle).toHaveBeenCalledWith("canopy-file", expect.any(Function));
+  });
+
+  it("registers the default-session file protocol aliases", async () => {
+    const { protocol } = await import("electron");
+
+    registerDaintreeFileProtocol();
+    registerCanopyFileProtocol();
+
+    expect(protocol.handle).toHaveBeenCalledWith("daintree-file", expect.any(Function));
+    expect(protocol.handle).toHaveBeenCalledWith("canopy-file", expect.any(Function));
   });
 });

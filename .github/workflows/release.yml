@@ -38,6 +38,18 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Resolve update metadata prefix
+        shell: bash
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [[ "$PKG_VERSION" == *-rc* ]]; then
+            echo "UPDATE_METADATA_PREFIX=rc" >> "$GITHUB_ENV"
+          elif [[ "$PKG_VERSION" == *-beta* ]]; then
+            echo "UPDATE_METADATA_PREFIX=beta" >> "$GITHUB_ENV"
+          else
+            echo "UPDATE_METADATA_PREFIX=latest" >> "$GITHUB_ENV"
+          fi
+
       - name: Verify version matches tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -130,8 +142,8 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: bash
         run: |
-          if [ ! -f "release/daintree/latest.yml" ]; then
-            echo "::error::Missing release/daintree/latest.yml - Windows auto-update will not work"
+          if [ ! -f "release/daintree/${UPDATE_METADATA_PREFIX}.yml" ]; then
+            echo "::error::Missing release/daintree/${UPDATE_METADATA_PREFIX}.yml - Windows auto-update metadata was not generated"
             exit 1
           fi
 
@@ -139,8 +151,8 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         shell: bash
         run: |
-          if [ ! -f "release/daintree/latest-mac.yml" ]; then
-            echo "::error::Missing release/daintree/latest-mac.yml - macOS auto-update will not work"
+          if [ ! -f "release/daintree/${UPDATE_METADATA_PREFIX}-mac.yml" ]; then
+            echo "::error::Missing release/daintree/${UPDATE_METADATA_PREFIX}-mac.yml - macOS auto-update metadata was not generated"
             exit 1
           fi
           DMG_COUNT=$(find release/daintree -maxdepth 1 -name '*.dmg' | wc -l | tr -d ' ')
@@ -150,14 +162,14 @@ jobs:
             find release/daintree -maxdepth 1 \( -name '*.dmg' -o -name '*.zip' \) -exec ls -la {} +
             exit 1
           fi
-          echo "✓ Found $DMG_COUNT DMGs, $ZIP_COUNT ZIPs, and latest-mac.yml"
+          echo "✓ Found $DMG_COUNT DMGs, $ZIP_COUNT ZIPs, and ${UPDATE_METADATA_PREFIX}-mac.yml"
 
       - name: Validate update metadata (Linux)
         if: matrix.os == 'ubuntu-22.04'
         shell: bash
         run: |
-          if [ ! -f "release/daintree/latest-linux.yml" ]; then
-            echo "::error::Missing release/daintree/latest-linux.yml - Linux auto-update will not work"
+          if [ ! -f "release/daintree/${UPDATE_METADATA_PREFIX}-linux.yml" ]; then
+            echo "::error::Missing release/daintree/${UPDATE_METADATA_PREFIX}-linux.yml - Linux auto-update metadata was not generated"
             exit 1
           fi
 
@@ -172,7 +184,7 @@ jobs:
             release/daintree/*.AppImage
             release/daintree/*.deb
             release/daintree/*.blockmap
-            release/daintree/latest*.yml
+            release/daintree/*.yml
           retention-days: 7
           if-no-files-found: error
 
@@ -190,6 +202,18 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Resolve update metadata prefix
+        shell: bash
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [[ "$PKG_VERSION" == *-rc* ]]; then
+            echo "UPDATE_METADATA_PREFIX=rc" >> "$GITHUB_ENV"
+          elif [[ "$PKG_VERSION" == *-beta* ]]; then
+            echo "UPDATE_METADATA_PREFIX=beta" >> "$GITHUB_ENV"
+          else
+            echo "UPDATE_METADATA_PREFIX=latest" >> "$GITHUB_ENV"
+          fi
+
       - name: Verify version matches tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -282,8 +306,8 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: bash
         run: |
-          if [ ! -f "release/canopy/latest.yml" ]; then
-            echo "::error::Missing release/canopy/latest.yml - Windows auto-update will not work"
+          if [ ! -f "release/canopy/${UPDATE_METADATA_PREFIX}.yml" ]; then
+            echo "::error::Missing release/canopy/${UPDATE_METADATA_PREFIX}.yml - Windows auto-update metadata was not generated"
             exit 1
           fi
 
@@ -291,8 +315,8 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         shell: bash
         run: |
-          if [ ! -f "release/canopy/latest-mac.yml" ]; then
-            echo "::error::Missing release/canopy/latest-mac.yml - macOS auto-update will not work"
+          if [ ! -f "release/canopy/${UPDATE_METADATA_PREFIX}-mac.yml" ]; then
+            echo "::error::Missing release/canopy/${UPDATE_METADATA_PREFIX}-mac.yml - macOS auto-update metadata was not generated"
             exit 1
           fi
           DMG_COUNT=$(find release/canopy -maxdepth 1 -name '*.dmg' | wc -l | tr -d ' ')
@@ -302,14 +326,14 @@ jobs:
             find release/canopy -maxdepth 1 \( -name '*.dmg' -o -name '*.zip' \) -exec ls -la {} +
             exit 1
           fi
-          echo "✓ Found $DMG_COUNT DMGs, $ZIP_COUNT ZIPs, and latest-mac.yml"
+          echo "✓ Found $DMG_COUNT DMGs, $ZIP_COUNT ZIPs, and ${UPDATE_METADATA_PREFIX}-mac.yml"
 
       - name: Validate update metadata (Linux)
         if: matrix.os == 'ubuntu-22.04'
         shell: bash
         run: |
-          if [ ! -f "release/canopy/latest-linux.yml" ]; then
-            echo "::error::Missing release/canopy/latest-linux.yml - Linux auto-update will not work"
+          if [ ! -f "release/canopy/${UPDATE_METADATA_PREFIX}-linux.yml" ]; then
+            echo "::error::Missing release/canopy/${UPDATE_METADATA_PREFIX}-linux.yml - Linux auto-update metadata was not generated"
             exit 1
           fi
 
@@ -324,7 +348,7 @@ jobs:
             release/canopy/*.AppImage
             release/canopy/*.deb
             release/canopy/*.blockmap
-            release/canopy/latest*.yml
+            release/canopy/*.yml
           retention-days: 7
           if-no-files-found: error
 
@@ -348,6 +372,18 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      - name: Resolve update metadata prefix
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$TAG_VERSION" == *-rc* ]]; then
+            echo "UPDATE_METADATA_PREFIX=rc" >> "$GITHUB_ENV"
+          elif [[ "$TAG_VERSION" == *-beta* ]]; then
+            echo "UPDATE_METADATA_PREFIX=beta" >> "$GITHUB_ENV"
+          else
+            echo "UPDATE_METADATA_PREFIX=latest" >> "$GITHUB_ENV"
+          fi
+
       - name: Download macOS artifacts
         uses: actions/download-artifact@v8
         with:
@@ -403,7 +439,7 @@ jobs:
             --endpoint-url "${R2_ENDPOINT}" \
             --no-progress \
             --exclude "*" \
-            --include "latest*.yml" \
+            --include "${UPDATE_METADATA_PREFIX}*.yml" \
             --cache-control "no-cache, no-store, must-revalidate"
 
       - name: Notify website of new release
@@ -431,6 +467,18 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      - name: Resolve update metadata prefix
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$TAG_VERSION" == *-rc* ]]; then
+            echo "UPDATE_METADATA_PREFIX=rc" >> "$GITHUB_ENV"
+          elif [[ "$TAG_VERSION" == *-beta* ]]; then
+            echo "UPDATE_METADATA_PREFIX=beta" >> "$GITHUB_ENV"
+          else
+            echo "UPDATE_METADATA_PREFIX=latest" >> "$GITHUB_ENV"
+          fi
+
       - name: Download macOS artifacts
         uses: actions/download-artifact@v8
         with:
@@ -486,5 +534,5 @@ jobs:
             --endpoint-url "${R2_ENDPOINT}" \
             --no-progress \
             --exclude "*" \
-            --include "latest*.yml" \
+            --include "${UPDATE_METADATA_PREFIX}*.yml" \
             --cache-control "no-cache, no-store, must-revalidate"
