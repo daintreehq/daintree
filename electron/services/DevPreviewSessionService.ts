@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
+import { resolveNextMajorVersion } from "../utils/resolveNextVersion.js";
 import type { PtyClient } from "./PtyClient.js";
 import { UrlDetector } from "./UrlDetector.js";
 import type {
@@ -88,7 +89,15 @@ const NEXT_DEV_DIRECT_RE = /\bnext\s+dev\b/;
 const TURBOPACK_FLAG_RE = /--turbo(?:pack)?\b/;
 const PKG_SCRIPT_RE = /^(?:npm\s+run|pnpm(?:\s+run)?|yarn(?:\s+run)?|bun(?:\s+run)?)\s+(\S+)$/;
 
-export async function normalizeNextjsDevCommand(command: string, cwd: string): Promise<string> {
+export async function normalizeNextjsDevCommand(
+  command: string,
+  cwd: string,
+  turbopackEnabled = true
+): Promise<string> {
+  if (!turbopackEnabled) return command;
+  const nextMajor = await resolveNextMajorVersion(cwd);
+  if (nextMajor === null || nextMajor < 15) return command;
+
   if (TURBOPACK_FLAG_RE.test(command)) return command;
 
   if (NEXT_DEV_DIRECT_RE.test(command)) {

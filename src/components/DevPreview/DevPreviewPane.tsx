@@ -425,7 +425,7 @@ export function DevPreviewPane({
     setIsAutoDetecting(true);
     try {
       const freshRunners = await projectClient.detectRunners(currentProjectId);
-      const candidate = findDevServerCandidate(freshRunners);
+      const candidate = findDevServerCandidate(freshRunners, projectSettings?.turbopackEnabled ?? true);
 
       if (!candidate) {
         return;
@@ -836,12 +836,12 @@ export function DevPreviewPane({
                   </h3>
                   <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
                     No dev server command is configured for this project.
-                    {allDetectedRunners && findDevServerCandidate(allDetectedRunners)
+                    {allDetectedRunners && findDevServerCandidate(allDetectedRunners, projectSettings?.turbopackEnabled ?? true)
                       ? " We found a script in your package.json that looks like a dev server."
                       : " Configure one to preview your application."}
                   </p>
                   <div className="flex flex-col items-center gap-2">
-                    {allDetectedRunners && findDevServerCandidate(allDetectedRunners) && (
+                    {allDetectedRunners && findDevServerCandidate(allDetectedRunners, projectSettings?.turbopackEnabled ?? true) && (
                       <Button
                         onClick={handleAutoDetect}
                         disabled={isAutoDetecting || isSettingsLoading}
@@ -853,7 +853,7 @@ export function DevPreviewPane({
                         <span className="text-xs">
                           {isAutoDetecting
                             ? "Detecting..."
-                            : `Use \`${findDevServerCandidate(allDetectedRunners)?.command}\``}
+                            : `Use \`${findDevServerCandidate(allDetectedRunners, projectSettings?.turbopackEnabled ?? true)?.command}\``}
                         </span>
                       </Button>
                     )}
