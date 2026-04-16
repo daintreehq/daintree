@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -18,12 +19,22 @@ import {
 } from "@/components/ui/context-menu";
 
 import type { BuiltInAgentId } from "@shared/config/agentIds";
-import type { AgentAvailabilityState } from "@shared/types";
+import type { AgentAvailabilityState, AgentState } from "@shared/types";
 import { isAgentReady, isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { Unplug } from "lucide-react";
 
 type AgentType = BuiltInAgentId;
+
+const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentState | undefined>([
+  "idle",
+  "working",
+  "running",
+  "waiting",
+  "directing",
+]);
 
 interface AgentButtonProps {
   type: AgentType;
@@ -39,34 +50,66 @@ export function AgentButton({
   const { worktrees } = useWorktrees();
   const displayCombo = useKeybindingDisplay(`agent.${type}`);
 
+  const panelsById = usePanelStore((s) => s.panelsById);
+  const panelIds = usePanelStore((s) => s.panelIds);
+  const setFocused = usePanelStore((s) => s.setFocused);
+  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+
+  const activeSession = useMemo(() => {
+    for (const pid of panelIds) {
+      const p = panelsById[pid];
+      if (
+        !p ||
+        p.kind !== "agent" ||
+        p.agentId !== type ||
+        p.location === "trash" ||
+        p.location === "background"
+      )
+        continue;
+      if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
+      if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
+      return { id: pid, state: p.agentState };
+    }
+    return null;
+  }, [panelsById, panelIds, activeWorktreeId, type]);
+
   const config = getAgentConfig(type);
   if (!config) return null;
+
+  const isSessionActive = activeSession !== null;
+  const isSessionWorking = activeSession?.state === "working" || activeSession?.state === "running";
 
   const tooltipDetails = config.tooltip ? ` — ${config.tooltip}` : "";
   const shortcut = displayCombo ? ` (${displayCombo})` : "";
   const isLoading = availability === undefined;
   const isReady = isAgentReady(availability);
-  const isInstalled = isAgentInstalled(availability);
-  const needsSetup = isInstalled && !isReady;
+  const isInstalledOnly = isAgentInstalled(availability);
+  const needsSetup = isInstalledOnly && !isReady;
 
   const tooltip = isLoading
     ? `Checking ${config.name} CLI availability...`
-    : isReady
-      ? `Start ${config.name}${tooltipDetails}${shortcut}`
-      : needsSetup
-        ? `${config.name} needs setup. Click to configure.`
-        : `${config.name} CLI not found. Click to install.`;
+    : isSessionActive
+      ? `Focus ${config.name} session${shortcut}`
+      : isReady
+        ? `Start ${config.name}${tooltipDetails}${shortcut}`
+        : needsSetup
+          ? `${config.name} needs setup. Click to configure.`
+          : `${config.name} CLI not found. Click to install.`;
 
   const ariaLabel = isLoading
     ? `Checking ${config.name} availability`
-    : isReady
-      ? `Start ${config.name} Agent`
-      : needsSetup
-        ? `${config.name} needs setup`
-        : `${config.name} CLI not installed`;
+    : isSessionActive
+      ? `Focus ${config.name} session`
+      : isReady
+        ? `Start ${config.name} Agent`
+        : needsSetup
+          ? `${config.name} needs setup`
+          : `${config.name} CLI not installed`;
 
   const handleClick = () => {
-    if (isReady) {
+    if (isSessionActive) {
+      setFocused(activeSession.id, true);
+    } else if (isReady) {
       void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
     } else {
       void actionService.dispatch(
@@ -102,7 +145,20 @@ export function AgentButton({
                   )}
                   aria-label={ariaLabel}
                 >
-                  <config.icon brandColor={getBrandColorHex(type)} />
+                  <div className="relative">
+                    <config.icon brandColor={getBrandColorHex(type)} />
+                    {isSessionActive && (
+                      <span
+                        className={cn(
+                          "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-daintree-sidebar",
+                          isSessionWorking
+                            ? "bg-status-success animate-pulse"
+                            : "bg-daintree-accent"
+                        )}
+                        aria-hidden="true"
+                      />
+                    )}
+                  </div>
                 </Button>
               </span>
             </TooltipTrigger>
@@ -111,6 +167,11 @@ export function AgentButton({
         </TooltipProvider>
       </ContextMenuTrigger>
       <ContextMenuContent>
+        {isSessionActive && (
+          <ContextMenuItem onSelect={() => setFocused(activeSession.id, true)}>
+            Focus {config.name} Session
+          </ContextMenuItem>
+        )}
         <ContextMenuItem
           disabled={!isReady}
           onSelect={() =>
@@ -121,7 +182,7 @@ export function AgentButton({
             )
           }
         >
-          Launch {config.name}
+          {isSessionActive ? `New ${config.name} Session` : `Launch ${config.name}`}
         </ContextMenuItem>
         <ContextMenuItem
           disabled={!isReady}

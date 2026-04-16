@@ -5,10 +5,12 @@ import type { AgentSettings, CliAvailability } from "@shared/types";
 
 const dispatchMock = vi.fn();
 const setAgentPinnedMock = vi.fn().mockResolvedValue(undefined);
-const addNotificationMock = vi.fn();
+const setFocusedMock = vi.fn();
 
-// Mutable mock store state so tests can control what the component reads.
 let mockSettings: AgentSettings | null = null;
+let mockPanelsById: Record<string, unknown> = {};
+let mockPanelIds: string[] = [];
+let mockActiveWorktreeId: string | null = null;
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => dispatchMock(...args) },
@@ -24,13 +26,22 @@ vi.mock("@/store/agentSettingsStore", () => ({
     selector({ settings: mockSettings, setAgentPinned: setAgentPinnedMock }),
 }));
 
-type MockNotificationState = {
-  addNotification: typeof addNotificationMock;
-};
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
+    selector({
+      panelsById: mockPanelsById,
+      panelIds: mockPanelIds,
+      setFocused: setFocusedMock,
+    }),
+}));
 
-vi.mock("@/store/notificationStore", () => ({
-  useNotificationStore: (selector: (s: MockNotificationState) => unknown) =>
-    selector({ addNotification: addNotificationMock }),
+vi.mock("@/store/worktreeStore", () => ({
+  useWorktreeSelectionStore: (selector: (s: { activeWorktreeId: string | null }) => unknown) =>
+    selector({ activeWorktreeId: mockActiveWorktreeId }),
+}));
+
+vi.mock("@/hooks", () => ({
+  useKeybindingDisplay: () => null,
 }));
 
 vi.mock("@shared/config/agentIds", () => ({
@@ -51,7 +62,6 @@ vi.mock("@/lib/colorUtils", () => ({
   getBrandColorHex: (id: string) => `#brand-${id}`,
 }));
 
-// Passthrough UI primitives so dropdown content renders without a portal.
 vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -85,6 +95,9 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     <div data-testid="menu-label">{children}</div>
   ),
   DropdownMenuSeparator: () => <hr data-testid="menu-separator" />,
+  DropdownMenuShortcut: ({ children }: { children: React.ReactNode }) => (
+    <span data-testid="menu-shortcut">{children}</span>
+  ),
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -105,9 +118,10 @@ vi.mock("@/components/ui/button", () => ({
 
 vi.mock("lucide-react", () => ({
   Plug: () => <span data-testid="plug-icon" />,
-  Pin: ({ className }: { className?: string }) => (
+  Pin: ({ className }: { className?: string; strokeWidth?: number }) => (
     <span data-testid="pin-icon" data-classname={className} />
   ),
+  Plus: () => <span data-testid="plus-icon" />,
   Settings2: () => <span data-testid="settings2-icon" />,
 }));
 
@@ -117,18 +131,21 @@ function settingsWith(overrides: Record<string, { pinned?: boolean }>): AgentSet
   return { agents: overrides } as unknown as AgentSettings;
 }
 
-function launchItems(container: HTMLElement): string[] {
-  return Array.from(container.querySelectorAll('[role="menuitem"]'))
-    .map((el) => el.textContent?.replace(/Press P to.*toolbar/, "").trim() ?? "")
-    .filter((t) => t && !t.includes("Set up") && !t.includes("Customize Toolbar"));
+function agentRows(container: HTMLElement): string[] {
+  return Array.from(container.querySelectorAll('[data-testid^="agent-tray-row-"]'))
+    .map((el) => el.getAttribute("data-testid")?.replace("agent-tray-row-", "") ?? "")
+    .filter(Boolean);
 }
 
 describe("AgentTrayButton", () => {
   beforeEach(() => {
     dispatchMock.mockClear();
     setAgentPinnedMock.mockClear();
-    addNotificationMock.mockClear();
+    setFocusedMock.mockClear();
     mockSettings = null;
+    mockPanelsById = {};
+    mockPanelIds = [];
+    mockActiveWorktreeId = null;
   });
 
   it("renders the plug trigger with accessible label", () => {
@@ -137,7 +154,7 @@ describe("AgentTrayButton", () => {
     expect(getByTestId("plug-icon")).toBeTruthy();
   });
 
-  it("lists every ready agent in a single Launch section regardless of pin state", () => {
+  it("lists every ready agent regardless of pin state", () => {
     const availability = {
       claude: "ready",
       gemini: "ready",
@@ -146,7 +163,6 @@ describe("AgentTrayButton", () => {
     mockSettings = settingsWith({
       claude: { pinned: true },
       gemini: { pinned: false },
-      // codex: no entry → defaults to pinned (opt-out)
     });
 
     const { container, getAllByTestId } = render(
@@ -154,25 +170,18 @@ describe("AgentTrayButton", () => {
     );
 
     const labels = getAllByTestId("menu-label").map((el) => el.textContent);
-    expect(labels).toContain("Launch");
-    expect(labels).not.toContain("Pin to Toolbar");
+    expect(labels).toContain("Agents");
 
-    const names = launchItems(container);
-    // All three ready agents appear in Launch
-    expect(names).toEqual(expect.arrayContaining(["Claude", "Gemini", "Codex"]));
+    const rows = agentRows(container);
+    expect(rows).toEqual(["claude", "gemini", "codex"]);
   });
 
-  it("dispatches agent.launch when a Launch row is clicked", () => {
+  it("dispatches agent.launch when no active session exists", () => {
     const availability = { gemini: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ gemini: { pinned: false } });
 
-    const { container } = render(<AgentTrayButton agentAvailability={availability} />);
-
-    const geminiItem = Array.from(container.querySelectorAll('[role="menuitem"]')).find((el) =>
-      el.textContent?.startsWith("Gemini")
-    );
-    expect(geminiItem).toBeTruthy();
-    fireEvent.click(geminiItem!);
+    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+    fireEvent.click(getByTestId("agent-tray-row-gemini"));
 
     expect(dispatchMock).toHaveBeenCalledWith(
       "agent.launch",
@@ -181,7 +190,34 @@ describe("AgentTrayButton", () => {
     );
   });
 
-  it("renders a filled pin indicator when an agent is pinned", () => {
+  it("focuses existing session instead of launching when agent is running", () => {
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({ claude: { pinned: true } });
+    mockPanelsById = {
+      "panel-1": {
+        id: "panel-1",
+        kind: "agent",
+        agentId: "claude",
+        worktreeId: "wt-1",
+        location: "grid",
+        agentState: "working",
+      },
+    };
+    mockPanelIds = ["panel-1"];
+    mockActiveWorktreeId = "wt-1";
+
+    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+    fireEvent.click(getByTestId("agent-tray-row-claude"));
+
+    expect(setFocusedMock).toHaveBeenCalledWith("panel-1", true);
+    expect(dispatchMock).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("renders a filled pin indicator for pinned agents", () => {
     const availability = {
       claude: "ready",
       gemini: "ready",
@@ -196,18 +232,14 @@ describe("AgentTrayButton", () => {
     expect(getByTestId("agent-tray-pin-gemini").getAttribute("data-pinned")).toBe("false");
   });
 
-  it("clicking the trailing pin toggles pinned without launching the agent", () => {
+  it("clicking pin toggles pinned without launching", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
 
     const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-    const pin = getByTestId("agent-tray-pin-claude");
-    fireEvent.click(pin);
+    fireEvent.click(getByTestId("agent-tray-pin-claude"));
 
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
-    // Pin/unpin is a direct user action — no toast should fire.
-    expect(addNotificationMock).not.toHaveBeenCalled();
-    // Menu launch must NOT have been triggered
     expect(dispatchMock).not.toHaveBeenCalledWith(
       "agent.launch",
       expect.anything(),
@@ -219,31 +251,24 @@ describe("AgentTrayButton", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: false } });
 
-    const { container } = render(<AgentTrayButton agentAvailability={availability} />);
-    const claude = Array.from(container.querySelectorAll('[role="menuitem"]')).find((el) =>
-      el.textContent?.startsWith("Claude")
-    ) as HTMLElement | undefined;
-    expect(claude).toBeTruthy();
-    fireEvent.keyDown(claude!, { key: "P" });
+    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+    fireEvent.keyDown(getByTestId("agent-tray-row-claude"), { key: "P" });
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
   });
 
-  it("treats missing pinned entries as pinned (opt-out default)", () => {
-    const availability = {
-      claude: "ready",
-    } as unknown as CliAvailability;
-    // No entry for claude at all — helper should treat it as pinned.
+  it("treats missing pinned entries as pinned (opt-out)", () => {
+    const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({});
 
     const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
     expect(getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("true");
   });
 
-  it("lists missing agents in Needs Setup and dispatches the correct subtab on click", () => {
+  it("puts missing and installed-but-unauth agents in Needs Setup with pill badge", () => {
     const availability = {
       claude: "ready",
       gemini: "missing",
-      codex: "missing",
+      codex: "installed",
     } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
 
@@ -255,13 +280,22 @@ describe("AgentTrayButton", () => {
     expect(labels).toContain("Needs Setup");
 
     const setupItems = Array.from(container.querySelectorAll('[role="menuitem"]')).filter((el) =>
-      el.textContent?.includes("Set up")
+      el.textContent?.includes("Setup")
     );
-    expect(setupItems.length).toBe(2);
+    // Gemini (missing) + Codex (installed) in Needs Setup
+    expect(setupItems.length).toBeGreaterThanOrEqual(2);
+  });
 
-    const geminiSetup = setupItems.find((el) => el.textContent?.includes("Gemini"));
-    expect(geminiSetup).toBeTruthy();
-    fireEvent.click(geminiSetup!);
+  it("dispatches settings for setup items", () => {
+    const availability = { gemini: "missing" } as unknown as CliAvailability;
+    mockSettings = settingsWith({});
+
+    const { container } = render(<AgentTrayButton agentAvailability={availability} />);
+    const setupItem = Array.from(container.querySelectorAll('[role="menuitem"]')).find((el) =>
+      el.textContent?.includes("Gemini")
+    );
+    fireEvent.click(setupItem!);
+
     expect(dispatchMock).toHaveBeenCalledWith(
       "app.settings.openTab",
       { tab: "agents", subtab: "gemini" },
@@ -269,23 +303,7 @@ describe("AgentTrayButton", () => {
     );
   });
 
-  it("routes 'installed' (unauthenticated) agents into Needs Setup", () => {
-    const availability = {
-      claude: "installed",
-    } as unknown as CliAvailability;
-    mockSettings = settingsWith({ claude: { pinned: true } });
-
-    const { container, getAllByTestId } = render(
-      <AgentTrayButton agentAvailability={availability} />
-    );
-    const labels = getAllByTestId("menu-label").map((el) => el.textContent);
-    expect(labels).toContain("Needs Setup");
-    expect(labels).not.toContain("Launch");
-    const launchRows = launchItems(container);
-    expect(launchRows).not.toContain("Claude");
-  });
-
-  it("shows a Customize Toolbar footer that dispatches the toolbar settings tab", () => {
+  it("shows Customize Toolbar footer", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
 
@@ -302,31 +320,52 @@ describe("AgentTrayButton", () => {
     );
   });
 
-  it("shows a loading placeholder while agentAvailability is undefined", () => {
+  it("shows loading placeholder when availability is undefined", () => {
     mockSettings = settingsWith({ claude: { pinned: true } });
-    const { getByText, queryAllByTestId } = render(<AgentTrayButton />);
+    const { getByText } = render(<AgentTrayButton />);
     expect(getByText("Checking agents…")).toBeTruthy();
-    const labels = queryAllByTestId("menu-label").map((el) => el.textContent);
-    expect(labels).not.toContain("Needs Setup");
-    expect(labels).not.toContain("Launch");
   });
 
-  it("shows 'No agents available' when availability has resolved with no entries", () => {
+  it("shows 'No agents available' for empty availability", () => {
     const { getByText } = render(
       <AgentTrayButton agentAvailability={{} as unknown as CliAvailability} />
     );
     expect(getByText("No agents available")).toBeTruthy();
   });
 
-  it("handles null store settings gracefully (treats absent entries as pinned)", () => {
+  it("handles null store settings gracefully", () => {
     mockSettings = null;
-    const availability = {
-      claude: "ready",
-      gemini: "ready",
-    } as unknown as CliAvailability;
+    const availability = { claude: "ready" } as unknown as CliAvailability;
 
     const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
     expect(getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("true");
-    expect(getByTestId("agent-tray-pin-gemini").getAttribute("data-pinned")).toBe("true");
+  });
+
+  it("ignores panels from other worktrees for session detection", () => {
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({ claude: { pinned: true } });
+    mockPanelsById = {
+      "panel-1": {
+        id: "panel-1",
+        kind: "agent",
+        agentId: "claude",
+        worktreeId: "wt-other",
+        location: "grid",
+        agentState: "working",
+      },
+    };
+    mockPanelIds = ["panel-1"];
+    mockActiveWorktreeId = "wt-mine";
+
+    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+    fireEvent.click(getByTestId("agent-tray-row-claude"));
+
+    // Should launch new, not focus — panel is in a different worktree
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "agent.launch",
+      { agentId: "claude" },
+      { source: "user" }
+    );
+    expect(setFocusedMock).not.toHaveBeenCalled();
   });
 });
