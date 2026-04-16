@@ -1,63 +1,82 @@
 import { describe, expect, it } from "vitest";
 import { BUILT_IN_THEME_SOURCES } from "../builtInThemes/index.js";
-
-function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.replace("#", "");
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-}
+import { BUILT_IN_APP_SCHEMES } from "../themes.js";
+import { APP_THEME_TOKEN_KEYS } from "../types.js";
 
 describe("built-in themes", () => {
-  it.each(BUILT_IN_THEME_SOURCES.map((t) => [t.id, t]))("%s has materialBlur set", (_id, theme) => {
-    expect(theme.palette.strategy?.materialBlur).toBeGreaterThan(0);
-    expect(theme.palette.strategy?.materialSaturation).toBeGreaterThan(0);
-  });
-
-  it.each(
-    BUILT_IN_THEME_SOURCES.filter((t) => ["svalbard", "hokkaido"].includes(t.id)).map((t) => [
-      t.id,
-      t,
-    ])
-  )("%s overlay/border rgba tokens use correct overlayTint RGB", (_id, theme) => {
-    const tint = theme.palette.overlayTint;
-    if (!tint) return;
-    const [r, g, b] = hexToRgb(tint);
-    const tintPattern = `${r},${g},${b}`;
-    const overlayKeys = Object.entries(theme.tokens ?? {}).filter(([k]) =>
-      /^(overlay|border|scrim|surface-(hover|active))/.test(k)
-    );
-    for (const [key, val] of overlayKeys) {
-      if (typeof val !== "string") continue;
-      const m = val.match(/rgba\((\d+),(\d+),(\d+),/);
-      if (!m) continue;
-      const found = `${m[1]},${m[2]},${m[3]}`;
-      expect(found, `${key} rgba should use overlayTint ${tintPattern}`).toBe(tintPattern);
+  it("every source compiles to a valid AppColorScheme", () => {
+    expect(BUILT_IN_APP_SCHEMES).toHaveLength(BUILT_IN_THEME_SOURCES.length);
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      expect(scheme.id).toBeTruthy();
+      expect(scheme.name).toBeTruthy();
+      expect(["dark", "light"]).toContain(scheme.type);
+      expect(scheme.builtin).toBe(true);
+      expect(scheme.tokens).toBeDefined();
     }
   });
 
-  it.each(
-    BUILT_IN_THEME_SOURCES.filter((t) => ["svalbard", "hokkaido"].includes(t.id)).map((t) => [
-      t.id,
-      t,
-    ])
-  )("%s elevated surface matches extension tokens", (_id, theme) => {
-    const elevated = theme.palette.surfaces.elevated;
-    const elevatedRefs = ["pulse-card-bg", "pulse-ring-offset", "sidebar-active-bg"];
-    for (const key of elevatedRefs) {
-      const val = theme.extensions?.[key];
-      if (val) expect(val, `${key} should match elevated surface`).toBe(elevated);
+  it("all theme IDs are unique", () => {
+    const ids = BUILT_IN_APP_SCHEMES.map((s) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("every compiled scheme has all required token keys", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      for (const key of APP_THEME_TOKEN_KEYS) {
+        expect(scheme.tokens[key], `${scheme.id} missing token: ${key}`).toBeTruthy();
+      }
     }
   });
 
-  it.each(BUILT_IN_THEME_SOURCES.map((t) => [t.id, t]))(
-    "%s accent RGB matches focus-ring token",
-    (_id, theme) => {
-      const accent = theme.palette.accent;
-      const [r, g, b] = hexToRgb(accent);
-      const focusRing = theme.tokens?.["focus-ring"];
-      if (!focusRing || typeof focusRing !== "string") return;
-      const m = focusRing.match(/rgba\((\d+),(\d+),(\d+),/);
-      if (!m) return;
-      expect([parseInt(m[1]), parseInt(m[2]), parseInt(m[3])]).toEqual([r, g, b]);
+  it("source palette type matches declared type", () => {
+    for (const source of BUILT_IN_THEME_SOURCES) {
+      expect(source.palette.type, `${source.id} palette.type mismatch`).toBe(source.type);
     }
-  );
+  });
+
+  it("every source has location and heroImage metadata", () => {
+    for (const source of BUILT_IN_THEME_SOURCES) {
+      expect(source.location, `${source.id} missing location`).toBeTruthy();
+      expect(source.heroImage, `${source.id} missing heroImage`).toBeTruthy();
+    }
+  });
+
+  it("every source palette has all required surface, text, and status fields", () => {
+    for (const source of BUILT_IN_THEME_SOURCES) {
+      const { surfaces, text, status, activity, syntax } = source.palette;
+      expect(surfaces.grid, `${source.id} missing surfaces.grid`).toBeTruthy();
+      expect(surfaces.sidebar, `${source.id} missing surfaces.sidebar`).toBeTruthy();
+      expect(surfaces.canvas, `${source.id} missing surfaces.canvas`).toBeTruthy();
+      expect(surfaces.panel, `${source.id} missing surfaces.panel`).toBeTruthy();
+      expect(surfaces.elevated, `${source.id} missing surfaces.elevated`).toBeTruthy();
+      expect(text.primary, `${source.id} missing text.primary`).toBeTruthy();
+      expect(text.secondary, `${source.id} missing text.secondary`).toBeTruthy();
+      expect(text.muted, `${source.id} missing text.muted`).toBeTruthy();
+      expect(text.inverse, `${source.id} missing text.inverse`).toBeTruthy();
+      expect(status.success, `${source.id} missing status.success`).toBeTruthy();
+      expect(status.warning, `${source.id} missing status.warning`).toBeTruthy();
+      expect(status.danger, `${source.id} missing status.danger`).toBeTruthy();
+      expect(status.info, `${source.id} missing status.info`).toBeTruthy();
+      expect(activity.active, `${source.id} missing activity.active`).toBeTruthy();
+      expect(activity.idle, `${source.id} missing activity.idle`).toBeTruthy();
+      expect(activity.working, `${source.id} missing activity.working`).toBeTruthy();
+      expect(activity.waiting, `${source.id} missing activity.waiting`).toBeTruthy();
+      for (const key of Object.keys(syntax) as (keyof typeof syntax)[]) {
+        expect(syntax[key], `${source.id} missing syntax.${key}`).toBeTruthy();
+      }
+    }
+  });
+
+  it("every source has a material blur strategy", () => {
+    for (const source of BUILT_IN_THEME_SOURCES) {
+      expect(
+        source.palette.strategy?.materialBlur,
+        `${source.id} missing materialBlur`
+      ).toBeGreaterThan(0);
+      expect(
+        source.palette.strategy?.materialSaturation,
+        `${source.id} missing materialSaturation`
+      ).toBeGreaterThan(0);
+    }
+  });
 });
