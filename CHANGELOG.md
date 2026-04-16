@@ -1,5 +1,135 @@
 # Changelog
 
+## [0.7.0] - 2026-04-16
+
+### Features
+
+**Daintree Rebrand**
+
+- Rename Canopy to Daintree across types, icons, menu, and UI copy (#5149)
+- Migrate userData and `.canopy` directory rename to `.daintree` (#5149)
+- Flip protocol scheme app://canopy → app://daintree, canopy-file → daintree-file
+- Rename `CANOPY_*` env vars to `DAINTREE_*` with back-compat shims
+- Dual-variant release builds (Canopy + Daintree) via BUILD_VARIANT (#5151, #5130)
+
+**Setup Wizard**
+
+- Three-state CLI availability model: missing, installed, ready (#5057, #5043)
+- Tiered agent list in setup wizard selection step (#5054, #5047)
+- Replace embedded terminal with install cards (#5056, #5044)
+- Animated step transitions with reduced-motion support (#5055, #5045)
+- Auto-skip install step when all selected agents are installed (#5053, #5050)
+- Fold system health check into agent selection step (#5060, #5046)
+- Consolidate welcome step into agent setup wizard (#5061, #5048)
+- Unify wizard and settings into shared agent card components (#5062, #5049)
+- Skip-permissions toggle in agent CLI step (#5042, #5026)
+
+**Theme System**
+
+- Command palette and toggle for theme switching (#5081, #5069)
+- Live preview on hover in theme pickers (#5088, #5068)
+- Track recently used themes in picker (#5082, #5071)
+- Accent color override for themes (#5095, #5074)
+- Circular reveal animation for theme switches (#5087, #5073)
+- Inline theme list with thumbnail previews replaces modal picker
+- Updated theme hero images and tuned accent/terminal palettes
+
+**Agents**
+
+- Add GitHub Copilot CLI as built-in agent (#5067, #4555)
+- Add Kiro CLI to README and improve auth detection (#5096, #5101, #5093)
+- Agent tray button for unpinned and uninstalled agents (#5089, #5075)
+- Default agents to pinned (opt-in toolbar) and rename selected to pinned (#5123, #5109)
+- Active-session detection and focus shortcut on agent buttons
+- Derive agent buttons dynamically from registry (#5078, #5070)
+- Bulk operations can target specific agent terminals (#5086, #4772)
+
+**Notes**
+
+- Voice input in notes panel (#5063, #5059, #4425)
+
+**Worktrees**
+
+- Per-worktree remote compute lifecycle — lease, connect, manage cloud resources (#5007, #4426)
+- Differentiate worktree card hover and selected states (#5077, #5065)
+
+**Notifications**
+
+- Notify user about idle terminals in background projects (#5083, #5064, #4745)
+
+**Project Switching**
+
+- Previous/next project shortcuts for fast MRU switching (#5142)
+
+**Other Features**
+
+- CONTRIBUTING.md for community contributors
+
+### Bug Fixes
+
+**Hydration & Persistence**
+
+- Prefer saved worktreeId over stale backend value on rehydration (#5144)
+- Preserve custom session names across project switches (#5105, #5103)
+- Persist lastSelectedNoteId on save and harden notes save lifecycle (#5125, #5119)
+- Apply same worktreeId precedence fix to reconnect path
+
+**Workspace & Resources**
+
+- Shell-escape substituted variables to prevent command injection (#5145, #5129)
+- Serialize concurrent resource actions per worktree (#5147, #5127)
+- Surface resource action failures to the user (#5146, #5128)
+- Emit abort events and cleanup resource queues on dispose
+- Exclude root worktree from PR branch-name matching (#5122, #5104)
+
+**Multi-Window**
+
+- Show project picker for user-triggered new windows (#5120, #5033, #5034)
+- Resolve sender window for open dialog in multi-window (#5148)
+
+**Terminal & PTY**
+
+- Recover from xterm DOM renderer IntersectionObserver pause (#5092, #5085)
+- Warm PTY pool at project cwd, skip on cwd mismatch (#5102, #5097, #5091)
+- Replace sliding-window rate limit with leaky bucket for worktree creation (#5106, #5098)
+- Cancel leaky bucket waiters on drain to match shutdown semantics
+
+**UI**
+
+- Stop FixedDropdown from self-closing on cold-start overlay race (#5090, #5084)
+- Toggle thumb contrast on dark themes (#5099, #5094)
+- Refresh LegacyMigrationBar design and copy
+- Center migration bar layout and update rename messaging
+- Hide worktree sidebar on welcome screen before project opens
+- Increase notification panel opacity for legibility (#5051, #5040)
+- Reload page when pressing Enter on unchanged URL (#5052, #5036)
+- Hide uninstalled agents in System Status (#5079, #5072)
+- Remove dedicated panel-palette toolbar button (#5121, #5116)
+- Improve GitHub toolbar button UX when token not configured
+
+**Cross-Platform**
+
+- Cross-platform path handling in file stores and tree service
+- Resolve Windows CI failures from path separator and shell quoting (#5152, #4708)
+
+**Build & Release**
+
+- Consolidate release output dir and harden nightly/update pipeline
+- Preserve prerelease feeds and canopy-file links across rebrand
+- GitHub Actions workflow to notify website on repo events
+
+### Performance
+
+- Adaptive backoff in ProcessTreeCache polling (#5124, #4818)
+
+### Testing
+
+- Adversarial test sweep — 22 rounds, 56 source bugs fixed across IPC, services, and stores (#5140)
+- Repair nightly E2E onboarding and online agent flows (#5138)
+- Propagate SKIP_FIRST_RUN_DIALOGS to sandboxed renderer (#5080, #5066)
+
+---
+
 ## [0.6.0] - 2026-04-08
 
 ### Features
