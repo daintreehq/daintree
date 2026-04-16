@@ -114,7 +114,12 @@ vi.mock("fs/promises", () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
   access: vi.fn().mockResolvedValue(undefined),
   readFile: vi.fn().mockRejectedValue(new Error("ENOENT")),
+  cp: vi.fn().mockResolvedValue(undefined),
 }));
+
+function flushAsyncTail(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 describe("WorkspaceService.createWorktree", () => {
   let service: WorkspaceService;
@@ -137,7 +142,7 @@ describe("WorkspaceService.createWorktree", () => {
     vi.restoreAllMocks();
   });
 
-  it("should call waitForPathExists after git worktree add", async () => {
+  it("passes --no-track on issue-mode git add and emits success with the direct-built worktree id", async () => {
     const requestId = "test-request-123";
     const options = {
       baseBranch: "main",
@@ -145,16 +150,13 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree",
     };
 
-    service["listService"].list = vi.fn().mockResolvedValue([
-      {
-        path: "/test/worktree",
-        branch: "feature/test",
-        head: "abc123",
-        isDetached: false,
-        isMainWorktree: false,
-        bare: false,
-      },
-    ]);
+    const syncSpy = vi
+      .spyOn(
+        service as unknown as { syncMonitors: (...args: unknown[]) => Promise<void> },
+        "syncMonitors"
+      )
+      .mockResolvedValue(undefined);
+    const listSpy = vi.spyOn(service["listService"], "list");
 
     await service.createWorktree(requestId, "/test/root", options);
 
@@ -163,12 +165,13 @@ describe("WorkspaceService.createWorktree", () => {
       "add",
       "-b",
       "feature/test",
+      "--no-track",
       "/test/worktree",
       "main",
     ]);
 
     expect(waitForPathExists).toHaveBeenCalledWith("/test/worktree", {
-      timeoutMs: 5000,
+      timeoutMs: 500,
       initialRetryDelayMs: 50,
       maxRetryDelayMs: 800,
     });
@@ -185,9 +188,31 @@ describe("WorkspaceService.createWorktree", () => {
         worktreeId: "/test/worktree",
       })
     );
+
+    // Opt 3: the O(N²) `git worktree list --porcelain` call on the success
+    // path is gone — the Worktree object is built directly from inputs.
+    await flushAsyncTail();
+    expect(listSpy).not.toHaveBeenCalled();
+
+    // syncMonitors receives a single-element array (the new worktree only) with
+    // skipInitialGitStatus=true, avoiding a storm of initial git status scans
+    // when bulk-creating 30+ worktrees.
+    expect(syncSpy).toHaveBeenCalledTimes(1);
+    const [worktrees, , , , skipInitialGitStatus] = syncSpy.mock.calls[0];
+    expect(worktrees).toEqual([
+      expect.objectContaining({
+        id: "/test/worktree",
+        path: "/test/worktree",
+        branch: "feature/test",
+        name: "feature/test",
+        isDetached: false,
+        isMainWorktree: false,
+      }),
+    ]);
+    expect(skipInitialGitStatus).toBe(true);
   });
 
-  it("should call waitForPathExists for useExistingBranch flow", async () => {
+  it("preserves issue-mode-only --no-track: useExistingBranch argv is unchanged", async () => {
     const requestId = "test-request-456";
     const options = {
       baseBranch: "main",
@@ -196,16 +221,10 @@ describe("WorkspaceService.createWorktree", () => {
       useExistingBranch: true,
     };
 
-    service["listService"].list = vi.fn().mockResolvedValue([
-      {
-        path: "/test/worktree2",
-        branch: "existing-branch",
-        head: "def456",
-        isDetached: false,
-        isMainWorktree: false,
-        bare: false,
-      },
-    ]);
+    vi.spyOn(
+      service as unknown as { syncMonitors: (...args: unknown[]) => Promise<void> },
+      "syncMonitors"
+    ).mockResolvedValue(undefined);
 
     await service.createWorktree(requestId, "/test/root", options);
 
@@ -215,10 +234,13 @@ describe("WorkspaceService.createWorktree", () => {
       "/test/worktree2",
       "existing-branch",
     ]);
-    expect(waitForPathExists).toHaveBeenCalledWith("/test/worktree2", expect.any(Object));
+    expect(waitForPathExists).toHaveBeenCalledWith(
+      "/test/worktree2",
+      expect.objectContaining({ timeoutMs: 500 })
+    );
   });
 
-  it("should call waitForPathExists for fromRemote flow", async () => {
+  it("preserves --track (not --no-track) for fromRemote so @{u} resolves for ahead/behind counts", async () => {
     const requestId = "test-request-789";
     const options = {
       baseBranch: "origin/main",
@@ -227,16 +249,10 @@ describe("WorkspaceService.createWorktree", () => {
       fromRemote: true,
     };
 
-    service["listService"].list = vi.fn().mockResolvedValue([
-      {
-        path: "/test/worktree3",
-        branch: "feature/remote",
-        head: "ghi789",
-        isDetached: false,
-        isMainWorktree: false,
-        bare: false,
-      },
-    ]);
+    vi.spyOn(
+      service as unknown as { syncMonitors: (...args: unknown[]) => Promise<void> },
+      "syncMonitors"
+    ).mockResolvedValue(undefined);
 
     await service.createWorktree(requestId, "/test/root", options);
 
@@ -249,10 +265,13 @@ describe("WorkspaceService.createWorktree", () => {
       "/test/worktree3",
       "origin/main",
     ]);
-    expect(waitForPathExists).toHaveBeenCalledWith("/test/worktree3", expect.any(Object));
+    expect(waitForPathExists).toHaveBeenCalledWith(
+      "/test/worktree3",
+      expect.objectContaining({ timeoutMs: 500 })
+    );
   });
 
-  it("should propagate waitForPathExists timeout error", async () => {
+  it("propagates waitForPathExists timeout error and reports 500ms budget", async () => {
     const requestId = "test-request-timeout";
     const options = {
       baseBranch: "main",
@@ -261,7 +280,7 @@ describe("WorkspaceService.createWorktree", () => {
     };
 
     waitForPathExists.mockRejectedValueOnce(
-      new Error("Timeout waiting for path to exist: /test/worktree-timeout (waited 5000ms)")
+      new Error("Timeout waiting for path to exist: /test/worktree-timeout (waited 500ms)")
     );
 
     await service.createWorktree(requestId, "/test/root", options);
@@ -271,12 +290,12 @@ describe("WorkspaceService.createWorktree", () => {
         type: "create-worktree-result",
         requestId: "test-request-timeout",
         success: false,
-        error: expect.stringContaining("Timeout waiting for path to exist"),
+        error: expect.stringContaining("waited 500ms"),
       })
     );
   });
 
-  it("should handle delayed directory creation", async () => {
+  it("handles delayed directory creation", async () => {
     const requestId = "test-request-delayed";
     const options = {
       baseBranch: "main",
@@ -284,7 +303,10 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree-delayed",
     };
 
-    vi.useFakeTimers();
+    vi.spyOn(
+      service as unknown as { syncMonitors: (...args: unknown[]) => Promise<void> },
+      "syncMonitors"
+    ).mockResolvedValue(undefined);
 
     let resolveWait: (() => void) | undefined;
     const waitPromise = new Promise<void>((resolve) => {
@@ -292,30 +314,27 @@ describe("WorkspaceService.createWorktree", () => {
     });
     waitForPathExists.mockReturnValue(waitPromise);
 
-    service["listService"].list = vi.fn().mockResolvedValue([
-      {
-        path: "/test/worktree-delayed",
-        branch: "feature/delayed",
-        head: "jkl012",
-        isDetached: false,
-        isMainWorktree: false,
-        bare: false,
-      },
-    ]);
-
     const createPromise = service.createWorktree(requestId, "/test/root", options);
 
-    await vi.runAllTimersAsync();
+    await Promise.resolve();
     expect(mockSimpleGit.raw).toHaveBeenCalled();
     expect(waitForPathExists).toHaveBeenCalledTimes(1);
+    // Event must NOT fire while waitForPathExists is unresolved — that guard
+    // preserves the contract that the directory exists before callers use it.
+    expect(mockSendEvent).not.toHaveBeenCalled();
 
     resolveWait!();
     await createPromise;
 
-    vi.useRealTimers();
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        success: true,
+      })
+    );
   });
 
-  it("should not proceed to ensureNoteFile if waitForPathExists fails", async () => {
+  it("skips all fire-and-forget tail work when waitForPathExists fails", async () => {
     const requestId = "test-request-fail";
     const options = {
       baseBranch: "main",
@@ -325,30 +344,96 @@ describe("WorkspaceService.createWorktree", () => {
 
     waitForPathExists.mockRejectedValueOnce(new Error("Path does not exist"));
 
-    const fsPromisesModule = await import("fs/promises");
-    const statSpy = vi.mocked(fsPromisesModule.stat);
-    const mkdirSpy = vi.mocked(fsPromisesModule.mkdir);
-    const writeFileSpy = vi.mocked(fsPromisesModule.writeFile);
-    statSpy.mockClear();
-    mkdirSpy.mockClear();
-    writeFileSpy.mockClear();
-
+    const syncSpy = vi
+      .spyOn(
+        service as unknown as { syncMonitors: (...args: unknown[]) => Promise<void> },
+        "syncMonitors"
+      )
+      .mockResolvedValue(undefined);
+    const invalidateSpy = vi.spyOn(service["listService"], "invalidateCache");
     const listSpy = vi.spyOn(service["listService"], "list");
-    listSpy.mockClear();
+    const copySpy = vi.spyOn(service["lifecycleService"], "copyDaintreeDir");
+
+    await service.createWorktree(requestId, "/test/root", options);
+    await flushAsyncTail();
+
+    expect(mockSendEvent).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+    expect(syncSpy).not.toHaveBeenCalled();
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    expect(listSpy).not.toHaveBeenCalled();
+    expect(copySpy).not.toHaveBeenCalled();
+  });
+
+  it("emits create-worktree-result before the fire-and-forget tail resolves", async () => {
+    const requestId = "test-request-tail-order";
+    const options = {
+      baseBranch: "main",
+      newBranch: "feature/tail-order",
+      path: "/test/worktree-tail-order",
+    };
+
+    let resolveSync: (() => void) | undefined;
+    const syncPromise = new Promise<void>((resolve) => {
+      resolveSync = resolve;
+    });
+    const syncSpy = vi
+      .spyOn(
+        service as unknown as { syncMonitors: (...args: unknown[]) => Promise<void> },
+        "syncMonitors"
+      )
+      .mockImplementation(() => syncPromise);
 
     await service.createWorktree(requestId, "/test/root", options);
 
+    // Event fires immediately after waitForPathExists, ahead of syncMonitors.
     expect(mockSendEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        success: false,
+        type: "create-worktree-result",
+        requestId: "test-request-tail-order",
+        success: true,
       })
     );
 
-    expect(statSpy).not.toHaveBeenCalled();
-    expect(mkdirSpy).not.toHaveBeenCalled();
-    expect(writeFileSpy).not.toHaveBeenCalled();
+    // syncMonitors is started but not resolved yet — tail is truly async.
+    await flushAsyncTail();
+    expect(syncSpy).toHaveBeenCalled();
 
-    expect(listSpy).not.toHaveBeenCalled();
+    resolveSync!();
+    await flushAsyncTail();
+  });
+
+  it("logs async tail failure without firing a second create-worktree-result event", async () => {
+    const requestId = "test-request-tail-fail";
+    const options = {
+      baseBranch: "main",
+      newBranch: "feature/tail-fail",
+      path: "/test/worktree-tail-fail",
+    };
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(
+      service as unknown as { syncMonitors: (...args: unknown[]) => Promise<void> },
+      "syncMonitors"
+    ).mockRejectedValueOnce(new Error("monitor sync exploded"));
+
+    await service.createWorktree(requestId, "/test/root", options);
+    await flushAsyncTail();
+
+    // Exactly one event, and it's the success event — tail failure is logged
+    // but never reaches the renderer as a second create-worktree-result.
+    expect(mockSendEvent).toHaveBeenCalledTimes(1);
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        success: true,
+      })
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("createWorktree async tail failed"),
+      expect.any(Error)
+    );
+
+    warnSpy.mockRestore();
   });
 });
 

@@ -162,7 +162,7 @@ interface WaitForPathOptions {
  *
  * @example
  * // Wait for worktree directory to exist before spawning terminals
- * await waitForPathExists('/path/to/worktree', { timeoutMs: 5000 });
+ * await waitForPathExists('/path/to/worktree', { timeoutMs: 500 });
  */
 export async function waitForPathExists(
   path: string,

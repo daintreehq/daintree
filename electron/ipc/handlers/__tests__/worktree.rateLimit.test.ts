@@ -110,7 +110,7 @@ describe("worktree rate limiting", () => {
         options: { baseBranch: "main", newBranch: "feat-1", path: "/test/worktrees/feat-1" },
       });
 
-      expect(waitForRateLimitSlotMock).toHaveBeenCalledWith("worktreeCreate", 6_000);
+      expect(waitForRateLimitSlotMock).toHaveBeenCalledWith("worktreeCreate", 1_000);
       expect(mockWorktreeService.createWorktree).toHaveBeenCalled();
     });
 
@@ -138,7 +138,7 @@ describe("worktree rate limiting", () => {
         description: "Test task",
       });
 
-      expect(waitForRateLimitSlotMock).toHaveBeenCalledWith("worktreeCreate", 6_000);
+      expect(waitForRateLimitSlotMock).toHaveBeenCalledWith("worktreeCreate", 1_000);
     });
 
     it("rejects without calling createWorktree when rate limit slot rejects", async () => {

@@ -643,34 +643,46 @@ export class WorkspaceService {
       } else if (fromRemote) {
         await git.raw(["worktree", "add", "-b", newBranch, "--track", path, baseBranch]);
       } else {
-        await git.raw(["worktree", "add", "-b", newBranch, path, baseBranch]);
+        // --no-track: local-base branches shouldn't auto-track a local ref even
+        // when the user has branch.autoSetupMerge=always. Skipping tracking also
+        // avoids a .git/config.lock acquisition, cutting contention under bulk
+        // creation. PR-mode (fromRemote) keeps --track — ahead/behind badges
+        // at WorktreeMonitor.ts:1092 depend on @{u} resolving.
+        await git.raw(["worktree", "add", "-b", newBranch, "--no-track", path, baseBranch]);
       }
 
       const absolutePath = isAbsolute(path) ? path : pathResolve(rootPath, path);
+      // 500ms is ample: git returns after the directory exists; the polling
+      // loop gives 4-5 attempts (50/100/200/150ms) across the budget, which
+      // covers APFS/NTFS/ext4 metadata flush latency without blocking the
+      // critical path for seconds on transient filesystem stalls.
       await waitForPathExists(absolutePath, {
-        timeoutMs: 5000,
+        timeoutMs: 500,
         initialRetryDelayMs: 50,
         maxRetryDelayMs: 800,
       });
 
-      await ensureNoteFile(absolutePath);
-
-      await this.lifecycleService.copyDaintreeDir(rootPath, absolutePath);
-
-      this.listService.invalidateCache(pathResolve(rootPath));
-      const updatedWorktrees = await this.listService.list({ forceRefresh: true });
-      const worktreeList = this.listService.mapToWorktrees(updatedWorktrees);
-
-      await this.syncMonitors(worktreeList, this.activeWorktreeId, this.mainBranch);
-
-      const createdWorktree = worktreeList.find(
-        (wt) => wt.path === absolutePath || wt.id === absolutePath || wt.branch === newBranch
-      );
-      if (!createdWorktree) {
-        throw new Error(`Worktree not found after creation: ${absolutePath}`);
-      }
+      // Build the Worktree object directly from known inputs instead of
+      // shelling out to `git worktree list --porcelain` — the per-create list
+      // was O(N²) across batches. Fields match WorktreeListService.mapToWorktrees
+      // output for a freshly-created, attached, non-main worktree.
+      const createdWorktree: Worktree = {
+        id: absolutePath,
+        path: absolutePath,
+        name: newBranch,
+        branch: newBranch,
+        head: undefined,
+        isDetached: false,
+        isCurrent: false,
+        isMainWorktree: false,
+        gitDir: getGitDir(absolutePath) || undefined,
+      };
       const canonicalWorktreeId = createdWorktree.id;
 
+      // Emit success immediately — downstream consumers only need the directory
+      // to exist (guaranteed by waitForPathExists above) and the worktree id.
+      // Monitor sync, .daintree copy, and lifecycle setup are moved to a
+      // fire-and-forget tail so a 30-worktree batch can release slots promptly.
       this.sendEvent({
         type: "create-worktree-result",
         requestId,
@@ -678,21 +690,43 @@ export class WorkspaceService {
         worktreeId: canonicalWorktreeId,
       });
 
-      // Set worktree mode on the monitor before lifecycle runs
-      if (options.worktreeMode && options.worktreeMode !== "local") {
-        const m = this.monitors.get(canonicalWorktreeId);
-        if (m) {
-          m.setWorktreeMode(options.worktreeMode);
-          m.setWorktreeEnvironmentLabel(options.worktreeMode);
-        }
-      }
+      void (async () => {
+        // Invalidate first so any racing list() call after this emission
+        // doesn't return a stale cached snapshot that excludes the new worktree.
+        this.listService.invalidateCache(pathResolve(rootPath));
 
-      void this.runLifecycleSetup(
-        canonicalWorktreeId,
-        absolutePath,
-        rootPath,
-        options.provisionResource ?? options.worktreeMode === "remote-worker"
-      );
+        await this.lifecycleService.copyDaintreeDir(rootPath, absolutePath);
+
+        // skipInitialGitStatus=true: a freshly-created worktree is clean by
+        // definition. syncMonitors only applies this flag to new monitors
+        // (existing monitors' polling is untouched) and also invokes
+        // ensureNoteFile for the new monitor, which is why createWorktree
+        // no longer calls ensureNoteFile directly.
+        await this.syncMonitors(
+          [createdWorktree],
+          this.activeWorktreeId,
+          this.mainBranch,
+          undefined,
+          true
+        );
+
+        if (options.worktreeMode && options.worktreeMode !== "local") {
+          const m = this.monitors.get(canonicalWorktreeId);
+          if (m) {
+            m.setWorktreeMode(options.worktreeMode);
+            m.setWorktreeEnvironmentLabel(options.worktreeMode);
+          }
+        }
+
+        void this.runLifecycleSetup(
+          canonicalWorktreeId,
+          absolutePath,
+          rootPath,
+          options.provisionResource ?? options.worktreeMode === "remote-worker"
+        );
+      })().catch((err) => {
+        console.warn("[WorkspaceHost] createWorktree async tail failed:", err);
+      });
     } catch (error) {
       this.sendEvent({
         type: "create-worktree-result",
