@@ -253,6 +253,47 @@ describe("cliAvailabilityStore", () => {
       await useCliAvailabilityStore.getState().refresh();
       expect(refreshMock).toHaveBeenCalledTimes(2);
     });
+
+    it("force: true bypasses the 30s throttle", async () => {
+      refreshMock.mockResolvedValueOnce(installedAvail);
+      const nowSpy = vi.spyOn(Date, "now");
+      nowSpy.mockReturnValue(3_000_000);
+
+      await useCliAvailabilityStore.getState().refresh();
+      expect(refreshMock).toHaveBeenCalledTimes(1);
+
+      // Within the throttle window; without force this would be skipped.
+      nowSpy.mockReturnValue(3_000_000 + 5_000);
+      refreshMock.mockResolvedValueOnce(installedAvail);
+      await useCliAvailabilityStore.getState().refresh(true);
+      expect(refreshMock).toHaveBeenCalledTimes(2);
+
+      nowSpy.mockRestore();
+    });
+
+    it("does not seed the throttle from cached lastCheckedAt on hydrate", async () => {
+      // Arrange: a recent cache (inside the 30s throttle window if it were honoured).
+      const fakeCache = {
+        availability: installedAvail,
+        lastCheckedAt: Date.now() - 1_000,
+      };
+      const getItemSpy = vi.spyOn(Storage.prototype, "getItem");
+      getItemSpy.mockReturnValueOnce(JSON.stringify(fakeCache));
+
+      // Init will hydrate from the cache but then fail the live probe, so
+      // lastCheckedAt should remain null — any future refresh must still run.
+      refreshMock.mockRejectedValueOnce(new Error("transient"));
+      await useCliAvailabilityStore.getState().initialize();
+
+      expect(useCliAvailabilityStore.getState().lastCheckedAt).toBeNull();
+
+      // The next refresh must not be throttled by the (stale) cache timestamp.
+      refreshMock.mockResolvedValueOnce(installedAvail);
+      await useCliAvailabilityStore.getState().refresh();
+      expect(refreshMock).toHaveBeenCalledTimes(2);
+
+      getItemSpy.mockRestore();
+    });
   });
 
   describe("cleanupCliAvailabilityStore", () => {

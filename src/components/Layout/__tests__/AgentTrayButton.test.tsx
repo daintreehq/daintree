@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 
@@ -173,6 +173,15 @@ describe("AgentTrayButton", () => {
     mockHasRealData = true;
   });
 
+  afterEach(() => {
+    // jsdom's default `visibilityState` is "visible"; tests that mutate it via
+    // defineProperty can bleed state between files, so reset explicitly.
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+  });
+
   it("renders the plug trigger with accessible label", () => {
     const { getByLabelText, getByTestId } = render(<AgentTrayButton />);
     expect(getByLabelText("Agent tray")).toBeTruthy();
@@ -321,11 +330,20 @@ describe("AgentTrayButton", () => {
     expect(allText).not.toMatch(/Also Available[\s\S]*Gemini/);
   });
 
-  it("dispatches settings for setup items", () => {
-    const availability = { gemini: "missing" } as unknown as CliAvailability;
-    mockSettings = settingsWith({});
+  it("dispatches settings with subtab when an Also-Available setup row is clicked", () => {
+    const availability = {
+      claude: "ready",
+      gemini: "installed",
+    } as unknown as CliAvailability;
+    mockSettings = settingsWith({ claude: { pinned: true } });
 
-    const { container } = render(<AgentTrayButton agentAvailability={availability} />);
+    const { container, getAllByTestId } = render(
+      <AgentTrayButton agentAvailability={availability} />
+    );
+    // Sanity check: this must be the Also-Available branch, not the fallback.
+    const labels = getAllByTestId("menu-label").map((el) => el.textContent);
+    expect(labels).toContain("Also Available");
+
     const setupItem = Array.from(container.querySelectorAll('[role="menuitem"]')).find((el) =>
       el.textContent?.includes("Gemini")
     );

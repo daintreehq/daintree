@@ -63,7 +63,9 @@ export function AgentSettings({
   const handleRefreshCliAvailability = useCallback(async () => {
     if (isRefreshingCli) return;
     try {
-      await refreshCliAvailability();
+      // Explicit user gesture — bypass the 30s throttle that exists for
+      // passive triggers (tray-open, window focus, visibility change).
+      await refreshCliAvailability(true);
     } catch (error) {
       console.error("[AgentSettings] Failed to refresh CLI availability:", error);
     }

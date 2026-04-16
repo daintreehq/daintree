@@ -22,7 +22,13 @@ interface CliAvailabilityState {
 
 interface CliAvailabilityActions {
   initialize: () => Promise<void>;
-  refresh: () => Promise<void>;
+  /**
+   * Probe CLI availability again. Pass `force: true` for explicit user
+   * gestures (e.g. the Refresh button in AgentSettings) so the 30s throttle
+   * — which exists to absorb passive triggers like tray-open and focus —
+   * does not swallow the request.
+   */
+  refresh: (force?: boolean) => Promise<void>;
 }
 
 type CliAvailabilityStore = CliAvailabilityState & CliAvailabilityActions;
@@ -121,11 +127,16 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()((set, get)
     // Hydrate from localStorage before kicking off the IPC call. This kills
     // the first-paint toolbar flicker: cached pins render immediately and
     // only reconcile when the fresh result lands.
+    //
+    // Deliberately omit `lastCheckedAt` so the 30s refresh throttle only
+    // kicks in after a successful *live* probe this session. Persisting
+    // the cached timestamp would mute the first mid-session refresh after
+    // a relaunch (and, with clock skew, could suppress refreshes
+    // indefinitely).
     const cached = loadCache();
     if (cached) {
       set({
         availability: cached.availability,
-        lastCheckedAt: cached.lastCheckedAt,
         hasRealData: true,
       });
     }
@@ -169,15 +180,18 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()((set, get)
     return initPromise;
   },
 
-  refresh: () => {
+  refresh: (force = false) => {
     // If init is still in-flight, join it rather than firing a duplicate IPC call.
     if (initPromise) return initPromise;
 
     // Skip if the last successful probe landed within the throttle window.
     // Failed refreshes do not set lastCheckedAt, so they stay retryable.
-    const { lastCheckedAt } = get();
-    if (lastCheckedAt !== null && Date.now() - lastCheckedAt < REFRESH_THROTTLE_MS) {
-      return Promise.resolve();
+    // Explicit user gestures pass `force: true` to bypass the window.
+    if (!force) {
+      const { lastCheckedAt } = get();
+      if (lastCheckedAt !== null && Date.now() - lastCheckedAt < REFRESH_THROTTLE_MS) {
+        return Promise.resolve();
+      }
     }
 
     if (refreshPromise) return refreshPromise;
