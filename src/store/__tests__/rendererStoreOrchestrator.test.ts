@@ -21,7 +21,12 @@ vi.mock("@/clients", () => ({
     setTabGroups: vi.fn().mockResolvedValue(undefined),
   },
   agentSettingsClient: {
-    get: vi.fn().mockResolvedValue({}),
+    get: vi.fn().mockResolvedValue({ agents: {} }),
+    set: vi.fn(),
+    reset: vi.fn(),
+  },
+  cliAvailabilityClient: {
+    refresh: vi.fn(),
   },
 }));
 
@@ -73,6 +78,10 @@ const { useConsoleCaptureStore } = await import("../consoleCaptureStore");
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
 const { unregisterInputController } = await import("../terminalInputStore");
 const { semanticAnalysisService } = await import("@/services/SemanticAnalysisService");
+const { useCliAvailabilityStore, cleanupCliAvailabilityStore } =
+  await import("../cliAvailabilityStore");
+const { useAgentSettingsStore, cleanupAgentSettingsStore } = await import("../agentSettingsStore");
+const { agentSettingsClient } = await import("@/clients");
 const { initStoreOrchestrator, destroyStoreOrchestrator } =
   await import("../rendererStoreOrchestrator");
 
@@ -797,5 +806,102 @@ describe("rendererStoreOrchestrator", () => {
 
     // Worktree should NOT have been switched since orchestrator is destroyed
     expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+  });
+
+  describe("availability → agent-settings sync (issue #5158)", () => {
+    beforeEach(() => {
+      cleanupCliAvailabilityStore();
+      cleanupAgentSettingsStore();
+      (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockReset();
+      (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({ agents: {} });
+    });
+
+    afterEach(() => {
+      cleanupCliAvailabilityStore();
+      cleanupAgentSettingsStore();
+    });
+
+    it("re-runs agentSettings normalization when hasRealData transitions false → true", async () => {
+      useAgentSettingsStore.setState({
+        settings: { agents: {} },
+        isInitialized: true,
+        isLoading: false,
+        error: null,
+      });
+      (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockClear();
+
+      useCliAvailabilityStore.setState({ hasRealData: true });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(agentSettingsClient.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not fire on unrelated cliAvailabilityStore updates", () => {
+      useCliAvailabilityStore.setState({ hasRealData: true });
+
+      useAgentSettingsStore.setState({
+        settings: { agents: {} },
+        isInitialized: true,
+        isLoading: false,
+        error: null,
+      });
+      (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockClear();
+
+      // Mutate a sibling flag without changing `availability` or the
+      // `hasRealData` transition — must NOT trigger a re-normalize.
+      useCliAvailabilityStore.setState({ isRefreshing: true });
+
+      expect(agentSettingsClient.get).not.toHaveBeenCalled();
+    });
+
+    it("re-runs normalization when availability ref changes after initial boot", async () => {
+      useCliAvailabilityStore.setState({
+        availability: { claude: "missing" } as never,
+        hasRealData: true,
+      });
+
+      useAgentSettingsStore.setState({
+        settings: { agents: {} },
+        isInitialized: true,
+        isLoading: false,
+        error: null,
+      });
+      (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockClear();
+
+      // Simulate the user installing a CLI outside Daintree: focus listener
+      // refreshes cliAvailabilityStore, which swaps the `availability` ref.
+      useCliAvailabilityStore.setState({
+        availability: { claude: "ready" } as never,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(agentSettingsClient.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips refresh when agentSettingsStore is not yet initialized", () => {
+      // Not yet initialized — initial store state.
+      (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockClear();
+
+      useCliAvailabilityStore.setState({ hasRealData: true });
+
+      expect(agentSettingsClient.get).not.toHaveBeenCalled();
+    });
+
+    it("stops firing after the orchestrator is destroyed", () => {
+      useAgentSettingsStore.setState({
+        settings: { agents: {} },
+        isInitialized: true,
+        isLoading: false,
+        error: null,
+      });
+      destroyStoreOrchestrator();
+      (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockClear();
+
+      useCliAvailabilityStore.setState({ hasRealData: true });
+
+      expect(agentSettingsClient.get).not.toHaveBeenCalled();
+    });
   });
 });

@@ -1,13 +1,15 @@
 import type { AgentSettings, AgentSettingsEntry } from "../types/agentSettings.js";
 
 /**
- * Returns true if the agent is pinned to the toolbar. Treats missing entries
- * and missing `pinned` fields as pinned=true (default-pin semantics): installed
- * agents show in the toolbar until the user explicitly unpins them.
+ * Returns true only when the entry explicitly sets `pinned: true`. Missing
+ * entries and missing `pinned` fields resolve to `false` (opt-in semantics).
+ * The renderer normalizer synthesizes `pinned: true` for registered agents
+ * whose CLI is installed — uninstalled or unknown-state agents stay unpinned
+ * until the user pins them explicitly.
  */
 export function isAgentPinned(entry: AgentSettingsEntry | undefined | null): boolean {
-  if (!entry) return true;
-  return entry.pinned !== false;
+  if (!entry) return false;
+  return entry.pinned === true;
 }
 
 export function isAgentPinnedById(

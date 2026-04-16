@@ -70,10 +70,12 @@ export const DEFAULT_ROUTING_CONFIG: AgentRoutingConfig = {
 
 export interface AgentSettingsEntry {
   /**
-   * Pin state for the toolbar. Opt-out semantics: `undefined` means pinned
-   * (installed agents default to the toolbar), and only explicit `false`
-   * unpins. Use `isAgentPinned()` from `shared/utils/agentPinned.ts` rather
-   * than reading this field directly so the default stays consistent.
+   * Pin state for the toolbar. Opt-in semantics: `undefined` means unpinned,
+   * and only explicit `true` pins the agent. The renderer normalizer
+   * synthesizes `pinned: true` for registered agents whose CLI is installed,
+   * so uninstalled agents stay off the toolbar until the user pins them
+   * explicitly. Use `isAgentPinned()` from `shared/utils/agentPinned.ts`
+   * rather than reading this field directly so the default stays consistent.
    */
   pinned?: boolean;
   customFlags?: string;

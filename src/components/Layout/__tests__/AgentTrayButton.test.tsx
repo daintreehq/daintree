@@ -256,12 +256,16 @@ describe("AgentTrayButton", () => {
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
   });
 
-  it("treats missing pinned entries as pinned (opt-out)", () => {
+  it("treats missing pinned entries as unpinned (opt-in, issue #5158)", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({});
 
     const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-    expect(getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("true");
+    // Missing entry no longer implies pinned — the renderer normalizer is
+    // responsible for synthesizing `pinned: true` when the CLI is installed,
+    // and the tray reads from the normalized store. A raw entry without
+    // `pinned` should read as unpinned.
+    expect(getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("false");
   });
 
   it("puts missing and installed-but-unauth agents in Also Available with pill badge", () => {
@@ -333,12 +337,14 @@ describe("AgentTrayButton", () => {
     expect(getByText("No agents available")).toBeTruthy();
   });
 
-  it("handles null store settings gracefully", () => {
+  it("handles null store settings gracefully (opt-in default)", () => {
     mockSettings = null;
     const availability = { claude: "ready" } as unknown as CliAvailability;
 
     const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-    expect(getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("true");
+    // Null settings means the normalizer hasn't run yet — with opt-in
+    // semantics, that reads as unpinned until real data arrives.
+    expect(getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("false");
   });
 
   it("ignores panels from other worktrees for session detection", () => {

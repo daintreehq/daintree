@@ -24,10 +24,24 @@ import {
   getPinnedAgents,
   normalizeAgentSelection,
 } from "../agentSettingsStore";
+import { useCliAvailabilityStore } from "../cliAvailabilityStore";
+import type { CliAvailability } from "@shared/types";
+
+function setAvailability(
+  overrides: Partial<Record<string, "ready" | "installed" | "missing">>,
+  hasRealData = true
+) {
+  const availability = {
+    claude: overrides.claude ?? "missing",
+    codex: overrides.codex ?? "missing",
+  } as unknown as CliAvailability;
+  useCliAvailabilityStore.setState({ availability, hasRealData });
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
   cleanupAgentSettingsStore();
+  setAvailability({}, false);
 });
 
 afterEach(() => {
@@ -35,34 +49,16 @@ afterEach(() => {
 });
 
 describe("agentSettingsStore adversarial", () => {
-  it("normalizeAgentSelection seeds pinned:true on entries missing the flag", () => {
+  it("normalizeAgentSelection preserves explicit pinned flags regardless of availability", () => {
     const before = {
       agents: {
-        claude: {
-          enabled: true,
-          selected: true,
-          toolbarPinned: true,
-          primaryModelId: null,
-          autoCompact: true,
-          defaultMethodIndex: 0,
-          customCommand: null,
-          flags: {},
-        },
-        codex: {
-          enabled: true,
-          selected: false,
-          toolbarPinned: false,
-          primaryModelId: null,
-          autoCompact: true,
-          defaultMethodIndex: 0,
-          customCommand: null,
-          pinned: false,
-          flags: {},
-        },
+        claude: { pinned: true, customFlags: "" },
+        codex: { pinned: false, customFlags: "" },
       },
-    };
+    } as never;
 
-    const after = normalizeAgentSelection(before as never);
+    const availability = { claude: "missing", codex: "ready" } as unknown as CliAvailability;
+    const after = normalizeAgentSelection(before, availability, true);
     expect(after.agents.claude.pinned).toBe(true);
     expect(after.agents.codex.pinned).toBe(false);
   });
@@ -75,7 +71,8 @@ describe("agentSettingsStore adversarial", () => {
       },
     } as never;
 
-    expect(normalizeAgentSelection(settings)).toBe(settings);
+    const availability = { claude: "ready", codex: "missing" } as unknown as CliAvailability;
+    expect(normalizeAgentSelection(settings, availability, true)).toBe(settings);
   });
 
   it("concurrent initialize() calls dedupe into a single client fetch", async () => {
@@ -175,8 +172,9 @@ describe("agentSettingsStore adversarial", () => {
     expect(getPinnedAgents()).toEqual([]);
   });
 
-  it("initialize applies normalizeAgentSelection so missing pinned flags default to true", async () => {
+  it("initialize leaves pinned absent for entries without explicit pin when availability has no real data (issue #5158)", async () => {
     registryMock.getEffectiveAgentIds.mockReturnValue(["claude", "codex"]);
+    setAvailability({ claude: "ready", codex: "missing" }, false);
     clientMock.get.mockResolvedValue({
       agents: {
         claude: { enabled: true, flags: {} },
@@ -187,11 +185,30 @@ describe("agentSettingsStore adversarial", () => {
     await useAgentSettingsStore.getState().initialize();
 
     const state = useAgentSettingsStore.getState();
+    // hasRealData === false: pre-probe state means we do NOT phantom-synthesize
+    // a default. The orchestrator re-runs normalization after availability lands.
+    expect(state.settings?.agents.claude?.pinned).toBeUndefined();
+    expect(state.settings?.agents.codex?.pinned).toBe(false);
+  });
+
+  it("initialize synthesizes pinned from CLI availability when real data is present", async () => {
+    registryMock.getEffectiveAgentIds.mockReturnValue(["claude", "codex"]);
+    setAvailability({ claude: "ready", codex: "missing" }, true);
+    clientMock.get.mockResolvedValue({
+      agents: {
+        claude: { enabled: true, flags: {} },
+        codex: { enabled: true, flags: {} },
+      },
+    });
+
+    await useAgentSettingsStore.getState().initialize();
+
+    const state = useAgentSettingsStore.getState();
     expect(state.settings?.agents.claude?.pinned).toBe(true);
     expect(state.settings?.agents.codex?.pinned).toBe(false);
   });
 
-  it("getPinnedAgents treats missing pinned fields as pinned (opt-out default)", () => {
+  it("getPinnedAgents returns only agents with explicit pinned: true (opt-in)", () => {
     useAgentSettingsStore.setState({
       settings: {
         agents: {
@@ -202,7 +219,136 @@ describe("agentSettingsStore adversarial", () => {
         },
       } as never,
     });
-    // Only explicit `pinned: false` excludes an agent; `{}` defaults to pinned.
-    expect(getPinnedAgents().sort()).toEqual(["a", "c", "d"]);
+    // Missing `pinned` field no longer implies pinned — only explicit `true`.
+    expect(getPinnedAgents().sort()).toEqual(["a", "d"]);
+  });
+
+  it("stale refresh result does not overwrite a newer snapshot", async () => {
+    registryMock.getEffectiveAgentIds.mockReturnValue(["claude", "codex"]);
+    setAvailability({ claude: "ready" }, true);
+
+    // Seed initial state so `refresh` has something to overwrite.
+    useAgentSettingsStore.setState({
+      settings: { agents: { claude: { pinned: true, customFlags: "" } } } as never,
+      isInitialized: true,
+      isLoading: false,
+    });
+
+    let resolveStale: (v: unknown) => void = () => {};
+    const stalePromise = new Promise((resolve) => {
+      resolveStale = resolve;
+    });
+    clientMock.get
+      .mockImplementationOnce(() => stalePromise)
+      .mockResolvedValueOnce({
+        agents: { claude: { pinned: false, customFlags: "fresh" } },
+      });
+
+    const refreshA = useAgentSettingsStore.getState().refresh();
+    const refreshB = useAgentSettingsStore.getState().refresh();
+    await refreshB;
+
+    // Now let the stale (first) refresh resolve — it must not clobber B's result.
+    resolveStale({ agents: { claude: { pinned: true, customFlags: "stale" } } });
+    await refreshA;
+
+    const state = useAgentSettingsStore.getState();
+    expect(state.settings?.agents.claude).toEqual({ pinned: false, customFlags: "fresh" });
+  });
+
+  it("cleanup during an in-flight refresh invalidates the result", async () => {
+    registryMock.getEffectiveAgentIds.mockReturnValue(["claude"]);
+    setAvailability({ claude: "ready" }, true);
+
+    useAgentSettingsStore.setState({
+      settings: null,
+      isInitialized: true,
+      isLoading: false,
+    });
+
+    let resolveGet: (v: unknown) => void = () => {};
+    clientMock.get.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveGet = resolve;
+        })
+    );
+
+    const pending = useAgentSettingsStore.getState().refresh();
+
+    cleanupAgentSettingsStore();
+
+    resolveGet({ agents: { claude: { pinned: true, customFlags: "hello" } } });
+    await pending;
+
+    // cleanupAgentSettingsStore resets `settings` to DEFAULT_AGENT_SETTINGS;
+    // the invalidated refresh result must not have overwritten that.
+    const state = useAgentSettingsStore.getState();
+    expect(state.isInitialized).toBe(false);
+    expect(state.settings?.agents.claude?.customFlags).not.toBe("hello");
+  });
+
+  it("stale refresh failures yield silently instead of throwing unhandled rejections", async () => {
+    registryMock.getEffectiveAgentIds.mockReturnValue(["claude"]);
+    setAvailability({ claude: "ready" }, true);
+
+    useAgentSettingsStore.setState({
+      settings: { agents: { claude: { pinned: true } } } as never,
+      isInitialized: true,
+      isLoading: false,
+    });
+
+    let rejectStale: (e: unknown) => void = () => {};
+    clientMock.get
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectStale = reject;
+          })
+      )
+      .mockResolvedValueOnce({ agents: { claude: { pinned: false } } });
+
+    const stale = useAgentSettingsStore.getState().refresh();
+    const fresh = useAgentSettingsStore.getState().refresh();
+    await fresh;
+
+    // Now fail the stale attempt. It must NOT reject — fire-and-forget
+    // callers (orchestrator subscription, toggle handlers) would surface an
+    // unhandled rejection otherwise.
+    rejectStale(new Error("stale failure"));
+    await expect(stale).resolves.toBeUndefined();
+
+    expect(useAgentSettingsStore.getState().settings?.agents.claude?.pinned).toBe(false);
+  });
+
+  it("initialize after a concurrent refresh flips isInitialized even when the result is stale", async () => {
+    registryMock.getEffectiveAgentIds.mockReturnValue(["claude"]);
+    setAvailability({ claude: "ready" }, true);
+
+    let resolveInit: (v: unknown) => void = () => {};
+    clientMock.get
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveInit = resolve;
+          })
+      )
+      .mockResolvedValueOnce({ agents: { claude: { pinned: false } } });
+
+    // Kick off init; it holds initPromise. While in-flight, another caller
+    // triggers a refresh (bumping the epoch and invalidating init).
+    const initPending = useAgentSettingsStore.getState().initialize();
+    useAgentSettingsStore.setState({ isInitialized: false, isLoading: true });
+    const concurrent = useAgentSettingsStore.getState().refresh();
+    await concurrent;
+
+    resolveInit({ agents: { claude: { pinned: true } } });
+    await initPending;
+
+    // Stale init must still flip isInitialized and clear initPromise so
+    // subsequent `initialize()` calls short-circuit (no-op) correctly.
+    const state = useAgentSettingsStore.getState();
+    expect(state.isInitialized).toBe(true);
+    expect(state.isLoading).toBe(false);
   });
 });

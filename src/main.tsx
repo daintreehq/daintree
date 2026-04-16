@@ -11,6 +11,7 @@ import "./index.css";
 import { applyDefaultAppTheme } from "./theme/applyAppTheme";
 import { ensureTerminalFontLoaded } from "./config/terminalFont";
 import { initStoreOrchestrator } from "./store/rendererStoreOrchestrator";
+import { useAgentSettingsStore } from "./store/agentSettingsStore";
 import { registerRendererGlobalErrorHandlers } from "./utils/rendererGlobalErrorHandlers";
 import { renderBootstrapError } from "./utils/renderBootstrapError";
 import {
@@ -35,6 +36,13 @@ async function bootstrap() {
   }
 
   cleanupOrchestrator = initStoreOrchestrator();
+
+  // Kick off the agent-settings store so `App.tsx`, `Toolbar`, and the tray
+  // all read from a normalized snapshot on cold boot. The install-aware
+  // default-pin path in `normalizeAgentSelection` depends on this running —
+  // without it the store stays null and the orchestrator's availability
+  // subscription never gets a chance to reconcile (see issue #5158).
+  void useAgentSettingsStore.getState().initialize();
 
   await ensureTerminalFontLoaded();
 

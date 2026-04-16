@@ -9,6 +9,8 @@ import { semanticAnalysisService } from "@/services/SemanticAnalysisService";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
+import { useCliAvailabilityStore } from "./cliAvailabilityStore";
+import { useAgentSettingsStore } from "./agentSettingsStore";
 import { debounce } from "@/utils/debounce";
 
 const debouncedPersistMruList = debounce(persistMruList, 150);
@@ -117,6 +119,25 @@ export function initStoreOrchestrator(): () => void {
     prevIdSet = currentIdSet;
   });
   unsubscribers.push(unsubLayoutUndo);
+
+  // 5. Availability → agent-settings re-normalization: installed/missing state
+  //    is the input to `normalizeAgentSelection`, so re-run normalization any
+  //    time a fresh availability snapshot lands (see issue #5158). Fires on
+  //    the `hasRealData: false → true` transition AND on subsequent
+  //    `availability` reference changes — the latter covers the focus-refresh
+  //    path in `useAgentLauncher`, where a user who installs a CLI outside
+  //    Daintree needs their tray/toolbar state to reconcile without an app
+  //    restart. `cliAvailabilityStore` only swaps the `availability` object
+  //    on real IPC completion, so ref equality is a reliable trigger.
+  const unsubAvailability = useCliAvailabilityStore.subscribe((state, prevState) => {
+    const realDataLanded = state.hasRealData && !prevState.hasRealData;
+    const availabilityChanged = state.availability !== prevState.availability;
+    if (!realDataLanded && !availabilityChanged) return;
+    const { isInitialized, isLoading } = useAgentSettingsStore.getState();
+    if (!isInitialized || isLoading) return;
+    void useAgentSettingsStore.getState().refresh();
+  });
+  unsubscribers.push(unsubAvailability);
 
   cleanupFn = () => {
     for (const unsub of unsubscribers) unsub();

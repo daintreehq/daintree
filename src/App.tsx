@@ -120,6 +120,7 @@ import {
   usePaletteStore,
   useNotificationSettingsStore,
 } from "./store";
+import { useAgentSettingsStore } from "./store/agentSettingsStore";
 import { isAgentReady } from "../shared/utils/agentAvailability";
 import { isAgentPinned } from "../shared/utils/agentPinned";
 import { useShallow } from "zustand/react/shallow";
@@ -185,12 +186,13 @@ function App() {
   );
 
   const { launchAgent, availability, agentSettings, refreshSettings } = useAgentLauncher();
+  const normalizedAgentSettings = useAgentSettingsStore((s) => s.settings);
 
   const hasAnySelectedAgent = useMemo(() => {
-    if (agentSettings === null) return null;
-    const agents = agentSettings.agents ?? {};
+    if (normalizedAgentSettings === null) return null;
+    const agents = normalizedAgentSettings.agents ?? {};
     return BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agents[id]));
-  }, [agentSettings]);
+  }, [normalizedAgentSettings]);
 
   useTerminalConfig();
   useAppThemeConfig();
@@ -337,8 +339,9 @@ function App() {
       }
 
       const defaultAgent = useAgentPreferencesStore.getState().defaultAgent;
-      const selected = agentSettings?.agents
-        ? Object.entries(agentSettings.agents)
+      const normalized = useAgentSettingsStore.getState().settings;
+      const selected = normalized?.agents
+        ? Object.entries(normalized.agents)
             .filter(([, entry]) => isAgentPinned(entry))
             .map(([id]) => id)
         : [];
@@ -350,7 +353,7 @@ function App() {
         }).catch(() => {});
       }
     },
-    [launchAgent, activeWorktreeId, availability, agentSettings, switchProject, currentProject?.id]
+    [launchAgent, activeWorktreeId, availability, switchProject, currentProject?.id]
   );
 
   const closeNotesPalette = useCallback(() => {
