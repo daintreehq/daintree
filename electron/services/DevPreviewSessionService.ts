@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
+import net from "node:net";
 import path from "node:path";
 import { resolveNextMajorVersion } from "../utils/resolveNextVersion.js";
 import type { PtyClient } from "./PtyClient.js";
@@ -143,6 +144,8 @@ export class DevPreviewSessionService {
   private readonly terminalToSession = new Map<string, string>();
   private readonly locks = new Map<string, Promise<void>>();
   private disposed = false;
+  private readonly portRegistry = new Map<string, number>(); // sessionKey -> allocated port
+  private readonly worktreeToSession = new Map<string, string>(); // worktreeId -> sessionKey
   private readonly onDataListener: (id: string, data: string | Uint8Array) => void;
   private readonly onExitListener: (id: string, exitCode: number) => void;
 
@@ -154,6 +157,43 @@ export class DevPreviewSessionService {
     this.onExitListener = this.handleExit.bind(this);
     this.ptyClient.on("data", this.onDataListener);
     this.ptyClient.on("exit", this.onExitListener);
+  }
+
+  private async allocatePort(sessionKey: string): Promise<number> {
+    const existing = this.portRegistry.get(sessionKey);
+    if (existing !== undefined) return existing;
+
+    const usedPorts = new Set(this.portRegistry.values());
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const candidate = 3000 + Math.floor(Math.random() * 7000);
+      if (usedPorts.has(candidate)) continue;
+      const available = await new Promise<boolean>((resolve) => {
+        const srv = net.createServer();
+        srv.once("error", () => resolve(false));
+        srv.listen(candidate, "127.0.0.1", () => srv.close(() => resolve(true)));
+      });
+      if (available) return candidate;
+    }
+    return new Promise<number>((resolve, reject) => {
+      const srv = net.createServer();
+      srv.listen(0, "127.0.0.1", () => {
+        const addr = srv.address();
+        const port = typeof addr === "object" && addr ? addr.port : 0;
+        srv.close(() => (port ? resolve(port) : reject(new Error("Failed to allocate port"))));
+      });
+    });
+  }
+
+  private releasePort(sessionKey: string): void {
+    this.portRegistry.delete(sessionKey);
+  }
+
+  getByWorktree(worktreeId: string): DevPreviewSessionState | null {
+    const key = this.worktreeToSession.get(worktreeId);
+    if (!key) return null;
+    const session = this.sessions.get(key);
+    if (!session) return null;
+    return this.toPublicState(session);
   }
 
   dispose(): void {
@@ -178,6 +218,8 @@ export class DevPreviewSessionService {
     this.terminalToSession.clear();
     this.sessions.clear();
     this.locks.clear();
+    this.portRegistry.clear();
+    this.worktreeToSession.clear();
   }
 
   async ensure(request: DevPreviewEnsureRequest): Promise<DevPreviewSessionState> {
@@ -205,6 +247,11 @@ export class DevPreviewSessionService {
       session.turbopackEnabled = nextTurbopackEnabled;
       if (envChanged) {
         session.env = cloneEnv(request.env);
+      }
+
+      if (session.worktreeId) {
+        const key = createSessionKey(session.projectId, session.panelId);
+        this.worktreeToSession.set(session.worktreeId, key);
       }
 
       const commandError = getInvalidCommandMessage(session.devCommand);
@@ -290,10 +337,13 @@ export class DevPreviewSessionService {
       this.updateSession(session, {
         status: "stopped",
         url: null,
+        assignedUrl: null,
         error: null,
         terminalId: null,
         isRestarting: false,
       });
+      session.assignedUrl = null;
+      this.releasePort(createSessionKey(session.projectId, session.panelId));
     });
     return this.getSessionState(request.projectId, request.panelId);
   }
@@ -318,6 +368,7 @@ export class DevPreviewSessionService {
               isRestarting: false,
             });
             this.sessions.delete(key);
+            this.releasePort(key);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             this.updateSession(session, {
@@ -356,6 +407,7 @@ export class DevPreviewSessionService {
               isRestarting: false,
             });
             this.sessions.delete(key);
+            this.releasePort(key);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             console.warn("[DevPreviewSessionService] stopByProject failed for session", {
@@ -446,6 +498,7 @@ export class DevPreviewSessionService {
       worktreeId: undefined,
       status: "stopped",
       url: null,
+      assignedUrl: null,
       error: null,
       terminalId: null,
       isRestarting: false,
@@ -465,6 +518,9 @@ export class DevPreviewSessionService {
       startupReplayTimer: null,
     };
     this.sessions.set(key, session);
+    if (session.worktreeId) {
+      this.worktreeToSession.set(session.worktreeId, key);
+    }
     return session;
   }
 
@@ -478,6 +534,7 @@ export class DevPreviewSessionService {
         worktreeId: undefined,
         status: "stopped",
         url: null,
+        assignedUrl: null,
         error: null,
         terminalId: null,
         isRestarting: false,
@@ -495,6 +552,7 @@ export class DevPreviewSessionService {
       worktreeId: session.worktreeId,
       status: session.status,
       url: session.url,
+      assignedUrl: session.assignedUrl,
       error: session.error,
       terminalId: session.terminalId,
       isRestarting: session.isRestarting,
@@ -508,13 +566,21 @@ export class DevPreviewSessionService {
     updates: Partial<
       Pick<
         DevPreviewSession,
-        "status" | "url" | "error" | "terminalId" | "isRestarting" | "worktreeId" | "generation"
+        | "status"
+        | "url"
+        | "assignedUrl"
+        | "error"
+        | "terminalId"
+        | "isRestarting"
+        | "worktreeId"
+        | "generation"
       >
     >
   ): void {
     if (this.disposed) return;
     if (updates.status !== undefined) session.status = updates.status;
     if (updates.url !== undefined) session.url = updates.url;
+    if (updates.assignedUrl !== undefined) session.assignedUrl = updates.assignedUrl;
     if (updates.error !== undefined) session.error = updates.error;
     if (updates.terminalId !== undefined) session.terminalId = updates.terminalId;
     if (updates.isRestarting !== undefined) session.isRestarting = updates.isRestarting;
@@ -590,13 +656,22 @@ export class DevPreviewSessionService {
     const terminalId = this.createTerminalId(session);
     const nextGeneration = session.generation + 1;
 
+    const sessionKey = createSessionKey(session.projectId, session.panelId);
+    const port = await this.allocatePort(sessionKey);
+    this.portRegistry.set(sessionKey, port);
+    const assignedUrl = `http://localhost:${port}`;
+
+    const spawnEnv: Record<string, string> = { PORT: String(port), ...session.env };
+
     session.buffer = "";
     session.lastErrorKey = null;
+    session.assignedUrl = assignedUrl;
     this.attachTerminal(session, terminalId);
     this.updateSession(session, {
       terminalId,
       status: "starting",
       url: null,
+      assignedUrl,
       error: null,
       generation: nextGeneration,
     });
@@ -609,7 +684,7 @@ export class DevPreviewSessionService {
         cols: 80,
         rows: 30,
         restore: false,
-        env: session.env,
+        env: spawnEnv,
         isEphemeral: true,
       });
       markPerformance(PERF_MARKS.DEVPREVIEW_TERMINAL_SPAWNED, {

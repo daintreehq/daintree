@@ -27,6 +27,7 @@ export interface DevPreviewSessionState {
   worktreeId?: string;
   status: DevPreviewSessionStatus;
   url: string | null;
+  assignedUrl: string | null;
   error: DevServerError | null;
   terminalId: string | null;
   isRestarting: boolean;
@@ -36,4 +37,8 @@ export interface DevPreviewSessionState {
 
 export interface DevPreviewStateChangedPayload {
   state: DevPreviewSessionState;
+}
+
+export interface DevPreviewGetByWorktreeRequest {
+  worktreeId: string;
 }
