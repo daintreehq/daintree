@@ -731,6 +731,7 @@ export function NewWorktreeDialog({
           try {
             await runRecipe(selectedRecipe.id, worktreePath.trim(), worktreeId, {
               issueNumber: selectedIssue?.number,
+              prNumber: initialPR?.number,
               worktreePath: worktreePath.trim(),
               branchName: fullBranchName,
             });
@@ -741,6 +742,7 @@ export function NewWorktreeDialog({
             const recipeWorktreeId = worktreeId;
             const recipeContext = {
               issueNumber: selectedIssue?.number,
+              prNumber: initialPR?.number,
               worktreePath: recipePath,
               branchName: fullBranchName,
             };
