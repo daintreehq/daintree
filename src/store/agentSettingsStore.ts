@@ -3,6 +3,7 @@ import type { AgentSettings, AgentSettingsEntry } from "@shared/types";
 import { agentSettingsClient } from "@/clients";
 import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 import { getEffectiveAgentIds } from "../../shared/config/agentRegistry";
+import { isAgentPinned } from "../../shared/utils/agentPinned";
 
 /**
  * In-memory normalization: seeds `pinned: true` for any registered agent that
@@ -126,7 +127,7 @@ export function getPinnedAgents(): string[] {
   const settings = useAgentSettingsStore.getState().settings;
   if (!settings?.agents) return [];
   return Object.entries(settings.agents)
-    .filter(([, entry]) => entry.pinned === true)
+    .filter(([, entry]) => isAgentPinned(entry))
     .map(([id]) => id);
 }
 

@@ -21,6 +21,7 @@ import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { getAgentSettingsEntry } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { isAgentReady } from "../../../shared/utils/agentAvailability";
+import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import { WorktreeDetailsSection } from "./WorktreeCard/WorktreeDetailsSection";
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
@@ -573,10 +574,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
 
   const launchAgents = useMemo(() => {
     return agentIds
-      .filter((agentId) => {
-        const entry = getAgentSettingsEntry(agentSettings, agentId);
-        return entry.pinned === true;
-      })
+      .filter((agentId) => isAgentPinned(getAgentSettingsEntry(agentSettings, agentId)))
       .map((agentId) => {
         const config = getAgentConfig(agentId);
         const available = isAgentReady(agentAvailability?.[agentId]);

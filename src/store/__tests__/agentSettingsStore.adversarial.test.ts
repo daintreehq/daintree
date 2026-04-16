@@ -191,7 +191,7 @@ describe("agentSettingsStore adversarial", () => {
     expect(state.settings?.agents.codex?.pinned).toBe(false);
   });
 
-  it("getPinnedAgents returns only agents with explicit pinned:true", () => {
+  it("getPinnedAgents treats missing pinned fields as pinned (opt-out default)", () => {
     useAgentSettingsStore.setState({
       settings: {
         agents: {
@@ -202,6 +202,7 @@ describe("agentSettingsStore adversarial", () => {
         },
       } as never,
     });
-    expect(getPinnedAgents().sort()).toEqual(["a", "d"]);
+    // Only explicit `pinned: false` excludes an agent; `{}` defaults to pinned.
+    expect(getPinnedAgents().sort()).toEqual(["a", "c", "d"]);
   });
 });

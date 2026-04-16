@@ -7,6 +7,7 @@ import {
   getAgentSettingsEntry,
   DEFAULT_DANGEROUS_ARGS,
 } from "@shared/types";
+import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import { RotateCcw, ExternalLink } from "lucide-react";
 import { DaintreeAgentIcon } from "@/components/icons";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
@@ -93,7 +94,7 @@ export function AgentSettings({
             color: config.color,
             Icon: config.icon,
             usageUrl: config.usageUrl,
-            selected: entry.pinned === true,
+            selected: isAgentPinned(entry),
             dangerousEnabled: entry.dangerousEnabled ?? false,
             hasCustomFlags: Boolean(entry.customFlags?.trim()),
           };
@@ -273,9 +274,9 @@ export function AgentSettings({
                 variant="compact"
                 title="Pin to toolbar"
                 subtitle="When pinned, this agent appears in the toolbar for quick access"
-                isEnabled={activeEntry.pinned === true}
+                isEnabled={isAgentPinned(activeEntry)}
                 onChange={() => {
-                  const current = activeEntry.pinned === true;
+                  const current = isAgentPinned(activeEntry);
                   void (async () => {
                     await setAgentPinned(activeAgent.id, !current);
                     onSettingsChange?.();

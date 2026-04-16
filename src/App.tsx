@@ -121,6 +121,7 @@ import {
   useNotificationSettingsStore,
 } from "./store";
 import { isAgentReady } from "../shared/utils/agentAvailability";
+import { isAgentPinned } from "../shared/utils/agentPinned";
 import { useShallow } from "zustand/react/shallow";
 import { useMacroFocusStore } from "./store/macroFocusStore";
 import { useSafeModeStore } from "./store/safeModeStore";
@@ -188,7 +189,7 @@ function App() {
   const hasAnySelectedAgent = useMemo(() => {
     if (agentSettings === null) return null;
     const agents = agentSettings.agents ?? {};
-    return BUILT_IN_AGENT_IDS.some((id) => agents[id]?.pinned === true);
+    return BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agents[id]));
   }, [agentSettings]);
 
   useTerminalConfig();
@@ -338,7 +339,7 @@ function App() {
       const defaultAgent = useAgentPreferencesStore.getState().defaultAgent;
       const selected = agentSettings?.agents
         ? Object.entries(agentSettings.agents)
-            .filter(([, entry]) => entry.pinned === true)
+            .filter(([, entry]) => isAgentPinned(entry))
             .map(([id]) => id)
         : [];
       const primaryAgent = defaultAgent ?? selected[0];

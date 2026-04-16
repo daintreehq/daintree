@@ -76,10 +76,24 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         console.error("Failed to load agent settings:", error);
       });
 
+    // Re-check availability when the window regains focus so that agents
+    // installed or authenticated in the background (e.g. via a terminal
+    // outside Daintree) show up without a manual refresh.
+    const handleFocus = () => {
+      if (!isMounted.current) return;
+      void refreshCliAvailability().catch(() => {});
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("focus", handleFocus);
+    }
+
     return () => {
       isMounted.current = false;
+      if (typeof window !== "undefined") {
+        window.removeEventListener("focus", handleFocus);
+      }
     };
-  }, [initializeCliAvailability]);
+  }, [initializeCliAvailability, refreshCliAvailability]);
 
   const launchAgent = useCallback(
     async (agentId: string, launchOptions?: LaunchAgentOptions): Promise<string | null> => {

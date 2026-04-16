@@ -19,7 +19,9 @@ import {
 
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentAvailabilityState } from "@shared/types";
-import { isAgentReady } from "../../../shared/utils/agentAvailability";
+import { isAgentReady, isAgentInstalled } from "../../../shared/utils/agentAvailability";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { Unplug } from "lucide-react";
 
 type AgentType = BuiltInAgentId;
 
@@ -43,22 +45,28 @@ export function AgentButton({
   const tooltipDetails = config.tooltip ? ` — ${config.tooltip}` : "";
   const shortcut = displayCombo ? ` (${displayCombo})` : "";
   const isLoading = availability === undefined;
-  const isAvailable = isAgentReady(availability);
+  const isReady = isAgentReady(availability);
+  const isInstalled = isAgentInstalled(availability);
+  const needsSetup = isInstalled && !isReady;
 
   const tooltip = isLoading
     ? `Checking ${config.name} CLI availability...`
-    : isAvailable
+    : isReady
       ? `Start ${config.name}${tooltipDetails}${shortcut}`
-      : `${config.name} CLI not found. Click to install.`;
+      : needsSetup
+        ? `${config.name} needs setup. Click to configure.`
+        : `${config.name} CLI not found. Click to install.`;
 
   const ariaLabel = isLoading
     ? `Checking ${config.name} availability`
-    : isAvailable
+    : isReady
       ? `Start ${config.name} Agent`
-      : `${config.name} CLI not installed`;
+      : needsSetup
+        ? `${config.name} needs setup`
+        : `${config.name} CLI not installed`;
 
   const handleClick = () => {
-    if (isAvailable) {
+    if (isReady) {
       void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
     } else {
       void actionService.dispatch(
@@ -67,6 +75,10 @@ export function AgentButton({
         { source: "user" }
       );
     }
+  };
+
+  const handleUnpinFromToolbar = () => {
+    void useAgentSettingsStore.getState().setAgentPinned(type, false);
   };
 
   return (
@@ -84,9 +96,9 @@ export function AgentButton({
                   data-toolbar-item={dataToolbarItem}
                   className={cn(
                     "toolbar-agent-button text-daintree-text transition-colors",
-                    isAvailable &&
+                    isReady &&
                       "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
-                    !isAvailable && !isLoading && "opacity-60"
+                    needsSetup && "opacity-70"
                   )}
                   aria-label={ariaLabel}
                 >
@@ -100,7 +112,7 @@ export function AgentButton({
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem
-          disabled={!isAvailable}
+          disabled={!isReady}
           onSelect={() =>
             void actionService.dispatch(
               "agent.launch",
@@ -112,7 +124,7 @@ export function AgentButton({
           Launch {config.name}
         </ContextMenuItem>
         <ContextMenuItem
-          disabled={!isAvailable}
+          disabled={!isReady}
           onSelect={() =>
             void actionService.dispatch(
               "agent.launch",
@@ -125,9 +137,7 @@ export function AgentButton({
         </ContextMenuItem>
         {worktrees.length > 0 && (
           <ContextMenuSub>
-            <ContextMenuSubTrigger disabled={!isAvailable}>
-              Launch in Worktree
-            </ContextMenuSubTrigger>
+            <ContextMenuSubTrigger disabled={!isReady}>Launch in Worktree</ContextMenuSubTrigger>
             <ContextMenuSubContent>
               {worktrees.map((wt) => {
                 const label = wt.isMainWorktree ? wt.name : wt.branch?.trim() || wt.name;
@@ -165,6 +175,10 @@ export function AgentButton({
           </ContextMenuSub>
         )}
         <ContextMenuSeparator />
+        <ContextMenuItem onSelect={handleUnpinFromToolbar}>
+          <Unplug className="mr-2 h-3.5 w-3.5" />
+          Unpin from Toolbar
+        </ContextMenuItem>
         <ContextMenuItem
           onSelect={() =>
             void actionService.dispatch(

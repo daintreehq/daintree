@@ -49,7 +49,8 @@ import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { CliAvailability, AgentSettings } from "@shared/types";
-import { isAgentReady } from "../../../shared/utils/agentAvailability";
+import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
+import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { ProjectSwitcherPalette } from "@/components/Project/ProjectSwitcherPalette";
@@ -381,8 +382,8 @@ export function Toolbar({
               />
             ),
             isAvailable:
-              isAgentReady(agentAvailability?.[id]) &&
-              effectiveAgentSettings?.agents?.[id]?.pinned !== false,
+              isAgentInstalled(agentAvailability?.[id]) &&
+              isAgentPinned(effectiveAgentSettings?.agents?.[id]),
           },
         ])
       ),

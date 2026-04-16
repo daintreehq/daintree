@@ -9,6 +9,7 @@ import {
   type AgentConfig,
 } from "../../../shared/config/agentRegistry.js";
 import type { AgentMetadata } from "../../../shared/types/ipc/agentCapabilities.js";
+import { isAgentPinned } from "../../../shared/utils/agentPinned.js";
 
 function toAgentMetadata(config: AgentConfig, agentId: string): AgentMetadata {
   const isBuiltIn = agentId in AGENT_REGISTRY;
@@ -84,7 +85,7 @@ export function registerAgentCapabilitiesHandlers(): () => void {
     }
     const agentSettings = store.get("agentSettings");
     const agentEntry = agentSettings?.agents?.[agentId];
-    return agentEntry?.pinned === true;
+    return isAgentPinned(agentEntry);
   };
   ipcMain.handle(CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED, handleIsAgentEnabled);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED));

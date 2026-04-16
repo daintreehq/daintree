@@ -17,13 +17,14 @@ describe("LegacyMigrationBar", () => {
     openExternalMock.mockResolvedValue(undefined);
   });
 
-  it("renders a migration message and Download + Why? actions", () => {
+  it("renders the rename notice and a Download Daintree action", () => {
     render(<LegacyMigrationBar />);
 
     expect(screen.getByTestId("legacy-migration-bar")).toBeTruthy();
-    expect(screen.getByRole("region", { name: /migrate to daintree/i })).toBeTruthy();
+    expect(
+      screen.getByRole("region", { name: /canopy has been renamed to daintree/i })
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: /download daintree/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /why\?/i })).toBeTruthy();
   });
 
   it("opens the Daintree download page when the CTA is clicked", () => {
@@ -31,15 +32,7 @@ describe("LegacyMigrationBar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /download daintree/i }));
 
-    expect(openExternalMock).toHaveBeenCalledWith("https://daintree.org");
-  });
-
-  it("opens the migration explainer when Why? is clicked", () => {
-    render(<LegacyMigrationBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: /why\?/i }));
-
-    expect(openExternalMock).toHaveBeenCalledWith("https://daintree.org/canopy-migration");
+    expect(openExternalMock).toHaveBeenCalledWith("https://daintree.org/download");
   });
 
   it("has no dismiss control (bar is permanent)", () => {

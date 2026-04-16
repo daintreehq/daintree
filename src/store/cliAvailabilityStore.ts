@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { CliAvailability } from "@shared/types";
+import type { CliAvailability, AgentAvailabilityState } from "@shared/types";
 import { cliAvailabilityClient } from "@/clients";
 import { getAgentIds } from "@/config/agents";
 import { isElectronAvailable } from "@/hooks/useElectron";
@@ -11,6 +11,13 @@ interface CliAvailabilityState {
   error: string | null;
   isInitialized: boolean;
   lastCheckedAt: number | null;
+  /**
+   * True once a real availability result has been applied (from cache or IPC).
+   * Distinct from `isInitialized`, which flips after the first IPC call
+   * regardless of outcome. Consumers that hide UI during the initial
+   * detection race should watch this instead.
+   */
+  hasRealData: boolean;
 }
 
 interface CliAvailabilityActions {
@@ -24,6 +31,72 @@ function defaultAvailability(): CliAvailability {
   return Object.fromEntries(getAgentIds().map((id) => [id, "missing"])) as CliAvailability;
 }
 
+const CACHE_STORAGE_KEY = "daintree:cliAvailability:v1";
+// Stale cache is still shown but triggers a synchronous refresh on init.
+const CACHE_STALE_AFTER_MS = 24 * 60 * 60 * 1000; // 24h
+
+const VALID_STATES: ReadonlySet<AgentAvailabilityState> = new Set<AgentAvailabilityState>([
+  "ready",
+  "installed",
+  "missing",
+]);
+
+interface PersistedCache {
+  availability: CliAvailability;
+  lastCheckedAt: number;
+}
+
+function loadCache(): PersistedCache | null {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(CACHE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      !("availability" in parsed) ||
+      !("lastCheckedAt" in parsed)
+    ) {
+      return null;
+    }
+    const availability = (parsed as PersistedCache).availability;
+    const lastCheckedAt = (parsed as PersistedCache).lastCheckedAt;
+    if (!availability || typeof availability !== "object" || typeof lastCheckedAt !== "number") {
+      return null;
+    }
+    // Intersect cached agents with the currently registered set so that
+    // deprecated / renamed agents don't leak back in.
+    const current = getAgentIds();
+    const sanitized: CliAvailability = {} as CliAvailability;
+    let anyValid = false;
+    for (const id of current) {
+      const value = (availability as Record<string, unknown>)[id];
+      if (typeof value === "string" && VALID_STATES.has(value as AgentAvailabilityState)) {
+        (sanitized as Record<string, AgentAvailabilityState>)[id] = value as AgentAvailabilityState;
+        anyValid = true;
+      } else {
+        (sanitized as Record<string, AgentAvailabilityState>)[id] = "missing";
+      }
+    }
+    if (!anyValid) return null;
+    return { availability: sanitized, lastCheckedAt };
+  } catch {
+    return null;
+  }
+}
+
+function saveCache(availability: CliAvailability, lastCheckedAt: number) {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") return;
+  try {
+    window.localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify({ availability, lastCheckedAt }));
+  } catch {
+    // Quota or access issues — cache is best-effort.
+  }
+}
+
 let epoch = 0;
 let initPromise: Promise<void> | null = null;
 let refreshPromise: Promise<void> | null = null;
@@ -35,10 +108,23 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()((set, get)
   error: null,
   isInitialized: false,
   lastCheckedAt: null,
+  hasRealData: false,
 
   initialize: () => {
     if (get().isInitialized) return Promise.resolve();
     if (initPromise) return initPromise;
+
+    // Hydrate from localStorage before kicking off the IPC call. This kills
+    // the first-paint toolbar flicker: cached pins render immediately and
+    // only reconcile when the fresh result lands.
+    const cached = loadCache();
+    if (cached) {
+      set({
+        availability: cached.availability,
+        lastCheckedAt: cached.lastCheckedAt,
+        hasRealData: true,
+      });
+    }
 
     if (!isElectronAvailable()) {
       set({ isLoading: false, isInitialized: true });
@@ -51,7 +137,15 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()((set, get)
         set({ isLoading: true, error: null });
         const availability = await cliAvailabilityClient.refresh();
         if (epoch === myEpoch) {
-          set({ availability, isLoading: false, isInitialized: true, lastCheckedAt: Date.now() });
+          const now = Date.now();
+          saveCache(availability, now);
+          set({
+            availability,
+            isLoading: false,
+            isInitialized: true,
+            lastCheckedAt: now,
+            hasRealData: true,
+          });
         }
       } catch (e) {
         if (epoch === myEpoch) {
@@ -84,7 +178,15 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()((set, get)
         set({ isRefreshing: true, error: null });
         const availability = await cliAvailabilityClient.refresh();
         if (epoch === myEpoch) {
-          set({ availability, isRefreshing: false, error: null, lastCheckedAt: Date.now() });
+          const now = Date.now();
+          saveCache(availability, now);
+          set({
+            availability,
+            isRefreshing: false,
+            error: null,
+            lastCheckedAt: now,
+            hasRealData: true,
+          });
         }
       } catch (e) {
         if (epoch === myEpoch) {
@@ -116,5 +218,11 @@ export function cleanupCliAvailabilityStore() {
     error: null,
     isInitialized: false,
     lastCheckedAt: null,
+    hasRealData: false,
   });
+}
+
+export function isCliAvailabilityCacheStale(lastCheckedAt: number | null): boolean {
+  if (lastCheckedAt === null) return true;
+  return Date.now() - lastCheckedAt > CACHE_STALE_AFTER_MS;
 }

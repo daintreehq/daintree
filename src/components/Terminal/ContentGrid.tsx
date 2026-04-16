@@ -14,6 +14,7 @@ import {
 } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { isAgentReady } from "../../../shared/utils/agentAvailability";
+import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import { GridPanel } from "./GridPanel";
 import { GridTabGroup } from "./GridTabGroup";
 import { GridNotificationBar } from "./GridNotificationBar";
@@ -396,7 +397,7 @@ export function ContentGrid({
     if (!gridAgentSettings?.agents) return undefined;
     return new Set(
       Object.entries(gridAgentSettings.agents)
-        .filter(([, entry]) => entry.pinned === true)
+        .filter(([, entry]) => isAgentPinned(entry))
         .map(([id]) => id)
     );
   }, [gridAgentSettings]);

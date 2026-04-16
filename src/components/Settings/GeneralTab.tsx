@@ -28,6 +28,7 @@ import type {
   AgentSettings,
 } from "@shared/types";
 import { isAgentInstalled, isAgentReady } from "../../../shared/utils/agentAvailability";
+import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import { usePreferencesStore } from "@/store";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
@@ -453,7 +454,7 @@ export function GeneralTab({
                 const installedAgentIds = allAgentIds.filter(
                   (id) =>
                     isAgentInstalled(cliAvailability[id]) &&
-                    getAgentSettingsEntry(agentSettings, id).pinned === true
+                    isAgentPinned(getAgentSettingsEntry(agentSettings, id))
                 );
                 const hiddenCount = allAgentIds.length - installedAgentIds.length;
 
