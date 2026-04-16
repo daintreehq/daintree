@@ -312,70 +312,94 @@ export class WorkspaceService {
           }
         }
       } else {
-        await ensureNoteFile(wt.path);
-        const issueNumber = wt.branch ? extractIssueNumberSync(wt.branch, wt.name) : null;
-        const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
-
-        let createdAt: number | undefined;
-        try {
-          const stats = await stat(wt.path);
-          createdAt = stats.birthtimeMs > 0 ? stats.birthtimeMs : stats.ctimeMs;
-        } catch {
-          // If stat fails, leave undefined
-        }
-
-        const monitor = new WorktreeMonitor(
-          { ...wt, isCurrent: isActive },
-          {
-            basePollingInterval: interval,
-            adaptiveBackoff: this.adaptiveBackoff,
-            pollIntervalMax: this.pollIntervalMax,
-            circuitBreakerThreshold: this.circuitBreakerThreshold,
-            gitWatchEnabled: this.gitWatchEnabled,
-            gitWatchDebounceMs: this.gitWatchDebounceMs,
-          },
-          {
-            onUpdate: (snapshot) => {
-              this.handleMonitorUpdate(monitor, snapshot);
-            },
-            onRemoved: (worktreeId) => {
-              this.handleExternalWorktreeRemoval(worktreeId);
-            },
-            onExternalRemoval: (worktreeId) => {
-              this.handleExternalWorktreeRemoval(worktreeId);
-            },
-            onResourceStatusPoll: (worktreeId) => {
-              return this.runResourceAction(
-                `auto-status-${worktreeId}`,
-                worktreeId,
-                "status",
-                undefined,
-                { origin: "auto-poll" }
-              );
-            },
-          },
-          this.mainBranch,
-          this.pollQueue
-        );
-
-        monitor.setIssueNumber(issueNumber ?? undefined);
-        monitor.setCreatedAt(createdAt);
-
-        this.monitors.set(wt.id, monitor);
-
-        if (skipInitialGitStatus) {
-          monitor.startWithoutGitStatus();
-        } else {
-          await monitor.start();
-        }
-
-        if (wt.branch && !issueNumber) {
-          void this.extractIssueNumberAsync(monitor, wt.branch, wt.name);
-        }
-
-        void this.initResourceConfigAsync(monitor, wt.path);
+        await this.addNewWorktreeMonitor(wt, isActive, skipInitialGitStatus);
       }
     }
+  }
+
+  /**
+   * Create, configure, and register a monitor for a single worktree.
+   *
+   * Used by syncMonitors' new-monitor branch AND by createWorktree to install
+   * a monitor for a freshly created worktree. Unlike syncMonitors, this does
+   * NOT touch any other monitor — which matters for createWorktree, where
+   * syncMonitors' remove-stale loop would drop every other non-main monitor
+   * because the one-element array is interpreted as the authoritative set.
+   *
+   * If a monitor already exists for `wt.id`, this is a no-op (race safety for
+   * overlapping create/delete on the same path).
+   */
+  private async addNewWorktreeMonitor(
+    wt: Worktree,
+    isActive: boolean,
+    skipInitialGitStatus: boolean
+  ): Promise<void> {
+    if (this.monitors.has(wt.id)) {
+      return;
+    }
+
+    await ensureNoteFile(wt.path);
+    const issueNumber = wt.branch ? extractIssueNumberSync(wt.branch, wt.name) : null;
+    const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
+
+    let createdAt: number | undefined;
+    try {
+      const stats = await stat(wt.path);
+      createdAt = stats.birthtimeMs > 0 ? stats.birthtimeMs : stats.ctimeMs;
+    } catch {
+      // If stat fails, leave undefined
+    }
+
+    const monitor = new WorktreeMonitor(
+      { ...wt, isCurrent: isActive },
+      {
+        basePollingInterval: interval,
+        adaptiveBackoff: this.adaptiveBackoff,
+        pollIntervalMax: this.pollIntervalMax,
+        circuitBreakerThreshold: this.circuitBreakerThreshold,
+        gitWatchEnabled: this.gitWatchEnabled,
+        gitWatchDebounceMs: this.gitWatchDebounceMs,
+      },
+      {
+        onUpdate: (snapshot) => {
+          this.handleMonitorUpdate(monitor, snapshot);
+        },
+        onRemoved: (worktreeId) => {
+          this.handleExternalWorktreeRemoval(worktreeId);
+        },
+        onExternalRemoval: (worktreeId) => {
+          this.handleExternalWorktreeRemoval(worktreeId);
+        },
+        onResourceStatusPoll: (worktreeId) => {
+          return this.runResourceAction(
+            `auto-status-${worktreeId}`,
+            worktreeId,
+            "status",
+            undefined,
+            { origin: "auto-poll" }
+          );
+        },
+      },
+      this.mainBranch,
+      this.pollQueue
+    );
+
+    monitor.setIssueNumber(issueNumber ?? undefined);
+    monitor.setCreatedAt(createdAt);
+
+    this.monitors.set(wt.id, monitor);
+
+    if (skipInitialGitStatus) {
+      monitor.startWithoutGitStatus();
+    } else {
+      await monitor.start();
+    }
+
+    if (wt.branch && !issueNumber) {
+      void this.extractIssueNumberAsync(monitor, wt.branch, wt.name);
+    }
+
+    void this.initResourceConfigAsync(monitor, wt.path);
   }
 
   private async initResourceConfigAsync(
@@ -678,11 +702,32 @@ export class WorkspaceService {
         gitDir: getGitDir(absolutePath) || undefined,
       };
       const canonicalWorktreeId = createdWorktree.id;
+      const isActive = canonicalWorktreeId === this.activeWorktreeId;
 
-      // Emit success immediately — downstream consumers only need the directory
-      // to exist (guaranteed by waitForPathExists above) and the worktree id.
-      // Monitor sync, .daintree copy, and lifecycle setup are moved to a
-      // fire-and-forget tail so a 30-worktree batch can release slots promptly.
+      // Register the monitor SYNCHRONOUSLY before emitting the success event.
+      // Two invariants depend on this ordering:
+      //   1. Any caller that queries this.monitors.get(worktreeId) immediately
+      //      after receiving create-worktree-result finds a live monitor.
+      //   2. startWithoutGitStatus (inside addNewWorktreeMonitor) emits the
+      //      initial clean-state worktree-update, which is the signal the
+      //      renderer's store uses to add the worktree to its list. Without
+      //      this emission the worktree stays invisible in the UI until the
+      //      next poll or watcher fire.
+      // We bypass syncMonitors here because syncMonitors treats its array as
+      // authoritative and would remove every other non-main monitor.
+      await this.addNewWorktreeMonitor(createdWorktree, isActive, true);
+
+      if (options.worktreeMode && options.worktreeMode !== "local") {
+        const m = this.monitors.get(canonicalWorktreeId);
+        if (m) {
+          m.setWorktreeMode(options.worktreeMode);
+          m.setWorktreeEnvironmentLabel(options.worktreeMode);
+          // Re-emit so the UI picks up the mode on the same snapshot cycle
+          // rather than waiting for the first real poll.
+          m.emitUpdate();
+        }
+      }
+
       this.sendEvent({
         type: "create-worktree-result",
         requestId,
@@ -690,33 +735,15 @@ export class WorkspaceService {
         worktreeId: canonicalWorktreeId,
       });
 
+      // Fire-and-forget tail: cache invalidation, .daintree copy, and
+      // lifecycle setup are non-blocking for callers of create-worktree-result.
+      // Tail failures are logged but never re-emit a result event.
       void (async () => {
         // Invalidate first so any racing list() call after this emission
         // doesn't return a stale cached snapshot that excludes the new worktree.
         this.listService.invalidateCache(pathResolve(rootPath));
 
         await this.lifecycleService.copyDaintreeDir(rootPath, absolutePath);
-
-        // skipInitialGitStatus=true: a freshly-created worktree is clean by
-        // definition. syncMonitors only applies this flag to new monitors
-        // (existing monitors' polling is untouched) and also invokes
-        // ensureNoteFile for the new monitor, which is why createWorktree
-        // no longer calls ensureNoteFile directly.
-        await this.syncMonitors(
-          [createdWorktree],
-          this.activeWorktreeId,
-          this.mainBranch,
-          undefined,
-          true
-        );
-
-        if (options.worktreeMode && options.worktreeMode !== "local") {
-          const m = this.monitors.get(canonicalWorktreeId);
-          if (m) {
-            m.setWorktreeMode(options.worktreeMode);
-            m.setWorktreeEnvironmentLabel(options.worktreeMode);
-          }
-        }
 
         void this.runLifecycleSetup(
           canonicalWorktreeId,

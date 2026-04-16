@@ -235,8 +235,11 @@ describe("waitForPathExists", () => {
     expect(mockAccess).toHaveBeenCalledTimes(3);
   });
 
-  it("should timeout immediately when initialDelayMs >= timeoutMs", async () => {
-    mockAccess.mockResolvedValue(undefined);
+  it("times out after initialDelayMs when initialDelayMs >= timeoutMs and the path is missing", async () => {
+    const enoentError = Object.assign(new Error("No such file or directory"), {
+      code: "ENOENT",
+    });
+    mockAccess.mockRejectedValue(enoentError);
 
     const promise = waitForPathExists("/test/path", {
       initialDelayMs: 1000,
@@ -245,17 +248,51 @@ describe("waitForPathExists", () => {
 
     const advance = vi.advanceTimersByTimeAsync(1000);
     await expect(promise).rejects.toThrow(/Timeout waiting for path to exist/);
-    expect(mockAccess).toHaveBeenCalledTimes(0);
+    // One check runs after the initial delay — the timeout is detected when
+    // that check fails and elapsed >= timeoutMs.
+    expect(mockAccess).toHaveBeenCalledTimes(1);
     await advance;
   });
 
-  it("should timeout immediately when timeoutMs is 0", async () => {
-    mockAccess.mockResolvedValue(undefined);
+  it("times out when timeoutMs is 0 and the path is missing", async () => {
+    const enoentError = Object.assign(new Error("No such file or directory"), {
+      code: "ENOENT",
+    });
+    mockAccess.mockRejectedValue(enoentError);
 
     const promise = waitForPathExists("/test/path", {
       timeoutMs: 0,
     });
 
     await expect(promise).rejects.toThrow(/Timeout waiting for path to exist/);
+    expect(mockAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves when the path appears right at the timeout boundary", async () => {
+    // Regression guard for the bug where checkExists was called AFTER the
+    // timeout check — a path that materialized at t≈timeoutMs was missed on
+    // the final wakeup. Under 500ms budgets (used by createWorktree) this
+    // produced spurious failures on slow filesystems.
+    const enoentError = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    mockAccess
+      .mockRejectedValueOnce(enoentError) // t=0
+      .mockRejectedValueOnce(enoentError) // t=50
+      .mockRejectedValueOnce(enoentError) // t=150
+      .mockRejectedValueOnce(enoentError) // t=350
+      .mockResolvedValueOnce(undefined); // t=500 — path just appeared
+
+    const promise = waitForPathExists("/test/path", {
+      initialRetryDelayMs: 50,
+      maxRetryDelayMs: 800,
+      timeoutMs: 500,
+    });
+
+    await vi.advanceTimersByTimeAsync(50); // t=50
+    await vi.advanceTimersByTimeAsync(100); // t=150
+    await vi.advanceTimersByTimeAsync(200); // t=350
+    await vi.advanceTimersByTimeAsync(150); // t=500 — final check runs BEFORE timeout throw
+
+    await expect(promise).resolves.toBeUndefined();
+    expect(mockAccess).toHaveBeenCalledTimes(5);
   });
 });

@@ -490,6 +490,21 @@ export class WorktreeMonitor {
     if (this.gitWatchEnabled) {
       this.startWatcher();
     }
+
+    // Skipping the initial git status scan is a perf optimization — freshly
+    // created worktrees are clean by definition, and bulk-loading a project
+    // runs its own refreshAll later. But we still have to (a) emit the
+    // current (default-clean) snapshot so the renderer can add the worktree
+    // to its store (the store only grows on worktree-update events), and
+    // (b) schedule polling so changes after file-watcher events get picked
+    // up. start() does both via updateGitStatus + scheduleNextPoll; this
+    // mirrors that contract minus the expensive git invocation.
+    this._hasInitialStatus = true;
+    this.emitUpdate();
+
+    if (this._isRunning && this.pollingEnabled) {
+      this.scheduleNextPoll();
+    }
   }
 
   stop(): void {

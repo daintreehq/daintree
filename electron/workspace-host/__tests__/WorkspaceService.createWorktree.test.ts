@@ -150,12 +150,6 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree",
     };
 
-    const syncSpy = vi
-      .spyOn(
-        service as unknown as { syncMonitors: (...args: unknown[]) => Promise<void> },
-        "syncMonitors"
-      )
-      .mockResolvedValue(undefined);
     const listSpy = vi.spyOn(service["listService"], "list");
 
     await service.createWorktree(requestId, "/test/root", options);
@@ -193,23 +187,6 @@ describe("WorkspaceService.createWorktree", () => {
     // path is gone — the Worktree object is built directly from inputs.
     await flushAsyncTail();
     expect(listSpy).not.toHaveBeenCalled();
-
-    // syncMonitors receives a single-element array (the new worktree only) with
-    // skipInitialGitStatus=true, avoiding a storm of initial git status scans
-    // when bulk-creating 30+ worktrees.
-    expect(syncSpy).toHaveBeenCalledTimes(1);
-    const [worktrees, , , , skipInitialGitStatus] = syncSpy.mock.calls[0];
-    expect(worktrees).toEqual([
-      expect.objectContaining({
-        id: "/test/worktree",
-        path: "/test/worktree",
-        branch: "feature/test",
-        name: "feature/test",
-        isDetached: false,
-        isMainWorktree: false,
-      }),
-    ]);
-    expect(skipInitialGitStatus).toBe(true);
   });
 
   it("preserves issue-mode-only --no-track: useExistingBranch argv is unchanged", async () => {
@@ -220,11 +197,6 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree2",
       useExistingBranch: true,
     };
-
-    vi.spyOn(
-      service as unknown as { syncMonitors: (...args: unknown[]) => Promise<void> },
-      "syncMonitors"
-    ).mockResolvedValue(undefined);
 
     await service.createWorktree(requestId, "/test/root", options);
 
@@ -248,11 +220,6 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree3",
       fromRemote: true,
     };
-
-    vi.spyOn(
-      service as unknown as { syncMonitors: (...args: unknown[]) => Promise<void> },
-      "syncMonitors"
-    ).mockResolvedValue(undefined);
 
     await service.createWorktree(requestId, "/test/root", options);
 
@@ -303,11 +270,6 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree-delayed",
     };
 
-    vi.spyOn(
-      service as unknown as { syncMonitors: (...args: unknown[]) => Promise<void> },
-      "syncMonitors"
-    ).mockResolvedValue(undefined);
-
     let resolveWait: (() => void) | undefined;
     const waitPromise = new Promise<void>((resolve) => {
       resolveWait = resolve;
@@ -319,9 +281,14 @@ describe("WorkspaceService.createWorktree", () => {
     await Promise.resolve();
     expect(mockSimpleGit.raw).toHaveBeenCalled();
     expect(waitForPathExists).toHaveBeenCalledTimes(1);
-    // Event must NOT fire while waitForPathExists is unresolved — that guard
-    // preserves the contract that the directory exists before callers use it.
-    expect(mockSendEvent).not.toHaveBeenCalled();
+
+    const createResultCalls = mockSendEvent.mock.calls.filter(
+      ([event]: [{ type: string }]) => event?.type === "create-worktree-result"
+    );
+    // Result event must NOT fire while waitForPathExists is unresolved — that
+    // guard preserves the contract that the directory exists before callers
+    // use it.
+    expect(createResultCalls).toHaveLength(0);
 
     resolveWait!();
     await createPromise;
@@ -334,7 +301,7 @@ describe("WorkspaceService.createWorktree", () => {
     );
   });
 
-  it("skips all fire-and-forget tail work when waitForPathExists fails", async () => {
+  it("skips monitor registration and tail work when waitForPathExists fails", async () => {
     const requestId = "test-request-fail";
     const options = {
       baseBranch: "main",
@@ -344,12 +311,6 @@ describe("WorkspaceService.createWorktree", () => {
 
     waitForPathExists.mockRejectedValueOnce(new Error("Path does not exist"));
 
-    const syncSpy = vi
-      .spyOn(
-        service as unknown as { syncMonitors: (...args: unknown[]) => Promise<void> },
-        "syncMonitors"
-      )
-      .mockResolvedValue(undefined);
     const invalidateSpy = vi.spyOn(service["listService"], "invalidateCache");
     const listSpy = vi.spyOn(service["listService"], "list");
     const copySpy = vi.spyOn(service["lifecycleService"], "copyDaintreeDir");
@@ -358,7 +319,7 @@ describe("WorkspaceService.createWorktree", () => {
     await flushAsyncTail();
 
     expect(mockSendEvent).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
-    expect(syncSpy).not.toHaveBeenCalled();
+    expect(service["monitors"].has("/test/worktree-fail")).toBe(false);
     expect(invalidateSpy).not.toHaveBeenCalled();
     expect(listSpy).not.toHaveBeenCalled();
     expect(copySpy).not.toHaveBeenCalled();
@@ -372,20 +333,18 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree-tail-order",
     };
 
-    let resolveSync: (() => void) | undefined;
-    const syncPromise = new Promise<void>((resolve) => {
-      resolveSync = resolve;
+    let resolveCopy: (() => void) | undefined;
+    const copyPromise = new Promise<void>((resolve) => {
+      resolveCopy = resolve;
     });
-    const syncSpy = vi
-      .spyOn(
-        service as unknown as { syncMonitors: (...args: unknown[]) => Promise<void> },
-        "syncMonitors"
-      )
-      .mockImplementation(() => syncPromise);
+    const copySpy = vi
+      .spyOn(service["lifecycleService"], "copyDaintreeDir")
+      .mockImplementation(() => copyPromise);
 
     await service.createWorktree(requestId, "/test/root", options);
 
-    // Event fires immediately after waitForPathExists, ahead of syncMonitors.
+    // Event fires after synchronous monitor registration but before the tail
+    // (copyDaintreeDir) resolves.
     expect(mockSendEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "create-worktree-result",
@@ -394,11 +353,11 @@ describe("WorkspaceService.createWorktree", () => {
       })
     );
 
-    // syncMonitors is started but not resolved yet — tail is truly async.
+    // copyDaintreeDir is running in the tail — not resolved yet.
     await flushAsyncTail();
-    expect(syncSpy).toHaveBeenCalled();
+    expect(copySpy).toHaveBeenCalled();
 
-    resolveSync!();
+    resolveCopy!();
     await flushAsyncTail();
   });
 
@@ -411,18 +370,22 @@ describe("WorkspaceService.createWorktree", () => {
     };
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.spyOn(
-      service as unknown as { syncMonitors: (...args: unknown[]) => Promise<void> },
-      "syncMonitors"
-    ).mockRejectedValueOnce(new Error("monitor sync exploded"));
+    vi.spyOn(service["lifecycleService"], "copyDaintreeDir").mockRejectedValueOnce(
+      new Error("copyDaintreeDir exploded")
+    );
 
     await service.createWorktree(requestId, "/test/root", options);
     await flushAsyncTail();
 
-    // Exactly one event, and it's the success event — tail failure is logged
-    // but never reaches the renderer as a second create-worktree-result.
-    expect(mockSendEvent).toHaveBeenCalledTimes(1);
-    expect(mockSendEvent).toHaveBeenCalledWith(
+    // Exactly one create-worktree-result event, and it's the success event —
+    // tail failure is logged but never reaches the renderer as a second
+    // create-worktree-result. (worktree-update events from monitor
+    // registration are a different event type and don't count.)
+    const createResultCalls = mockSendEvent.mock.calls.filter(
+      ([event]: [{ type: string }]) => event?.type === "create-worktree-result"
+    );
+    expect(createResultCalls).toHaveLength(1);
+    expect(createResultCalls[0][0]).toEqual(
       expect.objectContaining({
         type: "create-worktree-result",
         success: true,
@@ -434,6 +397,60 @@ describe("WorkspaceService.createWorktree", () => {
     );
 
     warnSpy.mockRestore();
+  });
+
+  it("registers the monitor synchronously before emitting create-worktree-result", async () => {
+    // Regression guard for the bug where monitor availability lagged event
+    // emission. Any caller that synchronously queries this.monitors.get(id)
+    // in response to the success event must find a live monitor.
+    const requestId = "test-request-sync";
+    const options = {
+      baseBranch: "main",
+      newBranch: "feature/sync-monitor",
+      path: "/test/worktree-sync",
+    };
+
+    let monitorPresentAtEmission: boolean | null = null;
+    mockSendEvent.mockImplementation((event: { type: string; worktreeId?: string }) => {
+      if (event.type === "create-worktree-result" && event.worktreeId) {
+        monitorPresentAtEmission = service["monitors"].has(event.worktreeId);
+      }
+    });
+
+    await service.createWorktree(requestId, "/test/root", options);
+
+    expect(monitorPresentAtEmission).toBe(true);
+    expect(service["monitors"].has("/test/worktree-sync")).toBe(true);
+  });
+
+  it("emits a worktree-update before create-worktree-result so the renderer's store picks up the new worktree", async () => {
+    // Regression guard for the bug where startWithoutGitStatus never emitted
+    // an initial snapshot, leaving freshly-created worktrees invisible in the
+    // UI until the first watcher fire or manual refresh.
+    const requestId = "test-request-store";
+    const options = {
+      baseBranch: "main",
+      newBranch: "feature/store-sync",
+      path: "/test/worktree-store",
+    };
+
+    await service.createWorktree(requestId, "/test/root", options);
+
+    const eventTypes = mockSendEvent.mock.calls.map(
+      ([event]: [{ type: string; worktreeId?: string }]) => event?.type
+    );
+    const firstUpdateIndex = eventTypes.indexOf("worktree-update");
+    const createResultIndex = eventTypes.indexOf("create-worktree-result");
+
+    expect(firstUpdateIndex).toBeGreaterThanOrEqual(0);
+    expect(createResultIndex).toBeGreaterThanOrEqual(0);
+    expect(firstUpdateIndex).toBeLessThan(createResultIndex);
+
+    // The emitted update must carry the correct worktree id.
+    const updateCall = mockSendEvent.mock.calls[firstUpdateIndex][0];
+    expect(updateCall.worktree).toEqual(
+      expect.objectContaining({ id: "/test/worktree-store", branch: "feature/store-sync" })
+    );
   });
 });
 

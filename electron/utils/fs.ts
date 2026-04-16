@@ -216,17 +216,19 @@ export async function waitForPathExists(
       await sleep(initialDelayMs);
     }
 
-    // Poll until path exists or timeout
+    // Poll until path exists or timeout. Ordering matters here: checkExists()
+    // runs before the timeout check so that a path appearing right at the
+    // timeout boundary (e.g. t≈500ms under a 500ms budget) is still observed.
+    // Reversing the order throws on the final wakeup without a last check —
+    // benign on a 5s budget, actively flaky on 500ms.
     while (true) {
-      // Check if timeout exceeded
+      if (await checkExists()) {
+        return;
+      }
+
       const elapsed = Date.now() - startTime;
       if (elapsed >= timeoutMs) {
         throw new Error(`Timeout waiting for path to exist: ${path} (waited ${elapsed}ms)`);
-      }
-
-      // Check if path exists
-      if (await checkExists()) {
-        return;
       }
 
       // Calculate next retry delay with backoff

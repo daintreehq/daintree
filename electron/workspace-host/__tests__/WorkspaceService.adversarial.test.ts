@@ -137,6 +137,54 @@ describe("WorkspaceService adversarial", () => {
     );
   });
 
+  it("does not remove existing non-main monitors when adding a new worktree — the single-element syncMonitors bug regression", async () => {
+    // Regression guard for the worst bug found in review: passing
+    // syncMonitors([createdWorktree]) treated the single-element array as
+    // the authoritative worktree set and removed every other non-main monitor
+    // (plus firing worktree-removed for each), so bulk-creating 30 worktrees
+    // converged to "main + last-created". Fix: createWorktree uses a narrower
+    // addNewWorktreeMonitor that only adds.
+    const existingWorktree = {
+      id: "/repo/wt-existing",
+      path: "/repo/wt-existing",
+      name: "feature/existing",
+      branch: "feature/existing",
+      isCurrent: false,
+      isMainWorktree: false,
+      gitDir: "/repo/wt-existing/.git",
+    };
+    await (
+      service as unknown as {
+        addNewWorktreeMonitor: (
+          wt: typeof existingWorktree,
+          isActive: boolean,
+          skipInitialGitStatus: boolean
+        ) => Promise<void>;
+      }
+    ).addNewWorktreeMonitor(existingWorktree, false, true);
+    expect(service["monitors"].has("/repo/wt-existing")).toBe(true);
+
+    // Drop the events recorded during the seeding so the assertion below is
+    // clean.
+    sentEvents.length = 0;
+
+    await service.createWorktree("req-add", "/repo", {
+      baseBranch: "main",
+      newBranch: "feature/new",
+      path: "/repo/wt-new",
+    });
+
+    // Both monitors must be present — the existing one was NOT removed.
+    expect(service["monitors"].has("/repo/wt-existing")).toBe(true);
+    expect(service["monitors"].has("/repo/wt-new")).toBe(true);
+
+    // No worktree-removed event was fired for the existing worktree.
+    const removedEvents = sentEvents.filter(
+      (e): e is WorkspaceHostEvent & { type: "worktree-removed" } => e.type === "worktree-removed"
+    );
+    expect(removedEvents).toEqual([]);
+  });
+
   it("succeeds without calling listService.list — the Worktree is built from inputs, so an empty list can never fail the create", async () => {
     const listService = service["listService"] as unknown as {
       invalidateCache: Mock;
