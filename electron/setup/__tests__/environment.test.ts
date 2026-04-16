@@ -630,22 +630,24 @@ describe("Canopy -> Daintree userData migration gating", () => {
     // Legacy Canopy userData exists; new Daintree userData does not.
     fsMock.existsSync.mockImplementation((p: string) => {
       if (p.endsWith(".rebrand-migrated")) return false;
-      if (p.endsWith("/Canopy")) return true;
+      if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
       return false;
     });
 
     await import("../environment.js");
 
-    expect(fsMock.cpSync).toHaveBeenCalledWith("/tmp/user-data/Canopy", "/tmp/user-data/Daintree", {
-      recursive: true,
-    });
+    expect(fsMock.cpSync).toHaveBeenCalledWith(
+      path.join("/tmp/user-data", "Canopy"),
+      "/tmp/user-data/Daintree",
+      { recursive: true }
+    );
   });
 
   it("skips the migration when BUILD_VARIANT=canopy (legacy build)", async () => {
     (process.env as Record<string, string | undefined>).BUILD_VARIANT = "canopy";
     fsMock.existsSync.mockImplementation((p: string) => {
       if (p.endsWith(".rebrand-migrated")) return false;
-      if (p.endsWith("/Canopy")) return true;
+      if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
       return false;
     });
 

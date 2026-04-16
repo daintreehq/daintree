@@ -709,68 +709,87 @@ describe("WorkspaceService.runResourceAction", () => {
       );
     });
 
-    it("substitutes {{worktree_name}} in connect command", async () => {
-      const monitor = createAndRegisterMonitor({ name: "feat-deploy" });
-      await setupConfig({
-        resource: {
-          provision: ["echo ok"],
-          connect: "ssh {{worktree_name}}@host.example.com",
-        },
+    describe("variable substitution", () => {
+      let originalPlatform: string;
+      beforeEach(() => {
+        originalPlatform = process.platform;
+        Object.defineProperty(process, "platform", {
+          value: "linux",
+          writable: true,
+          configurable: true,
+        });
       });
-      await setupSpawn(0);
-
-      await service.runResourceAction("req-sub1", "/test/worktree", "provision");
-
-      expect(monitor.resourceConnectCommand).toBe("ssh 'feat-deploy'@host.example.com");
-    });
-
-    it("substitutes {{branch}} in connect command", async () => {
-      const monitor = createAndRegisterMonitor({ branch: "feature/remote" });
-      await setupConfig({
-        resource: {
-          provision: ["echo ok"],
-          connect: "ssh root@{{branch}}.dev.example.com",
-        },
+      afterEach(() => {
+        Object.defineProperty(process, "platform", {
+          value: originalPlatform,
+          writable: true,
+          configurable: true,
+        });
       });
-      await setupSpawn(0);
 
-      await service.runResourceAction("req-sub2", "/test/worktree", "provision");
+      it("substitutes {{worktree_name}} in connect command", async () => {
+        const monitor = createAndRegisterMonitor({ name: "feat-deploy" });
+        await setupConfig({
+          resource: {
+            provision: ["echo ok"],
+            connect: "ssh {{worktree_name}}@host.example.com",
+          },
+        });
+        await setupSpawn(0);
 
-      expect(monitor.resourceConnectCommand).toBe("ssh root@'feature/remote'.dev.example.com");
-    });
+        await service.runResourceAction("req-sub1", "/test/worktree", "provision");
 
-    it("leaves unresolved {{endpoint}} placeholder intact", async () => {
-      const monitor = createAndRegisterMonitor();
-      await setupConfig({
-        resource: {
-          provision: ["echo ok"],
-          connect: "ssh root@{{endpoint}} -i ~/.ssh/key",
-        },
+        expect(monitor.resourceConnectCommand).toBe("ssh 'feat-deploy'@host.example.com");
       });
-      await setupSpawn(0);
 
-      await service.runResourceAction("req-sub3", "/test/worktree", "provision");
+      it("substitutes {{branch}} in connect command", async () => {
+        const monitor = createAndRegisterMonitor({ branch: "feature/remote" });
+        await setupConfig({
+          resource: {
+            provision: ["echo ok"],
+            connect: "ssh root@{{branch}}.dev.example.com",
+          },
+        });
+        await setupSpawn(0);
 
-      expect(monitor.resourceConnectCommand).toBe("ssh root@{{endpoint}} -i ~/.ssh/key");
-    });
+        await service.runResourceAction("req-sub2", "/test/worktree", "provision");
 
-    it("substitutes variables in provision commands before execution", async () => {
-      createAndRegisterMonitor({ name: "my-wt", branch: "feat/x" });
-      await setupConfig({
-        resource: {
-          provision: ["deploy --name={{worktree_name}} --branch={{branch}}"],
-        },
+        expect(monitor.resourceConnectCommand).toBe("ssh root@'feature/remote'.dev.example.com");
       });
-      await setupSpawn(0);
 
-      const runCommandsSpy = vi.spyOn(service["lifecycleService"], "runCommands");
+      it("leaves unresolved {{endpoint}} placeholder intact", async () => {
+        const monitor = createAndRegisterMonitor();
+        await setupConfig({
+          resource: {
+            provision: ["echo ok"],
+            connect: "ssh root@{{endpoint}} -i ~/.ssh/key",
+          },
+        });
+        await setupSpawn(0);
 
-      await service.runResourceAction("req-sub4", "/test/worktree", "provision");
+        await service.runResourceAction("req-sub3", "/test/worktree", "provision");
 
-      expect(runCommandsSpy).toHaveBeenCalledWith(
-        ["deploy --name='my-wt' --branch='feat/x'"],
-        expect.any(Object)
-      );
+        expect(monitor.resourceConnectCommand).toBe("ssh root@{{endpoint}} -i ~/.ssh/key");
+      });
+
+      it("substitutes variables in provision commands before execution", async () => {
+        createAndRegisterMonitor({ name: "my-wt", branch: "feat/x" });
+        await setupConfig({
+          resource: {
+            provision: ["deploy --name={{worktree_name}} --branch={{branch}}"],
+          },
+        });
+        await setupSpawn(0);
+
+        const runCommandsSpy = vi.spyOn(service["lifecycleService"], "runCommands");
+
+        await service.runResourceAction("req-sub4", "/test/worktree", "provision");
+
+        expect(runCommandsSpy).toHaveBeenCalledWith(
+          ["deploy --name='my-wt' --branch='feat/x'"],
+          expect.any(Object)
+        );
+      });
     });
   });
 
