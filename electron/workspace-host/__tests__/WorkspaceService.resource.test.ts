@@ -713,10 +713,18 @@ describe("WorkspaceService.runResourceAction", () => {
       let originalPlatform: string;
       beforeEach(() => {
         originalPlatform = process.platform;
-        Object.defineProperty(process, "platform", { value: "linux", writable: true });
+        Object.defineProperty(process, "platform", {
+          value: "linux",
+          writable: true,
+          configurable: true,
+        });
       });
       afterEach(() => {
-        Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+        Object.defineProperty(process, "platform", {
+          value: originalPlatform,
+          writable: true,
+          configurable: true,
+        });
       });
 
       it("substitutes {{worktree_name}} in connect command", async () => {
