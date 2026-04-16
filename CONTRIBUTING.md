@@ -11,7 +11,7 @@ Be kind, be specific, assume good faith. Harassment, personal attacks, and bad-f
 ## Getting set up
 
 ```bash
-git clone https://github.com/canopyide/canopy.git
+git clone https://github.com/daintreehq/daintree.git
 cd daintree
 npm install        # runs the postinstall rebuild for node-pty
 npm run dev        # Main + Renderer with HMR
@@ -102,7 +102,7 @@ Resolves #<issue-number>
 - Anything you _couldn't_ test and why (be honest — "verified in CI" is fine)
 ```
 
-Real examples of this format are plentiful in the merged PR history (e.g. canopyide/canopy#5106, canopyide/canopy#5102, canopyide/canopy#5092) — read a few before opening yours.
+Real examples of this format are plentiful in the merged PR history (e.g. daintreehq/daintree#5106, daintreehq/daintree#5102, daintreehq/daintree#5092) — read a few before opening yours.
 
 Rules:
 

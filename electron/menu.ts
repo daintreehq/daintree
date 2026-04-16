@@ -395,7 +395,7 @@ export function createApplicationMenu(
         {
           label: "Learn More",
           click: async () => {
-            await shell.openExternal("https://github.com/canopyide/canopy");
+            await shell.openExternal("https://github.com/daintreehq/daintree");
           },
         },
         ...(process.platform !== "darwin" && app.isPackaged

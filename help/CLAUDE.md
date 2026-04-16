@@ -40,14 +40,14 @@ Don't push users to file junk. If the idea doesn't pass the Green Light test (re
 
 ## GitHub Issues
 
-You have access to the `gh` CLI for the Daintree repository (`canopyide/canopy`). Read `docs/issue-guidelines.md` before creating any issue — it defines what the project accepts and rejects.
+You have access to the `gh` CLI for the Daintree repository (`daintreehq/daintree`). Read `docs/issue-guidelines.md` before creating any issue — it defines what the project accepts and rejects.
 
 **Searching issues:** As a last resort when documentation and MCP search don't answer the user's question, search existing issues for relevant context. Don't search proactively — only when docs have failed.
 
 ```bash
-gh search issues "query" --repo canopyide/canopy
-gh issue list --repo canopyide/canopy --label "bug"
-gh issue view 123 --repo canopyide/canopy
+gh search issues "query" --repo daintreehq/daintree
+gh issue list --repo daintreehq/daintree --label "bug"
+gh issue view 123 --repo daintreehq/daintree
 ```
 
 **Creating issues:** When the user agrees to submit an issue (either because they asked or because you suggested it):
@@ -60,7 +60,7 @@ gh issue view 123 --repo canopyide/canopy
 6. Run `gh issue create` — this will require tool permission confirmation
 
 ```bash
-gh issue create --repo canopyide/canopy --title "..." --body "..." --label "enhancement"
+gh issue create --repo daintreehq/daintree --title "..." --body "..." --label "enhancement"
 ```
 
 ## When You Cannot Answer

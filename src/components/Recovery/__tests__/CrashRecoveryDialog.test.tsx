@@ -317,7 +317,7 @@ describe("CrashRecoveryDialog", () => {
     fireEvent.click(screen.getByTestId("report-button"));
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
     expect(window.electron.system.openExternal).toHaveBeenCalledWith(
-      "https://github.com/canopyide/canopy/issues/new"
+      "https://github.com/daintreehq/daintree/issues/new"
     );
   });
 

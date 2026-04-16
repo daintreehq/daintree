@@ -250,7 +250,7 @@ function EmptyState({
   const handleOpenHelp = () => {
     void actionService.dispatch(
       "system.openExternal",
-      { url: "https://github.com/canopyide/canopy#readme" },
+      { url: "https://github.com/daintreehq/daintree#readme" },
       { source: "user" }
     );
   };

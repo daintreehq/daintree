@@ -99,7 +99,7 @@ The goal isn't to become an IDE or a cloud platform. It's to be the best possibl
 ### Install
 
 ```bash
-git clone https://github.com/canopyide/canopy.git
+git clone https://github.com/daintreehq/daintree.git
 cd daintree
 npm install
 ```
