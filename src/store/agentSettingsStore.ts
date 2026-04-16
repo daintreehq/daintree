@@ -90,6 +90,11 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     if (initPromise) return initPromise;
 
     const myEpoch = ++normalizeEpoch;
+    // Use a holder so the `finally` block can reach back to the promise
+    // reference that will exist immediately after the IIFE synchronously
+    // returns. Strict TS won't let a `let`/`const` captured in the IIFE be
+    // compared before assignment, but a property assignment is fine.
+    const ref: { current: Promise<void> | null } = { current: null };
     const promise = (async () => {
       try {
         set({ isLoading: true, error: null });
@@ -118,10 +123,11 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       } finally {
         // Clear the cached promise so a later `initialize()` can retry after
         // cleanup/reset, even if this run was superseded by a concurrent op.
-        if (initPromise === promise) initPromise = null;
+        if (initPromise === ref.current) initPromise = null;
       }
     })();
 
+    ref.current = promise;
     initPromise = promise;
     return promise;
   },
