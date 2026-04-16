@@ -277,22 +277,31 @@ describe("cliAvailabilityStore", () => {
         availability: installedAvail,
         lastCheckedAt: Date.now() - 1_000,
       };
-      const getItemSpy = vi.spyOn(Storage.prototype, "getItem");
-      getItemSpy.mockReturnValueOnce(JSON.stringify(fakeCache));
 
-      // Init will hydrate from the cache but then fail the live probe, so
-      // lastCheckedAt should remain null — any future refresh must still run.
-      refreshMock.mockRejectedValueOnce(new Error("transient"));
-      await useCliAvailabilityStore.getState().initialize();
+      // Vitest runs this file under the Node environment, so there's no
+      // browser `Storage` global to spy on. Stub `window.localStorage`
+      // directly — the store loads the cache via `window.localStorage.getItem`.
+      const getItem = vi.fn().mockReturnValueOnce(JSON.stringify(fakeCache));
+      const setItem = vi.fn();
+      vi.stubGlobal("window", { localStorage: { getItem, setItem } });
 
-      expect(useCliAvailabilityStore.getState().lastCheckedAt).toBeNull();
+      try {
+        // Init will hydrate from the cache but then fail the live probe, so
+        // lastCheckedAt should remain null — any future refresh must still run.
+        refreshMock.mockRejectedValueOnce(new Error("transient"));
+        await useCliAvailabilityStore.getState().initialize();
 
-      // The next refresh must not be throttled by the (stale) cache timestamp.
-      refreshMock.mockResolvedValueOnce(installedAvail);
-      await useCliAvailabilityStore.getState().refresh();
-      expect(refreshMock).toHaveBeenCalledTimes(2);
+        expect(useCliAvailabilityStore.getState().lastCheckedAt).toBeNull();
+        // Cached availability should still have hydrated (hasRealData proves it).
+        expect(useCliAvailabilityStore.getState().hasRealData).toBe(true);
 
-      getItemSpy.mockRestore();
+        // The next refresh must not be throttled by the (stale) cache timestamp.
+        refreshMock.mockResolvedValueOnce(installedAvail);
+        await useCliAvailabilityStore.getState().refresh();
+        expect(refreshMock).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
   });
 
