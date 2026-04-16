@@ -24,6 +24,10 @@ import { isAgentReady, isAgentInstalled } from "../../../shared/utils/agentAvail
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import {
+  getDominantAgentState,
+  agentStateDotColor,
+} from "@/components/Worktree/AgentStatusIndicator";
 import { Unplug } from "lucide-react";
 
 type AgentType = BuiltInAgentId;
@@ -52,10 +56,11 @@ export function AgentButton({
 
   const panelsById = usePanelStore((s) => s.panelsById);
   const panelIds = usePanelStore((s) => s.panelIds);
-  const setFocused = usePanelStore((s) => s.setFocused);
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
 
   const activeSession = useMemo(() => {
+    const states: (AgentState | undefined)[] = [];
+    let firstId: string | null = null;
     for (const pid of panelIds) {
       const p = panelsById[pid];
       if (
@@ -68,16 +73,18 @@ export function AgentButton({
         continue;
       if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
       if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
-      return { id: pid, state: p.agentState };
+      if (!firstId) firstId = pid;
+      states.push(p.agentState);
     }
-    return null;
+    if (!firstId) return null;
+    return { id: firstId, dominantState: getDominantAgentState(states) };
   }, [panelsById, panelIds, activeWorktreeId, type]);
 
   const config = getAgentConfig(type);
   if (!config) return null;
 
   const isSessionActive = activeSession !== null;
-  const isSessionWorking = activeSession?.state === "working" || activeSession?.state === "running";
+  const dominantState = activeSession?.dominantState ?? null;
 
   const tooltipDetails = config.tooltip ? ` — ${config.tooltip}` : "";
   const shortcut = displayCombo ? ` (${displayCombo})` : "";
@@ -88,28 +95,22 @@ export function AgentButton({
 
   const tooltip = isLoading
     ? `Checking ${config.name} CLI availability...`
-    : isSessionActive
-      ? `Focus ${config.name} session${shortcut}`
-      : isReady
-        ? `Start ${config.name}${tooltipDetails}${shortcut}`
-        : needsSetup
-          ? `${config.name} needs setup. Click to configure.`
-          : `${config.name} CLI not found. Click to install.`;
+    : isReady
+      ? `Start ${config.name}${tooltipDetails}${shortcut}`
+      : needsSetup
+        ? `${config.name} needs setup. Click to configure.`
+        : `${config.name} CLI not found. Click to install.`;
 
   const ariaLabel = isLoading
     ? `Checking ${config.name} availability`
-    : isSessionActive
-      ? `Focus ${config.name} session`
-      : isReady
-        ? `Start ${config.name} Agent`
-        : needsSetup
-          ? `${config.name} needs setup`
-          : `${config.name} CLI not installed`;
+    : isReady
+      ? `Start ${config.name} Agent`
+      : needsSetup
+        ? `${config.name} needs setup`
+        : `${config.name} CLI not installed`;
 
   const handleClick = () => {
-    if (isSessionActive) {
-      setFocused(activeSession.id, true);
-    } else if (isReady) {
+    if (isReady) {
       void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
     } else {
       void actionService.dispatch(
@@ -147,13 +148,11 @@ export function AgentButton({
                 >
                   <div className="relative">
                     <config.icon brandColor={getBrandColorHex(type)} />
-                    {isSessionActive && (
+                    {isSessionActive && dominantState && (
                       <span
                         className={cn(
                           "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-daintree-sidebar",
-                          isSessionWorking
-                            ? "bg-status-success animate-pulse"
-                            : "bg-daintree-accent"
+                          agentStateDotColor(dominantState)
                         )}
                         aria-hidden="true"
                       />
@@ -167,11 +166,6 @@ export function AgentButton({
         </TooltipProvider>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        {isSessionActive && (
-          <ContextMenuItem onSelect={() => setFocused(activeSession.id, true)}>
-            Focus {config.name} Session
-          </ContextMenuItem>
-        )}
         <ContextMenuItem
           disabled={!isReady}
           onSelect={() =>
@@ -182,7 +176,7 @@ export function AgentButton({
             )
           }
         >
-          {isSessionActive ? `New ${config.name} Session` : `Launch ${config.name}`}
+          Launch {config.name}
         </ContextMenuItem>
         <ContextMenuItem
           disabled={!isReady}

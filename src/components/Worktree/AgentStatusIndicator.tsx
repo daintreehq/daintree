@@ -133,3 +133,16 @@ export function getDominantAgentState(states: (AgentState | undefined)[]): Agent
 
   return dominant === "idle" ? null : dominant;
 }
+
+export function agentStateDotColor(state: AgentState): string {
+  switch (state) {
+    case "working":
+    case "running":
+    case "directing":
+      return "bg-state-working";
+    case "waiting":
+      return "bg-state-waiting";
+    default:
+      return "bg-daintree-accent";
+  }
+}

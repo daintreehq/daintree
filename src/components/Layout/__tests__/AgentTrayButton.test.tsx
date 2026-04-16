@@ -190,7 +190,7 @@ describe("AgentTrayButton", () => {
     );
   });
 
-  it("focuses existing session instead of launching when agent is running", () => {
+  it("always launches a new session even when agent already has one running", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
     mockPanelsById = {
@@ -209,12 +209,12 @@ describe("AgentTrayButton", () => {
     const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
     fireEvent.click(getByTestId("agent-tray-row-claude"));
 
-    expect(setFocusedMock).toHaveBeenCalledWith("panel-1", true);
-    expect(dispatchMock).not.toHaveBeenCalledWith(
+    expect(dispatchMock).toHaveBeenCalledWith(
       "agent.launch",
-      expect.anything(),
-      expect.anything()
+      { agentId: "claude" },
+      { source: "user" }
     );
+    expect(setFocusedMock).not.toHaveBeenCalled();
   });
 
   it("renders a filled pin indicator for pinned agents", () => {
@@ -264,7 +264,7 @@ describe("AgentTrayButton", () => {
     expect(getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("true");
   });
 
-  it("puts missing and installed-but-unauth agents in Needs Setup with pill badge", () => {
+  it("puts missing and installed-but-unauth agents in Also Available with pill badge", () => {
     const availability = {
       claude: "ready",
       gemini: "missing",
@@ -277,12 +277,12 @@ describe("AgentTrayButton", () => {
     );
 
     const labels = getAllByTestId("menu-label").map((el) => el.textContent);
-    expect(labels).toContain("Needs Setup");
+    expect(labels).toContain("Also Available");
 
     const setupItems = Array.from(container.querySelectorAll('[role="menuitem"]')).filter((el) =>
       el.textContent?.includes("Setup")
     );
-    // Gemini (missing) + Codex (installed) in Needs Setup
+    // Gemini (missing) + Codex (installed) in Also Available
     expect(setupItems.length).toBeGreaterThanOrEqual(2);
   });
 

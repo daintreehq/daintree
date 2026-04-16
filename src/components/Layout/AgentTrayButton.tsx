@@ -5,7 +5,7 @@ import {
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Plug, Pin, Plus, Settings2 } from "lucide-react";
+import { Plug, Pin, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -28,6 +28,10 @@ import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds
 import type { CliAvailability, AgentState } from "@shared/types";
 import { isAgentReady, isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
+import {
+  getDominantAgentState,
+  agentStateDotColor,
+} from "@/components/Worktree/AgentStatusIndicator";
 import { cn } from "@/lib/utils";
 
 interface AgentTrayButtonProps {
@@ -40,8 +44,7 @@ type AgentRow = {
   name: string;
   Icon: ComponentType<AgentIconProps>;
   pinned: boolean;
-  activeSessionId: string | null;
-  activeSessionState: AgentState | null;
+  dominantState: AgentState | null;
 };
 
 const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentState | undefined>([
@@ -55,22 +58,20 @@ const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentSt
 function buildAgentRow(
   id: BuiltInAgentId,
   pinned: boolean,
-  activeSessionId: string | null,
-  activeSessionState: AgentState | null
+  dominantState: AgentState | null
 ): AgentRow | null {
   const config = getAgentConfig(id);
   if (!config) return null;
-  return { id, name: config.name, Icon: config.icon, pinned, activeSessionId, activeSessionState };
+  return { id, name: config.name, Icon: config.icon, pinned, dominantState };
 }
 
 function RunningDot({ state }: { state: AgentState | null }) {
   if (!state) return null;
-  const isWorking = state === "working" || state === "running";
   return (
     <span
       className={cn(
         "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-daintree-sidebar",
-        isWorking ? "bg-status-success animate-pulse" : "bg-daintree-accent"
+        agentStateDotColor(state)
       )}
       aria-hidden="true"
     />
@@ -86,14 +87,13 @@ export function AgentTrayButton({
 
   const panelsById = usePanelStore((s) => s.panelsById);
   const panelIds = usePanelStore((s) => s.panelIds);
-  const setFocused = usePanelStore((s) => s.setFocused);
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
 
   const isAvailabilityLoading = agentAvailability === undefined;
   const lastPinActionAt = useRef(0);
 
-  const activeSessions = useMemo(() => {
-    const map = new Map<string, { id: string; state: AgentState | undefined }>();
+  const agentDominantStates = useMemo(() => {
+    const statesPerAgent = new Map<string, (AgentState | undefined)[]>();
     for (const pid of panelIds) {
       const p = panelsById[pid];
       if (
@@ -106,11 +106,15 @@ export function AgentTrayButton({
         continue;
       if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
       if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
-      if (!map.has(p.agentId)) {
-        map.set(p.agentId, { id: pid, state: p.agentState });
-      }
+      const arr = statesPerAgent.get(p.agentId) ?? [];
+      arr.push(p.agentState);
+      statesPerAgent.set(p.agentId, arr);
     }
-    return map;
+    const result = new Map<string, AgentState | null>();
+    for (const [agentId, states] of statesPerAgent) {
+      result.set(agentId, getDominantAgentState(states));
+    }
+    return result;
   }, [panelsById, panelIds, activeWorktreeId]);
 
   const { launchable, needsSetup } = useMemo(() => {
@@ -119,13 +123,8 @@ export function AgentTrayButton({
 
     for (const id of BUILT_IN_AGENT_IDS) {
       const pinned = isAgentPinned(agentSettings?.agents?.[id]);
-      const session = activeSessions.get(id);
-      const row = buildAgentRow(
-        id,
-        pinned,
-        session?.id ?? null,
-        (session?.state as AgentState) ?? null
-      );
+      const dominant = agentDominantStates.get(id) ?? null;
+      const row = buildAgentRow(id, pinned, dominant);
       if (!row) continue;
 
       const state = agentAvailability?.[id];
@@ -137,18 +136,9 @@ export function AgentTrayButton({
     }
 
     return { launchable, needsSetup };
-  }, [agentAvailability, agentSettings, activeSessions]);
+  }, [agentAvailability, agentSettings, agentDominantStates]);
 
-  const handleRowAction = (row: AgentRow) => {
-    if (row.activeSessionId) {
-      setFocused(row.activeSessionId, true);
-    } else {
-      void actionService.dispatch("agent.launch", { agentId: row.id }, { source: "user" });
-    }
-  };
-
-  const handleLaunchNew = (row: AgentRow, e: ReactPointerEvent | React.MouseEvent) => {
-    e.stopPropagation();
+  const handleLaunch = (row: AgentRow) => {
     void actionService.dispatch("agent.launch", { agentId: row.id }, { source: "user" });
   };
 
@@ -227,8 +217,7 @@ export function AgentTrayButton({
               <LaunchRow
                 key={`launch-${row.id}`}
                 row={row}
-                onRowAction={handleRowAction}
-                onLaunchNew={handleLaunchNew}
+                onLaunch={handleLaunch}
                 onKeyDown={handleRowKeyDown}
                 onTogglePin={togglePin}
                 stopPointer={stopPointer}
@@ -240,7 +229,7 @@ export function AgentTrayButton({
         {needsSetup.length > 0 && (
           <>
             {launchable.length > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuLabel>Needs Setup</DropdownMenuLabel>
+            <DropdownMenuLabel>Also Available</DropdownMenuLabel>
             {needsSetup.map((row) => (
               <DropdownMenuItem
                 key={`setup-${row.id}`}
@@ -271,84 +260,58 @@ export function AgentTrayButton({
 
 function LaunchRow({
   row,
-  onRowAction,
-  onLaunchNew,
+  onLaunch,
   onKeyDown,
   onTogglePin,
   stopPointer,
 }: {
   row: AgentRow;
-  onRowAction: (row: AgentRow) => void;
-  onLaunchNew: (row: AgentRow, e: ReactPointerEvent | React.MouseEvent) => void;
+  onLaunch: (row: AgentRow) => void;
   onKeyDown: (e: KeyboardEvent<HTMLDivElement>, row: AgentRow) => void;
   onTogglePin: (row: AgentRow) => void;
   stopPointer: (e: ReactPointerEvent) => void;
 }) {
   const displayCombo = useKeybindingDisplay(`agent.${row.id}`);
-  const isRunning = row.activeSessionId !== null;
 
   return (
     <DropdownMenuItem
-      onSelect={() => onRowAction(row)}
+      onSelect={() => onLaunch(row)}
       onKeyDown={(e) => onKeyDown(e, row)}
       className="group h-7"
       data-testid={`agent-tray-row-${row.id}`}
     >
-      {/* Agent icon with running indicator */}
       <span className="relative mr-2 inline-flex h-4 w-4 items-center justify-center">
         <row.Icon brandColor={getBrandColorHex(row.id)} />
-        {isRunning && <RunningDot state={row.activeSessionState} />}
+        <RunningDot state={row.dominantState} />
       </span>
 
-      {/* Agent name */}
       <span className="flex-1">{row.name}</span>
 
-      {/* Keyboard shortcut hint */}
-      {displayCombo && !isRunning && <DropdownMenuShortcut>{displayCombo}</DropdownMenuShortcut>}
+      {displayCombo && <DropdownMenuShortcut>{displayCombo}</DropdownMenuShortcut>}
 
-      {/* SR hint for pin shortcut */}
       <span className="sr-only">Press P to {row.pinned ? "unpin from" : "pin to"} toolbar</span>
 
-      {/* Trailing: launch-new + pin */}
-      <span className="ml-1 inline-flex items-center gap-0.5">
-        {/* New session button — only visible when an agent is already running */}
-        {isRunning && (
-          <span
-            role="presentation"
-            aria-hidden="true"
-            title="Launch new session"
-            onPointerDown={stopPointer}
-            onPointerUp={stopPointer}
-            onClick={(e) => onLaunchNew(row, e)}
-            className="inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-emphasis hover:text-daintree-text group-data-[highlighted]:opacity-100"
-          >
-            <Plus className="h-3 w-3" strokeWidth={2.5} />
-          </span>
+      <span
+        role="presentation"
+        aria-hidden="true"
+        data-testid={`agent-tray-pin-${row.id}`}
+        data-pinned={row.pinned ? "true" : "false"}
+        title={row.pinned ? "Unpin from toolbar (P)" : "Pin to toolbar (P)"}
+        onPointerDown={stopPointer}
+        onPointerUp={stopPointer}
+        onClick={(e) => {
+          e.stopPropagation();
+          onTogglePin(row);
+        }}
+        className={cn(
+          "ml-1 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 transition-opacity hover:bg-overlay-emphasis hover:text-daintree-text",
+          row.pinned ? "opacity-100" : "opacity-0 group-data-[highlighted]:opacity-100"
         )}
-
-        {/* Pin toggle */}
-        <span
-          role="presentation"
-          aria-hidden="true"
-          data-testid={`agent-tray-pin-${row.id}`}
-          data-pinned={row.pinned ? "true" : "false"}
-          title={row.pinned ? "Unpin from toolbar (P)" : "Pin to toolbar (P)"}
-          onPointerDown={stopPointer}
-          onPointerUp={stopPointer}
-          onClick={(e) => {
-            e.stopPropagation();
-            onTogglePin(row);
-          }}
-          className={cn(
-            "inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 transition-opacity hover:bg-overlay-emphasis hover:text-daintree-text",
-            row.pinned ? "opacity-100" : "opacity-0 group-data-[highlighted]:opacity-100"
-          )}
-        >
-          <Pin
-            className={cn("h-3 w-3", row.pinned && "fill-current text-daintree-text")}
-            strokeWidth={row.pinned ? 2 : 1.75}
-          />
-        </span>
+      >
+        <Pin
+          className={cn("h-3 w-3", row.pinned && "fill-current text-daintree-text")}
+          strokeWidth={row.pinned ? 2 : 1.75}
+        />
       </span>
     </DropdownMenuItem>
   );
