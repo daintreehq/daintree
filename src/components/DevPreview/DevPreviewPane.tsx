@@ -206,6 +206,7 @@ export function DevPreviewPane({
     cwd,
     worktreeId,
     env: projectEnv,
+    turbopackEnabled: projectSettings?.turbopackEnabled ?? true,
   });
 
   const webviewPartition = useMemo(() => {
@@ -425,7 +426,10 @@ export function DevPreviewPane({
     setIsAutoDetecting(true);
     try {
       const freshRunners = await projectClient.detectRunners(currentProjectId);
-      const candidate = findDevServerCandidate(freshRunners, projectSettings?.turbopackEnabled ?? true);
+      const candidate = findDevServerCandidate(
+        freshRunners,
+        projectSettings?.turbopackEnabled ?? true
+      );
 
       if (!candidate) {
         return;
@@ -449,7 +453,7 @@ export function DevPreviewPane({
         setIsAutoDetecting(false);
       }
     }
-  }, [currentProjectId, isAutoDetecting, saveSettings]);
+  }, [currentProjectId, isAutoDetecting, saveSettings, projectSettings?.turbopackEnabled]);
 
   const handleOpenSettings = useCallback(() => {
     void actionService.dispatch("project.settings.open", undefined, { source: "user" });
@@ -836,7 +840,11 @@ export function DevPreviewPane({
                   </h3>
                   <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
                     No dev server command is configured for this project.
-                    {allDetectedRunners && findDevServerCandidate(allDetectedRunners, projectSettings?.turbopackEnabled ?? true)
+                    {allDetectedRunners &&
+                    findDevServerCandidate(
+                      allDetectedRunners,
+                      projectSettings?.turbopackEnabled ?? true
+                    )
                       ? " We found a script in your package.json that looks like a dev server."
                       : " Configure one to preview your application."}
                   </p>

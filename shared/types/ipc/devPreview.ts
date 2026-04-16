@@ -9,6 +9,7 @@ export interface DevPreviewEnsureRequest {
   devCommand: string;
   worktreeId?: string;
   env?: Record<string, string>;
+  turbopackEnabled?: boolean;
 }
 
 export interface DevPreviewSessionRequest {

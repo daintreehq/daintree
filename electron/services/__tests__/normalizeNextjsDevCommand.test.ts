@@ -162,4 +162,45 @@ describe("normalizeNextjsDevCommand", () => {
       expect(await normalizeNextjsDevCommand("next dev", CWD, false)).toBe("next dev");
     });
   });
+
+  describe("adversarial: renderer pre-injection for old Next.js versions (Bug 3)", () => {
+    // The renderer (findDevServerCandidate) has no version awareness and injects
+    // --turbopack for any Next.js project when turbopackEnabled=true. If that
+    // pre-injected command reaches normalizeNextjsDevCommand on a v14 project,
+    // the main process must strip the flag — not silently pass it through.
+
+    it("strips pre-injected --turbopack from 'next dev --turbopack' when version is 14", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(14);
+      expect(await normalizeNextjsDevCommand("next dev --turbopack", CWD)).toBe("next dev");
+    });
+
+    it("strips pre-injected -- --turbopack from pkg manager command when version is 14", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(14);
+      expect(await normalizeNextjsDevCommand("npm run dev -- --turbopack", CWD)).toBe(
+        "npm run dev"
+      );
+    });
+
+    it("strips pre-injected --turbopack from bun command when version is 14", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(14);
+      expect(await normalizeNextjsDevCommand("bun run dev --turbopack", CWD)).toBe("bun run dev");
+    });
+
+    it("strips --turbopack when version is null (unknown = safe default)", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(null);
+      expect(await normalizeNextjsDevCommand("next dev --turbopack", CWD)).toBe("next dev");
+    });
+
+    it("strips --turbopack when turbopackEnabled is false, regardless of version", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(15);
+      expect(await normalizeNextjsDevCommand("next dev --turbopack", CWD, false)).toBe("next dev");
+    });
+
+    it("strips -- --turbopack when turbopackEnabled is false", async () => {
+      mockResolveNextMajorVersion.mockResolvedValue(15);
+      expect(await normalizeNextjsDevCommand("npm run dev -- --turbopack", CWD, false)).toBe(
+        "npm run dev"
+      );
+    });
+  });
 });

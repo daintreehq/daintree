@@ -19,7 +19,7 @@ export async function resolveNextMajorVersion(cwd: string): Promise<number | nul
     const pkg = JSON.parse(raw);
     const versionSpec: unknown = pkg?.dependencies?.next ?? pkg?.devDependencies?.next;
     if (typeof versionSpec === "string") {
-      const stripped = versionSpec.replace(/^[^~>=<]*/, "").replace(/^[~>=<^]+/, "");
+      const stripped = versionSpec.replace(/^[\^~>=<v\s]+/, "");
       const major = parseInt(stripped.split(".")[0], 10);
       if (major >= 1) return major;
     }

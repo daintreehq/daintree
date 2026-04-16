@@ -11,6 +11,7 @@ export interface UseDevServerOptions {
   cwd: string;
   worktreeId?: string;
   env?: Record<string, string>;
+  turbopackEnabled?: boolean;
 }
 
 export interface UseDevServerState {
@@ -73,6 +74,7 @@ export function useDevServer({
   cwd,
   worktreeId,
   env,
+  turbopackEnabled,
 }: UseDevServerOptions): UseDevServerReturn {
   const currentProjectId = useProjectStore((state) => state.currentProject?.id ?? null);
   const [status, setStatus] = useState<DevPreviewStatus>("stopped");
@@ -105,6 +107,7 @@ export function useDevServer({
     worktreeId?: string;
     devCommand: string;
     env?: Record<string, string>;
+    turbopackEnabled?: boolean;
   }>({
     panelId,
     projectId: currentProjectId,
@@ -112,6 +115,7 @@ export function useDevServer({
     worktreeId,
     devCommand,
     env,
+    turbopackEnabled,
   });
 
   const envSignature = useMemo(() => serializeEnv(env), [env]);
@@ -123,6 +127,7 @@ export function useDevServer({
     worktreeId,
     devCommand,
     env,
+    turbopackEnabled,
   };
 
   const isRequestCurrent = useCallback(
@@ -201,6 +206,7 @@ export function useDevServer({
           devCommand: latest.devCommand,
           worktreeId: latest.worktreeId,
           env: latest.env,
+          turbopackEnabled: latest.turbopackEnabled,
         });
 
         if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
