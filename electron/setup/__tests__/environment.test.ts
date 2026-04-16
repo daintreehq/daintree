@@ -649,7 +649,7 @@ describe("Canopy -> Daintree userData migration gating", () => {
       class {
         prepare = sqliteMock.prepare;
         close = sqliteMock.close;
-      } as unknown as new () => unknown
+      } as never
     );
   });
 
@@ -775,12 +775,12 @@ describe("Canopy -> Daintree userData migration gating", () => {
       class {
         constructor(dbPath: unknown) {
           const isCanopy = typeof dbPath === "string" && dbPath.endsWith("canopy.db");
-          (this as { prepare: unknown }).prepare = () => ({
+          (this as unknown as { prepare: unknown }).prepare = () => ({
             get: () => ({ count: isCanopy ? 3 : 0 }),
           });
-          (this as { close: unknown }).close = vi.fn();
+          (this as unknown as { close: unknown }).close = vi.fn();
         }
-      } as unknown as new () => unknown
+      } as never
     );
 
     await import("../environment.js");
@@ -843,7 +843,7 @@ describe("Canopy -> Daintree userData migration gating", () => {
           err.code = "SQLITE_NOTADB";
           throw err;
         }
-      } as unknown as new () => unknown
+      } as never
     );
 
     await import("../environment.js");
@@ -878,7 +878,7 @@ describe("Canopy -> Daintree userData migration gating", () => {
           },
         });
         close = closeSpy;
-      } as unknown as new () => unknown
+      } as never
     );
 
     await import("../environment.js");
@@ -937,12 +937,12 @@ describe("Canopy -> Daintree userData migration gating", () => {
       class {
         constructor(dbPath: unknown) {
           const isCanopy = typeof dbPath === "string" && dbPath.endsWith("canopy.db");
-          (this as { prepare: unknown }).prepare = () => ({
+          (this as unknown as { prepare: unknown }).prepare = () => ({
             get: () => ({ count: isCanopy ? 5 : 0 }),
           });
-          (this as { close: unknown }).close = vi.fn();
+          (this as unknown as { close: unknown }).close = vi.fn();
         }
-      } as unknown as new () => unknown
+      } as never
     );
 
     await import("../environment.js");
