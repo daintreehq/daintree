@@ -16,11 +16,12 @@ function getPublishChannel(version) {
 // TODO(0.9.0): Remove the `canopy` entry entirely when the dual-variant build
 // is retired. See github #5130.
 //
-// Each variant pins `debPackageName` and `updaterCacheDirName` explicitly
-// because both default to `package.json.name` ("daintree") — without these
-// overrides the canopy `.deb` would ship as `Package: daintree` (breaking
-// in-place dpkg upgrades from old 0.6.x) and both variants would share
-// `daintree-updater` as their download cache directory.
+// Each variant pins `debPackageName` so the canopy `.deb` ships as
+// `Package: canopy-app` (preserving in-place dpkg upgrades from old 0.6.x)
+// rather than defaulting to `package.json.name` ("daintree"). Both variants
+// currently share `daintree-updater` as their electron-updater cache dir;
+// electron-builder 26.x derives that from `package.json.name` and rejects
+// root-level overrides.
 const VARIANTS = {
   daintree: {
     appId: "org.daintree.app",
@@ -37,7 +38,6 @@ const VARIANTS = {
     cliScriptName: "daintree-cli.sh",
     apparmorName: "daintree.apparmor",
     debPackageName: "daintree",
-    updaterCacheDirName: "daintree-updater",
     microphoneDescription:
       "Daintree uses the microphone for voice dictation into terminal inputs.",
   },
@@ -55,7 +55,6 @@ const VARIANTS = {
     cliScriptName: "canopy-cli.sh",
     apparmorName: "canopy.apparmor",
     debPackageName: "canopy-app",
-    updaterCacheDirName: "canopy-updater",
     microphoneDescription:
       "Canopy uses the microphone for voice dictation into terminal inputs.",
   },
@@ -91,7 +90,6 @@ module.exports = async function () {
     asar: true,
     appId: v.appId,
     productName: v.productName,
-    updaterCacheDirName: v.updaterCacheDirName,
     publish: [publishEntry],
     electronUpdaterCompatibility: ">=2.16",
     npmRebuild: true,
