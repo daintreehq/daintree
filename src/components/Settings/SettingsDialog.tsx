@@ -1331,6 +1331,8 @@ export function SettingsDialog({
                               onDevServerCommandChange={projectForm.setDevServerCommand}
                               devServerLoadTimeout={projectForm.devServerLoadTimeout}
                               onDevServerLoadTimeoutChange={projectForm.setDevServerLoadTimeout}
+                              turbopackEnabled={projectForm.turbopackEnabled}
+                              onTurbopackEnabledChange={projectForm.setTurbopackEnabled}
                               projectIconSvg={projectForm.projectIconSvg}
                               onProjectIconSvgChange={projectForm.setProjectIconSvg}
                               enableInRepoSettings={projectForm.enableInRepoSettings}

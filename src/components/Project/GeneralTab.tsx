@@ -50,6 +50,8 @@ interface GeneralTabProps {
   onDevServerCommandChange: (value: string) => void;
   devServerLoadTimeout: number | undefined;
   onDevServerLoadTimeoutChange: (value: number | undefined) => void;
+  turbopackEnabled: boolean;
+  onTurbopackEnabledChange: (value: boolean) => void;
   projectIconSvg: string | undefined;
   onProjectIconSvgChange: (value: string | undefined) => void;
   enableInRepoSettings: (projectId: string) => Promise<Project>;
@@ -70,6 +72,8 @@ export function GeneralTab({
   onDevServerCommandChange,
   devServerLoadTimeout,
   onDevServerLoadTimeoutChange,
+  turbopackEnabled,
+  onTurbopackEnabledChange,
   projectIconSvg,
   onProjectIconSvgChange,
   enableInRepoSettings,
@@ -426,6 +430,23 @@ export function GeneralTab({
             placeholder="30"
             aria-label="Dev server load timeout in seconds"
           />
+        </div>
+
+        <div className="mt-3 flex items-center gap-2">
+          <input
+            id="turbopack-enabled"
+            type="checkbox"
+            checked={turbopackEnabled}
+            onChange={(e) => onTurbopackEnabledChange(e.target.checked)}
+            className="h-4 w-4 rounded border-canopy-border accent-canopy-accent cursor-pointer"
+            aria-label="Auto-inject --turbopack for Next.js 15+ projects"
+          />
+          <label
+            htmlFor="turbopack-enabled"
+            className="text-xs text-canopy-text/60 cursor-pointer select-none"
+          >
+            Auto-inject <code className="font-mono">--turbopack</code> for Next.js 15+ projects
+          </label>
         </div>
       </div>
 

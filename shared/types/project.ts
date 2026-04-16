@@ -303,6 +303,8 @@ export interface ProjectSettings {
   cloudSyncWarningDismissed?: boolean;
   /** Timeout in seconds before a slow-loading dev preview is automatically reloaded (default: 30, max: 120) */
   devServerLoadTimeout?: number;
+  /** Whether to auto-inject --turbopack for Next.js 15+ projects (default: true) */
+  turbopackEnabled?: boolean;
   /** CopyTree context generation configuration */
   copyTreeSettings?: CopyTreeSettings;
   /** Command overrides for project-specific customization */
