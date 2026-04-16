@@ -358,6 +358,29 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm run test
+
   e2e-core-gate:
     needs: build-daintree
     uses: ./.github/workflows/e2e-core.yml
@@ -373,7 +396,7 @@ jobs:
 
   publish-daintree:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-daintree, e2e-core-gate, e2e-online-gate]
+    needs: [build-daintree, e2e-core-gate, e2e-online-gate, unit-tests]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
 
@@ -468,7 +491,7 @@ jobs:
     # Intentionally NOT gated on e2e-core-gate / e2e-online-gate — those only
     # exercise the Daintree variant, so blocking Canopy publish on them couples
     # two independent release channels. Canopy ships on its own build health.
-    needs: [build-canopy]
+    needs: [build-canopy, unit-tests]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
 
