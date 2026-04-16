@@ -9,7 +9,7 @@
 - Rename Canopy to Daintree across types, icons, menu, and UI copy (#5149)
 - Migrate userData and `.canopy` directory rename to `.daintree` (#5149)
 - Flip protocol scheme app://canopy → app://daintree, canopy-file → daintree-file
-- Rename CANOPY*\* env vars to DAINTREE*\* with back-compat shims
+- Rename `CANOPY_*` env vars to `DAINTREE_*` with back-compat shims
 - Dual-variant release builds (Canopy + Daintree) via BUILD_VARIANT (#5151, #5130)
 
 **Setup Wizard**
