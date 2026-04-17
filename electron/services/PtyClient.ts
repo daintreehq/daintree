@@ -97,6 +97,21 @@ const DEFAULT_CONFIG: Required<PtyClientConfig> = {
 };
 
 /**
+ * Centralized per-operation timeout policy for PTY host RPC calls.
+ * Keys are logical method labels forwarded to the broker's onTimeout hook
+ * so timeouts can be attributed to specific operations in logs and metrics.
+ */
+const PTY_TIMEOUTS = {
+  "graceful-kill": 5000,
+  "graceful-kill-by-project": 10000,
+  "kill-by-project": 10000,
+  "get-serialized-state": 15000,
+  "get-snapshot": 5000,
+  "get-all-snapshots": 5000,
+  "transition-state": 5000,
+} as const satisfies Record<string, number>;
+
+/**
  * Classify crash type based on exit code and signal.
  * Exit codes 137 (128+9=SIGKILL) and 134 (128+6=SIGABRT) often indicate OOM.
  */
@@ -158,18 +173,10 @@ export class PtyClient extends EventEmitter {
   private broker = new RequestResponseBroker({
     defaultTimeoutMs: 5000,
     idPrefix: "pty",
-    onTimeout: (requestId) => {
-      console.warn(`[PtyClient] Request timeout: ${requestId}`);
+    onTimeout: (requestId, method) => {
+      console.warn(`[PtyClient] Request timeout: ${method ? `${method} ` : ""}(${requestId})`);
     },
   });
-
-  /** Special callbacks that don't fit the request/response pattern */
-  private snapshotCallbacks: Map<string, (snapshot: TerminalSnapshot | null) => void> = new Map();
-  private snapshotTimeouts: Map<string, NodeJS.Timeout> = new Map();
-  private allSnapshotsCallbacks: Map<string, (snapshots: TerminalSnapshot[]) => void> = new Map();
-  private allSnapshotsTimeouts: Map<string, NodeJS.Timeout> = new Map();
-  private transitionCallbacks: Map<string, (success: boolean) => void> = new Map();
-  private transitionTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
   private readyPromise: Promise<void>;
   private readyResolve: (() => void) | null = null;
@@ -485,47 +492,17 @@ export class PtyClient extends EventEmitter {
         this.emit("error", event.id, event.error);
         break;
 
-      case "snapshot": {
-        const callback = this.snapshotCallbacks.get(event.requestId);
-        if (callback) {
-          this.snapshotCallbacks.delete(event.requestId);
-          const timeout = this.snapshotTimeouts.get(event.requestId);
-          if (timeout) {
-            clearTimeout(timeout);
-            this.snapshotTimeouts.delete(event.requestId);
-          }
-          callback(event.snapshot as TerminalSnapshot | null);
-        }
+      case "snapshot":
+        this.broker.resolve(event.requestId, (event.snapshot ?? null) as TerminalSnapshot | null);
         break;
-      }
 
-      case "all-snapshots": {
-        const callback = this.allSnapshotsCallbacks.get(event.requestId);
-        if (callback) {
-          this.allSnapshotsCallbacks.delete(event.requestId);
-          const timeout = this.allSnapshotsTimeouts.get(event.requestId);
-          if (timeout) {
-            clearTimeout(timeout);
-            this.allSnapshotsTimeouts.delete(event.requestId);
-          }
-          callback(event.snapshots as TerminalSnapshot[]);
-        }
+      case "all-snapshots":
+        this.broker.resolve(event.requestId, (event.snapshots ?? []) as TerminalSnapshot[]);
         break;
-      }
 
-      case "transition-result": {
-        const cb = this.transitionCallbacks.get(event.requestId);
-        if (cb) {
-          this.transitionCallbacks.delete(event.requestId);
-          const timeout = this.transitionTimeouts.get(event.requestId);
-          if (timeout) {
-            clearTimeout(timeout);
-            this.transitionTimeouts.delete(event.requestId);
-          }
-          cb(event.success);
-        }
+      case "transition-result":
+        this.broker.resolve(event.requestId, event.success);
         break;
-      }
 
       case "pong":
         this.missedHeartbeats = 0;
@@ -1042,7 +1019,10 @@ export class PtyClient extends EventEmitter {
 
   async gracefulKill(id: string): Promise<string | null> {
     const requestId = this.broker.generateId(`graceful-kill-${id}`);
-    const promise = this.broker.register<string | null>(requestId, 5000);
+    const promise = this.broker.register<string | null>(requestId, {
+      method: "graceful-kill",
+      timeoutMs: PTY_TIMEOUTS["graceful-kill"],
+    });
     this.send({ type: "graceful-kill", id, requestId });
     return promise.catch(() => {
       this.kill(id, "graceful-kill-timeout");
@@ -1056,7 +1036,10 @@ export class PtyClient extends EventEmitter {
     const requestId = this.broker.generateId(`graceful-kill-by-project-${projectId}`);
     const promise = this.broker.register<Array<{ id: string; agentSessionId: string | null }>>(
       requestId,
-      10000
+      {
+        method: "graceful-kill-by-project",
+        timeoutMs: PTY_TIMEOUTS["graceful-kill-by-project"],
+      }
     );
     this.send({ type: "graceful-kill-by-project", projectId, requestId });
     return promise.catch(() => []);
@@ -1064,7 +1047,10 @@ export class PtyClient extends EventEmitter {
 
   async killByProject(projectId: string): Promise<number> {
     const requestId = this.broker.generateId(`kill-by-project-${projectId}`);
-    const promise = this.broker.register<number>(requestId, 10000);
+    const promise = this.broker.register<number>(requestId, {
+      method: "kill-by-project",
+      timeoutMs: PTY_TIMEOUTS["kill-by-project"],
+    });
     this.send({ type: "kill-by-project", projectId, requestId });
     return promise.catch(() => 0);
   }
@@ -1158,8 +1144,11 @@ export class PtyClient extends EventEmitter {
    */
   async getSerializedStateAsync(id: string): Promise<string | null> {
     const requestId = this.broker.generateId(`serialize-${id}`);
-    // Extended timeout (15s) for large terminals with lots of scrollback.
-    const promise = this.broker.register<string | null>(requestId, 15000);
+    // Extended timeout for large terminals with lots of scrollback (see PTY_TIMEOUTS).
+    const promise = this.broker.register<string | null>(requestId, {
+      method: "get-serialized-state",
+      timeoutMs: PTY_TIMEOUTS["get-serialized-state"],
+    });
     this.send({ type: "get-serialized-state", id, requestId } as PtyHostRequest);
     return promise.catch(() => {
       console.warn(`[PtyClient] getSerializedState timeout for ${id}`);
@@ -1184,39 +1173,23 @@ export class PtyClient extends EventEmitter {
   /** Get a snapshot of terminal state (async due to IPC) */
   async getTerminalSnapshot(id: string): Promise<TerminalSnapshot | null> {
     const requestId = this.broker.generateId(`snapshot-${id}`);
-    return new Promise((resolve) => {
-      this.snapshotCallbacks.set(requestId, resolve);
-      this.send({ type: "get-snapshot", id, requestId });
-
-      // Timeout after 5s
-      const timeout = setTimeout(() => {
-        if (this.snapshotCallbacks.has(requestId)) {
-          this.snapshotCallbacks.delete(requestId);
-          this.snapshotTimeouts.delete(requestId);
-          resolve(null);
-        }
-      }, 5000);
-      this.snapshotTimeouts.set(requestId, timeout);
+    const promise = this.broker.register<TerminalSnapshot | null>(requestId, {
+      method: "get-snapshot",
+      timeoutMs: PTY_TIMEOUTS["get-snapshot"],
     });
+    this.send({ type: "get-snapshot", id, requestId });
+    return promise.catch(() => null);
   }
 
   /** Get snapshots for all terminals (async due to IPC) */
   async getAllTerminalSnapshots(): Promise<TerminalSnapshot[]> {
     const requestId = this.broker.generateId("all-snapshots");
-    return new Promise((resolve) => {
-      this.allSnapshotsCallbacks.set(requestId, resolve);
-      this.send({ type: "get-all-snapshots", requestId });
-
-      // Timeout after 5s
-      const timeout = setTimeout(() => {
-        if (this.allSnapshotsCallbacks.has(requestId)) {
-          this.allSnapshotsCallbacks.delete(requestId);
-          this.allSnapshotsTimeouts.delete(requestId);
-          resolve([]);
-        }
-      }, 5000);
-      this.allSnapshotsTimeouts.set(requestId, timeout);
+    const promise = this.broker.register<TerminalSnapshot[]>(requestId, {
+      method: "get-all-snapshots",
+      timeoutMs: PTY_TIMEOUTS["get-all-snapshots"],
     });
+    this.send({ type: "get-all-snapshots", requestId });
+    return promise.catch(() => []);
   }
 
   markChecked(id: string): void {
@@ -1230,29 +1203,21 @@ export class PtyClient extends EventEmitter {
     confidence: number,
     spawnedAt?: number
   ): Promise<boolean> {
-    return new Promise((resolve) => {
-      const requestId = this.broker.generateId(`transition-${id}`);
-      this.transitionCallbacks.set(requestId, resolve);
-      this.send({
-        type: "transition-state",
-        id,
-        requestId,
-        event,
-        trigger,
-        confidence,
-        spawnedAt,
-      });
-
-      // Timeout after 5s
-      const timeout = setTimeout(() => {
-        if (this.transitionCallbacks.has(requestId)) {
-          this.transitionCallbacks.delete(requestId);
-          this.transitionTimeouts.delete(requestId);
-          resolve(false);
-        }
-      }, 5000);
-      this.transitionTimeouts.set(requestId, timeout);
+    const requestId = this.broker.generateId(`transition-${id}`);
+    const promise = this.broker.register<boolean>(requestId, {
+      method: "transition-state",
+      timeoutMs: PTY_TIMEOUTS["transition-state"],
     });
+    this.send({
+      type: "transition-state",
+      id,
+      requestId,
+      event,
+      trigger,
+      confidence,
+      spawnedAt,
+    });
+    return promise.catch(() => false);
   }
 
   /** Request PtyHost to trim scrollback on all terminals to reduce memory */
@@ -1450,30 +1415,15 @@ export class PtyClient extends EventEmitter {
       }, 1000);
     }
 
-    // Clean up all pending requests via broker
+    // Clean up all pending requests via broker (rejects pending promises with
+    // "Broker disposed"; callers convert to sentinel values via .catch()).
     this.broker.dispose();
-
-    // Clean up remaining special callbacks
-    for (const cb of this.snapshotCallbacks.values()) cb(null);
-    for (const cb of this.allSnapshotsCallbacks.values()) cb([]);
-    for (const cb of this.transitionCallbacks.values()) cb(false);
-
-    // Clear all timeouts
-    for (const timeout of this.snapshotTimeouts.values()) clearTimeout(timeout);
-    for (const timeout of this.allSnapshotsTimeouts.values()) clearTimeout(timeout);
-    for (const timeout of this.transitionTimeouts.values()) clearTimeout(timeout);
 
     this.pendingSpawns.clear();
     this.pendingKillCount.clear();
     this.windowProjectContexts.clear();
     this.ipcDataMirrorIds.clear();
     this.terminalPids.clear();
-    this.snapshotCallbacks.clear();
-    this.snapshotTimeouts.clear();
-    this.allSnapshotsCallbacks.clear();
-    this.allSnapshotsTimeouts.clear();
-    this.transitionCallbacks.clear();
-    this.transitionTimeouts.clear();
     this.removeAllListeners();
 
     console.log("[PtyClient] Disposed");

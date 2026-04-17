@@ -194,6 +194,102 @@ describe("PtyClient adversarial", () => {
     expect(statuses).toEqual(["paused-backpressure", "running"]);
   });
 
+  it("SNAPSHOT_RESPONSE_RESOLVES_PROMISE_VIA_BROKER", async () => {
+    const client = createReadyClient();
+    const snapshotPayload = { id: "t1", title: "hello", cwd: "/tmp", spawnedAt: 1 };
+
+    const snapshotPromise = client.getTerminalSnapshot("t1");
+
+    const sentRequest = mockChild.postMessage.mock.calls
+      .map((call: unknown[]) => call[0] as { type?: string; requestId?: string })
+      .find((msg) => msg?.type === "get-snapshot");
+    expect(sentRequest?.requestId).toBeTruthy();
+
+    mockChild.emit("message", {
+      type: "snapshot",
+      id: "t1",
+      requestId: sentRequest!.requestId,
+      snapshot: snapshotPayload,
+    });
+
+    await expect(snapshotPromise).resolves.toEqual(snapshotPayload);
+  });
+
+  it("ALL_SNAPSHOTS_RESPONSE_RESOLVES_PROMISE_VIA_BROKER", async () => {
+    const client = createReadyClient();
+    const payload = [{ id: "t1", title: "a", cwd: "/", spawnedAt: 1 }];
+
+    const promise = client.getAllTerminalSnapshots();
+
+    const sentRequest = mockChild.postMessage.mock.calls
+      .map((call: unknown[]) => call[0] as { type?: string; requestId?: string })
+      .find((msg) => msg?.type === "get-all-snapshots");
+    expect(sentRequest?.requestId).toBeTruthy();
+
+    mockChild.emit("message", {
+      type: "all-snapshots",
+      requestId: sentRequest!.requestId,
+      snapshots: payload,
+    });
+
+    await expect(promise).resolves.toEqual(payload);
+  });
+
+  it("TRANSITION_RESULT_RESPONSE_RESOLVES_PROMISE_VIA_BROKER", async () => {
+    const client = createReadyClient();
+
+    const promise = client.transitionState("t1", { type: "idle" }, "output", 1);
+
+    const sentRequest = mockChild.postMessage.mock.calls
+      .map((call: unknown[]) => call[0] as { type?: string; requestId?: string })
+      .find((msg) => msg?.type === "transition-state");
+    expect(sentRequest?.requestId).toBeTruthy();
+
+    mockChild.emit("message", {
+      type: "transition-result",
+      id: "t1",
+      requestId: sentRequest!.requestId,
+      success: true,
+    });
+
+    await expect(promise).resolves.toBe(true);
+  });
+
+  it("GRACEFUL_KILL_TIMEOUT_TRIGGERS_FORCED_KILL", async () => {
+    const client = createReadyClient();
+
+    const promise = client.gracefulKill("t1");
+
+    await vi.advanceTimersByTimeAsync(5001);
+
+    await expect(promise).resolves.toBeNull();
+    const killCall = mockChild.postMessage.mock.calls.find(
+      (call: unknown[]) =>
+        (call[0] as { type?: string; id?: string; reason?: string })?.type === "kill"
+    );
+    expect(killCall?.[0]).toMatchObject({
+      type: "kill",
+      id: "t1",
+      reason: "graceful-kill-timeout",
+    });
+  });
+
+  it("HOST_RESTART_CLEARS_MIGRATED_REQUESTS_TO_SENTINELS", async () => {
+    const client = createReadyClient();
+
+    const snapshotPromise = client.getTerminalSnapshot("t1");
+    const allSnapshotsPromise = client.getAllTerminalSnapshots();
+    const transitionPromise = client.transitionState("t1", { type: "idle" }, "output", 1);
+    const serializedPromise = client.getSerializedStateAsync("t1");
+
+    mockChild.emit("exit", 1);
+
+    await expect(snapshotPromise).resolves.toBeNull();
+    await expect(allSnapshotsPromise).resolves.toEqual([]);
+    await expect(transitionPromise).resolves.toBe(false);
+    await expect(serializedPromise).resolves.toBeNull();
+  });
+
   it("DISPOSE_RESOLVES_ORPHANED_PENDING_OPS", async () => {
     const client = createReadyClient();
     const privateAccess = client as unknown as PtyClientPrivateAccess;

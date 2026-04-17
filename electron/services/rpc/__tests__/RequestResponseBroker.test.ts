@@ -48,7 +48,7 @@ describe("RequestResponseBroker", () => {
 
     vi.advanceTimersByTime(11);
     await expect(promise).rejects.toThrow("Request timeout: req-timeout");
-    expect(onTimeout).toHaveBeenCalledWith("req-timeout");
+    expect(onTimeout).toHaveBeenCalledWith("req-timeout", undefined);
     expect(broker.size).toBe(0);
   });
 
@@ -121,5 +121,39 @@ describe("RequestResponseBroker", () => {
 
     await expect(p).rejects.toThrow("Broker disposed");
     expect(broker.size).toBe(0);
+  });
+
+  it("options-object register forwards method label to onTimeout", async () => {
+    const onTimeout = vi.fn();
+    const broker = new RequestResponseBroker({ defaultTimeoutMs: 1000, onTimeout });
+    const promise = broker.register("req-labeled", { method: "graceful-kill", timeoutMs: 10 });
+
+    vi.advanceTimersByTime(11);
+    await expect(promise).rejects.toThrow("Request timeout: req-labeled");
+    expect(onTimeout).toHaveBeenCalledWith("req-labeled", "graceful-kill");
+  });
+
+  it("legacy numeric register passes undefined method to onTimeout", async () => {
+    const onTimeout = vi.fn();
+    const broker = new RequestResponseBroker({ defaultTimeoutMs: 1000, onTimeout });
+    const promise = broker.register("req-legacy", 10);
+
+    vi.advanceTimersByTime(11);
+    await expect(promise).rejects.toThrow("Request timeout: req-legacy");
+    expect(onTimeout).toHaveBeenCalledWith("req-legacy", undefined);
+  });
+
+  it("options-object register with invalid timeoutMs falls back to default", async () => {
+    const broker = new RequestResponseBroker({ defaultTimeoutMs: 20 });
+    const promise = broker.register("req-opts-invalid", {
+      method: "snapshot",
+      timeoutMs: Number.NaN,
+    });
+
+    vi.advanceTimersByTime(10);
+    expect(broker.has("req-opts-invalid")).toBe(true);
+
+    vi.advanceTimersByTime(11);
+    await expect(promise).rejects.toThrow("Request timeout: req-opts-invalid");
   });
 });
