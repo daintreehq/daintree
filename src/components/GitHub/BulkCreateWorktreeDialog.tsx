@@ -30,6 +30,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useRecipePicker, CLONE_LAYOUT_ID } from "@/components/Worktree/hooks/useRecipePicker";
 import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNewWorktreeProjectSettings";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import type { BranchInfo } from "@shared/types";
 
 type BulkCreateMode = "issue" | "pr";
 
@@ -508,7 +509,90 @@ export function BulkCreateWorktreeDialog({
       const failedItems = new Set<number>();
       let lastSuccessfulWorktreeId: string | null = null;
 
+      // Batch pre-queries: hoist read-only IPC calls out of the per-item queue
+      // so N items don't produce N×IPC round-trips before any worktree creates.
+      // Sequential traversal is required — the backend findAvailableBranchName /
+      // findAvailablePath are pure snapshot reads with no reservation, so
+      // parallel Promise.all would race to the same resolved names for items
+      // sharing a base branch. The `assignedBranches` set below adds a
+      // client-side collision guard for the rare same-slug case.
+      let sharedBranches: BranchInfo[] | null = null;
+      const precomputed = new Map<number, { branch: string; path: string }>();
+      const prequeryFailed = new Set<number>();
+
+      if (toCreate.some((p) => p.mode === "pr")) {
+        try {
+          sharedBranches = await worktreeClient.listBranches(rootPath);
+        } catch (err) {
+          const errorMsg = normalizeError(err);
+          for (const planned of toCreate) {
+            if (planned.mode !== "pr") continue;
+            failedItems.add(planned.item.number);
+            dispatchProgress({
+              type: "ITEM_FAILED",
+              issueNumber: planned.item.number,
+              error: errorMsg,
+              attempts: 1,
+              failedStep: "worktree",
+            });
+          }
+          if (toCreate.every((p) => p.mode === "pr")) {
+            dispatchProgress({ type: "DONE" });
+            queueRef.current = null;
+            notify({
+              type: "error",
+              title: "Bulk Create Partial Failure",
+              message: `0 created, ${failedItems.size} failed`,
+            });
+            return;
+          }
+        }
+      }
+
+      const assignedBranches = new Set<string>();
       for (const planned of toCreate) {
+        if (runIdRef.current !== currentRunId) return;
+        if (planned.mode !== "issue") continue;
+
+        // Skip pre-query if the worktree already exists locally — the per-item
+        // path below will detect it via the worktree store and short-circuit.
+        const existingWorktrees = getCurrentViewStore().getState().worktrees;
+        let alreadyExists = false;
+        for (const wt of existingWorktrees.values()) {
+          if (wt.branch && wt.branch === planned.branchName) {
+            alreadyExists = true;
+            break;
+          }
+        }
+        if (alreadyExists) continue;
+
+        try {
+          let branch = await worktreeClient.getAvailableBranch(rootPath, planned.branchName);
+          if (assignedBranches.has(branch)) {
+            let n = 2;
+            while (assignedBranches.has(`${branch}-${n}`)) n++;
+            branch = `${branch}-${n}`;
+          }
+          assignedBranches.add(branch);
+          const path = await worktreeClient.getDefaultPath(rootPath, branch);
+          precomputed.set(planned.item.number, { branch, path });
+        } catch (err) {
+          prequeryFailed.add(planned.item.number);
+          failedItems.add(planned.item.number);
+          dispatchProgress({
+            type: "ITEM_FAILED",
+            issueNumber: planned.item.number,
+            error: normalizeError(err),
+            attempts: 1,
+            failedStep: "worktree",
+          });
+        }
+      }
+
+      if (runIdRef.current !== currentRunId) return;
+
+      for (const planned of toCreate) {
+        if (prequeryFailed.has(planned.item.number)) continue;
         void queue.add(async () => {
           if (runIdRef.current !== currentRunId) return;
 
@@ -545,8 +629,10 @@ export function BulkCreateWorktreeDialog({
                 });
 
                 if (planned.mode === "pr" && planned.headRefName) {
-                  // PR mode: resolve branch from headRefName
-                  const branches = await worktreeClient.listBranches(rootPath);
+                  // PR mode: resolve branch from headRefName. The initial
+                  // listBranches snapshot is hoisted into `sharedBranches`
+                  // above; only refetch after a fetchPRBranch mutation.
+                  const branches = sharedBranches ?? (await worktreeClient.listBranches(rootPath));
                   const remoteBranchName = `origin/${planned.headRefName}`;
                   const remoteBranch = branches.find((b) => b.name === remoteBranchName);
                   const localBranch = branches.find(
@@ -605,18 +691,23 @@ export function BulkCreateWorktreeDialog({
                   worktreePath = path;
                   resolvedBranch = planned.headRefName;
                 } else {
-                  // Issue mode: create new branch from base
+                  // Issue mode: create new branch from base. Branch name and
+                  // path were resolved once in the pre-query phase; fall back
+                  // to a live lookup only for items that had no pre-query
+                  // result (e.g., retry after a worktree-store-detected
+                  // short-circuit branch was later removed).
                   const mainWorktree = Array.from(
                     getCurrentViewStore().getState().worktrees.values()
                   ).find((w) => w.isMainWorktree);
                   const baseBranch = mainWorktree?.branch;
                   if (!baseBranch) throw new Error("No main worktree found for base branch");
 
-                  const availableBranch = await worktreeClient.getAvailableBranch(
-                    rootPath,
-                    planned.branchName
-                  );
-                  const path = await worktreeClient.getDefaultPath(rootPath, availableBranch);
+                  const pre = precomputed.get(itemNumber);
+                  const availableBranch =
+                    pre?.branch ??
+                    (await worktreeClient.getAvailableBranch(rootPath, planned.branchName));
+                  const path =
+                    pre?.path ?? (await worktreeClient.getDefaultPath(rootPath, availableBranch));
 
                   const createdId = await worktreeClient.create(
                     {

@@ -1078,6 +1078,106 @@ describe("BulkCreateWorktreeDialog", () => {
     worktreeDataHolder.map = cleanMap;
   });
 
+  it("runs pre-queries once per batch before any worktree creates", async () => {
+    const createResolvers: Array<(value: string) => void> = [];
+    mockWorktreeCreate.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          createResolvers.push(resolve);
+        })
+    );
+
+    render(<BulkCreateWorktreeDialog {...defaultProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    // With 3 issues, pre-query runs getAvailableBranch + getDefaultPath once each
+    // per item BEFORE any worktree.create call. After the button click and
+    // microtask flush, all pre-queries have completed and both concurrency
+    // slots have filled — but no further pre-query IPC should fire.
+    expect(mockGetAvailableBranch).toHaveBeenCalledTimes(3);
+    expect(mockGetDefaultPath).toHaveBeenCalledTimes(3);
+
+    // The queue has started worktree.create for the first 2 items (concurrency=2)
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
+
+    // Resolve all creates and advance
+    await act(async () => {
+      createResolvers[0]?.("wt-1");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      createResolvers[1]?.("wt-2");
+      createResolvers[2]?.("wt-3");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await advanceTimersGradually(1000);
+
+    // Pre-query call counts must not have grown — confirming the per-item
+    // queue bodies read from the precomputed map, not fresh IPC calls.
+    expect(mockGetAvailableBranch).toHaveBeenCalledTimes(3);
+    expect(mockGetDefaultPath).toHaveBeenCalledTimes(3);
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+  });
+
+  it("suffixes colliding branch names during pre-query", async () => {
+    // findAvailableBranchName is a pure snapshot read — if two items
+    // independently resolve to the same branch name (e.g., backend returned
+    // identical result before any creates happened), the client-side
+    // `assignedBranches` set must add `-2`, `-3`, ... to prevent a real
+    // collision at create time. Force the scenario by returning a constant
+    // branch name from the mock for both items.
+    mockGetAvailableBranch.mockResolvedValue("feature/shared-branch");
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/worktrees/${branch}`)
+    );
+
+    const props = { ...defaultProps, selectedIssues: [makeIssue(1), makeIssue(2)] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(screen.getByText(/2 of 2 created/)).toBeTruthy();
+
+    const createCalls = mockWorktreeCreate.mock.calls;
+    expect(createCalls.length).toBe(2);
+    const createdBranches = createCalls.map((c) => c[0].newBranch).sort();
+    // First item keeps the base name; second gets a client-side `-2` suffix.
+    expect(createdBranches).toEqual(["feature/shared-branch", "feature/shared-branch-2"]);
+    // getDefaultPath was called with the post-suffix branch name for item 2.
+    const pathCalls = mockGetDefaultPath.mock.calls.map((c) => c[1]);
+    expect(pathCalls).toContain("feature/shared-branch-2");
+  });
+
+  it("dispatches ITEM_FAILED and skips item when pre-query rejects", async () => {
+    let availableBranchCalls = 0;
+    mockGetAvailableBranch.mockImplementation((_root: string, branch: string) => {
+      availableBranchCalls++;
+      if (availableBranchCalls === 2) {
+        return Promise.reject(new Error("Branch name is invalid"));
+      }
+      return Promise.resolve(branch);
+    });
+
+    render(<BulkCreateWorktreeDialog {...defaultProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(screen.getByText("Branch name is invalid")).toBeTruthy();
+    expect(screen.getByText(/2 of 3 created/)).toBeTruthy();
+    expect(screen.getByText(/1 failed/)).toBeTruthy();
+    // The failed item never reached worktree.create.
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
+  });
+
   it("does not flash empty state when Done is clicked", async () => {
     const onComplete = vi.fn();
     const onClose = vi.fn();
@@ -1213,6 +1313,27 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
     const createCalls = mockWorktreeCreate.mock.calls;
     expect(createCalls[0][0].useExistingBranch).toBe(true);
     expect(createCalls[0][0].fromRemote).toBe(false);
+  });
+
+  it("calls listBranches once per batch, not once per PR", async () => {
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: true, remote: false },
+      { name: "origin/feature/pr-10", current: false, remote: true },
+      { name: "origin/feature/pr-20", current: false, remote: true },
+      { name: "origin/feature/pr-30", current: false, remote: true },
+    ]);
+
+    render(<BulkCreateWorktreeDialog {...prProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+    // Single shared snapshot hoisted before the queue, not one per item.
+    expect(mockListBranches).toHaveBeenCalledTimes(1);
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
   });
 
   it("fails when branch cannot be fetched from remote", async () => {
