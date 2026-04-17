@@ -101,19 +101,22 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 
 const mockSetPendingWorktree = vi.fn();
 const mockSelectWorktree = vi.fn();
+let mockActiveWorktreeId: string | null = "main-wt";
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: {
     getState: () => ({
       setPendingWorktree: mockSetPendingWorktree,
       selectWorktree: mockSelectWorktree,
+      activeWorktreeId: mockActiveWorktreeId,
     }),
   },
 }));
 
+let mockSelectedRecipeId: string | null = null;
 vi.mock("@/components/Worktree/hooks/useRecipePicker", () => ({
   CLONE_LAYOUT_ID: "__clone_layout__",
   useRecipePicker: () => ({
-    selectedRecipeId: null,
+    selectedRecipeId: mockSelectedRecipeId,
     setSelectedRecipeId: vi.fn(),
     recipePickerOpen: false,
     setRecipePickerOpen: vi.fn(),
@@ -240,6 +243,7 @@ vi.mock("@/components/Worktree/worktreeCreationErrors", () => ({
 Element.prototype.scrollIntoView = vi.fn();
 
 import { NewWorktreeDialog } from "../NewWorktreeDialog";
+import { notify } from "@/lib/notify";
 
 const TEST_BRANCHES: BranchInfo[] = [
   { name: "main", current: true, commit: "abc123" },
@@ -455,5 +459,134 @@ describe("NewWorktreeDialog — existing branch mode", () => {
 
     const createButton = screen.getByTestId("create-worktree-button");
     expect(createButton.hasAttribute("disabled")).toBe(true);
+  });
+});
+
+describe("NewWorktreeDialog — clone layout", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    mockSelectedRecipeId = "__clone_layout__";
+    mockActiveWorktreeId = "main-wt";
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+    mockSelectedRecipeId = null;
+    mockActiveWorktreeId = "main-wt";
+  });
+
+  async function createWithExistingBranch() {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("radio", { name: /existing branch/i }));
+    });
+
+    const branchOption = screen
+      .getAllByRole("option")
+      .find((el) => el.textContent === "feature/existing-work");
+    await act(async () => {
+      fireEvent.click(branchOption!);
+    });
+
+    await advanceTimersGradually(500);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+
+    await advanceTimersGradually(500);
+  }
+
+  it("clones layout by adding a panel per recipe terminal", async () => {
+    mockGenerateRecipeFromActiveTerminals.mockReturnValue([
+      {
+        type: "terminal",
+        title: "Shell",
+        exitBehavior: "persistent",
+      },
+      {
+        type: "claude",
+        title: "Claude",
+        exitBehavior: "persistent",
+        agentModelId: "claude-opus-4-7",
+        agentLaunchFlags: ["--thinking"],
+      },
+    ]);
+
+    await createWithExistingBranch();
+
+    expect(mockGenerateRecipeFromActiveTerminals).toHaveBeenCalledWith("main-wt");
+    expect(mockAddTerminal).toHaveBeenCalledTimes(2);
+
+    expect(mockAddTerminal).toHaveBeenNthCalledWith(1, {
+      kind: "terminal",
+      agentId: undefined,
+      title: "Shell",
+      cwd: expect.stringContaining("feature/existing-work"),
+      worktreeId: "new-wt-id",
+      exitBehavior: "persistent",
+      devCommand: undefined,
+      agentModelId: undefined,
+      agentLaunchFlags: undefined,
+    });
+
+    expect(mockAddTerminal).toHaveBeenNthCalledWith(2, {
+      kind: "agent",
+      agentId: "claude",
+      title: "Claude",
+      cwd: expect.stringContaining("feature/existing-work"),
+      worktreeId: "new-wt-id",
+      exitBehavior: "persistent",
+      devCommand: undefined,
+      agentModelId: "claude-opus-4-7",
+      agentLaunchFlags: ["--thinking"],
+    });
+  });
+
+  it("notifies on clone failure without aborting worktree creation", async () => {
+    mockGenerateRecipeFromActiveTerminals.mockImplementation(() => {
+      throw new Error("boom");
+    });
+
+    await createWithExistingBranch();
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "worktree.create",
+      expect.objectContaining({ rootPath: "/test/root" }),
+      { source: "user" }
+    );
+    expect(vi.mocked(notify)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "warning",
+        title: "Could not clone layout",
+        message: expect.stringContaining("boom"),
+      })
+    );
+    expect(mockAddTerminal).not.toHaveBeenCalled();
+  });
+
+  it("skips clone when no active source worktree is available", async () => {
+    mockActiveWorktreeId = null;
+    mockGenerateRecipeFromActiveTerminals.mockReturnValue([
+      { type: "terminal", title: "Shell", exitBehavior: "persistent" },
+    ]);
+
+    await createWithExistingBranch();
+
+    expect(mockGenerateRecipeFromActiveTerminals).not.toHaveBeenCalled();
+    expect(mockAddTerminal).not.toHaveBeenCalled();
   });
 });

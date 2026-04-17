@@ -82,6 +82,38 @@ function HighlightBranchText({
   return <>{nodes}</>;
 }
 
+async function cloneLayout(
+  sourceWorktreeId: string,
+  worktreePath: string,
+  worktreeId: string
+): Promise<void> {
+  try {
+    const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals(sourceWorktreeId);
+    for (const t of terminals) {
+      const isDevPreview = t.type === "dev-preview";
+      const isAgent = !isDevPreview && t.type !== "terminal";
+      await usePanelStore.getState().addPanel({
+        kind: isDevPreview ? "dev-preview" : isAgent ? "agent" : "terminal",
+        agentId: isAgent ? t.type : undefined,
+        title: t.title,
+        cwd: worktreePath,
+        worktreeId,
+        exitBehavior: t.exitBehavior,
+        devCommand: isDevPreview ? t.devCommand : undefined,
+        agentModelId: isAgent ? t.agentModelId : undefined,
+        agentLaunchFlags: isAgent ? t.agentLaunchFlags : undefined,
+      });
+    }
+  } catch (cloneErr) {
+    const message = cloneErr instanceof Error ? cloneErr.message : "Failed to clone layout";
+    notify({
+      type: "warning",
+      title: "Could not clone layout",
+      message: `${message} — worktree was created successfully`,
+    });
+  }
+}
+
 interface NewWorktreeDialogProps {
   isOpen: boolean;
   onClose: () => void;
@@ -517,34 +549,7 @@ export function NewWorktreeDialog({
           useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
 
           if (selectedRecipeId === CLONE_LAYOUT_ID && sourceWorktreeId) {
-            try {
-              const terminals = useRecipeStore
-                .getState()
-                .generateRecipeFromActiveTerminals(sourceWorktreeId);
-              for (const t of terminals) {
-                const isDevPreview = t.type === "dev-preview";
-                const isAgent = !isDevPreview && t.type !== "terminal";
-                await usePanelStore.getState().addPanel({
-                  kind: isDevPreview ? "dev-preview" : isAgent ? "agent" : "terminal",
-                  agentId: isAgent ? t.type : undefined,
-                  title: t.title,
-                  cwd: worktreePath.trim(),
-                  worktreeId,
-                  exitBehavior: t.exitBehavior,
-                  devCommand: isDevPreview ? t.devCommand : undefined,
-                  agentModelId: isAgent ? t.agentModelId : undefined,
-                  agentLaunchFlags: isAgent ? t.agentLaunchFlags : undefined,
-                });
-              }
-            } catch (cloneErr) {
-              const message =
-                cloneErr instanceof Error ? cloneErr.message : "Failed to clone layout";
-              notify({
-                type: "warning",
-                title: "Could not clone layout",
-                message: `${message} — worktree was created successfully`,
-              });
-            }
+            await cloneLayout(sourceWorktreeId, worktreePath.trim(), worktreeId);
           } else if (selectedRecipe) {
             try {
               await runRecipe(selectedRecipe.id, worktreePath.trim(), worktreeId, {
@@ -699,33 +704,7 @@ export function NewWorktreeDialog({
         }
 
         if (selectedRecipeId === CLONE_LAYOUT_ID && sourceWorktreeId) {
-          try {
-            const terminals = useRecipeStore
-              .getState()
-              .generateRecipeFromActiveTerminals(sourceWorktreeId);
-            for (const t of terminals) {
-              const isDevPreview = t.type === "dev-preview";
-              const isAgent = !isDevPreview && t.type !== "terminal";
-              await usePanelStore.getState().addPanel({
-                kind: isDevPreview ? "dev-preview" : isAgent ? "agent" : "terminal",
-                agentId: isAgent ? t.type : undefined,
-                title: t.title,
-                cwd: worktreePath.trim(),
-                worktreeId,
-                exitBehavior: t.exitBehavior,
-                devCommand: isDevPreview ? t.devCommand : undefined,
-                agentModelId: isAgent ? t.agentModelId : undefined,
-                agentLaunchFlags: isAgent ? t.agentLaunchFlags : undefined,
-              });
-            }
-          } catch (cloneErr) {
-            const message = cloneErr instanceof Error ? cloneErr.message : "Failed to clone layout";
-            notify({
-              type: "warning",
-              title: "Could not clone layout",
-              message: `${message} — worktree was created successfully`,
-            });
-          }
+          await cloneLayout(sourceWorktreeId, worktreePath.trim(), worktreeId);
         } else if (selectedRecipe) {
           const worktreeId = result.result as string | undefined;
           try {
