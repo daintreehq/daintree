@@ -126,8 +126,13 @@ vi.mock("../skeletonCss.js", () => ({
   injectSkeletonCss: vi.fn(),
 }));
 
+vi.mock("../../utils/logger.js", () => ({
+  logInfo: vi.fn(),
+}));
+
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
+import { logInfo } from "../../utils/logger.js";
 
 function createMockWindow() {
   return {
@@ -164,6 +169,7 @@ describe("ProjectViewManager — switch failure rollback", () => {
     nextWebContentsId = 200;
     wcQueue = [];
     vi.mocked(notifyError).mockClear();
+    vi.mocked(logInfo).mockClear();
 
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, { dirname: "/test", cachedProjectViews: 3 });
@@ -199,6 +205,9 @@ describe("ProjectViewManager — switch failure rollback", () => {
       expect.any(Error),
       expect.objectContaining({ source: "project-switch" })
     );
+    expect(
+      vi.mocked(logInfo).mock.calls.filter(([e]) => e === "projectview.coldstart")
+    ).toHaveLength(0);
   });
 
   it("rolls back when did-fail-load fires", async () => {
@@ -215,6 +224,9 @@ describe("ProjectViewManager — switch failure rollback", () => {
     expect(err.message).toBe("View load failed: ERR_ABORTED (-3)");
     expect(manager.getActiveProjectId()).toBe("proj-a");
     expect(failWc.close).toHaveBeenCalled();
+    expect(
+      vi.mocked(logInfo).mock.calls.filter(([e]) => e === "projectview.coldstart")
+    ).toHaveLength(0);
   });
 
   it("rolls back when render-process-gone fires during load", async () => {
@@ -230,6 +242,9 @@ describe("ProjectViewManager — switch failure rollback", () => {
     const err = await errPromise;
     expect(err.message).toBe("Renderer process gone during load: crashed");
     expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(
+      vi.mocked(logInfo).mock.calls.filter(([e]) => e === "projectview.coldstart")
+    ).toHaveLength(0);
   });
 
   it("rolls back when load times out (10s)", async () => {
@@ -244,6 +259,9 @@ describe("ProjectViewManager — switch failure rollback", () => {
     const err = await errPromise;
     expect(err.message).toBe("View load timed out");
     expect(manager.getActiveProjectId()).toBe("proj-a");
+    expect(
+      vi.mocked(logInfo).mock.calls.filter(([e]) => e === "projectview.coldstart")
+    ).toHaveLength(0);
   });
 
   it("sets activeProjectId to null when no previous view exists", async () => {

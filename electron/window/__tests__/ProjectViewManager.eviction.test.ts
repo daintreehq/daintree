@@ -242,14 +242,22 @@ describe("ProjectViewManager — telemetry", () => {
 
     vi.mocked(logInfo).mockClear();
 
+    // Shrink from 3 to 1 — evicts the 2 LRU non-active projects (proj-a, proj-b)
     manager.setCachedViewLimit(1);
 
     const limitChangeCalls = vi
       .mocked(logInfo)
       .mock.calls.filter(([event]) => event === "projectview.eviction");
-    expect(limitChangeCalls.length).toBeGreaterThan(0);
+    expect(limitChangeCalls.length).toBe(2);
+
+    const evictedIds = limitChangeCalls.map(([, ctx]) => (ctx as { projectId: string }).projectId);
+    expect(evictedIds).toContain("proj-a");
+    expect(evictedIds).toContain("proj-b");
+
     for (const [, ctx] of limitChangeCalls) {
-      expect((ctx as { reason: string }).reason).toBe("limit-change");
+      const c = ctx as { reason: string; ageMs: number };
+      expect(c.reason).toBe("limit-change");
+      expect(c.ageMs).toBeGreaterThanOrEqual(0);
     }
   });
 
@@ -350,7 +358,7 @@ describe("ProjectViewManager — telemetry", () => {
     expect((coldStartCall![1] as { durationMs: number }).durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it("dispose clears evictionTimestamps to prevent revival replay after new manager", async () => {
+  it("dispose tears down cleanly after an eviction recorded a timestamp", async () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       cachedProjectViews: 2,

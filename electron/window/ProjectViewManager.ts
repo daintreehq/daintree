@@ -159,6 +159,13 @@ export class ProjectViewManager {
     // Try to activate cached view
     const cached = this.views.get(projectId);
     if (cached && !cached.view.webContents.isDestroyed()) {
+      // "revival" measures time since this projectId was last evicted — not time
+      // since the current cached view (a cold-started successor) was last active.
+      // Eviction destroys the original view, so any cache hit for a previously-
+      // evicted projectId necessarily hits a later cold-started entry. The
+      // timestamp persists across the cold-start so cache-pressure signals stay
+      // observable at the project level. Consumed on read to fire only once per
+      // eviction → return cycle.
       const evictedAt = this.evictionTimestamps.get(projectId);
       if (evictedAt !== undefined) {
         logInfo("projectview.revival", {
