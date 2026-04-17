@@ -6,7 +6,6 @@ import type {
   DemoMoveToPayload,
   DemoMoveToSelectorPayload,
   DemoTypePayload,
-  DemoSetZoomPayload,
   DemoWaitForSelectorPayload,
   DemoSleepPayload,
   DemoScrollPayload,
@@ -417,42 +416,6 @@ export function DemoCursor() {
               prevChar = char;
             }
           }
-          sendDone(payload.requestId);
-        } catch (err) {
-          sendDone(payload.requestId, String(err));
-        }
-      })
-    );
-
-    cleanups.push(
-      demo.onExecCommand("demo:exec-set-zoom", async (raw: Record<string, unknown>) => {
-        const payload = raw as unknown as DemoSetZoomPayload & { requestId: string };
-        try {
-          await waitIfPaused();
-          const start = demo.getZoomFactor();
-          const target = payload.factor;
-          const duration = payload.durationMs ?? 300;
-
-          if (duration <= 0) {
-            demo.setZoomFactor(target);
-            sendDone(payload.requestId);
-            return;
-          }
-
-          await new Promise<void>((resolve) => {
-            const startTime = performance.now();
-            function step(now: number) {
-              const t = Math.min((now - startTime) / duration, 1);
-              const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
-              demo.setZoomFactor(start + (target - start) * eased);
-              if (t < 1) {
-                requestAnimationFrame(step);
-              } else {
-                resolve();
-              }
-            }
-            requestAnimationFrame(step);
-          });
           sendDone(payload.requestId);
         } catch (err) {
           sendDone(payload.requestId, String(err));

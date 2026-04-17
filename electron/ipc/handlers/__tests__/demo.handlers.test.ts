@@ -100,9 +100,9 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("registers 22 IPC handlers when isDemoMode is true", () => {
+  it("registers 21 IPC handlers when isDemoMode is true", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(22);
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(21);
     cleanup();
   });
 
@@ -114,7 +114,6 @@ describe("registerDemoHandlers", () => {
     expect(channels).toContain("demo:click");
     expect(channels).toContain("demo:screenshot");
     expect(channels).toContain("demo:type");
-    expect(channels).toContain("demo:set-zoom");
     expect(channels).toContain("demo:wait-for-selector");
     expect(channels).toContain("demo:pause");
     expect(channels).toContain("demo:resume");
@@ -134,16 +133,15 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("cleanup removes all 22 handlers", () => {
+  it("cleanup removes all 21 handlers", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
     cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(22);
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(21);
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:move-to");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:move-to-selector");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:click");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:screenshot");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:type");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:set-zoom");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:wait-for-selector");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:pause");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:resume");
