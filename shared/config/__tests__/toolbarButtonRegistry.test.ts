@@ -102,6 +102,13 @@ describe("unregisterPluginToolbarButtons", () => {
     expect(getPluginToolbarButtonIds()).toHaveLength(1);
   });
 
+  it("is a no-op for empty or non-string pluginId (defensive input guard)", () => {
+    registerToolbarButton(makeConfig("plugin.owner-a.btn", { pluginId: "owner-a" }));
+    expect(() => unregisterPluginToolbarButtons("")).not.toThrow();
+    expect(() => unregisterPluginToolbarButtons(undefined as unknown as string)).not.toThrow();
+    expect(getPluginToolbarButtonIds()).toHaveLength(1);
+  });
+
   it("is a no-op when unregistering the same plugin twice", () => {
     registerToolbarButton(makeConfig("plugin.owner-a.btn", { pluginId: "owner-a" }));
     unregisterPluginToolbarButtons("owner-a");

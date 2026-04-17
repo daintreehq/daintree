@@ -19,6 +19,7 @@ export function getPluginMenuItems(): Array<{ pluginId: string; item: MenuItemCo
 }
 
 export function unregisterPluginMenuItems(pluginId: string): void {
+  if (typeof pluginId !== "string" || pluginId.length === 0) return;
   PLUGIN_MENU_ITEMS.delete(pluginId);
 }
 

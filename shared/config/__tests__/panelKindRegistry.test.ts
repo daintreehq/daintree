@@ -80,10 +80,13 @@ describe("unregisterPluginPanelKinds", () => {
   it("never removes built-in panel kinds", () => {
     registerPanelKind(makeExtensionConfig("ext-a.viewer", "ext-a"));
 
-    // Calling with any plugin ID (even matching no entries) must preserve built-ins.
+    // Calling with any plugin ID (even matching no entries, empty string, or
+    // a typecast undefined) must preserve built-ins. The input guard blocks the
+    // dangerous `undefined` case where built-ins' extensionId is also undefined.
     unregisterPluginPanelKinds("ext-a");
     unregisterPluginPanelKinds("never-loaded");
     unregisterPluginPanelKinds("");
+    unregisterPluginPanelKinds(undefined as unknown as string);
 
     for (const kind of BUILT_IN_KINDS) {
       const config = getPanelKindConfig(kind);

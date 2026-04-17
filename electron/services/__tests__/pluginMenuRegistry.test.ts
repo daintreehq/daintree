@@ -46,6 +46,13 @@ describe("pluginMenuRegistry", () => {
     expect(getPluginMenuItems()).toHaveLength(1);
   });
 
+  it("is a no-op for empty or non-string pluginId (defensive input guard)", () => {
+    registerPluginMenuItem("plugin-a", makeItem("A1"));
+    expect(() => unregisterPluginMenuItems("")).not.toThrow();
+    expect(() => unregisterPluginMenuItems(undefined as unknown as string)).not.toThrow();
+    expect(getPluginMenuItems()).toHaveLength(1);
+  });
+
   it("is a no-op when unregistering the same plugin twice", () => {
     registerPluginMenuItem("plugin-a", makeItem("A1"));
     unregisterPluginMenuItems("plugin-a");
