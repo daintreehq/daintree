@@ -510,17 +510,35 @@ describe("NewWorktreeDialog — clone layout", () => {
     await advanceTimersGradually(500);
   }
 
+  async function createWithNewBranch(branchName: string) {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = screen.getByTestId("branch-name-input");
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value: branchName } });
+    });
+
+    await advanceTimersGradually(500);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+
+    await advanceTimersGradually(500);
+  }
+
   it("clones layout by adding a panel per recipe terminal", async () => {
     mockGenerateRecipeFromActiveTerminals.mockReturnValue([
       {
         type: "terminal",
         title: "Shell",
-        exitBehavior: "persistent",
+        exitBehavior: "keep",
       },
       {
         type: "claude",
         title: "Claude",
-        exitBehavior: "persistent",
+        exitBehavior: "keep",
         agentModelId: "claude-opus-4-7",
         agentLaunchFlags: ["--thinking"],
       },
@@ -537,7 +555,7 @@ describe("NewWorktreeDialog — clone layout", () => {
       title: "Shell",
       cwd: expect.stringContaining("feature/existing-work"),
       worktreeId: "new-wt-id",
-      exitBehavior: "persistent",
+      exitBehavior: "keep",
       devCommand: undefined,
       agentModelId: undefined,
       agentLaunchFlags: undefined,
@@ -549,7 +567,7 @@ describe("NewWorktreeDialog — clone layout", () => {
       title: "Claude",
       cwd: expect.stringContaining("feature/existing-work"),
       worktreeId: "new-wt-id",
-      exitBehavior: "persistent",
+      exitBehavior: "keep",
       devCommand: undefined,
       agentModelId: "claude-opus-4-7",
       agentLaunchFlags: ["--thinking"],
@@ -578,10 +596,28 @@ describe("NewWorktreeDialog — clone layout", () => {
     expect(mockAddTerminal).not.toHaveBeenCalled();
   });
 
+  it("clones layout when creating a new branch", async () => {
+    mockGenerateRecipeFromActiveTerminals.mockReturnValue([
+      { type: "terminal", title: "Shell", exitBehavior: "keep" },
+    ]);
+
+    await createWithNewBranch("feature/new-work");
+
+    expect(mockGenerateRecipeFromActiveTerminals).toHaveBeenCalledWith("main-wt");
+    expect(mockAddTerminal).toHaveBeenCalledTimes(1);
+    expect(mockAddTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "terminal",
+        title: "Shell",
+        worktreeId: "new-wt-id",
+      })
+    );
+  });
+
   it("skips clone when no active source worktree is available", async () => {
     mockActiveWorktreeId = null;
     mockGenerateRecipeFromActiveTerminals.mockReturnValue([
-      { type: "terminal", title: "Shell", exitBehavior: "persistent" },
+      { type: "terminal", title: "Shell", exitBehavior: "keep" },
     ]);
 
     await createWithExistingBranch();
