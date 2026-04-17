@@ -469,11 +469,90 @@ describe("PtyClient adversarial", () => {
       const client = createReadyClient();
       const { payloads } = captureCrash(client);
 
-      emitGone({ name: "some-other-host", reason: "oom" });
+      // Clear both name and serviceName so the filter can't fall through.
+      emitGone({ name: "some-other-host", serviceName: "some-other-host", reason: "oom" });
       mockChild.emit("exit", 0);
       vi.advanceTimersByTime(1);
 
       expect(payloads).toHaveLength(0);
+    });
+
+    it("SERVICE_NAME_MATCHES_WHEN_NAME_IS_UNDEFINED", () => {
+      const client = createReadyClient();
+      const { payloads } = captureCrash(client);
+
+      // Electron 41 populates both `name` and `serviceName`, but the `Details`
+      // type flags both as optional. Make sure we still match if only
+      // `serviceName` is present.
+      shared.appMock.emit(
+        "child-process-gone",
+        {},
+        {
+          type: "Utility",
+          reason: "oom",
+          exitCode: 0,
+          serviceName: "daintree-pty-host",
+        }
+      );
+      mockChild.emit("exit", 0);
+      vi.advanceTimersByTime(1);
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0].crashType).toBe("OUT_OF_MEMORY");
+    });
+
+    it("MANUAL_RESTART_DURING_EXIT_DEFER_DOES_NOT_DOUBLE_START", () => {
+      const client = createReadyClient();
+      const restartedChild = createMockChild();
+      restartedChild.pid = 777;
+
+      // Exit fires — synchronous part nulls this.child, setImmediate is queued.
+      mockChild.emit("exit", 1);
+
+      // Before setImmediate runs, the renderer triggers manualRestart(). It
+      // sees this.child === null and forks a new host immediately.
+      shared.forkMock.mockReturnValue(restartedChild);
+      client.manualRestart();
+      expect(shared.forkMock).toHaveBeenCalledTimes(2);
+
+      // Now let the deferred setImmediate run. It must NOT schedule another
+      // restart, because a new host is already alive.
+      vi.advanceTimersByTime(1);
+
+      // And if a restart timer had been armed, draining timers would have
+      // triggered a third fork. Advance well past the max restart delay.
+      vi.advanceTimersByTime(30000);
+
+      expect(shared.forkMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("AUTHORITATIVE_REASON_CARRIES_AUTHORITATIVE_EXIT_CODE", () => {
+      const client = createReadyClient();
+      const { payloads } = captureCrash(client);
+
+      // Gone reports the authoritative exitCode; exit reports a mangled 0.
+      emitGone({ reason: "oom", exitCode: -1 });
+      mockChild.emit("exit", 0);
+      vi.advanceTimersByTime(1);
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0].code).toBe(-1);
+      expect(payloads[0].signal).toBeNull();
+      expect(payloads[0].crashType).toBe("OUT_OF_MEMORY");
+    });
+
+    it("CRASH_PAYLOAD_FIELDS_ARE_COMPLETE_ON_FALLBACK", () => {
+      const client = createReadyClient();
+      const { payloads } = captureCrash(client);
+
+      // No gone event — use exit-code heuristic. Payload should include all fields.
+      mockChild.emit("exit", 137);
+      vi.advanceTimersByTime(1);
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0].code).toBe(137);
+      expect(payloads[0].signal).toBe("SIG9");
+      expect(payloads[0].crashType).toBe("OUT_OF_MEMORY");
     });
 
     it("STARTHOST_CLEARS_STALE_GONE_BEFORE_NEW_HOST", () => {

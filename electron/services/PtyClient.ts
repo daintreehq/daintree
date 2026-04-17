@@ -261,7 +261,13 @@ export class PtyClient extends EventEmitter {
     if (this.childProcessGoneHandler) return;
     const handler = (_event: Electron.Event, details: Electron.Details): void => {
       if (this.isDisposed) return;
-      if (details.type !== "Utility" || details.name !== "daintree-pty-host") return;
+      if (details.type !== "Utility") return;
+      // Electron 41 populates `name` from `serviceName` at runtime, but both
+      // fields are typed as optional. Accept either to stay resilient to
+      // future runtime changes or edge cases where only one is set.
+      const matchesHost =
+        details.name === "daintree-pty-host" || details.serviceName === "daintree-pty-host";
+      if (!matchesHost) return;
       this.pendingChildProcessGoneReason = {
         reason: details.reason,
         exitCode: details.exitCode,
@@ -448,9 +454,13 @@ export class PtyClient extends EventEmitter {
         const crashType: CrashType = gone
           ? mapGoneReasonToCrashType(gone.reason)
           : fallbackCrashType;
+        // Prefer the authoritative exit code from `child-process-gone` over the
+        // (sometimes unreliable) one from `exit` — Electron 40-41 has a known
+        // signed/unsigned mangling bug on Windows for the exit event.
+        const reportedCode = gone ? gone.exitCode : code;
 
         console.error(
-          `[PtyClient] Pty Host exited with code ${code}` +
+          `[PtyClient] Pty Host exited with code ${reportedCode}` +
             (crashType !== "CLEAN_EXIT" ? ` (${crashType})` : "")
         );
 
@@ -459,13 +469,20 @@ export class PtyClient extends EventEmitter {
         // Emit crash payload with classification for downstream consumers
         if (crashType !== "CLEAN_EXIT") {
           const crashPayload: HostCrashPayload = {
-            code,
-            signal,
+            code: reportedCode,
+            // When we have an authoritative reason, trust it and clear the
+            // derived-from-exit-code signal string.
+            signal: gone ? null : signal,
             crashType,
             timestamp: Date.now(),
           };
           this.emit("host-crash-details", crashPayload);
         }
+
+        // If `manualRestart()` already spawned a new host during the defer
+        // window (possible via the renderer TERMINAL_RESTART_SERVICE IPC call),
+        // don't schedule a second auto-restart — it would orphan that host.
+        if (this.child !== null) return;
 
         // Try to restart
         if (this.restartAttempts < this.config.maxRestartAttempts) {
@@ -480,12 +497,13 @@ export class PtyClient extends EventEmitter {
           }
           this.restartTimer = setTimeout(() => {
             this.restartTimer = null;
+            if (this.isDisposed || this.child !== null) return;
             this.needsRespawn = true;
             this.startHost();
           }, delay);
         } else {
           console.error("[PtyClient] Max restart attempts reached, giving up");
-          this.emit("host-crash", code);
+          this.emit("host-crash", reportedCode);
         }
       });
     });
