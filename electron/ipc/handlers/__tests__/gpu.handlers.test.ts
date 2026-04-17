@@ -53,41 +53,56 @@ describe("GPU_SET_HARDWARE_ACCELERATION handler", () => {
     ipcMainMock._handlers.clear();
   });
 
-  it("disables GPU, then calls relaunch, closeTelemetry, exit(0) — in order", async () => {
-    const callOrder: string[] = [];
-    gpuMonitorMock.writeGpuDisabledFlag.mockImplementation(() => callOrder.push("writeFlag"));
-    appMock.relaunch.mockImplementation(() => callOrder.push("relaunch"));
-    telemetryServiceMock.closeTelemetry.mockImplementation(async () => {
-      callOrder.push("closeTelemetry");
+  it("disables GPU then awaits closeTelemetry before exit(0)", async () => {
+    let resolveClose!: () => void;
+    const deferred = new Promise<void>((r) => {
+      resolveClose = r;
     });
-    appMock.exit.mockImplementation(() => callOrder.push("exit"));
+    telemetryServiceMock.closeTelemetry.mockReturnValue(deferred);
 
     registerGpuHandlers();
     const handler = ipcMainMock._handlers.get("gpu:set-hardware-acceleration")!;
     expect(handler).toBeDefined();
 
-    await handler({} as Electron.IpcMainInvokeEvent, false);
+    const handlerPromise = handler({} as Electron.IpcMainInvokeEvent, false);
 
-    expect(callOrder).toEqual(["writeFlag", "relaunch", "closeTelemetry", "exit"]);
-    expect(appMock.exit).toHaveBeenCalledWith(0);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(gpuMonitorMock.writeGpuDisabledFlag).toHaveBeenCalled();
     expect(storeMock.set).toHaveBeenCalledWith("gpu", { hardwareAccelerationDisabled: true });
+    expect(appMock.relaunch).toHaveBeenCalled();
+    expect(telemetryServiceMock.closeTelemetry).toHaveBeenCalled();
+    expect(appMock.exit).not.toHaveBeenCalled();
+
+    resolveClose();
+    await handlerPromise;
+
+    expect(appMock.exit).toHaveBeenCalledWith(0);
   });
 
-  it("enables GPU: clears flag, relaunch, closeTelemetry, exit(0) — in order", async () => {
-    const callOrder: string[] = [];
-    gpuMonitorMock.clearGpuDisabledFlag.mockImplementation(() => callOrder.push("clearFlag"));
-    appMock.relaunch.mockImplementation(() => callOrder.push("relaunch"));
-    telemetryServiceMock.closeTelemetry.mockImplementation(async () => {
-      callOrder.push("closeTelemetry");
+  it("enables GPU then awaits closeTelemetry before exit(0)", async () => {
+    let resolveClose!: () => void;
+    const deferred = new Promise<void>((r) => {
+      resolveClose = r;
     });
-    appMock.exit.mockImplementation(() => callOrder.push("exit"));
+    telemetryServiceMock.closeTelemetry.mockReturnValue(deferred);
 
     registerGpuHandlers();
     const handler = ipcMainMock._handlers.get("gpu:set-hardware-acceleration")!;
 
-    await handler({} as Electron.IpcMainInvokeEvent, true);
+    const handlerPromise = handler({} as Electron.IpcMainInvokeEvent, true);
 
-    expect(callOrder).toEqual(["clearFlag", "relaunch", "closeTelemetry", "exit"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(gpuMonitorMock.clearGpuDisabledFlag).toHaveBeenCalled();
     expect(storeMock.set).toHaveBeenCalledWith("gpu", { hardwareAccelerationDisabled: false });
+    expect(appMock.relaunch).toHaveBeenCalled();
+    expect(telemetryServiceMock.closeTelemetry).toHaveBeenCalled();
+    expect(appMock.exit).not.toHaveBeenCalled();
+
+    resolveClose();
+    await handlerPromise;
+
+    expect(appMock.exit).toHaveBeenCalledWith(0);
   });
 });

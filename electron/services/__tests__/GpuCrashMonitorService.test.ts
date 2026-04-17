@@ -29,6 +29,12 @@ vi.mock("electron", () => ({
   app: appMock,
 }));
 
+const telemetryServiceMock = vi.hoisted(() => ({
+  closeTelemetry: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("../TelemetryService.js", () => telemetryServiceMock);
+
 import {
   isGpuDisabledByFlag,
   writeGpuDisabledFlag,
@@ -119,8 +125,12 @@ describe("GpuCrashMonitorService", () => {
       emitGpuCrash();
       emitGpuCrash();
       emitGpuCrash();
+      // Let the async crash handler flush — relaunch is sync, but exit is awaited
+      // after closeTelemetry.
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
       expect(appMock.relaunch).toHaveBeenCalledTimes(1);
-      expect(appMock.exit).toHaveBeenCalledWith(0);
       expect(isGpuDisabledByFlag(tmpDir)).toBe(true);
     });
 
@@ -176,8 +186,10 @@ describe("GpuCrashMonitorService", () => {
       emitGpuCrash("oom");
       emitGpuCrash("launch-failed");
       emitGpuCrash("abnormal-exit");
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
       expect(appMock.relaunch).toHaveBeenCalledTimes(1);
-      expect(appMock.exit).toHaveBeenCalledWith(0);
     });
 
     it("persists store state on relaunch", async () => {
@@ -197,8 +209,35 @@ describe("GpuCrashMonitorService", () => {
       emitGpuCrash();
       emitGpuCrash();
       emitGpuCrash();
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledTimes(1);
+      });
       expect(appMock.relaunch).toHaveBeenCalledTimes(1);
-      expect(appMock.exit).toHaveBeenCalledTimes(1);
+    });
+
+    it("waits for closeTelemetry to resolve before app.exit(0) on relaunch", async () => {
+      let resolveClose!: () => void;
+      const deferred = new Promise<void>((r) => {
+        resolveClose = r;
+      });
+      telemetryServiceMock.closeTelemetry.mockReturnValueOnce(deferred);
+
+      await loadAndInit();
+      emitGpuCrash();
+      emitGpuCrash();
+      emitGpuCrash();
+
+      await vi.waitFor(() => {
+        expect(telemetryServiceMock.closeTelemetry).toHaveBeenCalled();
+      });
+      expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      resolveClose();
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
     });
 
     it("does not register duplicate listeners on double initialize", async () => {

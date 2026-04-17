@@ -57,21 +57,30 @@ describe("PRIVACY_RESET_ALL_DATA handler", () => {
     ipcMainMock._handlers.clear();
   });
 
-  it("calls relaunch, then closeTelemetry, then exit(0) — in that order", async () => {
-    const callOrder: string[] = [];
-    appMock.relaunch.mockImplementation(() => callOrder.push("relaunch"));
-    telemetryServiceMock.closeTelemetry.mockImplementation(async () => {
-      callOrder.push("closeTelemetry");
+  it("calls relaunch then awaits closeTelemetry before exit(0)", async () => {
+    let resolveClose!: () => void;
+    const deferred = new Promise<void>((r) => {
+      resolveClose = r;
     });
-    appMock.exit.mockImplementation(() => callOrder.push("exit"));
+    telemetryServiceMock.closeTelemetry.mockReturnValue(deferred);
 
     registerPrivacyHandlers();
     const handler = ipcMainMock._handlers.get("privacy:reset-all-data")!;
     expect(handler).toBeDefined();
 
-    await handler();
+    const handlerPromise = handler();
 
-    expect(callOrder).toEqual(["relaunch", "closeTelemetry", "exit"]);
+    // Let synchronous prefix run (relaunch + the closeTelemetry call itself).
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(appMock.relaunch).toHaveBeenCalled();
+    expect(telemetryServiceMock.closeTelemetry).toHaveBeenCalled();
+    // exit MUST NOT fire before closeTelemetry resolves.
+    expect(appMock.exit).not.toHaveBeenCalled();
+
+    resolveClose();
+    await handlerPromise;
+
     expect(appMock.exit).toHaveBeenCalledWith(0);
   });
 
