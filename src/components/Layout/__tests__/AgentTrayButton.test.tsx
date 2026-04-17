@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, act } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 
 const dispatchMock = vi.fn();
@@ -8,6 +8,9 @@ const setAgentPinnedMock = vi.fn().mockResolvedValue(undefined);
 const setFocusedMock = vi.fn();
 const refreshAvailabilityMock = vi.fn().mockResolvedValue(undefined);
 let openChangeSpy: ((open: boolean) => void) | null = null;
+let tooltipOpenChangeSpy: ((open: boolean) => void) | null = null;
+let capturedTooltipOpen: boolean | undefined = undefined;
+let closeAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 
 let mockSettings: AgentSettings | null = null;
 let mockPanelsById: Record<string, unknown> = {};
@@ -87,9 +90,16 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     return <div>{children}</div>;
   },
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="dropdown-content">{children}</div>
-  ),
+  DropdownMenuContent: ({
+    children,
+    onCloseAutoFocus,
+  }: {
+    children: React.ReactNode;
+    onCloseAutoFocus?: (e: { preventDefault: () => void }) => void;
+  }) => {
+    closeAutoFocusSpy = onCloseAutoFocus ?? null;
+    return <div data-testid="dropdown-content">{children}</div>;
+  },
   DropdownMenuItem: ({
     children,
     onSelect,
@@ -123,7 +133,19 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
-  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({
+    children,
+    open,
+    onOpenChange,
+  }: {
+    children: React.ReactNode;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }) => {
+    tooltipOpenChangeSpy = onOpenChange ?? null;
+    capturedTooltipOpen = open;
+    return <>{children}</>;
+  },
   TooltipContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -166,6 +188,9 @@ describe("AgentTrayButton", () => {
     setFocusedMock.mockClear();
     refreshAvailabilityMock.mockClear();
     openChangeSpy = null;
+    tooltipOpenChangeSpy = null;
+    capturedTooltipOpen = undefined;
+    closeAutoFocusSpy = null;
     mockSettings = null;
     mockPanelsById = {};
     mockPanelIds = [];
@@ -478,6 +503,61 @@ describe("AgentTrayButton", () => {
     // Null settings means the normalizer hasn't run yet — with opt-in
     // semantics, that reads as unpinned until real data arrives.
     expect(getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("false");
+  });
+
+  it("suppresses tooltip reopen during focus restoration after dropdown closes (issue #5153)", () => {
+    vi.useFakeTimers();
+    try {
+      const availability = { claude: "ready" } as unknown as CliAvailability;
+      mockSettings = settingsWith({ claude: { pinned: true } });
+
+      render(<AgentTrayButton agentAvailability={availability} />);
+      expect(tooltipOpenChangeSpy).toBeTruthy();
+      expect(closeAutoFocusSpy).toBeTruthy();
+
+      // Hover opens the tooltip.
+      act(() => {
+        tooltipOpenChangeSpy!(true);
+      });
+      expect(capturedTooltipOpen).toBe(true);
+
+      // Dropdown opens — handleOpenChange forces the tooltip closed.
+      act(() => {
+        openChangeSpy!(true);
+      });
+      expect(capturedTooltipOpen).toBe(false);
+
+      // Dropdown closes; Radix tries to restore focus which would normally
+      // re-fire Tooltip.onOpenChange(true). The suppression ref must gate it.
+      act(() => {
+        closeAutoFocusSpy!({ preventDefault: vi.fn() });
+        tooltipOpenChangeSpy!(true);
+      });
+      expect(capturedTooltipOpen).toBe(false);
+
+      // After the microtask clears, tooltip opens normally again on hover.
+      act(() => {
+        vi.runAllTimers();
+      });
+      act(() => {
+        tooltipOpenChangeSpy!(true);
+      });
+      expect(capturedTooltipOpen).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not call preventDefault in onCloseAutoFocus (preserves a11y focus return)", () => {
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    mockSettings = settingsWith({ claude: { pinned: true } });
+
+    render(<AgentTrayButton agentAvailability={availability} />);
+    expect(closeAutoFocusSpy).toBeTruthy();
+
+    const preventDefault = vi.fn();
+    closeAutoFocusSpy!({ preventDefault });
+    expect(preventDefault).not.toHaveBeenCalled();
   });
 
   it("ignores panels from other worktrees for session detection", () => {
