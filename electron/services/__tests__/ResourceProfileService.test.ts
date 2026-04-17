@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vite
 import type { PtyClient } from "../PtyClient.js";
 import type { WorkspaceClient } from "../WorkspaceClient.js";
 import type { HibernationService } from "../HibernationService.js";
+import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
 
 // Mock electron modules before importing
 vi.mock("electron", () => ({
@@ -61,6 +62,9 @@ interface MockWorkspaceClient {
 interface MockHibernationService {
   setMemoryPressureThresholdMs: Mock;
 }
+interface MockProjectViewManager {
+  setCachedViewLimit: Mock;
+}
 
 function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDeps {
   const mockPtyClient: MockPtyClient = {
@@ -73,11 +77,16 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): ResourceProfileDe
   const mockHibernationService: MockHibernationService = {
     setMemoryPressureThresholdMs: vi.fn(),
   };
+  const mockProjectViewManager: MockProjectViewManager = {
+    setCachedViewLimit: vi.fn(),
+  };
 
   return {
     getPtyClient: () => mockPtyClient as unknown as PtyClient,
     getWorkspaceClient: () => mockWorkspaceClient as unknown as WorkspaceClient,
     getHibernationService: () => mockHibernationService as unknown as HibernationService,
+    getProjectViewManager: () => mockProjectViewManager as unknown as ProjectViewManager,
+    getUserCachedViewLimit: () => 2,
     ...overrides,
   };
 }
@@ -244,7 +253,117 @@ describe("ResourceProfileService", () => {
       getPtyClient: () => null,
       getWorkspaceClient: () => null,
       getHibernationService: () => null,
+      getProjectViewManager: () => null,
     });
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
+
+    // Should not throw
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    service.stop();
+  });
+
+  it("clamps cached project views to 1 when transitioning to efficiency", () => {
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    expect(pvm.setCachedViewLimit).toHaveBeenCalledWith(1);
+    expect(pvm.setCachedViewLimit).toHaveBeenCalledTimes(1);
+
+    service.stop();
+  });
+
+  it("restores user cached view limit when upgrading from efficiency to balanced", () => {
+    const deps = createDeps({ getUserCachedViewLimit: () => 3 });
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    // Drive into efficiency
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(1);
+
+    // Relieve to moderate pressure (score 1 = balanced)
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+
+    // First real eval sets candidate; 60s upgrade hold = 2 more ticks to apply
+    vi.advanceTimersByTime(30_000);
+    vi.advanceTimersByTime(30_000);
+    vi.advanceTimersByTime(30_000);
+
+    expect(service.getProfile()).toBe("balanced");
+    expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(3);
+    expect(pvm.setCachedViewLimit).toHaveBeenCalledTimes(2);
+
+    service.stop();
+  });
+
+  it("restores user cached view limit when upgrading from efficiency to performance", () => {
+    const deps = createDeps({ getUserCachedViewLimit: () => 2 });
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    // Drive into efficiency
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+    mockIsOnBatteryPower.mockReturnValue(true);
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("efficiency");
+
+    // Relieve to zero pressure (score 0 = performance)
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+
+    // First real eval sets candidate; 60s upgrade hold = 2 more ticks to apply
+    vi.advanceTimersByTime(30_000);
+    vi.advanceTimersByTime(30_000);
+    vi.advanceTimersByTime(30_000);
+
+    expect(service.getProfile()).toBe("performance");
+    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(2);
+    expect(pvm.setCachedViewLimit).toHaveBeenCalledTimes(2);
+
+    service.stop();
+  });
+
+  it("does not touch cached view limit on balanced → performance transition", () => {
+    const deps = createDeps();
+    const service = new ResourceProfileService(deps);
+    service.start();
+
+    // Low pressure from the start — balanced → performance, no efficiency involved
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
+    mockIsOnBatteryPower.mockReturnValue(false);
+
+    vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000);
+    expect(service.getProfile()).toBe("performance");
+
+    const pvm = deps.getProjectViewManager() as unknown as MockProjectViewManager;
+    expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
+
+    service.stop();
+  });
+
+  it("handles null project view manager on efficiency transition", () => {
+    const deps = createDeps({ getProjectViewManager: () => null });
     const service = new ResourceProfileService(deps);
     service.start();
 

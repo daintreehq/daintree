@@ -6,6 +6,7 @@ import { logInfo } from "../utils/logger.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import type { HibernationService } from "./HibernationService.js";
+import type { ProjectViewManager } from "../window/ProjectViewManager.js";
 import {
   RESOURCE_PROFILE_CONFIGS,
   type ResourceProfile,
@@ -30,6 +31,8 @@ export interface ResourceProfileDeps {
   getPtyClient: () => PtyClient | null;
   getWorkspaceClient: () => WorkspaceClient | null;
   getHibernationService: () => HibernationService | null;
+  getProjectViewManager: () => ProjectViewManager | null;
+  getUserCachedViewLimit: () => number;
 }
 
 export class ResourceProfileService {
@@ -203,6 +206,26 @@ export class ResourceProfileService {
     if (ptyClient) {
       try {
         ptyClient.setResourceProfile(profile);
+      } catch {
+        // non-critical
+      }
+    }
+
+    // Adjust cached project view limit under memory pressure.
+    // Cached WebContentsViews cost ~100–500 MB RSS each (full Chromium renderer),
+    // so clamping to 1 on efficiency reclaims the largest memory chunk available.
+    // NOTE: only reaches the primary window's PVM (single-window scope) — mirrors
+    // the existing PtyClient/HibernationService ref pattern.
+    // TODO: memory-pressure eviction bypasses the browser/dev-preview state-capture
+    // flow used in project-switch-initiated eviction (see issue #5009).
+    const pvm = this.deps.getProjectViewManager();
+    if (pvm) {
+      try {
+        if (profile === "efficiency") {
+          pvm.setCachedViewLimit(1);
+        } else if (previous === "efficiency") {
+          pvm.setCachedViewLimit(this.deps.getUserCachedViewLimit());
+        }
       } catch {
         // non-critical
       }

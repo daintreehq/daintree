@@ -76,6 +76,7 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { isSmokeTest, isDemoMode, smokeTestStart, exposeGc } from "../setup/environment.js";
 import { extractCliPath, getPendingCliPath, setPendingCliPath } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
+import { getProjectViewManager } from "./windowRef.js";
 
 const DEFAULT_TERMINAL_ID = "default";
 
@@ -987,6 +988,9 @@ export async function setupWindowServices(
       getPtyClient: () => ptyClient,
       getWorkspaceClient: () => workspaceClient,
       getHibernationService: () => getHibernationService(),
+      getProjectViewManager: () => getProjectViewManager(),
+      getUserCachedViewLimit: () =>
+        store.get("terminalConfig")?.cachedProjectViews ?? (process.env.DAINTREE_E2E_MODE ? 4 : 1),
     });
     resourceProfileService.start();
   }

@@ -248,7 +248,8 @@ export class ProjectViewManager {
   }
 
   setCachedViewLimit(n: number): void {
-    this.maxCachedViews = Math.max(1, Math.min(5, n));
+    const safe = Number.isFinite(n) ? n : 1;
+    this.maxCachedViews = Math.max(1, Math.min(5, safe));
     this.evictStaleViews();
   }
 
