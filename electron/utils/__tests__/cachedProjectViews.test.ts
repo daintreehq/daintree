@@ -104,6 +104,26 @@ describe("effectiveCachedProjectViews", () => {
     expect(effectiveCachedProjectViews(0, { totalMemBytes: mem(128), isE2E: true })).toBe(4);
   });
 
+  it("prefers an explicit opts.isE2E over the environment variable", () => {
+    const prev = process.env.DAINTREE_E2E_MODE;
+    try {
+      process.env.DAINTREE_E2E_MODE = "1";
+      expect(effectiveCachedProjectViews(undefined, { totalMemBytes: mem(8), isE2E: false })).toBe(
+        1
+      );
+      delete process.env.DAINTREE_E2E_MODE;
+      expect(effectiveCachedProjectViews(undefined, { totalMemBytes: mem(8), isE2E: true })).toBe(
+        4
+      );
+    } finally {
+      if (prev === undefined) {
+        delete process.env.DAINTREE_E2E_MODE;
+      } else {
+        process.env.DAINTREE_E2E_MODE = prev;
+      }
+    }
+  });
+
   it("reads DAINTREE_E2E_MODE from the environment when isE2E is not provided", () => {
     const prev = process.env.DAINTREE_E2E_MODE;
     try {
