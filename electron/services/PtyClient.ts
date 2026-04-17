@@ -462,8 +462,6 @@ export class PtyClient extends EventEmitter {
         this.readyReject = null;
       }
 
-      this.cleanupOrphanedPtys(crashType);
-
       this.broker.clear(new BrokerError("HOST_EXITED", "Pty host exited"));
       this.shouldResyncProjectContext = true;
 
