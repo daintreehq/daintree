@@ -1052,6 +1052,42 @@ describe("worktree cycling respects sidebar order", () => {
     expect(select).not.toHaveBeenCalled();
   });
 
+  it("previous and up agree when the active worktree is filtered out", async () => {
+    installWorktrees([
+      { id: "main", name: "main", branch: "main", path: "/repo", isMainWorktree: true },
+      { id: "wt-idle", name: "idle", branch: "feature/idle", path: "/repo/idle" },
+      { id: "wt-working", name: "working", branch: "feature/working", path: "/repo/working" },
+    ]);
+    usePanelStore.setState({
+      panelsById: {
+        "term-working": createTerminal({
+          id: "term-working",
+          worktreeId: "wt-working",
+          agentState: "working",
+        }),
+      },
+      panelIds: ["term-working"],
+    });
+    useWorktreeFilterStore.setState({
+      orderBy: "alpha",
+      quickStateFilter: "working",
+      alwaysShowActive: false,
+    });
+    const select = spySelectWorktree();
+
+    const actions = buildRegistry(registerWorktreeActions, {
+      getActiveWorktreeId: () => "wt-idle",
+    });
+
+    await actions.get("worktree.previous")!().run(undefined, {} as never);
+    await actions.get("worktree.up")!().run(undefined, {} as never);
+
+    // Visible list: [main, wt-working]. Both actions must pick the same entry
+    // (last visible → wt-working) so cycle and directional navigation agree.
+    expect(select.mock.calls[0][0]).toBe("wt-working");
+    expect(select.mock.calls[1][0]).toBe("wt-working");
+  });
+
   it("up/down use first/last visible when active is filtered out", async () => {
     installWorktrees([
       { id: "main", name: "main", branch: "main", path: "/repo", isMainWorktree: true },

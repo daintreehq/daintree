@@ -308,8 +308,13 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       const currentIndex = activeWorktreeId
         ? worktrees.findIndex((w) => w.id === activeWorktreeId)
         : -1;
+      // When the active worktree is outside the visible list, wrap from the
+      // end — this matches worktree.up/upVim so directional and cycle actions
+      // agree when filters hide the active worktree.
       const prevIndex =
-        currentIndex === -1 ? 0 : (currentIndex - 1 + worktrees.length) % worktrees.length;
+        currentIndex === -1
+          ? worktrees.length - 1
+          : (currentIndex - 1 + worktrees.length) % worktrees.length;
       useWorktreeSelectionStore.getState().selectWorktree(worktrees[prevIndex].id);
     },
   }));

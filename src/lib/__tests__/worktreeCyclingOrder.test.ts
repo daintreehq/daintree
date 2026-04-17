@@ -236,9 +236,9 @@ describe("getVisibleWorktreesForCycling", () => {
     expect(ids[0]).toBe("wt-newer");
   });
 
-  it("walks grouped + manual + pins in the flattened render order", () => {
+  it("walks manual order with pins promoted to the top", () => {
     useWorktreeFilterStore.setState({
-      groupByType: false, // manual sort cannot combine with groupByType — sidebar forces created
+      groupByType: false,
       orderBy: "manual",
       pinnedWorktrees: ["feat-1", "bug-2"],
       manualOrder: ["bug-2", "feat-2", "feat-1", "chore-1"],
@@ -252,9 +252,28 @@ describe("getVisibleWorktreesForCycling", () => {
     ]);
 
     const ids = getVisibleWorktreesForCycling().map((w) => w.id);
-    // Pins come first in pin order (feat-1, bug-2), then remaining non-main in
-    // manualOrder (bug-2 already pinned → skip, feat-2, feat-1 already pinned → skip,
-    // chore-1). Final: [main, feat-1, bug-2, feat-2, chore-1].
+    // Pins come first in pin-array order (feat-1, bug-2), then remaining
+    // non-pinned entries in manualOrder (feat-2, chore-1).
     expect(ids).toEqual(["main", "feat-1", "bug-2", "feat-2", "chore-1"]);
+  });
+
+  it("walks grouped sections with pins promoted within the flattened sections", () => {
+    useWorktreeFilterStore.setState({
+      groupByType: true,
+      orderBy: "alpha",
+      pinnedWorktrees: ["feat-2", "bug-2"],
+    });
+    setWorktrees([
+      createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
+      createSnapshot({ id: "feat-1", name: "feat-1", branch: "feature/one" }),
+      createSnapshot({ id: "feat-2", name: "feat-2", branch: "feature/two" }),
+      createSnapshot({ id: "bug-1", name: "bug-1", branch: "bugfix/one" }),
+      createSnapshot({ id: "bug-2", name: "bug-2", branch: "bugfix/two" }),
+    ]);
+
+    const ids = getVisibleWorktreesForCycling().map((w) => w.id);
+    // Grouped order (feature → bugfix) with pins promoted inside each section:
+    // feature section = [feat-2 (pinned), feat-1]; bugfix section = [bug-2 (pinned), bug-1].
+    expect(ids).toEqual(["main", "feat-2", "feat-1", "bug-2", "bug-1"]);
   });
 });
