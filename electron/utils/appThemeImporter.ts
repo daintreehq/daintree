@@ -7,6 +7,7 @@ import {
   getBuiltInAppSchemeForType,
   inferAppThemeTypeFromTokens,
   normalizeAppColorScheme,
+  validateImportedThemeData,
   type AppThemeImportResult,
   type ThemePalette,
 } from "../../shared/theme/index.js";
@@ -112,6 +113,16 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
     };
   }
 
+  const rawRecord = rawTheme as Record<string, unknown>;
+  const validation = validateImportedThemeData({
+    tokens: rawTokens,
+    palette: rawTheme.palette,
+    heroImage: rawRecord.heroImage,
+  });
+  if (!validation.valid) {
+    return { ok: false, errors: validation.errors };
+  }
+
   const paletteType =
     rawTheme.palette &&
     typeof rawTheme.palette === "object" &&
@@ -122,7 +133,6 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
   const resolvedType =
     rawTheme.type ?? paletteType ?? inferAppThemeTypeFromTokens(rawTokens) ?? "dark";
   const name = rawTheme.name?.trim() || getFileDisplayName(filename);
-  const rawRecord = rawTheme as Record<string, unknown>;
   const scheme = normalizeAppColorScheme(
     {
       id: rawTheme.id?.trim() || generateThemeId(name),
