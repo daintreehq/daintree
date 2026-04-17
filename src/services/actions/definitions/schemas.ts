@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { BUILT_IN_AGENT_IDS, BUILT_IN_TERMINAL_TYPES } from "@shared/config/agentIds";
 
-export const AgentIdSchema = z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser"]);
+export const AgentIdSchema = z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser", "dev-preview"]);
 
 export const LaunchLocationSchema = z.enum(["grid", "dock"]);
 

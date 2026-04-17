@@ -281,7 +281,7 @@ describe("agent.launch dispatch integration", () => {
     });
   });
 
-  it("rejects malformed args with a VALIDATION_ERROR result rather than invoking the callback", async () => {
+  it("rejects malformed args with a VALIDATION_ERROR targeting agentId and never invokes the callback", async () => {
     const { ActionService } = await import("../../../ActionService");
     const service = new ActionService();
 
@@ -302,7 +302,33 @@ describe("agent.launch dispatch integration", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe("VALIDATION_ERROR");
+      expect(JSON.stringify(result.error.details)).toContain("agentId");
     }
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("accepts dev-preview through the schema so worktree-card dev-preview launches don't silently fail", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "dev-preview", worktreeId: "wt-1", location: "grid" },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "dev-preview",
+      expect.objectContaining({ worktreeId: "wt-1", location: "grid" })
+    );
   });
 });

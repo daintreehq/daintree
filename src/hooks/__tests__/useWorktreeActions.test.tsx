@@ -97,6 +97,19 @@ describe("useWorktreeActions", () => {
       { source: "user" }
     );
   });
+
+  it("handleLaunchAgent dispatches agent.launch for dev-preview panels", () => {
+    dispatchMock.mockResolvedValueOnce({ ok: true, result: { terminalId: "term-dev" } });
+
+    const { result } = renderHook(() => useWorktreeActions());
+    result.current.handleLaunchAgent("wt-1", "dev-preview");
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "agent.launch",
+      { agentId: "dev-preview", worktreeId: "wt-1", location: "grid" },
+      { source: "user" }
+    );
+  });
 });
 
 describe("formatCopyResultMessage", () => {

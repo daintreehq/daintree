@@ -8,16 +8,20 @@ const {
   addPanelMock,
   getEffectiveAgentIdsMock,
   getLaunchOptionsMock,
+  closePaletteMock,
   cliAvailabilityState,
+  paletteState,
 } = vi.hoisted(() => ({
   dispatchMock: vi.fn(),
   addPanelMock: vi.fn(),
   getEffectiveAgentIdsMock: vi.fn(),
   getLaunchOptionsMock: vi.fn(),
+  closePaletteMock: vi.fn(),
   cliAvailabilityState: {
     availability: {} as Record<string, string>,
     isInitialized: true,
   },
+  paletteState: { activePaletteId: null as string | null },
 }));
 
 vi.mock("@shared/config/agentRegistry", () => ({
@@ -52,6 +56,25 @@ vi.mock("@/store/cliAvailabilityStore", () => {
     selector(cliAvailabilityState);
   store.getState = () => cliAvailabilityState;
   return { useCliAvailabilityStore: store };
+});
+
+vi.mock("@/store/paletteStore", () => {
+  const store = Object.assign(
+    (selector: (state: { activePaletteId: string | null }) => unknown) => selector(paletteState),
+    {
+      getState: () => ({
+        activePaletteId: paletteState.activePaletteId,
+        openPalette: (id: string) => {
+          paletteState.activePaletteId = id;
+        },
+        closePalette: (id: string) => {
+          closePaletteMock(id);
+          if (paletteState.activePaletteId === id) paletteState.activePaletteId = null;
+        },
+      }),
+    }
+  );
+  return { usePaletteStore: store };
 });
 
 vi.mock("@/services/ActionService", () => ({
@@ -98,6 +121,7 @@ describe("useNewTerminalPalette", () => {
       gemini: "ready",
       codex: "ready",
     };
+    paletteState.activePaletteId = null;
 
     getEffectiveAgentIdsMock.mockReturnValue(["claude", "gemini", "codex"]);
     getLaunchOptionsMock.mockReturnValue([
