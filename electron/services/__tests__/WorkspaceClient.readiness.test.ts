@@ -198,7 +198,7 @@ describe("WorkspaceClient.waitForReady after host restart", () => {
     expect(resolved).toBe(true);
   });
 
-  it("does not hang forever if the post-restart load-project fails", async () => {
+  it("rejects when the post-restart load-project fails so callers can bail", async () => {
     await loadAndReady("/project-a", 1);
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -213,11 +213,81 @@ describe("WorkspaceClient.waitForReady after host restart", () => {
       .filter((r: any) => r.type === "load-project");
     h(0).rejectRequest(loadProjectReqs[1].requestId, new Error("reload failed"));
 
-    await expect(client.waitForReady()).resolves.toBeUndefined();
+    await expect(client.waitForReady()).rejects.toThrow("reload failed");
     expect(consoleError).toHaveBeenCalledWith(
       expect.stringContaining("Failed to reload project after host restart"),
       expect.any(Error)
     );
+    consoleError.mockRestore();
+  });
+
+  it("resolves cleanly when a failed restart-reload is followed by a successful one", async () => {
+    await loadAndReady("/project-a", 1);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // Restart 1: fails mid-reload.
+    h(0).resetReady();
+    h(0).emit("restarted");
+    await tick();
+    h(0).simulateReady();
+    await tick();
+    const reqsAfterRestart1 = h(0)
+      .getAllRequests()
+      .filter((r: any) => r.type === "load-project");
+    h(0).rejectRequest(reqsAfterRestart1[1].requestId, new Error("reload 1 failed"));
+    await tick();
+
+    // Restart 2: succeeds. `currentReadyPromise` is replaced by the fresh
+    // restart promise, so waitForReady should now resolve.
+    h(0).resetReady();
+    h(0).emit("restarted");
+    await tick();
+
+    const waitPromise = client.waitForReady();
+    h(0).simulateReady();
+    await tick();
+
+    const reqsAfterRestart2 = h(0)
+      .getAllRequests()
+      .filter((r: any) => r.type === "load-project");
+    expect(reqsAfterRestart2.length).toBe(3);
+    h(0).resolveRequest(reqsAfterRestart2[2].requestId);
+
+    await expect(waitPromise).resolves.toBeUndefined();
+    consoleError.mockRestore();
+  });
+
+  it("loadProject on a poisoned restarted entry disposes the old host and creates a new one", async () => {
+    await loadAndReady("/project-a", 1);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // Restart fails — entry's currentReadyPromise rejects.
+    h(0).resetReady();
+    h(0).emit("restarted");
+    await tick();
+    h(0).simulateReady();
+    await tick();
+    const reqs = h(0)
+      .getAllRequests()
+      .filter((r: any) => r.type === "load-project");
+    h(0).rejectRequest(reqs[1].requestId, new Error("reload failed"));
+    await tick();
+
+    // Second window tries to attach to the same project. The poisoned entry
+    // must NOT be reused — loadProject should dispose it and spin up a new
+    // host.
+    const load = client.loadProject("/project-a", 2);
+    await tick();
+    expect(h(0).dispose).toHaveBeenCalledTimes(1);
+    expect(mockHosts.length).toBe(2);
+
+    h(1).simulateReady();
+    await tick();
+    const newReq = h(1).getLastRequest()!;
+    expect(newReq.type).toBe("load-project");
+    h(1).resolveRequest(newReq.requestId);
+
+    await expect(load).resolves.toBeUndefined();
     consoleError.mockRestore();
   });
 });

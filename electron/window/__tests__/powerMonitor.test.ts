@@ -263,6 +263,40 @@ describe("setupPowerMonitor", () => {
     expect(dead.wc.send).not.toHaveBeenCalled();
   });
 
+  it("blocks refresh and broadcast until waitForReady resolves", async () => {
+    let resolveReady: (() => void) | null = null;
+    const readyPromise = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    const workspaceClient = createMockWorkspaceClient({
+      waitForReady: vi.fn(() => readyPromise),
+    });
+    const { win, wc } = createMockWindow();
+    mockGetAllWindows.mockReturnValue([win]);
+
+    setupPowerMonitor({
+      getPtyClient: () => createMockPtyClient(),
+      getWorkspaceClient: () => workspaceClient,
+    });
+
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(workspaceClient.waitForReady).toHaveBeenCalledTimes(1);
+    expect(workspaceClient.setPollingEnabled).not.toHaveBeenCalled();
+    expect(workspaceClient.resumeHealthCheck).not.toHaveBeenCalled();
+    expect(workspaceClient.refresh).not.toHaveBeenCalled();
+    expect(wc.send).not.toHaveBeenCalled();
+
+    resolveReady!();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expect(workspaceClient.resumeHealthCheck).toHaveBeenCalledTimes(1);
+    expect(workspaceClient.refresh).toHaveBeenCalledTimes(1);
+    expect(wc.send).toHaveBeenCalledWith("system:wake", expect.any(Object));
+  });
+
   it("skips SYSTEM_WAKE for a window whose webContents is destroyed", async () => {
     const workspaceClient = createMockWorkspaceClient();
     const { win, wc } = createMockWindow();

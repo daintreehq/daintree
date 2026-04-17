@@ -154,15 +154,14 @@ export class WorkspaceClient extends EventEmitter {
 
     host.on("restarted", () => {
       const restartPromise = this.reloadProjectAfterRestart(entry);
-      // Gate `waitForReady()` on the restart reload so callers (e.g. the
-      // power-monitor resume handler) don't send follow-up requests to a host
-      // that hasn't finished `load-project` yet.
-      entry.currentReadyPromise = restartPromise.catch((err) => {
+      restartPromise.catch((err) => {
         console.error(`[WorkspaceClient] Failed to reload project after host restart:`, err);
-        // Swallow the rejection so subsequent `waitForReady()` calls don't
-        // hang forever on a failed reload — downstream IPC calls already
-        // tolerate a partially-broken host.
       });
+      // Gate `waitForReady()` on the restart reload so callers don't race
+      // ahead of `load-project` on a restarted host. Let rejection propagate
+      // so a false-positive "ready" can't unblock callers on a broken host —
+      // the next `restarted` event will overwrite this with a fresh promise.
+      entry.currentReadyPromise = restartPromise;
     });
   }
 
@@ -376,12 +375,16 @@ export class WorkspaceClient extends EventEmitter {
 
     const existingEntry = this.entries.get(normalizedPath);
     if (existingEntry) {
-      // Check if this entry has a failed initPromise (poisoned by prior crash)
-      const isInitFailed = await existingEntry.initPromise.then(
+      // Check if this entry has a failed readiness promise (poisoned by a
+      // prior init crash or a failed post-restart reload). Using
+      // `currentReadyPromise` catches both the original load and the most
+      // recent restart — reusing a host whose restart-reload failed produces
+      // stale state that looks like the wake-staleness bug.
+      const isReadyFailed = await existingEntry.currentReadyPromise.then(
         () => false,
         () => true
       );
-      if (isInitFailed) {
+      if (isReadyFailed) {
         existingEntry.host.dispose();
         this.entries.delete(normalizedPath);
       } else {

@@ -41,6 +41,10 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
     clearResumeTimeout();
     resumeTimeout = setTimeout(async () => {
       resumeTimeout = null;
+      // Capture and clear suspendTime up front so a mid-handler exception
+      // can't leak it into the next wake cycle's sleepDuration calculation.
+      const sleepDuration = suspendTime ? Date.now() - suspendTime : 0;
+      suspendTime = null;
       try {
         const ptyClient = deps.getPtyClient();
         const workspaceClient = deps.getWorkspaceClient();
@@ -54,7 +58,6 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
           workspaceClient.resumeHealthCheck();
           await workspaceClient.refresh();
         }
-        const sleepDuration = suspendTime ? Date.now() - suspendTime : 0;
         BrowserWindow.getAllWindows().forEach((win) => {
           if (win && !win.isDestroyed()) {
             const wc = getAppWebContents(win);
@@ -70,7 +73,6 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
             }
           }
         });
-        suspendTime = null;
       } catch (error) {
         console.error("[MAIN] Error during resume:", error);
       }
