@@ -4,7 +4,6 @@ import { getPanelKindIds, getPanelKindConfig } from "@shared/config/panelKindReg
 import { getPanelKindDefinition } from "@/registry";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { keybindingService } from "@/services/KeybindingService";
@@ -63,7 +62,6 @@ export const MORE_AGENTS_PANEL_ID = "more-agents";
 
 export function usePanelPalette(): UsePanelPaletteReturn {
   const userRegistry = useUserAgentRegistryStore((state) => state.registry);
-  const agentSettings = useAgentSettingsStore((state) => state.settings);
   const availability = useCliAvailabilityStore((state) => state.availability);
   const isAvailabilityInitialized = useCliAvailabilityStore((state) => state.isInitialized);
   const [keybindingVersion, setKeybindingVersion] = useState(0);
@@ -104,8 +102,8 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       });
 
     const isAgentHidden = (agentId: string): boolean => {
-      if (!agentSettings?.agents) return false;
-      return agentSettings.agents[agentId]?.pinned !== true;
+      if (!isAvailabilityInitialized) return false;
+      return !isAgentInstalled(availability[agentId]);
     };
 
     const agentKinds = getEffectiveAgentIds()
@@ -172,14 +170,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       ...toolDedup.values(),
       ...resumeOptions,
     ];
-  }, [
-    userRegistry,
-    keybindingVersion,
-    agentSettings,
-    resumeSessions,
-    availability,
-    isAvailabilityInitialized,
-  ]);
+  }, [userRegistry, keybindingVersion, resumeSessions, availability, isAvailabilityInitialized]);
 
   const { results, selectedIndex, close, isOpen, matchesById, ...paletteRest } =
     useSearchablePalette<PanelKindOption>({

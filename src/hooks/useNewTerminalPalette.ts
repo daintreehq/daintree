@@ -7,11 +7,12 @@ import {
 import type { LaunchAgentOptions } from "./useAgentLauncher";
 import { useWorktreeSelectionStore, usePanelStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { WorktreeState } from "@/types";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { actionService } from "@/services/ActionService";
 import { getEffectiveAgentIds } from "@shared/config/agentRegistry";
+import { isAgentInstalled } from "../../shared/utils/agentAvailability";
 
 interface UseNewTerminalPaletteProps {
   launchAgent: (type: string, options?: LaunchAgentOptions) => Promise<string | null>;
@@ -42,17 +43,18 @@ export function useNewTerminalPalette({
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const currentProject = useProjectStore((state) => state.currentProject);
   const addPanel = usePanelStore((state) => state.addPanel);
-  const agentSettings = useAgentSettingsStore((state) => state.settings);
+  const availability = useCliAvailabilityStore((state) => state.availability);
+  const isAvailabilityInitialized = useCliAvailabilityStore((state) => state.isInitialized);
 
   const options = useMemo(() => {
     const allOptions = getLaunchOptions();
     const registryAgentIds = new Set(getEffectiveAgentIds());
 
-    // When settings haven't loaded yet, show all agents (no filter).
-    // When loaded, hide agents that are not pinned.
+    // Before availability is known, show all agents (avoids startup flicker).
+    // Once known, hide agents that are not installed.
     const isAgentHidden = (id: string): boolean => {
-      if (!agentSettings?.agents) return false;
-      return agentSettings.agents[id]?.pinned !== true;
+      if (!isAvailabilityInitialized) return false;
+      return !isAgentInstalled(availability[id]);
     };
 
     const filtered = allOptions.filter(
@@ -62,7 +64,7 @@ export function useNewTerminalPalette({
     filtered.push(getMoreAgentsOption());
 
     return filtered;
-  }, [agentSettings]);
+  }, [availability, isAvailabilityInitialized]);
 
   const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<LaunchOption>({
     items: options,

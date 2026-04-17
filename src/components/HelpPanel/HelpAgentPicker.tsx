@@ -1,50 +1,57 @@
 import { useMemo, useCallback } from "react";
-import { Settings } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { AGENT_REGISTRY } from "@/config/agents";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import { actionService } from "@/services/ActionService";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
-import { isAgentMissing } from "../../../shared/utils/agentAvailability";
+import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 
 interface HelpAgentPickerProps {
   onSelectAgent: (agentId: string) => void;
 }
 
 export function HelpAgentPicker({ onSelectAgent }: HelpAgentPickerProps) {
-  const settings = useAgentSettingsStore((s) => s.settings);
   const availability = useCliAvailabilityStore((s) => s.availability);
+  // Gate on `hasRealData` (not `isInitialized`): `isInitialized` flips true even on probe
+  // failure, but `hasRealData` waits for a real result — from localStorage cache or a
+  // successful IPC — so users with previously-installed agents don't see the
+  // "No agents are installed" empty state flash on cold open.
+  const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
 
-  const enabledAgents = useMemo(() => {
-    return BUILT_IN_AGENT_IDS.filter((id) => {
-      if (settings?.agents && settings.agents[id]?.pinned !== true) return false;
-      if (isAgentMissing(availability[id])) return false;
-      return true;
-    });
-  }, [settings, availability]);
+  const installedAgents = useMemo(() => {
+    if (!hasRealData) return [];
+    return BUILT_IN_AGENT_IDS.filter((id) => isAgentInstalled(availability[id]));
+  }, [hasRealData, availability]);
 
-  const handleOpenSettings = useCallback(() => {
-    void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
+  const handleOpenSetupWizard = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
   }, []);
 
-  if (enabledAgents.length === 0) {
+  if (!hasRealData) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-2 p-8 text-center">
+        <p className="text-sm text-daintree-text/50">Checking for installed agents…</p>
+      </div>
+    );
+  }
+
+  if (installedAgents.length === 0) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">
-        <p className="text-sm text-daintree-text/50">No agents are currently available.</p>
+        <p className="text-sm text-daintree-text/50">No agents are installed.</p>
         <p className="text-xs text-daintree-text/40">
-          Enable an agent in settings to use as your Daintree assistant.
+          Install an agent using the setup wizard to use as your Daintree assistant.
         </p>
         <Button
           type="button"
           variant="outline"
           size="sm"
-          onClick={handleOpenSettings}
+          onClick={handleOpenSetupWizard}
           className="gap-1.5"
         >
-          <Settings className="w-3.5 h-3.5" />
-          <span>Agent Settings</span>
+          <Sparkles className="w-3.5 h-3.5" />
+          <span>Run setup wizard</span>
         </Button>
       </div>
     );
@@ -59,7 +66,7 @@ export function HelpAgentPicker({ onSelectAgent }: HelpAgentPickerProps) {
       </div>
 
       <div className="flex flex-col gap-2">
-        {enabledAgents.map((id) => {
+        {installedAgents.map((id) => {
           const config = AGENT_REGISTRY[id];
           if (!config) return null;
           const Icon = config.icon;

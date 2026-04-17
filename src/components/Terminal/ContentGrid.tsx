@@ -14,7 +14,7 @@ import {
 } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { isAgentReady } from "../../../shared/utils/agentAvailability";
-import { isAgentPinned } from "../../../shared/utils/agentPinned";
+import { computeGridCanLaunch, computeGridSelectedAgentIds } from "./contentGridAgentFilter";
 import { GridPanel } from "./GridPanel";
 import { GridTabGroup } from "./GridTabGroup";
 import { GridNotificationBar } from "./GridNotificationBar";
@@ -58,7 +58,6 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { RecipeRunner } from "./RecipeRunner/RecipeRunner";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
@@ -390,17 +389,23 @@ export function ContentGrid({
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
   const currentProject = useProjectStore((state) => state.currentProject);
-  const gridAgentSettings = useAgentSettingsStore((state) => state.settings);
+  const isAvailabilityInitialized = useCliAvailabilityStore((s) => s.isInitialized);
 
-  // undefined = no filter (settings not loaded or pre-migration); Set = loaded, filter to non-hidden
-  const gridSelectedAgentIds = useMemo((): Set<string> | undefined => {
-    if (!gridAgentSettings?.agents) return undefined;
-    return new Set(
-      Object.entries(gridAgentSettings.agents)
-        .filter(([, entry]) => isAgentPinned(entry))
-        .map(([id]) => id)
-    );
-  }, [gridAgentSettings]);
+  // undefined = no filter (availability not yet probed); Set = filter to installed agents.
+  // Gate on the store's `isInitialized` flag: the `agentAvailability` prop is always a
+  // defined object (pre-populated by `defaultAvailability()` with every agent as "missing"),
+  // so a `!agentAvailability` guard would never fire and the menu would start empty on cold
+  // boot until the first probe returns. Pin state intentionally does NOT gate this menu —
+  // unpinning from the toolbar must not remove an installed agent from the launch menu.
+  const gridSelectedAgentIds = useMemo(
+    () =>
+      computeGridSelectedAgentIds(
+        isAvailabilityInitialized,
+        agentAvailability,
+        getEffectiveAgentIds()
+      ),
+    [isAvailabilityInitialized, agentAvailability]
+  );
   const isProjectSwitching = false;
   const { projectIconSvg } = useProjectBranding(currentProject?.id);
   const { worktreeMap } = useWorktrees();
@@ -651,11 +656,10 @@ export function ContentGrid({
       .filter((id) => !gridSelectedAgentIds || gridSelectedAgentIds.has(id))
       .map((id) => {
         const agentConfig = getEffectiveAgentConfig(id);
-        const canLaunch =
-          id === "terminal" ? true : !agentAvailability || isAgentReady(agentAvailability[id]);
+        const canLaunch = computeGridCanLaunch(id, isAvailabilityInitialized, agentAvailability);
         return { id, name: agentConfig?.name ?? id, canLaunch };
       });
-  }, [agentAvailability, gridSelectedAgentIds]);
+  }, [agentAvailability, gridSelectedAgentIds, isAvailabilityInitialized]);
 
   const handleGridLaunch = useCallback(
     (agentId: string) => {
