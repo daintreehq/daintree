@@ -119,9 +119,10 @@ describe("RequestResponseBroker", () => {
     const p = broker.register("a");
     broker.dispose();
 
-    await expect(p).rejects.toThrow("Broker disposed");
-    await expect(p).rejects.toBeInstanceOf(BrokerError);
-    await expect(p).rejects.toMatchObject({ code: "APP_SHUTDOWN" });
+    const err = await p.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BrokerError);
+    expect((err as BrokerError).code).toBe("APP_SHUTDOWN");
+    expect((err as BrokerError).message).toBe("Broker disposed");
     expect(broker.size).toBe(0);
   });
 
@@ -166,9 +167,12 @@ describe("RequestResponseBroker", () => {
 
     broker.clear(new BrokerError("HOST_EXITED", "Pty host exited"));
 
-    await expect(p1).rejects.toBeInstanceOf(BrokerError);
-    await expect(p1).rejects.toMatchObject({ code: "HOST_EXITED" });
-    await expect(p2).rejects.toMatchObject({ code: "HOST_EXITED" });
+    const e1 = await p1.catch((e: unknown) => e);
+    const e2 = await p2.catch((e: unknown) => e);
+    expect(e1).toBeInstanceOf(BrokerError);
+    expect((e1 as BrokerError).code).toBe("HOST_EXITED");
+    expect(e2).toBeInstanceOf(BrokerError);
+    expect((e2 as BrokerError).code).toBe("HOST_EXITED");
     expect(broker.size).toBe(0);
   });
 

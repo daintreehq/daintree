@@ -1025,9 +1025,12 @@ export class PtyClient extends EventEmitter {
     });
     this.send({ type: "graceful-kill", id, requestId });
     return promise.catch((error: unknown) => {
-      // Broker-cleared rejections (host exit, app shutdown) mean the host is
-      // already gone — sending another kill would only mutate local state.
-      if (error instanceof BrokerError) {
+      // Sending a kill to a host that isn't there only mutates local bookkeeping.
+      // Skip whenever the host is known to be gone — either because the broker
+      // clear told us (typed BrokerError), or because we notice it ourselves
+      // (null child or disposed client, e.g. restart pending, max restarts
+      // exhausted, or app quit arriving during the 5s timeout window).
+      if (error instanceof BrokerError || !this.child || this.isDisposed) {
         return null;
       }
       this.kill(id, "graceful-kill-timeout");

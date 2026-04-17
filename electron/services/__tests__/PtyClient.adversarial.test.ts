@@ -40,6 +40,7 @@ interface MockMessagePortMain {
 interface PtyClientPrivateAccess {
   child: MockUtilityProcess | null;
   pendingMessagePorts: Map<number, MockMessagePortMain>;
+  pendingKillCount: Map<string, number>;
 }
 
 function createMockChild(): MockUtilityProcess {
@@ -276,6 +277,7 @@ describe("PtyClient adversarial", () => {
 
   it("GRACEFUL_KILL_SKIPS_KILL_WHEN_BROKER_CLEARED_BY_HOST_EXIT", async () => {
     const client = createReadyClient();
+    const privateAccess = client as unknown as PtyClientPrivateAccess;
     shared.forkMock.mockReturnValue(createMockChild());
 
     const promise = client.gracefulKill("t1");
@@ -286,13 +288,41 @@ describe("PtyClient adversarial", () => {
     expect(postedRequest).toBeDefined();
 
     shared.tracker.removeTrashed.mockClear();
+    mockChild.postMessage.mockClear();
     mockChild.emit("exit", 1);
 
     await expect(promise).resolves.toBeNull();
 
-    // this.kill() would call getTrashedPidTracker().removeTrashed(id) — it must
-    // not fire when the broker clear carries a BrokerError reason.
+    // this.kill() would call getTrashedPidTracker().removeTrashed(id), post a
+    // kill-typed IPC message, and bump pendingKillCount. None of that should
+    // happen when the broker clear carries a BrokerError reason.
     expect(shared.tracker.removeTrashed).not.toHaveBeenCalled();
+    expect(privateAccess.pendingKillCount.get("t1") ?? 0).toBe(0);
+    const killCall = mockChild.postMessage.mock.calls.find(
+      (call: unknown[]) => (call[0] as { type?: string })?.type === "kill"
+    );
+    expect(killCall).toBeUndefined();
+  });
+
+  it("GRACEFUL_KILL_SKIPS_KILL_WHEN_TIMEOUT_FIRES_AFTER_HOST_GONE", async () => {
+    // When the host exits and restarts are exhausted, a subsequent gracefulKill
+    // will time out with a plain Error('Request timeout: …') — not a
+    // BrokerError. Without the null-child guard, the catch would fall through
+    // to this.kill() and mutate local state on a dead client.
+    const client = createReadyClient({ maxRestartAttempts: 0 });
+    const privateAccess = client as unknown as PtyClientPrivateAccess;
+
+    mockChild.emit("exit", 1);
+    expect(privateAccess.child).toBeNull();
+
+    shared.tracker.removeTrashed.mockClear();
+    const latePromise = client.gracefulKill("t1");
+
+    vi.advanceTimersByTime(6000);
+    await expect(latePromise).resolves.toBeNull();
+
+    expect(shared.tracker.removeTrashed).not.toHaveBeenCalled();
+    expect(privateAccess.pendingKillCount.get("t1") ?? 0).toBe(0);
   });
 
   it("GRACEFUL_KILL_CALLS_KILL_ON_TIMEOUT_WHEN_HOST_STILL_ALIVE", async () => {
@@ -306,8 +336,8 @@ describe("PtyClient adversarial", () => {
 
     await expect(promise).resolves.toBeNull();
 
-    // On timeout (non-BrokerError rejection), gracefulKill must still send
-    // a kill message and remove the trashed PID.
+    // On timeout (non-BrokerError rejection) with a live host, gracefulKill
+    // must still send a kill message and remove the trashed PID.
     expect(shared.tracker.removeTrashed).toHaveBeenCalledWith("t1");
     const killCall = mockChild.postMessage.mock.calls.find(
       (call: unknown[]) => (call[0] as { type?: string })?.type === "kill"
