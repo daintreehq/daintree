@@ -868,6 +868,15 @@ export class PtyClient extends EventEmitter {
       logWarn(
         `[PtyClient] spawn rejected — pendingSpawns at cap (${this.MAX_PENDING_SPAWNS}), id=${id}`
       );
+      const result: SpawnResult = {
+        success: false,
+        id,
+        error: {
+          code: "PENDING_SPAWNS_CAPPED",
+          message: `Too many pending terminal spawns (cap ${this.MAX_PENDING_SPAWNS}); close some terminals and try again.`,
+        },
+      };
+      this.emit("spawn-result", id, result);
       return;
     }
 
