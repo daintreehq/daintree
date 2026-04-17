@@ -7,6 +7,7 @@ import { ErrorBoundary } from "../ErrorBoundary";
 import { PortalDock, PortalVisibilityController } from "../Portal";
 import { HelpPanel } from "../HelpPanel";
 import { ProjectSwitchOverlay } from "@/components/Project";
+import { FleetArmingRibbon } from "@/components/Fleet";
 import { ChordIndicator } from "./ChordIndicator";
 import { DemoCursor, DemoOverlay } from "../Demo";
 
@@ -304,6 +305,7 @@ export function AppLayout({
         agentSettings={agentSettings}
         projectSwitcherPalette={projectSwitcherPalette}
       />
+      <FleetArmingRibbon />
       <div
         className="flex-1 flex flex-col overflow-hidden"
         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}

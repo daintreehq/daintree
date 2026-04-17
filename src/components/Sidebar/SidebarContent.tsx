@@ -939,9 +939,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                     <BroadcastTerminalIcon className="w-3.5 h-3.5" />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {createTooltipWithShortcut("Bulk Operations", "Cmd+Shift+B")}
-                </TooltipContent>
+                <TooltipContent side="bottom">Bulk Operations</TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>

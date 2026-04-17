@@ -54,6 +54,15 @@ export function setWorktreeSelectionStoreGetter(
   _getWorktreeSelectionState = getter;
 }
 
+// Lazy reference to the fleet-arming store's clear() so a project switch can
+// drop armed selections synchronously before the WebContentsView gets detached.
+// Registered from fleetArmingStore at module init.
+let _clearFleetArming: (() => void) | null = null;
+
+export function setFleetArmingClear(callback: () => void): void {
+  _clearFleetArming = callback;
+}
+
 function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   const draftInputs = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
   const activeWorktreeId = _getWorktreeSelectionState?.()?.activeWorktreeId ?? undefined;
@@ -336,6 +345,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   switchProject: async (projectId) => {
     if (get().currentProject?.id === projectId) return;
     const requestId = ++projectTransitionRequestId;
+
+    // Drop fleet arming selections synchronously — the outgoing view's armed
+    // set is project-scoped and must not leak if the view is later restored
+    // from the LRU cache.
+    _clearFleetArming?.();
 
     // Capture outgoing state before the renderer gets detached
     const currentProjectId = get().currentProject?.id;

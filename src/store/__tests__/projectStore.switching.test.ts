@@ -384,3 +384,45 @@ describe("buildOutgoingState worktree selection (#5000)", () => {
     expect(outgoing.activeWorktreeId).toBe("wt-early");
   });
 });
+
+describe("fleet arming clear on project switch (#5298)", () => {
+  it("invokes the registered fleet-arming clear callback before the IPC call", async () => {
+    const { useProjectStore, setFleetArmingClear } = await import("../projectStore");
+    const clearSpy = vi.fn();
+    setFleetArmingClear(clearSpy);
+
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    // Sanity: not called before switch
+    expect(clearSpy).not.toHaveBeenCalled();
+
+    await useProjectStore.getState().switchProject(projectB.id);
+
+    expect(clearSpy).toHaveBeenCalledTimes(1);
+    // Called before the fire-and-forget IPC
+    const clearOrder = clearSpy.mock.invocationCallOrder[0];
+    const switchOrder = projectClientMock.switch.mock.invocationCallOrder[0];
+    expect(clearOrder).toBeLessThan(switchOrder);
+  });
+
+  it("does not throw when the callback is a no-op", async () => {
+    const { useProjectStore, setFleetArmingClear } = await import("../projectStore");
+    setFleetArmingClear(() => {});
+
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await expect(useProjectStore.getState().switchProject(projectB.id)).resolves.not.toThrow();
+  });
+
+  it("does not invoke clear when switching to the current project (early return)", async () => {
+    const { useProjectStore, setFleetArmingClear } = await import("../projectStore");
+    const clearSpy = vi.fn();
+    setFleetArmingClear(clearSpy);
+
+    useProjectStore.setState({ projects: [projectA], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectA.id);
+
+    expect(clearSpy).not.toHaveBeenCalled();
+  });
+});

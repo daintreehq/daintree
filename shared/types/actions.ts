@@ -275,7 +275,13 @@ export type BuiltInActionId =
   | "terminal.bulkCommand"
   | "terminal.stashInput"
   | "terminal.popStash"
-  | "terminal.restartService";
+  | "terminal.restartService"
+  | "terminal.arm"
+  | "terminal.disarm"
+  | "terminal.disarmAll"
+  | "terminal.armByState"
+  | "terminal.armAll"
+  | "terminal.armDefault";
 
 export type ActionId = BuiltInActionId | (string & {});
 
