@@ -194,6 +194,27 @@ describe("PtyClient adversarial", () => {
     expect(statuses).toEqual(["paused-backpressure", "running"]);
   });
 
+  it("SNAPSHOT_RESPONSE_RESOLVES_PROMISE_VIA_BROKER", async () => {
+    const client = createReadyClient();
+    const snapshotPayload = { id: "t1", title: "hello", cwd: "/tmp", spawnedAt: 1 };
+
+    const snapshotPromise = client.getTerminalSnapshot("t1");
+
+    const sentRequest = mockChild.postMessage.mock.calls
+      .map((call: unknown[]) => call[0] as { type?: string; requestId?: string })
+      .find((msg) => msg?.type === "get-snapshot");
+    expect(sentRequest?.requestId).toBeTruthy();
+
+    mockChild.emit("message", {
+      type: "snapshot",
+      id: "t1",
+      requestId: sentRequest!.requestId,
+      snapshot: snapshotPayload,
+    });
+
+    await expect(snapshotPromise).resolves.toEqual(snapshotPayload);
+  });
+
   it("DISPOSE_RESOLVES_ORPHANED_PENDING_OPS", async () => {
     const client = createReadyClient();
     const privateAccess = client as unknown as PtyClientPrivateAccess;
