@@ -470,7 +470,7 @@ describe("PtyClient Handshake Protocol", () => {
       }
 
       const summaryCalls = logSpy.mock.calls.filter(
-        (c) =>
+        (c: unknown[]) =>
           typeof c[0] === "string" &&
           (c[0] as string).startsWith("[PtyClient] Heartbeat RTT (last ")
       );
@@ -490,7 +490,8 @@ describe("PtyClient Handshake Protocol", () => {
       mockChild.emit("message", { type: "pong" });
 
       const spikes = warnSpy.mock.calls.filter(
-        (c) => typeof c[0] === "string" && (c[0] as string).includes("Heartbeat RTT spike")
+        (c: unknown[]) =>
+          typeof c[0] === "string" && (c[0] as string).includes("Heartbeat RTT spike")
       );
       expect(spikes).toHaveLength(1);
       expect(spikes[0][0]).toContain("6000.0ms");
