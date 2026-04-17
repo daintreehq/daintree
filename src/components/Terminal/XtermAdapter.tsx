@@ -5,19 +5,7 @@ import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import type { TerminalType } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import {
-  useScrollbackStore,
-  usePerformanceModeStore,
-  useTerminalFontStore,
-  useProjectSettingsStore,
-  useScreenReaderStore,
-} from "@/store";
-import {
-  useTerminalColorSchemeStore,
-  selectWrapperBackground,
-  selectEffectiveTheme,
-} from "@/store/terminalColorSchemeStore";
-import { useAppThemeStore } from "@/store/appThemeStore";
+import { useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
@@ -75,19 +63,16 @@ function XtermAdapterComponent({
     return getRefreshTierRef.current ? getRefreshTierRef.current() : TerminalRefreshTier.FOCUSED;
   }, []);
 
-  const scrollbackLines = useScrollbackStore((state) => state.scrollbackLines);
-  const projectScrollback = useProjectSettingsStore(
-    (state) => state.settings?.terminalSettings?.scrollbackLines
-  );
-  const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
-  const fontSize = useTerminalFontStore((state) => state.fontSize);
-  const fontFamily = useTerminalFontStore((state) => state.fontFamily);
-  // Subscribe to app theme so wrapper background + effective theme re-compute on theme change
-  useAppThemeStore((s) => s.selectedSchemeId);
-  const wrapperBackground = useTerminalColorSchemeStore(selectWrapperBackground);
-  const effectiveTheme = useTerminalColorSchemeStore(selectEffectiveTheme);
-
-  const screenReaderEnabled = useScreenReaderStore((s) => s.resolvedScreenReaderEnabled());
+  const {
+    fontSize,
+    fontFamily,
+    performanceMode,
+    scrollbackLines,
+    projectScrollback,
+    effectiveTheme,
+    wrapperBackground,
+    screenReaderMode: screenReaderEnabled,
+  } = useTerminalAppearance();
 
   // Calculate effective scrollback: performance mode overrides, then project override, then app default
   const effectiveScrollback = useMemo(() => {
