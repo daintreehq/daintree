@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { initBuiltInPanelKinds } from "@/panels/registry";
-import { PanelPersistence } from "../panelPersistence";
+import { PanelPersistence, panelToSnapshot } from "../panelPersistence";
 import type { TerminalInstance, TerminalSnapshot } from "@/types";
 
 initBuiltInPanelKinds();
@@ -727,6 +727,112 @@ describe("PanelPersistence", () => {
       expect(secondSave[0]).toEqual(
         expect.objectContaining({ id: "ext-unknown", title: "Second" })
       );
+    });
+
+    it("getPreviousSnapshotMap exposes preserved fragments to external callers", () => {
+      // Regression test for the project-switch outgoing-state path. The main
+      // process pre-applies outgoing terminals to persisted state, so a
+      // synchronous capture during switch must also thread previousSnapshot
+      // through panelToSnapshot — not just the debounced save path.
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      persistence.primeProject(projectId, [
+        {
+          id: "ext-unknown",
+          kind: "custom-widget",
+          title: "Custom",
+          location: "grid",
+          browserUrl: "https://example.com",
+          notePath: "/notes/custom.md",
+        },
+      ]);
+
+      const prevMap = persistence.getPreviousSnapshotMap(projectId);
+      expect(prevMap).toBeDefined();
+      expect(prevMap?.get("ext-unknown")).toEqual(
+        expect.objectContaining({
+          browserUrl: "https://example.com",
+          notePath: "/notes/custom.md",
+        })
+      );
+
+      const panel = createMockTerminal({
+        id: "ext-unknown",
+        kind: "custom-widget",
+        title: "Custom",
+        location: "grid",
+      });
+
+      const snapshot = panelToSnapshot(panel, prevMap?.get(panel.id));
+      expect(snapshot).toEqual(
+        expect.objectContaining({
+          id: "ext-unknown",
+          kind: "custom-widget",
+          browserUrl: "https://example.com",
+          notePath: "/notes/custom.md",
+        })
+      );
+    });
+
+    it("getPreviousSnapshotMap returns undefined for unknown projects", () => {
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+      expect(persistence.getPreviousSnapshotMap("nonexistent")).toBeUndefined();
+    });
+
+    it("preserves fragment via queued state when debounce has not flushed", async () => {
+      // Covers the queuedTerminalsByProject branch of getPreviousSnapshotMap.
+      // Make the first persist hang so queued state stays present while a
+      // second save runs; the second save must still see the preserved
+      // fragment via queued, not fall back to an empty fragment.
+      const client = createMockProjectClient();
+      let resolveFirstPersist: (() => void) | null = null;
+      const firstPersistPromise = new Promise<void>((resolve) => {
+        resolveFirstPersist = resolve;
+      });
+      client.setTerminals.mockImplementationOnce(() => firstPersistPromise);
+
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      persistence.primeProject(projectId, [
+        {
+          id: "ext-unknown",
+          kind: "custom-widget",
+          title: "Custom",
+          location: "grid",
+          browserUrl: "https://example.com",
+        },
+      ]);
+
+      const panel = createMockTerminal({
+        id: "ext-unknown",
+        kind: "custom-widget",
+        title: "Custom",
+        location: "grid",
+      });
+
+      persistence.save([panel], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+      // First persist is still pending; queued has been flushed into the
+      // persist promise but queuedTerminalsByProject remains primed.
+      expect(client.setTerminals).toHaveBeenCalledTimes(1);
+
+      persistence.save([createMockTerminal({ ...panel, title: "Renamed" })], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(client.setTerminals).toHaveBeenCalledTimes(2);
+      const secondSave = client.setTerminals.mock.calls[1][1] as TerminalSnapshot[];
+      expect(secondSave[0]).toEqual(
+        expect.objectContaining({
+          id: "ext-unknown",
+          title: "Renamed",
+          browserUrl: "https://example.com",
+        })
+      );
+
+      resolveFirstPersist?.();
+      await persistence.whenIdle();
     });
   });
 

@@ -278,20 +278,15 @@ export class PanelPersistence {
     const filtered = terminals.filter(this.options.filter);
     // When using the default transform (panelToSnapshot), thread the previously-
     // persisted snapshot per panel so unregistered kinds preserve their
-    // kind-specific fields across save cycles. Prefer queued state (reflects
-    // the most recent save, even if debounce hasn't flushed) over persisted.
-    const transformed =
-      this.options.transform === panelToSnapshot
-        ? (() => {
-            const prevSnapshots =
-              this.queuedTerminalsByProject.get(resolvedProjectId) ??
-              this.persistedTerminalsByProject.get(resolvedProjectId);
-            const prevById = prevSnapshots
-              ? new Map(prevSnapshots.map((s) => [s.id, s]))
-              : undefined;
-            return filtered.map((t) => panelToSnapshot(t, prevById?.get(t.id)));
-          })()
-        : filtered.map(this.options.transform);
+    // kind-specific fields across save cycles. Custom transforms own their
+    // output entirely and bypass preservation.
+    let transformed: PanelSnapshot[];
+    if (this.options.transform === panelToSnapshot) {
+      const prevById = this.getPreviousSnapshotMap(resolvedProjectId);
+      transformed = filtered.map((t) => panelToSnapshot(t, prevById?.get(t.id)));
+    } else {
+      transformed = filtered.map(this.options.transform);
+    }
     if (snapshotsEqual(this.queuedTerminalsByProject.get(resolvedProjectId), transformed)) {
       return;
     }
@@ -362,6 +357,22 @@ export class PanelPersistence {
   primeProject(projectId: string, snapshots: PanelSnapshot[]): void {
     if (this.persistedTerminalsByProject.has(projectId)) return;
     this.persistedTerminalsByProject.set(projectId, snapshots);
+  }
+
+  /**
+   * Returns a map of panel id → most-recent snapshot for the given project,
+   * or `undefined` if no snapshots are tracked. Used by callers outside the
+   * debounced save path (e.g., the synchronous outgoing-state capture on
+   * project switch) so they can thread `previousSnapshot` into
+   * `panelToSnapshot` and preserve unregistered-kind fragments. Prefers
+   * queued (in-flight) state over persisted (on-disk) state.
+   */
+  getPreviousSnapshotMap(projectId: string): Map<string, PanelSnapshot> | undefined {
+    const snapshots =
+      this.queuedTerminalsByProject.get(projectId) ??
+      this.persistedTerminalsByProject.get(projectId);
+    if (!snapshots) return undefined;
+    return new Map(snapshots.map((s) => [s.id, s]));
   }
 }
 

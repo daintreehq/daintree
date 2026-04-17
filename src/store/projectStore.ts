@@ -79,13 +79,17 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
 
   const { panelsById, panelIds, tabGroups } = terminalState;
 
+  // Thread previously-persisted snapshots per panel so the outgoing state
+  // preserves kind-specific fields for unregistered kinds (issue #5201).
+  // The main process pre-applies this payload to the previous project's
+  // persisted state during PROJECT_SWITCH (see projectCrud.ts:184-217), so
+  // without preservation here a switch would silently overwrite an extension
+  // panel's on-disk fields with a base-only snapshot.
+  const prevSnapshotMap = panelPersistence.getPreviousSnapshotMap(projectId);
   const terminals = panelIds
     .map((id) => panelsById[id])
     .filter((t): t is TerminalInstance => t != null && shouldPersistTerminal(t))
-    // No previousSnapshot threaded here — this synchronous capture has no
-    // access to persistence caches. Unknown-kind preservation for the steady
-    // state is handled by PanelPersistence.save() after hydration priming.
-    .map((t) => panelToSnapshot(t));
+    .map((t) => panelToSnapshot(t, prevSnapshotMap?.get(t.id)));
 
   const tabGroupArray = Array.from(tabGroups.values()).filter((g) => g.panelIds.length > 1);
 
