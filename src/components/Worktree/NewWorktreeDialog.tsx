@@ -522,18 +522,18 @@ export function NewWorktreeDialog({
                 .getState()
                 .generateRecipeFromActiveTerminals(sourceWorktreeId);
               for (const t of terminals) {
+                const isDevPreview = t.type === "dev-preview";
+                const isAgent = !isDevPreview && t.type !== "terminal";
                 await usePanelStore.getState().addPanel({
-                  kind:
-                    t.type === "dev-preview"
-                      ? "dev-preview"
-                      : t.type === "terminal"
-                        ? "terminal"
-                        : "agent",
-                  agentId: t.type !== "terminal" && t.type !== "dev-preview" ? t.type : undefined,
+                  kind: isDevPreview ? "dev-preview" : isAgent ? "agent" : "terminal",
+                  agentId: isAgent ? t.type : undefined,
                   title: t.title,
                   cwd: worktreePath.trim(),
                   worktreeId,
                   exitBehavior: t.exitBehavior,
+                  devCommand: isDevPreview ? t.devCommand : undefined,
+                  agentModelId: isAgent ? t.agentModelId : undefined,
+                  agentLaunchFlags: isAgent ? t.agentLaunchFlags : undefined,
                 });
               }
             } catch (cloneErr) {
@@ -704,18 +704,18 @@ export function NewWorktreeDialog({
               .getState()
               .generateRecipeFromActiveTerminals(sourceWorktreeId);
             for (const t of terminals) {
+              const isDevPreview = t.type === "dev-preview";
+              const isAgent = !isDevPreview && t.type !== "terminal";
               await usePanelStore.getState().addPanel({
-                kind:
-                  t.type === "dev-preview"
-                    ? "dev-preview"
-                    : t.type === "terminal"
-                      ? "terminal"
-                      : "agent",
-                agentId: t.type !== "terminal" && t.type !== "dev-preview" ? t.type : undefined,
+                kind: isDevPreview ? "dev-preview" : isAgent ? "agent" : "terminal",
+                agentId: isAgent ? t.type : undefined,
                 title: t.title,
                 cwd: worktreePath.trim(),
                 worktreeId,
                 exitBehavior: t.exitBehavior,
+                devCommand: isDevPreview ? t.devCommand : undefined,
+                agentModelId: isAgent ? t.agentModelId : undefined,
+                agentLaunchFlags: isAgent ? t.agentLaunchFlags : undefined,
               });
             }
           } catch (cloneErr) {

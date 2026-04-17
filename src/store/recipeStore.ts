@@ -27,6 +27,22 @@ function isAgentRecipeType(type: RecipeTerminalType): boolean {
   return type !== "terminal" && type !== "dev-preview";
 }
 
+// Recipes read from disk may still contain agentModelId/agentLaunchFlags if
+// they were written by an older build before those fields were stripped on
+// persist. Treat them as session-only state and drop them at load time.
+function stripSessionOverridesFromRecipe(recipe: TerminalRecipe): TerminalRecipe {
+  let changed = false;
+  const terminals = recipe.terminals.map((terminal) => {
+    if (terminal.agentModelId === undefined && terminal.agentLaunchFlags === undefined) {
+      return terminal;
+    }
+    changed = true;
+    const { agentModelId: _m, agentLaunchFlags: _f, ...rest } = terminal;
+    return rest;
+  });
+  return changed ? { ...recipe, terminals } : recipe;
+}
+
 function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
   const isAgent = isAgentRecipeType(terminal.type);
   const command = terminal.command?.trim() || undefined;
@@ -43,6 +59,9 @@ function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
     initialPrompt: isAgent ? initialPrompt : undefined,
     devCommand: terminal.type === "dev-preview" ? devCommand : undefined,
     args,
+    // Session-scoped overrides must never leak into disk-saved recipes.
+    agentModelId: undefined,
+    agentLaunchFlags: undefined,
   };
 }
 
@@ -53,6 +72,8 @@ function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
       ? "dev-preview"
       : (terminal.agentId ?? terminal.type ?? "terminal");
 
+  const isAgent = isAgentRecipeType(type);
+
   return {
     type,
     title: terminal.title || undefined,
@@ -60,6 +81,8 @@ function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
     devCommand: terminal.kind === "dev-preview" ? terminal.devCommand : undefined,
     env: {},
     exitBehavior: terminal.exitBehavior,
+    agentModelId: isAgent ? terminal.agentModelId : undefined,
+    agentLaunchFlags: isAgent ? terminal.agentLaunchFlags : undefined,
   };
 }
 
@@ -151,7 +174,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         : {}),
     });
     try {
-      const [globalRecipes, projectRecipes, inRepoRecipes] = await Promise.all([
+      const [globalRecipesRaw, projectRecipesRaw, inRepoRecipesRaw] = await Promise.all([
         globalRecipesClient.getRecipes(),
         projectClient.getRecipes(projectId),
         projectClient.getInRepoRecipes(projectId).catch(() => [] as TerminalRecipe[]),
@@ -159,6 +182,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       if (requestId !== loadRecipesRequestId || get().currentProjectId !== projectId) {
         return;
       }
+      const globalRecipes = globalRecipesRaw.map(stripSessionOverridesFromRecipe);
+      const projectRecipes = projectRecipesRaw.map(stripSessionOverridesFromRecipe);
+      const inRepoRecipes = inRepoRecipesRaw.map(stripSessionOverridesFromRecipe);
       set({
         globalRecipes,
         projectRecipes,

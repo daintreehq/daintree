@@ -824,6 +824,7 @@ export function BulkCreateWorktreeDialog({
                         const entry = cloneAgentSettings?.agents?.[t.type] ?? {};
                         command = generateAgentCommand(baseCommand, entry, t.type, {
                           clipboardDirectory: cloneClipboardDirectory,
+                          modelId: t.agentModelId,
                         });
                       } else {
                         command = t.command?.trim() || undefined;
@@ -837,6 +838,8 @@ export function BulkCreateWorktreeDialog({
                         worktreeId,
                         exitBehavior: t.exitBehavior,
                         command,
+                        agentModelId: isAgent ? t.agentModelId : undefined,
+                        agentLaunchFlags: isAgent ? t.agentLaunchFlags : undefined,
                       });
                     }
 

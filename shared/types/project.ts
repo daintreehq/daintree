@@ -180,6 +180,10 @@ export interface RecipeTerminal {
   devCommand?: string;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely (optional, defaults to "keep") */
   exitBehavior?: PanelExitBehavior;
+  /** Per-panel model override captured at launch (agent types only). Transient — stripped before disk persistence. */
+  agentModelId?: string;
+  /** Process-level launch flags captured at launch (agent types only). Transient — stripped before disk persistence. */
+  agentLaunchFlags?: string[];
 }
 
 /** A saved terminal recipe */

@@ -57,12 +57,19 @@ vi.mock("@/clients", () => ({
   },
 }));
 
+const panelStoreState: {
+  panelIds: string[];
+  panelsById: Record<string, unknown>;
+  addPanel: typeof addTerminalMock;
+} = {
+  panelIds: [],
+  panelsById: {},
+  addPanel: addTerminalMock,
+};
+
 vi.mock("../panelStore", () => ({
   usePanelStore: {
-    getState: vi.fn(() => ({
-      terminals: [],
-      addPanel: addTerminalMock,
-    })),
+    getState: vi.fn(() => panelStoreState),
   },
 }));
 
@@ -72,6 +79,8 @@ describe("recipeStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useRecipeStore.getState().reset();
+    panelStoreState.panelIds = [];
+    panelStoreState.panelsById = {};
   });
 
   it("rejects malformed recipe json", async () => {
@@ -105,6 +114,183 @@ describe("recipeStore", () => {
     expect(recipe?.terminals[2]?.command).toBeUndefined();
     expect(recipe?.terminals[2]?.initialPrompt).toBe("hello");
     expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+  });
+
+  describe("generateRecipeFromActiveTerminals", () => {
+    it("preserves agentModelId and agentLaunchFlags for agent panels (clone-layout flow)", () => {
+      panelStoreState.panelIds = ["panel-agent", "panel-plain", "panel-dev"];
+      panelStoreState.panelsById = {
+        "panel-agent": {
+          id: "panel-agent",
+          kind: "agent",
+          agentId: "claude",
+          title: "Claude",
+          worktreeId: "wt-1",
+          location: "active",
+          agentModelId: "claude-opus-4-7",
+          agentLaunchFlags: ["--resume", "abc123"],
+        },
+        "panel-plain": {
+          id: "panel-plain",
+          kind: "terminal",
+          title: "Shell",
+          worktreeId: "wt-1",
+          location: "active",
+          command: "npm test",
+          // Plain terminals should never carry agent overrides in the projection.
+          agentModelId: "should-be-ignored",
+          agentLaunchFlags: ["should-be-ignored"],
+        },
+        "panel-dev": {
+          id: "panel-dev",
+          kind: "dev-preview",
+          title: "Preview",
+          worktreeId: "wt-1",
+          location: "active",
+          devCommand: "npm run dev",
+        },
+      };
+
+      const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals("wt-1");
+      expect(terminals).toHaveLength(3);
+
+      const agentEntry = terminals.find((t) => t.type === "claude");
+      expect(agentEntry?.agentModelId).toBe("claude-opus-4-7");
+      expect(agentEntry?.agentLaunchFlags).toEqual(["--resume", "abc123"]);
+
+      const plainEntry = terminals.find((t) => t.type === "terminal");
+      expect(plainEntry?.agentModelId).toBeUndefined();
+      expect(plainEntry?.agentLaunchFlags).toBeUndefined();
+
+      const devEntry = terminals.find((t) => t.type === "dev-preview");
+      expect(devEntry?.devCommand).toBe("npm run dev");
+      expect(devEntry?.agentModelId).toBeUndefined();
+      expect(devEntry?.agentLaunchFlags).toBeUndefined();
+    });
+
+    it("strips agentModelId and agentLaunchFlags when persisting to disk via createRecipe", async () => {
+      useRecipeStore.setState({ currentProjectId: "project-1" });
+      await useRecipeStore.getState().createRecipe(
+        "project-1",
+        "Layout",
+        undefined,
+        [
+          {
+            type: "claude",
+            title: "Agent",
+            env: {},
+            agentModelId: "claude-opus-4-7",
+            agentLaunchFlags: ["--resume", "abc"],
+          },
+        ],
+        false
+      );
+
+      expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+      const persistedRecipe = updateInRepoRecipeMock.mock.calls[0]?.[1];
+      expect(persistedRecipe?.terminals?.[0]?.agentModelId).toBeUndefined();
+      expect(persistedRecipe?.terminals?.[0]?.agentLaunchFlags).toBeUndefined();
+    });
+
+    it("strips agentModelId and agentLaunchFlags when persisting to disk via updateRecipe", async () => {
+      useRecipeStore.setState({ currentProjectId: "project-1" });
+      await useRecipeStore
+        .getState()
+        .createRecipe(
+          "project-1",
+          "Layout",
+          undefined,
+          [{ type: "terminal", title: "Shell", command: "npm test", env: {} }],
+          false
+        );
+
+      const recipeId = useRecipeStore.getState().recipes[0]?.id;
+      expect(recipeId).toBeTruthy();
+
+      updateInRepoRecipeMock.mockClear();
+      await useRecipeStore.getState().updateRecipe(recipeId!, {
+        terminals: [
+          {
+            type: "claude",
+            title: "Agent",
+            env: {},
+            agentModelId: "claude-opus-4-7",
+            agentLaunchFlags: ["--resume", "xyz"],
+          },
+        ],
+      });
+
+      const persistedRecipe = updateInRepoRecipeMock.mock.calls[0]?.[1];
+      expect(persistedRecipe?.terminals?.[0]?.agentModelId).toBeUndefined();
+      expect(persistedRecipe?.terminals?.[0]?.agentLaunchFlags).toBeUndefined();
+    });
+
+    it("strips agentModelId and agentLaunchFlags when persisting a global recipe update", async () => {
+      useRecipeStore.setState({
+        globalRecipes: [
+          {
+            id: "global-agent",
+            name: "Global Agent",
+            terminals: [{ type: "terminal", title: "Shell", env: {} }],
+            createdAt: 1000,
+          },
+        ],
+        projectRecipes: [],
+        inRepoRecipes: [],
+        recipes: [
+          {
+            id: "global-agent",
+            name: "Global Agent",
+            terminals: [{ type: "terminal", title: "Shell", env: {} }],
+            createdAt: 1000,
+          },
+        ],
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore.getState().updateRecipe("global-agent", {
+        terminals: [
+          {
+            type: "claude",
+            title: "Agent",
+            env: {},
+            agentModelId: "claude-opus-4-7",
+            agentLaunchFlags: ["--resume", "xyz"],
+          },
+        ],
+      });
+
+      expect(globalUpdateRecipeMock).toHaveBeenCalledTimes(1);
+      const persistedUpdates = globalUpdateRecipeMock.mock.calls[0]?.[1];
+      expect(persistedUpdates?.terminals?.[0]?.agentModelId).toBeUndefined();
+      expect(persistedUpdates?.terminals?.[0]?.agentLaunchFlags).toBeUndefined();
+    });
+
+    it("drops session-override fields from recipes loaded from disk (defense-in-depth)", async () => {
+      const contaminatedRecipe = {
+        id: "inrepo-contaminated",
+        name: "Contaminated",
+        terminals: [
+          {
+            type: "claude" as const,
+            title: "Agent",
+            env: {},
+            agentModelId: "claude-opus-4-7",
+            agentLaunchFlags: ["--resume", "old"],
+          },
+        ],
+        createdAt: 1000,
+      };
+      globalGetRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce([]);
+      getInRepoRecipesMock.mockResolvedValueOnce([contaminatedRecipe]);
+
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      const loaded = useRecipeStore.getState().inRepoRecipes[0];
+      expect(loaded?.terminals[0]?.agentModelId).toBeUndefined();
+      expect(loaded?.terminals[0]?.agentLaunchFlags).toBeUndefined();
+    });
   });
 
   it("sanitizes agent commands on update before persisting", async () => {
