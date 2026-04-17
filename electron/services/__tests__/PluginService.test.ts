@@ -3,6 +3,17 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 
+const appMock = vi.hoisted(() => ({
+  getVersion: vi.fn(() => "0.0.0"),
+}));
+const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+
+vi.mock("electron", () => ({
+  app: appMock,
+}));
+vi.mock("../../ipc/utils.js", () => ({
+  broadcastToRenderer: broadcastToRendererMock,
+}));
 vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
   registerPanelKind: vi.fn(),
 }));
@@ -17,6 +28,7 @@ import { PluginService } from "../PluginService.js";
 import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
 import { registerToolbarButton } from "../../../shared/config/toolbarButtonRegistry.js";
 import { registerPluginMenuItem } from "../pluginMenuRegistry.js";
+import { CHANNELS } from "../../ipc/channels.js";
 
 let tmpDir: string;
 
@@ -466,5 +478,246 @@ describe("Plugin IPC handler registration", () => {
     service.registerHandler("test-plugin", "sync", () => "sync-result");
     const result = await service.dispatchHandler("test-plugin", "sync", []);
     expect(result).toBe("sync-result");
+  });
+});
+
+describe("engines.daintree compatibility gate", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it("loads a plugin when app version satisfies engines.daintree", async () => {
+    await writePlugin("compatible", {
+      name: "compatible",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a plugin when app version does not satisfy engines.daintree", async () => {
+    await writePlugin("incompatible", {
+      name: "incompatible",
+      displayName: "Incompatible Plugin",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.8.0");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Plugin "incompatible" requires Daintree ^0.7.0')
+    );
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(
+      CHANNELS.NOTIFICATION_SHOW_TOAST,
+      expect.objectContaining({
+        type: "error",
+        title: "Plugin incompatible",
+        message: expect.stringContaining("Incompatible Plugin"),
+      })
+    );
+  });
+
+  it("treats app prerelease versions as satisfying their release-series range", async () => {
+    await writePlugin("prerelease-compatible", {
+      name: "prerelease-compatible",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.1-rc.1");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("loads plugins that omit engines.daintree with a warning", async () => {
+    await writePlugin("no-engines", { name: "no-engines", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Plugin "no-engines" does not declare engines.daintree')
+    );
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("loads plugins with empty engines object (daintree absent) with a warning", async () => {
+    await writePlugin("empty-engines", {
+      name: "empty-engines",
+      version: "1.0.0",
+      engines: {},
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Plugin "empty-engines" does not declare engines.daintree')
+    );
+  });
+
+  it("rejects manifests with an invalid semver range at schema level", async () => {
+    await writePlugin("bad-range", {
+      name: "bad-range",
+      version: "1.0.0",
+      engines: { daintree: "not-a-range" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects plugins requiring a future major version", async () => {
+    await writePlugin("future", {
+      name: "future",
+      version: "1.0.0",
+      engines: { daintree: "^1.0.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.1");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not attempt main import or register contributions for incompatible plugins", async () => {
+    await writePlugin("skip-side-effects", {
+      name: "skip-side-effects",
+      version: "1.0.0",
+      main: "dist/main.js",
+      engines: { daintree: "^1.0.0" },
+      contributes: {
+        panels: [{ id: "p", name: "P", iconId: "i", color: "#000" }],
+        toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "x.y" }],
+        menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.1");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(registerPanelKind).not.toHaveBeenCalled();
+    expect(registerToolbarButton).not.toHaveBeenCalled();
+    expect(registerPluginMenuItem).not.toHaveBeenCalled();
+  });
+
+  it("loads only the compatible plugins in a mixed batch", async () => {
+    await writePlugin("good", {
+      name: "good",
+      version: "1.0.0",
+      engines: { daintree: "^0.7.0" },
+    });
+    await writePlugin("bad", {
+      name: "bad",
+      version: "1.0.0",
+      engines: { daintree: "^1.0.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    const names = service.listPlugins().map((p) => p.manifest.name);
+    expect(names).toEqual(["good"]);
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts the wildcard range '*'", async () => {
+    await writePlugin("wildcard", {
+      name: "wildcard",
+      version: "1.0.0",
+      engines: { daintree: "*" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.1");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects whitespace-only range strings at the schema layer", async () => {
+    await writePlugin("whitespace-range", {
+      name: "whitespace-range",
+      version: "1.0.0",
+      engines: { daintree: "   " },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an app prerelease that is below a non-prerelease range's lower bound", async () => {
+    await writePlugin("prerelease-too-early", {
+      name: "prerelease-too-early",
+      version: "1.0.0",
+      engines: { daintree: ">=0.7.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.0-rc.1");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts an exact-version range when the app matches precisely", async () => {
+    await writePlugin("exact-match", {
+      name: "exact-match",
+      version: "1.0.0",
+      engines: { daintree: "0.7.5" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.5");
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an exact-version range when the app does not match", async () => {
+    await writePlugin("exact-mismatch", {
+      name: "exact-mismatch",
+      version: "1.0.0",
+      engines: { daintree: "0.7.5" },
+    });
+
+    const service = new PluginService(tmpDir, "0.7.4");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
   });
 });

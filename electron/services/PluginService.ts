@@ -2,11 +2,15 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
+import { app } from "electron";
+import * as semver from "semver";
 import { PluginManifestSchema } from "../schemas/plugin.js";
 import type { PluginManifest, PluginIpcHandler } from "../../shared/types/plugin.js";
 import { registerPanelKind } from "../../shared/config/panelKindRegistry.js";
 import { registerToolbarButton } from "../../shared/config/toolbarButtonRegistry.js";
 import { registerPluginMenuItem } from "./pluginMenuRegistry.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
+import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 
@@ -23,9 +27,11 @@ export class PluginService {
   private handlerMap = new Map<string, PluginIpcHandler>();
   private initialized = false;
   private pluginsRoot: string;
+  private appVersion: string;
 
-  constructor(pluginsRoot?: string) {
+  constructor(pluginsRoot?: string, appVersion?: string) {
     this.pluginsRoot = pluginsRoot ?? path.join(os.homedir(), ".daintree", "plugins");
+    this.appVersion = appVersion ?? app.getVersion();
   }
 
   async initialize(): Promise<void> {
@@ -88,6 +94,26 @@ export class PluginService {
     }
 
     const manifest = parseResult.data;
+
+    const requiredRange = manifest.engines?.daintree;
+    if (requiredRange) {
+      if (!semver.satisfies(this.appVersion, requiredRange, { includePrerelease: true })) {
+        console.error(
+          `[PluginService] Plugin "${manifest.name}" requires Daintree ${requiredRange} but current version is ${this.appVersion} — skipping`
+        );
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          type: "error",
+          title: "Plugin incompatible",
+          message: `Plugin "${manifest.displayName ?? manifest.name}" requires Daintree ${requiredRange} but current version is ${this.appVersion}.`,
+        });
+        return null;
+      }
+    } else {
+      console.warn(
+        `[PluginService] Plugin "${manifest.name}" does not declare engines.daintree — consider adding it to ensure compatibility`
+      );
+    }
+
     const plugin: LoadedPlugin = {
       manifest,
       dir: pluginDir,

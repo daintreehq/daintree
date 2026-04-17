@@ -1,3 +1,4 @@
+import * as semver from "semver";
 import { z } from "zod";
 import type {
   PluginManifest,
@@ -43,6 +44,18 @@ export const PluginManifestSchema = z.object({
   description: z.string().optional(),
   main: z.string().optional(),
   renderer: z.string().optional(),
+  engines: z
+    .object({
+      daintree: z
+        .string()
+        .trim()
+        .min(1)
+        .refine((val) => semver.validRange(val) !== null, {
+          message: "engines.daintree must be a valid semver range",
+        })
+        .optional(),
+    })
+    .optional(),
   contributes: z
     .object({
       panels: z.array(PanelContributionSchema).default([]),

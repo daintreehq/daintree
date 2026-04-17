@@ -33,6 +33,9 @@ export interface PluginManifest {
   description?: string;
   main?: string;
   renderer?: string;
+  engines?: {
+    daintree?: string;
+  };
   contributes: {
     panels: PanelContribution[];
     toolbarButtons: ToolbarButtonContribution[];
