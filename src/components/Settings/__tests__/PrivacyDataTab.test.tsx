@@ -2,6 +2,7 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { PrivacyDataTab } from "../PrivacyDataTab";
+import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
 
 const mockNotify = vi.fn();
 vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
@@ -145,6 +146,28 @@ describe("PrivacyDataTab", () => {
         "border-daintree-accent/40"
       );
     });
+  });
+
+  it("renders telemetry disclosure listing all allowlisted analytics events", async () => {
+    render(<PrivacyDataTab activeSubtab="telemetry" onSubtabChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/What's collected at each level/i)).toBeTruthy();
+    });
+
+    for (const name of ANALYTICS_EVENTS) {
+      expect(screen.getByText(name)).toBeTruthy();
+    }
+  });
+
+  it("does not render telemetry disclosure on the storage subtab", async () => {
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("30 days")).toBeTruthy();
+    });
+
+    expect(screen.queryByText(/What's collected at each level/i)).toBeNull();
   });
 
   it("reverts log retention and shows error toast on IPC failure", async () => {

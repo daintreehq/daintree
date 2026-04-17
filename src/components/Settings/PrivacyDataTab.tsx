@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
+import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
 
 type TelemetryLevel = "off" | "errors" | "full";
 type LogRetention = 7 | 30 | 90 | 0;
@@ -36,6 +37,44 @@ const TELEMETRY_OPTIONS: Array<{
     title: "Full Usage",
     description:
       "Crash reports and anonymous usage analytics are sent to help improve the product.",
+  },
+];
+
+const TELEMETRY_DISCLOSURE: Array<{
+  level: TelemetryLevel;
+  title: string;
+  summary: string;
+  fields: string[];
+  events?: readonly string[];
+}> = [
+  {
+    level: "off",
+    title: "Off level",
+    summary: "No data is collected or transmitted.",
+    fields: [],
+  },
+  {
+    level: "errors",
+    title: "Errors Only level",
+    summary:
+      "A sampled subset (roughly 10%) of crash reports is sent to Sentry. Home-directory paths are redacted from stack frames and error messages before transmission.",
+    fields: [
+      "Exception type and message (home directory redacted)",
+      "Stack frames with sanitized file paths, line and column numbers",
+      "App version, Electron version, Node.js version, and release channel",
+      "Operating system name, version, and architecture",
+      "Device hardware metadata (CPU, memory, GPU) provided by the Sentry Electron SDK",
+      "Locale and timezone",
+      "Breadcrumbs of recent app activity preceding the crash (UI interactions, navigation, and console log entries)",
+    ],
+  },
+  {
+    level: "full",
+    title: "Full Usage level",
+    summary:
+      "Everything above, plus the following anonymous onboarding analytics events. Each event carries its name, a timestamp, and event-specific properties — never file contents, prompts, or credentials.",
+    fields: [],
+    events: ANALYTICS_EVENTS,
   },
 ];
 
@@ -200,6 +239,54 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           <p className="text-xs text-daintree-text/40 mt-2 select-text">
             Changes to telemetry level take effect on next app restart.
           </p>
+
+          <div
+            aria-labelledby="telemetry-disclosure-heading"
+            className="mt-6 pt-4 border-t border-daintree-border/40"
+          >
+            <h3
+              id="telemetry-disclosure-heading"
+              className="text-xs font-medium text-daintree-text/70 uppercase tracking-wide"
+            >
+              What's collected at each level
+            </h3>
+            <p className="text-xs text-daintree-text/50 mt-1 select-text">
+              This disclosure describes the data transmitted externally. File contents, prompts, API
+              keys, and other credentials are never collected.
+            </p>
+            <dl className="mt-3 space-y-4">
+              {TELEMETRY_DISCLOSURE.map((entry) => (
+                <div
+                  key={entry.level}
+                  className="rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3"
+                >
+                  <dt className="text-xs font-medium text-daintree-text">{entry.title}</dt>
+                  <dd className="mt-1 space-y-2 text-xs text-daintree-text/60 select-text">
+                    <p>{entry.summary}</p>
+                    {entry.fields.length > 0 && (
+                      <ul className="list-disc pl-4 space-y-0.5">
+                        {entry.fields.map((field) => (
+                          <li key={field}>{field}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {entry.events && entry.events.length > 0 && (
+                      <ul className="flex flex-wrap gap-1.5 pt-1">
+                        {entry.events.map((name) => (
+                          <li
+                            key={name}
+                            className="font-mono text-[11px] text-daintree-text/70 bg-daintree-bg px-1.5 py-0.5 rounded border border-daintree-border/60"
+                          >
+                            {name}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
         </SettingsSection>
       )}
 

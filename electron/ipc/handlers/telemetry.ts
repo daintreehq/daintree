@@ -7,13 +7,9 @@ import {
   markTelemetryPromptShown,
   trackEvent,
 } from "../../services/TelemetryService.js";
+import { ANALYTICS_EVENTS } from "../../../shared/config/telemetry.js";
 
-const ALLOWED_EVENTS = new Set([
-  "onboarding_step_viewed",
-  "onboarding_step_skipped",
-  "onboarding_completed",
-  "onboarding_abandoned",
-]);
+const ALLOWED_EVENTS = new Set<string>(ANALYTICS_EVENTS);
 
 export function registerTelemetryHandlers(): () => void {
   const cleanups: Array<() => void> = [];
