@@ -72,6 +72,13 @@ describe("useSoundPlaybackListener", () => {
     expect(mockPlaySound).toHaveBeenCalledWith("pulse.wav", 9);
   });
 
+  it("forwards explicit detune of 0 (does not coerce to undefined)", () => {
+    renderHook(() => useSoundPlaybackListener());
+    triggerCallback!({ soundFile: "pulse.wav", detune: 0 });
+
+    expect(mockPlaySound).toHaveBeenCalledWith("pulse.wav", 0);
+  });
+
   it("calls cancelSound when cancel event fires", () => {
     renderHook(() => useSoundPlaybackListener());
     cancelCallback!();

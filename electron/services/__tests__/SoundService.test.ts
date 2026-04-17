@@ -203,6 +203,17 @@ describe("SoundService", () => {
     });
   });
 
+  it("playPulse preserves an explicit detune of 0 in the payload", () => {
+    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+
+    soundService.playPulse("pulse.wav", 0);
+
+    expect(mockBroadcastToRenderer).toHaveBeenCalledWith("sound:trigger", {
+      soundFile: "pulse.wav",
+      detune: 0,
+    });
+  });
+
   it("playPulse falls back to OS process without detune when no renderer", () => {
     mockGetAllWindows.mockReturnValue([]);
 
