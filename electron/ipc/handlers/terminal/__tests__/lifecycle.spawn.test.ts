@@ -240,7 +240,7 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
     expect(spawnArgs.cwd).toBe(os.homedir());
   });
 
-  it("does not forward worktreeId to the pty client (renderer-owned layout state)", async () => {
+  it("forwards worktreeId to the pty client for session-history persistence (#5182)", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
 
@@ -252,13 +252,11 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
         cwd: os.homedir(),
         cols: 80,
         rows: 24,
-        // Even if a caller sends worktreeId it should be stripped by the Zod schema
-        // and never reach the pty client spawn options.
         worktreeId: "wt-123",
       } as unknown as Parameters<typeof handler>[1]
     );
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.worktreeId).toBeUndefined();
+    expect(spawnArgs.worktreeId).toBe("wt-123");
   });
 });
