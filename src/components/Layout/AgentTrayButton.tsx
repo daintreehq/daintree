@@ -2,6 +2,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   type ComponentType,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
@@ -99,6 +100,15 @@ export function AgentTrayButton({
   const isAvailabilityLoading = agentAvailability === undefined || !hasRealData;
   const lastPinActionAt = useRef(0);
 
+  // Radix Tooltip reopens whenever the trigger receives focus, including
+  // programmatic focus restoration from DropdownMenu's onCloseAutoFocus. Gate
+  // the Tooltip via controlled state and suppress open=true for one tick
+  // after the dropdown closes so the refocused button doesn't flash the
+  // tooltip back into view. See issue #5153.
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const isRestoringFocusRef = useRef(false);
+  const restoreFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Re-probe on view visibility changes (Electron LRU reactivation, tab
   // switches). The window-focus trigger is handled once globally in
   // useAgentLauncher; both paths share the 30s throttle in the store.
@@ -116,6 +126,31 @@ export function AgentTrayButton({
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [refreshAvailability]);
+
+  useEffect(() => {
+    return () => {
+      if (restoreFocusTimerRef.current != null) {
+        clearTimeout(restoreFocusTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleTooltipOpenChange = (open: boolean) => {
+    if (open && isRestoringFocusRef.current) return;
+    setTooltipOpen(open);
+  };
+
+  const suppressTooltipDuringFocusRestore = () => {
+    setTooltipOpen(false);
+    isRestoringFocusRef.current = true;
+    if (restoreFocusTimerRef.current != null) {
+      clearTimeout(restoreFocusTimerRef.current);
+    }
+    restoreFocusTimerRef.current = setTimeout(() => {
+      isRestoringFocusRef.current = false;
+      restoreFocusTimerRef.current = null;
+    }, 0);
+  };
 
   const agentDominantStates = useMemo(() => {
     const statesPerAgent = new Map<string, (AgentState | undefined)[]>();
@@ -191,6 +226,7 @@ export function AgentTrayButton({
   };
 
   const handleOpenChange = (open: boolean) => {
+    setTooltipOpen(false);
     if (!open) return;
     // Fire-and-forget: the store throttle absorbs rapid reopens.
     void refreshAvailability().catch(() => {});
@@ -224,7 +260,7 @@ export function AgentTrayButton({
   return (
     <DropdownMenu onOpenChange={handleOpenChange}>
       <TooltipProvider>
-        <Tooltip>
+        <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange}>
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
               <Button
@@ -245,8 +281,8 @@ export function AgentTrayButton({
         align="start"
         sideOffset={4}
         className="min-w-[16rem]"
-        onCloseAutoFocus={(e) => {
-          if ((e as unknown as PointerEvent).detail > 0) e.preventDefault();
+        onCloseAutoFocus={() => {
+          suppressTooltipDuringFocusRestore();
         }}
       >
         {isAvailabilityLoading && (
