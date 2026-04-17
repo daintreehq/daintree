@@ -58,6 +58,9 @@ perf-metrics.ndjson
 # Demo recording output
 demo-output/
 
+# Demo authoring project (daintreehq/demo-studio clone target)
+demo/
+
 # Cache
 .cache/
 *.tsbuildinfo

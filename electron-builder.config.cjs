@@ -101,6 +101,7 @@ module.exports = async function () {
     files: [
       "dist/**/*",
       "dist-electron/**/*",
+      "!demo/**",
       "!node_modules/node-pty/bin",
       "!node_modules/node-pty/prebuilds",
     ],
