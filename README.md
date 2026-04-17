@@ -226,7 +226,6 @@ daintree/
 │   ├── online/              # 2 tests — agent integration
 │   └── nightly/             # Memory leak detection
 │
-├── demo/                    # Demo recording (Stage DSL + scenes)
 ├── scripts/                 # Build, dev, and perf scripts
 ├── help/                    # Embedded help documentation
 └── docs/                    # Architecture and development docs
