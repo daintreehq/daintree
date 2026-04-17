@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const mockReadFile = vi.fn<(path: string, encoding: string) => Promise<string>>();
@@ -11,8 +12,8 @@ vi.mock("node:fs/promises", () => ({
 const { resolveNextMajorVersion } = await import("../resolveNextVersion.js");
 
 const CWD = "/project";
-const MODULES_PKG = `${CWD}/node_modules/next/package.json`;
-const ROOT_PKG = `${CWD}/package.json`;
+const MODULES_PKG = path.join(CWD, "node_modules/next/package.json");
+const ROOT_PKG = path.join(CWD, "package.json");
 
 function mockInstalledVersion(version: string) {
   mockReadFile.mockImplementation(async (p) => {
