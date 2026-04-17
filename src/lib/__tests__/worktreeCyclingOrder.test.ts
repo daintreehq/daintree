@@ -153,7 +153,7 @@ describe("getVisibleWorktreesForCycling", () => {
           hasPty: true,
           isVisible: true,
           agentState: "working",
-        } as unknown as (typeof usePanelStore.getState)["panelsById"][string],
+        } as unknown as ReturnType<typeof usePanelStore.getState>["panelsById"][string],
       },
       panelIds: ["term-working"],
     } as never);
