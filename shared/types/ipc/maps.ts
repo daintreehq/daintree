@@ -152,7 +152,31 @@ import type {
   DemoStartCaptureResult,
   DemoStopCaptureResult,
   DemoCaptureStatus,
+  DemoEncodePayload,
+  DemoEncodeProgressEvent,
+  DemoEncodeResult,
+  DemoAnnotatePayload,
+  DemoAnnotateResult,
+  DemoDismissAnnotationPayload,
+  DemoDragPayload,
+  DemoPressKeyPayload,
+  DemoScrollPayload,
+  DemoSpotlightPayload,
+  DemoWaitForIdlePayload,
 } from "./demo.js";
+import type { BulkProjectStats } from "./project.js";
+import type { PrerequisiteSpec, PrerequisiteCheckResult } from "./system.js";
+import type { CloneRepoOptions, CloneRepoResult } from "./gitClone.js";
+import type { AppAgentConfig } from "../appAgent.js";
+import type { AgentSessionRecord } from "./agentSessionHistory.js";
+import type {
+  CommandContext,
+  CommandExecutePayload,
+  CommandGetPayload,
+  CommandManifestEntry,
+  CommandResult,
+  DaintreeCommand,
+} from "../commands.js";
 
 export type ChecklistItemId =
   | "openedProject"
@@ -1806,6 +1830,310 @@ export interface IpcInvokeMap {
   "demo:get-capture-status": {
     args: [];
     result: DemoCaptureStatus;
+  };
+  "demo:encode": {
+    args: [payload: DemoEncodePayload];
+    result: DemoEncodeResult;
+  };
+  "demo:scroll": {
+    args: [payload: DemoScrollPayload];
+    result: void;
+  };
+  "demo:drag": {
+    args: [payload: DemoDragPayload];
+    result: void;
+  };
+  "demo:press-key": {
+    args: [payload: DemoPressKeyPayload];
+    result: void;
+  };
+  "demo:spotlight": {
+    args: [payload: DemoSpotlightPayload];
+    result: void;
+  };
+  "demo:dismiss-spotlight": {
+    args: [];
+    result: void;
+  };
+  "demo:annotate": {
+    args: [payload: DemoAnnotatePayload];
+    result: DemoAnnotateResult;
+  };
+  "demo:dismiss-annotation": {
+    args: [payload: DemoDismissAnnotationPayload];
+    result: void;
+  };
+  "demo:wait-for-idle": {
+    args: [payload: DemoWaitForIdlePayload];
+    result: void;
+  };
+
+  // Agent session history channels
+  "agent-session:list": {
+    args: [payload: { worktreeId?: string }];
+    result: AgentSessionRecord[];
+  };
+  "agent-session:clear": {
+    args: [payload: { worktreeId?: string }];
+    result: void;
+  };
+
+  // App Agent channels
+  "app-agent:get-config": {
+    args: [];
+    result: Omit<AppAgentConfig, "apiKey">;
+  };
+  "app-agent:set-config": {
+    args: [config: Partial<AppAgentConfig>];
+    result: Omit<AppAgentConfig, "apiKey">;
+  };
+  "app-agent:has-api-key": {
+    args: [];
+    result: boolean;
+  };
+  "app-agent:test-api-key": {
+    args: [apiKey: string];
+    result: { valid: boolean; error?: string };
+  };
+  "app-agent:test-model": {
+    args: [model: string];
+    result: { valid: boolean; error?: string };
+  };
+
+  // Additional app theme channels
+  "app-theme:set-accent-color-override": {
+    args: [color: unknown];
+    result: void;
+  };
+  "app-theme:set-recent-scheme-ids": {
+    args: [ids: unknown];
+    result: void;
+  };
+
+  // Command system channels
+  "commands:list": {
+    args: [context?: CommandContext];
+    result: CommandManifestEntry[];
+  };
+  "commands:get": {
+    args: [payload: CommandGetPayload];
+    result: CommandManifestEntry | null;
+  };
+  "commands:execute": {
+    args: [payload: CommandExecutePayload];
+    result: CommandResult;
+  };
+  "commands:get-builder": {
+    args: [commandId: string];
+    result: DaintreeCommand["builder"] | null;
+  };
+
+  // Additional GitHub channels
+  "github:get-issue-by-number": {
+    args: [payload: { cwd: string; issueNumber: number }];
+    result: import("../github.js").GitHubIssue | null;
+  };
+  "github:get-pr-by-number": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: import("../github.js").GitHubPR | null;
+  };
+  "github:list-remotes": {
+    args: [cwd: string];
+    result: Array<{
+      name: string;
+      fetchUrl: string;
+      parsedRepo: { owner: string; repo: string } | null;
+    }>;
+  };
+
+  // Global env channels
+  "global-env:get": {
+    args: [];
+    result: Record<string, string>;
+  };
+  "global-env:set": {
+    args: [payload: { variables: Record<string, string> }];
+    result: void;
+  };
+
+  // Global recipe channels
+  "global:get-recipes": {
+    args: [];
+    result: TerminalRecipe[];
+  };
+  "global:add-recipe": {
+    args: [payload: { recipe: TerminalRecipe }];
+    result: void;
+  };
+  "global:update-recipe": {
+    args: [
+      payload: {
+        recipeId: string;
+        updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>;
+      },
+    ];
+    result: void;
+  };
+  "global:delete-recipe": {
+    args: [payload: { recipeId: string }];
+    result: void;
+  };
+
+  // Help channels
+  "help:get-folder-path": {
+    args: [];
+    result: string;
+  };
+  "help:mark-terminal": {
+    args: [terminalId: string];
+    result: void;
+  };
+  "help:unmark-terminal": {
+    args: [terminalId: string];
+    result: void;
+  };
+
+  // Project clone channels
+  "project:clone-repo": {
+    args: [options: CloneRepoOptions];
+    result: CloneRepoResult;
+  };
+  "project:clone-cancel": {
+    args: [];
+    result: void;
+  };
+
+  // Bulk project stats
+  "project:get-bulk-stats": {
+    args: [projectIds: string[]];
+    result: BulkProjectStats;
+  };
+
+  // Draft inputs
+  "project:get-draft-inputs": {
+    args: [projectId: string];
+    result: Record<string, string>;
+  };
+  "project:set-draft-inputs": {
+    args: [payload: { projectId: string; draftInputs: Record<string, string> }];
+    result: void;
+  };
+
+  // In-repo recipe channels
+  "project:get-inrepo-recipes": {
+    args: [projectId: string];
+    result: TerminalRecipe[];
+  };
+  "project:sync-inrepo-recipes": {
+    args: [payload: { projectId: string; recipes: TerminalRecipe[] }];
+    result: void;
+  };
+  "project:update-inrepo-recipe": {
+    args: [payload: { projectId: string; recipe: TerminalRecipe; previousName?: string }];
+    result: void;
+  };
+  "project:delete-inrepo-recipe": {
+    args: [payload: { projectId: string; recipeName: string }];
+    result: void;
+  };
+
+  // Recipe import/export
+  "recipe:export-file": {
+    args: [payload: { name: string; json: string }];
+    result: boolean;
+  };
+  "recipe:import-file": {
+    args: [];
+    result: string | null;
+  };
+
+  // Recovery channels
+  "recovery:reload-app": {
+    args: [];
+    result: void;
+  };
+  "recovery:reset-and-reload": {
+    args: [];
+    result: void;
+  };
+
+  // System prerequisite check channels
+  "system:check-tool": {
+    args: [spec: PrerequisiteSpec];
+    result: PrerequisiteCheckResult;
+  };
+  "system:health-check-specs": {
+    args: [agentIds?: string[]];
+    result: PrerequisiteSpec[];
+  };
+
+  // Additional terminal config channels
+  "terminal-config:set-resource-monitoring": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "terminal-config:set-memory-leak-detection": {
+    args: [enabled: boolean];
+    result: void;
+  };
+  "terminal-config:set-memory-leak-auto-restart": {
+    args: [thresholdMb: number];
+    result: void;
+  };
+  "terminal-config:set-cached-project-views": {
+    args: [cachedProjectViews: number];
+    result: void;
+  };
+  "terminal-config:set-recent-scheme-ids": {
+    args: [ids: unknown];
+    result: void;
+  };
+
+  // Additional terminal snapshot channels
+  "terminal:get-all": {
+    args: [];
+    result: BackendTerminalInfo[];
+  };
+  "terminal:get-available": {
+    args: [];
+    result: BackendTerminalInfo[];
+  };
+  "terminal:get-by-state": {
+    args: [state: string];
+    result: BackendTerminalInfo[];
+  };
+  "terminal:graceful-kill": {
+    args: [id: string];
+    result: string | null;
+  };
+
+  // Webview lifecycle / dialog / OAuth channels
+  "webview:set-lifecycle-state": {
+    args: [webContentsId: number, frozen: boolean];
+    result: void;
+  };
+  "webview:register-panel": {
+    args: [payload: { webContentsId: number; panelId: string }];
+    result: void;
+  };
+  "webview:dialog-response": {
+    args: [payload: { dialogId: string; confirmed: boolean; response?: string }];
+    result: void;
+  };
+  "webview:oauth-loopback": {
+    args: [
+      authUrl: string,
+      panelId: string,
+      webContentsId: number,
+      sessionStorageSnapshot?: Array<[string, string]>,
+    ];
+    result: { success: boolean; error?: string } | null;
+  };
+
+  // Additional worktree channels
+  "worktree:fetch-pr-branch": {
+    args: [payload: { rootPath: string; prNumber: number; headRefName: string }];
+    result: void;
   };
 }
 
