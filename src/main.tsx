@@ -24,6 +24,7 @@ import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupOrchestrator: (() => void) | undefined;
+let cleanupDemoCapture: (() => void) | undefined;
 
 async function bootstrap() {
   await initRendererSentry();
@@ -48,6 +49,11 @@ async function bootstrap() {
   void useAgentSettingsStore.getState().initialize();
 
   await ensureTerminalFontLoaded();
+
+  if (window.electron?.demo) {
+    const { initDemoCapture } = await import("./services/demo/demoCapture");
+    cleanupDemoCapture = initDemoCapture();
+  }
 
   const { default: App } = await import("./App");
 
@@ -99,5 +105,6 @@ if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     cleanupGlobalErrorHandlers?.();
     cleanupOrchestrator?.();
+    cleanupDemoCapture?.();
   });
 }

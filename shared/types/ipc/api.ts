@@ -1324,6 +1324,10 @@ export interface ElectronAPI {
     startCapture(payload: DemoStartCapturePayload): Promise<DemoStartCaptureResult>;
     stopCapture(): Promise<DemoStopCaptureResult>;
     getCaptureStatus(): Promise<DemoCaptureStatus>;
+    sendCaptureChunk(captureId: string, buffer: ArrayBuffer): void;
+    sendCaptureFinished(captureId: string): void;
+    onCaptureStart(callback: (payload: { captureId: string; fps: number }) => void): () => void;
+    onCaptureStop(callback: (payload: { captureId: string }) => void): () => void;
     encode(payload: DemoEncodePayload): Promise<DemoEncodeResult>;
     onEncodeProgress(callback: (event: DemoEncodeProgressEvent) => void): () => void;
     onExecCommand(

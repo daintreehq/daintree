@@ -2814,14 +2814,34 @@ const api: ElectronAPI = {
           pause: () => _unwrappingInvoke(CHANNELS.DEMO_PAUSE),
           resume: () => _unwrappingInvoke(CHANNELS.DEMO_RESUME),
           sleep: (durationMs: number) => _unwrappingInvoke(CHANNELS.DEMO_SLEEP, { durationMs }),
-          startCapture: (payload: {
-            fps?: number;
-            maxFrames?: number;
-            outputPath: string;
-            preset: import("../shared/types/ipc/demo.js").DemoEncodePreset;
-          }) => _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
+          startCapture: (payload: { fps?: number; outputPath: string }) =>
+            _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
           stopCapture: () => _unwrappingInvoke(CHANNELS.DEMO_STOP_CAPTURE),
           getCaptureStatus: () => _unwrappingInvoke(CHANNELS.DEMO_GET_CAPTURE_STATUS),
+          sendCaptureChunk: (captureId: string, buffer: ArrayBuffer): void => {
+            // postMessage transfers the ArrayBuffer zero-copy; structured clone
+            // would double the peak memory during recording.
+            ipcRenderer.postMessage(CHANNELS.DEMO_CAPTURE_CHUNK, { captureId }, [buffer]);
+          },
+          sendCaptureFinished: (captureId: string): void => {
+            ipcRenderer.send(CHANNELS.DEMO_CAPTURE_FINISHED, { captureId });
+          },
+          onCaptureStart: (
+            callback: (payload: { captureId: string; fps: number }) => void
+          ): (() => void) => {
+            const handler = (
+              _event: Electron.IpcRendererEvent,
+              payload: { captureId: string; fps: number }
+            ) => callback(payload);
+            ipcRenderer.on(CHANNELS.DEMO_CAPTURE_START, handler);
+            return () => ipcRenderer.removeListener(CHANNELS.DEMO_CAPTURE_START, handler);
+          },
+          onCaptureStop: (callback: (payload: { captureId: string }) => void): (() => void) => {
+            const handler = (_event: Electron.IpcRendererEvent, payload: { captureId: string }) =>
+              callback(payload);
+            ipcRenderer.on(CHANNELS.DEMO_CAPTURE_STOP, handler);
+            return () => ipcRenderer.removeListener(CHANNELS.DEMO_CAPTURE_STOP, handler);
+          },
           scroll: (selector: string) => _unwrappingInvoke(CHANNELS.DEMO_SCROLL, { selector }),
           drag: (fromSelector: string, toSelector: string, durationMs?: number) =>
             _unwrappingInvoke(CHANNELS.DEMO_DRAG, { fromSelector, toSelector, durationMs }),

@@ -39,9 +39,7 @@ export interface DemoScreenshotResult {
 
 export interface DemoStartCapturePayload {
   fps?: number;
-  maxFrames?: number;
   outputPath: string;
-  preset: DemoEncodePreset;
 }
 
 export interface DemoStartCaptureResult {

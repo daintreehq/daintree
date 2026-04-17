@@ -3,23 +3,19 @@ import path from "node:path";
 import { launchApp, closeApp } from "../e2e/helpers/launch.js";
 import { Stage } from "./stage.js";
 import type { ScenarioConfig } from "./stage.js";
-import type { DemoEncodePreset } from "../shared/types/ipc/demo.js";
 
 const { values } = parseArgs({
   args: process.argv.slice(2),
   options: {
     scenario: { type: "string", short: "s" },
     output: { type: "string", short: "o" },
-    preset: { type: "string", short: "p" },
     fps: { type: "string", short: "f" },
   },
   allowPositionals: false,
 });
 
 if (!values.scenario) {
-  console.error(
-    "Usage: tsx demo/runner.ts --scenario <name> [--output <path>] [--preset <preset>] [--fps <number>]"
-  );
+  console.error("Usage: tsx demo/runner.ts --scenario <name> [--output <path>] [--fps <number>]");
   process.exit(1);
 }
 
@@ -32,7 +28,6 @@ async function run(): Promise<void> {
   const config = mod.default;
 
   const outputPath = values.output ?? config.outputFile;
-  const preset = (values.preset ?? config.preset) as DemoEncodePreset;
   const parsedFps = values.fps ? parseInt(values.fps, 10) : (config.fps ?? 30);
   const fps = Number.isFinite(parsedFps) && parsedFps > 0 ? parsedFps : 30;
 
@@ -47,7 +42,7 @@ async function run(): Promise<void> {
     console.log(`Stage ready. Running ${config.scenes.length} scene(s)...`);
 
     const resolvedOutput = path.resolve(outputPath);
-    const capture = await stage.startCapture({ fps, outputPath: resolvedOutput, preset });
+    const capture = await stage.startCapture({ fps, outputPath: resolvedOutput });
     console.log(`Capturing at ${fps} fps → ${capture.outputPath}`);
 
     for (let i = 0; i < config.scenes.length; i++) {
@@ -56,14 +51,6 @@ async function run(): Promise<void> {
     }
 
     const stopResult = await stage.stopCapture();
-    console.log(`Captured ${stopResult.frameCount} frames.`);
-
-    if (stopResult.frameCount === 0) {
-      console.error("No frames captured.");
-      process.exitCode = 1;
-      return;
-    }
-
     console.log(`Done → ${stopResult.outputPath}`);
   } catch (err) {
     console.error("Scene failed:", err);

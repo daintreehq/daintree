@@ -21,7 +21,6 @@ import type {
   DemoEncodePayload,
   DemoEncodeProgressEvent,
   DemoEncodeResult,
-  DemoEncodePreset,
   DemoScrollPayload,
   DemoDragPayload,
   DemoPressKeyPayload,
@@ -31,6 +30,15 @@ import type {
   DemoDismissAnnotationPayload,
   DemoWaitForIdlePayload,
 } from "../../../shared/types/ipc/demo.js";
+
+// Maximum capture duration before we force-stop. MediaRecorder exposes no
+// intrinsic limit, so we apply one to prevent a forgotten recording from
+// filling the disk.
+const CAPTURE_MAX_DURATION_MS = 10 * 60 * 1000;
+
+// Secondary timer: if the renderer never finalizes after stop, we destroy the
+// stream and reject so the IPC call doesn't hang forever.
+const CAPTURE_FINALIZE_TIMEOUT_MS = 30 * 1000;
 
 export function resolveFfmpegPath(): string {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -204,90 +212,130 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_WAIT_FOR_IDLE, payload);
   };
 
-  // --- Frame capture state ---
+  // --- Frame capture state (renderer-driven getDisplayMedia + MediaRecorder) ---
+  //
+  // Lifecycle:
+  //   1. handleStartCapture: register setDisplayMediaRequestHandler on session,
+  //      open output WriteStream, wire DEMO_CAPTURE_CHUNK / DEMO_CAPTURE_FINISHED
+  //      listeners, send DEMO_CAPTURE_START to renderer.
+  //   2. Renderer calls getDisplayMedia, pipes MediaRecorder chunks via
+  //      ipcRenderer.postMessage (zero-copy ArrayBuffer transfer).
+  //   3. handleStopCapture: send DEMO_CAPTURE_STOP; finalizePromise resolves only
+  //      after the renderer's onstop fires and sends DEMO_CAPTURE_FINISHED — this
+  //      preserves the W3C-guaranteed ordering and avoids truncating the output.
+
   interface CaptureSession {
-    ffmpegProc: ChildProcess;
-    ticker: ReturnType<typeof setInterval> | null;
-    captureToken: number;
-    lastFrameBuffer: Buffer | null;
-    frameWidth: number;
-    frameHeight: number;
-    frameCount: number;
-    maxFrames: number;
+    captureId: string;
     outputPath: string;
-    draining: boolean;
-    stopping: boolean;
     fps: number;
+    fileStream: fs.WriteStream;
+    stopping: boolean;
+    finalized: boolean;
     finalizePromise: Promise<DemoStopCaptureResult>;
     resolveFinalizeWith: (result: DemoStopCaptureResult) => void;
     rejectFinalizeWith: (err: Error) => void;
+    safetyTimer: ReturnType<typeof setTimeout> | null;
+    finalizeTimer: ReturnType<typeof setTimeout> | null;
+    chunkListener: (
+      event: Electron.IpcMainEvent,
+      msg: { captureId: string } | undefined,
+      ...rest: unknown[]
+    ) => void;
+    finishListener: (event: Electron.IpcMainEvent, msg: { captureId: string }) => void;
+    sessionRef: Electron.Session | null;
+    handlerRegistered: boolean;
   }
 
   let captureSession: CaptureSession | null = null;
-  let captureTokenCounter = 0;
 
-  function writeFrameToStdin(session: CaptureSession): void {
-    if (!session.lastFrameBuffer || session.stopping) return;
-    const ok = session.ffmpegProc.stdin!.write(session.lastFrameBuffer);
-    session.frameCount++;
-    if (session.frameCount >= session.maxFrames) {
-      stopCaptureSession();
-      return;
-    }
-    if (!ok) {
-      session.draining = true;
-      if (session.ticker !== null) {
-        clearInterval(session.ticker);
-        session.ticker = null;
-      }
-      session.ffmpegProc.stdin!.once("drain", () => {
-        if (session !== captureSession || session.stopping) return;
-        session.draining = false;
-        session.ticker = setInterval(
-          () => writeFrameToStdin(session),
-          Math.round(1000 / session.fps)
-        );
-      });
-    }
-  }
-
-  function stopCaptureSession(): Promise<DemoStopCaptureResult> | null {
-    const session = captureSession;
-    if (!session || session.stopping) return session?.finalizePromise ?? null;
-    session.stopping = true;
-    captureTokenCounter++;
-    if (session.ticker !== null) {
-      clearInterval(session.ticker);
-      session.ticker = null;
-    }
-    session.ffmpegProc.stdin!.end();
-    return session.finalizePromise;
-  }
-
-  function startCaptureLoop(session: CaptureSession, token: number): void {
+  function getCaptureSession(): Electron.Session | null {
     const win = getMainWindow();
-    if (!win || win.isDestroyed()) return;
+    if (!win || win.isDestroyed()) return null;
     const wc = getAppWebContents(win);
+    if (wc.isDestroyed()) return null;
+    return wc.session;
+  }
 
-    void (async () => {
-      while (captureSession === session && session.captureToken === token && !session.stopping) {
-        try {
-          const image = await wc.capturePage();
-          if (captureSession !== session || session.captureToken !== token || session.stopping)
-            break;
-          const resized = image.resize({
-            width: session.frameWidth,
-            height: session.frameHeight,
-            quality: "best",
-          });
-          session.lastFrameBuffer = resized.toBitmap();
-        } catch {
-          // Keep lastFrameBuffer unchanged — ticker will duplicate
-        }
-        // Yield to event loop between captures to avoid starving the ticker
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      }
-    })();
+  function sendToApp(channel: string, payload?: unknown): boolean {
+    const win = getMainWindow();
+    if (!win || win.isDestroyed()) return false;
+    const wc = getAppWebContents(win);
+    if (wc.isDestroyed()) return false;
+    wc.send(channel, payload);
+    return true;
+  }
+
+  function clearCaptureListeners(session: CaptureSession): void {
+    ipcMain.removeListener(CHANNELS.DEMO_CAPTURE_CHUNK, session.chunkListener);
+    ipcMain.removeListener(CHANNELS.DEMO_CAPTURE_FINISHED, session.finishListener);
+  }
+
+  function clearCaptureTimers(session: CaptureSession): void {
+    if (session.safetyTimer !== null) {
+      clearTimeout(session.safetyTimer);
+      session.safetyTimer = null;
+    }
+    if (session.finalizeTimer !== null) {
+      clearTimeout(session.finalizeTimer);
+      session.finalizeTimer = null;
+    }
+  }
+
+  function clearDisplayMediaHandler(session: CaptureSession): void {
+    if (!session.handlerRegistered || !session.sessionRef) return;
+    try {
+      // Clearing with null unregisters the handler so getDisplayMedia
+      // falls back to the platform default outside demo mode.
+      session.sessionRef.setDisplayMediaRequestHandler(null);
+    } catch {
+      // Best-effort cleanup — session may already be torn down.
+    }
+    session.handlerRegistered = false;
+  }
+
+  function finalizeCaptureSession(session: CaptureSession, result: DemoStopCaptureResult): void {
+    if (session.finalized) return;
+    session.finalized = true;
+    clearCaptureTimers(session);
+    clearCaptureListeners(session);
+    clearDisplayMediaHandler(session);
+    if (captureSession === session) {
+      captureSession = null;
+    }
+    session.resolveFinalizeWith(result);
+  }
+
+  function failCaptureSession(session: CaptureSession, err: Error): void {
+    if (session.finalized) return;
+    session.finalized = true;
+    clearCaptureTimers(session);
+    clearCaptureListeners(session);
+    clearDisplayMediaHandler(session);
+    if (!session.fileStream.destroyed) {
+      session.fileStream.destroy();
+    }
+    if (captureSession === session) {
+      captureSession = null;
+    }
+    session.rejectFinalizeWith(err);
+  }
+
+  function beginStopCapture(session: CaptureSession): void {
+    if (session.stopping) return;
+    session.stopping = true;
+    if (session.safetyTimer !== null) {
+      clearTimeout(session.safetyTimer);
+      session.safetyTimer = null;
+    }
+    // Send the stop signal to the renderer. The renderer must call
+    // mediaRecorder.stop(), let the final ondataavailable fire, then send
+    // DEMO_CAPTURE_FINISHED from within onstop.
+    sendToApp(CHANNELS.DEMO_CAPTURE_STOP, { captureId: session.captureId });
+    // Secondary guard: if the renderer crashed or never finalizes, reject
+    // the IPC call so callers don't hang.
+    session.finalizeTimer = setTimeout(() => {
+      failCaptureSession(session, new Error("Capture finalize timed out waiting for renderer"));
+    }, CAPTURE_FINALIZE_TIMEOUT_MS);
   }
 
   const handleStartCapture = async (
@@ -299,53 +347,22 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     }
 
     const fps = payload.fps ?? 30;
-    const maxFrames = payload.maxFrames ?? 9000;
-    const { outputPath, preset } = payload;
-    const presetConfig = CAPTURE_PRESETS[preset];
-    if (!presetConfig) {
-      throw new Error(`Unknown capture preset: ${preset}`);
-    }
+    const { outputPath } = payload;
 
-    // Capture first frame to determine dimensions
     const win = getMainWindow();
     if (!win || win.isDestroyed()) {
       throw new Error("No window available for capture");
     }
-    const firstImage = await getAppWebContents(win).capturePage();
-    const logicalSize = firstImage.getSize();
-    const frameWidth = logicalSize.width;
-    const frameHeight = logicalSize.height;
-    const resizedFirst = firstImage.resize({
-      width: frameWidth,
-      height: frameHeight,
-      quality: "best",
-    });
-    const firstBitmap = resizedFirst.toBitmap();
+
+    const rendererSession = getCaptureSession();
+    if (!rendererSession) {
+      throw new Error("No session available for capture");
+    }
 
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    const fileStream = fs.createWriteStream(outputPath);
 
-    const ffmpegBin = resolveFfmpegPath();
-    const args = [
-      "-y",
-      "-f",
-      "rawvideo",
-      "-pix_fmt",
-      "bgra",
-      "-video_size",
-      `${frameWidth}x${frameHeight}`,
-      "-framerate",
-      String(fps),
-      "-i",
-      "pipe:0",
-      ...presetConfig.outputOptions,
-      "-fps_mode",
-      "cfr",
-      outputPath,
-    ];
-
-    const ffmpegProc = spawn(ffmpegBin, args, { stdio: ["pipe", "pipe", "pipe"] });
-
-    const token = ++captureTokenCounter;
+    const captureId = randomBytes(8).toString("hex");
 
     let resolveFinalizeWith!: (result: DemoStopCaptureResult) => void;
     let rejectFinalizeWith!: (err: Error) => void;
@@ -353,149 +370,129 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
       resolveFinalizeWith = resolve;
       rejectFinalizeWith = reject;
     });
+    // Attach a no-op handler so an abort during cleanup (before anyone calls
+    // stopCapture) doesn't trigger an unhandled rejection warning. Real
+    // awaiters still observe the rejection through their own .then/.catch.
+    finalizePromise.catch(() => {});
+
+    const chunkListener = (
+      _event: Electron.IpcMainEvent,
+      msg: { captureId: string } | undefined,
+      ...rest: unknown[]
+    ): void => {
+      const session = captureSession;
+      if (!session || session.finalized) return;
+      if (!msg || msg.captureId !== session.captureId) return;
+      // When using ipcRenderer.postMessage the transferred ArrayBuffer
+      // arrives as an additional argument after the message payload.
+      const transferred = rest.find((arg) => arg instanceof ArrayBuffer) as ArrayBuffer | undefined;
+      if (!transferred || transferred.byteLength === 0) return;
+      if (session.fileStream.destroyed) return;
+      // Buffer.from(arrayBuffer) returns a view, not a copy — safe because the
+      // chunk originated on the browser heap (blob.arrayBuffer()), not from a
+      // Node.js slab. See PR #4639.
+      session.fileStream.write(Buffer.from(transferred));
+    };
+
+    const finishListener = (_event: Electron.IpcMainEvent, msg: { captureId: string }): void => {
+      const session = captureSession;
+      if (!session || session.finalized) return;
+      if (!msg || msg.captureId !== session.captureId) return;
+      // End the stream and resolve once it flushes. 'error' rejects; 'finish'
+      // resolves with the frameCount-stub (MediaRecorder has no frame count).
+      session.fileStream.once("error", (err) => {
+        failCaptureSession(session, err);
+      });
+      session.fileStream.once("finish", () => {
+        finalizeCaptureSession(session, {
+          outputPath: session.outputPath,
+          frameCount: 0,
+        });
+      });
+      session.fileStream.end();
+    };
 
     const session: CaptureSession = {
-      ffmpegProc,
-      ticker: null,
-      captureToken: token,
-      lastFrameBuffer: firstBitmap,
-      frameWidth,
-      frameHeight,
-      frameCount: 0,
-      maxFrames,
+      captureId,
       outputPath,
-      draining: false,
-      stopping: false,
       fps,
+      fileStream,
+      stopping: false,
+      finalized: false,
       finalizePromise,
       resolveFinalizeWith,
       rejectFinalizeWith,
+      safetyTimer: null,
+      finalizeTimer: null,
+      chunkListener,
+      finishListener,
+      sessionRef: rendererSession,
+      handlerRegistered: false,
     };
+
+    fileStream.on("error", (err: Error) => {
+      if (captureSession === session) {
+        failCaptureSession(session, new Error(`Capture file stream error: ${err.message}`));
+      }
+    });
+
+    ipcMain.on(CHANNELS.DEMO_CAPTURE_CHUNK, chunkListener);
+    ipcMain.on(CHANNELS.DEMO_CAPTURE_FINISHED, finishListener);
+
+    // Auto-approve getDisplayMedia by pointing it at the requesting frame.
+    // useSystemPicker: false ensures our handler is always invoked (no native
+    // picker dialog).
+    rendererSession.setDisplayMediaRequestHandler(
+      (request, callback) => {
+        // Always call callback exactly once — otherwise getDisplayMedia hangs.
+        try {
+          if (request.frame) {
+            callback({ video: request.frame });
+          } else {
+            // No frame to capture — deny by passing an empty response.
+            callback({});
+          }
+        } catch {
+          callback({});
+        }
+      },
+      { useSystemPicker: false }
+    );
+    session.handlerRegistered = true;
 
     captureSession = session;
 
-    ffmpegProc.on("error", (err: Error) => {
-      if (captureSession === session) {
-        session.stopping = true;
-        if (session.ticker !== null) {
-          clearInterval(session.ticker);
-          session.ticker = null;
-        }
-        captureSession = null;
-        session.rejectFinalizeWith(new Error(`Capture encode failed: ${err.message}`));
+    // Safety timeout — force-stop if capture runs longer than
+    // CAPTURE_MAX_DURATION_MS (e.g., if stopCapture is never called).
+    session.safetyTimer = setTimeout(() => {
+      if (!session.finalized && !session.stopping) {
+        beginStopCapture(session);
       }
-    });
+    }, CAPTURE_MAX_DURATION_MS);
 
-    ffmpegProc.on("close", (code) => {
-      session.stopping = true;
-      if (session.ticker !== null) {
-        clearInterval(session.ticker);
-        session.ticker = null;
-      }
-      if (captureSession === session) {
-        captureSession = null;
-      }
-      if (code === 0) {
-        session.resolveFinalizeWith({
-          outputPath: session.outputPath,
-          frameCount: session.frameCount,
-        });
-      } else {
-        session.rejectFinalizeWith(new Error(`ffmpeg exited with code ${code}`));
-      }
-    });
-
-    // Start the ticker and capture loop
-    session.ticker = setInterval(() => writeFrameToStdin(session), Math.round(1000 / fps));
-    startCaptureLoop(session, token);
+    if (!sendToApp(CHANNELS.DEMO_CAPTURE_START, { captureId, fps })) {
+      failCaptureSession(session, new Error("No window available to start capture"));
+      throw new Error("No window available to start capture");
+    }
 
     return { outputPath };
   };
 
   const handleStopCapture = async (): Promise<DemoStopCaptureResult> => {
-    const promise = stopCaptureSession();
-    if (!promise) {
+    const session = captureSession;
+    if (!session) {
       throw new Error("No capture in progress");
     }
-    return promise;
+    beginStopCapture(session);
+    return session.finalizePromise;
   };
 
   const handleGetCaptureStatus = async (): Promise<DemoCaptureStatus> => {
     return {
       active: captureSession !== null && !captureSession.stopping,
-      frameCount: captureSession?.frameCount ?? 0,
+      frameCount: 0,
       outputPath: captureSession?.outputPath ?? null,
     };
-  };
-
-  // --- Encode presets for live capture (raw BGRA stdin → output file) ---
-
-  const CAPTURE_PRESETS: Record<DemoEncodePreset, { outputOptions: string[] }> = {
-    "youtube-4k": {
-      outputOptions: [
-        "-vf",
-        "scale=3840:2160:flags=lanczos",
-        "-c:v",
-        "libx264",
-        "-profile:v",
-        "high444",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv444p",
-        "-preset",
-        "slow",
-        "-g",
-        "15",
-        "-bf",
-        "2",
-        "-movflags",
-        "+faststart",
-        "-an",
-      ],
-    },
-    "youtube-1080p": {
-      outputOptions: [
-        "-vf",
-        "scale=1920:1080:flags=lanczos",
-        "-c:v",
-        "libx264",
-        "-profile:v",
-        "high444",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv444p",
-        "-preset",
-        "slow",
-        "-g",
-        "15",
-        "-bf",
-        "2",
-        "-movflags",
-        "+faststart",
-        "-an",
-      ],
-    },
-    "web-webm": {
-      outputOptions: [
-        "-c:v",
-        "libvpx-vp9",
-        "-crf",
-        "20",
-        "-b:v",
-        "0",
-        "-deadline",
-        "good",
-        "-cpu-used",
-        "1",
-        "-row-mt",
-        "1",
-        "-pix_fmt",
-        "yuv444p",
-        "-an",
-      ],
-    },
   };
 
   // --- Encode presets for offline re-encode (PNG files from disk) ---
@@ -702,8 +699,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
 
   return () => {
     if (captureSession) {
-      stopCaptureSession();
-      captureSession?.ffmpegProc.kill("SIGKILL");
+      failCaptureSession(captureSession, new Error("Capture aborted: handlers cleaned up"));
     }
     ipcMain.removeHandler(CHANNELS.DEMO_MOVE_TO);
     ipcMain.removeHandler(CHANNELS.DEMO_MOVE_TO_SELECTOR);

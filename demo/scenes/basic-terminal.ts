@@ -17,8 +17,7 @@ const typeCommand: Scene = async (stage) => {
 };
 
 export default {
-  outputFile: "demo-output/basic-terminal.mp4",
-  preset: "youtube-1080p",
+  outputFile: "demo-output/basic-terminal.webm",
   fps: 30,
   scenes: [openTerminal, typeCommand],
 } satisfies ScenarioConfig;

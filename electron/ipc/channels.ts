@@ -582,6 +582,10 @@ export const CHANNELS = {
   DEMO_EXEC_WAIT_FOR_IDLE: "demo:exec-wait-for-idle",
   DEMO_ENCODE: "demo:encode",
   DEMO_ENCODE_PROGRESS: "demo:encode:progress",
+  DEMO_CAPTURE_START: "demo:capture-start",
+  DEMO_CAPTURE_STOP: "demo:capture-stop",
+  DEMO_CAPTURE_CHUNK: "demo:capture-chunk",
+  DEMO_CAPTURE_FINISHED: "demo:capture-finished",
 
   // Plugin channels
   PLUGIN_LIST: "plugin:list",

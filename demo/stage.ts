@@ -14,7 +14,6 @@ export type Scene = (stage: Stage) => Promise<void>;
 
 export interface ScenarioConfig {
   outputFile: string;
-  preset: DemoEncodePayload["preset"];
   fps?: number;
   scenes: Scene[];
 }
