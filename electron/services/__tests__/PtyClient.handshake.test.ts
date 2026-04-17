@@ -12,6 +12,8 @@ vi.mock("electron", () => ({
   },
   app: {
     getPath: vi.fn().mockReturnValue("/mock/user/data"),
+    on: vi.fn(),
+    off: vi.fn(),
   },
 }));
 
@@ -55,6 +57,8 @@ describe("PtyClient Handshake Protocol", () => {
       },
       app: {
         getPath: vi.fn().mockReturnValue("/mock/user/data"),
+        on: vi.fn(),
+        off: vi.fn(),
       },
     }));
 
