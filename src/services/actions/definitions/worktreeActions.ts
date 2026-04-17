@@ -6,6 +6,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { notify } from "@/lib/notify";
+import { getVisibleWorktreesForCycling } from "@/lib/worktreeCyclingOrder";
 
 export function registerWorktreeActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   // Query action: list all worktrees with metadata
@@ -281,9 +282,9 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const worktrees = callbacks.getWorktrees();
-      if (worktrees.length === 0) return;
       const activeWorktreeId = callbacks.getActiveWorktreeId();
+      const worktrees = getVisibleWorktreesForCycling(activeWorktreeId);
+      if (worktrees.length === 0) return;
       const currentIndex = activeWorktreeId
         ? worktrees.findIndex((w) => w.id === activeWorktreeId)
         : -1;
@@ -301,14 +302,19 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const worktrees = callbacks.getWorktrees();
-      if (worktrees.length === 0) return;
       const activeWorktreeId = callbacks.getActiveWorktreeId();
+      const worktrees = getVisibleWorktreesForCycling(activeWorktreeId);
+      if (worktrees.length === 0) return;
       const currentIndex = activeWorktreeId
         ? worktrees.findIndex((w) => w.id === activeWorktreeId)
         : -1;
+      // When the active worktree is outside the visible list, wrap from the
+      // end — this matches worktree.up/upVim so directional and cycle actions
+      // agree when filters hide the active worktree.
       const prevIndex =
-        currentIndex === -1 ? 0 : (currentIndex - 1 + worktrees.length) % worktrees.length;
+        currentIndex === -1
+          ? worktrees.length - 1
+          : (currentIndex - 1 + worktrees.length) % worktrees.length;
       useWorktreeSelectionStore.getState().selectWorktree(worktrees[prevIndex].id);
     },
   }));
@@ -325,7 +331,8 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     argsSchema: z.object({ index: z.number().int().min(1).max(9) }),
     run: async (args: unknown) => {
       const { index } = args as { index: number };
-      const worktrees = callbacks.getWorktrees();
+      const activeWorktreeId = callbacks.getActiveWorktreeId();
+      const worktrees = getVisibleWorktreesForCycling(activeWorktreeId);
       if (worktrees.length >= index) {
         useWorktreeSelectionStore.getState().selectWorktree(worktrees[index - 1].id);
       }
@@ -344,7 +351,8 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       danger: "safe",
       scope: "renderer",
       run: async () => {
-        const worktrees = callbacks.getWorktrees();
+        const activeWorktreeId = callbacks.getActiveWorktreeId();
+        const worktrees = getVisibleWorktreesForCycling(activeWorktreeId);
         if (worktrees.length >= index) {
           useWorktreeSelectionStore.getState().selectWorktree(worktrees[index - 1].id);
         }
@@ -353,15 +361,21 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
   }
 
   const selectWorktreeByOffset = (offset: number) => {
-    const worktrees = callbacks.getWorktrees();
-    if (worktrees.length === 0) return;
     const activeWorktreeId = callbacks.getActiveWorktreeId();
+    const worktrees = getVisibleWorktreesForCycling(activeWorktreeId);
+    if (worktrees.length === 0) return;
     const currentIndex = activeWorktreeId
       ? worktrees.findIndex((w) => w.id === activeWorktreeId)
       : -1;
-    const baseIndex = currentIndex === -1 ? 0 : currentIndex;
-    const nextIndex = baseIndex + offset;
-    if (nextIndex < 0 || nextIndex >= worktrees.length) return;
+    let nextIndex: number;
+    if (currentIndex === -1) {
+      // Active worktree is outside the visible list (filtered out or unset).
+      // Moving down lands on the first visible entry; moving up lands on the last.
+      nextIndex = offset > 0 ? 0 : worktrees.length - 1;
+    } else {
+      nextIndex = currentIndex + offset;
+      if (nextIndex < 0 || nextIndex >= worktrees.length) return;
+    }
     useWorktreeSelectionStore.getState().selectWorktree(worktrees[nextIndex].id);
   };
 
@@ -426,7 +440,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const worktrees = callbacks.getWorktrees();
+      const worktrees = getVisibleWorktreesForCycling(callbacks.getActiveWorktreeId());
       if (worktrees.length === 0) return;
       useWorktreeSelectionStore.getState().selectWorktree(worktrees[0].id);
     },
@@ -441,7 +455,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      const worktrees = callbacks.getWorktrees();
+      const worktrees = getVisibleWorktreesForCycling(callbacks.getActiveWorktreeId());
       if (worktrees.length === 0) return;
       useWorktreeSelectionStore.getState().selectWorktree(worktrees[worktrees.length - 1].id);
     },

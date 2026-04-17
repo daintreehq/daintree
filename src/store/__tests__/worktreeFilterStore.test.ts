@@ -16,6 +16,8 @@ function resetWorktreeFilterStore() {
     hideMainWorktree: false,
     pinnedWorktrees: [],
     collapsedWorktrees: [],
+    manualOrder: [],
+    quickStateFilter: "all",
   });
 }
 
@@ -125,5 +127,36 @@ describe("worktreeFilterStore", () => {
     useWorktreeFilterStore.getState().clearAll();
 
     expect(useWorktreeFilterStore.getState().collapsedWorktrees).toEqual(["wt-1"]);
+  });
+
+  it('defaults quickStateFilter to "all"', () => {
+    expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("all");
+  });
+
+  it("updates quickStateFilter via setter", () => {
+    useWorktreeFilterStore.getState().setQuickStateFilter("working");
+    expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("working");
+
+    useWorktreeFilterStore.getState().setQuickStateFilter("waiting");
+    expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("waiting");
+
+    useWorktreeFilterStore.getState().setQuickStateFilter("all");
+    expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("all");
+  });
+
+  it("counts quickStateFilter in hasActiveFilters and getActiveFilterCount", () => {
+    expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(false);
+
+    useWorktreeFilterStore.getState().setQuickStateFilter("waiting");
+
+    expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(true);
+    expect(useWorktreeFilterStore.getState().getActiveFilterCount()).toBe(1);
+  });
+
+  it('resets quickStateFilter to "all" on clearAll', () => {
+    useWorktreeFilterStore.getState().setQuickStateFilter("working");
+    useWorktreeFilterStore.getState().clearAll();
+
+    expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("all");
   });
 });

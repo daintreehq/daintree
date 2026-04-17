@@ -242,6 +242,7 @@ const { registerWorktreeActions } = await import("../definitions/worktreeActions
 const { usePanelStore } = await import("../../../store/panelStore");
 const { usePortalStore } = await import("../../../store/portalStore");
 const { useWorktreeSelectionStore } = await import("../../../store/worktreeStore");
+const { useWorktreeFilterStore } = await import("../../../store/worktreeFilterStore");
 const worktreeViewStore = mocks.worktreeViewStore;
 
 function createCallbacks(overrides: Partial<ActionCallbacks> = {}): ActionCallbacks {
@@ -346,6 +347,24 @@ beforeEach(() => {
     isLoading: false,
     error: null,
     isInitialized: false,
+  });
+
+  useWorktreeFilterStore.setState({
+    query: "",
+    orderBy: "created",
+    groupByType: false,
+    statusFilters: new Set(),
+    typeFilters: new Set(),
+    githubFilters: new Set(),
+    sessionFilters: new Set(),
+    activityFilters: new Set(),
+    alwaysShowActive: true,
+    alwaysShowWaiting: true,
+    hideMainWorktree: false,
+    pinnedWorktrees: [],
+    collapsedWorktrees: [],
+    manualOrder: [],
+    quickStateFilter: "all",
   });
 });
 
@@ -902,5 +921,242 @@ describe("worktree action hardening", () => {
     );
 
     expect(onInject).not.toHaveBeenCalled();
+  });
+});
+
+describe("worktree cycling respects sidebar order", () => {
+  function installWorktrees(entries: Array<Record<string, unknown>>): void {
+    const map = new Map<string, Record<string, unknown>>();
+    for (const entry of entries) {
+      const id = entry.id as string;
+      map.set(id, {
+        worktreeId: id,
+        isCurrent: false,
+        isMainWorktree: false,
+        ...entry,
+      });
+    }
+    worktreeViewStore.setState({
+      worktrees: map as Map<string, never>,
+      isLoading: false,
+      error: null,
+      isInitialized: true,
+    });
+  }
+
+  function spySelectWorktree(): ReturnType<typeof vi.fn> {
+    const spy = vi.fn();
+    useWorktreeSelectionStore.setState({ selectWorktree: spy } as never);
+    return spy;
+  }
+
+  it("cycles forward through sidebar-ordered list, not a stale callback list", async () => {
+    installWorktrees([
+      { id: "main", name: "main", branch: "main", path: "/repo", isMainWorktree: true },
+      { id: "wt-a", name: "alpha", branch: "feature/alpha", path: "/repo/a" },
+      { id: "wt-b", name: "bravo", branch: "feature/bravo", path: "/repo/b" },
+      { id: "wt-c", name: "charlie", branch: "feature/charlie", path: "/repo/c" },
+    ]);
+    useWorktreeFilterStore.setState({ orderBy: "alpha" });
+    const select = spySelectWorktree();
+
+    const actions = buildRegistry(registerWorktreeActions, {
+      getActiveWorktreeId: () => "wt-a",
+      // Deliberately stale/wrong list — should be ignored by the cycle action.
+      getWorktrees: () => [{ id: "stale", name: "stale" }] as never,
+    });
+    await actions.get("worktree.next")!().run(undefined, {} as never);
+
+    expect(select).toHaveBeenCalledWith("wt-b");
+  });
+
+  it("cycles backward honoring sidebar order", async () => {
+    installWorktrees([
+      { id: "main", name: "main", branch: "main", path: "/repo", isMainWorktree: true },
+      { id: "wt-a", name: "alpha", branch: "feature/alpha", path: "/repo/a" },
+      { id: "wt-b", name: "bravo", branch: "feature/bravo", path: "/repo/b" },
+    ]);
+    useWorktreeFilterStore.setState({ orderBy: "alpha" });
+    const select = spySelectWorktree();
+
+    const actions = buildRegistry(registerWorktreeActions, {
+      getActiveWorktreeId: () => "wt-a",
+    });
+    await actions.get("worktree.previous")!().run(undefined, {} as never);
+
+    // Visible order: [main, wt-a, wt-b]; wt-a is at index 1, previous goes to main.
+    expect(select).toHaveBeenCalledWith("main");
+  });
+
+  it("switchIndex selects by sidebar position", async () => {
+    installWorktrees([
+      { id: "main", name: "main", branch: "main", path: "/repo", isMainWorktree: true },
+      { id: "wt-a", name: "alpha", branch: "feature/alpha", path: "/repo/a" },
+      { id: "wt-b", name: "bravo", branch: "feature/bravo", path: "/repo/b" },
+      { id: "wt-c", name: "charlie", branch: "feature/charlie", path: "/repo/c" },
+    ]);
+    useWorktreeFilterStore.setState({ orderBy: "alpha" });
+    const select = spySelectWorktree();
+
+    const actions = buildRegistry(registerWorktreeActions);
+    await actions.get("worktree.switchIndex")!().run({ index: 3 }, {} as never);
+
+    // Sidebar order: [main, wt-a, wt-b, wt-c]; index 3 => wt-b.
+    expect(select).toHaveBeenCalledWith("wt-b");
+  });
+
+  it("home and end jump to first and last sidebar entries", async () => {
+    installWorktrees([
+      { id: "main", name: "main", branch: "main", path: "/repo", isMainWorktree: true },
+      { id: "wt-a", name: "alpha", branch: "feature/alpha", path: "/repo/a" },
+      { id: "wt-b", name: "bravo", branch: "feature/bravo", path: "/repo/b" },
+    ]);
+    useWorktreeFilterStore.setState({ orderBy: "alpha" });
+    const select = spySelectWorktree();
+
+    const actions = buildRegistry(registerWorktreeActions, {
+      getActiveWorktreeId: () => "wt-a",
+    });
+    await actions.get("worktree.home")!().run(undefined, {} as never);
+    await actions.get("worktree.end")!().run(undefined, {} as never);
+
+    expect(select).toHaveBeenNthCalledWith(1, "main");
+    expect(select).toHaveBeenNthCalledWith(2, "wt-b");
+  });
+
+  it("down navigates by offset within the visible list", async () => {
+    installWorktrees([
+      { id: "main", name: "main", branch: "main", path: "/repo", isMainWorktree: true },
+      { id: "wt-a", name: "alpha", branch: "feature/alpha", path: "/repo/a" },
+      { id: "wt-b", name: "bravo", branch: "feature/bravo", path: "/repo/b" },
+    ]);
+    useWorktreeFilterStore.setState({ orderBy: "alpha" });
+    const select = spySelectWorktree();
+
+    const actions = buildRegistry(registerWorktreeActions, {
+      getActiveWorktreeId: () => "wt-a",
+    });
+    await actions.get("worktree.down")!().run(undefined, {} as never);
+
+    expect(select).toHaveBeenCalledWith("wt-b");
+  });
+
+  it("no-ops when the visible list is empty", async () => {
+    const select = spySelectWorktree();
+    const actions = buildRegistry(registerWorktreeActions);
+
+    await actions.get("worktree.next")!().run(undefined, {} as never);
+    await actions.get("worktree.switch1")!().run(undefined, {} as never);
+    await actions.get("worktree.end")!().run(undefined, {} as never);
+
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("previous and up agree when the active worktree is filtered out", async () => {
+    installWorktrees([
+      { id: "main", name: "main", branch: "main", path: "/repo", isMainWorktree: true },
+      { id: "wt-idle", name: "idle", branch: "feature/idle", path: "/repo/idle" },
+      { id: "wt-working", name: "working", branch: "feature/working", path: "/repo/working" },
+    ]);
+    usePanelStore.setState({
+      panelsById: {
+        "term-working": createTerminal({
+          id: "term-working",
+          worktreeId: "wt-working",
+          agentState: "working",
+        }),
+      },
+      panelIds: ["term-working"],
+    });
+    useWorktreeFilterStore.setState({
+      orderBy: "alpha",
+      quickStateFilter: "working",
+      alwaysShowActive: false,
+    });
+    const select = spySelectWorktree();
+
+    const actions = buildRegistry(registerWorktreeActions, {
+      getActiveWorktreeId: () => "wt-idle",
+    });
+
+    await actions.get("worktree.previous")!().run(undefined, {} as never);
+    await actions.get("worktree.up")!().run(undefined, {} as never);
+
+    // Visible list: [main, wt-working]. Both actions must pick the same entry
+    // (last visible → wt-working) so cycle and directional navigation agree.
+    expect(select.mock.calls[0][0]).toBe("wt-working");
+    expect(select.mock.calls[1][0]).toBe("wt-working");
+  });
+
+  it("up/down use first/last visible when active is filtered out", async () => {
+    installWorktrees([
+      { id: "main", name: "main", branch: "main", path: "/repo", isMainWorktree: true },
+      { id: "wt-idle", name: "idle", branch: "feature/idle", path: "/repo/idle" },
+      { id: "wt-working", name: "working", branch: "feature/working", path: "/repo/working" },
+    ]);
+    usePanelStore.setState({
+      panelsById: {
+        "term-working": createTerminal({
+          id: "term-working",
+          worktreeId: "wt-working",
+          agentState: "working",
+        }),
+      },
+      panelIds: ["term-working"],
+    });
+    useWorktreeFilterStore.setState({
+      orderBy: "alpha",
+      quickStateFilter: "working",
+      alwaysShowActive: false,
+    });
+    const select = spySelectWorktree();
+
+    // wt-idle is the active worktree but is filtered out (quickStateFilter=working,
+    // alwaysShowActive=false). Visible list is [main, wt-working].
+    const actions = buildRegistry(registerWorktreeActions, {
+      getActiveWorktreeId: () => "wt-idle",
+    });
+
+    await actions.get("worktree.down")!().run(undefined, {} as never);
+    await actions.get("worktree.up")!().run(undefined, {} as never);
+
+    expect(select).toHaveBeenNthCalledWith(1, "main"); // down → first visible
+    expect(select).toHaveBeenNthCalledWith(2, "wt-working"); // up → last visible
+  });
+
+  it("quickStateFilter hides non-matching worktrees from cycling", async () => {
+    installWorktrees([
+      { id: "main", name: "main", branch: "main", path: "/repo", isMainWorktree: true },
+      { id: "wt-idle", name: "idle", branch: "feature/idle", path: "/repo/idle" },
+      { id: "wt-working", name: "working", branch: "feature/working", path: "/repo/working" },
+    ]);
+
+    // Mark wt-working with a working agent terminal
+    usePanelStore.setState({
+      panelsById: {
+        "term-working": createTerminal({
+          id: "term-working",
+          worktreeId: "wt-working",
+          agentState: "working",
+        }),
+      },
+      panelIds: ["term-working"],
+    });
+
+    useWorktreeFilterStore.setState({
+      orderBy: "alpha",
+      quickStateFilter: "working",
+    });
+    const select = spySelectWorktree();
+
+    const actions = buildRegistry(registerWorktreeActions, {
+      getActiveWorktreeId: () => "main",
+    });
+    // Visible list with quickStateFilter=working: [main, wt-working] (main always shown,
+    // wt-idle filtered out). Forward from main selects wt-working.
+    await actions.get("worktree.next")!().run(undefined, {} as never);
+
+    expect(select).toHaveBeenCalledWith("wt-working");
+    expect(select).not.toHaveBeenCalledWith("wt-idle");
   });
 });

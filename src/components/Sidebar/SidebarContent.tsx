@@ -45,7 +45,6 @@ import {
   scoreWorktree,
   type DerivedWorktreeMeta,
   type FilterState,
-  type QuickStateFilter,
 } from "@/lib/worktreeFilters";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
 import { parseExactNumber } from "@/lib/parseExactNumber";
@@ -336,6 +335,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     alwaysShowWaiting,
     pinnedWorktrees,
     manualOrder,
+    quickStateFilter,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
       query: state.query,
@@ -350,6 +350,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       alwaysShowWaiting: state.alwaysShowWaiting,
       pinnedWorktrees: state.pinnedWorktrees,
       manualOrder: state.manualOrder,
+      quickStateFilter: state.quickStateFilter,
     }))
   );
   const clearAllFilters = useWorktreeFilterStore((state) => state.clearAll);
@@ -357,6 +358,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const unpinWorktree = useWorktreeFilterStore((state) => state.unpinWorktree);
   const collapsedWorktrees = useWorktreeFilterStore((state) => state.collapsedWorktrees);
   const expandWorktree = useWorktreeFilterStore((state) => state.expandWorktree);
+  const setQuickStateFilter = useWorktreeFilterStore((state) => state.setQuickStateFilter);
 
   // Terminal store for derived metadata
   const panelsById = usePanelStore(useShallow((state) => state.panelsById));
@@ -371,8 +373,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [hiddenAbove, setHiddenAbove] = useState(0);
   const [hiddenBelow, setHiddenBelow] = useState(0);
-
-  const [quickStateFilter, setQuickStateFilter] = useState<QuickStateFilter>("all");
 
   const [isRecipeEditorOpen, setIsRecipeEditorOpen] = useState(false);
   const [recipeEditorWorktreeId, setRecipeEditorWorktreeId] = useState<string | undefined>(
@@ -854,8 +854,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const rootPath = currentProject?.path ?? "";
   const hasNonMainWorktrees = deferredWorktrees.length > 1;
-  const hasQuickFilter = quickStateFilter !== "all";
-  const hasFilters = hasActiveFilters() || hasQuickFilter;
+  const hasFilters = hasActiveFilters();
   const worktreeMatchesQuery = (w: WorktreeState) => {
     if (!query) return true;
     const exactNum = parseExactNumber(query);
@@ -1024,10 +1023,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                     No worktrees match your filters
                   </p>
                   <button
-                    onClick={() => {
-                      clearAllFilters();
-                      setQuickStateFilter("all");
-                    }}
+                    onClick={clearAllFilters}
                     className="text-xs px-3 py-1.5 text-daintree-accent hover:bg-daintree-accent/10 rounded transition-colors"
                   >
                     Clear filters

@@ -14,6 +14,7 @@ vi.mock("@/clients", () => ({
   githubClient: {},
   systemClient: {},
   worktreeClient: { resourceAction: mockResourceAction },
+  projectClient: {},
 }));
 
 const mockWorktrees = new Map<string, Record<string, unknown>>();

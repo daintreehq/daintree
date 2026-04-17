@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import type { QuickStateFilter } from "@/lib/worktreeFilters";
 
 export type OrderBy = "recent" | "created" | "alpha" | "manual";
 
@@ -46,6 +47,8 @@ interface WorktreeFilterState {
   pinnedWorktrees: string[];
   collapsedWorktrees: string[];
   manualOrder: string[];
+  /** Transient session-only quick-state chip filter (not persisted). */
+  quickStateFilter: QuickStateFilter;
 }
 
 interface WorktreeFilterActions {
@@ -68,6 +71,7 @@ interface WorktreeFilterActions {
   toggleWorktreeCollapsed: (id: string) => void;
   isWorktreeCollapsed: (id: string) => boolean;
   setManualOrder: (order: string[]) => void;
+  setQuickStateFilter: (filter: QuickStateFilter) => void;
   clearAll: () => void;
   getActiveFilterCount: () => number;
   hasActiveFilters: () => boolean;
@@ -109,6 +113,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
       pinnedWorktrees: [],
       collapsedWorktrees: [],
       manualOrder: [],
+      quickStateFilter: "all",
 
       setQuery: (query) => set({ query }),
       setOrderBy: (orderBy) => set({ orderBy }),
@@ -217,6 +222,8 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
 
       setManualOrder: (order) => set({ manualOrder: order }),
 
+      setQuickStateFilter: (quickStateFilter) => set({ quickStateFilter }),
+
       clearAll: () =>
         set({
           query: "",
@@ -226,6 +233,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
           sessionFilters: new Set(),
           activityFilters: new Set(),
           hideMainWorktree: false,
+          quickStateFilter: "all",
         }),
 
       getActiveFilterCount: () => {
@@ -237,7 +245,8 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
           state.typeFilters.size +
           state.githubFilters.size +
           state.sessionFilters.size +
-          state.activityFilters.size
+          state.activityFilters.size +
+          (state.quickStateFilter !== "all" ? 1 : 0)
         );
       },
 
@@ -250,7 +259,8 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
           state.typeFilters.size > 0 ||
           state.githubFilters.size > 0 ||
           state.sessionFilters.size > 0 ||
-          state.activityFilters.size > 0
+          state.activityFilters.size > 0 ||
+          state.quickStateFilter !== "all"
         );
       },
     }),
