@@ -116,6 +116,7 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
   const rawRecord = rawTheme as Record<string, unknown>;
   const validation = validateImportedThemeData({
     tokens: rawTokens,
+    palette: rawTheme.palette,
     heroImage: rawRecord.heroImage,
   });
   if (!validation.valid) {

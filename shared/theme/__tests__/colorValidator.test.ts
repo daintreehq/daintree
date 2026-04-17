@@ -66,22 +66,31 @@ describe("isValidCssColor", () => {
     expect(isValidCssColor("color-mix(in oklab, rgb(255, 0, 0) 50%, #00ff00)")).toBe(true);
   });
 
+  it("rejects color-mix() with invalid inner colors", () => {
+    expect(isValidCssColor("color-mix(in oklab, not-a-color, blue)")).toBe(false);
+    expect(isValidCssColor("color-mix(in oklab, #ff0000, bogus)")).toBe(false);
+    expect(isValidCssColor("color-mix(in oklab, nope)")).toBe(false);
+  });
+
   it("rejects malformed color-mix()", () => {
     expect(isValidCssColor("color-mix(red, blue)")).toBe(false);
     expect(isValidCssColor("color-mix(in oklab, red, blue")).toBe(false);
     expect(isValidCssColor("color-mix()")).toBe(false);
   });
 
-  it("accepts var() with double-dash custom property", () => {
+  it("accepts var() with double-dash custom property and color fallback", () => {
     expect(isValidCssColor("var(--accent-primary)")).toBe(true);
     expect(isValidCssColor("var(--theme-accent, #ff0000)")).toBe(true);
     expect(isValidCssColor("var( --custom )")).toBe(true);
   });
 
-  it("rejects var() without double-dash or argument", () => {
+  it("rejects var() without double-dash, empty name, or invalid fallback", () => {
     expect(isValidCssColor("var()")).toBe(false);
     expect(isValidCssColor("var(accent)")).toBe(false);
     expect(isValidCssColor("var(-accent)")).toBe(false);
+    expect(isValidCssColor("var(--)")).toBe(false);
+    expect(isValidCssColor("var(--theme-accent, )")).toBe(false);
+    expect(isValidCssColor("var(--x, not-a-color)")).toBe(false);
   });
 
   it("accepts CSS named colors, transparent, and currentcolor", () => {
@@ -130,16 +139,26 @@ describe("isValidThemeHeroImage", () => {
     expect(isValidThemeHeroImage("images/hero/foo.png")).toBe(true);
   });
 
-  it("accepts data: URLs", () => {
+  it("accepts data:image/ URLs", () => {
     expect(isValidThemeHeroImage("data:image/png;base64,iVBORw0KGgo=")).toBe(true);
     expect(isValidThemeHeroImage("DATA:image/jpeg;base64,xyz")).toBe(true);
+    expect(isValidThemeHeroImage("data:image/svg+xml;base64,abc")).toBe(true);
   });
 
-  it("rejects remote protocols", () => {
+  it("rejects non-image data: URLs", () => {
+    expect(isValidThemeHeroImage("data:text/html,<script>alert(1)</script>")).toBe(false);
+    expect(isValidThemeHeroImage("data:text/plain,hello")).toBe(false);
+    expect(isValidThemeHeroImage("data:application/javascript,alert(1)")).toBe(false);
+  });
+
+  it("rejects remote protocols and script-capable schemes", () => {
     expect(isValidThemeHeroImage("http://example.com/img.png")).toBe(false);
     expect(isValidThemeHeroImage("https://example.com/img.png")).toBe(false);
     expect(isValidThemeHeroImage("//cdn.example.com/img.png")).toBe(false);
     expect(isValidThemeHeroImage("file:///Users/me/img.png")).toBe(false);
+    expect(isValidThemeHeroImage("javascript:alert(1)")).toBe(false);
+    expect(isValidThemeHeroImage("vbscript:msgbox(1)")).toBe(false);
+    expect(isValidThemeHeroImage("ftp://example.com/x.png")).toBe(false);
   });
 
   it("rejects Windows absolute paths and UNC paths", () => {
@@ -236,5 +255,73 @@ describe("validateImportedThemeData", () => {
       },
     });
     expect(result.valid).toBe(false);
+  });
+
+  it("handles null or missing tokens without throwing", () => {
+    expect(
+      validateImportedThemeData({ tokens: null as unknown as Record<string, unknown> }).valid
+    ).toBe(true);
+    expect(validateImportedThemeData({}).valid).toBe(true);
+  });
+
+  it("rejects non-object tokens", () => {
+    const result = validateImportedThemeData({
+      tokens: "not-an-object" as unknown as Record<string, unknown>,
+    });
+    expect(result.valid).toBe(false);
+    if (result.valid) return;
+    expect(result.errors[0]).toContain("Invalid tokens");
+  });
+
+  it("rejects palette-format themes with invalid color values", () => {
+    const result = validateImportedThemeData({
+      palette: {
+        type: "dark",
+        surfaces: {
+          grid: "not-a-color",
+          sidebar: "#151a20",
+          canvas: "#1a2027",
+          panel: "#202730",
+          elevated: "#28313c",
+        },
+        text: {
+          primary: "#edf2f7",
+          secondary: "#cbd5e0",
+          muted: "#94a3b8",
+          inverse: "#0f1115",
+        },
+        border: "#334155",
+        accent: "also-bogus",
+        status: {
+          success: "#22c55e",
+          warning: "#f59e0b",
+          danger: "#ef4444",
+          info: "#60a5fa",
+        },
+        activity: {
+          active: "#22d3ee",
+          idle: "#64748b",
+          working: "#38bdf8",
+          waiting: "#fbbf24",
+        },
+        syntax: {
+          comment: "#64748b",
+          punctuation: "#cbd5e1",
+          number: "#fbbf24",
+          string: "#86efac",
+          operator: "#7dd3fc",
+          keyword: "#c084fc",
+          function: "#93c5fd",
+          link: "#38bdf8",
+          quote: "#94a3b8",
+          chip: "#22d3ee",
+        },
+      },
+    });
+    expect(result.valid).toBe(false);
+    if (result.valid) return;
+    const joined = result.errors.join(" ");
+    expect(joined).toContain("palette.surfaces.grid");
+    expect(joined).toContain("palette.accent");
   });
 });

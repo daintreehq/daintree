@@ -348,6 +348,91 @@ describe("appThemeImporter", () => {
     expect(result.errors.join(" ")).toContain("accent-rgb");
   });
 
+  it("rejects palette-format themes when a palette color is invalid", () => {
+    const result = parseAppThemeContent(
+      JSON.stringify({
+        name: "Bad Palette",
+        palette: {
+          type: "dark",
+          surfaces: {
+            grid: "not-a-color",
+            sidebar: "#151a20",
+            canvas: "#1a2027",
+            panel: "#202730",
+            elevated: "#28313c",
+          },
+          text: {
+            primary: "#edf2f7",
+            secondary: "#cbd5e0",
+            muted: "#94a3b8",
+            inverse: "#0f1115",
+          },
+          border: "#334155",
+          accent: "#38bdf8",
+          status: {
+            success: "#22c55e",
+            warning: "#f59e0b",
+            danger: "#ef4444",
+            info: "#60a5fa",
+          },
+          activity: {
+            active: "#22d3ee",
+            idle: "#64748b",
+            working: "#38bdf8",
+            waiting: "#fbbf24",
+          },
+          syntax: {
+            comment: "#64748b",
+            punctuation: "#cbd5e1",
+            number: "#fbbf24",
+            string: "#86efac",
+            operator: "#7dd3fc",
+            keyword: "#c084fc",
+            function: "#93c5fd",
+            link: "#38bdf8",
+            quote: "#94a3b8",
+            chip: "#22d3ee",
+          },
+        },
+      }),
+      "bad-palette.json"
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.join(" ")).toContain("palette.surfaces.grid");
+  });
+
+  it("rejects a javascript: heroImage URL", () => {
+    const result = parseAppThemeContent(
+      JSON.stringify({
+        name: "JS Hero",
+        type: "dark",
+        heroImage: "javascript:alert(1)",
+        tokens: { "surface-canvas": "#101010" },
+      }),
+      "js-hero.json"
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((err) => err.includes("heroImage"))).toBe(true);
+  });
+
+  it("rejects a non-image data: URL for heroImage", () => {
+    const result = parseAppThemeContent(
+      JSON.stringify({
+        name: "Data HTML Hero",
+        type: "dark",
+        heroImage: "data:text/html,<script>alert(1)</script>",
+        tokens: { "surface-canvas": "#101010" },
+      }),
+      "data-html-hero.json"
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((err) => err.includes("heroImage"))).toBe(true);
+  });
+
   it("preserves extensions without validating their values", () => {
     const result = parseAppThemeContent(
       JSON.stringify({

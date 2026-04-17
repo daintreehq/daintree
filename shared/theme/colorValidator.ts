@@ -201,10 +201,10 @@ const HSL_RE =
 const OKLCH_OKLAB_RE =
   /^okl(?:ch|ab)\(\s*(?:-?\d*\.?\d+%?\s+-?\d*\.?\d+%?\s+-?\d*\.?\d+(?:deg|rad|turn|grad)?%?(?:\s*\/\s*-?\d*\.?\d+%?)?|-?\d*\.?\d+%?\s*,\s*-?\d*\.?\d+%?\s*,\s*-?\d*\.?\d+(?:deg|rad|turn|grad)?%?(?:\s*,\s*-?\d*\.?\d+%?)?)\s*\)$/i;
 
-const COLOR_MIX_PREFIX_RE =
-  /^color-mix\(\s*in\s+[a-z-]+(?:\s+(?:longer|shorter|increasing|decreasing)\s+hue)?\s*,/i;
-const VAR_PREFIX_RE = /^var\(\s*--/;
-
+const COLOR_MIX_INTERPOLATION_RE =
+  /^in\s+[a-z-]+(?:\s+(?:longer|shorter|increasing|decreasing)\s+hue)?$/i;
+const VAR_NAME_RE = /^--[a-zA-Z_][\w-]*$/;
+const COLOR_COMPONENT_PERCENT_RE = /\s+-?\d*\.?\d+%$/;
 const NAMED_COLOR_RE = /^[a-z]+$/i;
 
 function hasBalancedParens(value: string): boolean {
@@ -219,16 +219,65 @@ function hasBalancedParens(value: string): boolean {
   return depth === 0;
 }
 
+/** Split `inner` on top-level commas (ignoring commas inside nested parens). */
+function splitTopLevelArgs(inner: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (ch === "," && depth === 0) {
+      parts.push(inner.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(inner.slice(start));
+  return parts;
+}
+
+function isValidColorMix(value: string): boolean {
+  if (!value.endsWith(")")) return false;
+  if (!hasBalancedParens(value)) return false;
+  const inner = value.slice("color-mix(".length, -1).trim();
+  const parts = splitTopLevelArgs(inner).map((part) => part.trim());
+  if (parts.length !== 3) return false;
+  if (!COLOR_MIX_INTERPOLATION_RE.test(parts[0])) return false;
+  for (const part of parts.slice(1)) {
+    if (!part) return false;
+    const withoutPercent = part.replace(COLOR_COMPONENT_PERCENT_RE, "").trim();
+    if (!withoutPercent) return false;
+    if (!isValidCssColor(withoutPercent)) return false;
+  }
+  return true;
+}
+
+function isValidVarExpression(value: string): boolean {
+  if (!value.endsWith(")")) return false;
+  if (!hasBalancedParens(value)) return false;
+  const inner = value.slice("var(".length, -1).trim();
+  const parts = splitTopLevelArgs(inner).map((part) => part.trim());
+  if (parts.length === 0 || parts.length > 2) return false;
+  if (!VAR_NAME_RE.test(parts[0])) return false;
+  if (parts.length === 2) {
+    const fallback = parts[1];
+    if (!fallback) return false;
+    if (!isValidCssColor(fallback)) return false;
+  }
+  return true;
+}
+
 /**
  * Returns true if `value` is structurally a valid CSS color string. Accepts
  * hex (3/4/6/8 digits), `rgb()`/`rgba()`, `hsl()`/`hsla()`, `oklch()`/`oklab()`,
- * `color-mix(in <space>, ...)`, `var(--...)`, and the CSS named colors
- * (including `transparent` and `currentcolor`).
+ * `color-mix(in <space>, ...)`, `var(--...)` (with optional color fallback),
+ * and the CSS named colors (including `transparent` and `currentcolor`).
  *
- * This is structural validation, not full CSS parsing — e.g. `color-mix()` is
- * checked for a valid prefix and balanced parens but nested color values are
- * not recursively validated. That tradeoff avoids false negatives on legal CSS
- * while still blocking obvious garbage like `"not-a-color"`.
+ * Structural validation, not full CSS parsing: `color-mix()` and `var()`
+ * arguments are recursively validated one level deep; deeper nesting is not
+ * expected in theme files. The goal is to block obvious garbage like
+ * `"not-a-color"` at the import boundary without rejecting legal CSS.
  */
 export function isValidCssColor(value: string): boolean {
   if (typeof value !== "string") return false;
@@ -243,17 +292,8 @@ export function isValidCssColor(value: string): boolean {
   if (/^hsla?\(/i.test(trimmed)) return HSL_RE.test(trimmed);
   if (/^okl(?:ch|ab)\(/i.test(trimmed)) return OKLCH_OKLAB_RE.test(trimmed);
 
-  if (/^color-mix\(/i.test(trimmed)) {
-    if (!trimmed.endsWith(")")) return false;
-    if (!hasBalancedParens(trimmed)) return false;
-    return COLOR_MIX_PREFIX_RE.test(trimmed);
-  }
-
-  if (/^var\(/i.test(trimmed)) {
-    if (!trimmed.endsWith(")")) return false;
-    if (!hasBalancedParens(trimmed)) return false;
-    return VAR_PREFIX_RE.test(trimmed);
-  }
+  if (/^color-mix\(/i.test(trimmed)) return isValidColorMix(trimmed);
+  if (/^var\(/i.test(trimmed)) return isValidVarExpression(trimmed);
 
   // Bare identifier → named color table lookup.
   if (NAMED_COLOR_RE.test(trimmed)) {
@@ -279,22 +319,125 @@ export function isValidAccentRgbTriplet(value: string): boolean {
   return true;
 }
 
+const DATA_IMAGE_URL_RE = /^data:image\/[a-z0-9.+-]+[;,]/i;
+const URL_SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+
 /**
- * Validates `heroImage` values on theme import. Accepts relative paths (with
- * or without a leading `/`) and `data:` URLs. Rejects remote protocols
- * (`http:`, `https:`, `file:`), protocol-relative `//`, Windows absolute
- * (`C:\...`), and UNC (`\\server\share`).
+ * Validates `heroImage` values on theme import. Allowlist semantics: only a
+ * `data:image/...` URL or a path (relative, root-relative, or dot-relative)
+ * is accepted. Everything with a URL scheme is rejected, including `http:`,
+ * `https:`, `file:`, `javascript:`, `ftp:`, and non-image `data:` payloads.
+ * Protocol-relative URLs (`//cdn…`), Windows absolute (`C:\...`), and UNC
+ * (`\\server\share`) are rejected.
  */
 export function isValidThemeHeroImage(value: string): boolean {
   if (typeof value !== "string") return false;
   const trimmed = value.trim();
   if (!trimmed) return false;
-  if (trimmed.toLowerCase().startsWith("data:")) return true;
-  return !/^(?:https?|file):|^\/\/|^[a-zA-Z]:[\\/]|^\\\\/i.test(trimmed);
+  if (DATA_IMAGE_URL_RE.test(trimmed)) return true;
+  if (URL_SCHEME_RE.test(trimmed)) return false;
+  if (trimmed.startsWith("//")) return false;
+  if (trimmed.startsWith("\\\\")) return false;
+  return true;
+}
+
+/**
+ * Leaf color keys inside `ThemePalette`. When a theme is imported in palette
+ * format, each of these paths must carry a valid CSS color string.
+ * `accentSecondary`, `overlayTint`, `terminal`, and `strategy` are optional
+ * top-level keys; we only validate them when present.
+ */
+const PALETTE_COLOR_FIELDS = {
+  surfaces: ["grid", "sidebar", "canvas", "panel", "elevated"] as const,
+  text: ["primary", "secondary", "muted", "inverse"] as const,
+  status: ["success", "warning", "danger", "info"] as const,
+  activity: ["active", "idle", "working", "waiting"] as const,
+  terminal: [
+    "background",
+    "foreground",
+    "muted",
+    "cursor",
+    "selection",
+    "red",
+    "green",
+    "yellow",
+    "blue",
+    "magenta",
+    "cyan",
+    "brightRed",
+    "brightGreen",
+    "brightYellow",
+    "brightBlue",
+    "brightMagenta",
+    "brightCyan",
+    "brightWhite",
+  ] as const,
+  syntax: [
+    "comment",
+    "punctuation",
+    "number",
+    "string",
+    "operator",
+    "keyword",
+    "function",
+    "link",
+    "quote",
+    "chip",
+  ] as const,
+} as const;
+
+const PALETTE_TOP_LEVEL_COLORS = ["border", "accent", "accentSecondary", "overlayTint"] as const;
+
+function collectPaletteColorErrors(palette: unknown): string[] {
+  const errors: string[] = [];
+  if (!palette || typeof palette !== "object" || Array.isArray(palette)) {
+    return ["Invalid palette: expected an object."];
+  }
+  const record = palette as Record<string, unknown>;
+  const invalid: string[] = [];
+
+  for (const key of PALETTE_TOP_LEVEL_COLORS) {
+    const value = record[key];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || !isValidCssColor(value)) {
+      invalid.push(`palette.${key}`);
+    }
+  }
+
+  for (const [groupKey, leafKeys] of Object.entries(PALETTE_COLOR_FIELDS) as [
+    keyof typeof PALETTE_COLOR_FIELDS,
+    readonly string[],
+  ][]) {
+    const group = record[groupKey];
+    if (group === undefined) continue;
+    if (!group || typeof group !== "object" || Array.isArray(group)) {
+      invalid.push(`palette.${groupKey}`);
+      continue;
+    }
+    const groupRecord = group as Record<string, unknown>;
+    for (const leafKey of leafKeys) {
+      const value = groupRecord[leafKey];
+      if (value === undefined) continue;
+      if (typeof value !== "string" || !isValidCssColor(value)) {
+        invalid.push(`palette.${groupKey}.${leafKey}`);
+      }
+    }
+  }
+
+  if (invalid.length > 0) {
+    invalid.sort();
+    errors.push(
+      `Invalid color values for palette field(s): ${invalid.join(", ")}. ` +
+        `Values must be valid CSS colors (hex, rgb/rgba, hsl/hsla, oklch/oklab, color-mix, var, or named color).`
+    );
+  }
+
+  return errors;
 }
 
 export interface ImportedThemeDataForValidation {
-  tokens: Record<string, unknown>;
+  tokens?: Record<string, unknown> | null;
+  palette?: unknown;
   heroImage?: unknown;
 }
 
@@ -303,9 +446,10 @@ export type ValidateImportedThemeDataResult = { valid: true } | { valid: false; 
 /**
  * Validates user-supplied theme data at the import boundary. Iterates the
  * `tokens` map and checks each recognized key against the appropriate
- * validator (color / `accent-rgb` triplet / non-color pass-through), then
- * validates `heroImage` if present. Unknown token keys are ignored here — the
- * importer emits a separate "Ignored unknown tokens" warning for those.
+ * validator (color / `accent-rgb` triplet / non-color pass-through), walks
+ * the nested `palette` color leaves when provided, then validates `heroImage`
+ * if present. Unknown token keys are ignored here — the importer emits a
+ * separate "Ignored unknown tokens" warning for those.
  *
  * Returns all failures together so users see every problem in one pass.
  */
@@ -315,23 +459,29 @@ export function validateImportedThemeData(
   const errors: string[] = [];
   const invalidColorTokens: string[] = [];
 
-  for (const [key, value] of Object.entries(data.tokens)) {
-    if (!APP_THEME_TOKEN_KEY_SET.has(key)) continue;
-    if (typeof value !== "string") {
-      invalidColorTokens.push(key);
-      continue;
-    }
+  if (data.tokens !== undefined && data.tokens !== null) {
+    if (typeof data.tokens !== "object" || Array.isArray(data.tokens)) {
+      errors.push("Invalid tokens: expected an object of token name → value pairs.");
+    } else {
+      for (const [key, value] of Object.entries(data.tokens)) {
+        if (!APP_THEME_TOKEN_KEY_SET.has(key)) continue;
+        if (typeof value !== "string") {
+          invalidColorTokens.push(key);
+          continue;
+        }
 
-    const tokenKey = key as AppThemeTokenKey;
-    if (tokenKey === "accent-rgb") {
-      if (!isValidAccentRgbTriplet(value)) invalidColorTokens.push(key);
-      continue;
+        const tokenKey = key as AppThemeTokenKey;
+        if (tokenKey === "accent-rgb") {
+          if (!isValidAccentRgbTriplet(value)) invalidColorTokens.push(key);
+          continue;
+        }
+        if (NON_COLOR_TOKEN_KEYS.has(tokenKey)) {
+          if (!value.trim()) invalidColorTokens.push(key);
+          continue;
+        }
+        if (!isValidCssColor(value)) invalidColorTokens.push(key);
+      }
     }
-    if (NON_COLOR_TOKEN_KEYS.has(tokenKey)) {
-      if (!value.trim()) invalidColorTokens.push(key);
-      continue;
-    }
-    if (!isValidCssColor(value)) invalidColorTokens.push(key);
   }
 
   if (invalidColorTokens.length > 0) {
@@ -342,10 +492,14 @@ export function validateImportedThemeData(
     );
   }
 
+  if (data.palette !== undefined && data.palette !== null) {
+    errors.push(...collectPaletteColorErrors(data.palette));
+  }
+
   if (data.heroImage !== undefined && data.heroImage !== null) {
     if (typeof data.heroImage !== "string" || !isValidThemeHeroImage(data.heroImage)) {
       errors.push(
-        `Invalid heroImage value. heroImage must be a relative path or a data: URL — remote URLs and absolute OS paths are not allowed.`
+        `Invalid heroImage value. heroImage must be a relative path or a data:image/ URL — remote URLs, non-image data URLs, and absolute OS paths are not allowed.`
       );
     }
   }
