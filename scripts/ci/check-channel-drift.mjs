@@ -16,8 +16,16 @@ const root = path.resolve(here, "../..");
 const CHANNELS_FILE = path.join(root, "electron/ipc/channels.ts");
 const PRELOAD_FILE = path.join(root, "electron/preload.cts");
 
-const CHANNELS_ANCHOR = /(?:^|\s)CHANNELS\s*=\s*\{/;
+// Anchor requires `const CHANNELS = {` at the start of a line (optionally
+// prefixed with `export `). This avoids false-matching `CHANNELS = {` inside
+// comments (leading `*`), template literals, or string literals.
+const CHANNELS_ANCHOR = /(?:^|\n)\s*(?:export\s+)?const\s+CHANNELS\s*=\s*\{/;
 const ENTRY_RE = /^\s+([A-Z][A-Z0-9_]*):\s+"([^"]+)",?$/gm;
+// Candidate-entry detection: a line inside the CHANNELS body that looks like
+// `  IDENT: ...` but didn't match ENTRY_RE. Catches trailing inline comments,
+// single-quoted values, template-literal values, or bracketed keys that would
+// otherwise be silently skipped.
+const CANDIDATE_ENTRY_RE = /^\s+[A-Za-z_[][^:\n]*:/;
 
 // Slice the body of the `CHANNELS = { ... }` object literal out of `src`.
 // Walks from the opening `{` to its matching `}`, tracking string/comment state
@@ -83,6 +91,39 @@ function parseChannels(src, filePath) {
       process.exit(1);
     }
     map.set(m[1], m[2]);
+  }
+  // Flag any line that looks like a channel entry but didn't match ENTRY_RE
+  // (trailing comments, single quotes, template literals, etc.). Better a
+  // loud failure than a silently missed entry.
+  const lines = body.split("\n");
+  let inBlockComment = false;
+  for (const rawLine of lines) {
+    let line = rawLine;
+    if (inBlockComment) {
+      const end = line.indexOf("*/");
+      if (end === -1) continue;
+      line = line.slice(end + 2);
+      inBlockComment = false;
+    }
+    const blockStart = line.indexOf("/*");
+    if (blockStart !== -1) {
+      const blockEnd = line.indexOf("*/", blockStart + 2);
+      if (blockEnd === -1) {
+        line = line.slice(0, blockStart);
+        inBlockComment = true;
+      } else {
+        line = line.slice(0, blockStart) + line.slice(blockEnd + 2);
+      }
+    }
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("//")) continue;
+    if (!CANDIDATE_ENTRY_RE.test(line)) continue;
+    if (!/^\s+([A-Z][A-Z0-9_]*):\s+"([^"]+)",?\s*$/.test(line)) {
+      console.error(
+        `::error file=${filePath}::unrecognized entry syntax in CHANNELS block: ${rawLine.trim()}`
+      );
+      process.exit(1);
+    }
   }
   if (map.size === 0) {
     console.error(
