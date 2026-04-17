@@ -22,6 +22,7 @@ import {
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { getAgentConfig, type AgentIconProps } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
+import { useActionMruStore } from "@/store/actionMruStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -87,6 +88,8 @@ export function AgentTrayButton({
 }: AgentTrayButtonProps) {
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   const setAgentPinned = useAgentSettingsStore((s) => s.setAgentPinned);
+
+  const actionMruList = useActionMruStore((s) => s.actionMruList);
 
   const refreshAvailability = useCliAvailabilityStore((s) => s.refresh);
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
@@ -190,10 +193,13 @@ export function AgentTrayButton({
 
       const state = agentAvailability?.[id];
       if (isAgentReady(state)) {
-        launchable.push(row);
+        // Pinned agents already live in the main toolbar — listing them in
+        // the tray's Launch section wastes dropdown space. Users unpin via
+        // the main toolbar button or Settings > Toolbar.
+        if (!pinned) launchable.push(row);
       } else if (isAgentInstalled(state)) {
         // "installed" means the CLI is on PATH but not fully authenticated
-        // or configured yet. These belong in "Also Available" with a setup
+        // or configured yet. These belong in "Needs Setup" with a setup
         // badge. Missing agents do NOT get promoted here.
         needsSetup.push(row);
       }
@@ -202,8 +208,21 @@ export function AgentTrayButton({
       fallbackSetup.push(row);
     }
 
+    // Sort Launch by palette MRU (lower index = more recent). Untracked
+    // agents keep their natural BUILT_IN_AGENT_IDS order after any tracked
+    // ones. Only palette dispatches populate `actionMruList`; tray launches
+    // don't record MRU, but palette-sourced recency is the signal we have.
+    launchable.sort((a, b) => {
+      const ai = actionMruList.indexOf(`agent.${a.id}`);
+      const bi = actionMruList.indexOf(`agent.${b.id}`);
+      if (ai === -1 && bi === -1) return 0;
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+
     return { launchable, needsSetup, fallbackSetup };
-  }, [agentAvailability, agentSettings, agentDominantStates]);
+  }, [agentAvailability, agentSettings, agentDominantStates, actionMruList]);
 
   const handleLaunch = (row: AgentRow) => {
     void actionService.dispatch("agent.launch", { agentId: row.id }, { source: "user" });
@@ -291,7 +310,7 @@ export function AgentTrayButton({
 
         {launchable.length > 0 && (
           <>
-            <DropdownMenuLabel>Agents</DropdownMenuLabel>
+            <DropdownMenuLabel>Launch</DropdownMenuLabel>
             {launchable.map((row) => (
               <LaunchRow
                 key={`launch-${row.id}`}
@@ -308,7 +327,7 @@ export function AgentTrayButton({
         {needsSetup.length > 0 && (
           <>
             {launchable.length > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuLabel>Also Available</DropdownMenuLabel>
+            <DropdownMenuLabel>Needs Setup</DropdownMenuLabel>
             {needsSetup.map((row) => (
               <DropdownMenuItem
                 key={`setup-${row.id}`}

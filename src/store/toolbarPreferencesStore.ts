@@ -152,7 +152,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }),
     {
       name: "daintree-toolbar-preferences",
-      version: 4,
+      version: 5,
       storage: createSafeJSONStorage(),
       migrate: (persisted, version) => {
         const state = persisted as Record<string, unknown>;
@@ -203,6 +203,16 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             layout.leftButtons = drop(layout.leftButtons);
             layout.rightButtons = drop(layout.rightButtons);
             layout.hiddenButtons = drop(layout.hiddenButtons);
+          }
+        }
+        if (version < 5) {
+          // Agent visibility moved to `agentSettingsStore.settings.agents[id].pinned`.
+          // Stale agent IDs in `hiddenButtons` from older versions would shadow the
+          // canonical pinned state after this migration, so strip them.
+          const layout = state.layout as { hiddenButtons?: string[] } | undefined;
+          if (layout?.hiddenButtons) {
+            const agentIds = new Set<string>(BUILT_IN_AGENT_IDS);
+            layout.hiddenButtons = layout.hiddenButtons.filter((id) => !agentIds.has(id));
           }
         }
         return state as unknown as ToolbarPreferencesState;

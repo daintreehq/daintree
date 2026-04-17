@@ -1,8 +1,19 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Mirror the production 7 agent IDs so the v5 migration is exercised against
+// the real set, not a subset. Keeping the mock in sync guards against
+// regressions when new built-in agents ship.
 vi.mock("@shared/config/agentIds", () => ({
-  BUILT_IN_AGENT_IDS: ["claude", "gemini", "codex", "opencode", "cursor"] as const,
+  BUILT_IN_AGENT_IDS: [
+    "claude",
+    "gemini",
+    "codex",
+    "opencode",
+    "cursor",
+    "kiro",
+    "copilot",
+  ] as const,
 }));
 
 let useToolbarPreferencesStore: typeof import("../toolbarPreferencesStore").useToolbarPreferencesStore;
@@ -341,6 +352,121 @@ describe("toolbarPreferencesStore", () => {
             launcher: { alwaysShowDevServer: false },
           },
           version: 3,
+        })
+      );
+
+      const store = await loadStore();
+      expect(store.getState().layout.leftButtons).toBeDefined();
+    });
+
+    it("v4→v5 strips built-in agent IDs from hiddenButtons", async () => {
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["agent-tray", "claude", "gemini", "terminal"],
+              rightButtons: ["settings"],
+              hiddenButtons: ["claude", "notes", "gemini"],
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 4,
+        })
+      );
+
+      const store = await loadStore();
+      const { layout } = store.getState();
+      // Agent IDs stripped; non-agent entries preserved.
+      expect(layout.hiddenButtons).toEqual(["notes"]);
+      // Ordering arrays untouched.
+      expect(layout.leftButtons).toContain("claude");
+      expect(layout.leftButtons).toContain("gemini");
+    });
+
+    it("v4→v5 strips every built-in agent ID including rarer ones", async () => {
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["agent-tray", "terminal"],
+              rightButtons: ["settings"],
+              hiddenButtons: [
+                "claude",
+                "gemini",
+                "codex",
+                "opencode",
+                "cursor",
+                "kiro",
+                "copilot",
+                "notes",
+              ],
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 4,
+        })
+      );
+
+      const store = await loadStore();
+      // All 7 built-in agent IDs stripped; non-agent entries preserved.
+      expect(store.getState().layout.hiddenButtons).toEqual(["notes"]);
+    });
+
+    it("v4→v5 leaves hiddenButtons untouched when no agent IDs are present", async () => {
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["agent-tray", "terminal"],
+              rightButtons: ["settings"],
+              hiddenButtons: ["notes", "copy-tree"],
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 4,
+        })
+      );
+
+      const store = await loadStore();
+      expect(store.getState().layout.hiddenButtons).toEqual(["notes", "copy-tree"]);
+    });
+
+    it("v4→v5 is a no-op on already-v5 state (idempotency guard)", async () => {
+      // Rehydrating a store that's already at v5 must not re-apply the
+      // migration — agent IDs legitimately absent from hiddenButtons should
+      // stay absent, and the filter path must not run again.
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["agent-tray", "claude", "terminal"],
+              rightButtons: ["settings"],
+              hiddenButtons: ["notes"],
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 5,
+        })
+      );
+
+      const store = await loadStore();
+      expect(store.getState().layout.hiddenButtons).toEqual(["notes"]);
+      // Ordering arrays untouched.
+      expect(store.getState().layout.leftButtons).toContain("claude");
+    });
+
+    it("v4→v5 handles missing layout without throwing", async () => {
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 4,
         })
       );
 
