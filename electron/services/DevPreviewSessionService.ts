@@ -267,6 +267,7 @@ export class DevPreviewSessionService {
           status: "error",
           error: { type: "unknown", message: commandError },
           url: null,
+          assignedUrl: null,
           terminalId: null,
           isRestarting: false,
         });
@@ -304,6 +305,7 @@ export class DevPreviewSessionService {
             status: "error",
             error: { type: "unknown", message: commandError },
             url: null,
+            assignedUrl: null,
             terminalId: null,
             isRestarting: false,
           });
@@ -705,6 +707,7 @@ export class DevPreviewSessionService {
       this.updateSession(session, {
         status: "error",
         url: null,
+        assignedUrl: null,
         error: { type: "unknown", message: `Failed to start dev server: ${message}` },
         terminalId: null,
         isRestarting: false,
@@ -905,6 +908,7 @@ export class DevPreviewSessionService {
       status: "error",
       error: result.error,
       url: null,
+      assignedUrl: null,
       isRestarting: false,
     });
   }
@@ -1015,6 +1019,7 @@ export class DevPreviewSessionService {
       this.updateSession(session, {
         status: "error",
         url: null,
+        assignedUrl: null,
         error: { type: "unknown", message: `Failed to start dependency install: ${message}` },
         terminalId: null,
         isRestarting: false,
@@ -1072,6 +1077,7 @@ export class DevPreviewSessionService {
           this.updateSession(session, {
             status: "error",
             url: null,
+            assignedUrl: null,
             error: {
               type: "unknown",
               message: `Dev server at ${url} did not respond within ${READINESS_TIMEOUT_MS / 1000} seconds`,
@@ -1096,6 +1102,7 @@ export class DevPreviewSessionService {
         this.updateSession(session, {
           status: "error",
           url: null,
+          assignedUrl: null,
           error: {
             type: "unknown",
             message: `Dev server readiness check failed: ${message}`,
