@@ -305,8 +305,17 @@ if (process.platform === "linux") {
 
 app.commandLine.appendSwitch("enable-features", enabledFeatures.join(","));
 
-// Raise GPU tile memory budget to keep Retina/multi-panel rendering from exhausting Chromium's default cap
-app.commandLine.appendSwitch("force-gpu-mem-available-mb", "1024");
+// Raise GPU tile memory budget to keep Retina/multi-panel rendering from exhausting Chromium's default cap.
+// Scales with system RAM: ≤8 GiB → 768 MB, >8 and ≤16 GiB → 1024 MB, >16 GiB → 2048 MB.
+// Must run before app.whenReady(), so only synchronous APIs are available.
+function getGpuTileMemoryCapMb(): string {
+  const totalMem = os.totalmem();
+  if (totalMem <= 8 * 1024 ** 3) return "768";
+  if (totalMem <= 16 * 1024 ** 3) return "1024";
+  return "2048";
+}
+
+app.commandLine.appendSwitch("force-gpu-mem-available-mb", getGpuTileMemoryCapMb());
 
 if (process.platform === "win32") {
   const extraPaths = getWindowsExtraPaths();
