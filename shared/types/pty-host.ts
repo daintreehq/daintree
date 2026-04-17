@@ -329,6 +329,7 @@ export type SpawnErrorCode =
   | "ENOTDIR" // Working directory does not exist (or path component is not a directory)
   | "EIO" // I/O error (e.g., PTY allocation failure)
   | "DISCONNECTED" // Terminal process no longer exists in backend (e.g., after project switch)
+  | "PENDING_SPAWNS_CAPPED" // PtyClient.pendingSpawns admission cap hit (restart-storm guard)
   | "UNKNOWN"; // Unknown error
 
 /** Result of a spawn operation */

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { EventEmitter } from "events";
+import type { PtyHostSpawnOptions, SpawnResult } from "../../../shared/types/pty-host.js";
 
 const shared = vi.hoisted(() => ({
   forkMock: vi.fn(),
@@ -23,6 +24,11 @@ vi.mock("electron", () => ({
 
 vi.mock("../TrashedPidTracker.js", () => ({
   getTrashedPidTracker: () => shared.tracker,
+}));
+
+vi.mock("../../utils/logger.js", () => ({
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
 }));
 
 interface MockUtilityProcess extends EventEmitter {
@@ -391,5 +397,170 @@ describe("PtyClient adversarial", () => {
 
     vi.advanceTimersByTime(1000);
     expect(mockChild.kill).toHaveBeenCalledTimes(1);
+  });
+
+  const MAX_PENDING_SPAWNS = 250;
+
+  function baseSpawnOptions(overrides: Partial<PtyHostSpawnOptions> = {}): PtyHostSpawnOptions {
+    return {
+      cwd: "/tmp",
+      cols: 80,
+      rows: 24,
+      ...overrides,
+    };
+  }
+
+  function countSpawnMessages(child: MockUtilityProcess): number {
+    return child.postMessage.mock.calls.filter(
+      (call: unknown[]) => (call[0] as { type?: string })?.type === "spawn"
+    ).length;
+  }
+
+  it("PENDING_SPAWNS_REJECTED_AT_CAP", async () => {
+    const client = createReadyClient();
+    const { logWarn } = await import("../../utils/logger.js");
+    const results: Array<{ id: string; result: SpawnResult }> = [];
+    client.on("spawn-result", (id: string, result: SpawnResult) => {
+      results.push({ id, result });
+    });
+    mockChild.postMessage.mockClear();
+
+    for (let i = 0; i < MAX_PENDING_SPAWNS; i++) {
+      client.spawn(`t-${i}`, baseSpawnOptions());
+    }
+    expect(countSpawnMessages(mockChild)).toBe(MAX_PENDING_SPAWNS);
+    expect(results).toHaveLength(0);
+
+    client.spawn("t-overflow", baseSpawnOptions());
+
+    expect(client.hasTerminal("t-overflow")).toBe(false);
+    expect(countSpawnMessages(mockChild)).toBe(MAX_PENDING_SPAWNS);
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("spawn rejected"));
+
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe("t-overflow");
+    expect(results[0].result.success).toBe(false);
+    expect(results[0].result.id).toBe("t-overflow");
+    expect(results[0].result.error?.code).toBe("PENDING_SPAWNS_CAPPED");
+    expect(results[0].result.error?.message).toEqual(expect.stringContaining("250"));
+  });
+
+  it("KILL_FREES_SLOT_BELOW_CAP", () => {
+    const client = createReadyClient();
+    mockChild.postMessage.mockClear();
+
+    for (let i = 0; i < MAX_PENDING_SPAWNS; i++) {
+      client.spawn(`t-${i}`, baseSpawnOptions());
+    }
+    expect(countSpawnMessages(mockChild)).toBe(MAX_PENDING_SPAWNS);
+
+    client.kill("t-0");
+    client.spawn("t-new", baseSpawnOptions());
+
+    expect(client.hasTerminal("t-new")).toBe(true);
+    expect(client.hasTerminal("t-0")).toBe(false);
+    const spawnIds = mockChild.postMessage.mock.calls
+      .filter((call: unknown[]) => (call[0] as { type?: string })?.type === "spawn")
+      .map((call: unknown[]) => (call[0] as { id?: string })?.id);
+    expect(spawnIds).toContain("t-new");
+  });
+
+  it("SAME_ID_AT_CAP_IS_UPDATED_NOT_REJECTED", async () => {
+    const client = createReadyClient();
+    const { logWarn } = await import("../../utils/logger.js");
+    const results: Array<{ id: string; result: SpawnResult }> = [];
+    client.on("spawn-result", (id: string, result: SpawnResult) => {
+      results.push({ id, result });
+    });
+
+    for (let i = 0; i < MAX_PENDING_SPAWNS; i++) {
+      client.spawn(`t-${i}`, baseSpawnOptions());
+    }
+    (logWarn as Mock).mockClear();
+    mockChild.postMessage.mockClear();
+
+    client.spawn("t-0", baseSpawnOptions({ cwd: "/updated" }));
+
+    expect(logWarn).not.toHaveBeenCalled();
+    expect(results).toHaveLength(0);
+    const updatedSpawns = mockChild.postMessage.mock.calls.filter(
+      (call: unknown[]) =>
+        (call[0] as { type?: string })?.type === "spawn" &&
+        (call[0] as { id?: string })?.id === "t-0"
+    );
+    expect(updatedSpawns).toHaveLength(1);
+    expect((updatedSpawns[0][0] as { options: PtyHostSpawnOptions }).options.cwd).toBe("/updated");
+  });
+
+  it("RESPAWN_AFTER_CRASH_DOES_NOT_EXCEED_CAP", () => {
+    const client = createReadyClient();
+    const restartedChild = createMockChild();
+
+    for (let i = 0; i < MAX_PENDING_SPAWNS; i++) {
+      client.spawn(`t-${i}`, baseSpawnOptions({ cwd: `/cwd/${i}` }));
+    }
+    client.spawn("t-overflow", baseSpawnOptions());
+
+    shared.forkMock.mockReturnValue(restartedChild);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(2000);
+    restartedChild.emit("message", { type: "ready" });
+
+    const replayedSpawns = restartedChild.postMessage.mock.calls.filter(
+      (call: unknown[]) => (call[0] as { type?: string })?.type === "spawn"
+    ) as Array<[{ type: "spawn"; id: string; options: PtyHostSpawnOptions }]>;
+    expect(replayedSpawns).toHaveLength(MAX_PENDING_SPAWNS);
+
+    const replayedIds = replayedSpawns.map(([msg]) => msg.id);
+    const expectedIds = Array.from({ length: MAX_PENDING_SPAWNS }, (_, i) => `t-${i}`);
+    expect(new Set(replayedIds)).toEqual(new Set(expectedIds));
+    expect(replayedIds).not.toContain("t-overflow");
+    expect(new Set(replayedIds).size).toBe(replayedIds.length); // no duplicates
+
+    for (const [msg] of replayedSpawns) {
+      const idx = Number(msg.id.slice(2));
+      expect(msg.options.cwd).toBe(`/cwd/${idx}`);
+    }
+
+    expect(client.hasTerminal("t-overflow")).toBe(false);
+    // dispose to avoid leaking timers/listeners across tests
+    client.dispose();
+  });
+
+  it("REJECTED_THEN_SUCCEEDING_SAME_ID_EMITS_FAILURE_THEN_SUCCESS", () => {
+    const client = createReadyClient();
+    const results: Array<{ id: string; result: SpawnResult }> = [];
+    client.on("spawn-result", (id: string, result: SpawnResult) => {
+      results.push({ id, result });
+    });
+
+    for (let i = 0; i < MAX_PENDING_SPAWNS; i++) {
+      client.spawn(`t-${i}`, baseSpawnOptions());
+    }
+    client.spawn("t-overflow", baseSpawnOptions());
+    expect(results).toHaveLength(1);
+    expect(results[0].result.success).toBe(false);
+
+    client.kill("t-0");
+    client.spawn("t-overflow", baseSpawnOptions());
+    expect(client.hasTerminal("t-overflow")).toBe(true);
+
+    // Host eventually replies with success for the admitted spawn
+    mockChild.emit("message", {
+      type: "spawn-result",
+      id: "t-overflow",
+      result: { success: true, id: "t-overflow" } satisfies SpawnResult,
+    });
+
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({
+      id: "t-overflow",
+      result: { success: false, id: "t-overflow" },
+    });
+    expect(results[0].result.error?.code).toBe("PENDING_SPAWNS_CAPPED");
+    expect(results[1]).toMatchObject({
+      id: "t-overflow",
+      result: { success: true, id: "t-overflow" },
+    });
   });
 });

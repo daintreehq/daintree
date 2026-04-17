@@ -169,6 +169,14 @@ export class PtyClient extends EventEmitter {
   private missedHeartbeats = 0;
   private readonly MAX_MISSED_HEARTBEATS = 3;
 
+  /**
+   * Cap on pendingSpawns to prevent restart-storm amplification. If the host
+   * crashes during spawn and respawnPending() replays the map, an unbounded map
+   * lets the next crash grow the replay burst. Capping admission keeps the
+   * respawn fan-out bounded under repeated crashes.
+   */
+  private readonly MAX_PENDING_SPAWNS = 250;
+
   /** Unified request/response broker for all async operations */
   private broker = new RequestResponseBroker({
     defaultTimeoutMs: 5000,
@@ -856,6 +864,22 @@ export class PtyClient extends EventEmitter {
   }
 
   spawn(id: string, options: PtyHostSpawnOptions): void {
+    if (!this.pendingSpawns.has(id) && this.pendingSpawns.size >= this.MAX_PENDING_SPAWNS) {
+      logWarn(
+        `[PtyClient] spawn rejected — pendingSpawns at cap (${this.MAX_PENDING_SPAWNS}), id=${id}`
+      );
+      const result: SpawnResult = {
+        success: false,
+        id,
+        error: {
+          code: "PENDING_SPAWNS_CAPPED",
+          message: `Too many pending terminal spawns (cap ${this.MAX_PENDING_SPAWNS}); close some terminals and try again.`,
+        },
+      };
+      this.emit("spawn-result", id, result);
+      return;
+    }
+
     const activeProjectId = this.activeProjectId ?? undefined;
     const normalizedProjectId =
       typeof options.projectId === "string" && options.projectId.trim()
