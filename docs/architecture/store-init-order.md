@@ -1,20 +1,20 @@
 # Store Module Init Order and Lazy-Getter Invariants
 
-This document describes why some renderer store modules intentionally avoid direct cross-store imports at module-evaluation time. The patterns documented here are **load-bearing**—removing or changing them will crash the renderer at boot.
+This document describes why some renderer store modules intentionally avoid direct cross-store imports at module-evaluation time. The lazy-getter injection patterns that break circular dependencies are **load-bearing**—removing or changing them will crash the renderer at boot. Optional lazy dependency patterns (e.g., `panelPersistence`) fail silently when unset.
 
 ## Why This Matters
 
 Renderer stores in Daintree use lazy getter injection to break circular dependencies that would cause Temporal Dead Zone (TDZ) errors at module initialization time. When a direct import cycle exists between ES modules (e.g., `projectStore.ts` imports `panelStore.ts` which imports back), accessing non-hoisted exports (`let`/`const`) before they're initialized throws `ReferenceError: Cannot access 'X' before initialization`. The renderer crashes before any UI appears, making these errors notoriously hard to debug.
 
-The lazy getter pattern allows stores to reference each other **after** both modules finish evaluation by deferring the actual store lookup to a function closure called at module-init time.
+The lazy getter pattern allows stores to reference each other **after** both modules finish evaluation by deferring the actual store lookup to a function closure. The setter is called at module-init time, but the closure is invoked later during runtime operations.
 
 ## Current Lazy Injection Sites
 
-| Source Module         | Target Module            | Getter Definition | Setter Call                | Purpose                                                           |
-| --------------------- | ------------------------ | ----------------- | -------------------------- | ----------------------------------------------------------------- |
-| `projectStore.ts`     | `panelStore.ts`          | Lines 25-44       | `panelStore.ts:524-529`    | Snapshot terminal panel state synchronously before project switch |
-| `projectStore.ts`     | `worktreeSelectionStore` | Lines 46-55       | `worktreeStore.ts:537-538` | Capture active worktree ID during project switch                  |
-| `panelPersistence.ts` | `projectStore.ts`        | Lines 301-303     | `projectStore.ts:636`      | Provide project ID getter for persistence operations              |
+| Source Module                     | Target Module            | Injection Type      | Setter Call                | Purpose                                                               |
+| --------------------------------- | ------------------------ | ------------------- | -------------------------- | --------------------------------------------------------------------- |
+| `projectStore.ts`                 | `panelStore.ts`          | Circular dependency | `panelStore.ts:524-529`    | Snapshot persistable panel state synchronously before project switch  |
+| `projectStore.ts`                 | `worktreeSelectionStore` | Circular dependency | `worktreeStore.ts:537-538` | Capture active worktree ID during project switch                      |
+| `persistence/panelPersistence.ts` | `projectStore.ts`        | Optional lazy dep   | `projectStore.ts:636`      | Provide project ID getter for persistence operations (fails silently) |
 
 ## How It Works
 
@@ -58,7 +58,7 @@ setPanelStoreGetter(() => {
 This works because:
 
 1. `setPanelStoreGetter` is a function, which is hoisted and available during circular dependency resolution
-2. The store reference (`usePanelStore.getState()`) is only resolved **inside** the closure, after both modules have finished evaluating
+2. The store reference (`usePanelStore.getState()`) is only resolved **inside** the closure when invoked during runtime operations, after both modules have finished evaluating
 3. No top-level dereference happens during module init, so no TDZ error occurs
 
 ## Rules for New Store Authors
