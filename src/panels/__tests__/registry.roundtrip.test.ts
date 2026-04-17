@@ -15,10 +15,11 @@ type BrowserData = Extract<PanelInstance, { kind: "browser" }>;
 type NotesData = Extract<PanelInstance, { kind: "notes" }>;
 type DevPreviewData = Extract<PanelInstance, { kind: "dev-preview" }>;
 
-// Persisted-field union per kind. `satisfies` binds each arbitrary spec to this
-// subset so adding a persisted field to the interface (or renaming one) surfaces
-// as a TypeScript error at the spec declaration rather than silently rotting the
-// round-trip guarantee.
+// Persisted-field union per kind. The arbitrary spec is bound via `satisfies`
+// below; that catches type drift on the listed fields (renames, type changes,
+// removals) as a TS error at the spec declaration. Adding a *new* persisted
+// field still requires extending the union here by hand — this guard is a
+// ratchet on the fields already enumerated, not a full exhaustiveness check.
 //
 // `createdAt` is intentionally absent from the pty and dev-preview unions: the
 // serializers handle it as a legacy `TerminalInstance` fallback, but it isn't
