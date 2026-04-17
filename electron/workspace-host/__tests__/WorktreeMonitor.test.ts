@@ -510,6 +510,35 @@ describe("WorktreeMonitor", () => {
 
       monitor.stop();
     });
+
+    it("startup ENOSPC that fires onWatcherFailed AND returns false still schedules one retry", async () => {
+      // Regression guard: before the fix, startWorktreeWatcher() returned
+      // undefined (coerced to true), WorktreeMonitor assigned gitWatcher
+      // and reset watcherRetryCount = 0, neutralizing the retry scheduled
+      // from inside the synchronous onWatcherFailed callback.
+      mockWatcherStartResult = false;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      // Watcher is absent after start — exactly the failure branch we want.
+      expect(monitor.hasWatcher).toBe(false);
+
+      // Retry fires after WATCHER_RETRY_INTERVAL_MS and succeeds this time.
+      mockWatcherStartResult = true;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(monitor.hasWatcher).toBe(true);
+
+      monitor.stop();
+    });
   });
 
   describe("poll queue concurrency", () => {

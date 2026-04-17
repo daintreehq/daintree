@@ -777,8 +777,11 @@ describe("GitFileWatcher", () => {
       onInotifyLimitReached,
     });
 
-    // start() should not throw — the catch absorbs the ENOSPC into callbacks.
-    expect(gitWatcher.start()).toBe(true);
+    // start() reports the recursive watcher failure via `false` so the
+    // monitor takes its retry branch (instead of treating the watcher as
+    // healthy and resetting the retry counter). Callbacks still fire exactly
+    // once so the toast dedup remains correct.
+    expect(gitWatcher.start()).toBe(false);
     expect(onInotifyLimitReached).toHaveBeenCalledTimes(1);
     expect(onWatcherFailed).toHaveBeenCalledTimes(1);
 

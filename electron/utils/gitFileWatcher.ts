@@ -96,7 +96,13 @@ export class GitFileWatcher {
       }
 
       if (this.watchWorktree) {
-        this.startWorktreeWatcher(gitDir);
+        const worktreeWatcherStarted = this.startWorktreeWatcher(gitDir);
+        // Surface startup failure of the recursive watcher (e.g. Linux
+        // ENOSPC) so WorktreeMonitor routes into its retry branch instead
+        // of treating the watcher as healthy and disabling the retry loop.
+        if (!worktreeWatcherStarted) {
+          return false;
+        }
       }
 
       return true;
@@ -152,7 +158,7 @@ export class GitFileWatcher {
     }
   }
 
-  private startWorktreeWatcher(_gitDir: string): void {
+  private startWorktreeWatcher(_gitDir: string): boolean {
     try {
       // Always filter ".git" — for linked worktrees the gitDir resolves to the
       // main repo's .git/worktrees/<name>, but the worktree root still has a
@@ -219,6 +225,7 @@ export class GitFileWatcher {
       });
 
       this.watchers.push(watcher);
+      return true;
     } catch (error) {
       const errno = error as NodeJS.ErrnoException;
       if (process.platform === "linux" && errno.code === "ENOSPC") {
@@ -236,6 +243,7 @@ export class GitFileWatcher {
           error: errno.message,
         });
       }
+      return false;
     }
   }
 

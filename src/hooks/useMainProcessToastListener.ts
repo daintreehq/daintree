@@ -15,7 +15,13 @@ export function useMainProcessToastListener(): void {
               if (ipcChannel === "update:check-for-updates") {
                 window.electron.update.checkForUpdates();
               } else if (ipcChannel === "clipboard:write-text") {
-                void window.electron.clipboard.writeText(data ?? "");
+                // Guard against a main-process payload that forgot `data` —
+                // silently clearing the clipboard would be a footgun.
+                if (!data) {
+                  console.warn("[MainProcessToast] clipboard:write-text missing data payload");
+                  return;
+                }
+                void window.electron.clipboard.writeText(data);
               } else {
                 console.warn(`[MainProcessToast] Unknown IPC channel for action: ${ipcChannel}`);
               }
