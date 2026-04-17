@@ -183,4 +183,108 @@ describe("persistence boundary hardening", () => {
 
     expect(usePortalStore.getState().width).toBe(600);
   });
+
+  it("safeJSONParse returns fallback and logs context on malformed JSON", async () => {
+    installLocalStorage(createStorageMock());
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { safeJSONParse } = await import("../persistence/safeStorage");
+
+    const result = safeJSONParse<{ value: number } | null>(
+      "{not-json",
+      { store: "testStore", key: "test-key" },
+      null
+    );
+
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const payload = warnSpy.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload).toMatchObject({ store: "testStore", key: "test-key" });
+    expect(typeof payload.error).toBe("string");
+  });
+
+  it("safeJSONParse returns fallback silently when raw value is null", async () => {
+    installLocalStorage(createStorageMock());
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { safeJSONParse } = await import("../persistence/safeStorage");
+
+    const result = safeJSONParse<number>(null, { store: "testStore", key: "test-key" }, 42);
+
+    expect(result).toBe(42);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("createSafeJSONStorage.getItem returns null and logs when persisted JSON is corrupt", async () => {
+    installLocalStorage(
+      createStorageMock({
+        getItem: (key) => (key === "test-persist-key" ? "{corrupt" : null),
+      })
+    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { createSafeJSONStorage } = await import("../persistence/safeStorage");
+
+    const storage = createSafeJSONStorage<{ value: number }>();
+    const result = storage.getItem("test-persist-key");
+
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[1]).toMatchObject({ key: "test-persist-key" });
+  });
+
+  it("createSafeJSONStorage round-trips healthy state via setItem/getItem", async () => {
+    installLocalStorage(createStorageMock());
+
+    const { createSafeJSONStorage } = await import("../persistence/safeStorage");
+
+    const storage = createSafeJSONStorage<{ value: number }>();
+    storage.setItem("round-trip-key", { state: { value: 7 }, version: 1 });
+
+    expect(storage.getItem("round-trip-key")).toEqual({ state: { value: 7 }, version: 1 });
+  });
+
+  it("agentPreferencesStore boots with defaults when the migration blob is corrupt JSON", async () => {
+    // Prime the primary key with a state:null envelope so Zustand's persist
+    // middleware invokes merge (which it skips entirely when getItem is null).
+    // That triggers the migration branch where persistedState is null.
+    installLocalStorage(
+      createStorageMock({
+        getItem: (key) => {
+          if (key === "daintree-agent-preferences") {
+            return JSON.stringify({ state: null, version: 0 });
+          }
+          if (key === "daintree-toolbar-preferences") return "{not-json";
+          return null;
+        },
+      })
+    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { useAgentPreferencesStore } = await import("../agentPreferencesStore");
+
+    expect(useAgentPreferencesStore.getState().defaultAgent).toBeUndefined();
+    const matching = warnSpy.mock.calls.find(
+      (call) => (call[1] as Record<string, unknown> | undefined)?.store === "agentPreferencesStore"
+    );
+    expect(matching).toBeDefined();
+  });
+
+  it("cliAvailabilityStore loadCache discards corrupt persisted cache without throwing", async () => {
+    installLocalStorage(
+      createStorageMock({
+        getItem: (key) => (key === "daintree:cliAvailability:v1" ? "{corrupt" : null),
+      })
+    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { useCliAvailabilityStore } = await import("../cliAvailabilityStore");
+
+    expect(() => useCliAvailabilityStore.getState().initialize()).not.toThrow();
+    expect(useCliAvailabilityStore.getState().hasRealData).toBe(false);
+    const matching = warnSpy.mock.calls.find(
+      (call) => (call[1] as Record<string, unknown> | undefined)?.store === "cliAvailabilityStore"
+    );
+    expect(matching).toBeDefined();
+  });
 });
