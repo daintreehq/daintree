@@ -635,6 +635,32 @@ describe("PtyClient adversarial", () => {
     });
   });
 
+  it("HOST_EXIT_RESETS_RTT_STATE_ACROSS_RESTART", () => {
+    const client = createReadyClient({ healthCheckIntervalMs: 1000 });
+    const privateRtt = client as unknown as {
+      rttSamples: number[];
+      lastPingTime: number | null;
+      rttSamplesSinceLastLog: number;
+      lastRttLogTime: number;
+    };
+
+    // Seed rolling-window state so a stale carry-over would be observable.
+    privateRtt.rttSamples = [10, 20, 30];
+    privateRtt.lastPingTime = 12345;
+    privateRtt.rttSamplesSinceLastLog = 3;
+    privateRtt.lastRttLogTime = 99999;
+
+    const restartedChild = createMockChild();
+    shared.forkMock.mockReturnValue(restartedChild);
+
+    mockChild.emit("exit", 1);
+
+    expect(privateRtt.rttSamples).toEqual([]);
+    expect(privateRtt.lastPingTime).toBeNull();
+    expect(privateRtt.rttSamplesSinceLastLog).toBe(0);
+    expect(privateRtt.lastRttLogTime).toBe(0);
+  });
+
   it("DISPOSE_RESOLVES_ORPHANED_PENDING_OPS", async () => {
     const client = createReadyClient();
     const privateAccess = client as unknown as PtyClientPrivateAccess;

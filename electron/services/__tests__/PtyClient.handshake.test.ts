@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { EventEmitter } from "events";
+import { performance } from "node:perf_hooks";
 import type { LogBuffer } from "../LogBuffer.js";
 
 // Mock Electron modules before importing PtyClient
@@ -383,6 +384,167 @@ describe("PtyClient Handshake Protocol", () => {
 
       // Advance past timeout - should not throw
       vi.advanceTimersByTime(6000);
+    });
+  });
+
+  describe("RTT measurement", () => {
+    interface RttPrivate {
+      lastPingTime: number | null;
+      rttSamples: number[];
+      rttSamplesSinceLastLog: number;
+      lastRttLogTime: number;
+    }
+
+    let fakeNow: number;
+    let nowSpy: ReturnType<typeof vi.spyOn>;
+    let logSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      fakeNow = 1_000;
+      nowSpy = vi.spyOn(performance, "now").mockImplementation(() => fakeNow);
+      logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      nowSpy.mockRestore();
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it("records RTT when pong arrives after handshake ping", () => {
+      const client = createClient({ healthCheckIntervalMs: 1000 });
+      const priv = client as unknown as RttPrivate;
+
+      client.pauseHealthCheck();
+      fakeNow = 2_000;
+      client.resumeHealthCheck();
+      expect(priv.lastPingTime).toBe(2_000);
+
+      fakeNow = 2_050;
+      mockChild.emit("message", { type: "pong" });
+
+      expect(priv.rttSamples).toEqual([50]);
+      expect(priv.lastPingTime).toBeNull();
+    });
+
+    it("does not record RTT when lastPingTime is null", () => {
+      const client = createClient({ healthCheckIntervalMs: 1000 });
+      const priv = client as unknown as RttPrivate;
+
+      // Pong arrives without an outstanding ping timestamp
+      mockChild.emit("message", { type: "pong" });
+
+      expect(priv.rttSamples).toEqual([]);
+      expect(priv.lastPingTime).toBeNull();
+    });
+
+    it("does not record a sample for a late pong after handshake timeout", () => {
+      const client = createClient({ healthCheckIntervalMs: 1000 });
+      const priv = client as unknown as RttPrivate;
+
+      client.pauseHealthCheck();
+      client.resumeHealthCheck();
+      expect(priv.lastPingTime).not.toBeNull();
+
+      // Handshake timeout fires at 5s — clears lastPingTime
+      vi.advanceTimersByTime(5000);
+      expect(priv.lastPingTime).toBeNull();
+
+      mockChild.emit("message", { type: "pong" });
+      expect(priv.rttSamples).toEqual([]);
+    });
+
+    it("logs a summary after 10 samples and resets the counter", () => {
+      const client = createClient({ healthCheckIntervalMs: 1000 });
+      const priv = client as unknown as RttPrivate;
+      mockChild.emit("message", { type: "pong" }); // ready handshake — no sample
+      logSpy.mockClear();
+
+      for (let i = 0; i < 10; i++) {
+        fakeNow = 10_000 + i * 1_000;
+        vi.advanceTimersByTime(1000);
+        fakeNow += 40; // 40ms RTT
+        mockChild.emit("message", { type: "pong" });
+      }
+
+      const summaryCalls = logSpy.mock.calls.filter(
+        (c: unknown[]) =>
+          typeof c[0] === "string" &&
+          (c[0] as string).startsWith("[PtyClient] Heartbeat RTT (last ")
+      );
+      expect(summaryCalls).toHaveLength(1);
+      expect(summaryCalls[0][0]).toContain("samples=10");
+      expect(priv.rttSamplesSinceLastLog).toBe(0);
+    });
+
+    it("emits a spike warning when RTT exceeds the threshold", () => {
+      const client = createClient({ healthCheckIntervalMs: 1000 });
+      mockChild.emit("message", { type: "pong" }); // handshake
+      warnSpy.mockClear();
+
+      fakeNow = 10_000;
+      vi.advanceTimersByTime(1000);
+      fakeNow = 16_000; // 6000ms RTT
+      mockChild.emit("message", { type: "pong" });
+
+      const spikes = warnSpy.mock.calls.filter(
+        (c: unknown[]) =>
+          typeof c[0] === "string" && (c[0] as string).includes("Heartbeat RTT spike")
+      );
+      expect(spikes).toHaveLength(1);
+      expect(spikes[0][0]).toContain("6000.0ms");
+      void client;
+    });
+
+    it("rolls the sample buffer at RTT_BUFFER_SIZE", () => {
+      const client = createClient({ healthCheckIntervalMs: 1000 });
+      const priv = client as unknown as RttPrivate;
+      mockChild.emit("message", { type: "pong" }); // handshake
+
+      for (let i = 0; i < 25; i++) {
+        fakeNow = 10_000 + i * 1_000;
+        vi.advanceTimersByTime(1000);
+        fakeNow += i + 1; // distinct RTTs
+        mockChild.emit("message", { type: "pong" });
+      }
+
+      expect(priv.rttSamples).toHaveLength(20);
+      // Oldest 5 samples were dropped; first kept sample has RTT = 6
+      expect(priv.rttSamples[0]).toBe(6);
+      expect(priv.rttSamples[priv.rttSamples.length - 1]).toBe(25);
+    });
+
+    it("clears lastPingTime when health check is paused", () => {
+      const client = createClient({ healthCheckIntervalMs: 1000 });
+      const priv = client as unknown as RttPrivate;
+      mockChild.emit("message", { type: "pong" }); // handshake
+
+      fakeNow = 5_000;
+      vi.advanceTimersByTime(1000);
+      expect(priv.lastPingTime).not.toBeNull();
+
+      client.pauseHealthCheck();
+      expect(priv.lastPingTime).toBeNull();
+    });
+
+    it("clears lastPingTime when the watchdog force-kills the host", () => {
+      const client = createClient({ healthCheckIntervalMs: 1000 });
+      const priv = client as unknown as RttPrivate;
+      mockChild.emit("message", { type: "pong" }); // handshake
+      // Leave mockChild.pid undefined so process.kill is skipped by the
+      // `if (this.child.pid)` guard — the watchdog should still clear state.
+
+      // Advance past MAX_MISSED_HEARTBEATS (3) intervals with no pong.
+      // Each interval: missedHeartbeats++ then send. After 3 unanswered
+      // cycles the watchdog path fires on the next tick.
+      for (let i = 0; i < 4; i++) {
+        vi.advanceTimersByTime(1000);
+      }
+
+      expect(priv.lastPingTime).toBeNull();
+      void client;
     });
   });
 });
