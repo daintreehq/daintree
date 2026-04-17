@@ -240,6 +240,7 @@ function AgentWelcomeCard() {
     useAgentDiscoveryOnboarding();
 
   const [busy, setBusy] = useState(false);
+  const [pinError, setPinError] = useState(false);
 
   const readyAgentIds = useMemo<BuiltInAgentId[]>(() => {
     return BUILT_IN_AGENT_IDS.filter((id) => isAgentReady(availability?.[id]));
@@ -253,8 +254,6 @@ function AgentWelcomeCard() {
   if (!hasRealData || !loaded) return null;
   if (welcomeCardDismissed) return null;
   if (readyAgentIds.length === 0 || !hasNoPinnedAgents) return null;
-
-  const [pinError, setPinError] = useState(false);
 
   const handlePinAll = async () => {
     if (busy) return;
