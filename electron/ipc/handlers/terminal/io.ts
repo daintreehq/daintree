@@ -8,6 +8,7 @@ import type { HandlerDependencies } from "../../types.js";
 import type { TerminalResizePayload } from "../../../types/index.js";
 import { TerminalResizePayloadSchema } from "../../../schemas/ipc.js";
 import type { PtyHostActivityTier } from "../../../../shared/types/pty-host.js";
+import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.js";
 
 export function registerTerminalIOHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -153,10 +154,9 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       if (!payload || typeof payload !== "object") return;
       const { id, title } = payload;
       if (typeof id !== "string" || !id) return;
-      if (typeof title !== "string") return;
-      const trimmed = title.trim();
-      if (!trimmed) return;
-      ptyClient.updateObservedTitle(id, trimmed);
+      const normalized = normalizeObservedTitle(title);
+      if (!normalized) return;
+      ptyClient.updateObservedTitle(id, normalized);
     } catch (error) {
       console.error("[IPC] Error handling observed title update:", error);
     }

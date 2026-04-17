@@ -35,7 +35,7 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
-import { isUselessTitle } from "@shared/utils/isUselessTitle";
+import { isUselessTitle, normalizeObservedTitle } from "@shared/utils/isUselessTitle";
 import { usePanelStore } from "@/store/panelStore";
 import { isNonKeyboardInput } from "./inputUtils";
 
@@ -819,10 +819,10 @@ class TerminalInstanceService {
       const agentConfig = getEffectiveAgentConfig(agentId);
 
       const observedTitleDisposable = terminal.onTitleChange((title: string) => {
-        if (isUselessTitle(title)) return;
-        const trimmed = title.trim();
-        if (trimmed === managed.lastObservedTitleSent) return;
-        managed.pendingObservedTitle = trimmed;
+        const normalized = normalizeObservedTitle(title);
+        if (!normalized || isUselessTitle(normalized)) return;
+        if (normalized === managed.lastObservedTitleSent) return;
+        managed.pendingObservedTitle = normalized;
         if (managed.observedTitleTimer !== undefined) {
           clearTimeout(managed.observedTitleTimer);
         }
