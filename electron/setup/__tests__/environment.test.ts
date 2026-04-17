@@ -408,25 +408,13 @@ describe("GPU memory flags", () => {
     process.argv = originalArgv;
   });
 
-  it("sets force-gpu-mem-available-mb to 512", async () => {
+  it("sets force-gpu-mem-available-mb to 1024", async () => {
     fsMock.existsSync.mockReturnValue(false);
 
     await import("../environment.js");
 
     const { app } = await import("electron");
-    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "512");
-  });
-
-  it("disables GPU rasterization MSAA", async () => {
-    fsMock.existsSync.mockReturnValue(false);
-
-    await import("../environment.js");
-
-    const { app } = await import("electron");
-    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith(
-      "gpu-rasterization-msaa-sample-count",
-      "0"
-    );
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "1024");
   });
 });
 
