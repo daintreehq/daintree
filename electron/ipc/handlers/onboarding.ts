@@ -77,7 +77,10 @@ function getOnboardingState(): OnboardingState {
       ? (raw.seenAgentIds as string[]).filter((id) => typeof id === "string")
       : [],
     welcomeCardDismissed: raw.welcomeCardDismissed === true,
-    setupBannerDismissed: raw.setupBannerDismissed === true,
+    // Treat any already-completed onboarding as implicit banner dismissal —
+    // without this, upgraded users who finished onboarding before #5131 see
+    // the new "Set up your AI agents" banner on every launch.
+    setupBannerDismissed: raw.setupBannerDismissed === true || raw.completed === true,
     checklist: {
       ...DEFAULT_CHECKLIST,
       ...checklist,
@@ -119,6 +122,10 @@ export function registerOnboardingHandlers(): () => void {
       completed: allPreviouslyComplete,
       currentStep: allPreviouslyComplete ? null : state.currentStep,
       firstRunToastSeen: firstRunToastSeen || state.firstRunToastSeen,
+      // If the legacy Canopy onboarding was fully completed, the #5131 setup
+      // banner should also be considered dismissed — these users have already
+      // made their agent/telemetry decisions.
+      setupBannerDismissed: allPreviouslyComplete || state.setupBannerDismissed,
       migratedFromLocalStorage: true,
       checklist: allPreviouslyComplete
         ? {

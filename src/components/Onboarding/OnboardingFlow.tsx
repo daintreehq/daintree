@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isDaintreeEnvEnabled } from "@/utils/env";
 import { AgentSetupWizard } from "@/components/Setup/AgentSetupWizard";
 import { actionService } from "@/services/ActionService";
+import { dismissSetupBanner as dismissSetupBannerFromHook } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import type { OnboardingState } from "@shared/types";
 import type { CliAvailability } from "@shared/types";
 
@@ -140,14 +141,17 @@ export function OnboardingFlow({
         setCurrentStep(nextStep);
         await window.electron.onboarding.setStep(nextStep);
       } else {
-        // Flow complete
+        // Flow complete — persist first so a failing IPC doesn't leave us in a
+        // half-committed state with completion telemetry fired but no
+        // persisted flag. Only flip completedRef (which suppresses the
+        // abandonment-on-unmount hook) after the persistence succeeds.
+        await window.electron.onboarding.complete();
         completedRef.current = true;
         trackOnboarding("onboarding_completed", {
           totalSteps: STEP_ORDER.length,
           durationMs: flowStartTimeRef.current > 0 ? Date.now() - flowStartTimeRef.current : 0,
         });
         setCurrentStep(null);
-        await window.electron.onboarding.complete();
         setState((prev) => (prev ? { ...prev, completed: true, currentStep: null } : prev));
         onComplete?.();
       }
@@ -164,14 +168,17 @@ export function OnboardingFlow({
     setManualWizardIsFirstRun(false);
     // If this open originated from the first-run welcome banner, mark the
     // onboarding flow complete so the first-run prompts (theme / telemetry)
-    // are not shown again and the banner stays dismissed on next launch.
+    // are not shown again, and dismiss the banner via the shared hook so
+    // WelcomeScreen's AgentSetupBannerCard hides immediately (raw IPC would
+    // update electron-store but not the Zustand store the banner reads).
     if (wasFirstRun && state && !state.completed) {
-      await advanceStep("agentSetup");
       try {
-        await window.electron?.onboarding?.dismissSetupBanner?.();
+        await advanceStep("agentSetup");
       } catch {
-        // Best-effort; the banner's own dismiss action can recover this.
+        // If persistence fails, still dismiss the banner in the current
+        // session so the user isn't stuck staring at an already-opened flow.
       }
+      await dismissSetupBannerFromHook();
     } else {
       setCurrentStep(null);
     }

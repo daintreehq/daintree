@@ -103,6 +103,13 @@ vi.mock("@/components/Setup/AgentSetupWizard", () => ({
   }),
 }));
 
+const { dismissSetupBannerHookMock } = vi.hoisted(() => ({
+  dismissSetupBannerHookMock: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
+  dismissSetupBanner: dismissSetupBannerHookMock,
+}));
+
 import { OnboardingFlow } from "../OnboardingFlow";
 
 describe("OnboardingFlow first-run", () => {
@@ -190,6 +197,28 @@ describe("OnboardingFlow first-run", () => {
       );
     });
     expect(onboardingMock.complete).toHaveBeenCalled();
+  });
+
+  it("dismisses the setup banner via the shared hook when first-run wizard closes", async () => {
+    const { getByTestId } = await act(async () => {
+      return render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await act(async () => {
+      fireOpenWizard({ isFirstRun: true });
+    });
+
+    await act(async () => {
+      getByTestId("close-wizard").click();
+    });
+
+    await vi.waitFor(() => {
+      expect(dismissSetupBannerHookMock).toHaveBeenCalled();
+    });
   });
 
   it("does NOT call onboarding.complete when a non-first-run wizard closes", async () => {
@@ -312,6 +341,39 @@ describe("OnboardingFlow telemetry tracking", () => {
       lastStep: "agentSetup",
       lastStepIndex: 0,
     });
+  });
+
+  it("does NOT emit onboarding_completed when complete() persistence rejects", async () => {
+    onboardingMock.complete.mockRejectedValueOnce(new Error("IPC down"));
+
+    const { getByTestId, unmount } = await act(async () => {
+      return render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await act(async () => {
+      fireOpenWizard({ isFirstRun: true });
+    });
+
+    await act(async () => {
+      getByTestId("close-wizard").click();
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    // Telemetry fires only after successful persistence.
+    expect(trackMock).not.toHaveBeenCalledWith("onboarding_completed", expect.any(Object));
+
+    // Abandonment telemetry still fires on unmount since completedRef was not
+    // flipped when persistence failed.
+    trackMock.mockClear();
+    unmount();
+    expect(trackMock).toHaveBeenCalledWith("onboarding_abandoned", expect.any(Object));
   });
 
   it("does NOT emit onboarding_abandoned after completion", async () => {

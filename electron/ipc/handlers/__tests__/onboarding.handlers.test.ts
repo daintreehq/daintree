@@ -173,6 +173,55 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
     expect(result.welcomeCardDismissed).toBe(true);
   });
 
+  it("get treats completed onboarding as implicit setupBannerDismissed (upgrade path)", () => {
+    registerOnboardingHandlers();
+    // Pre-#5131 completed state: no setupBannerDismissed field, completed=true.
+    seedOnboarding({ completed: true });
+    delete (storeMock._data["onboarding"] as Record<string, unknown>).setupBannerDismissed;
+    const get = getHandler("onboarding:get");
+    const state = get(null) as { completed: boolean; setupBannerDismissed: boolean };
+    expect(state.completed).toBe(true);
+    expect(state.setupBannerDismissed).toBe(true);
+  });
+
+  it("get keeps setupBannerDismissed false when onboarding is incomplete", () => {
+    registerOnboardingHandlers();
+    seedOnboarding({ completed: false });
+    delete (storeMock._data["onboarding"] as Record<string, unknown>).setupBannerDismissed;
+    const get = getHandler("onboarding:get");
+    const state = get(null) as { completed: boolean; setupBannerDismissed: boolean };
+    expect(state.completed).toBe(false);
+    expect(state.setupBannerDismissed).toBe(false);
+  });
+
+  it("migrate sets setupBannerDismissed: true when all legacy keys are complete", () => {
+    storeMock._data["privacy"] = { hasSeenPrompt: true };
+    registerOnboardingHandlers();
+    seedOnboarding({ migratedFromLocalStorage: false });
+    const migrate = getHandler("onboarding:migrate");
+    const result = migrate(null, {
+      agentSelectionDismissed: true,
+      agentSetupComplete: true,
+      firstRunToastSeen: true,
+    }) as { completed: boolean; setupBannerDismissed: boolean };
+    expect(result.completed).toBe(true);
+    expect(result.setupBannerDismissed).toBe(true);
+  });
+
+  it("migrate leaves setupBannerDismissed false when legacy state is partial", () => {
+    storeMock._data["privacy"] = { hasSeenPrompt: false };
+    registerOnboardingHandlers();
+    seedOnboarding({ migratedFromLocalStorage: false });
+    const migrate = getHandler("onboarding:migrate");
+    const result = migrate(null, {
+      agentSelectionDismissed: true,
+      agentSetupComplete: false,
+      firstRunToastSeen: true,
+    }) as { completed: boolean; setupBannerDismissed: boolean };
+    expect(result.completed).toBe(false);
+    expect(result.setupBannerDismissed).toBe(false);
+  });
+
   it("dismissSetupBanner flips the flag and returns the updated state", () => {
     registerOnboardingHandlers();
     seedOnboarding({ setupBannerDismissed: false });
