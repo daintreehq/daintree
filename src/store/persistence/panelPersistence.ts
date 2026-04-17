@@ -48,7 +48,7 @@ export function panelToSnapshot(
     // so a save cycle doesn't silently erase extension state.
     if (previousSnapshot && previousSnapshot.id === t.id && previousSnapshot.kind === t.kind) {
       const preserved: Record<string, unknown> = {};
-      const prev = previousSnapshot as Record<string, unknown>;
+      const prev = previousSnapshot as unknown as Record<string, unknown>;
       for (const key of Object.keys(prev)) {
         if (!BASE_PANEL_FIELDS.has(key) && prev[key] !== undefined) {
           preserved[key] = prev[key];

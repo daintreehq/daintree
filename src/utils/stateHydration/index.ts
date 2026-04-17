@@ -8,6 +8,7 @@ import type {
   TerminalType,
   AgentState,
   PanelKind,
+  PanelSnapshot,
   TerminalReconnectError,
   TabGroup,
 } from "@/types";
@@ -354,8 +355,14 @@ export async function hydrateAppState(
           // preserve kind-specific fields for unregistered kinds (e.g., an
           // extension that hasn't re-registered yet). Without this priming,
           // a first save cycle would drop those fields — see issue #5201.
+          // appState.terminals is TerminalState[] (IPC wire type, more
+          // lenient); the on-disk data was written by panelToSnapshot so is
+          // structurally PanelSnapshot[].
           if (currentProjectId) {
-            panelPersistence.primeProject(currentProjectId, appState.terminals);
+            panelPersistence.primeProject(
+              currentProjectId,
+              appState.terminals as unknown as PanelSnapshot[]
+            );
           }
 
           panelRestoreStartedAt = Date.now();

@@ -787,7 +787,7 @@ describe("PanelPersistence", () => {
       // second save runs; the second save must still see the preserved
       // fragment via queued, not fall back to an empty fragment.
       const client = createMockProjectClient();
-      let resolveFirstPersist: (() => void) | null = null;
+      let resolveFirstPersist: (() => void) | undefined;
       const firstPersistPromise = new Promise<void>((resolve) => {
         resolveFirstPersist = resolve;
       });
