@@ -849,22 +849,26 @@ export function DevPreviewPane({
                       : " Configure one to preview your application."}
                   </p>
                   <div className="flex flex-col items-center gap-2">
-                    {allDetectedRunners && findDevServerCandidate(allDetectedRunners, projectSettings?.turbopackEnabled ?? true) && (
-                      <Button
-                        onClick={handleAutoDetect}
-                        disabled={isAutoDetecting || isSettingsLoading}
-                        variant="ghost"
-                        size="sm"
-                        className="gap-1.5 px-2.5 py-1.5 group text-daintree-accent/70 hover:text-daintree-accent"
-                      >
-                        <WandSparkles className="h-3.5 w-3.5" />
-                        <span className="text-xs">
-                          {isAutoDetecting
-                            ? "Detecting..."
-                            : `Use \`${findDevServerCandidate(allDetectedRunners, projectSettings?.turbopackEnabled ?? true)?.command}\``}
-                        </span>
-                      </Button>
-                    )}
+                    {allDetectedRunners &&
+                      findDevServerCandidate(
+                        allDetectedRunners,
+                        projectSettings?.turbopackEnabled ?? true
+                      ) && (
+                        <Button
+                          onClick={handleAutoDetect}
+                          disabled={isAutoDetecting || isSettingsLoading}
+                          variant="ghost"
+                          size="sm"
+                          className="gap-1.5 px-2.5 py-1.5 group text-daintree-accent/70 hover:text-daintree-accent"
+                        >
+                          <WandSparkles className="h-3.5 w-3.5" />
+                          <span className="text-xs">
+                            {isAutoDetecting
+                              ? "Detecting..."
+                              : `Use \`${findDevServerCandidate(allDetectedRunners, projectSettings?.turbopackEnabled ?? true)?.command}\``}
+                          </span>
+                        </Button>
+                      )}
                     <Button
                       onClick={handleOpenSettings}
                       variant="ghost"
