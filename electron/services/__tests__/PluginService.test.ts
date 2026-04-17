@@ -60,6 +60,8 @@ afterEach(async () => {
 
 describe("PluginManifestSchema name validation", () => {
   const validBase = { version: "1.0.0" };
+  const sixtyFourCharName = `a.${"b".repeat(62)}`; // 1 + 1 + 62 = 64 chars
+  const sixtyFiveCharName = `a.${"b".repeat(63)}`; // 1 + 1 + 63 = 65 chars
 
   it.each([
     "acme.linear-context",
@@ -67,6 +69,7 @@ describe("PluginManifestSchema name validation", () => {
     "daintreehq.dev-tools",
     "daintree-hq.my-cool-plugin",
     "acme.good-1",
+    sixtyFourCharName,
   ])("accepts scoped name %j", (name) => {
     const result = PluginManifestSchema.safeParse({ name, ...validBase });
     expect(result.success).toBe(true);
@@ -86,10 +89,19 @@ describe("PluginManifestSchema name validation", () => {
     "acme.-foo",
     "acme.foo-",
     "-acme.foo",
+    "---.foo",
+    "acme.---",
+    " acme.foo",
+    "acme.foo ",
+    "acme.foo\n",
+    sixtyFiveCharName,
     "",
   ])("rejects unscoped or malformed name %j", (name) => {
     const result = PluginManifestSchema.safeParse({ name, ...validBase });
     expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path[0] === "name")).toBe(true);
+    }
   });
 
   it("rejection includes an explanatory error message", () => {
