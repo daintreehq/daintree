@@ -1096,8 +1096,6 @@ const CHANNELS = {
   DEMO_EXEC_DISMISS_ANNOTATION: "demo:exec-dismiss-annotation",
   DEMO_WAIT_FOR_IDLE: "demo:wait-for-idle",
   DEMO_EXEC_WAIT_FOR_IDLE: "demo:exec-wait-for-idle",
-  DEMO_ENCODE: "demo:encode",
-  DEMO_ENCODE_PROGRESS: "demo:encode:progress",
 
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
@@ -2972,11 +2970,6 @@ const api: ElectronAPI = {
             _unwrappingInvoke(CHANNELS.DEMO_DISMISS_ANNOTATION, { id }),
           waitForIdle: (settleMs?: number, timeoutMs?: number) =>
             _unwrappingInvoke(CHANNELS.DEMO_WAIT_FOR_IDLE, { settleMs, timeoutMs }),
-          encode: (payload: import("../shared/types/ipc/demo.js").DemoEncodePayload) =>
-            _unwrappingInvoke(CHANNELS.DEMO_ENCODE, payload),
-          onEncodeProgress: (
-            callback: (event: import("../shared/types/ipc/demo.js").DemoEncodeProgressEvent) => void
-          ) => _typedOn(CHANNELS.DEMO_ENCODE_PROGRESS, callback),
           onExecCommand: (
             channel: string,
             callback: (payload: Record<string, unknown>) => void

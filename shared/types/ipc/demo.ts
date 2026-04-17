@@ -56,25 +56,6 @@ export interface DemoCaptureStatus {
 
 export type DemoEncodePreset = "youtube-4k" | "youtube-1080p" | "web-webm";
 
-export interface DemoEncodePayload {
-  framesDir: string;
-  outputPath: string;
-  preset: DemoEncodePreset;
-  fps?: number;
-}
-
-export interface DemoEncodeProgressEvent {
-  frame: number;
-  fps: number;
-  percentComplete: number;
-  etaSeconds: number;
-}
-
-export interface DemoEncodeResult {
-  outputPath: string;
-  durationMs: number;
-}
-
 export interface DemoScrollPayload {
   selector: string;
 }

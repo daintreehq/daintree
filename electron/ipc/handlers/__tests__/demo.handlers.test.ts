@@ -15,7 +15,6 @@ vi.mock("crypto", () => ({
 }));
 
 vi.mock("fs", () => ({
-  readdirSync: vi.fn(() => ["frame-000001.png", "frame-000002.png", "frame-000003.png"]),
   mkdirSync: vi.fn(),
 }));
 
@@ -25,21 +24,15 @@ class MockStdin extends EventEmitter {
 }
 
 let mockProc: EventEmitter & {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
   stdin: MockStdin;
   kill: ReturnType<typeof vi.fn>;
 };
 
 function createMockProc() {
   const proc = new EventEmitter() as EventEmitter & {
-    stdout: EventEmitter;
-    stderr: EventEmitter;
     stdin: MockStdin;
     kill: ReturnType<typeof vi.fn>;
   };
-  proc.stdout = new EventEmitter();
-  proc.stderr = new EventEmitter();
   proc.stdin = new MockStdin();
   proc.kill = vi.fn();
   return proc;
@@ -100,9 +93,9 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("registers 21 IPC handlers when isDemoMode is true", () => {
+  it("registers 20 IPC handlers when isDemoMode is true", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(21);
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(20);
     cleanup();
   });
 
@@ -121,7 +114,7 @@ describe("registerDemoHandlers", () => {
     expect(channels).toContain("demo:start-capture");
     expect(channels).toContain("demo:stop-capture");
     expect(channels).toContain("demo:get-capture-status");
-    expect(channels).toContain("demo:encode");
+    expect(channels).not.toContain("demo:encode");
     expect(channels).toContain("demo:scroll");
     expect(channels).toContain("demo:drag");
     expect(channels).toContain("demo:press-key");
@@ -133,10 +126,10 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("cleanup removes all 21 handlers", () => {
+  it("cleanup removes all 20 handlers", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
     cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(21);
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(20);
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:move-to");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:move-to-selector");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:click");
@@ -157,7 +150,7 @@ describe("registerDemoHandlers", () => {
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:start-capture");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:stop-capture");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:get-capture-status");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:encode");
+    expect(ipcMainMock.removeHandler).not.toHaveBeenCalledWith("demo:encode");
   });
 
   it("screenshot handler returns Uint8Array with PNG magic bytes", async () => {
@@ -174,229 +167,6 @@ describe("registerDemoHandlers", () => {
     expect(result.data[3]).toBe(0x47);
     expect(result.width).toBe(1920);
     expect(result.height).toBe(1080);
-  });
-
-  describe("handleEncode", () => {
-    function getEncodeHandler() {
-      registerDemoHandlers(makeDeps(true));
-      const [, handler] =
-        ipcMainMock.handle.mock.calls.find(([ch]: unknown[]) => ch === "demo:encode") ?? [];
-      return handler;
-    }
-
-    function makeEvent(isDestroyed = false) {
-      return {
-        sender: {
-          send: vi.fn(),
-          isDestroyed: vi.fn(() => isDestroyed),
-        },
-      };
-    }
-
-    it("resolves with outputPath and durationMs on success", async () => {
-      const handler = getEncodeHandler();
-      const event = makeEvent();
-
-      const promise = handler(event, {
-        framesDir: "/tmp/frames",
-        outputPath: "/tmp/out.mp4",
-        preset: "youtube-1080p",
-      });
-
-      mockProc.emit("close", 0);
-      const result = await promise;
-
-      expect(result.outputPath).toBe("/tmp/out.mp4");
-      expect(typeof result.durationMs).toBe("number");
-    });
-
-    it("rejects when no PNG frames found", async () => {
-      const fsMod = await import("fs");
-      (fsMod.readdirSync as ReturnType<typeof vi.fn>).mockReturnValueOnce([]);
-
-      const handler = getEncodeHandler();
-      const event = makeEvent();
-
-      await expect(
-        handler(event, {
-          framesDir: "/tmp/empty",
-          outputPath: "/tmp/out.mp4",
-          preset: "youtube-4k",
-        })
-      ).rejects.toThrow("No PNG frames matching frame-NNNNNN.png found");
-    });
-
-    it("rejects old underscore-format frame names", async () => {
-      const fsMod = await import("fs");
-      (fsMod.readdirSync as ReturnType<typeof vi.fn>).mockReturnValueOnce([
-        "frame_0001.png",
-        "frame_0002.png",
-        "frame_0003.png",
-      ]);
-
-      const handler = getEncodeHandler();
-      const event = makeEvent();
-
-      await expect(
-        handler(event, {
-          framesDir: "/tmp/old-format",
-          outputPath: "/tmp/out.mp4",
-          preset: "youtube-4k",
-        })
-      ).rejects.toThrow("No PNG frames matching frame-NNNNNN.png found");
-    });
-
-    it("rejects on spawn error event", async () => {
-      const handler = getEncodeHandler();
-      const event = makeEvent();
-
-      const promise = handler(event, {
-        framesDir: "/tmp/frames",
-        outputPath: "/tmp/out.mp4",
-        preset: "web-webm",
-      });
-
-      mockProc.emit("error", new Error("spawn ENOENT"));
-      await expect(promise).rejects.toThrow("Encode failed: spawn ENOENT");
-    });
-
-    it("rejects on non-zero exit code with stderr", async () => {
-      const handler = getEncodeHandler();
-      const event = makeEvent();
-
-      const promise = handler(event, {
-        framesDir: "/tmp/frames",
-        outputPath: "/tmp/out.mp4",
-        preset: "web-webm",
-      });
-
-      mockProc.stderr.emit("data", Buffer.from("Unknown encoder libx264"));
-      mockProc.emit("close", 1);
-      await expect(promise).rejects.toThrow("ffmpeg exited with code 1");
-    });
-
-    it("creates output directory before encoding", async () => {
-      const fsMod = await import("fs");
-      const handler = getEncodeHandler();
-      const event = makeEvent();
-
-      const promise = handler(event, {
-        framesDir: "/tmp/frames",
-        outputPath: "/tmp/output/video.mp4",
-        preset: "youtube-1080p",
-      });
-
-      mockProc.emit("close", 0);
-      await promise;
-
-      expect(fsMod.mkdirSync).toHaveBeenCalledWith("/tmp/output", { recursive: true });
-    });
-
-    it("sends progress events via IPC", async () => {
-      const handler = getEncodeHandler();
-      const event = makeEvent(false);
-
-      const promise = handler(event, {
-        framesDir: "/tmp/frames",
-        outputPath: "/tmp/out.mp4",
-        preset: "youtube-1080p",
-      });
-
-      mockProc.stdout.emit("data", Buffer.from("frame=2\nfps=30\nprogress=continue\n"));
-      mockProc.emit("close", 0);
-      await promise;
-
-      expect(event.sender.send).toHaveBeenCalledWith(
-        "demo:encode:progress",
-        expect.objectContaining({
-          frame: 2,
-          fps: 30,
-          percentComplete: expect.any(Number),
-          etaSeconds: expect.any(Number),
-        })
-      );
-    });
-
-    it("does not send progress when sender is destroyed", async () => {
-      const handler = getEncodeHandler();
-      const event = makeEvent(true);
-
-      const promise = handler(event, {
-        framesDir: "/tmp/frames",
-        outputPath: "/tmp/out.mp4",
-        preset: "youtube-1080p",
-      });
-
-      mockProc.stdout.emit("data", Buffer.from("frame=2\nfps=30\nprogress=continue\n"));
-      mockProc.emit("close", 0);
-      await promise;
-
-      expect(event.sender.send).not.toHaveBeenCalled();
-    });
-
-    it("uses yuv444p and high444 profile for youtube presets", async () => {
-      const { spawn: spawnMock } = await import("child_process");
-      const handler = getEncodeHandler();
-      const event = makeEvent();
-
-      const promise = handler(event, {
-        framesDir: "/tmp/frames",
-        outputPath: "/tmp/out.mp4",
-        preset: "youtube-1080p",
-      });
-
-      mockProc.emit("close", 0);
-      await promise;
-
-      const args = (spawnMock as ReturnType<typeof vi.fn>).mock.calls[0][1] as string[];
-      expect(args).toContain("yuv444p");
-      expect(args).toContain("high444");
-      expect(args).not.toContain("yuv420p");
-    });
-
-    it("uses yuv444p for web-webm preset with row-mt", async () => {
-      const { spawn: spawnMock } = await import("child_process");
-      // Need a fresh mockProc since the encode handler uses the current one
-      mockProc = createMockProc();
-      const handler = getEncodeHandler();
-      const event = makeEvent();
-
-      const promise = handler(event, {
-        framesDir: "/tmp/frames",
-        outputPath: "/tmp/out.webm",
-        preset: "web-webm",
-      });
-
-      mockProc.emit("close", 0);
-      await promise;
-
-      const lastCall = (spawnMock as ReturnType<typeof vi.fn>).mock.calls.at(-1)!;
-      const args = lastCall[1] as string[];
-      expect(args).toContain("yuv444p");
-      expect(args).toContain("1");
-      const rowMtIdx = args.indexOf("-row-mt");
-      expect(rowMtIdx).toBeGreaterThan(-1);
-    });
-
-    it("uses frame-%06d.png input pattern matching capture output", async () => {
-      const { spawn: spawnMock } = await import("child_process");
-      const handler = getEncodeHandler();
-      const event = makeEvent();
-
-      const promise = handler(event, {
-        framesDir: "/tmp/frames",
-        outputPath: "/tmp/out.mp4",
-        preset: "youtube-1080p",
-      });
-
-      mockProc.emit("close", 0);
-      await promise;
-
-      const args = (spawnMock as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string[];
-      const inputIdx = args.indexOf("-i");
-      expect(inputIdx).toBeGreaterThan(-1);
-      expect(args[inputIdx + 1]).toContain("frame-%06d.png");
-    });
   });
 
   it("moveTo handler sends exec event with requestId and awaits done", async () => {
