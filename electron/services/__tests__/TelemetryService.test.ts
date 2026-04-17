@@ -192,6 +192,21 @@ describe("initializeTelemetry", () => {
     expect(sentryInitMock).not.toHaveBeenCalled();
     process.env.SENTRY_DSN = original;
   });
+
+  it("does not drop error events via sampleRate when initialized", async () => {
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+    storeMock.get.mockReturnValue({ enabled: true, hasSeenPrompt: true });
+    await initializeTelemetry();
+    expect(sentryInitMock).toHaveBeenCalledTimes(1);
+    const options = sentryInitMock.mock.calls[0][0] as { sampleRate?: number };
+    // sampleRate must be either absent (SDK default 1.0) or exactly 1 — any
+    // value < 1 silently drops that fraction of crash reports. See #5255.
+    if (options.sampleRate !== undefined) {
+      expect(options.sampleRate).toBe(1);
+    }
+    process.env.SENTRY_DSN = original;
+  });
 });
 
 describe("trackEvent", () => {

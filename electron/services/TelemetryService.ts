@@ -82,7 +82,8 @@ export async function initializeTelemetry(): Promise<void> {
       dsn,
       release: app.getVersion(),
       environment: app.isPackaged ? "production" : "development",
-      sampleRate: 0.1,
+      // Do not set `sampleRate` — it defaults to 1.0 (100% error capture). If
+      // performance tracing is ever added, use `tracesSampleRate` instead.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       beforeSend: sanitizeEvent as any,
       initialScope: {
