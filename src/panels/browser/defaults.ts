@@ -8,9 +8,5 @@ export function createBrowserDefaults(options: AddPanelOptions): Partial<Termina
     browserHistory: "browserHistory" in options ? options.browserHistory : undefined,
     browserZoom: "browserZoom" in options ? options.browserZoom : undefined,
     browserConsoleOpen: "browserConsoleOpen" in options ? options.browserConsoleOpen : undefined,
-    type: "terminal" as const,
-    cwd: "",
-    cols: 80,
-    rows: 24,
   };
 }

@@ -12,10 +12,9 @@ describe("panelKindRegistry createDefaults (co-located)", () => {
     const config = getPanelKindConfig("browser")!;
     const result = config.createDefaults!({ kind: "browser" });
     expect(result.browserUrl).toBe("http://localhost:3000");
-    expect(result.type).toBe("terminal");
-    expect(result.cwd).toBe("");
-    expect(result.cols).toBe(80);
-    expect(result.rows).toBe(24);
+    expect(result.cwd).toBeUndefined();
+    expect(result.cols).toBeUndefined();
+    expect(result.rows).toBeUndefined();
   });
 
   it("browser factory preserves provided browserUrl", () => {
@@ -38,7 +37,9 @@ describe("panelKindRegistry createDefaults (co-located)", () => {
     expect(result.noteId).toBe("");
     expect(result.scope).toBe("project");
     expect(result.createdAt).toBeGreaterThan(0);
-    expect(result.type).toBe("terminal");
+    expect(result.cwd).toBeUndefined();
+    expect(result.cols).toBeUndefined();
+    expect(result.rows).toBeUndefined();
   });
 
   it("notes factory preserves provided fields", () => {
@@ -67,7 +68,8 @@ describe("panelKindRegistry createDefaults (co-located)", () => {
     expect(result.cwd).toBe("/project");
     expect(result.devCommand).toBe("npm run dev");
     expect(result.browserUrl).toBe("http://localhost:3000");
-    expect(result.type).toBe("terminal");
+    expect(result.cols).toBeUndefined();
+    expect(result.rows).toBeUndefined();
   });
 
   it("dev-preview defaults cwd to empty string", () => {

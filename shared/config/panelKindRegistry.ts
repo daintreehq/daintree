@@ -119,12 +119,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
  * Default fields for extension panel kinds that don't provide a createDefaults factory.
  */
 export function getExtensionFallbackDefaults(): Partial<TerminalInstance> {
-  return {
-    type: "terminal" as const,
-    cwd: "",
-    cols: 80,
-    rows: 24,
-  };
+  return {};
 }
 
 /**

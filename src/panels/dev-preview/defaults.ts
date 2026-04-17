@@ -16,8 +16,5 @@ export function createDevPreviewDefaults(options: AddPanelOptions): Partial<Term
     devPreviewConsoleOpen:
       "devPreviewConsoleOpen" in options ? options.devPreviewConsoleOpen : undefined,
     exitBehavior: "exitBehavior" in options ? options.exitBehavior : undefined,
-    type: "terminal" as const,
-    cols: 80,
-    rows: 24,
   };
 }

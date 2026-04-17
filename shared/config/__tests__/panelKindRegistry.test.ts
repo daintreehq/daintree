@@ -12,12 +12,9 @@ import {
 } from "../panelKindRegistry.js";
 
 describe("panelKindRegistry metadata", () => {
-  it("extension fallback returns base non-PTY fields", () => {
+  it("extension fallback returns empty object", () => {
     const result = getExtensionFallbackDefaults();
-    expect(result.type).toBe("terminal");
-    expect(result.cwd).toBe("");
-    expect(result.cols).toBe(80);
-    expect(result.rows).toBe(24);
+    expect(Object.keys(result)).toHaveLength(0);
   });
 
   it("dev-preview does not use terminal UI", () => {
