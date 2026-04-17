@@ -837,6 +837,8 @@ export function BulkCreateWorktreeDialog({
                         worktreeId,
                         exitBehavior: t.exitBehavior,
                         command,
+                        agentModelId: isAgent ? t.agentModelId : undefined,
+                        agentLaunchFlags: isAgent ? t.agentLaunchFlags : undefined,
                       });
                     }
 

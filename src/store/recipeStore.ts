@@ -43,6 +43,9 @@ function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
     initialPrompt: isAgent ? initialPrompt : undefined,
     devCommand: terminal.type === "dev-preview" ? devCommand : undefined,
     args,
+    // Session-scoped overrides must never leak into disk-saved recipes.
+    agentModelId: undefined,
+    agentLaunchFlags: undefined,
   };
 }
 
@@ -53,6 +56,8 @@ function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
       ? "dev-preview"
       : (terminal.agentId ?? terminal.type ?? "terminal");
 
+  const isAgent = isAgentRecipeType(type);
+
   return {
     type,
     title: terminal.title || undefined,
@@ -60,6 +65,8 @@ function terminalToRecipeTerminal(terminal: TerminalInstance): RecipeTerminal {
     devCommand: terminal.kind === "dev-preview" ? terminal.devCommand : undefined,
     env: {},
     exitBehavior: terminal.exitBehavior,
+    agentModelId: isAgent ? terminal.agentModelId : undefined,
+    agentLaunchFlags: isAgent ? terminal.agentLaunchFlags : undefined,
   };
 }
 

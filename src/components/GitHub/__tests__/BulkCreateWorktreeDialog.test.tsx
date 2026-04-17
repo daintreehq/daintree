@@ -1280,6 +1280,8 @@ describe("BulkCreateWorktreeDialog", () => {
         title: "Agent",
         exitBehavior: "stay",
         command: "claude --resume stale-session",
+        agentModelId: "claude-opus-4-7",
+        agentLaunchFlags: ["--resume", "old"],
       },
       {
         type: "terminal",
@@ -1323,6 +1325,9 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(agentCall?.[0].command).toBe("claude --fresh-generated");
     expect(agentCall?.[0].agentId).toBe("claude");
     expect(agentCall?.[0].command).not.toContain("stale-session");
+    // Per-panel agent overrides survive the clone-layout projection.
+    expect(agentCall?.[0].agentModelId).toBe("claude-opus-4-7");
+    expect(agentCall?.[0].agentLaunchFlags).toEqual(["--resume", "old"]);
 
     // Plain terminal command is passed through verbatim (it's a user-authored
     // shell command, not a path-scoped agent invocation).
