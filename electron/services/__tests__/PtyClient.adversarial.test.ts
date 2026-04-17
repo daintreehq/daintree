@@ -3,6 +3,9 @@ import { EventEmitter } from "events";
 import type { PtyHostSpawnOptions, SpawnResult } from "../../../shared/types/pty-host.js";
 
 const shared = vi.hoisted(() => {
+  // vi.hoisted runs before module imports resolve, so use require() to load
+  // the Node stdlib synchronously.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter } = require("events") as typeof import("events");
   const appEmitter = new EventEmitter();
   const appMock = Object.assign(appEmitter, {
