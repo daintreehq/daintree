@@ -16,6 +16,7 @@ const defaultOnboardingState: OnboardingState = {
   waitingNudgeSeen: false,
   seenAgentIds: [],
   welcomeCardDismissed: false,
+  setupBannerDismissed: false,
   checklist: {
     dismissed: false,
     celebrationShown: false,
@@ -35,6 +36,7 @@ const onboardingMock = {
   migrate: vi.fn(() => Promise.resolve({ ...defaultOnboardingState })),
   markToastSeen: vi.fn(() => Promise.resolve()),
   markNewsletterSeen: vi.fn(() => Promise.resolve()),
+  dismissSetupBanner: vi.fn(() => Promise.resolve({ ...defaultOnboardingState })),
 };
 
 const telemetryMock = {
@@ -48,6 +50,10 @@ const privacyMock = {
   setTelemetryLevel: vi.fn(() => Promise.resolve()),
 };
 
+// Capture the real addEventListener so the component can actually subscribe to
+// the open-wizard custom event within the jsdom window.
+const openWizardListeners = new Set<(e: Event) => void>();
+
 vi.stubGlobal("window", {
   ...globalThis.window,
   electron: {
@@ -55,9 +61,28 @@ vi.stubGlobal("window", {
     telemetry: telemetryMock,
     privacy: privacyMock,
   },
-  addEventListener: vi.fn(),
-  removeEventListener: vi.fn(),
+  addEventListener: vi.fn((name: string, listener: (e: Event) => void) => {
+    if (name === "daintree:open-agent-setup-wizard") {
+      openWizardListeners.add(listener);
+    }
+  }),
+  removeEventListener: vi.fn((name: string, listener: (e: Event) => void) => {
+    if (name === "daintree:open-agent-setup-wizard") {
+      openWizardListeners.delete(listener);
+    }
+  }),
+  dispatchEvent: vi.fn((event: Event) => {
+    if (event.type === "daintree:open-agent-setup-wizard") {
+      for (const l of openWizardListeners) l(event);
+    }
+    return true;
+  }),
 });
+
+function fireOpenWizard(detail?: { isFirstRun?: boolean; returnToPanelPalette?: boolean }) {
+  const evt = new CustomEvent("daintree:open-agent-setup-wizard", { detail });
+  for (const l of openWizardListeners) l(evt);
+}
 
 const { isDaintreeEnvEnabledMock } = vi.hoisted(() => ({
   isDaintreeEnvEnabledMock: vi.fn((_key: string): boolean => false),
@@ -84,34 +109,74 @@ describe("OnboardingFlow first-run", () => {
   const defaultProps = {
     availability: {} as import("@shared/types").CliAvailability,
     onRefreshSettings: vi.fn(() => Promise.resolve()),
-    hasAnySelectedAgent: true as boolean | null,
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
-
+    openWizardListeners.clear();
     onboardingMock.get.mockResolvedValue({ ...defaultOnboardingState });
   });
 
-  it("renders AgentSetupWizard with isFirstRun=true on first run", async () => {
-    const { getByTestId } = await act(async () => {
+  it("does NOT render AgentSetupWizard on first run", async () => {
+    const { baseElement } = await act(async () => {
       return render(<OnboardingFlow {...defaultProps} />);
     });
 
-    await vi.waitFor(() => {
-      const wizard = getByTestId("agent-setup-wizard");
-      expect(wizard).toBeTruthy();
-      expect(wizard.getAttribute("data-first-run")).toBe("true");
+    // Give hydration a tick to complete.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
     });
+
+    expect(
+      baseElement.ownerDocument.querySelector('[data-testid="agent-setup-wizard"]')
+    ).toBeNull();
   });
 
-  it("completes onboarding when wizard closes", async () => {
+  it("opens wizard with isFirstRun=true when banner fires event with that detail", async () => {
     const { getByTestId } = await act(async () => {
       return render(<OnboardingFlow {...defaultProps} />);
     });
 
-    await vi.waitFor(() => {
-      expect(getByTestId("agent-setup-wizard")).toBeTruthy();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await act(async () => {
+      fireOpenWizard({ isFirstRun: true });
+    });
+
+    const wizard = getByTestId("agent-setup-wizard");
+    expect(wizard.getAttribute("data-first-run")).toBe("true");
+  });
+
+  it("opens wizard with isFirstRun=false when event has no detail (e.g. Settings)", async () => {
+    const { getByTestId } = await act(async () => {
+      return render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await act(async () => {
+      fireOpenWizard();
+    });
+
+    const wizard = getByTestId("agent-setup-wizard");
+    expect(wizard.getAttribute("data-first-run")).toBe("false");
+  });
+
+  it("completes onboarding when wizard closes after first-run banner open", async () => {
+    const { getByTestId } = await act(async () => {
+      return render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await act(async () => {
+      fireOpenWizard({ isFirstRun: true });
     });
 
     await act(async () => {
@@ -124,6 +189,35 @@ describe("OnboardingFlow first-run", () => {
         expect.objectContaining({ totalSteps: 1 })
       );
     });
+    expect(onboardingMock.complete).toHaveBeenCalled();
+  });
+
+  it("does NOT call onboarding.complete when a non-first-run wizard closes", async () => {
+    // Simulates Settings/toolbar re-opening the wizard after onboarding was
+    // already completed. Those opens should not re-fire first-run telemetry.
+    onboardingMock.get.mockResolvedValue({ ...defaultOnboardingState, completed: true });
+
+    const { getByTestId } = await act(async () => {
+      return render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await act(async () => {
+      fireOpenWizard();
+    });
+
+    await act(async () => {
+      getByTestId("close-wizard").click();
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    expect(onboardingMock.complete).not.toHaveBeenCalled();
   });
 
   it("calls onRefreshSettings when wizard closes", async () => {
@@ -131,8 +225,12 @@ describe("OnboardingFlow first-run", () => {
       return render(<OnboardingFlow {...defaultProps} />);
     });
 
-    await vi.waitFor(() => {
-      expect(getByTestId("agent-setup-wizard")).toBeTruthy();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await act(async () => {
+      fireOpenWizard({ isFirstRun: true });
     });
 
     await act(async () => {
@@ -149,18 +247,25 @@ describe("OnboardingFlow telemetry tracking", () => {
   const defaultProps = {
     availability: {} as import("@shared/types").CliAvailability,
     onRefreshSettings: vi.fn(() => Promise.resolve()),
-    hasAnySelectedAgent: true as boolean | null,
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
-
+    openWizardListeners.clear();
     onboardingMock.get.mockResolvedValue({ ...defaultOnboardingState });
   });
 
-  it("emits onboarding_step_viewed when agentSetup step renders", async () => {
+  it("emits onboarding_step_viewed when the banner opens the wizard", async () => {
     await act(async () => {
       render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await act(async () => {
+      fireOpenWizard({ isFirstRun: true });
     });
 
     await vi.waitFor(() => {
@@ -171,9 +276,29 @@ describe("OnboardingFlow telemetry tracking", () => {
     });
   });
 
-  it("emits onboarding_abandoned on unmount when flow is incomplete", async () => {
+  it("does NOT emit onboarding_step_viewed on first paint (no wizard yet)", async () => {
+    await act(async () => {
+      render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+
+    expect(trackMock).not.toHaveBeenCalledWith("onboarding_step_viewed", expect.any(Object));
+  });
+
+  it("emits onboarding_abandoned on unmount when wizard was opened but not completed", async () => {
     const { unmount } = await act(async () => {
       return render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await act(async () => {
+      fireOpenWizard({ isFirstRun: true });
     });
 
     await vi.waitFor(() => {
@@ -194,8 +319,12 @@ describe("OnboardingFlow telemetry tracking", () => {
       return render(<OnboardingFlow {...defaultProps} />);
     });
 
-    await vi.waitFor(() => {
-      expect(getByTestId("agent-setup-wizard")).toBeTruthy();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await act(async () => {
+      fireOpenWizard({ isFirstRun: true });
     });
 
     await act(async () => {
@@ -213,79 +342,16 @@ describe("OnboardingFlow telemetry tracking", () => {
   });
 });
 
-describe("OnboardingFlow resume and legacy steps", () => {
+describe("OnboardingFlow E2E skip", () => {
   const defaultProps = {
     availability: {} as import("@shared/types").CliAvailability,
     onRefreshSettings: vi.fn(() => Promise.resolve()),
-    hasAnySelectedAgent: true as boolean | null,
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
-
+    openWizardListeners.clear();
     onboardingMock.get.mockResolvedValue({ ...defaultOnboardingState });
-  });
-
-  it("resumes at agentSetup when persisted step is agentSetup", async () => {
-    onboardingMock.get.mockResolvedValue({
-      ...defaultOnboardingState,
-      currentStep: "agentSetup",
-      agentSetupIds: ["claude", "gemini"],
-    });
-
-    const { getByTestId } = await act(async () => {
-      return render(<OnboardingFlow {...defaultProps} />);
-    });
-
-    await vi.waitFor(() => {
-      expect(getByTestId("agent-setup-wizard")).toBeTruthy();
-    });
-  });
-
-  it("resumes at agentSetup when persisted step is legacy agentSelection", async () => {
-    onboardingMock.get.mockResolvedValue({
-      ...defaultOnboardingState,
-      currentStep: "agentSelection",
-      agentSetupIds: [],
-    });
-
-    const { getByTestId } = await act(async () => {
-      return render(<OnboardingFlow {...defaultProps} />);
-    });
-
-    await vi.waitFor(() => {
-      expect(getByTestId("agent-setup-wizard")).toBeTruthy();
-    });
-  });
-
-  it("falls back to agentSetup step when resuming with unknown step name", async () => {
-    onboardingMock.get.mockResolvedValue({
-      ...defaultOnboardingState,
-      currentStep: "themeSelection",
-    });
-
-    const { getByTestId } = await act(async () => {
-      return render(<OnboardingFlow {...defaultProps} />);
-    });
-
-    await vi.waitFor(() => {
-      expect(getByTestId("agent-setup-wizard")).toBeTruthy();
-    });
-  });
-
-  it("maps legacy 'welcome' step to agentSetup", async () => {
-    onboardingMock.get.mockResolvedValue({
-      ...defaultOnboardingState,
-      currentStep: "welcome",
-    });
-
-    const { getByTestId } = await act(async () => {
-      return render(<OnboardingFlow {...defaultProps} />);
-    });
-
-    await vi.waitFor(() => {
-      expect(getByTestId("agent-setup-wizard")).toBeTruthy();
-    });
   });
 
   it("renders nothing and skips hydration when DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS is enabled", async () => {
@@ -303,10 +369,6 @@ describe("OnboardingFlow resume and legacy steps", () => {
       expect(
         baseElement.ownerDocument.querySelector('[data-testid="agent-setup-wizard"]')
       ).toBeNull();
-      expect(baseElement.ownerDocument.querySelector('[data-testid="welcome-step"]')).toBeNull();
-      expect(
-        baseElement.ownerDocument.querySelector('[data-testid="onboarding-progress"]')
-      ).toBeNull();
 
       // IPC hydration should be skipped entirely
       expect(onboardingMock.get).not.toHaveBeenCalled();
@@ -314,119 +376,5 @@ describe("OnboardingFlow resume and legacy steps", () => {
       isDaintreeEnvEnabledMock.mockReturnValue(false);
       vi.resetModules();
     }
-  });
-});
-
-describe("OnboardingFlow auto-open wizard on no selected agents", () => {
-  const completedOnboardingState: OnboardingState = {
-    ...defaultOnboardingState,
-    completed: true,
-    currentStep: null,
-  };
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-
-    onboardingMock.get.mockResolvedValue({ ...completedOnboardingState });
-  });
-
-  it("auto-opens wizard with isFirstRun=false when onboarding complete and no agents selected", async () => {
-    const { getByTestId } = await act(async () => {
-      return render(
-        <OnboardingFlow
-          availability={{} as import("@shared/types").CliAvailability}
-          onRefreshSettings={vi.fn(() => Promise.resolve())}
-          hasAnySelectedAgent={false}
-        />
-      );
-    });
-
-    await vi.waitFor(() => {
-      const wizard = getByTestId("agent-setup-wizard");
-      expect(wizard).toBeTruthy();
-      expect(wizard.getAttribute("data-first-run")).toBe("false");
-    });
-  });
-
-  it("calls onRefreshSettings when auto-opened wizard is closed", async () => {
-    const refreshMock = vi.fn(() => Promise.resolve());
-    const { getByTestId } = await act(async () => {
-      return render(
-        <OnboardingFlow
-          availability={{} as import("@shared/types").CliAvailability}
-          onRefreshSettings={refreshMock}
-          hasAnySelectedAgent={false}
-        />
-      );
-    });
-
-    await vi.waitFor(() => {
-      expect(getByTestId("agent-setup-wizard")).toBeTruthy();
-    });
-
-    await act(async () => {
-      getByTestId("close-wizard").click();
-    });
-
-    expect(refreshMock).toHaveBeenCalled();
-  });
-
-  it("does NOT auto-open wizard when hasAnySelectedAgent is null (loading)", async () => {
-    const { baseElement } = await act(async () => {
-      return render(
-        <OnboardingFlow
-          availability={{} as import("@shared/types").CliAvailability}
-          onRefreshSettings={vi.fn(() => Promise.resolve())}
-          hasAnySelectedAgent={null}
-        />
-      );
-    });
-
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
-
-    const wizard = baseElement.ownerDocument.querySelector('[data-testid="agent-setup-wizard"]');
-    expect(wizard).toBeNull();
-  });
-
-  it("does NOT auto-open wizard when agents are selected", async () => {
-    const { baseElement } = await act(async () => {
-      return render(
-        <OnboardingFlow
-          availability={{} as import("@shared/types").CliAvailability}
-          onRefreshSettings={vi.fn(() => Promise.resolve())}
-          hasAnySelectedAgent={true}
-        />
-      );
-    });
-
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
-
-    const wizard = baseElement.ownerDocument.querySelector('[data-testid="agent-setup-wizard"]');
-    expect(wizard).toBeNull();
-  });
-
-  it("does NOT auto-open wizard when onboarding is not complete", async () => {
-    onboardingMock.get.mockResolvedValue({ ...defaultOnboardingState, completed: false });
-
-    const { getByTestId } = await act(async () => {
-      return render(
-        <OnboardingFlow
-          availability={{} as import("@shared/types").CliAvailability}
-          onRefreshSettings={vi.fn(() => Promise.resolve())}
-          hasAnySelectedAgent={false}
-        />
-      );
-    });
-
-    // With completed=false, it starts the first-run flow directly at agentSetup
-    await vi.waitFor(() => {
-      const wizard = getByTestId("agent-setup-wizard");
-      expect(wizard).toBeTruthy();
-      expect(wizard.getAttribute("data-first-run")).toBe("true");
-    });
   });
 });

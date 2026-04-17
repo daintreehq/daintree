@@ -7,12 +7,14 @@ interface AgentDiscoveryState {
   loaded: boolean;
   seenAgentIds: string[];
   welcomeCardDismissed: boolean;
+  setupBannerDismissed: boolean;
 }
 
 const useAgentDiscoveryStore = create<AgentDiscoveryState>(() => ({
   loaded: false,
   seenAgentIds: [],
   welcomeCardDismissed: false,
+  setupBannerDismissed: false,
 }));
 
 let hydrating: Promise<void> | null = null;
@@ -37,6 +39,7 @@ async function hydrate(): Promise<void> {
         loaded: true,
         seenAgentIds: Array.isArray(state.seenAgentIds) ? state.seenAgentIds : [],
         welcomeCardDismissed: state.welcomeCardDismissed === true,
+        setupBannerDismissed: state.setupBannerDismissed === true,
       });
     } catch {
       useAgentDiscoveryStore.setState({ loaded: true });
@@ -84,9 +87,22 @@ export async function dismissWelcomeCard(): Promise<void> {
   }
 }
 
+export async function dismissSetupBanner(): Promise<void> {
+  if (useAgentDiscoveryStore.getState().setupBannerDismissed) return;
+  useAgentDiscoveryStore.setState({ setupBannerDismissed: true });
+  const api = window.electron?.onboarding;
+  if (!api?.dismissSetupBanner) return;
+  try {
+    await api.dismissSetupBanner();
+  } catch {
+    // Best-effort; optimistic local state stands.
+  }
+}
+
 interface AgentDiscoveryOnboarding extends AgentDiscoveryState {
   markAgentsSeen: (agentIds: string[]) => Promise<void>;
   dismissWelcomeCard: () => Promise<void>;
+  dismissSetupBanner: () => Promise<void>;
 }
 
 /**
@@ -100,6 +116,7 @@ export function useAgentDiscoveryOnboarding(): AgentDiscoveryOnboarding {
   const loaded = useAgentDiscoveryStore((s) => s.loaded);
   const seenAgentIds = useAgentDiscoveryStore((s) => s.seenAgentIds);
   const welcomeCardDismissed = useAgentDiscoveryStore((s) => s.welcomeCardDismissed);
+  const setupBannerDismissed = useAgentDiscoveryStore((s) => s.setupBannerDismissed);
 
   useEffect(() => {
     void hydrate();
@@ -109,8 +126,10 @@ export function useAgentDiscoveryOnboarding(): AgentDiscoveryOnboarding {
     loaded,
     seenAgentIds,
     welcomeCardDismissed,
+    setupBannerDismissed,
     markAgentsSeen,
     dismissWelcomeCard,
+    dismissSetupBanner,
   };
 }
 
@@ -120,5 +139,6 @@ export function resetAgentDiscoveryStoreForTests(): void {
     loaded: false,
     seenAgentIds: [],
     welcomeCardDismissed: false,
+    setupBannerDismissed: false,
   });
 }

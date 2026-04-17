@@ -21,8 +21,10 @@ let mockActionMruList: string[] = [];
 
 const markAgentsSeenMock = vi.fn().mockResolvedValue(undefined);
 const dismissWelcomeCardMock = vi.fn().mockResolvedValue(undefined);
+const dismissSetupBannerMock = vi.fn().mockResolvedValue(undefined);
 let mockSeenAgentIds: string[] = [];
 let mockWelcomeCardDismissed = true;
+const mockSetupBannerDismissed = true;
 let mockOnboardingLoaded = true;
 
 vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
@@ -30,8 +32,10 @@ vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
     loaded: mockOnboardingLoaded,
     seenAgentIds: mockSeenAgentIds,
     welcomeCardDismissed: mockWelcomeCardDismissed,
+    setupBannerDismissed: mockSetupBannerDismissed,
     markAgentsSeen: markAgentsSeenMock,
     dismissWelcomeCard: dismissWelcomeCardMock,
+    dismissSetupBanner: dismissSetupBannerMock,
   }),
 }));
 

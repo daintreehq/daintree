@@ -11,6 +11,7 @@ import {
   X,
   Plug,
   Pin,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DaintreeIcon } from "@/components/icons";
@@ -65,6 +66,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const progressTotal = 4; // 3 real items + endowed "Install Daintree"
   const progressDone = 1 + completedCount; // endowed item always complete
 
+  const setupBanner = <AgentSetupBannerCard />;
   const welcomeCard = <AgentWelcomeCard />;
 
   return (
@@ -85,6 +87,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
         {hasProjects ? (
           <>
             <RecentProjects projects={recentProjects} onSelect={switchProject} />
+            {setupBanner}
             {welcomeCard}
             {showChecklist && (
               <InlineChecklist
@@ -96,6 +99,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
           </>
         ) : (
           <>
+            {setupBanner}
             {welcomeCard}
             {showChecklist && (
               <InlineChecklist
@@ -226,6 +230,66 @@ function RecentProjects({
             </span>
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function AgentSetupBannerCard() {
+  const { loaded, setupBannerDismissed, dismissSetupBanner } = useAgentDiscoveryOnboarding();
+
+  // Gate on hydration to prevent flash-of-content before the persisted
+  // dismiss flag arrives from electron-store (see #5111 review).
+  if (!loaded) return null;
+  if (setupBannerDismissed) return null;
+
+  const handleStartSetup = () => {
+    window.dispatchEvent(
+      new CustomEvent("daintree:open-agent-setup-wizard", {
+        detail: { isFirstRun: true },
+      })
+    );
+  };
+
+  const handleDismiss = () => {
+    void dismissSetupBanner();
+  };
+
+  return (
+    <div className="w-full" data-testid="agent-setup-banner">
+      <div className="relative w-full rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-sidebar/40 px-4 py-3.5">
+        <button
+          type="button"
+          onClick={handleDismiss}
+          aria-label="Dismiss agent setup banner"
+          data-testid="agent-setup-banner-dismiss"
+          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-daintree-text/40 transition-colors hover:bg-overlay-emphasis hover:text-daintree-text/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+        <div className="flex items-start gap-3 pr-6">
+          <Sparkles className="h-4 w-4 text-daintree-accent mt-0.5 shrink-0" aria-hidden="true" />
+          <div className="flex-1 min-w-0">
+            <h3 className="text-sm font-semibold text-daintree-text/90">Set up your AI agents</h3>
+            <p className="text-xs text-daintree-text/60 mt-1 leading-relaxed">
+              Pick a theme, opt into telemetry, and choose which agents to install. You can skip
+              this and come back anytime.
+            </p>
+            <div className="mt-4 flex items-center gap-2">
+              <Button size="sm" onClick={handleStartSetup} data-testid="agent-setup-banner-cta">
+                <Sparkles className="h-3.5 w-3.5" />
+                Set up agents
+              </Button>
+              <button
+                type="button"
+                onClick={handleDismiss}
+                className="text-xs text-daintree-text/50 hover:text-daintree-text/80 transition-colors"
+              >
+                Not now
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

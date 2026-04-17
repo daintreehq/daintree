@@ -50,6 +50,7 @@ vi.mock("@/lib/colorUtils", () => ({
 const {
   markAgentsSeenMock,
   dismissWelcomeCardMock,
+  dismissSetupBannerMock,
   setAgentPinnedMock,
   agentDiscoveryState,
   agentSettingsState,
@@ -57,11 +58,13 @@ const {
 } = vi.hoisted(() => ({
   markAgentsSeenMock: vi.fn(() => Promise.resolve()),
   dismissWelcomeCardMock: vi.fn(() => Promise.resolve()),
+  dismissSetupBannerMock: vi.fn(() => Promise.resolve()),
   setAgentPinnedMock: vi.fn(() => Promise.resolve()),
   agentDiscoveryState: {
     loaded: true,
     seenAgentIds: [] as string[],
     welcomeCardDismissed: false,
+    setupBannerDismissed: false,
   },
   agentSettingsState: {
     settings: null as { agents: Record<string, { pinned?: boolean }> } | null,
@@ -77,8 +80,10 @@ vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
     loaded: agentDiscoveryState.loaded,
     seenAgentIds: agentDiscoveryState.seenAgentIds,
     welcomeCardDismissed: agentDiscoveryState.welcomeCardDismissed,
+    setupBannerDismissed: agentDiscoveryState.setupBannerDismissed,
     markAgentsSeen: markAgentsSeenMock,
     dismissWelcomeCard: dismissWelcomeCardMock,
+    dismissSetupBanner: dismissSetupBannerMock,
   }),
 }));
 
@@ -262,6 +267,9 @@ describe("WelcomeScreen", () => {
     agentDiscoveryState.loaded = true;
     agentDiscoveryState.seenAgentIds = [];
     agentDiscoveryState.welcomeCardDismissed = false;
+    // Default to dismissed in existing card/layout suites so they continue
+    // to exercise only the behavior they were written for.
+    agentDiscoveryState.setupBannerDismissed = true;
     agentSettingsState.settings = null;
     cliAvailabilityState.availability = {};
     cliAvailabilityState.hasRealData = false;
@@ -605,6 +613,78 @@ describe("WelcomeScreen", () => {
       expect(screen.getByTestId("welcome-card-pin-error")).toBeTruthy();
       expect(dismissWelcomeCardMock).not.toHaveBeenCalled();
       expect(markAgentsSeenMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- Agent Setup Banner (#5131) ---
+
+  describe("agent setup banner", () => {
+    it("does not render until onboarding state is hydrated", () => {
+      agentDiscoveryState.loaded = false;
+      agentDiscoveryState.setupBannerDismissed = false;
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      expect(screen.queryByTestId("agent-setup-banner")).toBeNull();
+    });
+
+    it("renders when hydrated and not dismissed", () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = false;
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      expect(screen.getByTestId("agent-setup-banner")).toBeTruthy();
+      expect(screen.getByText("Set up your AI agents")).toBeTruthy();
+    });
+
+    it("does not render when dismissed", () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = true;
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+      expect(screen.queryByTestId("agent-setup-banner")).toBeNull();
+    });
+
+    it("calls dismissSetupBanner when the X button is clicked", async () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = false;
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("agent-setup-banner-dismiss"));
+      });
+      expect(dismissSetupBannerMock).toHaveBeenCalled();
+    });
+
+    it("calls dismissSetupBanner when the Not now link is clicked", async () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = false;
+      render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByText("Not now"));
+      });
+      expect(dismissSetupBannerMock).toHaveBeenCalled();
+    });
+
+    it("dispatches daintree:open-agent-setup-wizard with isFirstRun: true when CTA is clicked", async () => {
+      agentDiscoveryState.loaded = true;
+      agentDiscoveryState.setupBannerDismissed = false;
+
+      const dispatched: CustomEvent[] = [];
+      const dispatchSpy = vi.spyOn(window, "dispatchEvent").mockImplementation((e: Event) => {
+        dispatched.push(e as CustomEvent);
+        return true;
+      });
+
+      try {
+        render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+        await act(async () => {
+          fireEvent.click(screen.getByTestId("agent-setup-banner-cta"));
+        });
+
+        const openEvt = dispatched.find((e) => e.type === "daintree:open-agent-setup-wizard");
+        expect(openEvt).toBeTruthy();
+        expect(openEvt?.detail).toEqual({ isFirstRun: true });
+      } finally {
+        dispatchSpy.mockRestore();
+      }
     });
   });
 });

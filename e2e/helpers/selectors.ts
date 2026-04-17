@@ -173,9 +173,12 @@ export const SEL = {
     openFolder: 'button:has-text("Open Folder")',
   },
   firstRun: {
-    welcomeTitle: 'role=dialog >> text="Welcome to Daintree"',
+    welcomeTitle: 'h1:has-text("Welcome to Daintree")',
     agentTitle: 'text="Choose your AI agents"',
     agentSetupTitle: 'text="Agent Setup"',
+    agentSetupBanner: '[data-testid="agent-setup-banner"]',
+    agentSetupBannerCta: '[data-testid="agent-setup-banner-cta"]',
+    agentSetupBannerDismiss: '[data-testid="agent-setup-banner-dismiss"]',
   },
   onboarding: {
     heading: 'h2:has-text("Set up your project")',

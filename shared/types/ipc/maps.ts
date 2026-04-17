@@ -183,6 +183,7 @@ export interface OnboardingState {
   waitingNudgeSeen: boolean;
   seenAgentIds: string[];
   welcomeCardDismissed: boolean;
+  setupBannerDismissed: boolean;
   // TODO(0.9.0): Remove after deleting onboarding:migrate and the renderer
   // localStorage import path for old Canopy onboarding keys.
   migratedFromLocalStorage: boolean;
@@ -1589,6 +1590,10 @@ export interface IpcInvokeMap {
     result: OnboardingState;
   };
   "onboarding:dismiss-welcome-card": {
+    args: [];
+    result: OnboardingState;
+  };
+  "onboarding:dismiss-setup-banner": {
     args: [];
     result: OnboardingState;
   };

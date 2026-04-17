@@ -21,8 +21,12 @@ const STEP_ORDER: OnboardingStep[] = ["agentSetup"];
 interface OnboardingFlowProps {
   availability: CliAvailability;
   onRefreshSettings: () => Promise<void>;
-  hasAnySelectedAgent: boolean | null;
   onComplete?: () => void;
+}
+
+interface OpenAgentSetupWizardDetail {
+  returnToPanelPalette?: boolean;
+  isFirstRun?: boolean;
 }
 
 function trackOnboarding(event: string, properties: Record<string, unknown> = {}): void {
@@ -32,17 +36,16 @@ function trackOnboarding(event: string, properties: Record<string, unknown> = {}
 export function OnboardingFlow({
   availability,
   onRefreshSettings,
-  hasAnySelectedAgent,
   onComplete,
 }: OnboardingFlowProps) {
   const [state, setState] = useState<OnboardingState | null>(null);
   const [currentStep, setCurrentStep] = useState<OnboardingStep | null>(null);
   const [manualWizardOpen, setManualWizardOpen] = useState(false);
+  const [manualWizardIsFirstRun, setManualWizardIsFirstRun] = useState(false);
   const returnToPaletteRef = useRef(false);
   const flowStartTimeRef = useRef<number>(0);
   const completedRef = useRef(false);
   const currentStepRef = useRef<OnboardingStep | null>(null);
-  const autoOpenedRef = useRef(false);
 
   // Hydrate state from electron-store and run localStorage migration
   useEffect(() => {
@@ -83,42 +86,24 @@ export function OnboardingFlow({
       }
 
       setState(onboardingState);
-
-      if (!onboardingState.completed) {
-        const rawStep = onboardingState.currentStep;
-        const resumeStep = rawStep as OnboardingStep | null;
-        if (resumeStep && STEP_ORDER.includes(resumeStep)) {
-          setCurrentStep(resumeStep);
-        } else if (rawStep === "agentSelection" || rawStep === "welcome") {
-          // TODO(0.9.0): Remove this temporary resume-step mapping when the
-          // old Canopy onboarding flow is no longer supported.
-          setCurrentStep("agentSetup");
-        } else {
-          setCurrentStep(STEP_ORDER[0]);
-        }
-      }
     })().catch(console.error);
   }, []);
 
-  // Listen for manual wizard open events (from Settings / toolbar button / panel palette)
+  // Listen for manual wizard open events (from Settings / toolbar / panel palette / welcome banner).
+  // The `isFirstRun` flag in the event detail lets the welcome-screen banner preserve the first-run
+  // theme-picker and telemetry prompts when opening the wizard for a user who hasn't finished
+  // onboarding yet.
   useEffect(() => {
     const handleOpenWizard = (e: Event) => {
-      const detail = (e as CustomEvent<{ returnToPanelPalette?: boolean }>).detail;
+      const detail = (e as CustomEvent<OpenAgentSetupWizardDetail>).detail;
       returnToPaletteRef.current = detail?.returnToPanelPalette === true;
+      setManualWizardIsFirstRun(detail?.isFirstRun === true);
+      setCurrentStep("agentSetup");
       setManualWizardOpen(true);
     };
     window.addEventListener("daintree:open-agent-setup-wizard", handleOpenWizard);
     return () => window.removeEventListener("daintree:open-agent-setup-wizard", handleOpenWizard);
   }, []);
-
-  // Auto-open wizard when onboarding is complete but no agents are selected
-  useEffect(() => {
-    if (hasAnySelectedAgent !== false) return;
-    if (!state?.completed) return;
-    if (autoOpenedRef.current) return;
-    autoOpenedRef.current = true;
-    setManualWizardOpen(true);
-  }, [hasAnySelectedAgent, state?.completed]);
 
   // Track step views and keep ref in sync
   useEffect(() => {
@@ -170,21 +155,30 @@ export function OnboardingFlow({
     [onComplete]
   );
 
-  const handleManualWizardClose = useCallback(() => {
+  const handleManualWizardClose = useCallback(async () => {
     void onRefreshSettings();
     const shouldReturn = returnToPaletteRef.current;
+    const wasFirstRun = manualWizardIsFirstRun;
     returnToPaletteRef.current = false;
     setManualWizardOpen(false);
+    setManualWizardIsFirstRun(false);
+    // If this open originated from the first-run welcome banner, mark the
+    // onboarding flow complete so the first-run prompts (theme / telemetry)
+    // are not shown again and the banner stays dismissed on next launch.
+    if (wasFirstRun && state && !state.completed) {
+      await advanceStep("agentSetup");
+      try {
+        await window.electron?.onboarding?.dismissSetupBanner?.();
+      } catch {
+        // Best-effort; the banner's own dismiss action can recover this.
+      }
+    } else {
+      setCurrentStep(null);
+    }
     if (shouldReturn) {
       void actionService.dispatch("panel.palette", undefined, { source: "user" });
     }
-  }, [onRefreshSettings]);
-
-  // Agent setup wizard close
-  const handleAgentSetupClose = useCallback(async () => {
-    void onRefreshSettings();
-    await advanceStep("agentSetup");
-  }, [advanceStep, onRefreshSettings]);
+  }, [advanceStep, manualWizardIsFirstRun, onRefreshSettings, state]);
 
   // Render nothing until hydration completes or if E2E skip is enabled
   if (SKIP_FIRST_RUN_DIALOGS) {
@@ -193,6 +187,7 @@ export function OnboardingFlow({
         isOpen
         onClose={handleManualWizardClose}
         initialAvailability={availability}
+        isFirstRun={manualWizardIsFirstRun}
       />
     ) : null;
   }
@@ -200,26 +195,17 @@ export function OnboardingFlow({
   // Still hydrating
   if (state === null) return null;
 
-  // Manual wizard re-open (from Settings / toolbar / panel palette)
+  // Manual wizard open (from Settings / toolbar / panel palette / welcome banner)
   if (manualWizardOpen) {
     return (
       <AgentSetupWizard
         isOpen
         onClose={handleManualWizardClose}
         initialAvailability={availability}
+        isFirstRun={manualWizardIsFirstRun}
       />
     );
   }
 
-  // Onboarding already complete
-  if (state.completed || !currentStep) return null;
-
-  return (
-    <AgentSetupWizard
-      isOpen
-      onClose={handleAgentSetupClose}
-      initialAvailability={availability}
-      isFirstRun
-    />
-  );
+  return null;
 }

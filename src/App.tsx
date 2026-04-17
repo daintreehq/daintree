@@ -1,4 +1,4 @@
-import { Profiler, Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { Profiler, Suspense, lazy, useCallback, useEffect, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import {
   isElectronAvailable,
@@ -128,7 +128,6 @@ import { useMacroFocusStore } from "./store/macroFocusStore";
 import { useSafeModeStore } from "./store/safeModeStore";
 import type { BuiltInPanelKind } from "./types";
 import type { TerminalType } from "@shared/types";
-import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { actionService } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { terminalInstanceService } from "./services/terminal/TerminalInstanceService";
@@ -186,13 +185,6 @@ function App() {
   );
 
   const { launchAgent, availability, agentSettings, refreshSettings } = useAgentLauncher();
-  const normalizedAgentSettings = useAgentSettingsStore((s) => s.settings);
-
-  const hasAnySelectedAgent = useMemo(() => {
-    if (normalizedAgentSettings === null) return null;
-    const agents = normalizedAgentSettings.agents ?? {};
-    return BUILT_IN_AGENT_IDS.some((id) => isAgentPinned(agents[id]));
-  }, [normalizedAgentSettings]);
 
   useTerminalConfig();
   useAppThemeConfig();
@@ -788,7 +780,6 @@ function App() {
       <OnboardingFlow
         availability={availability}
         onRefreshSettings={refreshSettings}
-        hasAnySelectedAgent={hasAnySelectedAgent}
         onComplete={gettingStarted.notifyOnboardingComplete}
       />
       {currentProject !== null && gettingStarted.visible && gettingStarted.checklist && (

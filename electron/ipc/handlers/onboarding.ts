@@ -37,6 +37,7 @@ function getOnboardingState(): OnboardingState {
       waitingNudgeSeen: true,
       seenAgentIds: [],
       welcomeCardDismissed: true,
+      setupBannerDismissed: true,
       migratedFromLocalStorage: true,
       checklist: {
         dismissed: true,
@@ -62,6 +63,7 @@ function getOnboardingState(): OnboardingState {
       waitingNudgeSeen: false,
       seenAgentIds: [],
       welcomeCardDismissed: false,
+      setupBannerDismissed: false,
       migratedFromLocalStorage: false,
       checklist: DEFAULT_CHECKLIST,
     };
@@ -75,6 +77,7 @@ function getOnboardingState(): OnboardingState {
       ? (raw.seenAgentIds as string[]).filter((id) => typeof id === "string")
       : [],
     welcomeCardDismissed: raw.welcomeCardDismissed === true,
+    setupBannerDismissed: raw.setupBannerDismissed === true,
     checklist: {
       ...DEFAULT_CHECKLIST,
       ...checklist,
@@ -219,6 +222,14 @@ export function registerOnboardingHandlers(): () => void {
     return updated;
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_DISMISS_WELCOME_CARD));
+
+  ipcMain.handle(CHANNELS.ONBOARDING_DISMISS_SETUP_BANNER, () => {
+    const state = getOnboardingState();
+    const updated: OnboardingState = { ...state, setupBannerDismissed: true };
+    store.set("onboarding", updated);
+    return updated;
+  });
+  cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_DISMISS_SETUP_BANNER));
 
   ipcMain.handle(CHANNELS.ONBOARDING_CHECKLIST_GET, () => getChecklistState());
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_CHECKLIST_GET));

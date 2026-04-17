@@ -185,6 +185,7 @@ export interface StoreSchema {
     waitingNudgeSeen: boolean;
     seenAgentIds: string[];
     welcomeCardDismissed: boolean;
+    setupBannerDismissed: boolean;
     // TODO(0.9.0): Remove after deleting onboarding:migrate and the renderer
     // localStorage import path for old Canopy onboarding keys.
     migratedFromLocalStorage: boolean;
@@ -312,6 +313,7 @@ const storeOptions = {
       waitingNudgeSeen: false,
       seenAgentIds: [],
       welcomeCardDismissed: false,
+      setupBannerDismissed: false,
       migratedFromLocalStorage: false,
       checklist: {
         dismissed: false,

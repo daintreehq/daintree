@@ -38,6 +38,9 @@ function seedOnboarding(partial: Record<string, unknown> = {}) {
     firstRunToastSeen: false,
     newsletterPromptSeen: false,
     waitingNudgeSeen: false,
+    seenAgentIds: [],
+    welcomeCardDismissed: false,
+    setupBannerDismissed: false,
     migratedFromLocalStorage: false,
     checklist: {
       dismissed: false,
@@ -61,17 +64,38 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
     }
   });
 
-  it("get normalizes missing seenAgentIds and welcomeCardDismissed to defaults", () => {
+  it("get normalizes missing seenAgentIds, welcomeCardDismissed, and setupBannerDismissed to defaults", () => {
     registerOnboardingHandlers();
-    // Raw store is missing the new fields entirely (pre-existing state).
-    seedOnboarding({});
+    // Raw store intentionally missing the new fields (pre-existing state).
+    storeMock._data["onboarding"] = {
+      schemaVersion: 1,
+      completed: false,
+      currentStep: null,
+      agentSetupIds: [],
+      firstRunToastSeen: false,
+      newsletterPromptSeen: false,
+      waitingNudgeSeen: false,
+      migratedFromLocalStorage: false,
+      checklist: {
+        dismissed: false,
+        celebrationShown: false,
+        items: {
+          openedProject: false,
+          launchedAgent: false,
+          createdWorktree: false,
+          subscribedNewsletter: false,
+        },
+      },
+    };
     const get = getHandler("onboarding:get");
     const state = get(null) as {
       seenAgentIds: string[];
       welcomeCardDismissed: boolean;
+      setupBannerDismissed: boolean;
     };
     expect(state.seenAgentIds).toEqual([]);
     expect(state.welcomeCardDismissed).toBe(false);
+    expect(state.setupBannerDismissed).toBe(false);
   });
 
   it("get filters out non-string values from seenAgentIds", () => {
@@ -149,10 +173,31 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
     expect(result.welcomeCardDismissed).toBe(true);
   });
 
-  it("cleanup removes both discovery handlers", () => {
+  it("dismissSetupBanner flips the flag and returns the updated state", () => {
+    registerOnboardingHandlers();
+    seedOnboarding({ setupBannerDismissed: false });
+    const dismiss = getHandler("onboarding:dismiss-setup-banner");
+    const result = dismiss(null) as { setupBannerDismissed: boolean };
+    expect(result.setupBannerDismissed).toBe(true);
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "onboarding",
+      expect.objectContaining({ setupBannerDismissed: true })
+    );
+  });
+
+  it("dismissSetupBanner is idempotent once dismissed", () => {
+    registerOnboardingHandlers();
+    seedOnboarding({ setupBannerDismissed: true });
+    const dismiss = getHandler("onboarding:dismiss-setup-banner");
+    const result = dismiss(null) as { setupBannerDismissed: boolean };
+    expect(result.setupBannerDismissed).toBe(true);
+  });
+
+  it("cleanup removes discovery handlers", () => {
     const cleanup = registerOnboardingHandlers();
     cleanup();
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("onboarding:mark-agents-seen");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("onboarding:dismiss-welcome-card");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("onboarding:dismiss-setup-banner");
   });
 });
