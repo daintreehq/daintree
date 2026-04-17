@@ -11,6 +11,12 @@ const fileSearchServiceMock = vi.hoisted(() => ({
   search: vi.fn<(payload: { cwd: string; query: string; limit?: number }) => Promise<string[]>>(),
 }));
 
+const checkRateLimitMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../utils.js", () => ({
+  checkRateLimit: checkRateLimitMock,
+}));
+
 vi.mock("../../../services/FileSearchService.js", () => ({
   fileSearchService: fileSearchServiceMock,
 }));
@@ -104,5 +110,39 @@ describe("files:search handler", () => {
     cleanup();
 
     expect(ipcMain.removeHandler).toHaveBeenCalledWith(CHANNELS.FILES_SEARCH);
+  });
+
+  it("calls checkRateLimit with files:search limits on every invocation", async () => {
+    registerFilesHandlers();
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const entry = calls.find((c) => c[0] === CHANNELS.FILES_SEARCH);
+    const handler = entry?.[1] as (
+      event: unknown,
+      payload: unknown
+    ) => Promise<{ files: string[] }>;
+
+    await handler({} as unknown, { cwd: "/tmp/project", query: "readme" });
+
+    expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.FILES_SEARCH, 20, 10_000);
+  });
+
+  it("propagates rate-limit errors and skips search service", async () => {
+    checkRateLimitMock.mockImplementationOnce(() => {
+      throw new Error("Rate limit exceeded");
+    });
+    registerFilesHandlers();
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const entry = calls.find((c) => c[0] === CHANNELS.FILES_SEARCH);
+    const handler = entry?.[1] as (
+      event: unknown,
+      payload: unknown
+    ) => Promise<{ files: string[] }>;
+
+    await expect(handler({} as unknown, { cwd: "/tmp/project", query: "readme" })).rejects.toThrow(
+      "Rate limit exceeded"
+    );
+    expect(fileSearchServiceMock.search).not.toHaveBeenCalled();
   });
 });

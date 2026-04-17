@@ -6,7 +6,7 @@ import { CHANNELS } from "../channels.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { runCommandDetector } from "../../services/RunCommandDetector.js";
 import { ProjectSwitchService } from "../../services/ProjectSwitchService.js";
-import { broadcastToRenderer, sendToRenderer } from "../utils.js";
+import { broadcastToRenderer, sendToRenderer, checkRateLimit } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type { Project, ProjectSettings } from "../../types/index.js";
 import type {
@@ -607,6 +607,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     _event: Electron.IpcMainInvokeEvent,
     projectIds: string[]
   ): Promise<BulkProjectStats> => {
+    checkRateLimit(CHANNELS.PROJECT_GET_BULK_STATS, 10, 10_000);
     if (!Array.isArray(projectIds)) {
       throw new Error("Invalid projectIds: must be an array");
     }

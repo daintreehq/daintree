@@ -2,6 +2,7 @@ import { ipcMain } from "electron";
 import path from "path";
 import fs from "fs/promises";
 import { CHANNELS } from "../channels.js";
+import { checkRateLimit } from "../utils.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
 import { FileSearchPayloadSchema, FileReadPayloadSchema } from "../../schemas/ipc.js";
 
@@ -14,6 +15,8 @@ export function registerFilesHandlers(): () => void {
     _event: Electron.IpcMainInvokeEvent,
     payload: unknown
   ): Promise<{ files: string[] }> => {
+    checkRateLimit(CHANNELS.FILES_SEARCH, 20, 10_000);
+
     const parsed = FileSearchPayloadSchema.safeParse(payload);
     if (!parsed.success) {
       console.error("[IPC] Invalid files:search payload:", parsed.error.format());

@@ -2,6 +2,7 @@ import { ipcMain, shell } from "electron";
 import fs from "fs/promises";
 import path from "path";
 import { CHANNELS } from "../channels.js";
+import { checkRateLimit } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   RepositoryStats,
@@ -57,6 +58,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     cwd: string,
     bypassCache = false
   ): Promise<RepositoryStats> => {
+    checkRateLimit(CHANNELS.GITHUB_GET_REPO_STATS, 10, 10_000);
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -112,6 +114,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     cwd: string,
     bypassCache = false
   ): Promise<ProjectHealthData> => {
+    checkRateLimit(CHANNELS.GITHUB_GET_PROJECT_HEALTH, 10, 10_000);
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -187,6 +190,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     query?: string,
     state?: string
   ) => {
+    checkRateLimit(CHANNELS.GITHUB_OPEN_ISSUES, 20, 10_000);
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -211,6 +215,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     query?: string,
     state?: string
   ) => {
+    checkRateLimit(CHANNELS.GITHUB_OPEN_PRS, 20, 10_000);
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -234,6 +239,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     cwd: string,
     branch?: string
   ) => {
+    checkRateLimit(CHANNELS.GITHUB_OPEN_COMMITS, 20, 10_000);
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -258,6 +264,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     payload: { cwd: string; issueNumber: number }
   ) => {
+    checkRateLimit(CHANNELS.GITHUB_OPEN_ISSUE, 20, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -281,6 +288,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_OPEN_ISSUE));
 
   const handleGitHubOpenPR = async (_event: Electron.IpcMainInvokeEvent, prUrl: string) => {
+    checkRateLimit(CHANNELS.GITHUB_OPEN_PR, 20, 10_000);
     if (typeof prUrl !== "string" || !prUrl) {
       throw new Error("Invalid PR URL");
     }
@@ -298,6 +306,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_OPEN_PR));
 
   const handleGitHubCheckCli = async (): Promise<GitHubCliStatus> => {
+    checkRateLimit(CHANNELS.GITHUB_CHECK_CLI, 10, 10_000);
     const { hasGitHubToken } = await import("../../services/GitHubService.js");
     if (hasGitHubToken()) {
       return { available: true };
@@ -308,6 +317,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_CHECK_CLI));
 
   const handleGitHubGetConfig = async (): Promise<GitHubTokenConfig> => {
+    checkRateLimit(CHANNELS.GITHUB_GET_CONFIG, 10, 10_000);
     const { getGitHubConfigAsync } = await import("../../services/GitHubService.js");
     return getGitHubConfigAsync();
   };
@@ -318,6 +328,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     token: string
   ): Promise<GitHubTokenValidation> => {
+    checkRateLimit(CHANNELS.GITHUB_SET_TOKEN, 5, 10_000);
     if (typeof token !== "string" || !token.trim()) {
       return { valid: false, scopes: [], error: "Token is required" };
     }
@@ -354,6 +365,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_SET_TOKEN));
 
   const handleGitHubClearToken = async (): Promise<void> => {
+    checkRateLimit(CHANNELS.GITHUB_CLEAR_TOKEN, 5, 10_000);
     const { clearGitHubToken } = await import("../../services/GitHubService.js");
     clearGitHubToken();
 
@@ -371,6 +383,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     token: string
   ): Promise<GitHubTokenValidation> => {
+    checkRateLimit(CHANNELS.GITHUB_VALIDATE_TOKEN, 5, 10_000);
     if (typeof token !== "string" || !token.trim()) {
       return { valid: false, scopes: [], error: "Token is required" };
     }
@@ -392,6 +405,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       sortOrder?: "created" | "updated";
     }
   ) => {
+    checkRateLimit(CHANNELS.GITHUB_LIST_ISSUES, 10, 10_000);
     if (!options || typeof options.cwd !== "string" || !options.cwd) {
       throw new Error("Invalid options: cwd is required");
     }
@@ -416,6 +430,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       sortOrder?: "created" | "updated";
     }
   ) => {
+    checkRateLimit(CHANNELS.GITHUB_LIST_PRS, 10, 10_000);
     if (!options || typeof options.cwd !== "string" || !options.cwd) {
       throw new Error("Invalid options: cwd is required");
     }
@@ -433,6 +448,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     payload: { cwd: string; issueNumber: number; username: string }
   ): Promise<void> => {
+    checkRateLimit(CHANNELS.GITHUB_ASSIGN_ISSUE, 5, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -464,6 +480,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     payload: { cwd: string; issueNumber: number }
   ) => {
+    checkRateLimit(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, 20, 10_000);
     if (!payload || typeof payload !== "object") {
       return null;
     }
@@ -491,6 +508,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     payload: { cwd: string; prNumber: number }
   ) => {
+    checkRateLimit(CHANNELS.GITHUB_GET_PR_TOOLTIP, 20, 10_000);
     if (!payload || typeof payload !== "object") {
       return null;
     }
@@ -518,6 +536,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     payload: { cwd: string; issueNumber: number }
   ): Promise<string | null> => {
+    checkRateLimit(CHANNELS.GITHUB_GET_ISSUE_URL, 10, 10_000);
     if (!payload || typeof payload !== "object") {
       return null;
     }
@@ -545,6 +564,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     payload: { cwd: string; issueNumber: number }
   ) => {
+    checkRateLimit(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER, 25, 10_000);
     if (!payload || typeof payload !== "object") {
       return null;
     }
@@ -572,6 +592,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     payload: { cwd: string; prNumber: number }
   ) => {
+    checkRateLimit(CHANNELS.GITHUB_GET_PR_BY_NUMBER, 25, 10_000);
     if (!payload || typeof payload !== "object") {
       return null;
     }
@@ -601,6 +622,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   ): Promise<
     Array<{ name: string; fetchUrl: string; parsedRepo: { owner: string; repo: string } | null }>
   > => {
+    checkRateLimit(CHANNELS.GITHUB_LIST_REMOTES, 10, 10_000);
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }

@@ -22,6 +22,14 @@ vi.mock("electron", () => ({
   },
 }));
 
+const checkRateLimitMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../utils.js", () => ({
+  checkRateLimit: checkRateLimitMock,
+  broadcastToRenderer: vi.fn(),
+  sendToRenderer: vi.fn(),
+}));
+
 vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: {
     getCurrentProjectId: vi.fn(),
@@ -405,6 +413,29 @@ describe("handleProjectGetBulkStats", () => {
     expect(result["proj-a"].waitingAgentCount).toBe(0);
     // ptyStats fields are still populated
     expect(result["proj-a"].terminalCount).toBe(2);
+  });
+
+  it("calls checkRateLimit with project:get-bulk-stats limits", async () => {
+    const ptyClient = makePtyClient();
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+    const handler = getBulkStatsHandler();
+
+    await handler(fakeEvent, ["proj-a"]);
+
+    expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.PROJECT_GET_BULK_STATS, 10, 10_000);
+  });
+
+  it("propagates rate-limit errors without fetching terminals or stats", async () => {
+    checkRateLimitMock.mockImplementationOnce(() => {
+      throw new Error("Rate limit exceeded");
+    });
+    const ptyClient = makePtyClient();
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+    const handler = getBulkStatsHandler();
+
+    await expect(handler(fakeEvent, ["proj-a"])).rejects.toThrow("Rate limit exceeded");
+    expect(ptyClient.getAllTerminalsAsync).not.toHaveBeenCalled();
+    expect(ptyClient.getProjectStats).not.toHaveBeenCalled();
   });
 
   it("skips terminals without a projectId", async () => {
