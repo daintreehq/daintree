@@ -1,4 +1,4 @@
-import { createJSONStorage, type PersistStorage, type StateStorage } from "zustand/middleware";
+import type { PersistStorage, StateStorage, StorageValue } from "zustand/middleware";
 
 const fallbackStorageData = new Map<string, string>();
 
@@ -67,8 +67,54 @@ function createResilientStorage(baseStorage: StateStorage | undefined): StateSto
   };
 }
 
+/**
+ * Parse a JSON string safely, returning a typed fallback and logging a warning
+ * with caller-supplied context (store/key) when the parse fails. Null input is
+ * treated as an absent value and returns the fallback without warning —
+ * corruption is distinct from a cache miss.
+ */
+export function safeJSONParse<T>(
+  raw: string | null,
+  context: { store: string; key: string },
+  fallback: T
+): T {
+  if (raw === null) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch (error) {
+    console.warn("[safeStorage] JSON parse failed", {
+      ...context,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return fallback;
+  }
+}
+
 export function createSafeJSONStorage<T>(): PersistStorage<T> {
-  return createJSONStorage<T>(() => createResilientStorage(resolveLocalStorage()))!;
+  const raw = createResilientStorage(resolveLocalStorage());
+
+  return {
+    getItem: (name) => {
+      const value = raw.getItem(name);
+      if (value instanceof Promise) return null;
+      if (value === null) return null;
+      try {
+        return JSON.parse(value) as StorageValue<T>;
+      } catch (error) {
+        console.warn("[safeStorage] corrupt persisted state, resetting to defaults", {
+          key: name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }
+    },
+    setItem: (name, value) => {
+      raw.setItem(name, JSON.stringify(value));
+    },
+    removeItem: (name) => {
+      raw.removeItem(name);
+    },
+  };
 }
 
 export function readLocalStorageItemSafely(name: string): string | null {

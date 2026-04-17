@@ -3,6 +3,7 @@ import type { CliAvailability, AgentAvailabilityState } from "@shared/types";
 import { cliAvailabilityClient } from "@/clients";
 import { getAgentIds } from "@/config/agents";
 import { isElectronAvailable } from "@/hooks/useElectron";
+import { safeJSONParse } from "./persistence/safeStorage";
 
 interface CliAvailabilityState {
   availability: CliAvailability;
@@ -62,8 +63,11 @@ function loadCache(): PersistedCache | null {
   }
   try {
     const raw = window.localStorage.getItem(CACHE_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = safeJSONParse<unknown>(
+      raw,
+      { store: "cliAvailabilityStore", key: CACHE_STORAGE_KEY },
+      null
+    );
     if (
       !parsed ||
       typeof parsed !== "object" ||
