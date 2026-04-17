@@ -472,3 +472,152 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     expect(createButton.hasAttribute("disabled")).toBe(true);
   });
 });
+
+describe("NewWorktreeDialog — ARIA validation wiring", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("sets aria-invalid and aria-describedby on the new-branch input when branch name is empty", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = screen.getByTestId("branch-name-input");
+    expect(branchInput.getAttribute("aria-invalid")).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+
+    const alert = screen.getByRole("alert");
+    expect(alert.id).toBe("validation-error");
+    expect(alert.textContent).toContain("Please enter a branch name");
+
+    expect(branchInput.getAttribute("aria-invalid")).toBe("true");
+    expect(branchInput.getAttribute("aria-describedby") ?? "").toContain("validation-error");
+
+    const pathInput = screen.getByTestId("worktree-path-input");
+    expect(pathInput.getAttribute("aria-invalid")).toBeNull();
+
+    const baseBranchButton = document.getElementById("base-branch");
+    expect(baseBranchButton?.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("sets aria-invalid on the worktree-path input when path is empty after valid branch name", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = screen.getByTestId("branch-name-input");
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value: "feature/new-feature" } });
+    });
+    await advanceTimersGradually(1000);
+
+    const pathInput = screen.getByTestId("worktree-path-input") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: "" } });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+
+    expect(screen.getByRole("alert").textContent).toContain("Please enter a worktree path");
+    expect(pathInput.getAttribute("aria-invalid")).toBe("true");
+    expect(pathInput.getAttribute("aria-describedby")).toBe("validation-error");
+    expect(branchInput.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("sets aria-invalid on the base-branch combobox when no base branch is selected", async () => {
+    mockListBranches.mockRejectedValueOnce(new Error("no branches"));
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = screen.getByTestId("branch-name-input");
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value: "feature/new" } });
+    });
+    await advanceTimersGradually(500);
+
+    const baseBranchButton = document.getElementById("base-branch");
+    expect(baseBranchButton?.getAttribute("aria-invalid")).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+
+    const alerts = screen.getAllByRole("alert");
+    const validationAlert = alerts.find((el) => el.id === "validation-error");
+    expect(validationAlert).toBeDefined();
+    expect(validationAlert?.textContent).toContain("Please select a base branch");
+
+    expect(baseBranchButton?.getAttribute("aria-invalid")).toBe("true");
+    expect(baseBranchButton?.getAttribute("aria-describedby")).toBe("validation-error");
+  });
+
+  it("clears aria-invalid when the user types in the failing field", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+
+    const branchInput = screen.getByTestId("branch-name-input") as HTMLInputElement;
+    expect(branchInput.getAttribute("aria-invalid")).toBe("true");
+
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value: "f" } });
+    });
+
+    expect(branchInput.getAttribute("aria-invalid")).toBeNull();
+    expect(branchInput.getAttribute("aria-describedby") ?? "").not.toContain("validation-error");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("clears aria-invalid on the failing field when switching modes", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+
+    const branchInput = screen.getByTestId("branch-name-input");
+    expect(branchInput.getAttribute("aria-invalid")).toBe("true");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("radio", { name: /existing branch/i }));
+    });
+
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("does not set aria-invalid on any input on initial render", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = screen.getByTestId("branch-name-input");
+    const pathInput = screen.getByTestId("worktree-path-input");
+    const baseBranchButton = document.getElementById("base-branch");
+
+    expect(branchInput.getAttribute("aria-invalid")).toBeNull();
+    expect(pathInput.getAttribute("aria-invalid")).toBeNull();
+    expect(baseBranchButton?.getAttribute("aria-invalid")).toBeNull();
+  });
+});
