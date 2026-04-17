@@ -210,29 +210,36 @@ export const createRestartActions = (
       }
 
       if (commandToRun === currentTerminal.command) {
-        try {
-          const [agentSettings, tmpDir] = await Promise.all([
-            agentSettingsClient.get(),
-            systemClient.getTmpDir().catch(() => ""),
-          ]);
-          if (agentSettings) {
-            const agentConfig = getAgentConfig(effectiveAgentId);
-            const baseCommand = agentConfig?.command || effectiveAgentId;
-            const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
-            commandToRun = generateAgentCommand(
-              baseCommand,
-              agentSettings.agents?.[effectiveAgentId] ?? {},
-              effectiveAgentId,
-              { clipboardDirectory, modelId: currentTerminal.agentModelId }
+        const persistedFlags = currentTerminal.agentLaunchFlags;
+        if (persistedFlags && persistedFlags.length > 0) {
+          const agentConfig = getAgentConfig(effectiveAgentId);
+          const baseCommand = agentConfig?.command || effectiveAgentId;
+          commandToRun = [baseCommand, ...persistedFlags].join(" ");
+        } else {
+          try {
+            const [agentSettings, tmpDir] = await Promise.all([
+              agentSettingsClient.get(),
+              systemClient.getTmpDir().catch(() => ""),
+            ]);
+            if (agentSettings) {
+              const agentConfig = getAgentConfig(effectiveAgentId);
+              const baseCommand = agentConfig?.command || effectiveAgentId;
+              const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
+              commandToRun = generateAgentCommand(
+                baseCommand,
+                agentSettings.agents?.[effectiveAgentId] ?? {},
+                effectiveAgentId,
+                { clipboardDirectory, modelId: currentTerminal.agentModelId }
+              );
+            }
+          } catch (error) {
+            logWarn(
+              "[TerminalStore] Failed to load agent settings for restart, using saved command",
+              {
+                error,
+              }
             );
           }
-        } catch (error) {
-          logWarn(
-            "[TerminalStore] Failed to load agent settings for restart, using saved command",
-            {
-              error,
-            }
-          );
         }
       }
     }

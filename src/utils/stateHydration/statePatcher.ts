@@ -247,13 +247,17 @@ export function buildArgsForRespawn(
   let command = saved.command?.trim() || undefined;
 
   if (agentId) {
+    const agentConfig = getAgentConfig(agentId);
+    const baseCommand = agentConfig?.command || agentId;
+    const hasPersistedFlags = Boolean(saved.agentLaunchFlags && saved.agentLaunchFlags.length > 0);
+
     if (saved.agentSessionId) {
       const resumeCmd = buildResumeCommand(agentId, saved.agentSessionId, saved.agentLaunchFlags);
       if (resumeCmd) {
         command = resumeCmd;
+      } else if (hasPersistedFlags) {
+        command = [baseCommand, ...(saved.agentLaunchFlags as string[])].join(" ");
       } else if (agentSettings) {
-        const agentConfig = getAgentConfig(agentId);
-        const baseCommand = agentConfig?.command || agentId;
         command = generateAgentCommand(
           baseCommand,
           agentSettings.agents?.[agentId] ?? {},
@@ -261,9 +265,9 @@ export function buildArgsForRespawn(
           { clipboardDirectory, modelId: saved.agentModelId }
         );
       }
+    } else if (hasPersistedFlags) {
+      command = [baseCommand, ...(saved.agentLaunchFlags as string[])].join(" ");
     } else if (agentSettings) {
-      const agentConfig = getAgentConfig(agentId);
-      const baseCommand = agentConfig?.command || agentId;
       command = generateAgentCommand(baseCommand, agentSettings.agents?.[agentId] ?? {}, agentId, {
         clipboardDirectory,
         modelId: saved.agentModelId,

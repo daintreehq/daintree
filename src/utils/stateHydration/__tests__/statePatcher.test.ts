@@ -14,9 +14,13 @@ const buildResumeCommandMock = vi.fn(
     `${agentId} --resume ${sessionId}`
 );
 
+const generateAgentCommandMock = vi.fn(
+  (base: string, _settings: unknown, _id: string, _opts: unknown): string => `${base} --generated`
+);
+
 vi.mock("@shared/types", () => ({
-  generateAgentCommand: (base: string, _settings: unknown, _id: string, _opts: unknown) =>
-    `${base} --generated`,
+  generateAgentCommand: (...args: unknown[]) =>
+    generateAgentCommandMock(...(args as [string, unknown, string, unknown])),
   buildResumeCommand: (...args: unknown[]) =>
     buildResumeCommandMock(...(args as [string, string, string[]?])),
 }));
@@ -37,6 +41,10 @@ beforeEach(() => {
   buildResumeCommandMock.mockImplementation(
     (agentId: string, sessionId: string) => `${agentId} --resume ${sessionId}`
   );
+  generateAgentCommandMock.mockImplementation(
+    (base: string, _settings: unknown, _id: string, _opts: unknown) => `${base} --generated`
+  );
+  generateAgentCommandMock.mockClear();
 });
 
 describe("inferKind", () => {
@@ -440,6 +448,71 @@ describe("buildArgsForRespawn", () => {
       "--yolo",
       "--dangerously-skip-permissions",
     ]);
+  });
+
+  it("uses persisted agentLaunchFlags for no-session agent respawn", () => {
+    // Sentinel return value would signal the bug (settings path taken instead of flags path)
+    generateAgentCommandMock.mockReturnValue("claude --from-settings");
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "agent" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentLaunchFlags: ["--dangerously-skip-permissions", "--model", "claude-opus-4-7"],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: { dangerousEnabled: false } } },
+      false,
+      "/tmp/clip"
+    );
+    expect(result.command).toBe("claude --dangerously-skip-permissions --model claude-opus-4-7");
+    expect(generateAgentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to generateAgentCommand when agentLaunchFlags is empty (pre-fix terminals)", () => {
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "agent" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentLaunchFlags: [],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      "/tmp/clip"
+    );
+    expect(result.command).toBe("claude --generated");
+    expect(generateAgentCommandMock).toHaveBeenCalledOnce();
+  });
+
+  it("uses persisted agentLaunchFlags when session exists but resume returns undefined", () => {
+    buildResumeCommandMock.mockReturnValue(undefined);
+    generateAgentCommandMock.mockReturnValue("claude --from-settings");
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "agent" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-expired",
+        agentLaunchFlags: ["--dangerously-skip-permissions"],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(result.command).toBe("claude --dangerously-skip-permissions");
+    expect(generateAgentCommandMock).not.toHaveBeenCalled();
   });
 });
 
