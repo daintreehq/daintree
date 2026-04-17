@@ -356,6 +356,7 @@ export async function setupWindowServices(
 
   if (windowRegistry) {
     notificationService.initialize(windowRegistry);
+    ctx.cleanup.push(() => notificationService.detachWindowListeners(win.id));
   }
   console.log("[MAIN] NotificationService initialized");
 
