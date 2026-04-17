@@ -416,6 +416,18 @@ describe("GPU memory flags", () => {
     const { app } = await import("electron");
     expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "1024");
   });
+
+  it("does not set gpu-rasterization-msaa-sample-count", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    const msaaCalls = vi
+      .mocked(app.commandLine.appendSwitch)
+      .mock.calls.filter(([key]) => key === "gpu-rasterization-msaa-sample-count");
+    expect(msaaCalls).toEqual([]);
+  });
 });
 
 describe("Chromium feature flags", () => {
