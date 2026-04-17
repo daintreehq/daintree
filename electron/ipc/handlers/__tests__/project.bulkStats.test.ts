@@ -422,7 +422,7 @@ describe("handleProjectGetBulkStats", () => {
 
     await handler(fakeEvent, ["proj-a"]);
 
-    expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.PROJECT_GET_BULK_STATS, 5, 10_000);
+    expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.PROJECT_GET_BULK_STATS, 10, 10_000);
   });
 
   it("propagates rate-limit errors without fetching terminals or stats", async () => {

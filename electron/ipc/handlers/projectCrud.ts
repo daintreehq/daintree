@@ -607,7 +607,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
     _event: Electron.IpcMainInvokeEvent,
     projectIds: string[]
   ): Promise<BulkProjectStats> => {
-    checkRateLimit(CHANNELS.PROJECT_GET_BULK_STATS, 5, 10_000);
+    checkRateLimit(CHANNELS.PROJECT_GET_BULK_STATS, 10, 10_000);
     if (!Array.isArray(projectIds)) {
       throw new Error("Invalid projectIds: must be an array");
     }

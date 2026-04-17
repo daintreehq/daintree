@@ -195,4 +195,86 @@ describe("github handlers — rate limiting", () => {
       expect(gitHubServiceMock.assignIssue).not.toHaveBeenCalled();
     });
   });
+
+  describe("all github handlers are rate-limit-wired", () => {
+    type HandlerSpec = {
+      channel: string;
+      maxCalls: number;
+      invoke: (handler: (...args: unknown[]) => Promise<unknown>) => Promise<unknown>;
+    };
+
+    const cwd = "/tmp/project";
+    const specs: HandlerSpec[] = [
+      // read family: 10/10s
+      { channel: CHANNELS.GITHUB_GET_REPO_STATS, maxCalls: 10, invoke: (h) => h({}, cwd) },
+      { channel: CHANNELS.GITHUB_GET_PROJECT_HEALTH, maxCalls: 10, invoke: (h) => h({}, cwd) },
+      { channel: CHANNELS.GITHUB_CHECK_CLI, maxCalls: 10, invoke: (h) => h({}) },
+      { channel: CHANNELS.GITHUB_GET_CONFIG, maxCalls: 10, invoke: (h) => h({}) },
+      { channel: CHANNELS.GITHUB_LIST_ISSUES, maxCalls: 10, invoke: (h) => h({}, { cwd }) },
+      { channel: CHANNELS.GITHUB_LIST_PRS, maxCalls: 10, invoke: (h) => h({}, { cwd }) },
+      {
+        channel: CHANNELS.GITHUB_GET_ISSUE_URL,
+        maxCalls: 10,
+        invoke: (h) => h({}, { cwd, issueNumber: 1 }),
+      },
+      { channel: CHANNELS.GITHUB_LIST_REMOTES, maxCalls: 10, invoke: (h) => h({}, cwd) },
+      // tooltip + by-number (raised from 10/10s to accommodate hover-density and MULTI_FETCH_CAP=20)
+      {
+        channel: CHANNELS.GITHUB_GET_ISSUE_TOOLTIP,
+        maxCalls: 20,
+        invoke: (h) => h({}, { cwd, issueNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.GITHUB_GET_PR_TOOLTIP,
+        maxCalls: 20,
+        invoke: (h) => h({}, { cwd, prNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER,
+        maxCalls: 25,
+        invoke: (h) => h({}, { cwd, issueNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.GITHUB_GET_PR_BY_NUMBER,
+        maxCalls: 25,
+        invoke: (h) => h({}, { cwd, prNumber: 1 }),
+      },
+      // open family: 20/10s
+      { channel: CHANNELS.GITHUB_OPEN_ISSUES, maxCalls: 20, invoke: (h) => h({}, cwd) },
+      { channel: CHANNELS.GITHUB_OPEN_PRS, maxCalls: 20, invoke: (h) => h({}, cwd) },
+      { channel: CHANNELS.GITHUB_OPEN_COMMITS, maxCalls: 20, invoke: (h) => h({}, cwd) },
+      {
+        channel: CHANNELS.GITHUB_OPEN_ISSUE,
+        maxCalls: 20,
+        invoke: (h) => h({}, { cwd, issueNumber: 1 }),
+      },
+      {
+        channel: CHANNELS.GITHUB_OPEN_PR,
+        maxCalls: 20,
+        invoke: (h) => h({}, "https://github.com/owner/repo/pull/1"),
+      },
+      // token + mutation family: 5/10s
+      { channel: CHANNELS.GITHUB_SET_TOKEN, maxCalls: 5, invoke: (h) => h({}, "ghp_token") },
+      { channel: CHANNELS.GITHUB_CLEAR_TOKEN, maxCalls: 5, invoke: (h) => h({}) },
+      { channel: CHANNELS.GITHUB_VALIDATE_TOKEN, maxCalls: 5, invoke: (h) => h({}, "ghp_token") },
+      {
+        channel: CHANNELS.GITHUB_ASSIGN_ISSUE,
+        maxCalls: 5,
+        invoke: (h) => h({}, { cwd, issueNumber: 1, username: "octocat" }),
+      },
+    ];
+
+    it("registers all 21 github channels", () => {
+      expect(specs).toHaveLength(21);
+    });
+
+    it.each(specs)(
+      "$channel calls checkRateLimit($channel, $maxCalls, 10_000)",
+      async ({ channel, maxCalls, invoke }) => {
+        const handler = getInvokeHandler(channel);
+        await invoke(handler);
+        expect(checkRateLimitMock).toHaveBeenCalledWith(channel, maxCalls, 10_000);
+      }
+    );
+  });
 });

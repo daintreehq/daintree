@@ -480,7 +480,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     payload: { cwd: string; issueNumber: number }
   ) => {
-    checkRateLimit(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, 10, 10_000);
+    checkRateLimit(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, 20, 10_000);
     if (!payload || typeof payload !== "object") {
       return null;
     }
@@ -508,7 +508,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     payload: { cwd: string; prNumber: number }
   ) => {
-    checkRateLimit(CHANNELS.GITHUB_GET_PR_TOOLTIP, 10, 10_000);
+    checkRateLimit(CHANNELS.GITHUB_GET_PR_TOOLTIP, 20, 10_000);
     if (!payload || typeof payload !== "object") {
       return null;
     }
@@ -564,7 +564,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     payload: { cwd: string; issueNumber: number }
   ) => {
-    checkRateLimit(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER, 10, 10_000);
+    checkRateLimit(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER, 25, 10_000);
     if (!payload || typeof payload !== "object") {
       return null;
     }
@@ -592,7 +592,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     _event: Electron.IpcMainInvokeEvent,
     payload: { cwd: string; prNumber: number }
   ) => {
-    checkRateLimit(CHANNELS.GITHUB_GET_PR_BY_NUMBER, 10, 10_000);
+    checkRateLimit(CHANNELS.GITHUB_GET_PR_BY_NUMBER, 25, 10_000);
     if (!payload || typeof payload !== "object") {
       return null;
     }
