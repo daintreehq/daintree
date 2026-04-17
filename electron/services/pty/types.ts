@@ -52,6 +52,8 @@ export interface TerminalPublicState {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** Resolved argv passed to pty.spawn() at launch time (for diagnostics) */
+  spawnArgs?: string[];
   /** Exit code from the PTY process (set on clean exit) */
   exitCode?: number;
 }

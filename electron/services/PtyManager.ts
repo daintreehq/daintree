@@ -509,6 +509,9 @@ export class PtyManager extends EventEmitter {
       ptyRows: ptyProcess?.rows,
       ptyForegroundProcess: ptyProcess?.process,
       ptyTty: ptyProcess ? this.resolveTtyPath(ptyProcess.pid) : undefined,
+      spawnArgs: terminalInfo.spawnArgs,
+      agentLaunchFlags: terminalInfo.agentLaunchFlags,
+      agentModelId: terminalInfo.agentModelId,
       exitCode: terminalInfo.exitCode,
     };
   }

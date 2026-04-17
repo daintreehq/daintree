@@ -52,7 +52,10 @@ function defaultSpawnContext(overrides?: Partial<SpawnContext>): SpawnContext {
 
 type TerminalProcessOptions = ConstructorParameters<typeof TerminalProcess>[1];
 
-function createTerminal(options?: Partial<TerminalProcessOptions>): TerminalProcess {
+function createTerminal(
+  options?: Partial<TerminalProcessOptions>,
+  contextOverrides?: Partial<SpawnContext>
+): TerminalProcess {
   const merged = {
     cwd: process.cwd(),
     cols: 80,
@@ -66,6 +69,7 @@ function createTerminal(options?: Partial<TerminalProcessOptions>): TerminalProc
   const ctx = defaultSpawnContext({
     isAgentTerminal: isAgent,
     agentId: isAgent ? ((merged as any).agentId ?? merged.type) : undefined,
+    ...contextOverrides,
   });
   return new TerminalProcess(
     "t-exit",
@@ -133,5 +137,30 @@ describe("TerminalProcess exit code persistence", () => {
 
     const state = terminal.getPublicState();
     expect(state.exitCode).toBeUndefined();
+  });
+});
+
+describe("TerminalProcess spawnArgs persistence", () => {
+  beforeEach(() => {
+    exitHandler = null;
+  });
+
+  it("captures spawnContext.args into getPublicState().spawnArgs", () => {
+    const terminal = createTerminal(undefined, { args: ["-l", "--rcfile", "/tmp/rc"] });
+
+    expect(terminal.getPublicState().spawnArgs).toEqual(["-l", "--rcfile", "/tmp/rc"]);
+  });
+
+  it("captures spawnContext.args into getInfo().spawnArgs", () => {
+    const terminal = createTerminal(undefined, { args: ["-l", "--rcfile", "/tmp/rc"] });
+
+    expect(terminal.getInfo().spawnArgs).toEqual(["-l", "--rcfile", "/tmp/rc"]);
+  });
+
+  it("preserves an empty args array (does not coerce to undefined)", () => {
+    const terminal = createTerminal(undefined, { args: [] });
+
+    expect(terminal.getPublicState().spawnArgs).toEqual([]);
+    expect(terminal.getInfo().spawnArgs).toEqual([]);
   });
 });

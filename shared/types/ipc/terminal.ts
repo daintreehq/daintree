@@ -221,6 +221,12 @@ export interface TerminalInfoPayload {
   ptyForegroundProcess?: string;
   /** TTY device path (e.g., /dev/ttys004) */
   ptyTty?: string;
+  /** Resolved argv passed to pty.spawn() at launch time */
+  spawnArgs?: string[];
+  /** Process-level flags captured at launch time (agent terminals only) */
+  agentLaunchFlags?: string[];
+  /** Model ID selected at launch time (agent terminals only) */
+  agentModelId?: string;
   /** Exit code when terminal has exited */
   exitCode?: number;
 }

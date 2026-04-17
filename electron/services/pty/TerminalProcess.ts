@@ -257,7 +257,7 @@ export class TerminalProcess {
     spawnContext: SpawnContext,
     ptyProcess: pty.IPty
   ) {
-    const { shell, isAgentTerminal, agentId } = spawnContext;
+    const { shell, args: spawnArgs, isAgentTerminal, agentId } = spawnContext;
     const spawnedAt = Date.now();
 
     this.isAgentTerminal = isAgentTerminal;
@@ -302,6 +302,7 @@ export class TerminalProcess {
       analysisEnabled: this.isAgentTerminal,
       agentLaunchFlags: options.agentLaunchFlags,
       agentModelId: options.agentModelId,
+      spawnArgs,
     };
 
     // NOTE: The headless responder is intentionally NOT installed for agent
@@ -454,6 +455,7 @@ export class TerminalProcess {
       agentSessionId: t.agentSessionId,
       agentLaunchFlags: t.agentLaunchFlags,
       agentModelId: t.agentModelId,
+      spawnArgs: t.spawnArgs,
       exitCode: t.exitCode,
     };
   }

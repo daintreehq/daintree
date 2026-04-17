@@ -92,6 +92,31 @@ function InfoRow({ label, value, mono = false }: InfoRowProps) {
   );
 }
 
+interface InfoListRowProps {
+  label: string;
+  items: string[] | undefined;
+}
+
+function InfoListRow({ label, items }: InfoListRowProps) {
+  if (!items || items.length === 0) return null;
+
+  return (
+    <div className="flex justify-between items-start gap-4 text-sm">
+      <span className="text-daintree-text/70 shrink-0 select-none">{label}:</span>
+      <div className="flex flex-wrap gap-1 justify-end">
+        {items.map((item, i) => (
+          <code
+            key={`${i}-${item}`}
+            className="bg-daintree-bg/50 border border-daintree-border font-mono text-xs px-1.5 py-0.5 rounded select-text break-all"
+          >
+            {item}
+          </code>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfoDialogProps) {
   const [info, setInfo] = useState<TerminalInfoPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -141,8 +166,33 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
     };
   }, [isOpen, terminalId]);
 
+  const showAgentSection = (info: TerminalInfoPayload): boolean =>
+    !!(
+      info.isAgentTerminal ||
+      info.agentId ||
+      info.detectedAgentType ||
+      (info.agentLaunchFlags && info.agentLaunchFlags.length > 0) ||
+      info.agentModelId
+    );
+
+  const formatArgsForClipboard = (args: string[] | undefined): string => {
+    if (args === undefined) return "N/A";
+    if (args.length === 0) return "(none)";
+    return args.join(" ");
+  };
+
   const copyToClipboard = async () => {
     if (!info) return;
+
+    const agentSection = showAgentSection(info)
+      ? `
+
+Agent:
+  Agent ID: ${info.agentId ?? "N/A"}
+  Detected Agent: ${info.detectedAgentType ?? "N/A"}
+  Launch Flags: ${formatArgsForClipboard(info.agentLaunchFlags)}
+  Model: ${info.agentModelId ?? "N/A"}`
+      : "";
 
     const diagnosticInfo = `Terminal Diagnostic Information
 =====================================
@@ -151,13 +201,14 @@ Session Metadata:
   ID: ${info.id}
   Kind: ${info.kind || "terminal"}
   Type: ${info.type || "N/A"}
-  Agent ID: ${info.agentId || "N/A"}
-  Detected Agent: ${info.detectedAgentType || "N/A"}
   Title: ${info.title || "N/A"}
-  Shell: ${info.shell || "N/A"}
   Project ID: ${info.projectId || "N/A"}
   Worktree ID: ${info.worktreeId || "N/A"}
   CWD: ${info.cwd}
+
+Spawn Command:
+  Shell: ${info.shell || "N/A"}
+  Args: ${formatArgsForClipboard(info.spawnArgs)}${agentSection}
 
 Terminal Classification:
   Agent Terminal: ${info.isAgentTerminal ? "Yes" : "No"}
@@ -226,16 +277,27 @@ Performance & Diagnostics:
               <InfoRow label="Terminal ID" value={info.id} mono />
               <InfoRow label="Kind" value={info.kind || "terminal"} />
               <InfoRow label="Type" value={info.type || "terminal"} />
-              {info.agentId && <InfoRow label="Agent ID" value={info.agentId} />}
-              {info.detectedAgentType && (
-                <InfoRow label="Detected Agent" value={info.detectedAgentType} />
-              )}
               <InfoRow label="Title" value={info.title} />
-              <InfoRow label="Shell" value={info.shell} mono />
               <InfoRow label="Project ID" value={info.projectId} mono />
               <InfoRow label="Worktree ID" value={info.worktreeId} mono />
               <InfoRow label="Current Directory" value={info.cwd} mono />
             </InfoSection>
+
+            <InfoSection title="Spawn Command">
+              <InfoRow label="Shell" value={info.shell} mono />
+              <InfoListRow label="Args" items={info.spawnArgs} />
+            </InfoSection>
+
+            {showAgentSection(info) && (
+              <InfoSection title="Agent">
+                {info.agentId && <InfoRow label="Agent ID" value={info.agentId} />}
+                {info.detectedAgentType && (
+                  <InfoRow label="Detected Agent" value={info.detectedAgentType} />
+                )}
+                <InfoListRow label="Launch Flags" items={info.agentLaunchFlags} />
+                {info.agentModelId && <InfoRow label="Model" value={info.agentModelId} mono />}
+              </InfoSection>
+            )}
 
             <InfoSection title="Terminal Classification">
               <InfoRow label="Agent Terminal" value={info.isAgentTerminal ? "Yes" : "No"} />
