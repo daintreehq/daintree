@@ -116,6 +116,8 @@ export type BuiltInKeyAction =
   | "terminal.scrollToLastActivity"
   | "terminal.sendToAgent"
   | "terminal.bulkCommand"
+  | "terminal.armDefault"
+  | "terminal.disarmAll"
 
   // Agent spawning
   | "agent.palette"
@@ -285,6 +287,8 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.scrollToLastActivity",
   "terminal.sendToAgent",
   "terminal.bulkCommand",
+  "terminal.armDefault",
+  "terminal.disarmAll",
   "agent.palette",
   ...BUILT_IN_AGENT_KEY_ACTIONS,
   "agent.terminal",

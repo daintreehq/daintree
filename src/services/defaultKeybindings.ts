@@ -334,8 +334,16 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Terminal",
   },
   {
-    actionId: "terminal.bulkCommand",
+    actionId: "terminal.armDefault",
     combo: "Cmd+Shift+B",
+    scope: "global",
+    priority: 0,
+    description: "Arm all eligible agents in the current worktree",
+    category: "Terminal",
+  },
+  {
+    actionId: "terminal.bulkCommand",
+    combo: "Cmd+Alt+Shift+B",
     scope: "global",
     priority: 0,
     description: "Open Bulk Operations",

@@ -190,4 +190,110 @@ export function registerTerminalInputActions(
       openSendToAgentPalette(sourceId);
     },
   }));
+
+  actions.set("terminal.arm", () => ({
+    id: "terminal.arm",
+    title: "Arm Terminal",
+    description: "Add a terminal to the fleet arming set",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string() }),
+    run: async (args: unknown) => {
+      const { terminalId } = args as { terminalId: string };
+      const terminal = usePanelStore.getState().panelsById[terminalId];
+      const { useFleetArmingStore, isFleetArmEligible } = await import("@/store/fleetArmingStore");
+      if (!isFleetArmEligible(terminal)) return;
+      useFleetArmingStore.getState().armId(terminalId);
+    },
+  }));
+
+  actions.set("terminal.disarm", () => ({
+    id: "terminal.disarm",
+    title: "Disarm Terminal",
+    description: "Remove a terminal from the fleet arming set",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string() }),
+    run: async (args: unknown) => {
+      const { terminalId } = args as { terminalId: string };
+      const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
+      useFleetArmingStore.getState().disarmId(terminalId);
+    },
+  }));
+
+  actions.set("terminal.disarmAll", () => ({
+    id: "terminal.disarmAll",
+    title: "Disarm All",
+    description: "Clear the fleet arming set",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
+      useFleetArmingStore.getState().clear();
+    },
+  }));
+
+  actions.set("terminal.armByState", () => ({
+    id: "terminal.armByState",
+    title: "Arm by State",
+    description: "Arm all eligible agent terminals in a given state",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({
+      state: z.enum(["working", "waiting", "finished"]),
+      scope: z.enum(["current", "all"]).optional(),
+      extend: z.boolean().optional(),
+    }),
+    run: async (args: unknown) => {
+      const {
+        state,
+        scope = "current",
+        extend = false,
+      } = args as {
+        state: "working" | "waiting" | "finished";
+        scope?: "current" | "all";
+        extend?: boolean;
+      };
+      const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
+      useFleetArmingStore.getState().armByState(state, scope, extend);
+    },
+  }));
+
+  actions.set("terminal.armAll", () => ({
+    id: "terminal.armAll",
+    title: "Arm All Eligible",
+    description: "Arm every eligible agent terminal",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ scope: z.enum(["current", "all"]).optional() }).optional(),
+    run: async (args: unknown) => {
+      const { scope = "current" } = (args ?? {}) as { scope?: "current" | "all" };
+      const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
+      useFleetArmingStore.getState().armAll(scope);
+    },
+  }));
+
+  actions.set("terminal.armDefault", () => ({
+    id: "terminal.armDefault",
+    title: "Arm Current Worktree",
+    description: "Arm all eligible agent terminals in the active worktree",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const { useFleetArmingStore } = await import("@/store/fleetArmingStore");
+      useFleetArmingStore.getState().armAll("current");
+    },
+  }));
 }

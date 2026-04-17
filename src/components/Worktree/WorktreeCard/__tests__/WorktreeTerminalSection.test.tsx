@@ -1,8 +1,8 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
   WorktreeTerminalSection,
@@ -10,6 +10,7 @@ import {
 } from "../WorktreeTerminalSection";
 import type { TerminalInstance } from "@/store/panelStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
@@ -163,5 +164,118 @@ describe("WorktreeTerminalSection summary icon", () => {
     const icon = screen.getByTestId("agent-icon");
     expect(icon.getAttribute("brandColor")).toBeNull();
     expect(icon.getAttribute("style")).toBeNull();
+  });
+});
+
+describe("WorktreeTerminalSection arming click handlers", () => {
+  beforeEach(() => {
+    useFleetArmingStore.setState({
+      armedIds: new Set<string>(),
+      armOrder: [],
+      armOrderById: {},
+      lastArmedId: null,
+    });
+  });
+
+  it("plain click on an eligible agent tile arms it", () => {
+    const term = makeTerminal({ id: "a1", agentId: "claude", kind: "agent", hasPty: true });
+    const onSelect = vi.fn();
+    renderSection({
+      isExpanded: true,
+      terminals: [term],
+      counts: { ...baseCounts, total: 1 },
+      onTerminalSelect: onSelect,
+    });
+
+    // The row button renders "Test Terminal" as the title
+    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0];
+    fireEvent.click(button);
+
+    expect(useFleetArmingStore.getState().armedIds.has("a1")).toBe(true);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("shift-click extends the armed range from lastArmedId", () => {
+    const t1 = makeTerminal({ id: "a1", agentId: "claude", kind: "agent", hasPty: true });
+    const t2 = makeTerminal({ id: "a2", agentId: "claude", kind: "agent", hasPty: true });
+    const t3 = makeTerminal({ id: "a3", agentId: "claude", kind: "agent", hasPty: true });
+    renderSection({
+      isExpanded: true,
+      terminals: [t1, t2, t3],
+      counts: { ...baseCounts, total: 3 },
+    });
+
+    const buttons = screen.getAllByRole("button", { name: /Test Terminal/i });
+    fireEvent.click(buttons[0]); // arm a1 — becomes anchor
+    fireEvent.click(buttons[2], { shiftKey: true }); // extend to a3
+
+    const armed = useFleetArmingStore.getState().armedIds;
+    expect([...armed].sort()).toEqual(["a1", "a2", "a3"]);
+  });
+
+  it("cmd-click (metaKey) toggles the armed state without clearing others", () => {
+    const t1 = makeTerminal({ id: "a1", agentId: "claude", kind: "agent", hasPty: true });
+    const t2 = makeTerminal({ id: "a2", agentId: "claude", kind: "agent", hasPty: true });
+    renderSection({
+      isExpanded: true,
+      terminals: [t1, t2],
+      counts: { ...baseCounts, total: 2 },
+    });
+
+    const buttons = screen.getAllByRole("button", { name: /Test Terminal/i });
+    fireEvent.click(buttons[0]); // arm a1
+    fireEvent.click(buttons[1], { metaKey: true }); // cmd+click a2 — also arms
+
+    const armed = useFleetArmingStore.getState().armedIds;
+    expect([...armed].sort()).toEqual(["a1", "a2"]);
+  });
+
+  it("click on non-eligible tile calls onTerminalSelect (legacy)", () => {
+    const nonAgent = makeTerminal({
+      id: "p1",
+      kind: "terminal",
+      agentId: undefined,
+      hasPty: true,
+    });
+    const onSelect = vi.fn();
+    renderSection({
+      isExpanded: true,
+      terminals: [nonAgent],
+      counts: { ...baseCounts, total: 1 },
+      onTerminalSelect: onSelect,
+    });
+
+    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0];
+    fireEvent.click(button);
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+  });
+
+  it("armed tile gets aria-selected=true", () => {
+    const term = makeTerminal({ id: "a1", agentId: "claude", kind: "agent", hasPty: true });
+    renderSection({
+      isExpanded: true,
+      terminals: [term],
+      counts: { ...baseCounts, total: 1 },
+    });
+    act(() => {
+      useFleetArmingStore.getState().armId("a1");
+    });
+
+    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0];
+    expect(button.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("scroll container has aria-multiselectable", () => {
+    const term = makeTerminal({ id: "a1", agentId: "claude", kind: "agent", hasPty: true });
+    const { container } = renderSection({
+      isExpanded: true,
+      terminals: [term],
+      counts: { ...baseCounts, total: 1 },
+    });
+
+    const scrollContainer = container.querySelector('[aria-multiselectable="true"]');
+    expect(scrollContainer).toBeTruthy();
   });
 });
