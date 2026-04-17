@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { worktreeClient, githubClient } from "@/clients";
+import { worktreeClient, githubClient, agentSettingsClient, systemClient } from "@/clients";
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { notify } from "@/lib/notify";
@@ -29,8 +29,10 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useRecipePicker, CLONE_LAYOUT_ID } from "@/components/Worktree/hooks/useRecipePicker";
 import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNewWorktreeProjectSettings";
+import { getAgentConfig } from "@/config/agents";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 import type { BranchInfo } from "@shared/types";
+import { generateAgentCommand } from "@shared/types";
 
 type BulkCreateMode = "issue" | "pr";
 
@@ -502,6 +504,30 @@ export function BulkCreateWorktreeDialog({
           ? useRecipeStore.getState().generateRecipeFromActiveTerminals(sourceWorktreeId)
           : null;
 
+      // Pre-fetch agent settings once so each cloned agent panel can regenerate
+      // its spawn command from current config (mirrors recipeStore.ts). Source
+      // RecipeTerminal.command is not reused for agents — it may embed a
+      // path-scoped session ID from the source worktree (see #5179, PR #4781).
+      let cloneAgentSettings: Awaited<ReturnType<typeof agentSettingsClient.get>> | null = null;
+      let cloneClipboardDirectory: string | undefined;
+      if (
+        cloneTerminals &&
+        cloneTerminals.some((t) => t.type !== "terminal" && t.type !== "dev-preview")
+      ) {
+        try {
+          const [settings, tmpDir] = await Promise.all([
+            agentSettingsClient.get(),
+            systemClient.getTmpDir().catch(() => ""),
+          ]);
+          if (runIdRef.current !== currentRunId) return;
+          cloneAgentSettings = settings;
+          cloneClipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
+        } catch {
+          if (runIdRef.current !== currentRunId) return;
+          // Non-fatal: agents fall back to generating with empty settings.
+        }
+      }
+
       const queue = new PQueue({
         concurrency: QUEUE_CONCURRENCY,
       });
@@ -775,19 +801,41 @@ export function BulkCreateWorktreeDialog({
                 });
                 try {
                   for (const t of cloneTerminals) {
+                    const isDevPreview = t.type === "dev-preview";
+                    const isAgent = !isDevPreview && t.type !== "terminal";
+
+                    if (isDevPreview) {
+                      await usePanelStore.getState().addPanel({
+                        kind: "dev-preview",
+                        title: t.title,
+                        cwd: worktreePath,
+                        worktreeId,
+                        exitBehavior: t.exitBehavior,
+                        devCommand: t.devCommand?.trim() || undefined,
+                      });
+                      continue;
+                    }
+
+                    let command: string | undefined;
+                    if (isAgent) {
+                      const agentConfig = getAgentConfig(t.type);
+                      const baseCommand = agentConfig?.command || t.type;
+                      const entry = cloneAgentSettings?.agents?.[t.type] ?? {};
+                      command = generateAgentCommand(baseCommand, entry, t.type, {
+                        clipboardDirectory: cloneClipboardDirectory,
+                      });
+                    } else {
+                      command = t.command?.trim() || undefined;
+                    }
+
                     await usePanelStore.getState().addPanel({
-                      kind:
-                        t.type === "dev-preview"
-                          ? "dev-preview"
-                          : t.type === "terminal"
-                            ? "terminal"
-                            : "agent",
-                      agentId:
-                        t.type !== "terminal" && t.type !== "dev-preview" ? t.type : undefined,
+                      kind: isAgent ? "agent" : "terminal",
+                      agentId: isAgent ? t.type : undefined,
                       title: t.title,
                       cwd: worktreePath,
                       worktreeId,
                       exitBehavior: t.exitBehavior,
+                      command,
                     });
                   }
                   const updatedTracked = tracking.get(itemNumber);

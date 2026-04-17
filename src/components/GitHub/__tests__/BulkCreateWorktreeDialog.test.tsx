@@ -11,6 +11,10 @@ const mockGetDefaultPath = vi.fn();
 const mockListBranches = vi.fn();
 const mockFetchPRBranch = vi.fn();
 const mockAssignIssue = vi.fn();
+const mockAgentSettingsGet = vi.fn();
+const mockSystemGetTmpDir = vi.fn();
+const mockGetAgentConfig = vi.fn();
+const mockGenerateAgentCommand = vi.fn();
 
 vi.mock("@/clients", () => ({
   worktreeClient: {
@@ -23,15 +27,35 @@ vi.mock("@/clients", () => ({
   githubClient: {
     assignIssue: (...args: unknown[]) => mockAssignIssue(...args),
   },
+  agentSettingsClient: {
+    get: (...args: unknown[]) => mockAgentSettingsGet(...args),
+  },
+  systemClient: {
+    getTmpDir: (...args: unknown[]) => mockSystemGetTmpDir(...args),
+  },
 }));
 
+vi.mock("@/config/agents", () => ({
+  getAgentConfig: (...args: unknown[]) => mockGetAgentConfig(...args),
+}));
+
+vi.mock("@shared/types", async (importActual) => {
+  const actual = await importActual<typeof import("@shared/types")>();
+  return {
+    ...actual,
+    generateAgentCommand: (...args: unknown[]) => mockGenerateAgentCommand(...args),
+  };
+});
+
 const mockRunRecipeWithResults = vi.fn();
+const mockGenerateRecipeFromActiveTerminals = vi.fn();
 vi.mock("@/store/recipeStore", () => ({
   useRecipeStore: Object.assign(() => ({ recipes: [] }), {
     getState: () => ({
       runRecipeWithResults: mockRunRecipeWithResults,
       getRecipeById: () => null,
-      generateRecipeFromActiveTerminals: () => [],
+      generateRecipeFromActiveTerminals: (...args: unknown[]) =>
+        mockGenerateRecipeFromActiveTerminals(...args),
     }),
   }),
 }));
@@ -113,12 +137,13 @@ vi.mock("@/store/worktreeStore", () => ({
 }));
 
 let mockTerminals: Array<{ id: string; exitCode?: number }> = [];
+const mockAddPanel = vi.fn();
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
     getState: () => ({
       panelsById: Object.fromEntries(mockTerminals.map((t) => [t.id, t])),
       panelIds: mockTerminals.map((t) => t.id),
-      addPanel: vi.fn().mockResolvedValue("clone-terminal-id"),
+      addPanel: (...args: unknown[]) => mockAddPanel(...args),
     }),
   },
 }));
@@ -237,6 +262,12 @@ beforeEach(() => {
   setupWorktreeCreateMocks();
   mockTerminals = [];
   mockSelectedRecipeId = null;
+  mockAddPanel.mockResolvedValue("clone-terminal-id");
+  mockAgentSettingsGet.mockResolvedValue({ agents: {} });
+  mockSystemGetTmpDir.mockResolvedValue("/tmp");
+  mockGetAgentConfig.mockReturnValue({ command: "claude" });
+  mockGenerateAgentCommand.mockReturnValue("claude --fresh");
+  mockGenerateRecipeFromActiveTerminals.mockReturnValue([]);
 });
 
 afterEach(() => {
@@ -1239,6 +1270,124 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
     expect(onComplete).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("clone layout generates command for agent panels and preserves plain terminal commands", async () => {
+    mockSelectedRecipeId = "__clone_layout__";
+    mockGenerateRecipeFromActiveTerminals.mockReturnValue([
+      {
+        type: "claude",
+        title: "Agent",
+        exitBehavior: "stay",
+        command: "claude --resume stale-session",
+      },
+      {
+        type: "terminal",
+        title: "Shell",
+        exitBehavior: "close",
+        command: "npm test",
+      },
+      {
+        type: "dev-preview",
+        title: "Preview",
+        exitBehavior: "close",
+        devCommand: "npm run dev",
+      },
+    ]);
+    mockAgentSettingsGet.mockResolvedValue({ agents: { claude: { flags: [] } } });
+    mockSystemGetTmpDir.mockResolvedValue("/tmp");
+    mockGetAgentConfig.mockReturnValue({ command: "claude" });
+    mockGenerateAgentCommand.mockReturnValue("claude --fresh-generated");
+
+    const props = { ...defaultProps, selectedIssues: [makeIssue(1)] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+
+    // Agent command is regenerated from current settings, not the stale one
+    // captured at recipe-generation time.
+    expect(mockGenerateAgentCommand).toHaveBeenCalledWith(
+      "claude",
+      { flags: [] },
+      "claude",
+      expect.objectContaining({ clipboardDirectory: "/tmp/daintree-clipboard" })
+    );
+
+    const agentCall = mockAddPanel.mock.calls.find((c) => c[0].kind === "agent");
+    expect(agentCall).toBeDefined();
+    expect(agentCall?.[0].command).toBe("claude --fresh-generated");
+    expect(agentCall?.[0].agentId).toBe("claude");
+    expect(agentCall?.[0].command).not.toContain("stale-session");
+
+    // Plain terminal command is passed through verbatim (it's a user-authored
+    // shell command, not a path-scoped agent invocation).
+    const terminalCall = mockAddPanel.mock.calls.find((c) => c[0].kind === "terminal");
+    expect(terminalCall).toBeDefined();
+    expect(terminalCall?.[0].command).toBe("npm test");
+
+    // Dev-preview carries devCommand, not command.
+    const devPreviewCall = mockAddPanel.mock.calls.find((c) => c[0].kind === "dev-preview");
+    expect(devPreviewCall).toBeDefined();
+    expect(devPreviewCall?.[0].devCommand).toBe("npm run dev");
+  });
+
+  it("clone layout degrades gracefully when agent settings IPC fails", async () => {
+    mockSelectedRecipeId = "__clone_layout__";
+    mockGenerateRecipeFromActiveTerminals.mockReturnValue([
+      { type: "claude", title: "Agent", exitBehavior: "stay" },
+    ]);
+    mockAgentSettingsGet.mockRejectedValue(new Error("IPC timeout"));
+    mockGetAgentConfig.mockReturnValue({ command: "claude" });
+    mockGenerateAgentCommand.mockReturnValue("claude --default");
+
+    const props = { ...defaultProps, selectedIssues: [makeIssue(1)] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    // Worktree still created — failed IPC is non-fatal.
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+
+    // Agent command was still generated (with an empty settings entry).
+    expect(mockGenerateAgentCommand).toHaveBeenCalledWith(
+      "claude",
+      {},
+      "claude",
+      expect.objectContaining({ clipboardDirectory: undefined })
+    );
+    const agentCall = mockAddPanel.mock.calls.find((c) => c[0].kind === "agent");
+    expect(agentCall?.[0].command).toBe("claude --default");
+  });
+
+  it("clone layout skips agent-settings prefetch when no agent panels present", async () => {
+    mockSelectedRecipeId = "__clone_layout__";
+    mockGenerateRecipeFromActiveTerminals.mockReturnValue([
+      { type: "terminal", title: "Shell", exitBehavior: "close", command: "ls" },
+    ]);
+
+    const props = { ...defaultProps, selectedIssues: [makeIssue(1)] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    // No agent panels → prefetch is skipped entirely.
+    expect(mockAgentSettingsGet).not.toHaveBeenCalled();
+    expect(mockGenerateAgentCommand).not.toHaveBeenCalled();
+
+    const terminalCall = mockAddPanel.mock.calls.find((c) => c[0].kind === "terminal");
+    expect(terminalCall?.[0].command).toBe("ls");
   });
 });
 
