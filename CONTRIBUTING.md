@@ -34,6 +34,16 @@ npm run package    # build distributables
 npm run rebuild    # rebuild native modules against Electron
 ```
 
+## Demo development
+
+Demo authoring — the Stage DSL, scene runner, and recording pipeline — lives in a separate repo: [`daintreehq/demo-studio`](https://github.com/daintreehq/demo-studio). Clone it into the `demo/` directory at the root of this repo:
+
+```bash
+git clone https://github.com/daintreehq/demo-studio.git demo
+```
+
+`demo/` is gitignored here and excluded from packaged builds, so the clone won't pollute `git status` or ship in releases. The app-side surface demo-studio drives (the `--demo-mode` flag, IPC handlers, and `DemoCursor`/`DemoOverlay` components) lives in this repo and is maintained here. See the demo-studio README for authoring workflow.
+
 ## Branching model
 
 Daintree uses **Gitflow**.

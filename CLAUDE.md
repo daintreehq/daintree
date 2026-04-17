@@ -148,13 +148,6 @@ src/
     └── electron.d.ts        # window.electron types
 ```
 
-```text
-demo/
-├── stage.ts                 # Stage DSL (cursor, keyboard, camera, wait helpers)
-├── runner.ts                # Scene sequencing and capture lifecycle
-└── scenes/                  # Demo scene definitions
-```
-
 ### Custom Icons
 
 Custom Daintree-specific icons live in `src/components/icons/custom/`. Lucide-style SVG components (24x24 viewBox, 2px stroke, round caps/joins, `currentColor`). Brand/agent icons in `src/components/icons/brands/`. Barrel-exported from `src/components/icons/index.ts`.
