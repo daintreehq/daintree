@@ -1,4 +1,3 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
@@ -6,7 +5,7 @@ import { DEFAULT_AGENT_SETTINGS, type UserAgentConfig } from "../../../shared/ty
 import { AgentHelpService } from "../../services/AgentHelpService.js";
 import { UserAgentRegistryService } from "../../services/UserAgentRegistryService.js";
 import type { AgentHelpRequest, AgentHelpResult } from "../../../shared/types/ipc/agent.js";
-import { broadcastToRenderer } from "../utils.js";
+import { broadcastToRenderer, typedHandle } from "../utils.js";
 import { createApplicationMenu } from "../../menu.js";
 
 const RESERVED_AGENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
@@ -61,16 +60,12 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
   const handleAgentSettingsGet = async () => {
     return store.get("agentSettings");
   };
-  ipcMain.handle(CHANNELS.AGENT_SETTINGS_GET, handleAgentSettingsGet);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_SETTINGS_GET));
+  handlers.push(typedHandle(CHANNELS.AGENT_SETTINGS_GET, handleAgentSettingsGet));
 
-  const handleAgentSettingsSet = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: {
-      agentType: string;
-      settings: Record<string, unknown>;
-    }
-  ) => {
+  const handleAgentSettingsSet = async (payload: {
+    agentType: string;
+    settings: Record<string, unknown>;
+  }) => {
     if (!isPlainRecord(payload)) {
       throw new Error("Invalid payload");
     }
@@ -99,13 +94,9 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
     store.set("agentSettings", updatedSettings);
     return updatedSettings;
   };
-  ipcMain.handle(CHANNELS.AGENT_SETTINGS_SET, handleAgentSettingsSet);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_SETTINGS_SET));
+  handlers.push(typedHandle(CHANNELS.AGENT_SETTINGS_SET, handleAgentSettingsSet));
 
-  const handleAgentSettingsReset = async (
-    _event: Electron.IpcMainInvokeEvent,
-    agentType?: unknown
-  ) => {
+  const handleAgentSettingsReset = async (agentType?: unknown) => {
     if (agentType !== undefined) {
       const safeAgentType = validateAgentType(agentType);
       const currentSettings = normalizeAgentSettings(
@@ -125,13 +116,9 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
       return DEFAULT_AGENT_SETTINGS;
     }
   };
-  ipcMain.handle(CHANNELS.AGENT_SETTINGS_RESET, handleAgentSettingsReset);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_SETTINGS_RESET));
+  handlers.push(typedHandle(CHANNELS.AGENT_SETTINGS_RESET, handleAgentSettingsReset));
 
-  const handleAgentHelpGet = async (
-    _event: Electron.IpcMainInvokeEvent,
-    request: AgentHelpRequest
-  ): Promise<AgentHelpResult> => {
+  const handleAgentHelpGet = async (request: AgentHelpRequest): Promise<AgentHelpResult> => {
     if (!request || typeof request !== "object") {
       throw new Error("Invalid request");
     }
@@ -144,31 +131,25 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
     }
     return agentHelpService.getHelp(agentId, refresh);
   };
-  ipcMain.handle(CHANNELS.AGENT_HELP_GET, handleAgentHelpGet);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.AGENT_HELP_GET));
+  handlers.push(typedHandle(CHANNELS.AGENT_HELP_GET, handleAgentHelpGet));
 
   const handleUserAgentRegistryGet = async () => {
     return userAgentRegistryService.getRegistry();
   };
-  ipcMain.handle(CHANNELS.USER_AGENT_REGISTRY_GET, handleUserAgentRegistryGet);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.USER_AGENT_REGISTRY_GET));
+  handlers.push(typedHandle(CHANNELS.USER_AGENT_REGISTRY_GET, handleUserAgentRegistryGet));
 
-  const handleUserAgentRegistryAdd = async (
-    _event: Electron.IpcMainInvokeEvent,
-    config: UserAgentConfig
-  ) => {
+  const handleUserAgentRegistryAdd = async (config: UserAgentConfig) => {
     if (!config || typeof config !== "object") {
       throw new Error("Invalid config");
     }
     return userAgentRegistryService.addAgent(config);
   };
-  ipcMain.handle(CHANNELS.USER_AGENT_REGISTRY_ADD, handleUserAgentRegistryAdd);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.USER_AGENT_REGISTRY_ADD));
+  handlers.push(typedHandle(CHANNELS.USER_AGENT_REGISTRY_ADD, handleUserAgentRegistryAdd));
 
-  const handleUserAgentRegistryUpdate = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { id: string; config: UserAgentConfig }
-  ) => {
+  const handleUserAgentRegistryUpdate = async (payload: {
+    id: string;
+    config: UserAgentConfig;
+  }) => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
@@ -181,17 +162,15 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
     }
     return userAgentRegistryService.updateAgent(id, config);
   };
-  ipcMain.handle(CHANNELS.USER_AGENT_REGISTRY_UPDATE, handleUserAgentRegistryUpdate);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.USER_AGENT_REGISTRY_UPDATE));
+  handlers.push(typedHandle(CHANNELS.USER_AGENT_REGISTRY_UPDATE, handleUserAgentRegistryUpdate));
 
-  const handleUserAgentRegistryRemove = async (_event: Electron.IpcMainInvokeEvent, id: string) => {
+  const handleUserAgentRegistryRemove = async (id: string) => {
     if (!id || typeof id !== "string") {
       throw new Error("Invalid id");
     }
     return userAgentRegistryService.removeAgent(id);
   };
-  ipcMain.handle(CHANNELS.USER_AGENT_REGISTRY_REMOVE, handleUserAgentRegistryRemove);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.USER_AGENT_REGISTRY_REMOVE));
+  handlers.push(typedHandle(CHANNELS.USER_AGENT_REGISTRY_REMOVE, handleUserAgentRegistryRemove));
 
   const handleReloadConfig = async () => {
     userAgentRegistryService.reload();
@@ -208,8 +187,7 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
 
     return { success: true };
   };
-  ipcMain.handle(CHANNELS.APP_RELOAD_CONFIG, handleReloadConfig);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_RELOAD_CONFIG));
+  handlers.push(typedHandle(CHANNELS.APP_RELOAD_CONFIG, handleReloadConfig));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

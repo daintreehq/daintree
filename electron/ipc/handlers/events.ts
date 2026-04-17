@@ -1,7 +1,7 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import type { DaintreeEventMap } from "../../services/events.js";
+import { typedHandle } from "../utils.js";
 
 const ALLOWED_RENDERER_EVENTS: ReadonlySet<keyof DaintreeEventMap> = new Set(["action:dispatched"]);
 
@@ -76,11 +76,7 @@ export function registerEventsHandlers(deps: HandlerDependencies): () => void {
   const { events } = deps;
   const handlers: Array<() => void> = [];
 
-  const handleEventsEmit = async (
-    _event: Electron.IpcMainInvokeEvent,
-    eventType: string,
-    payload: unknown
-  ) => {
+  const handleEventsEmit = async (eventType: string, payload: unknown) => {
     if (!events) {
       console.warn("[IPC] Event bus not available, cannot emit event:", eventType);
       return;
@@ -106,8 +102,7 @@ export function registerEventsHandlers(deps: HandlerDependencies): () => void {
       payload as DaintreeEventMap[keyof DaintreeEventMap]
     );
   };
-  ipcMain.handle(CHANNELS.EVENTS_EMIT, handleEventsEmit);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.EVENTS_EMIT));
+  handlers.push(typedHandle(CHANNELS.EVENTS_EMIT, handleEventsEmit));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

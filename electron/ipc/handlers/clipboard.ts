@@ -1,10 +1,11 @@
-import { clipboard, ipcMain, nativeImage } from "electron";
+import { clipboard, nativeImage } from "electron";
 import { CHANNELS } from "../channels.js";
 import * as path from "node:path";
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as crypto from "node:crypto";
 import * as os from "node:os";
+import { typedHandle } from "../utils.js";
 
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -51,6 +52,8 @@ async function cleanupOldClipboardImages(): Promise<void> {
 }
 
 export function registerClipboardHandlers(): () => void {
+  const handlers: Array<() => void> = [];
+
   // Ensure the clipboard directory exists at startup so agents like Gemini
   // can reference it via --include-directories without errors (#4048)
   fs.mkdir(getClipboardDir(), { recursive: true }).catch((err) => {
@@ -59,9 +62,7 @@ export function registerClipboardHandlers(): () => void {
   cleanupOldClipboardImages().catch((err) => {
     console.warn("[clipboard] Cleanup failed unexpectedly:", err);
   });
-  const handleSaveImage = async (
-    _event: Electron.IpcMainInvokeEvent
-  ): Promise<
+  const handleSaveImage = async (): Promise<
     { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
   > => {
     try {
@@ -93,7 +94,6 @@ export function registerClipboardHandlers(): () => void {
   };
 
   const handleThumbnailFromPath = async (
-    _event: Electron.IpcMainInvokeEvent,
     filePath: string
   ): Promise<
     { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
@@ -118,7 +118,6 @@ export function registerClipboardHandlers(): () => void {
   };
 
   const handleWriteImage = async (
-    _event: Electron.IpcMainInvokeEvent,
     pngData: Uint8Array
   ): Promise<{ ok: true } | { ok: false; error: string }> => {
     try {
@@ -135,10 +134,7 @@ export function registerClipboardHandlers(): () => void {
     }
   };
 
-  const handleWriteText = (
-    _event: Electron.IpcMainInvokeEvent,
-    text: string
-  ): { ok: true } | { ok: false; error: string } => {
+  const handleWriteText = (text: string): { ok: true } | { ok: false; error: string } => {
     try {
       if (typeof text !== "string") {
         return { ok: false, error: "Text must be a string" };
@@ -151,15 +147,10 @@ export function registerClipboardHandlers(): () => void {
     }
   };
 
-  ipcMain.handle(CHANNELS.CLIPBOARD_SAVE_IMAGE, handleSaveImage);
-  ipcMain.handle(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH, handleThumbnailFromPath);
-  ipcMain.handle(CHANNELS.CLIPBOARD_WRITE_IMAGE, handleWriteImage);
-  ipcMain.handle(CHANNELS.CLIPBOARD_WRITE_TEXT, handleWriteText);
+  handlers.push(typedHandle(CHANNELS.CLIPBOARD_SAVE_IMAGE, handleSaveImage));
+  handlers.push(typedHandle(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH, handleThumbnailFromPath));
+  handlers.push(typedHandle(CHANNELS.CLIPBOARD_WRITE_IMAGE, handleWriteImage));
+  handlers.push(typedHandle(CHANNELS.CLIPBOARD_WRITE_TEXT, handleWriteText));
 
-  return () => {
-    ipcMain.removeHandler(CHANNELS.CLIPBOARD_SAVE_IMAGE);
-    ipcMain.removeHandler(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH);
-    ipcMain.removeHandler(CHANNELS.CLIPBOARD_WRITE_IMAGE);
-    ipcMain.removeHandler(CHANNELS.CLIPBOARD_WRITE_TEXT);
-  };
+  return () => handlers.forEach((cleanup) => cleanup());
 }

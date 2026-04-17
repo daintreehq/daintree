@@ -1,4 +1,4 @@
-import { app, ipcMain, dialog } from "electron";
+import { app, dialog } from "electron";
 import os from "node:os";
 import v8 from "node:v8";
 import { monitorEventLoopDelay, type IntervalHistogram } from "node:perf_hooks";
@@ -13,6 +13,7 @@ import type {
   DiagnosticsInfo,
 } from "../../../shared/types/ipc/system.js";
 import { collectDiagnostics } from "../../services/DiagnosticsCollector.js";
+import { typedHandle } from "../utils.js";
 
 let eventLoopHistogram: IntervalHistogram | null = null;
 
@@ -41,8 +42,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       return { totalMemoryMB: 0 };
     }
   };
-  ipcMain.handle(CHANNELS.SYSTEM_GET_APP_METRICS, handleGetAppMetrics);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_APP_METRICS));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_GET_APP_METRICS, handleGetAppMetrics));
 
   const handleGetProcessMetrics = (): ProcessMetricEntry[] => {
     try {
@@ -60,8 +60,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       return [];
     }
   };
-  ipcMain.handle(CHANNELS.DIAGNOSTICS_GET_PROCESS_METRICS, handleGetProcessMetrics);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.DIAGNOSTICS_GET_PROCESS_METRICS));
+  handlers.push(typedHandle(CHANNELS.DIAGNOSTICS_GET_PROCESS_METRICS, handleGetProcessMetrics));
 
   const handleGetHeapStats = (): HeapStats => {
     try {
@@ -79,8 +78,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       return { usedMB: 0, limitMB: 0, percent: 0, externalMB: 0 };
     }
   };
-  ipcMain.handle(CHANNELS.DIAGNOSTICS_GET_HEAP_STATS, handleGetHeapStats);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.DIAGNOSTICS_GET_HEAP_STATS));
+  handlers.push(typedHandle(CHANNELS.DIAGNOSTICS_GET_HEAP_STATS, handleGetHeapStats));
 
   const handleGetDiagnosticsInfo = (): DiagnosticsInfo => {
     try {
@@ -92,8 +90,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       return { uptimeSeconds: 0, eventLoopP99Ms: 0 };
     }
   };
-  ipcMain.handle(CHANNELS.DIAGNOSTICS_GET_INFO, handleGetDiagnosticsInfo);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.DIAGNOSTICS_GET_INFO));
+  handlers.push(typedHandle(CHANNELS.DIAGNOSTICS_GET_INFO, handleGetDiagnosticsInfo));
 
   const handleGetHardwareInfo = (): HardwareInfo => {
     try {
@@ -105,8 +102,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       return { totalMemoryBytes: 0, logicalCpuCount: 0 };
     }
   };
-  ipcMain.handle(CHANNELS.SYSTEM_GET_HARDWARE_INFO, handleGetHardwareInfo);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_HARDWARE_INFO));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_GET_HARDWARE_INFO, handleGetHardwareInfo));
 
   const handleDownloadDiagnostics = async (): Promise<boolean> => {
     const payload = await collectDiagnostics(deps);
@@ -128,8 +124,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     await fs.writeFile(filePath, json, "utf-8");
     return true;
   };
-  ipcMain.handle(CHANNELS.SYSTEM_DOWNLOAD_DIAGNOSTICS, handleDownloadDiagnostics);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_DOWNLOAD_DIAGNOSTICS));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_DOWNLOAD_DIAGNOSTICS, handleDownloadDiagnostics));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

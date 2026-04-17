@@ -1,4 +1,3 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
@@ -7,6 +6,7 @@ import {
   validatePathPattern,
   DEFAULT_WORKTREE_PATH_PATTERN,
 } from "../../../shared/utils/pathPattern.js";
+import { typedHandle } from "../utils.js";
 
 function getWorktreeConfig(): WorktreeConfig {
   const raw = store.get("worktreeConfig");
@@ -27,13 +27,9 @@ export function registerWorktreeConfigHandlers(_deps: HandlerDependencies): () =
   const handleGetConfig = async (): Promise<WorktreeConfig> => {
     return getWorktreeConfig();
   };
-  ipcMain.handle(CHANNELS.WORKTREE_CONFIG_GET, handleGetConfig);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_CONFIG_GET));
+  handlers.push(typedHandle(CHANNELS.WORKTREE_CONFIG_GET, handleGetConfig));
 
-  const handleSetPattern = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: { pattern: string }
-  ): Promise<WorktreeConfig> => {
+  const handleSetPattern = async (payload: { pattern: string }): Promise<WorktreeConfig> => {
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid worktree config payload");
     }
@@ -54,8 +50,7 @@ export function registerWorktreeConfigHandlers(_deps: HandlerDependencies): () =
     store.set("worktreeConfig.pathPattern", trimmedPattern);
     return getWorktreeConfig();
   };
-  ipcMain.handle(CHANNELS.WORKTREE_CONFIG_SET_PATTERN, handleSetPattern);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_CONFIG_SET_PATTERN));
+  handlers.push(typedHandle(CHANNELS.WORKTREE_CONFIG_SET_PATTERN, handleSetPattern));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

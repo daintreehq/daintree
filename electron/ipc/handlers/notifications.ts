@@ -15,10 +15,13 @@ import {
 import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
+import { typedHandle } from "../utils.js";
 
 type SoundId = keyof typeof SOUND_FILES;
 
 export function registerNotificationHandlers(_deps: HandlerDependencies): () => void {
+  const cleanups: Array<() => void> = [];
+
   const handleNotificationUpdate = (
     _event: Electron.IpcMainEvent,
     state: NotificationState
@@ -30,10 +33,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     return store.get("notificationSettings");
   };
 
-  const handleSettingsSet = async (
-    _event: Electron.IpcMainInvokeEvent,
-    rawSettings: unknown
-  ): Promise<void> => {
+  const handleSettingsSet = async (rawSettings: unknown): Promise<void> => {
     if (!rawSettings || typeof rawSettings !== "object") return;
 
     const allowed: Partial<NotificationSettings> = {};
@@ -84,10 +84,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     store.set("notificationSettings", { ...current, ...allowed });
   };
 
-  const handlePlaySound = async (
-    _event: Electron.IpcMainInvokeEvent,
-    soundFile: unknown
-  ): Promise<void> => {
+  const handlePlaySound = async (soundFile: unknown): Promise<void> => {
     if (typeof soundFile !== "string" || !ALLOWED_SOUND_FILES.has(soundFile)) return;
     soundService.previewFile(soundFile);
   };
@@ -98,10 +95,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     agentNotificationService.syncWatchedPanels(ids);
   };
 
-  const handlePlayUiEvent = async (
-    _event: Electron.IpcMainInvokeEvent,
-    soundId: unknown
-  ): Promise<void> => {
+  const handlePlayUiEvent = async (soundId: unknown): Promise<void> => {
     if (typeof soundId !== "string") return;
     if (!(soundId in SOUND_FILES)) return;
     if (!store.get("notificationSettings").uiFeedbackSoundEnabled) return;
@@ -153,24 +147,22 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     return getSoundsDir();
   };
 
+  // Fire-and-forget listeners (ipcMain.on) — no typedHandle equivalent.
   ipcMain.on(CHANNELS.NOTIFICATION_UPDATE, handleNotificationUpdate);
-  ipcMain.handle(CHANNELS.NOTIFICATION_SETTINGS_GET, handleSettingsGet);
-  ipcMain.handle(CHANNELS.NOTIFICATION_SETTINGS_SET, handleSettingsSet);
-  ipcMain.handle(CHANNELS.NOTIFICATION_PLAY_SOUND, handlePlaySound);
-  ipcMain.handle(CHANNELS.SOUND_GET_DIR, handleGetSoundDir);
   ipcMain.on(CHANNELS.NOTIFICATION_SHOW_NATIVE, handleShowNative);
   ipcMain.on(CHANNELS.NOTIFICATION_SHOW_WATCH, handleShowWatch);
   ipcMain.on(CHANNELS.NOTIFICATION_SYNC_WATCHED, handleSyncWatched);
   ipcMain.on(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, handleWaitingAcknowledge);
   ipcMain.on(CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE, handleWorkingPulseAcknowledge);
-  ipcMain.handle(CHANNELS.SOUND_PLAY_UI_EVENT, handlePlayUiEvent);
+
+  cleanups.push(typedHandle(CHANNELS.NOTIFICATION_SETTINGS_GET, handleSettingsGet));
+  cleanups.push(typedHandle(CHANNELS.NOTIFICATION_SETTINGS_SET, handleSettingsSet));
+  cleanups.push(typedHandle(CHANNELS.NOTIFICATION_PLAY_SOUND, handlePlaySound));
+  cleanups.push(typedHandle(CHANNELS.SOUND_GET_DIR, handleGetSoundDir));
+  cleanups.push(typedHandle(CHANNELS.SOUND_PLAY_UI_EVENT, handlePlayUiEvent));
 
   return () => {
     ipcMain.removeListener(CHANNELS.NOTIFICATION_UPDATE, handleNotificationUpdate);
-    ipcMain.removeHandler(CHANNELS.NOTIFICATION_SETTINGS_GET);
-    ipcMain.removeHandler(CHANNELS.NOTIFICATION_SETTINGS_SET);
-    ipcMain.removeHandler(CHANNELS.NOTIFICATION_PLAY_SOUND);
-    ipcMain.removeHandler(CHANNELS.SOUND_GET_DIR);
     ipcMain.removeListener(CHANNELS.NOTIFICATION_SHOW_NATIVE, handleShowNative);
     ipcMain.removeListener(CHANNELS.NOTIFICATION_SHOW_WATCH, handleShowWatch);
     ipcMain.removeListener(CHANNELS.NOTIFICATION_SYNC_WATCHED, handleSyncWatched);
@@ -179,6 +171,6 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
       CHANNELS.NOTIFICATION_WORKING_PULSE_ACKNOWLEDGE,
       handleWorkingPulseAcknowledge
     );
-    ipcMain.removeHandler(CHANNELS.SOUND_PLAY_UI_EVENT);
+    cleanups.forEach((c) => c());
   };
 }

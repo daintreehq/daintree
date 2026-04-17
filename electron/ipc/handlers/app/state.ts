@@ -1,4 +1,4 @@
-import { ipcMain, app } from "electron";
+import { app } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { store, type StoreSchema, consumePendingSettingsRecovery } from "../../../store.js";
 import { projectStore } from "../../../services/ProjectStore.js";
@@ -13,6 +13,7 @@ import { isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
 import { isGpuDisabledByFlag } from "../../../services/GpuCrashMonitorService.js";
 import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
 import { inferKind } from "../../../../shared/utils/inferPanelKind.js";
+import { typedHandle } from "../../utils.js";
 
 export function registerAppStateHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -240,24 +241,25 @@ export function registerAppStateHandlers(): () => void {
       settingsRecovery: consumePendingSettingsRecovery(),
     };
   };
-  ipcMain.handle(CHANNELS.APP_HYDRATE, handleAppHydrate);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_HYDRATE));
+  handlers.push(typedHandle(CHANNELS.APP_HYDRATE, handleAppHydrate));
 
   const handleAppGetState = async () => {
     return store.get("appState");
   };
-  ipcMain.handle(CHANNELS.APP_GET_STATE, handleAppGetState);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_GET_STATE));
+  handlers.push(typedHandle(CHANNELS.APP_GET_STATE, handleAppGetState));
 
   const handleAppSetState = async (
-    _event: Electron.IpcMainInvokeEvent,
-    partialState: Partial<typeof store.store.appState>
+    incoming: Partial<import("../../../../shared/types/ipc/app.js").AppState>
   ) => {
     try {
-      if (!partialState || typeof partialState !== "object" || Array.isArray(partialState)) {
-        console.error("Invalid app state payload:", partialState);
+      if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+        console.error("Invalid app state payload:", incoming);
         return;
       }
+
+      // Handler performs its own structural validation before writing; cast to the
+      // store schema to keep the `updates` object compatible with persistence types.
+      const partialState = incoming as Partial<typeof store.store.appState>;
 
       const currentState = store.get("appState");
 
@@ -421,26 +423,22 @@ export function registerAppStateHandlers(): () => void {
       console.error("Failed to set app state:", error);
     }
   };
-  ipcMain.handle(CHANNELS.APP_SET_STATE, handleAppSetState);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_SET_STATE));
+  handlers.push(typedHandle(CHANNELS.APP_SET_STATE, handleAppSetState));
 
   const handleAppGetVersion = async () => {
     return app.getVersion();
   };
-  ipcMain.handle(CHANNELS.APP_GET_VERSION, handleAppGetVersion);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_GET_VERSION));
+  handlers.push(typedHandle(CHANNELS.APP_GET_VERSION, handleAppGetVersion));
 
   const handleAppQuit = async () => {
     app.quit();
   };
-  ipcMain.handle(CHANNELS.APP_QUIT, handleAppQuit);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_QUIT));
+  handlers.push(typedHandle(CHANNELS.APP_QUIT, handleAppQuit));
 
   const handleAppForceQuit = async () => {
     app.exit(0);
   };
-  ipcMain.handle(CHANNELS.APP_FORCE_QUIT, handleAppForceQuit);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_FORCE_QUIT));
+  handlers.push(typedHandle(CHANNELS.APP_FORCE_QUIT, handleAppForceQuit));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

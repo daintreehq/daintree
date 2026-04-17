@@ -1,6 +1,5 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
-import { broadcastToRenderer } from "../utils.js";
+import { broadcastToRenderer, typedHandle } from "../utils.js";
 import {
   getSystemSleepService,
   type SystemSleepMetrics,
@@ -14,26 +13,20 @@ export function registerSystemSleepHandlers(_deps: HandlerDependencies): () => v
   const handleGetMetrics = async (): Promise<SystemSleepMetrics> => {
     return systemSleepService.getMetrics();
   };
-  ipcMain.handle(CHANNELS.SYSTEM_SLEEP_GET_METRICS, handleGetMetrics);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_SLEEP_GET_METRICS));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_SLEEP_GET_METRICS, handleGetMetrics));
 
-  const handleGetAwakeTime = async (
-    _event: Electron.IpcMainInvokeEvent,
-    startTimestamp: number
-  ): Promise<number> => {
+  const handleGetAwakeTime = async (startTimestamp: number): Promise<number> => {
     if (typeof startTimestamp !== "number" || !Number.isFinite(startTimestamp)) {
       throw new Error("startTimestamp must be a finite number");
     }
     return systemSleepService.getAwakeTimeSince(startTimestamp);
   };
-  ipcMain.handle(CHANNELS.SYSTEM_SLEEP_GET_AWAKE_TIME, handleGetAwakeTime);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_SLEEP_GET_AWAKE_TIME));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_SLEEP_GET_AWAKE_TIME, handleGetAwakeTime));
 
   const handleReset = async (): Promise<void> => {
     systemSleepService.reset();
   };
-  ipcMain.handle(CHANNELS.SYSTEM_SLEEP_RESET, handleReset);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_SLEEP_RESET));
+  handlers.push(typedHandle(CHANNELS.SYSTEM_SLEEP_RESET, handleReset));
 
   const unsubscribeSuspend = systemSleepService.onSuspend(() => {
     broadcastToRenderer(CHANNELS.SYSTEM_SLEEP_ON_SUSPEND);

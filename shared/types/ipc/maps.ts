@@ -1982,7 +1982,7 @@ export interface IpcInvokeMap {
   // Help channels
   "help:get-folder-path": {
     args: [];
-    result: string;
+    result: string | null;
   };
   "help:mark-terminal": {
     args: [terminalId: string];
