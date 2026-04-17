@@ -199,12 +199,11 @@ describe("initializeTelemetry", () => {
     storeMock.get.mockReturnValue({ enabled: true, hasSeenPrompt: true });
     await initializeTelemetry();
     expect(sentryInitMock).toHaveBeenCalledTimes(1);
-    const options = sentryInitMock.mock.calls[0][0] as { sampleRate?: number };
-    // sampleRate must be either absent (SDK default 1.0) or exactly 1 — any
-    // value < 1 silently drops that fraction of crash reports. See #5255.
-    if (options.sampleRate !== undefined) {
-      expect(options.sampleRate).toBe(1);
-    }
+    const options = sentryInitMock.mock.calls[0][0] as Record<string, unknown>;
+    // sampleRate must not be set at all — the SDK default is 1.0 (100%
+    // capture) and any value < 1 silently drops that fraction of crash
+    // reports. Fail closed so reintroduction at any value is caught. See #5255.
+    expect(options).not.toHaveProperty("sampleRate");
     process.env.SENTRY_DSN = original;
   });
 });
