@@ -12,7 +12,7 @@ const ipcMainMock = vi.hoisted(() => ({
 }));
 
 const browserWindowMock = vi.hoisted(() => ({
-  fromWebContents: vi.fn() as ReturnType<typeof vi.fn>,
+  fromWebContents: vi.fn<(sender: unknown) => unknown>(),
   getFocusedWindow: vi.fn(),
   getAllWindows: vi.fn(() => []),
 }));
