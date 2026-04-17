@@ -2,7 +2,7 @@
   "agentId": "gemini",
   "settleMs": 6000,
   "transitions": [
-    { "atMs": 0, "state": "busy" },
-    { "atMs": 5400, "state": "idle", "trigger": "pattern" }
+    { "atMs": 0, "state": "busy", "trigger": "pattern" },
+    { "atMs": 5400, "state": "idle", "trigger": "pattern", "waitingReason": "prompt" }
   ]
 }

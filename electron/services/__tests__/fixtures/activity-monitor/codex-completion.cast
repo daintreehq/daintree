@@ -6,4 +6,5 @@
 [1.40,"o","\r• Working (3s · esc to interrupt)"]
 [1.85,"o","\r\u001b[2K"]
 [1.90,"o","Task completed successfully\r\n"]
+[1.92,"o","$0.005 · 1234 tokens\r\n"]
 [1.95,"o","codex> "]

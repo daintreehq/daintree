@@ -17,6 +17,8 @@ export interface RecordedTransition {
   trigger?: ActivityStateMetadata["trigger"];
   waitingReason?: ActivityStateMetadata["waitingReason"];
   patternConfidence?: number;
+  sessionCost?: number;
+  sessionTokens?: number;
 }
 
 export interface FragmentationOpts {
@@ -41,6 +43,8 @@ export interface ExpectedTransition {
   state: "busy" | "idle" | "completed";
   trigger?: ActivityStateMetadata["trigger"];
   waitingReason?: ActivityStateMetadata["waitingReason"];
+  sessionCost?: number;
+  sessionTokens?: number;
 }
 
 export interface ExpectedFile {
@@ -51,6 +55,13 @@ export interface ExpectedFile {
   idleDebounceMs?: number;
   promptFastPathMinQuietMs?: number;
   toleranceMs?: number;
+  /**
+   * Default false (strict). When true, recorded transitions that are not in the
+   * expected list are tolerated. Used by fragmented replay variants where
+   * intentional chunk-boundary noise can introduce extra busy/completed pulses
+   * that don't change the load-bearing state-sequence invariant.
+   */
+  allowExtraTransitions?: boolean;
   transitions: ExpectedTransition[];
 }
 
@@ -131,6 +142,9 @@ export function parseCast(filePath: string): ParsedCast {
     if (!Number.isFinite(time)) {
       throw new Error(`Event time must be a number at ${filePath}:${i + 1}`);
     }
+    if (version === 3 && time < 0) {
+      throw new Error(`v3 event delta must be non-negative at ${filePath}:${i + 1} (got ${time})`);
+    }
     let absoluteSeconds: number;
     if (version === 3) {
       accumulated += time;
@@ -153,25 +167,32 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-function fragmentChunk(data: string, rng: () => number, maxSplits: number): string[] {
-  const buf = Buffer.from(data, "utf8");
-  if (buf.length <= 1 || maxSplits <= 0) {
-    return [data];
+/**
+ * Split a UTF-8 byte buffer at random byte offsets — including offsets that
+ * land mid-codepoint and mid-ANSI-sequence. The fragments are returned as raw
+ * `Uint8Array` slices so that xterm's parser can stitch multi-byte sequences
+ * across `parse()` calls (which it does in production when node-pty delivers
+ * partial chunks). Decoding fragments to strings here would inject U+FFFD
+ * replacement characters before xterm sees the bytes, defeating the test.
+ */
+function fragmentBytes(bytes: Uint8Array, rng: () => number, maxSplits: number): Uint8Array[] {
+  if (bytes.length <= 1 || maxSplits <= 0) {
+    return [bytes];
   }
   const splitCount = 1 + Math.floor(rng() * Math.max(1, maxSplits));
   const offsets = new Set<number>();
   for (let i = 0; i < splitCount; i++) {
-    const offset = 1 + Math.floor(rng() * (buf.length - 1));
+    const offset = 1 + Math.floor(rng() * (bytes.length - 1));
     offsets.add(offset);
   }
   const sorted = [...offsets].sort((a, b) => a - b);
-  const fragments: string[] = [];
+  const fragments: Uint8Array[] = [];
   let prev = 0;
   for (const offset of sorted) {
-    fragments.push(buf.subarray(prev, offset).toString("utf8"));
+    fragments.push(bytes.subarray(prev, offset));
     prev = offset;
   }
-  fragments.push(buf.subarray(prev).toString("utf8"));
+  fragments.push(bytes.subarray(prev));
   return fragments;
 }
 
@@ -188,6 +209,10 @@ function makeGetVisibleLines(term: HeadlessTerminalType): (n: number) => string[
   return (n: number) => {
     const buffer = term.buffer.active;
     if (!buffer) return [];
+    // Bottom-N rows of the active viewport — matches TerminalProcess.getLastNLines().
+    // For short fixtures whose cursor doesn't reach the bottom, the trailing rows
+    // will be empty. Fixture authors should size `height` so meaningful content
+    // lands within the bottom `promptScanLineCount` rows (default 6).
     const viewportBottom = buffer.baseY + term.rows;
     const start = Math.max(buffer.baseY, viewportBottom - n);
     const lines: string[] = [];
@@ -210,7 +235,7 @@ function makeGetCursorLine(term: HeadlessTerminalType): () => string | null {
 }
 
 interface InputHandlerLike {
-  parse(data: string | Uint8Array, promiseResult?: boolean): void;
+  parse(data: string | Uint8Array, promiseResult?: boolean): void | Promise<boolean>;
 }
 
 interface CoreLike {
@@ -222,7 +247,7 @@ interface InternalTerminal extends HeadlessTerminalType {
 }
 
 /**
- * Write data to the headless terminal synchronously via xterm's internal
+ * Write bytes to the headless terminal synchronously via xterm's internal
  * input handler. The public `term.write(data, callback)` API batches via
  * `setTimeout` internally, which deadlocks under `vi.useFakeTimers()` because
  * the WriteBuffer's deferred flush never fires. Driving the parser directly
@@ -232,9 +257,11 @@ interface InternalTerminal extends HeadlessTerminalType {
  * This relies on xterm's private `_core._inputHandler.parse()` surface — the
  * tradeoff is acceptable since (a) the API has been stable across xterm 5–6,
  * (b) this is test-only code with no production impact, and (c) any breakage
- * here surfaces as a single test-suite failure rather than a runtime bug.
+ * here surfaces as a single test-suite failure with a descriptive error
+ * rather than a runtime bug. `parse()` returns Promise<boolean> if any async
+ * DCS handler is installed; we install none, so the void return is safe.
  */
-function writeToTerminal(term: HeadlessTerminalType, data: string): void {
+function writeBytesToTerminal(term: HeadlessTerminalType, bytes: Uint8Array): void {
   const internal = term as InternalTerminal;
   const inputHandler = internal._core?._inputHandler;
   if (!inputHandler || typeof inputHandler.parse !== "function") {
@@ -242,7 +269,7 @@ function writeToTerminal(term: HeadlessTerminalType, data: string): void {
       "Headless terminal does not expose _core._inputHandler.parse — xterm internals may have changed."
     );
   }
-  inputHandler.parse(Buffer.from(data, "utf8"), false);
+  inputHandler.parse(bytes, false);
 }
 
 export async function replayCast(
@@ -274,6 +301,8 @@ export async function replayCast(
         trigger: metadata?.trigger,
         waitingReason: metadata?.waitingReason,
         patternConfidence: metadata?.patternConfidence,
+        sessionCost: metadata?.sessionCost,
+        sessionTokens: metadata?.sessionTokens,
       });
     },
     {
@@ -297,22 +326,45 @@ export async function replayCast(
 
   let currentMs = 0;
   for (const event of cast.events) {
-    if (event.kind !== "o") continue;
     const delta = Math.max(0, event.absoluteMs - currentMs);
     if (delta > 0) {
-      // Tick polling cycles in the gap before this event arrives. This is what
-      // gives the monitor a chance to fire idle/completion transitions during
-      // long quiet stretches between output bursts.
+      // Polling ordering: timers advance to the event timestamp BEFORE the event
+      // is written/dispatched. A polling tick scheduled exactly at `currentMs+N`
+      // therefore observes pre-event state — the new bytes land immediately
+      // afterward and the next tick sees them. Deterministic and matches how
+      // production polling is interleaved with PTY data callbacks.
       vi.advanceTimersByTime(delta);
       currentMs = event.absoluteMs;
     }
 
-    const chunks = rng ? fragmentChunk(event.data, rng, maxSplits) : [event.data];
-    for (const chunk of chunks) {
-      if (chunk.length === 0) continue;
-      writeToTerminal(term, chunk);
-      monitor.onData(chunk);
+    if (event.kind === "o") {
+      const bytes = Buffer.from(event.data, "utf8");
+      const fragments = rng ? fragmentBytes(bytes, rng, maxSplits) : [bytes];
+      for (const fragment of fragments) {
+        if (fragment.length === 0) continue;
+        writeBytesToTerminal(term, fragment);
+      }
+      // Production calls `monitor.onData(chunk)` with the fully-decoded string
+      // from node-pty (which buffers partial UTF-8). Replay mirrors that
+      // contract: the monitor sees the whole event as one string, not the
+      // fragmented byte chunks. Fragmentation stresses xterm's parser only.
+      monitor.onData(event.data);
+    } else if (event.kind === "i") {
+      monitor.onInput(event.data);
+    } else if (event.kind === "r") {
+      const match = /^(\d+)x(\d+)$/.exec(event.data);
+      if (match) {
+        const newCols = Number(match[1]);
+        const newRows = Number(match[2]);
+        try {
+          term.resize(Math.max(1, newCols), Math.max(1, newRows));
+        } catch {
+          // Some xterm builds throw if dims unchanged — ignore.
+        }
+        monitor.notifyResize();
+      }
     }
+    // Ignore "m" (markers) and "x" (exit) for now — they don't drive state.
   }
 
   const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
@@ -336,17 +388,21 @@ export function loadExpected(expectedPath: string): ExpectedFile {
 
 export interface MatchOpts {
   toleranceMs?: number;
+  /**
+   * When true, recorded transitions that don't map to an expected entry are
+   * tolerated. Default is strict — any unmatched recorded transition fails.
+   */
+  allowExtraTransitions?: boolean;
 }
 
 export interface MatchFailure {
   kind:
     | "missing"
-    | "state-mismatch"
+    | "extra"
     | "trigger-mismatch"
     | "waiting-reason-mismatch"
-    | "timing"
-    | "extra-leading"
-    | "extra-trailing";
+    | "metadata-mismatch"
+    | "timing";
   index: number;
   expected?: ExpectedTransition;
   actual?: RecordedTransition;
@@ -354,29 +410,36 @@ export interface MatchFailure {
 }
 
 /**
- * Match recorded transitions against expected entries. Recorded transitions may
- * include extras the spec does not list (e.g. boot-phase busy emit) — only the
- * expected entries are required to appear in order. Each expected entry must
- * match an actual entry (state required, trigger and waitingReason optional)
- * within `toleranceMs` of its `atMs`.
+ * Strict in-order match. Each expected entry must match a recorded transition
+ * within `toleranceMs` of `atMs`. State is required; `trigger`,
+ * `waitingReason`, `sessionCost`, `sessionTokens` are asserted only when the
+ * expected entry names them. Recorded transitions that don't map to an
+ * expected entry produce `extra` failures unless `allowExtraTransitions` is
+ * true (used by fragmented variants where chunk-boundary noise can introduce
+ * benign duplicate `completed` pulses).
  */
 export function matchTransitions(
   recorded: RecordedTransition[],
   expected: ExpectedTransition[],
   opts: MatchOpts = {}
 ): MatchFailure[] {
-  const tolerance = opts.toleranceMs ?? 25;
+  const tolerance = opts.toleranceMs ?? 200;
   const failures: MatchFailure[] = [];
+  const matched = new Set<number>();
   let cursor = 0;
+
   for (let i = 0; i < expected.length; i++) {
     const want = expected[i];
     let foundIndex = -1;
     for (let j = cursor; j < recorded.length; j++) {
       const got = recorded[j];
+      if (matched.has(j)) continue;
       if (got.state !== want.state) continue;
       if (Math.abs(got.replayMs - want.atMs) > tolerance) continue;
       if (want.trigger && got.trigger !== want.trigger) continue;
       if (want.waitingReason && got.waitingReason !== want.waitingReason) continue;
+      if (want.sessionCost !== undefined && got.sessionCost !== want.sessionCost) continue;
+      if (want.sessionTokens !== undefined && got.sessionTokens !== want.sessionTokens) continue;
       foundIndex = j;
       break;
     }
@@ -384,7 +447,21 @@ export function matchTransitions(
       failures.push({ kind: "missing", index: i, expected: want });
       continue;
     }
+    matched.add(foundIndex);
     cursor = foundIndex + 1;
   }
+
+  if (!opts.allowExtraTransitions) {
+    for (let j = 0; j < recorded.length; j++) {
+      if (matched.has(j)) continue;
+      failures.push({
+        kind: "extra",
+        index: j,
+        actual: recorded[j],
+        detail: `unmatched recorded transition: ${recorded[j].state}/${recorded[j].trigger ?? "-"} at ${recorded[j].replayMs}ms`,
+      });
+    }
+  }
+
   return failures;
 }

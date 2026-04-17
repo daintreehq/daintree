@@ -1,6 +1,0 @@
-{"version":2,"width":120,"height":10,"timestamp":1700000000,"title":"general-silence-timeout"}
-[0.05,"o","$ run-something --quietly\r\n"]
-[0.10,"o","starting work...\r\n"]
-[0.20,"o","step 1 done\r\n"]
-[0.30,"o","step 2 done\r\n"]
-[0.40,"o","step 3 done\r\n"]

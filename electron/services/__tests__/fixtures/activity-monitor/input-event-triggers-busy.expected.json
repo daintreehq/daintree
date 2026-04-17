@@ -1,0 +1,10 @@
+{
+  "agentId": "claude",
+  "settleMs": 500,
+  "transitions": [
+    { "atMs": 0, "state": "busy", "trigger": "pattern" },
+    { "atMs": 3100, "state": "idle", "trigger": "pattern" },
+    { "atMs": 3600, "state": "busy", "trigger": "input" },
+    { "atMs": 4100, "state": "idle", "trigger": "dispose" }
+  ]
+}

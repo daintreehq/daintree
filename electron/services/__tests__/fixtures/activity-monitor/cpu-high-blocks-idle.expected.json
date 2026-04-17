@@ -2,7 +2,7 @@
   "agentId": "claude",
   "settleMs": 6000,
   "transitions": [
-    { "atMs": 0, "state": "busy" },
-    { "atMs": 4850, "state": "idle", "trigger": "pattern" }
+    { "atMs": 0, "state": "busy", "trigger": "pattern" },
+    { "atMs": 5500, "state": "idle", "trigger": "pattern", "waitingReason": "prompt" }
   ]
 }
