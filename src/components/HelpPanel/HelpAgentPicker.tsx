@@ -13,16 +13,28 @@ interface HelpAgentPickerProps {
 
 export function HelpAgentPicker({ onSelectAgent }: HelpAgentPickerProps) {
   const availability = useCliAvailabilityStore((s) => s.availability);
-  const isAvailabilityInitialized = useCliAvailabilityStore((s) => s.isInitialized);
+  // Gate on `hasRealData` (not `isInitialized`): `isInitialized` flips true even on probe
+  // failure, but `hasRealData` waits for a real result — from localStorage cache or a
+  // successful IPC — so users with previously-installed agents don't see the
+  // "No agents are installed" empty state flash on cold open.
+  const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
 
   const installedAgents = useMemo(() => {
-    if (!isAvailabilityInitialized) return [];
+    if (!hasRealData) return [];
     return BUILT_IN_AGENT_IDS.filter((id) => isAgentInstalled(availability[id]));
-  }, [isAvailabilityInitialized, availability]);
+  }, [hasRealData, availability]);
 
   const handleOpenSetupWizard = useCallback(() => {
     window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
   }, []);
+
+  if (!hasRealData) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-2 p-8 text-center">
+        <p className="text-sm text-daintree-text/50">Checking for installed agents…</p>
+      </div>
+    );
+  }
 
   if (installedAgents.length === 0) {
     return (

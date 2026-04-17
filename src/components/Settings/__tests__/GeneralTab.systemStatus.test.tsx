@@ -160,6 +160,59 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     expect(screen.getByText("Codex")).toBeTruthy();
   });
 
+  it("shows ALL installed agents when none are pinned (issue #5117, adversarial)", async () => {
+    setupDispatchMock(
+      { claude: "ready", gemini: "ready", codex: "ready", opencode: "missing", cursor: "missing" },
+      {
+        agents: {
+          claude: { pinned: false },
+          gemini: { pinned: false },
+          codex: { pinned: false },
+        },
+      } as unknown as AgentSettings
+    );
+
+    await renderGeneralTab();
+
+    await waitFor(() => {
+      expect(screen.getByText("Claude")).toBeTruthy();
+    });
+
+    expect(screen.getByText("Gemini")).toBeTruthy();
+    expect(screen.getByText("Codex")).toBeTruthy();
+    expect(screen.queryByText("Opencode")).toBeNull();
+    expect(screen.queryByText("Cursor")).toBeNull();
+  });
+
+  it("hides pinned-but-missing agents (pin alone doesn't make an agent appear)", async () => {
+    setupDispatchMock(
+      {
+        claude: "missing",
+        gemini: "missing",
+        codex: "ready",
+        opencode: "missing",
+        cursor: "missing",
+      },
+      {
+        agents: {
+          claude: { pinned: true },
+          gemini: { pinned: true },
+          codex: { pinned: true },
+        },
+      } as unknown as AgentSettings
+    );
+
+    await renderGeneralTab();
+
+    await waitFor(() => {
+      expect(screen.getByText("Codex")).toBeTruthy();
+    });
+
+    // Pinned but missing → must NOT appear.
+    expect(screen.queryByText("Claude")).toBeNull();
+    expect(screen.queryByText("Gemini")).toBeNull();
+  });
+
   it("shows summary for hidden agents with correct count and pluralization", async () => {
     setupDispatchMock(
       {

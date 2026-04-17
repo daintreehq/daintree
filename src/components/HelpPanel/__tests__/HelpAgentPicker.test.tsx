@@ -6,6 +6,7 @@ const { cliAvailabilityState } = vi.hoisted(() => ({
   cliAvailabilityState: {
     availability: {} as Record<string, string>,
     isInitialized: true,
+    hasRealData: true,
   },
 }));
 
@@ -44,6 +45,7 @@ describe("HelpAgentPicker", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     cliAvailabilityState.isInitialized = true;
+    cliAvailabilityState.hasRealData = true;
     cliAvailabilityState.availability = {};
   });
 
@@ -61,7 +63,8 @@ describe("HelpAgentPicker", () => {
     expect(screen.queryByText("Codex")).toBeNull();
   });
 
-  it("renders empty state when no agents are installed — with no 'Enable' copy", () => {
+  it("renders empty state when real data says no agents are installed — with no 'Enable' copy", () => {
+    cliAvailabilityState.hasRealData = true;
     cliAvailabilityState.availability = {
       claude: "missing",
       gemini: "missing",
@@ -76,6 +79,7 @@ describe("HelpAgentPicker", () => {
   });
 
   it("setup wizard CTA dispatches daintree:open-agent-setup-wizard", () => {
+    cliAvailabilityState.hasRealData = true;
     cliAvailabilityState.availability = {
       claude: "missing",
       gemini: "missing",
@@ -95,14 +99,31 @@ describe("HelpAgentPicker", () => {
     dispatchSpy.mockRestore();
   });
 
-  it("shows empty state while availability is uninitialized", () => {
-    cliAvailabilityState.isInitialized = false;
+  it("renders loading sentinel (not empty state) while real data is pending", () => {
+    // hasRealData=false means neither cache nor probe has landed — don't show
+    // "No agents installed" prematurely (avoids flash on cold open with cache).
+    cliAvailabilityState.hasRealData = false;
     cliAvailabilityState.availability = {};
 
     render(<HelpAgentPicker onSelectAgent={vi.fn()} />);
 
-    expect(screen.getByText("No agents are installed.")).toBeTruthy();
+    expect(screen.getByText("Checking for installed agents…")).toBeTruthy();
+    expect(screen.queryByText("No agents are installed.")).toBeNull();
     expect(screen.queryByText("Claude")).toBeNull();
+  });
+
+  it("renders installed agents once cached data lands even before first live probe", () => {
+    // hasRealData=true flips when localStorage cache hydrates the store, even without
+    // a successful IPC call yet. Users with previously-installed agents should see
+    // them immediately on cold open.
+    cliAvailabilityState.hasRealData = true;
+    cliAvailabilityState.availability = { claude: "ready", gemini: "missing", codex: "missing" };
+
+    render(<HelpAgentPicker onSelectAgent={vi.fn()} />);
+
+    expect(screen.getByText("Claude")).toBeTruthy();
+    expect(screen.queryByText("Gemini")).toBeNull();
+    expect(screen.queryByText("Checking for installed agents…")).toBeNull();
   });
 
   it("calls onSelectAgent when an installed agent is clicked", () => {

@@ -13,7 +13,8 @@ import {
   type TerminalInstance,
 } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
-import { isAgentInstalled, isAgentReady } from "../../../shared/utils/agentAvailability";
+import { isAgentReady } from "../../../shared/utils/agentAvailability";
+import { computeGridCanLaunch, computeGridSelectedAgentIds } from "./contentGridAgentFilter";
 import { GridPanel } from "./GridPanel";
 import { GridTabGroup } from "./GridTabGroup";
 import { GridNotificationBar } from "./GridNotificationBar";
@@ -388,14 +389,23 @@ export function ContentGrid({
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
   const currentProject = useProjectStore((state) => state.currentProject);
-  // undefined = no filter (availability not yet known); Set = filter to installed agents only.
-  // Pin state intentionally does NOT gate this menu — unpinning from the toolbar must not
-  // remove an installed agent from the grid launch menu. Launch-enablement (ready vs.
-  // installed-but-not-ready) is still gated per-row via `canLaunch` below.
-  const gridSelectedAgentIds = useMemo((): Set<string> | undefined => {
-    if (!agentAvailability) return undefined;
-    return new Set(getEffectiveAgentIds().filter((id) => isAgentInstalled(agentAvailability[id])));
-  }, [agentAvailability]);
+  const isAvailabilityInitialized = useCliAvailabilityStore((s) => s.isInitialized);
+
+  // undefined = no filter (availability not yet probed); Set = filter to installed agents.
+  // Gate on the store's `isInitialized` flag: the `agentAvailability` prop is always a
+  // defined object (pre-populated by `defaultAvailability()` with every agent as "missing"),
+  // so a `!agentAvailability` guard would never fire and the menu would start empty on cold
+  // boot until the first probe returns. Pin state intentionally does NOT gate this menu —
+  // unpinning from the toolbar must not remove an installed agent from the launch menu.
+  const gridSelectedAgentIds = useMemo(
+    () =>
+      computeGridSelectedAgentIds(
+        isAvailabilityInitialized,
+        agentAvailability,
+        getEffectiveAgentIds()
+      ),
+    [isAvailabilityInitialized, agentAvailability]
+  );
   const isProjectSwitching = false;
   const { projectIconSvg } = useProjectBranding(currentProject?.id);
   const { worktreeMap } = useWorktrees();
@@ -646,11 +656,10 @@ export function ContentGrid({
       .filter((id) => !gridSelectedAgentIds || gridSelectedAgentIds.has(id))
       .map((id) => {
         const agentConfig = getEffectiveAgentConfig(id);
-        const canLaunch =
-          id === "terminal" ? true : !agentAvailability || isAgentReady(agentAvailability[id]);
+        const canLaunch = computeGridCanLaunch(id, isAvailabilityInitialized, agentAvailability);
         return { id, name: agentConfig?.name ?? id, canLaunch };
       });
-  }, [agentAvailability, gridSelectedAgentIds]);
+  }, [agentAvailability, gridSelectedAgentIds, isAvailabilityInitialized]);
 
   const handleGridLaunch = useCallback(
     (agentId: string) => {
