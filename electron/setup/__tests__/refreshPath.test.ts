@@ -22,8 +22,9 @@ vi.mock("fix-path", () => ({ default: vi.fn() }));
 vi.mock("node:v8", () => ({ default: { setFlagsFromString: vi.fn() } }));
 vi.mock("node:vm", () => ({ default: { runInNewContext: vi.fn() } }));
 vi.mock("os", () => ({
-  default: { homedir: () => "/home/testuser" },
+  default: { homedir: () => "/home/testuser", totalmem: () => 16 * 1024 ** 3 },
   homedir: () => "/home/testuser",
+  totalmem: () => 16 * 1024 ** 3,
 }));
 
 const shellEnvMock = vi.fn<() => Promise<Record<string, string>>>();

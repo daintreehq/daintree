@@ -44,6 +44,10 @@ const fsUtilsMock = vi.hoisted(() => ({
   waitForPathExists: vi.fn(),
 }));
 
+const osMock = vi.hoisted(() => ({
+  totalmem: vi.fn<() => number>(),
+}));
+
 vi.mock("fs", () => ({
   default: {
     existsSync: fsMock.existsSync,
@@ -80,8 +84,9 @@ vi.mock("node:vm", () => ({
 }));
 
 vi.mock("os", () => ({
-  default: { homedir: () => "C:\\Users\\testuser" },
+  default: { homedir: () => "C:\\Users\\testuser", totalmem: osMock.totalmem },
   homedir: () => "C:\\Users\\testuser",
+  totalmem: osMock.totalmem,
 }));
 
 const originalPlatform = process.platform;
@@ -396,6 +401,8 @@ describe("Windows Git PATH discovery", () => {
 });
 
 describe("GPU memory flags", () => {
+  const GIB = 1024 ** 3;
+
   beforeEach(() => {
     vi.resetModules();
     vi.resetAllMocks();
@@ -408,8 +415,29 @@ describe("GPU memory flags", () => {
     process.argv = originalArgv;
   });
 
-  it("sets force-gpu-mem-available-mb to 1024", async () => {
+  it("sets force-gpu-mem-available-mb to 768 on a 4 GiB machine", async () => {
     fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(4 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "768");
+  });
+
+  it("sets force-gpu-mem-available-mb to 768 at the 8 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(8 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "768");
+  });
+
+  it("sets force-gpu-mem-available-mb to 1024 just above the 8 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(8 * GIB + 1);
 
     await import("../environment.js");
 
@@ -417,8 +445,39 @@ describe("GPU memory flags", () => {
     expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "1024");
   });
 
+  it("sets force-gpu-mem-available-mb to 1024 at the 16 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(16 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "1024");
+  });
+
+  it("sets force-gpu-mem-available-mb to 2048 just above the 16 GiB boundary", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(16 * GIB + 1);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "2048");
+  });
+
+  it("sets force-gpu-mem-available-mb to 2048 on a 32 GiB machine", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(32 * GIB);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "2048");
+  });
+
   it("does not set gpu-rasterization-msaa-sample-count", async () => {
     fsMock.existsSync.mockReturnValue(false);
+    osMock.totalmem.mockReturnValue(16 * GIB);
 
     await import("../environment.js");
 
