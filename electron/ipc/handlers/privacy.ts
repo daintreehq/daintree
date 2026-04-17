@@ -2,6 +2,7 @@ import { ipcMain, app, shell, session } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import {
+  closeTelemetry,
   getTelemetryLevel,
   setTelemetryLevel,
   type TelemetryLevel,
@@ -52,8 +53,9 @@ export function registerPrivacyHandlers(): () => void {
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.PRIVACY_CLEAR_CACHE));
 
-  ipcMain.handle(CHANNELS.PRIVACY_RESET_ALL_DATA, () => {
+  ipcMain.handle(CHANNELS.PRIVACY_RESET_ALL_DATA, async () => {
     app.relaunch({ args: process.argv.slice(1).concat(["--reset-data"]) });
+    await closeTelemetry();
     app.exit(0);
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.PRIVACY_RESET_ALL_DATA));

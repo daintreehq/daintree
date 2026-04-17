@@ -3,6 +3,7 @@ import os from "os";
 
 const sentryInitMock = vi.hoisted(() => vi.fn());
 const captureEventMock = vi.hoisted(() => vi.fn(() => "mock-event-id"));
+const sentryCloseMock = vi.hoisted(() => vi.fn(() => Promise.resolve(true)));
 
 const storeMock = vi.hoisted(() => {
   const data: Record<string, unknown> = {
@@ -26,6 +27,7 @@ vi.mock("electron", () => ({
 vi.mock("@sentry/electron/main", () => ({
   init: sentryInitMock,
   captureEvent: captureEventMock,
+  close: sentryCloseMock,
 }));
 
 import {
@@ -399,5 +401,94 @@ describe("setTelemetryLevel with buffer", () => {
       trackEvent("onboarding_step_viewed", { step: "telemetry", i });
     }
     expect(_getPreConsentBufferLength()).toBe(100);
+  });
+});
+
+describe("closeTelemetry", () => {
+  // Use isolated module instances so each test starts with a clean `initialized` flag.
+  async function loadFreshModule() {
+    vi.resetModules();
+    return await import("../TelemetryService.js");
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sentryCloseMock.mockReset();
+    sentryCloseMock.mockResolvedValue(true);
+  });
+
+  it("is a no-op when telemetry was never initialized", async () => {
+    const mod = await loadFreshModule();
+    await mod.closeTelemetry();
+    expect(sentryCloseMock).not.toHaveBeenCalled();
+  });
+
+  it("calls Sentry.close(2000) after init", async () => {
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+    storeMock._data.telemetry = { enabled: true, hasSeenPrompt: true };
+    storeMock._data.privacy = { telemetryLevel: "errors", logRetentionDays: 30 };
+    storeMock.get.mockImplementation((key: string) => storeMock._data[key]);
+
+    const mod = await loadFreshModule();
+    await mod.initializeTelemetry();
+    await mod.closeTelemetry();
+
+    expect(sentryCloseMock).toHaveBeenCalledTimes(1);
+    expect(sentryCloseMock).toHaveBeenCalledWith(2000);
+
+    process.env.SENTRY_DSN = original;
+  });
+
+  it("swallows rejection from Sentry.close", async () => {
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+    storeMock._data.telemetry = { enabled: true, hasSeenPrompt: true };
+    storeMock._data.privacy = { telemetryLevel: "errors", logRetentionDays: 30 };
+    storeMock.get.mockImplementation((key: string) => storeMock._data[key]);
+
+    const mod = await loadFreshModule();
+    await mod.initializeTelemetry();
+    sentryCloseMock.mockRejectedValueOnce(new Error("transport exploded"));
+
+    await expect(mod.closeTelemetry()).resolves.toBeUndefined();
+
+    process.env.SENTRY_DSN = original;
+  });
+
+  it("is idempotent — second call is a no-op", async () => {
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+    storeMock._data.telemetry = { enabled: true, hasSeenPrompt: true };
+    storeMock._data.privacy = { telemetryLevel: "errors", logRetentionDays: 30 };
+    storeMock.get.mockImplementation((key: string) => storeMock._data[key]);
+
+    const mod = await loadFreshModule();
+    await mod.initializeTelemetry();
+    await mod.closeTelemetry();
+    expect(sentryCloseMock).toHaveBeenCalledTimes(1);
+
+    await mod.closeTelemetry();
+    expect(sentryCloseMock).toHaveBeenCalledTimes(1);
+
+    process.env.SENTRY_DSN = original;
+  });
+
+  it("stops capturing new events after close", async () => {
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+    storeMock._data.telemetry = { enabled: true, hasSeenPrompt: true };
+    storeMock._data.privacy = { telemetryLevel: "full", logRetentionDays: 30 };
+    storeMock.get.mockImplementation((key: string) => storeMock._data[key]);
+
+    const mod = await loadFreshModule();
+    await mod.initializeTelemetry();
+    captureEventMock.mockClear();
+
+    await mod.closeTelemetry();
+    mod.trackEvent("post_close_event", {});
+    expect(captureEventMock).not.toHaveBeenCalled();
+
+    process.env.SENTRY_DSN = original;
   });
 });

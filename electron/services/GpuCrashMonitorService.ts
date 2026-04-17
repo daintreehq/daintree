@@ -2,6 +2,7 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { store } from "../store.js";
+import { closeTelemetry } from "./TelemetryService.js";
 
 const GPU_DISABLED_FLAG = "gpu-disabled.flag";
 const GPU_CRASH_THRESHOLD = 3;
@@ -32,7 +33,7 @@ class GpuCrashMonitorService {
 
     const alreadyDisabled = isGpuDisabledByFlag(app.getPath("userData"));
 
-    app.on("child-process-gone", (_event, details) => {
+    app.on("child-process-gone", async (_event, details) => {
       if (details.type !== "GPU") {
         if (details.reason !== "clean-exit" && details.reason !== "killed") {
           console.warn(
@@ -61,6 +62,7 @@ class GpuCrashMonitorService {
           console.error("[GPU] Failed to write disable flag:", err);
         }
         app.relaunch();
+        await closeTelemetry();
         app.exit(0);
       }
     });

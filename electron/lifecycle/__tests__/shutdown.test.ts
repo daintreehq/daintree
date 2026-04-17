@@ -104,6 +104,12 @@ const closeSharedDbMock = vi.hoisted(() => ({
 
 vi.mock("../../services/persistence/db.js", () => closeSharedDbMock);
 
+const closeTelemetryMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+
+vi.mock("../../services/TelemetryService.js", () => ({
+  closeTelemetry: closeTelemetryMock,
+}));
+
 const isSmokeTestMock = vi.hoisted(() => ({ value: false }));
 
 vi.mock("../../setup/environment.js", () => ({
@@ -343,6 +349,67 @@ describe("registerShutdownHandler", () => {
     });
   });
 
+  describe("Sentry telemetry flush before exit", () => {
+    afterEach(() => {
+      appMock.exit.mockReset();
+      mcpServerMock.stop.mockReset();
+      mcpServerMock.stop.mockReturnValue(Promise.resolve());
+      closeTelemetryMock.mockReset();
+      closeTelemetryMock.mockResolvedValue(undefined);
+    });
+
+    it("waits for closeTelemetry to resolve before app.exit(0) on clean shutdown", async () => {
+      let resolveClose!: () => void;
+      const closeDeferred = new Promise<void>((r) => {
+        resolveClose = r;
+      });
+      closeTelemetryMock.mockReturnValue(closeDeferred);
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      // Give the cleanup chain a chance to reach closeTelemetry.
+      await vi.waitFor(() => {
+        expect(closeTelemetryMock).toHaveBeenCalled();
+      });
+      // The await must hold — exit MUST NOT fire until closeTelemetry resolves.
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      resolveClose();
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+    });
+
+    it("waits for closeTelemetry to resolve before app.exit(1) on cleanup error", async () => {
+      mcpServerMock.stop.mockReturnValue(Promise.reject(new Error("MCP stop failed")));
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      let resolveClose!: () => void;
+      const closeDeferred = new Promise<void>((r) => {
+        resolveClose = r;
+      });
+      closeTelemetryMock.mockReturnValue(closeDeferred);
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(closeTelemetryMock).toHaveBeenCalled();
+      });
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      resolveClose();
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(1);
+      });
+
+      consoleSpy.mockRestore();
+    });
+  });
+
   describe("hard shutdown timeout", () => {
     beforeEach(() => {
       vi.useFakeTimers();
@@ -364,6 +431,7 @@ describe("registerShutdownHandler", () => {
 
       expect(appMock.exit).toHaveBeenCalledWith(1);
       expect(appMock.exit).toHaveBeenCalledTimes(1);
+      expect(closeTelemetryMock).toHaveBeenCalled();
       expect(consoleSpy).toHaveBeenCalledWith(
         "[MAIN] Error during cleanup:",
         expect.objectContaining({

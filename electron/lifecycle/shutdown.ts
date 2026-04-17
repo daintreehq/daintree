@@ -18,6 +18,7 @@ import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
 import { closeSharedDb } from "../services/persistence/db.js";
+import { closeTelemetry } from "../services/TelemetryService.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { isSignalShutdown } from "./signalShutdownState.js";
 
@@ -207,18 +208,20 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     });
 
     Promise.race([cleanupPromise, timeoutPromise])
-      .then(() => {
+      .then(async () => {
         if (exitCalled) return;
         exitCalled = true;
         clearTimeout(hardTimer);
         console.log("[MAIN] Graceful shutdown complete");
+        await closeTelemetry();
         app.exit(0);
       })
-      .catch((error) => {
+      .catch(async (error) => {
         if (exitCalled) return;
         exitCalled = true;
         clearTimeout(hardTimer);
         console.error("[MAIN] Error during cleanup:", error);
+        await closeTelemetry();
         app.exit(1);
       });
   });

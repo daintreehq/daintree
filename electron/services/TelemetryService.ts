@@ -57,6 +57,15 @@ function sanitizeEvent(event: SentryEvent): SentryEvent | null {
 
 let initialized = false;
 let captureEventFn: ((event: SentryEvent) => string) | null = null;
+let sentryModule: typeof import("@sentry/electron/main") | null = null;
+let initPromise: Promise<void> | null = null;
+let closingPromise: Promise<void> | null = null;
+
+const SENTRY_CLOSE_TIMEOUT_MS = 2000;
+// Cap the wait for in-flight init during shutdown. If init is still pending past
+// this, proceed with close — the alternative is blocking exit on a potentially
+// hung import.
+const SENTRY_INIT_WAIT_CAP_MS = 500;
 
 interface BufferedEvent {
   event: string;
@@ -68,35 +77,45 @@ const preConsentBuffer: BufferedEvent[] = [];
 const BUFFER_MAX = 100;
 
 export async function initializeTelemetry(): Promise<void> {
-  if (getTelemetryLevel() === "off") return;
-
-  const dsn = process.env.SENTRY_DSN;
-  if (!dsn) return;
-
   if (initialized) return;
+  if (initPromise) return initPromise;
+
+  initPromise = (async () => {
+    if (getTelemetryLevel() === "off") return;
+
+    const dsn = process.env.SENTRY_DSN;
+    if (!dsn) return;
+
+    try {
+      const sentry = await import("@sentry/electron/main");
+      sentry.init({
+        dsn,
+        release: app.getVersion(),
+        environment: app.isPackaged ? "production" : "development",
+        // Do not set `sampleRate` — it defaults to 1.0 (100% error capture). If
+        // performance tracing is ever added, use `tracesSampleRate` instead.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        beforeSend: sanitizeEvent as any,
+        initialScope: {
+          tags: {
+            platform: process.platform,
+            arch: process.arch,
+            node: process.versions.node,
+          },
+        },
+      });
+      captureEventFn = sentry.captureEvent;
+      sentryModule = sentry;
+      initialized = true;
+    } catch (err) {
+      console.warn("[Telemetry] Failed to initialize Sentry:", err);
+    }
+  })();
 
   try {
-    const sentry = await import("@sentry/electron/main");
-    sentry.init({
-      dsn,
-      release: app.getVersion(),
-      environment: app.isPackaged ? "production" : "development",
-      // Do not set `sampleRate` — it defaults to 1.0 (100% error capture). If
-      // performance tracing is ever added, use `tracesSampleRate` instead.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      beforeSend: sanitizeEvent as any,
-      initialScope: {
-        tags: {
-          platform: process.platform,
-          arch: process.arch,
-          node: process.versions.node,
-        },
-      },
-    });
-    captureEventFn = sentry.captureEvent;
-    initialized = true;
-  } catch (err) {
-    console.warn("[Telemetry] Failed to initialize Sentry:", err);
+    await initPromise;
+  } finally {
+    initPromise = null;
   }
 }
 
@@ -186,4 +205,41 @@ export function markTelemetryPromptShown(): void {
 
 export function _getPreConsentBufferLength(): number {
   return preConsentBuffer.length;
+}
+
+// Drain buffered Sentry events before process exit. Safe to call when telemetry
+// was never initialized (no-op) and idempotent. Never throws — telemetry failure
+// must never block app exit. Concurrent callers share a single in-flight drain.
+export async function closeTelemetry(): Promise<void> {
+  if (closingPromise) return closingPromise;
+
+  closingPromise = (async () => {
+    // If init is still in flight, wait briefly so we don't miss late-arriving
+    // events. Cap the wait so a hung import can't block exit.
+    if (initPromise) {
+      await Promise.race([
+        initPromise.catch(() => {}),
+        new Promise<void>((resolve) => setTimeout(resolve, SENTRY_INIT_WAIT_CAP_MS)),
+      ]);
+    }
+
+    if (!initialized || !sentryModule) return;
+    const mod = sentryModule;
+    try {
+      const drained = await mod.close(SENTRY_CLOSE_TIMEOUT_MS);
+      if (drained === false) {
+        console.warn(
+          `[Telemetry] Sentry.close timed out after ${SENTRY_CLOSE_TIMEOUT_MS}ms; some events may be lost`
+        );
+      }
+    } catch {
+      // never block exit on telemetry failure
+    } finally {
+      initialized = false;
+      captureEventFn = null;
+      sentryModule = null;
+    }
+  })();
+
+  return closingPromise;
 }
