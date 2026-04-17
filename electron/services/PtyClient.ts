@@ -31,6 +31,7 @@ import path from "path";
 import os from "os";
 import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
+import { performance } from "node:perf_hooks";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { getTrashedPidTracker } from "./TrashedPidTracker.js";
 import { RequestResponseBroker, BrokerError } from "./rpc/index.js";
@@ -162,6 +163,23 @@ function classifyCrash(code: number | null, signal: string | null): CrashType {
   return "CLEAN_EXIT";
 }
 
+const RTT_BUFFER_SIZE = 20;
+const RTT_LOG_EVERY_N_SAMPLES = 10;
+const RTT_LOG_INTERVAL_MS = 5 * 60 * 1000;
+const RTT_WARN_THRESHOLD_MS = 5000;
+
+function rttPercentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  if (p <= 0) return sorted[0];
+  if (p >= 1) return sorted[sorted.length - 1];
+  const idx = p * (sorted.length - 1);
+  const low = Math.floor(idx);
+  const high = Math.ceil(idx);
+  if (low === high) return sorted[low];
+  const frac = idx - low;
+  return sorted[low] * (1 - frac) + sorted[high] * frac;
+}
+
 export class PtyClient extends EventEmitter {
   private child: UtilityProcess | null = null;
   private config: Required<PtyClientConfig>;
@@ -199,6 +217,12 @@ export class PtyClient extends EventEmitter {
    * respawn fan-out bounded under repeated crashes.
    */
   private readonly MAX_PENDING_SPAWNS = 250;
+
+  /** RTT observability: timestamp of the in-flight health-check ping, or null if none. */
+  private lastPingTime: number | null = null;
+  private rttSamples: number[] = [];
+  private rttSamplesSinceLastLog = 0;
+  private lastRttLogTime = 0;
 
   /** Unified request/response broker for all async operations */
   private broker = new RequestResponseBroker({
@@ -415,6 +439,10 @@ export class PtyClient extends EventEmitter {
         clearInterval(this.healthCheckInterval);
         this.healthCheckInterval = null;
       }
+      this.lastPingTime = null;
+      this.rttSamples = [];
+      this.rttSamplesSinceLastLog = 0;
+      this.lastRttLogTime = 0;
 
       // Reject ready promise if host exited before becoming ready
       const wasReady = this.isInitialized;
@@ -615,6 +643,12 @@ export class PtyClient extends EventEmitter {
 
       case "pong":
         this.missedHeartbeats = 0;
+        if (this.lastPingTime !== null) {
+          const now = performance.now();
+          const rtt = now - this.lastPingTime;
+          this.lastPingTime = null;
+          this.recordRtt(rtt, now);
+        }
         if (this.isWaitingForHandshake) {
           this.isWaitingForHandshake = false;
           if (this.handshakeTimeout) {
@@ -743,6 +777,35 @@ export class PtyClient extends EventEmitter {
       default:
         console.warn("[PtyClient] Unknown event type:", (event as { type: string }).type);
     }
+  }
+
+  private recordRtt(rtt: number, now: number): void {
+    this.rttSamples.push(rtt);
+    if (this.rttSamples.length > RTT_BUFFER_SIZE) {
+      this.rttSamples.shift();
+    }
+    this.rttSamplesSinceLastLog++;
+
+    if (rtt > RTT_WARN_THRESHOLD_MS) {
+      console.warn(
+        `[PtyClient] Heartbeat RTT spike: ${rtt.toFixed(1)}ms (> ${RTT_WARN_THRESHOLD_MS}ms)`
+      );
+    }
+
+    const countTrigger = this.rttSamplesSinceLastLog >= RTT_LOG_EVERY_N_SAMPLES;
+    const timeTrigger = now - this.lastRttLogTime >= RTT_LOG_INTERVAL_MS;
+    if (!countTrigger && !timeTrigger) return;
+
+    const sorted = [...this.rttSamples].sort((a, b) => a - b);
+    const p50 = rttPercentile(sorted, 0.5);
+    const p95 = rttPercentile(sorted, 0.95);
+    const p99 = rttPercentile(sorted, 0.99);
+    const max = sorted[sorted.length - 1] ?? 0;
+    console.log(
+      `[PtyClient] Heartbeat RTT (last ${sorted.length}): p50=${p50.toFixed(1)}ms p95=${p95.toFixed(1)}ms p99=${p99.toFixed(1)}ms max=${max.toFixed(1)}ms samples=${this.rttSamplesSinceLastLog}`
+    );
+    this.rttSamplesSinceLastLog = 0;
+    this.lastRttLogTime = now;
   }
 
   private send(request: PtyHostRequest): void {
@@ -1388,6 +1451,7 @@ export class PtyClient extends EventEmitter {
       this.handshakeTimeout = null;
     }
     this.isWaitingForHandshake = false;
+    this.lastPingTime = null;
     console.log("[PtyClient] Health check paused");
   }
 
@@ -1417,6 +1481,7 @@ export class PtyClient extends EventEmitter {
     // Send handshake ping before resuming normal health checks
     console.log("[PtyClient] System resumed. Initiating handshake...");
     this.isWaitingForHandshake = true;
+    this.lastPingTime = performance.now();
     this.send({ type: "health-check" });
 
     // Timeout if no response within 5 seconds - fall back to immediate start
@@ -1425,6 +1490,7 @@ export class PtyClient extends EventEmitter {
         console.warn("[PtyClient] Handshake timeout - forcing health check resume");
         this.isWaitingForHandshake = false;
         this.handshakeTimeout = null;
+        this.lastPingTime = null;
         this.startHealthCheckInterval();
       }
     }, 5000);
@@ -1440,6 +1506,7 @@ export class PtyClient extends EventEmitter {
 
     // Reset watchdog counter when starting
     this.missedHeartbeats = 0;
+    this.lastRttLogTime = performance.now();
 
     this.healthCheckInterval = setInterval(() => {
       if (!this.isInitialized || !this.child || this.isHealthCheckPaused) return;
@@ -1465,11 +1532,13 @@ export class PtyClient extends EventEmitter {
           process.kill(this.child.pid, "SIGKILL");
         }
         this.missedHeartbeats = 0;
+        this.lastPingTime = null;
         return;
       }
 
       // Increment counter - will be reset by 'pong' response
       this.missedHeartbeats++;
+      this.lastPingTime = performance.now();
       this.send({ type: "health-check" });
     }, this.config.healthCheckIntervalMs);
 
@@ -1516,6 +1585,7 @@ export class PtyClient extends EventEmitter {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
     }
+    this.lastPingTime = null;
 
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
