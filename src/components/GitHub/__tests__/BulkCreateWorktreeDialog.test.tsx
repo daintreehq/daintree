@@ -1096,20 +1096,17 @@ describe("BulkCreateWorktreeDialog", () => {
 
     // With 3 issues, pre-query runs getAvailableBranch + getDefaultPath once each
     // per item BEFORE any worktree.create call. After the button click and
-    // microtask flush, all pre-queries have completed and both concurrency
+    // microtask flush, all pre-queries have completed and all three concurrency
     // slots have filled — but no further pre-query IPC should fire.
     expect(mockGetAvailableBranch).toHaveBeenCalledTimes(3);
     expect(mockGetDefaultPath).toHaveBeenCalledTimes(3);
 
-    // The queue has started worktree.create for the first 2 items (concurrency=2)
-    expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
+    // The queue has started worktree.create for all 3 items (concurrency=3)
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
 
     // Resolve all creates and advance
     await act(async () => {
       createResolvers[0]?.("wt-1");
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    await act(async () => {
       createResolvers[1]?.("wt-2");
       createResolvers[2]?.("wt-3");
       await vi.advanceTimersByTimeAsync(0);
