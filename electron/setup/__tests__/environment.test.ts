@@ -901,7 +901,7 @@ describe("Canopy -> Daintree userData migration gating", () => {
     fsMock.existsSync.mockImplementation((p: string) => {
       if (p.endsWith(".rebrand-migrated")) return false;
       if (p.endsWith("daintree.db")) return true;
-      if (p.endsWith("/Daintree/Preferences")) return true;
+      if (p.endsWith("/Daintree/Preferences") || p.endsWith("\\Daintree\\Preferences")) return true;
       if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
       return false;
     });
@@ -926,7 +926,8 @@ describe("Canopy -> Daintree userData migration gating", () => {
     fsMock.existsSync.mockImplementation((p: string) => {
       if (p.endsWith(".rebrand-migrated")) return true; // marker stays
       if (p.endsWith("daintree.db")) return true;
-      if (p.endsWith("/Daintree/Local Storage")) return true;
+      if (p.endsWith("/Daintree/Local Storage") || p.endsWith("\\Daintree\\Local Storage"))
+        return true;
       if (p.endsWith("/Canopy") || p.endsWith("\\Canopy")) return true;
       return false;
     });
