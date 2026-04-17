@@ -19,7 +19,6 @@ export function toHostSnapshot(
     lastOutputTime: snapshot.lastOutputTime,
     lastCheckTime: snapshot.lastCheckTime,
     type: snapshot.type,
-    worktreeId: snapshot.worktreeId,
     agentId: snapshot.agentId,
     agentState: snapshot.agentState,
     lastStateChange: snapshot.lastStateChange,

@@ -192,7 +192,6 @@ describe("dev preview session handlers", () => {
       expect.any(String),
       expect.objectContaining({
         projectId: "project-1",
-        worktreeId: "wt-1",
       })
     );
 

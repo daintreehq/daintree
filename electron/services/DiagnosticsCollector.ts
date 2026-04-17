@@ -347,7 +347,6 @@ async function collectTerminals() {
     const terminals = ptyManager.getAll();
     return terminals.map((t) => ({
       id: t.id,
-      worktreeId: t.worktreeId,
       kind: t.kind,
       agentState: t.agentState,
       cwd: t.cwd ? sanitizePath(t.cwd) : null,

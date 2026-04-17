@@ -59,7 +59,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       : validatedOptions.kind || (validatedOptions.agentId ? "agent" : "terminal");
     const agentId = validatedOptions.agentId || (isAgentType ? type : undefined);
     const title = validatedOptions.title;
-    const worktreeId = validatedOptions.worktreeId;
 
     const id = validatedOptions.id || crypto.randomUUID();
 
@@ -111,18 +110,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           return projectPath;
         } catch {
           // ignore
-        }
-      }
-
-      if (worktreeId && deps.worktreeService) {
-        try {
-          const snapshot = await deps.worktreeService.getMonitorAsync(worktreeId);
-          if (snapshot?.path && path.isAbsolute(snapshot.path)) {
-            await fs.promises.access(snapshot.path);
-            return snapshot.path;
-          }
-        } catch {
-          // ignore — worktree path inaccessible or service unavailable
         }
       }
 
@@ -201,7 +188,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         type,
         agentId,
         title,
-        worktreeId,
         projectId,
         restore: validatedOptions.restore,
         isEphemeral: validatedOptions.isEphemeral,

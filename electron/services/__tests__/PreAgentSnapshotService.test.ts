@@ -27,11 +27,11 @@ vi.mock("../../utils/logger.js", () => ({
 import { events, type DaintreeEventMap } from "../events.js";
 import { preAgentSnapshotService } from "../PreAgentSnapshotService.js";
 
-function emitStateChange(previousState: string, state: string, worktreeId?: string) {
+function emitStateChange(previousState: string, state: string, cwd?: string) {
   events.emit("agent:state-changed", {
     state,
     previousState,
-    worktreeId,
+    cwd,
     terminalId: "term-1",
     timestamp: Date.now(),
     trigger: "heuristic",

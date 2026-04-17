@@ -493,7 +493,7 @@ events.on("agent:state-changed", (payload) => {
       traceId: payload.traceId,
       trigger: payload.trigger,
       confidence: payload.confidence,
-      worktreeId: payload.worktreeId,
+      cwd: payload.cwd,
       waitingReason: payload.waitingReason,
       sessionCost: payload.sessionCost,
       sessionTokens: payload.sessionTokens,
@@ -536,7 +536,6 @@ events.on("agent:spawned", (payload) => {
       agentId: payload.agentId,
       terminalId: payload.terminalId,
       type: payload.type,
-      worktreeId: payload.worktreeId,
       timestamp: payload.timestamp,
     },
   });
@@ -551,7 +550,6 @@ events.on("agent:output", (payload) => {
       timestamp: payload.timestamp,
       traceId: payload.traceId,
       terminalId: payload.terminalId,
-      worktreeId: payload.worktreeId,
     },
   });
 });
@@ -566,7 +564,6 @@ events.on("agent:completed", (payload) => {
       timestamp: payload.timestamp,
       traceId: payload.traceId,
       terminalId: payload.terminalId,
-      worktreeId: payload.worktreeId,
     },
   });
 });
@@ -580,7 +577,6 @@ events.on("agent:killed", (payload) => {
       timestamp: payload.timestamp,
       traceId: payload.traceId,
       terminalId: payload.terminalId,
-      worktreeId: payload.worktreeId,
     },
   });
 });
@@ -1159,7 +1155,6 @@ port.on("message", async (rawMsg: any) => {
             lastOutputTime: s.lastOutputTime,
             lastCheckTime: s.lastCheckTime,
             type: s.type,
-            worktreeId: s.worktreeId,
             agentId: s.agentId,
             agentState: s.agentState,
             lastStateChange: s.lastStateChange,
@@ -1264,7 +1259,6 @@ port.on("message", async (rawMsg: any) => {
                 agentId: terminal.agentId,
                 title: terminal.title,
                 cwd: terminal.cwd,
-                worktreeId: terminal.worktreeId,
                 agentState: terminal.agentState,
                 waitingReason: terminal.waitingReason,
                 lastStateChange: terminal.lastStateChange,
@@ -1386,7 +1380,6 @@ port.on("message", async (rawMsg: any) => {
             agentId: t.agentId,
             title: t.title,
             cwd: t.cwd,
-            worktreeId: t.worktreeId,
             agentState: t.agentState,
             waitingReason: t.waitingReason,
             lastStateChange: t.lastStateChange,
@@ -1416,7 +1409,6 @@ port.on("message", async (rawMsg: any) => {
             agentId: t.agentId,
             title: t.title,
             cwd: t.cwd,
-            worktreeId: t.worktreeId,
             agentState: t.agentState,
             waitingReason: t.waitingReason,
             lastStateChange: t.lastStateChange,
@@ -1446,7 +1438,6 @@ port.on("message", async (rawMsg: any) => {
             agentId: t.agentId,
             title: t.title,
             cwd: t.cwd,
-            worktreeId: t.worktreeId,
             agentState: t.agentState,
             waitingReason: t.waitingReason,
             lastStateChange: t.lastStateChange,

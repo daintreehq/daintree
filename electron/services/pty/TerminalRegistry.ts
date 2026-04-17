@@ -346,9 +346,6 @@ export class TerminalRegistry {
     }
 
     const startPaths: string[] = [];
-    if (typeof info.worktreeId === "string" && info.worktreeId.trim()) {
-      startPaths.push(info.worktreeId);
-    }
     if (typeof info.cwd === "string" && info.cwd.trim()) {
       startPaths.push(info.cwd);
     }

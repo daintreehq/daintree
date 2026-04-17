@@ -331,7 +331,6 @@ export const createCorePanelActions = (
           type: legacyType,
           agentId,
           title,
-          worktreeId: options.worktreeId,
           env: mergedEnv,
           restore: options.restore,
           agentLaunchFlags: options.agentLaunchFlags,

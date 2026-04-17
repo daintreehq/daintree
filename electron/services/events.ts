@@ -503,6 +503,8 @@ export type DaintreeEventMap = {
     previousState: AgentState;
     trigger: AgentStateChangeTrigger;
     confidence: number;
+    /** Terminal working directory (used by PreAgentSnapshotService as the git target). */
+    cwd?: string;
     waitingReason?: import("../../shared/types/agent.js").WaitingReason;
     sessionCost?: number;
     sessionTokens?: number;

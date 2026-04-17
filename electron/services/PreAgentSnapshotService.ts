@@ -25,11 +25,16 @@ class PreAgentSnapshotService {
   private handleStateChanged(payload: {
     state: string;
     previousState: string;
-    worktreeId?: string;
+    cwd?: string;
   }): void {
-    const { state, previousState, worktreeId } = payload;
+    const { state, previousState, cwd } = payload;
 
-    if (previousState !== "idle" || state !== "working" || !worktreeId) return;
+    if (previousState !== "idle" || state !== "working" || !cwd) return;
+
+    // worktreeId in this codebase is the normalized absolute path — the
+    // terminal's cwd (the worktree root) is used as the git target for
+    // stash/restore and as the snapshot key.
+    const worktreeId = cwd;
 
     if (this.snapshots.has(worktreeId)) return;
 

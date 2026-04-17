@@ -111,6 +111,23 @@ class AgentNotificationService {
     return true;
   }
 
+  /**
+   * Look up the renderer-owned worktreeId for a terminal from persisted app state.
+   *
+   * Backend-emitted agent events (agent:state-changed, agent:completed, etc.) no
+   * longer carry worktreeId — it's renderer-owned layout state. Main-side
+   * consumers that need worktreeId for focus/dedup/routing should resolve it
+   * here from the IPC-synced appState. May briefly lag a drag-to-worktree
+   * gesture; that is acceptable because the fallback (undefined) simply means
+   * notifications aren't suppressed, not that they fire wrongly.
+   */
+  private resolveWorktreeIdForTerminal(terminalId?: string): string | undefined {
+    if (!terminalId) return undefined;
+    const terminals = store.get("appState").terminals;
+    const entry = terminals.find((t) => t.id === terminalId);
+    return entry?.worktreeId;
+  }
+
   private handleStateChanged(payload: {
     state: string;
     previousState: string;
@@ -120,7 +137,11 @@ class AgentNotificationService {
     timestamp: number;
     waitingReason?: string;
   }): void {
-    const { state, previousState, worktreeId, terminalId, agentId, waitingReason } = payload;
+    const { state, previousState, terminalId, agentId, waitingReason } = payload;
+    // Backend no longer emits worktreeId on agent events (#5139). Resolve it
+    // from persisted renderer state so focus suppression, dedup keying, and
+    // notification context still work correctly.
+    const worktreeId = payload.worktreeId ?? this.resolveWorktreeIdForTerminal(terminalId);
     const settings = projectStore.getEffectiveNotificationSettings();
 
     // Clear spawn grace tracking once the agent starts doing real work

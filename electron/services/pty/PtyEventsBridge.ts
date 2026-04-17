@@ -72,7 +72,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         traceId: event.traceId,
         trigger: normalizeAgentTrigger(event.trigger),
         confidence: normalizeConfidence(event.confidence),
-        worktreeId: event.worktreeId,
+        cwd: event.cwd,
         waitingReason: event.waitingReason,
         sessionCost: event.sessionCost,
         sessionTokens: event.sessionTokens,

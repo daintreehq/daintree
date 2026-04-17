@@ -26,7 +26,6 @@ export interface TerminalPublicState {
   type?: TerminalType;
   agentId?: AgentId;
   title?: string;
-  worktreeId?: string;
   spawnedAt: number;
   wasKilled?: boolean;
   isExited?: boolean;
@@ -118,7 +117,6 @@ export interface TerminalSnapshot {
   lastCheckTime: number;
   kind?: PanelKind;
   type?: TerminalType;
-  worktreeId?: string;
   agentId?: AgentId;
   agentState?: AgentState;
   lastStateChange?: number;

@@ -51,6 +51,9 @@ export const AgentStateChangedSchema = EventContextSchema.extend({
   trigger: AgentStateChangeTriggerSchema,
   // Confidence in the state detection (0.0 = uncertain, 1.0 = certain)
   confidence: z.number().min(0).max(1),
+  // Working directory of the spawned terminal (used as the git target for
+  // pre-agent snapshots; equal to the worktree path in the typical case).
+  cwd: z.string().optional(),
   waitingReason: z.enum(["prompt", "question"]).optional(),
   sessionCost: z.number().nonnegative().optional(),
   sessionTokens: z.number().int().nonnegative().optional(),

@@ -68,7 +68,6 @@ interface BackendTerminalData {
   agentId?: string;
   title?: string;
   cwd: string;
-  worktreeId?: string;
   agentState?: AgentState;
   lastStateChange?: number;
   activityTier?: "active" | "background";
@@ -84,7 +83,6 @@ interface ReconnectedTerminalData {
   agentId?: string;
   title?: string;
   cwd?: string;
-  worktreeId?: string;
   agentState?: AgentState;
   lastStateChange?: number;
   activityTier?: "active" | "background";
@@ -159,7 +157,7 @@ export function buildArgsForBackendTerminal(
     agentId,
     title: saved.title ?? backendTerminal.title,
     cwd,
-    worktreeId: saved.worktreeId ?? backendTerminal.worktreeId,
+    worktreeId: saved.worktreeId,
     location,
     existingId: backendTerminal.id,
     agentState: backendTerminal.agentState,
@@ -209,7 +207,7 @@ export function buildArgsForReconnectedFallback(
     agentId,
     title: saved.title ?? reconnectedTerminal.title,
     cwd,
-    worktreeId: saved.worktreeId ?? reconnectedTerminal.worktreeId,
+    worktreeId: saved.worktreeId,
     location,
     existingId: reconnectedTerminal.id,
     agentState: reconnectedTerminal.agentState,
@@ -326,6 +324,29 @@ export function buildArgsForNonPtyRecreation(
   return base;
 }
 
+/**
+ * Infer a worktreeId from a terminal's cwd by longest-prefix matching against the
+ * worktrees list. Returns undefined when no worktree's path is a prefix of cwd.
+ * Uses segment-aware matching (both POSIX and Windows separators) to avoid false
+ * positives where `/repo/wt` would match `/repo/wt-long`.
+ */
+export function inferWorktreeIdFromCwd(
+  cwd: string | undefined,
+  worktrees: ReadonlyArray<{ id: string; path: string }> | undefined
+): string | undefined {
+  if (!cwd || !worktrees || worktrees.length === 0) return undefined;
+  let best: { id: string; path: string } | undefined;
+  for (const wt of worktrees) {
+    if (!wt.path) continue;
+    if (cwd === wt.path || cwd.startsWith(wt.path + "/") || cwd.startsWith(wt.path + "\\")) {
+      if (!best || wt.path.length > best.path.length) {
+        best = wt;
+      }
+    }
+  }
+  return best?.id;
+}
+
 export function buildArgsForOrphanedTerminal(
   terminal: BackendTerminalData,
   projectRoot: string
@@ -340,7 +361,6 @@ export function buildArgsForOrphanedTerminal(
     agentId,
     title: terminal.title,
     cwd,
-    worktreeId: terminal.worktreeId,
     location: "grid",
     existingId: terminal.id,
     agentState: terminal.agentState,

@@ -910,4 +910,138 @@ describe("AgentNotificationService", () => {
       expect(soundServiceMock.play).not.toHaveBeenCalled();
     });
   });
+
+  // #5139 follow-up: backend-emitted events no longer carry worktreeId.
+  // Main-side consumers (AgentNotificationService) resolve it from persisted
+  // renderer state (appState.terminals) so notification context carries the
+  // correct worktreeId for click-to-navigate. Without this resolution,
+  // makeContext would ship worktreeId: undefined to the renderer.
+  describe("worktreeId fallback from appState (issue #5139)", () => {
+    function payloadWithoutWorktreeId(state: AgentState, previousState: AgentState = "working") {
+      return {
+        state,
+        previousState,
+        terminalId: "term-1",
+        agentId: "agent-1",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+      };
+    }
+
+    it("resolves worktreeId from appState.terminals when the payload omits it (completion)", () => {
+      mockStore(
+        { completedEnabled: true },
+        {
+          activeWorktreeId: "wt-A",
+          terminals: [
+            {
+              id: "term-1",
+              kind: "agent",
+              agentId: "agent-1",
+              title: "Claude",
+              location: "dock",
+              worktreeId: "wt-B",
+            },
+          ],
+        }
+      );
+
+      events.emit("agent:state-changed", payloadWithoutWorktreeId("completed"));
+      vi.advanceTimersByTime(5000);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent completed",
+        expect.stringContaining("finished"),
+        expect.objectContaining({ worktreeId: "wt-B" }),
+        "notification:watch-navigate",
+        true
+      );
+    });
+
+    it("resolves worktreeId from appState.terminals when the payload omits it (waiting)", () => {
+      mockStore(
+        { waitingEnabled: true },
+        {
+          activeWorktreeId: "wt-A",
+          terminals: [
+            {
+              id: "term-1",
+              kind: "agent",
+              agentId: "agent-1",
+              title: "Claude",
+              location: "dock",
+              worktreeId: "wt-B",
+            },
+          ],
+        }
+      );
+
+      events.emit("agent:state-changed", payloadWithoutWorktreeId("waiting"));
+      vi.advanceTimersByTime(500);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent waiting",
+        expect.stringContaining("waiting"),
+        expect.objectContaining({ worktreeId: "wt-B" }),
+        "notification:watch-navigate",
+        true
+      );
+    });
+
+    it("prefers an explicit worktreeId in the payload over the appState fallback", () => {
+      mockStore(
+        { completedEnabled: true },
+        {
+          activeWorktreeId: "wt-A",
+          terminals: [
+            {
+              id: "term-1",
+              kind: "agent",
+              agentId: "agent-1",
+              title: "Claude",
+              location: "dock",
+              worktreeId: "wt-stale",
+            },
+          ],
+        }
+      );
+
+      events.emit("agent:state-changed", {
+        ...payloadWithoutWorktreeId("completed"),
+        worktreeId: "wt-fresh",
+      });
+      vi.advanceTimersByTime(5000);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent completed",
+        expect.any(String),
+        expect.objectContaining({ worktreeId: "wt-fresh" }),
+        "notification:watch-navigate",
+        true
+      );
+    });
+
+    it("degrades to undefined worktreeId when the terminal is not found in appState", () => {
+      mockStore(
+        { completedEnabled: true },
+        {
+          activeWorktreeId: "wt-A",
+          // No terminal entry for term-1 — e.g., event arrives after delete.
+          terminals: [],
+        }
+      );
+
+      events.emit("agent:state-changed", payloadWithoutWorktreeId("completed"));
+      vi.advanceTimersByTime(5000);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent completed",
+        expect.any(String),
+        expect.objectContaining({ worktreeId: undefined }),
+        "notification:watch-navigate",
+        true
+      );
+    });
+  });
 });

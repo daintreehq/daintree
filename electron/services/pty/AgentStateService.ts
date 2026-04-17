@@ -136,7 +136,7 @@ export class AgentStateService {
           timestamp: getStateChangeTimestamp(),
           traceId: terminal.traceId,
           terminalId: terminal.id,
-          worktreeId: terminal.worktreeId,
+          cwd: terminal.cwd,
           trigger: inferredTrigger,
           confidence: inferredConfidence,
           waitingReason,
@@ -176,7 +176,7 @@ export class AgentStateService {
       timestamp: terminal.lastStateChange,
       traceId: terminal.traceId,
       terminalId: terminal.id,
-      worktreeId: terminal.worktreeId,
+      cwd: terminal.cwd,
       trigger: inferredTrigger,
       confidence: inferredConfidence,
       ...(newState === "waiting" && waitingReason ? { waitingReason } : {}),
@@ -244,7 +244,6 @@ export class AgentStateService {
       timestamp: completedAt,
       traceId: terminal.traceId,
       terminalId: terminal.id,
-      worktreeId: terminal.worktreeId,
     };
 
     const validatedCompleted = AgentCompletedSchema.safeParse(completedPayload);
@@ -269,7 +268,6 @@ export class AgentStateService {
       timestamp: Date.now(),
       traceId: terminal.traceId,
       terminalId: terminal.id,
-      worktreeId: terminal.worktreeId,
     };
 
     const validatedKilled = AgentKilledSchema.safeParse(killedPayload);
@@ -348,7 +346,6 @@ export class AgentStateService {
       type,
       confidence: 1.0,
       timestamp: Date.now(),
-      worktreeId: terminal.worktreeId,
       // lastCommand is only populated for shell terminals currently
       lastCommand: undefined,
     });

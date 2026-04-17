@@ -25,7 +25,6 @@ export interface PtyHostSpawnOptions {
   type?: TerminalType;
   agentId?: AgentId;
   title?: string;
-  worktreeId?: string;
   projectId?: string;
   /** Whether to restore previous session content (default: true). Set to false on restart. */
   restore?: boolean;
@@ -122,7 +121,6 @@ export interface PtyHostTerminalSnapshot {
   lastCheckTime: number;
   kind?: PanelKind;
   type?: TerminalType;
-  worktreeId?: string;
   agentId?: AgentId;
   agentState?: AgentState;
   lastStateChange?: number;
@@ -161,7 +159,8 @@ export type PtyHostEvent =
       traceId?: string;
       trigger: string;
       confidence: number;
-      worktreeId?: string;
+      /** Terminal cwd (used by PreAgentSnapshotService as the git target). */
+      cwd?: string;
       waitingReason?: WaitingReason;
       sessionCost?: number;
       sessionTokens?: number;
@@ -254,7 +253,6 @@ export interface PtyHostTerminalInfo {
   agentId?: AgentId;
   title?: string;
   cwd: string;
-  worktreeId?: string;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
@@ -278,7 +276,6 @@ export interface AgentSpawnedPayload {
   agentId: string;
   terminalId: string;
   type: TerminalType;
-  worktreeId?: string;
   timestamp: number;
 }
 
@@ -289,7 +286,6 @@ export interface AgentOutputPayload {
   timestamp: number;
   traceId?: string;
   terminalId?: string;
-  worktreeId?: string;
 }
 
 /** Payload for agent:completed event */
@@ -300,7 +296,6 @@ export interface AgentCompletedPayload {
   timestamp: number;
   traceId?: string;
   terminalId?: string;
-  worktreeId?: string;
 }
 
 /** Payload for agent:killed event */
@@ -310,7 +305,6 @@ export interface AgentKilledPayload {
   timestamp: number;
   traceId?: string;
   terminalId?: string;
-  worktreeId?: string;
 }
 
 /**

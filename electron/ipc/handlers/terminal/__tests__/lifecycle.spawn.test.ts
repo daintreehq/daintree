@@ -10,13 +10,11 @@ vi.mock("electron", () => ({
   },
 }));
 
-const { mockGetCurrentProject, mockGetProjectById, mockGetProjectSettings, mockGetMonitorAsync } =
-  vi.hoisted(() => ({
-    mockGetCurrentProject: vi.fn(),
-    mockGetProjectById: vi.fn(),
-    mockGetProjectSettings: vi.fn(),
-    mockGetMonitorAsync: vi.fn(),
-  }));
+const { mockGetCurrentProject, mockGetProjectById, mockGetProjectSettings } = vi.hoisted(() => ({
+  mockGetCurrentProject: vi.fn(),
+  mockGetProjectById: vi.fn(),
+  mockGetProjectSettings: vi.fn(),
+}));
 
 vi.mock("../../../../services/ProjectStore.js", () => ({
   projectStore: {
@@ -188,7 +186,7 @@ describe("terminal spawn handler - projectId resolution", () => {
   });
 });
 
-describe("terminal spawn handler - worktree cwd fallback (issue #4888)", () => {
+describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer-owned)", () => {
   let ptyClient: {
     spawn: ReturnType<typeof vi.fn>;
     hasTerminal: ReturnType<typeof vi.fn>;
@@ -205,70 +203,28 @@ describe("terminal spawn handler - worktree cwd fallback (issue #4888)", () => {
     mockGetCurrentProject.mockReturnValue(null);
     mockGetProjectById.mockReturnValue(null);
     mockGetProjectSettings.mockResolvedValue({});
-    mockGetMonitorAsync.mockResolvedValue(null);
   });
 
-  it("falls back to worktree path when cwd is inaccessible and worktreeId is provided", async () => {
+  it("falls back to the current project path when cwd is inaccessible", async () => {
     const os = await import("os");
     const tmpDir = os.tmpdir();
-    mockGetMonitorAsync.mockResolvedValue({ path: tmpDir });
+    mockGetCurrentProject.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
 
-    const worktreeService = { getMonitorAsync: mockGetMonitorAsync };
-    const deps = { ptyClient, worktreeService } as unknown as HandlerDependencies;
+    const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
 
     const handler = getSpawnHandler();
     await handler({} as Electron.IpcMainInvokeEvent, {
       cwd: "/nonexistent/path",
-      worktreeId: "wt-123",
       cols: 80,
       rows: 24,
     });
 
-    expect(mockGetMonitorAsync).toHaveBeenCalledWith("wt-123");
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.cwd).toBe(tmpDir);
   });
 
-  it("falls back to homedir when worktreeService returns null", async () => {
-    mockGetMonitorAsync.mockResolvedValue(null);
-
-    const worktreeService = { getMonitorAsync: mockGetMonitorAsync };
-    const deps = { ptyClient, worktreeService } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    const os = await import("os");
-    await handler({} as Electron.IpcMainInvokeEvent, {
-      cwd: "/nonexistent/path",
-      worktreeId: "wt-123",
-      cols: 80,
-      rows: 24,
-    });
-
-    expect(mockGetMonitorAsync).toHaveBeenCalledWith("wt-123");
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.cwd).toBe(os.homedir());
-  });
-
-  it("does not call worktreeService when cwd is valid", async () => {
-    const worktreeService = { getMonitorAsync: mockGetMonitorAsync };
-    const deps = { ptyClient, worktreeService } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    const os = await import("os");
-    await handler({} as Electron.IpcMainInvokeEvent, {
-      cwd: os.homedir(),
-      worktreeId: "wt-123",
-      cols: 80,
-      rows: 24,
-    });
-
-    expect(mockGetMonitorAsync).not.toHaveBeenCalled();
-  });
-
-  it("works when worktreeService is not available on deps", async () => {
+  it("falls back to homedir when no project path is available", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
 
@@ -276,12 +232,33 @@ describe("terminal spawn handler - worktree cwd fallback (issue #4888)", () => {
     const os = await import("os");
     await handler({} as Electron.IpcMainInvokeEvent, {
       cwd: "/nonexistent/path",
-      worktreeId: "wt-123",
       cols: 80,
       rows: 24,
     });
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.cwd).toBe(os.homedir());
+  });
+
+  it("does not forward worktreeId to the pty client (renderer-owned layout state)", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    const os = await import("os");
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cwd: os.homedir(),
+        cols: 80,
+        rows: 24,
+        // Even if a caller sends worktreeId it should be stripped by the Zod schema
+        // and never reach the pty client spawn options.
+        worktreeId: "wt-123",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.worktreeId).toBeUndefined();
   });
 });

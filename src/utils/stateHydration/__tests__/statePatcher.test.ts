@@ -30,6 +30,7 @@ const {
   buildArgsForRespawn,
   buildArgsForNonPtyRecreation,
   buildArgsForOrphanedTerminal,
+  inferWorktreeIdFromCwd,
 } = await import("../statePatcher");
 
 beforeEach(() => {
@@ -225,22 +226,22 @@ describe("buildArgsForBackendTerminal", () => {
     expect(result.title).toBe("Shell");
   });
 
-  it("prefers saved worktreeId over stale backend worktreeId", () => {
+  it("uses saved worktreeId (renderer-owned layout state)", () => {
     const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "agent", title: "Claude", worktreeId: "wt-original" },
+      { id: "t1", cwd: "/p", kind: "agent", title: "Claude" },
       { id: "t1", location: "grid", worktreeId: "wt-dragged" },
       "/p"
     );
     expect(result.worktreeId).toBe("wt-dragged");
   });
 
-  it("falls back to backend worktreeId when saved worktreeId is missing", () => {
+  it("returns undefined worktreeId when saved has none", () => {
     const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", title: "Shell", worktreeId: "wt-backend" },
+      { id: "t1", cwd: "/p", kind: "terminal", title: "Shell" },
       { id: "t1", location: "grid" },
       "/p"
     );
-    expect(result.worktreeId).toBe("wt-backend");
+    expect(result.worktreeId).toBeUndefined();
   });
 });
 
@@ -252,7 +253,6 @@ describe("buildArgsForReconnectedFallback", () => {
       kind: "terminal" as const,
       type: undefined,
       title: "Shell",
-      worktreeId: "wt1",
     };
     const saved = { id: "t1", location: "dock", worktreeId: "wt-old", title: "Old Title" };
 
@@ -264,22 +264,22 @@ describe("buildArgsForReconnectedFallback", () => {
     expect(result.location).toBe("dock");
   });
 
-  it("prefers saved worktreeId over stale reconnected worktreeId", () => {
+  it("uses saved worktreeId (renderer-owned layout state)", () => {
     const result = buildArgsForReconnectedFallback(
-      { id: "t1", cwd: "/p", kind: "agent", title: "Claude", worktreeId: "wt-original" },
+      { id: "t1", cwd: "/p", kind: "agent", title: "Claude" },
       { id: "t1", location: "grid", worktreeId: "wt-dragged" },
       "/p"
     );
     expect(result.worktreeId).toBe("wt-dragged");
   });
 
-  it("falls back to reconnected worktreeId when saved worktreeId is missing", () => {
+  it("returns undefined worktreeId when saved has none", () => {
     const result = buildArgsForReconnectedFallback(
-      { id: "t1", cwd: "/p", kind: "terminal", title: "Shell", worktreeId: "wt-reconnected" },
+      { id: "t1", cwd: "/p", kind: "terminal", title: "Shell" },
       { id: "t1", location: "grid" },
       "/p"
     );
-    expect(result.worktreeId).toBe("wt-reconnected");
+    expect(result.worktreeId).toBeUndefined();
   });
 
   it("falls back to saved fields when reconnected is missing data", () => {
@@ -574,7 +574,6 @@ describe("buildArgsForOrphanedTerminal", () => {
         type: undefined,
         title: "Shell",
         cwd: "/project",
-        worktreeId: "wt1",
         agentState: "idle",
         lastStateChange: 12345,
       },
@@ -584,6 +583,8 @@ describe("buildArgsForOrphanedTerminal", () => {
     expect(result.location).toBe("grid");
     expect(result.kind).toBe("terminal");
     expect(result.agentState).toBe("idle");
+    // Orphan builder returns undefined; caller assigns via cwd inference
+    expect(result.worktreeId).toBeUndefined();
   });
 
   it("infers agent kind from title", () => {
@@ -636,6 +637,51 @@ describe("buildArgsForOrphanedTerminal", () => {
     expect(result.agentLaunchFlags).toBeUndefined();
     expect(result.agentModelId).toBeUndefined();
     expect(result.agentSessionId).toBeUndefined();
+  });
+});
+
+describe("inferWorktreeIdFromCwd", () => {
+  it("returns the id of the worktree whose path equals cwd", () => {
+    const worktrees = [
+      { id: "/repo/wt-a", path: "/repo/wt-a" },
+      { id: "/repo/wt-b", path: "/repo/wt-b" },
+    ];
+    expect(inferWorktreeIdFromCwd("/repo/wt-a", worktrees)).toBe("/repo/wt-a");
+  });
+
+  it("returns the id of the worktree whose path is a directory prefix of cwd", () => {
+    const worktrees = [{ id: "/repo/wt-a", path: "/repo/wt-a" }];
+    expect(inferWorktreeIdFromCwd("/repo/wt-a/src/lib", worktrees)).toBe("/repo/wt-a");
+  });
+
+  it("picks the longest matching path when multiple worktrees could match", () => {
+    const worktrees = [
+      { id: "/repo/wt", path: "/repo/wt" },
+      { id: "/repo/wt-long", path: "/repo/wt-long" },
+    ];
+    expect(inferWorktreeIdFromCwd("/repo/wt-long/src", worktrees)).toBe("/repo/wt-long");
+  });
+
+  it("does not match sibling directories that share a prefix", () => {
+    const worktrees = [{ id: "/repo/wt", path: "/repo/wt" }];
+    // "/repo/wt-long" starts with "/repo/wt" as a raw prefix but is not inside it.
+    expect(inferWorktreeIdFromCwd("/repo/wt-long/src", worktrees)).toBeUndefined();
+  });
+
+  it("returns undefined when cwd is outside every worktree", () => {
+    const worktrees = [{ id: "/repo/wt", path: "/repo/wt" }];
+    expect(inferWorktreeIdFromCwd("/home/user", worktrees)).toBeUndefined();
+  });
+
+  it("returns undefined when cwd is missing or worktrees are empty", () => {
+    expect(inferWorktreeIdFromCwd(undefined, [{ id: "/a", path: "/a" }])).toBeUndefined();
+    expect(inferWorktreeIdFromCwd("/a", [])).toBeUndefined();
+    expect(inferWorktreeIdFromCwd("/a", undefined)).toBeUndefined();
+  });
+
+  it("matches Windows-style paths with backslash separators", () => {
+    const worktrees = [{ id: "C:\\repo\\wt-a", path: "C:\\repo\\wt-a" }];
+    expect(inferWorktreeIdFromCwd("C:\\repo\\wt-a\\src\\lib", worktrees)).toBe("C:\\repo\\wt-a");
   });
 });
 

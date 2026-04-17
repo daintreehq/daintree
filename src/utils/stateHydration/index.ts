@@ -44,6 +44,7 @@ import {
   buildArgsForRespawn,
   buildArgsForNonPtyRecreation,
   buildArgsForOrphanedTerminal,
+  inferWorktreeIdFromCwd,
 } from "./statePatcher";
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
 const VERBOSE_HYDRATION_LOGGING = isDaintreeEnvEnabled("DAINTREE_VERBOSE");
@@ -486,6 +487,11 @@ export async function hydrateAppState(
                         saved,
                         projectRoot || ""
                       );
+                      // Assign to active worktree when a legacy saved panel has
+                      // no worktreeId (mirrors the matched-backend path).
+                      if (!reconnectArgs.worktreeId && activeWorktreeId) {
+                        reconnectArgs.worktreeId = activeWorktreeId;
+                      }
                       const restoredTerminalId = await addPanel(reconnectArgs);
                       restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
@@ -680,6 +686,12 @@ export async function hydrateAppState(
             `${orphanedTerminals.length} orphaned terminal(s) not in saved order, appending at end`
           );
 
+          // Resolve worktreeId for orphaned terminals by matching the terminal's
+          // cwd against known worktree paths (longest-prefix wins). worktreesPromise
+          // is awaited once; if it resolves to null or hasn't loaded, orphans fall
+          // back to activeWorktreeId so they still appear in the grid.
+          const worktreesForInfer = await worktreesPromise;
+
           await runInBatches(
             orphanedTerminals,
             RESTORE_SPAWN_BATCH_SIZE,
@@ -689,9 +701,16 @@ export async function hydrateAppState(
                 logHydrationInfo(`Reconnecting to orphaned terminal: ${terminal.id}`);
 
                 const orphanArgs = buildArgsForOrphanedTerminal(terminal, projectRoot || "");
-                // Assign orphaned terminals to the active worktree if they have none,
-                // so they appear in the grid filter (which matches on worktreeId).
-                if (!orphanArgs.worktreeId && activeWorktreeId) {
+                // Orphaned backend terminals no longer carry worktreeId — infer it
+                // from cwd against the loaded worktrees, then fall back to the
+                // active worktree so the panel still appears in the grid filter.
+                const inferred = inferWorktreeIdFromCwd(
+                  terminal.cwd,
+                  worktreesForInfer ?? undefined
+                );
+                if (inferred) {
+                  orphanArgs.worktreeId = inferred;
+                } else if (activeWorktreeId) {
                   orphanArgs.worktreeId = activeWorktreeId;
                 }
                 const restoredTerminalId = await addPanel(orphanArgs);
@@ -723,7 +742,7 @@ export async function hydrateAppState(
                 restoreTasks.push({
                   terminalId: restoredTerminalId,
                   label: terminal.id,
-                  worktreeId: terminal.worktreeId,
+                  worktreeId: orphanArgs.worktreeId,
                   location: "grid",
                 });
               } catch (error) {

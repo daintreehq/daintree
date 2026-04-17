@@ -244,7 +244,6 @@ export const TerminalSpawnOptionsSchema = z.object({
   env: z.record(z.string(), z.string()).optional(),
   type: TerminalTypeSchema.optional(),
   title: z.string().optional(),
-  worktreeId: z.string().optional(),
   restore: z.boolean().optional(),
   isEphemeral: z.boolean().optional(),
   agentLaunchFlags: z.array(z.string()).optional(),

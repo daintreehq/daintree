@@ -119,7 +119,6 @@ class TerminalRegistryController {
       type: legacyType,
       agentId,
       title,
-      worktreeId: options.worktreeId,
     };
 
     const id = await terminalClient.spawn(spawnOptions);
