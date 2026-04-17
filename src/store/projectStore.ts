@@ -82,7 +82,10 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   const terminals = panelIds
     .map((id) => panelsById[id])
     .filter((t): t is TerminalInstance => t != null && shouldPersistTerminal(t))
-    .map(panelToSnapshot);
+    // No previousSnapshot threaded here — this synchronous capture has no
+    // access to persistence caches. Unknown-kind preservation for the steady
+    // state is handled by PanelPersistence.save() after hydration priming.
+    .map((t) => panelToSnapshot(t));
 
   const tabGroupArray = Array.from(tabGroups.values()).filter((g) => g.panelIds.length > 1);
 

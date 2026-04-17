@@ -502,7 +502,9 @@ describe("PanelPersistence", () => {
   });
 
   describe("unregistered extension kind", () => {
-    it("produces base-only snapshot without crashing for unknown kinds", async () => {
+    it("falls back to base-only when no previous snapshot exists", async () => {
+      // First-save scenario: no prior state to preserve, no serializer registered.
+      // Base fields (including extensionState) survive; kind-specific fragment is empty.
       const client = createMockProjectClient();
       const persistence = new PanelPersistence(client, { debounceMs: 100 });
 
@@ -527,6 +529,204 @@ describe("PanelPersistence", () => {
         location: "grid",
         extensionState: { key: "value" },
       });
+    });
+
+    it("preserves previously-persisted kind-specific fields across save cycles", async () => {
+      // Regression test for #5201. A panel whose kind has no registered
+      // serializer (extension disabled mid-session, plugin not yet loaded,
+      // kind renamed) must retain its kind-specific fields through saves.
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const panel = createMockTerminal({
+        id: "ext-unknown",
+        kind: "custom-widget",
+        title: "Custom",
+        location: "grid",
+      });
+
+      // Prime persistence with a snapshot that includes kind-specific fields,
+      // as if hydrated from disk after an app launch where the extension
+      // hasn't registered its serializer yet.
+      persistence.primeProject(projectId, [
+        {
+          id: "ext-unknown",
+          kind: "custom-widget",
+          title: "Custom",
+          location: "grid",
+          // Kind-specific fields the (now-gone) serializer had written.
+          browserUrl: "https://example.com",
+          notePath: "/notes/custom.md",
+        },
+      ]);
+
+      persistence.save([panel], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const saved = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      expect(saved).toHaveLength(1);
+      expect(saved[0]).toEqual(
+        expect.objectContaining({
+          id: "ext-unknown",
+          kind: "custom-widget",
+          browserUrl: "https://example.com",
+          notePath: "/notes/custom.md",
+        })
+      );
+    });
+
+    it("preserves fields across two successive save cycles", async () => {
+      // Save once after priming, then save again — the second save should
+      // consult persisted state (not stale previous "base-only" output) and
+      // still preserve the kind-specific fields.
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const panel = createMockTerminal({
+        id: "ext-unknown",
+        kind: "custom-widget",
+        title: "Custom",
+        location: "grid",
+      });
+
+      persistence.primeProject(projectId, [
+        {
+          id: "ext-unknown",
+          kind: "custom-widget",
+          title: "Custom",
+          location: "grid",
+          browserUrl: "https://example.com",
+        },
+      ]);
+
+      persistence.save([panel], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      // Trigger a second save with a title change so the snapshot differs
+      // from the queued/persisted state and the debounce actually fires.
+      persistence.save([createMockTerminal({ ...panel, title: "Custom Renamed" })], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(client.setTerminals).toHaveBeenCalledTimes(2);
+      const secondSave = client.setTerminals.mock.calls[1][1] as TerminalSnapshot[];
+      expect(secondSave[0]).toEqual(
+        expect.objectContaining({
+          id: "ext-unknown",
+          title: "Custom Renamed",
+          browserUrl: "https://example.com",
+        })
+      );
+    });
+
+    it("does not preserve fields across a kind change for the same id", async () => {
+      // Same panel id but a different kind — the previously-persisted
+      // fragment belongs to the old kind and must NOT leak into the new kind.
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      persistence.primeProject(projectId, [
+        {
+          id: "ext-unknown",
+          kind: "old-kind",
+          title: "Custom",
+          location: "grid",
+          browserUrl: "https://old.example.com",
+        },
+      ]);
+
+      const panel = createMockTerminal({
+        id: "ext-unknown",
+        kind: "new-kind",
+        title: "Custom",
+        location: "grid",
+      });
+
+      persistence.save([panel], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const saved = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      expect(saved[0]).not.toHaveProperty("browserUrl");
+      expect(saved[0]).toEqual(expect.objectContaining({ id: "ext-unknown", kind: "new-kind" }));
+    });
+
+    it("bypasses preservation when a custom transform is provided", async () => {
+      // Custom `transform` is an external extension point. Preservation logic
+      // is tied to the default transform (panelToSnapshot); custom transforms
+      // own their own output entirely.
+      const client = createMockProjectClient();
+      const customTransform = vi.fn(
+        (t: TerminalInstance): TerminalSnapshot => ({
+          id: t.id,
+          kind: t.kind,
+          title: t.title,
+          location: t.location === "trash" ? "grid" : t.location,
+        })
+      );
+      const persistence = new PanelPersistence(client, {
+        debounceMs: 100,
+        transform: customTransform,
+      });
+
+      persistence.primeProject(projectId, [
+        {
+          id: "ext-unknown",
+          kind: "custom-widget",
+          title: "Custom",
+          location: "grid",
+          browserUrl: "https://example.com",
+        },
+      ]);
+
+      const panel = createMockTerminal({
+        id: "ext-unknown",
+        kind: "custom-widget",
+        title: "Custom",
+        location: "grid",
+      });
+
+      persistence.save([panel], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(customTransform).toHaveBeenCalledTimes(1);
+      const saved = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      expect(saved[0]).not.toHaveProperty("browserUrl");
+    });
+
+    it("primeProject is a no-op when state is already tracked", async () => {
+      // If a real save has already run (persisted state exists), a late
+      // hydration prime must not clobber live data.
+      const client = createMockProjectClient();
+      const persistence = new PanelPersistence(client, { debounceMs: 100 });
+
+      const panel = createMockTerminal({
+        id: "ext-unknown",
+        kind: "custom-widget",
+        title: "First",
+        location: "grid",
+      });
+
+      persistence.save([panel], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      // Late prime with a different snapshot — should be ignored.
+      persistence.primeProject(projectId, [
+        {
+          id: "ext-unknown",
+          kind: "custom-widget",
+          title: "Stale",
+          location: "grid",
+          browserUrl: "https://stale.example.com",
+        },
+      ]);
+
+      persistence.save([createMockTerminal({ ...panel, title: "Second" })], projectId);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const secondSave = client.setTerminals.mock.calls[1][1] as TerminalSnapshot[];
+      expect(secondSave[0]).not.toHaveProperty("browserUrl");
+      expect(secondSave[0]).toEqual(
+        expect.objectContaining({ id: "ext-unknown", title: "Second" })
+      );
     });
   });
 
