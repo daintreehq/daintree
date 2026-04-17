@@ -61,7 +61,7 @@ describe("registerPluginHandlers", () => {
     expect(result).toBe(plugins);
   });
 
-  it("PLUGIN_INVOKE handler delegates to pluginService.dispatchHandler", async () => {
+  it("PLUGIN_INVOKE handler delegates to pluginService.dispatchHandler for trusted senders", async () => {
     mockDispatchHandler.mockResolvedValue({ data: "hello" });
 
     registerPluginHandlers();
@@ -69,7 +69,8 @@ describe("registerPluginHandlers", () => {
       (c: unknown[]) => c[0] === "plugin:invoke"
     )![1] as (...args: unknown[]) => unknown;
 
-    const result = await invokeHandler({}, "my-plugin", "get-data", "arg1", "arg2");
+    const trustedEvent = { senderFrame: { url: "app://daintree/" } };
+    const result = await invokeHandler(trustedEvent, "my-plugin", "get-data", "arg1", "arg2");
     expect(mockDispatchHandler).toHaveBeenCalledWith("my-plugin", "get-data", ["arg1", "arg2"]);
     expect(result).toEqual({ data: "hello" });
   });
@@ -82,9 +83,36 @@ describe("registerPluginHandlers", () => {
       (c: unknown[]) => c[0] === "plugin:invoke"
     )![1] as (...args: unknown[]) => unknown;
 
-    await expect(invokeHandler({}, "x", "y")).rejects.toThrow(
+    const trustedEvent = { senderFrame: { url: "app://daintree/" } };
+    await expect(invokeHandler(trustedEvent, "x", "y")).rejects.toThrow(
       "No plugin handler registered for x:y"
     );
+  });
+
+  it("PLUGIN_INVOKE handler rejects untrusted senders and does not dispatch", async () => {
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const untrustedEvent = { senderFrame: { url: "https://evil.com/attack.html" } };
+    await expect(invokeHandler(untrustedEvent, "my-plugin", "get-data", "arg1")).rejects.toThrow(
+      "plugin:invoke rejected: untrusted sender"
+    );
+    expect(mockDispatchHandler).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INVOKE handler rejects when senderFrame is missing and does not dispatch", async () => {
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const nullFrameEvent = { senderFrame: null };
+    await expect(invokeHandler(nullFrameEvent, "my-plugin", "get-data")).rejects.toThrow(
+      "plugin:invoke rejected: untrusted sender"
+    );
+    expect(mockDispatchHandler).not.toHaveBeenCalled();
   });
 });
 
