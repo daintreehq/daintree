@@ -188,6 +188,22 @@ export class DevPreviewSessionService {
     this.portRegistry.delete(sessionKey);
   }
 
+  /**
+   * After a session is deleted, remove its stale worktreeToSession entry and
+   * hand the mapping back to any surviving session that still claims the same worktreeId.
+   */
+  private restoreWorktreeMapping(worktreeId: string | undefined, deletedKey: string): void {
+    if (!worktreeId) return;
+    if (this.worktreeToSession.get(worktreeId) !== deletedKey) return;
+    this.worktreeToSession.delete(worktreeId);
+    for (const [survivingKey, survivingSession] of this.sessions) {
+      if (survivingSession.worktreeId === worktreeId) {
+        this.worktreeToSession.set(worktreeId, survivingKey);
+        break;
+      }
+    }
+  }
+
   getByWorktree(worktreeId: string): DevPreviewSessionState | null {
     const key = this.worktreeToSession.get(worktreeId);
     if (!key) return null;
@@ -376,6 +392,7 @@ export class DevPreviewSessionService {
             });
             this.sessions.delete(key);
             this.releasePort(key);
+            this.restoreWorktreeMapping(session.worktreeId, key);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             this.updateSession(session, {
@@ -417,6 +434,7 @@ export class DevPreviewSessionService {
             });
             this.sessions.delete(key);
             this.releasePort(key);
+            this.restoreWorktreeMapping(session.worktreeId, key);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             console.warn("[DevPreviewSessionService] stopByProject failed for session", {
@@ -644,7 +662,7 @@ export class DevPreviewSessionService {
       session.pendingUrl = null;
       session.needsInstall = false;
       session.isRunningInstall = false;
-      this.updateSession(session, { terminalId: null, url: null });
+      this.updateSession(session, { terminalId: null, url: null, assignedUrl: null });
     }
 
     await this.spawnSessionTerminal(session);
