@@ -289,6 +289,83 @@ describe("hydration batch (#5196)", () => {
     expect(result?.extensionState).toEqual({ foo: "bar" });
   });
 
+  it("lets store updaters find a panel by id before flush (event-handler invariant)", async () => {
+    const { beginHydrationBatch, flushHydrationBatch, addPanel, updateAgentState, updateActivity } =
+      usePanelStore.getState();
+
+    const token = beginHydrationBatch();
+    await addPanel({
+      kind: "agent",
+      type: "terminal",
+      requestedId: "term-1",
+      cwd: "/",
+      bypassLimits: true,
+    });
+
+    // Simulate an IPC event arriving for this panel BEFORE the phase's flush —
+    // both handlers look panels up by id via `state.panelsById[id]` and bail if
+    // missing. With deferred `panelIds`, the entry is already in `panelsById`,
+    // so the updates must stick.
+    updateAgentState("term-1", "waiting");
+    updateActivity("term-1", "writing code", "working", "interactive", 100);
+
+    const mid = usePanelStore.getState().panelsById["term-1"];
+    expect(mid?.agentState).toBe("waiting");
+    expect(mid?.activityHeadline).toBe("writing code");
+
+    flushHydrationBatch(token);
+
+    const after = usePanelStore.getState().panelsById["term-1"];
+    expect(after?.agentState).toBe("waiting");
+    expect(after?.activityHeadline).toBe("writing code");
+  });
+
+  it("does not append ids whose addPanel failed before reaching panelsById", async () => {
+    const { beginHydrationBatch, flushHydrationBatch, addPanel } = usePanelStore.getState();
+
+    // Make spawn reject for one id, succeed for the next.
+    const { terminalClient } = (await import("@/clients")) as unknown as {
+      terminalClient: { spawn: ReturnType<typeof vi.fn> };
+    };
+    terminalClient.spawn
+      .mockImplementationOnce(async () => {
+        throw new Error("spawn failed");
+      })
+      .mockImplementationOnce(async ({ id }: { id?: string }) => id ?? "ok");
+
+    const token = beginHydrationBatch();
+    // First addPanel: spawn throws, caught by addPanel's outer try/catch and re-thrown.
+    await expect(
+      addPanel({
+        kind: "terminal",
+        type: "terminal",
+        requestedId: "fail-1",
+        cwd: "/",
+        bypassLimits: true,
+      })
+    ).rejects.toThrow("spawn failed");
+    // Second addPanel succeeds.
+    await addPanel({
+      kind: "terminal",
+      type: "terminal",
+      requestedId: "ok-1",
+      cwd: "/",
+      bypassLimits: true,
+    });
+
+    saveNormalizedMock.mockClear();
+    flushHydrationBatch(token);
+
+    // Only the successful id lands in panelIds.
+    expect(usePanelStore.getState().panelIds).toEqual(["ok-1"]);
+    expect(usePanelStore.getState().panelsById["fail-1"]).toBeUndefined();
+
+    // saveNormalized fired once with the correct id list.
+    expect(saveNormalizedMock).toHaveBeenCalledTimes(1);
+    const [, savedIds] = saveNormalizedMock.mock.calls[0] as [Record<string, unknown>, string[]];
+    expect(savedIds).toEqual(["ok-1"]);
+  });
+
   it("collapses N panel additions into a single panelIds render", async () => {
     const { beginHydrationBatch, flushHydrationBatch, addPanel } = usePanelStore.getState();
 
