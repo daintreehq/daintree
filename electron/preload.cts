@@ -2473,7 +2473,7 @@ const api: ElectronAPI = {
 
   // Sound API (Web Audio playback via main → renderer push)
   sound: {
-    onTrigger: (callback: (payload: { soundFile: string }) => void) =>
+    onTrigger: (callback: (payload: { soundFile: string; detune?: number }) => void) =>
       _typedOn(CHANNELS.SOUND_TRIGGER, callback),
     onCancel: (callback: () => void) => {
       const handler = () => callback();

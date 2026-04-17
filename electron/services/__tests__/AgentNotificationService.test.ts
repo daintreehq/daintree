@@ -735,7 +735,35 @@ describe("AgentNotificationService", () => {
       // At 10s — first pulse fires
       vi.advanceTimersByTime(1);
       expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
-      expect(soundServiceMock.playPulse).toHaveBeenCalledWith("pulse.wav");
+      expect(soundServiceMock.playPulse).toHaveBeenCalledWith("pulse.wav", expect.any(Number));
+    });
+
+    it("passes a random detune within ±15 cents on each pulse", () => {
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+
+      const randomSpy = vi.spyOn(Math, "random");
+      try {
+        // Math.random = 0 → detune = -15
+        randomSpy.mockReturnValueOnce(0);
+        events.emit("agent:state-changed", makePayload("working", "idle"));
+        vi.advanceTimersByTime(10_000);
+        expect(soundServiceMock.playPulse).toHaveBeenLastCalledWith("pulse.wav", -15);
+
+        // Math.random = 0.5 → detune = 0
+        randomSpy.mockReturnValueOnce(0.5);
+        vi.advanceTimersByTime(10_000);
+        expect(soundServiceMock.playPulse).toHaveBeenLastCalledWith("pulse.wav", 0);
+
+        // Math.random = 0.999 → detune ≈ +14.97 (strictly < 15)
+        randomSpy.mockReturnValueOnce(0.999);
+        vi.advanceTimersByTime(10_000);
+        const lastCall = soundServiceMock.playPulse.mock.calls.at(-1);
+        expect(lastCall?.[0]).toBe("pulse.wav");
+        expect(lastCall?.[1]).toBeGreaterThan(-15);
+        expect(lastCall?.[1]).toBeLessThan(15);
+      } finally {
+        randomSpy.mockRestore();
+      }
     });
 
     it("starts pulse for docked terminal with escalation enabled", () => {

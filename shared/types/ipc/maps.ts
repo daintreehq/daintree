@@ -1914,7 +1914,7 @@ export interface IpcEventMap {
   "portal:tabs-evicted": { tabIds: string[] };
 
   // Sound events (main → renderer)
-  "sound:trigger": { soundFile: string };
+  "sound:trigger": { soundFile: string; detune?: number };
   "sound:cancel": void;
 
   // Notification events

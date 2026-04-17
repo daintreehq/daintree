@@ -499,7 +499,10 @@ class AgentNotificationService {
         this.clearWorkingPulse(terminalId);
         return;
       }
-      soundService.playPulse(currentSettings.workingPulseSoundFile);
+      // Randomize pitch ±15 cents per pulse to slow auditory habituation.
+      // Exceeds JND (~5-10 cents) but preserves sound identity.
+      const detuneCents = Math.random() * 30 - 15;
+      soundService.playPulse(currentSettings.workingPulseSoundFile, detuneCents);
 
       const jitter =
         WORKING_PULSE_MIN_INTERVAL_MS +

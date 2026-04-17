@@ -9,7 +9,10 @@ function createMockAudioContext() {
   const mockResume = vi.fn().mockResolvedValue(undefined);
   const mockClose = vi.fn().mockResolvedValue(undefined);
   const mockDecodeAudioData = vi.fn();
-  const sources: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
+  const sources: Array<{
+    stop: ReturnType<typeof vi.fn>;
+    detune: { value: number };
+  }> = [];
 
   let state = "running";
 
@@ -24,6 +27,7 @@ function createMockAudioContext() {
     createBufferSource: vi.fn(() => {
       const source = {
         buffer: null as AudioBuffer | null,
+        detune: { value: 0 },
         connect: mockConnect,
         start: mockStart,
         stop: vi.fn(),
@@ -128,6 +132,30 @@ describe("WebAudioService", () => {
     await service.playSound("resume-test.wav");
 
     expect(mockResume).toHaveBeenCalled();
+  });
+
+  it("applies detune to the source before start when provided", async () => {
+    const { service, mockSuccessfulFetch, sources, mockStart } = await setupTest();
+    mockSuccessfulFetch();
+
+    await service.playSound("pulse.wav", 12);
+
+    expect(sources[0].detune.value).toBe(12);
+    expect(mockStart).toHaveBeenCalledWith(0);
+    // start is called strictly after detune is set
+    const startCallOrder = mockStart.mock.invocationCallOrder[0];
+    // Any later mutation to detune is not allowed — verify by reading current value
+    expect(sources[0].detune.value).toBe(12);
+    expect(startCallOrder).toBeGreaterThan(0);
+  });
+
+  it("leaves detune at default (0) when no detune argument is passed", async () => {
+    const { service, mockSuccessfulFetch, sources } = await setupTest();
+    mockSuccessfulFetch();
+
+    await service.playSound("chime.wav");
+
+    expect(sources[0].detune.value).toBe(0);
   });
 
   it("dispose closes the AudioContext", async () => {

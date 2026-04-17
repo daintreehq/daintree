@@ -5,8 +5,8 @@ export function useSoundPlaybackListener(): void {
   useEffect(() => {
     if (!window.electron?.sound) return;
 
-    const cleanupTrigger = window.electron.sound.onTrigger(({ soundFile }) => {
-      playSound(soundFile);
+    const cleanupTrigger = window.electron.sound.onTrigger(({ soundFile, detune }) => {
+      playSound(soundFile, detune);
     });
 
     const cleanupCancel = window.electron.sound.onCancel(() => {

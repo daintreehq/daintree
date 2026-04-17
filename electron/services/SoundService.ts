@@ -126,8 +126,8 @@ class SoundService {
     this.activeVoices = [];
   }
 
-  playPulse(soundFile: string): void {
-    this.playBypassed(soundFile);
+  playPulse(soundFile: string, detuneCents?: number): void {
+    this.playBypassed(soundFile, detuneCents);
   }
 
   cancelPulse(): void {
@@ -145,17 +145,20 @@ class SoundService {
 
   // -- Private: dampening --
 
-  private playBypassed(soundFile: string): void {
+  private playBypassed(soundFile: string, detune?: number): void {
     const soundPath = path.join(getSoundsDir(), soundFile);
     if (!existsSync(soundPath)) return;
 
     // Try Web Audio via renderer first
     if (BrowserWindow.getAllWindows().length > 0) {
-      broadcastToRenderer(CHANNELS.SOUND_TRIGGER, { soundFile });
+      const payload: { soundFile: string; detune?: number } = { soundFile };
+      if (detune !== undefined) payload.detune = detune;
+      broadcastToRenderer(CHANNELS.SOUND_TRIGGER, payload);
       return;
     }
 
     // Fallback to OS process spawning when no renderer is available
+    // (OS playback doesn't support detune — cadence variation still helps)
     const handle = playSound(soundPath);
     this.activeVoices.push({ handle, priority: 0, startedAt: Date.now() });
   }
