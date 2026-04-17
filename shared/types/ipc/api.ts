@@ -50,9 +50,6 @@ import type {
   DemoStartCaptureResult,
   DemoStopCaptureResult,
   DemoCaptureStatus,
-  DemoEncodePayload,
-  DemoEncodeProgressEvent,
-  DemoEncodeResult,
   DemoAnnotateResult,
 } from "./demo.js";
 import type {
@@ -1329,8 +1326,6 @@ export interface ElectronAPI {
     startCapture(payload: DemoStartCapturePayload): Promise<DemoStartCaptureResult>;
     stopCapture(): Promise<DemoStopCaptureResult>;
     getCaptureStatus(): Promise<DemoCaptureStatus>;
-    encode(payload: DemoEncodePayload): Promise<DemoEncodeResult>;
-    onEncodeProgress(callback: (event: DemoEncodeProgressEvent) => void): () => void;
     onExecCommand(
       channel: string,
       callback: (payload: Record<string, unknown>) => void

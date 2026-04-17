@@ -582,8 +582,6 @@ export const CHANNELS = {
   DEMO_EXEC_DISMISS_ANNOTATION: "demo:exec-dismiss-annotation",
   DEMO_WAIT_FOR_IDLE: "demo:wait-for-idle",
   DEMO_EXEC_WAIT_FOR_IDLE: "demo:exec-wait-for-idle",
-  DEMO_ENCODE: "demo:encode",
-  DEMO_ENCODE_PROGRESS: "demo:encode:progress",
 
   // Plugin channels
   PLUGIN_LIST: "plugin:list",

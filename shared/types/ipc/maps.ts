@@ -152,9 +152,6 @@ import type {
   DemoStartCaptureResult,
   DemoStopCaptureResult,
   DemoCaptureStatus,
-  DemoEncodePayload,
-  DemoEncodeProgressEvent,
-  DemoEncodeResult,
 } from "./demo.js";
 
 export type ChecklistItemId =
@@ -1798,10 +1795,6 @@ export interface IpcInvokeMap {
     args: [];
     result: DemoCaptureStatus;
   };
-  "demo:encode": {
-    args: [payload: DemoEncodePayload];
-    result: DemoEncodeResult;
-  };
 }
 
 /**
@@ -1985,7 +1978,6 @@ export interface IpcEventMap {
   "demo:exec-resume": void;
   "demo:exec-wait-for-selector": DemoWaitForSelectorPayload;
   "demo:exec-sleep": DemoSleepPayload;
-  "demo:encode:progress": DemoEncodeProgressEvent;
 
   // Accessibility events
   "accessibility:support-changed": { enabled: boolean };
