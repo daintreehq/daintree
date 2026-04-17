@@ -443,7 +443,7 @@ describe("PanelPersistence", () => {
 
       const extensionPanel = createMockTerminal({
         id: "ext-1",
-        kind: "my-plugin",
+        kind: "acme.my-plugin.viewer",
         title: "My Plugin",
         extensionState: { activeTab: "overview", zoom: 1.5 },
         location: "grid",
@@ -457,7 +457,7 @@ describe("PanelPersistence", () => {
       expect(savedTerminals[0]).toEqual(
         expect.objectContaining({
           id: "ext-1",
-          kind: "my-plugin",
+          kind: "acme.my-plugin.viewer",
           extensionState: { activeTab: "overview", zoom: 1.5 },
         })
       );

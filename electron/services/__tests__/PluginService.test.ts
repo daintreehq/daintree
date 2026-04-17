@@ -28,6 +28,7 @@ vi.mock("../pluginMenuRegistry.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
+import { PluginManifestSchema } from "../../schemas/plugin.js";
 import {
   registerPanelKind,
   unregisterPluginPanelKinds,
@@ -57,6 +58,50 @@ afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
+describe("PluginManifestSchema name validation", () => {
+  const validBase = { version: "1.0.0" };
+
+  it.each([
+    "acme.linear-context",
+    "a.b",
+    "daintreehq.dev-tools",
+    "daintree-hq.my-cool-plugin",
+    "acme.good-1",
+  ])("accepts scoped name %j", (name) => {
+    const result = PluginManifestSchema.safeParse({ name, ...validBase });
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    "linear-context",
+    "test-plugin",
+    "Acme.linear-context",
+    "acme.Linear",
+    "acme..tools",
+    ".acme.tools",
+    "acme.tools.",
+    "acme.team.tools",
+    "acme/tools",
+    "acme_tools",
+    "acme.-foo",
+    "acme.foo-",
+    "-acme.foo",
+    "",
+  ])("rejects unscoped or malformed name %j", (name) => {
+    const result = PluginManifestSchema.safeParse({ name, ...validBase });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejection includes an explanatory error message", () => {
+    const result = PluginManifestSchema.safeParse({ name: "bare-plugin", ...validBase });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const nameIssue = result.error.issues.find((i) => i.path[0] === "name");
+      expect(nameIssue?.message).toContain("publisher.name");
+    }
+  });
+});
+
 describe("PluginService", () => {
   it("returns empty list when plugins directory does not exist", async () => {
     const service = new PluginService(path.join(tmpDir, "nonexistent"));
@@ -72,7 +117,7 @@ describe("PluginService", () => {
 
   it("loads a valid plugin and registers panel kinds", async () => {
     await writePlugin("test-plugin", {
-      name: "test-plugin",
+      name: "acme.test-plugin",
       version: "1.0.0",
       displayName: "Test Plugin",
       contributes: {
@@ -92,13 +137,13 @@ describe("PluginService", () => {
 
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(1);
-    expect(plugins[0].manifest.name).toBe("test-plugin");
+    expect(plugins[0].manifest.name).toBe("acme.test-plugin");
     expect(plugins[0].manifest.displayName).toBe("Test Plugin");
     expect(plugins[0].dir).toBe(path.join(tmpDir, "test-plugin"));
 
     expect(registerPanelKind).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "test-plugin.viewer",
+        id: "acme.test-plugin.viewer",
         name: "Test Viewer",
         iconId: "eye",
         color: "#ff0000",
@@ -106,7 +151,7 @@ describe("PluginService", () => {
         canRestart: false,
         canConvert: false,
         showInPalette: true,
-        extensionId: "test-plugin",
+        extensionId: "acme.test-plugin",
       })
     );
   });
@@ -141,9 +186,9 @@ describe("PluginService", () => {
   });
 
   it("loads multiple plugins and skips invalid ones", async () => {
-    await writePlugin("good-1", { name: "good-1", version: "1.0.0" });
+    await writePlugin("good-1", { name: "acme.good-1", version: "1.0.0" });
     await writePlugin("bad", { version: "1.0.0" }); // missing name
-    await writePlugin("good-2", { name: "good-2", version: "2.0.0" });
+    await writePlugin("good-2", { name: "acme.good-2", version: "2.0.0" });
 
     const service = new PluginService(tmpDir);
     await service.initialize();
@@ -151,11 +196,11 @@ describe("PluginService", () => {
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(2);
     const names = plugins.map((p) => p.manifest.name).sort();
-    expect(names).toEqual(["good-1", "good-2"]);
+    expect(names).toEqual(["acme.good-1", "acme.good-2"]);
   });
 
   it("is idempotent — second initialize is a no-op", async () => {
-    await writePlugin("test-plugin", { name: "test-plugin", version: "1.0.0" });
+    await writePlugin("test-plugin", { name: "acme.test-plugin", version: "1.0.0" });
 
     const service = new PluginService(tmpDir);
     await service.initialize();
@@ -167,7 +212,7 @@ describe("PluginService", () => {
 
   it("namespaces panel IDs as pluginName.panelId", async () => {
     await writePlugin("my-plugin", {
-      name: "my-plugin",
+      name: "acme.my-plugin",
       version: "1.0.0",
       contributes: {
         panels: [
@@ -182,16 +227,16 @@ describe("PluginService", () => {
 
     expect(registerPanelKind).toHaveBeenCalledTimes(2);
     expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "my-plugin.viewer" })
+      expect.objectContaining({ id: "acme.my-plugin.viewer" })
     );
     expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "my-plugin.editor" })
+      expect.objectContaining({ id: "acme.my-plugin.editor" })
     );
   });
 
   it("rejects main entry paths that escape the plugin directory", async () => {
     await writePlugin("escape-test", {
-      name: "escape-test",
+      name: "acme.escape-test",
       version: "1.0.0",
       main: "../evil.js",
       renderer: "dist/renderer.js",
@@ -212,7 +257,7 @@ describe("PluginService", () => {
 
   it("resolves valid renderer entry path", async () => {
     await writePlugin("renderer-test", {
-      name: "renderer-test",
+      name: "acme.renderer-test",
       version: "1.0.0",
       renderer: "dist/renderer.js",
     });
@@ -229,7 +274,7 @@ describe("PluginService", () => {
 
   it("does not include resolvedMain in listPlugins output", async () => {
     await writePlugin("main-test", {
-      name: "main-test",
+      name: "acme.main-test",
       version: "1.0.0",
       main: "dist/main.js",
     });
@@ -261,7 +306,7 @@ describe("PluginService", () => {
 
   it("rejects panel with invalid ID characters", async () => {
     await writePlugin("bad-panel", {
-      name: "bad-panel",
+      name: "acme.bad-panel",
       version: "1.0.0",
       contributes: {
         panels: [{ id: "../../hack", name: "Hack", iconId: "x", color: "#000" }],
@@ -274,21 +319,21 @@ describe("PluginService", () => {
   });
 
   it("warns on duplicate plugin names and keeps the last one", async () => {
-    await writePlugin("dir-a", { name: "same-name", version: "1.0.0", description: "first" });
-    await writePlugin("dir-b", { name: "same-name", version: "2.0.0", description: "second" });
+    await writePlugin("dir-a", { name: "acme.same-name", version: "1.0.0", description: "first" });
+    await writePlugin("dir-b", { name: "acme.same-name", version: "2.0.0", description: "second" });
 
     const service = new PluginService(tmpDir);
     await service.initialize();
 
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(1);
-    expect(plugins[0].manifest.name).toBe("same-name");
+    expect(plugins[0].manifest.name).toBe("acme.same-name");
   });
 
   it("allows retry after non-ENOENT initialize failure", async () => {
     const badRoot = path.join(tmpDir, "unreadable");
     await fs.mkdir(badRoot);
-    await writePlugin("good", { name: "good", version: "1.0.0" });
+    await writePlugin("good", { name: "acme.good", version: "1.0.0" });
 
     const service = new PluginService(tmpDir);
 
@@ -303,7 +348,7 @@ describe("PluginService", () => {
 
   it("registers toolbar buttons from plugin manifest", async () => {
     await writePlugin("toolbar-test", {
-      name: "toolbar-test",
+      name: "acme.toolbar-test",
       version: "1.0.0",
       contributes: {
         toolbarButtons: [
@@ -311,7 +356,7 @@ describe("PluginService", () => {
             id: "my-btn",
             label: "My Button",
             iconId: "puzzle",
-            actionId: "toolbar-test.doThing",
+            actionId: "acme.toolbar-test.doThing",
             priority: 4,
           },
         ],
@@ -323,19 +368,19 @@ describe("PluginService", () => {
 
     expect(registerToolbarButton).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "plugin.toolbar-test.my-btn",
+        id: "plugin.acme.toolbar-test.my-btn",
         label: "My Button",
         iconId: "puzzle",
-        actionId: "toolbar-test.doThing",
+        actionId: "acme.toolbar-test.doThing",
         priority: 4,
-        pluginId: "toolbar-test",
+        pluginId: "acme.toolbar-test",
       })
     );
   });
 
   it("uses default priority 3 when not specified in toolbar button", async () => {
     await writePlugin("default-priority", {
-      name: "default-priority",
+      name: "acme.default-priority",
       version: "1.0.0",
       contributes: {
         toolbarButtons: [
@@ -354,7 +399,7 @@ describe("PluginService", () => {
 
     expect(registerToolbarButton).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "plugin.default-priority.btn",
+        id: "plugin.acme.default-priority.btn",
         priority: 3,
       })
     );
@@ -362,13 +407,13 @@ describe("PluginService", () => {
 
   it("registers menu items from plugin manifest", async () => {
     await writePlugin("menu-test", {
-      name: "menu-test",
+      name: "acme.menu-test",
       version: "1.0.0",
       contributes: {
         menuItems: [
           {
             label: "Do Something",
-            actionId: "menu-test.doSomething",
+            actionId: "acme.menu-test.doSomething",
             location: "terminal",
           },
         ],
@@ -378,16 +423,16 @@ describe("PluginService", () => {
     const service = new PluginService(tmpDir);
     await service.initialize();
 
-    expect(registerPluginMenuItem).toHaveBeenCalledWith("menu-test", {
+    expect(registerPluginMenuItem).toHaveBeenCalledWith("acme.menu-test", {
       label: "Do Something",
-      actionId: "menu-test.doSomething",
+      actionId: "acme.menu-test.doSomething",
       location: "terminal",
     });
   });
 
   it("does not call toolbar/menu registration when no contributions", async () => {
     await writePlugin("empty-contribs", {
-      name: "empty-contribs",
+      name: "acme.empty-contribs",
       version: "1.0.0",
     });
 
@@ -403,89 +448,89 @@ describe("Plugin IPC handler registration", () => {
   let service: PluginService;
 
   beforeEach(async () => {
-    await writePlugin("test-plugin", { name: "test-plugin", version: "1.0.0" });
+    await writePlugin("test-plugin", { name: "acme.test-plugin", version: "1.0.0" });
     service = new PluginService(tmpDir);
     await service.initialize();
   });
 
   it("registerHandler succeeds for a loaded plugin with valid channel", () => {
     const handler = vi.fn();
-    expect(() => service.registerHandler("test-plugin", "get-data", handler)).not.toThrow();
+    expect(() => service.registerHandler("acme.test-plugin", "get-data", handler)).not.toThrow();
   });
 
   it("registerHandler throws when pluginId is not loaded", () => {
-    expect(() => service.registerHandler("unknown-plugin", "get-data", vi.fn())).toThrow(
-      "Unknown plugin: unknown-plugin"
+    expect(() => service.registerHandler("acme.unknown-plugin", "get-data", vi.fn())).toThrow(
+      "Unknown plugin: acme.unknown-plugin"
     );
   });
 
   it("registerHandler throws when channel contains a colon", () => {
-    expect(() => service.registerHandler("test-plugin", "bad:channel", vi.fn())).toThrow(
+    expect(() => service.registerHandler("acme.test-plugin", "bad:channel", vi.fn())).toThrow(
       "Plugin channel must not contain colons: bad:channel"
     );
   });
 
   it("registerHandler throws when handler is not a function", () => {
     expect(() =>
-      service.registerHandler("test-plugin", "get-data", "not-a-function" as never)
+      service.registerHandler("acme.test-plugin", "get-data", "not-a-function" as never)
     ).toThrow("Plugin handler must be a function, got string");
   });
 
   it("dispatchHandler calls the registered handler and returns its result", async () => {
     const handler = vi.fn().mockResolvedValue({ value: 42 });
-    service.registerHandler("test-plugin", "get-data", handler);
+    service.registerHandler("acme.test-plugin", "get-data", handler);
 
-    const result = await service.dispatchHandler("test-plugin", "get-data", ["arg1", "arg2"]);
+    const result = await service.dispatchHandler("acme.test-plugin", "get-data", ["arg1", "arg2"]);
     expect(handler).toHaveBeenCalledWith("arg1", "arg2");
     expect(result).toEqual({ value: 42 });
   });
 
   it("dispatchHandler throws when no handler is found", async () => {
-    await expect(service.dispatchHandler("test-plugin", "unknown", [])).rejects.toThrow(
-      "No plugin handler registered for test-plugin:unknown"
+    await expect(service.dispatchHandler("acme.test-plugin", "unknown", [])).rejects.toThrow(
+      "No plugin handler registered for acme.test-plugin:unknown"
     );
   });
 
   it("registering same (pluginId, channel) twice overwrites the handler", async () => {
     const handler1 = vi.fn().mockReturnValue("first");
     const handler2 = vi.fn().mockReturnValue("second");
-    service.registerHandler("test-plugin", "get-data", handler1);
-    service.registerHandler("test-plugin", "get-data", handler2);
+    service.registerHandler("acme.test-plugin", "get-data", handler1);
+    service.registerHandler("acme.test-plugin", "get-data", handler2);
 
-    const result = await service.dispatchHandler("test-plugin", "get-data", []);
+    const result = await service.dispatchHandler("acme.test-plugin", "get-data", []);
     expect(result).toBe("second");
     expect(handler1).not.toHaveBeenCalled();
   });
 
   it("removeHandlers removes all handlers for a plugin, leaving others intact", async () => {
-    await writePlugin("other-plugin", { name: "other-plugin", version: "1.0.0" });
+    await writePlugin("other-plugin", { name: "acme.other-plugin", version: "1.0.0" });
     const service2 = new PluginService(tmpDir);
     await service2.initialize();
 
-    service2.registerHandler("test-plugin", "ch-a", vi.fn().mockReturnValue("a"));
-    service2.registerHandler("test-plugin", "ch-b", vi.fn().mockReturnValue("b"));
-    service2.registerHandler("other-plugin", "ch-c", vi.fn().mockReturnValue("c"));
+    service2.registerHandler("acme.test-plugin", "ch-a", vi.fn().mockReturnValue("a"));
+    service2.registerHandler("acme.test-plugin", "ch-b", vi.fn().mockReturnValue("b"));
+    service2.registerHandler("acme.other-plugin", "ch-c", vi.fn().mockReturnValue("c"));
 
-    service2.removeHandlers("test-plugin");
+    service2.removeHandlers("acme.test-plugin");
 
-    await expect(service2.dispatchHandler("test-plugin", "ch-a", [])).rejects.toThrow();
-    await expect(service2.dispatchHandler("test-plugin", "ch-b", [])).rejects.toThrow();
-    expect(await service2.dispatchHandler("other-plugin", "ch-c", [])).toBe("c");
+    await expect(service2.dispatchHandler("acme.test-plugin", "ch-a", [])).rejects.toThrow();
+    await expect(service2.dispatchHandler("acme.test-plugin", "ch-b", [])).rejects.toThrow();
+    expect(await service2.dispatchHandler("acme.other-plugin", "ch-c", [])).toBe("c");
   });
 
   it("hasPlugin returns true for loaded plugins and false otherwise", () => {
-    expect(service.hasPlugin("test-plugin")).toBe(true);
+    expect(service.hasPlugin("acme.test-plugin")).toBe(true);
     expect(service.hasPlugin("nonexistent")).toBe(false);
   });
 
   it("registerHandler throws for empty channel", () => {
-    expect(() => service.registerHandler("test-plugin", "", vi.fn())).not.toThrow();
+    expect(() => service.registerHandler("acme.test-plugin", "", vi.fn())).not.toThrow();
     // Empty channel is technically valid — no colons
   });
 
   it("dispatchHandler handles synchronous handlers", async () => {
-    service.registerHandler("test-plugin", "sync", () => "sync-result");
-    const result = await service.dispatchHandler("test-plugin", "sync", []);
+    service.registerHandler("acme.test-plugin", "sync", () => "sync-result");
+    const result = await service.dispatchHandler("acme.test-plugin", "sync", []);
     expect(result).toBe("sync-result");
   });
 });
@@ -506,7 +551,7 @@ describe("engines.daintree compatibility gate", () => {
 
   it("loads a plugin when app version satisfies engines.daintree", async () => {
     await writePlugin("compatible", {
-      name: "compatible",
+      name: "acme.compatible",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
     });
@@ -520,7 +565,7 @@ describe("engines.daintree compatibility gate", () => {
 
   it("rejects a plugin when app version does not satisfy engines.daintree", async () => {
     await writePlugin("incompatible", {
-      name: "incompatible",
+      name: "acme.incompatible",
       displayName: "Incompatible Plugin",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
@@ -535,7 +580,7 @@ describe("engines.daintree compatibility gate", () => {
     expect(service.listPlugins()).toEqual([]);
     expect(registerPanelKind).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Plugin "incompatible" requires Daintree ^0.7.0')
+      expect.stringContaining('Plugin "acme.incompatible" requires Daintree ^0.7.0')
     );
     expect(broadcastToRendererMock).toHaveBeenCalledWith(
       CHANNELS.NOTIFICATION_SHOW_TOAST,
@@ -549,7 +594,7 @@ describe("engines.daintree compatibility gate", () => {
 
   it("treats app prerelease versions as satisfying their release-series range", async () => {
     await writePlugin("prerelease-compatible", {
-      name: "prerelease-compatible",
+      name: "acme.prerelease-compatible",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
     });
@@ -562,21 +607,21 @@ describe("engines.daintree compatibility gate", () => {
   });
 
   it("loads plugins that omit engines.daintree with a warning", async () => {
-    await writePlugin("no-engines", { name: "no-engines", version: "1.0.0" });
+    await writePlugin("no-engines", { name: "acme.no-engines", version: "1.0.0" });
 
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Plugin "no-engines" does not declare engines.daintree')
+      expect.stringContaining('Plugin "acme.no-engines" does not declare engines.daintree')
     );
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
   });
 
   it("loads plugins with empty engines object (daintree absent) with a warning", async () => {
     await writePlugin("empty-engines", {
-      name: "empty-engines",
+      name: "acme.empty-engines",
       version: "1.0.0",
       engines: {},
     });
@@ -586,13 +631,13 @@ describe("engines.daintree compatibility gate", () => {
 
     expect(service.listPlugins()).toHaveLength(1);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Plugin "empty-engines" does not declare engines.daintree')
+      expect.stringContaining('Plugin "acme.empty-engines" does not declare engines.daintree')
     );
   });
 
   it("rejects manifests with an invalid semver range at schema level", async () => {
     await writePlugin("bad-range", {
-      name: "bad-range",
+      name: "acme.bad-range",
       version: "1.0.0",
       engines: { daintree: "not-a-range" },
     });
@@ -606,7 +651,7 @@ describe("engines.daintree compatibility gate", () => {
 
   it("rejects plugins requiring a future major version", async () => {
     await writePlugin("future", {
-      name: "future",
+      name: "acme.future",
       version: "1.0.0",
       engines: { daintree: "^1.0.0" },
     });
@@ -620,7 +665,7 @@ describe("engines.daintree compatibility gate", () => {
 
   it("does not attempt main import or register contributions for incompatible plugins", async () => {
     await writePlugin("skip-side-effects", {
-      name: "skip-side-effects",
+      name: "acme.skip-side-effects",
       version: "1.0.0",
       main: "dist/main.js",
       engines: { daintree: "^1.0.0" },
@@ -642,12 +687,12 @@ describe("engines.daintree compatibility gate", () => {
 
   it("loads only the compatible plugins in a mixed batch", async () => {
     await writePlugin("good", {
-      name: "good",
+      name: "acme.good",
       version: "1.0.0",
       engines: { daintree: "^0.7.0" },
     });
     await writePlugin("bad", {
-      name: "bad",
+      name: "acme.bad",
       version: "1.0.0",
       engines: { daintree: "^1.0.0" },
     });
@@ -656,13 +701,13 @@ describe("engines.daintree compatibility gate", () => {
     await service.initialize();
 
     const names = service.listPlugins().map((p) => p.manifest.name);
-    expect(names).toEqual(["good"]);
+    expect(names).toEqual(["acme.good"]);
     expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
   });
 
   it("accepts the wildcard range '*'", async () => {
     await writePlugin("wildcard", {
-      name: "wildcard",
+      name: "acme.wildcard",
       version: "1.0.0",
       engines: { daintree: "*" },
     });
@@ -676,7 +721,7 @@ describe("engines.daintree compatibility gate", () => {
 
   it("rejects whitespace-only range strings at the schema layer", async () => {
     await writePlugin("whitespace-range", {
-      name: "whitespace-range",
+      name: "acme.whitespace-range",
       version: "1.0.0",
       engines: { daintree: "   " },
     });
@@ -690,7 +735,7 @@ describe("engines.daintree compatibility gate", () => {
 
   it("rejects an app prerelease that is below a non-prerelease range's lower bound", async () => {
     await writePlugin("prerelease-too-early", {
-      name: "prerelease-too-early",
+      name: "acme.prerelease-too-early",
       version: "1.0.0",
       engines: { daintree: ">=0.7.0" },
     });
@@ -704,7 +749,7 @@ describe("engines.daintree compatibility gate", () => {
 
   it("accepts an exact-version range when the app matches precisely", async () => {
     await writePlugin("exact-match", {
-      name: "exact-match",
+      name: "acme.exact-match",
       version: "1.0.0",
       engines: { daintree: "0.7.5" },
     });
@@ -718,7 +763,7 @@ describe("engines.daintree compatibility gate", () => {
 
   it("rejects an exact-version range when the app does not match", async () => {
     await writePlugin("exact-mismatch", {
-      name: "exact-mismatch",
+      name: "acme.exact-mismatch",
       version: "1.0.0",
       engines: { daintree: "0.7.5" },
     });

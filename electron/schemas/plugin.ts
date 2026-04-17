@@ -9,6 +9,8 @@ import type {
 
 const SAFE_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
+export const SCOPED_PLUGIN_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
 export const PanelContributionSchema = z.object({
   id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
   name: z.string().min(1),
@@ -38,7 +40,9 @@ export const MenuItemContributionSchema = z.object({
 });
 
 export const PluginManifestSchema = z.object({
-  name: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+  name: z.string().min(1).max(64).regex(SCOPED_PLUGIN_NAME_PATTERN, {
+    error: 'Plugin name must be in publisher.name format (e.g. "acme.linear-context")',
+  }),
   version: z.string().min(1),
   displayName: z.string().optional(),
   description: z.string().optional(),
