@@ -155,6 +155,48 @@ describe("useRepositoryStats", () => {
         expect(result.current.error).toBeNull();
       });
     });
+
+    it("clears isTokenError when daintree:refresh-sidebar triggers a successful refetch", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      getRepoStatsMock.mockResolvedValueOnce({
+        commitCount: 0,
+        issueCount: 0,
+        prCount: 0,
+        loading: false,
+        stale: false,
+        lastUpdated: null,
+        ghError: "GitHub token not configured. Set it in Settings.",
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.isTokenError).toBe(true);
+        expect(result.current.error).toBe("GitHub token not configured. Set it in Settings.");
+      });
+
+      getRepoStatsMock.mockResolvedValueOnce({
+        commitCount: 5,
+        issueCount: 2,
+        prCount: 1,
+        loading: false,
+        stale: false,
+        lastUpdated: 2000,
+      });
+
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+        expect(getRepoStatsMock.mock.calls[1]?.[1]).toBe(true);
+        expect(result.current.isTokenError).toBe(false);
+        expect(result.current.error).toBeNull();
+      });
+    });
   });
 
   it("queues a refetch on project switch when an earlier fetch is still in flight", async () => {

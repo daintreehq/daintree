@@ -67,7 +67,7 @@ export function GitHubSettingsTab() {
         }
         const config = configResult.result as any;
         updateConfig(config);
-        void actionService.dispatch("worktree.refreshPullRequests", undefined, {
+        void actionService.dispatch("worktree.refresh", undefined, {
           source: "user",
         });
       } else {
