@@ -33,7 +33,9 @@ describe("migration014 — consolidate telemetry consent", () => {
     expect((store as unknown as { delete: ReturnType<typeof vi.fn> }).delete).toHaveBeenCalledWith(
       "telemetry"
     );
-    expect((store as unknown as { _data: Record<string, unknown> })._data.telemetry).toBeUndefined();
+    expect(
+      (store as unknown as { _data: Record<string, unknown> })._data.telemetry
+    ).toBeUndefined();
   });
 
   it("migrates legacy enabled=false to privacy.telemetryLevel='off'", () => {
