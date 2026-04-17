@@ -25,7 +25,11 @@ vi.mock("@/lib/watchNotification", () => ({
   fireWatchNotification: fireWatchNotificationMock,
 }));
 
-import { useWatchedPanelNotifications } from "../useWatchedPanelNotifications";
+import {
+  MAX_STAGGER_QUEUE_LENGTH,
+  applyStaggerQueueCap,
+  useWatchedPanelNotifications,
+} from "../useWatchedPanelNotifications";
 
 type TerminalShape = {
   id: string;
@@ -54,6 +58,56 @@ function buildState(
     setFocused: vi.fn(),
   };
 }
+
+describe("applyStaggerQueueCap", () => {
+  it("returns false and leaves the queue untouched when under the cap", () => {
+    const queue = Array.from(
+      { length: MAX_STAGGER_QUEUE_LENGTH - 1 },
+      (_, i) => (): void => void i
+    );
+    const initialFirst = queue[0];
+    const initialLength = queue.length;
+
+    const dropped = applyStaggerQueueCap(queue);
+
+    expect(dropped).toBe(false);
+    expect(queue.length).toBe(initialLength);
+    expect(queue[0]).toBe(initialFirst);
+  });
+
+  it("drops the oldest entry and returns true when the queue is at the cap", () => {
+    const queue = Array.from(
+      { length: MAX_STAGGER_QUEUE_LENGTH },
+      (_, i) => (): number => i
+    );
+    const originalFirst = queue[0];
+    const originalSecond = queue[1];
+
+    const dropped = applyStaggerQueueCap(queue);
+
+    expect(dropped).toBe(true);
+    expect(queue.length).toBe(MAX_STAGGER_QUEUE_LENGTH - 1);
+    expect(queue).not.toContain(originalFirst);
+    expect(queue[0]).toBe(originalSecond);
+  });
+
+  it("drops the oldest each call when invoked repeatedly past the cap", () => {
+    const queue = Array.from(
+      { length: MAX_STAGGER_QUEUE_LENGTH + 5 },
+      (_, i) => (): number => i
+    );
+    const firstThree = queue.slice(0, 3);
+
+    applyStaggerQueueCap(queue);
+    applyStaggerQueueCap(queue);
+    applyStaggerQueueCap(queue);
+
+    expect(queue.length).toBe(MAX_STAGGER_QUEUE_LENGTH + 2);
+    for (const dropped of firstThree) {
+      expect(queue).not.toContain(dropped);
+    }
+  });
+});
 
 describe("useWatchedPanelNotifications", () => {
   let subscribers: Array<(state: PanelStoreState) => void>;
@@ -98,35 +152,82 @@ describe("useWatchedPanelNotifications", () => {
 
   function fireUpdate(next: PanelStoreState): void {
     currentState = next;
-    // Copy to avoid mutation during iteration when subscribers are unsubscribed mid-fire.
+    // Copy subscribers array to avoid mutation during iteration.
     for (const cb of [...subscribers]) {
       cb(next);
     }
   }
 
-  it("fires a notification when a single watched panel transitions to completed", () => {
-    const panels: TerminalShape[] = [
-      { id: "p1", agentState: "working", location: "grid", title: "Panel 1" },
-    ];
-    currentState = buildState(panels, ["p1"]);
+  it("fires a notification and clears the watch when a panel transitions to completed", () => {
+    currentState = buildState(
+      [{ id: "p1", agentState: "working", location: "grid", title: "Panel 1" }],
+      ["p1"]
+    );
     renderHook(() => useWatchedPanelNotifications());
 
-    act(() => {
-      fireUpdate(
-        buildState(
-          [{ id: "p1", agentState: "completed", location: "grid", title: "Panel 1" }],
-          ["p1"]
-        )
-      );
-    });
+    const next = buildState(
+      [{ id: "p1", agentState: "completed", location: "grid", title: "Panel 1" }],
+      ["p1"]
+    );
 
-    // Drain all pending timers in case any stagger scheduling kicks in.
+    act(() => {
+      fireUpdate(next);
+    });
     act(() => {
       vi.runAllTimers();
     });
 
     expect(fireWatchNotificationMock).toHaveBeenCalledTimes(1);
     expect(fireWatchNotificationMock).toHaveBeenCalledWith("p1", "Panel 1", "completed");
+    expect(next.unwatchPanel).toHaveBeenCalledWith("p1");
+  });
+
+  it.each([
+    ["waiting" as const, "Agent waiting"],
+    ["exited" as const, "Agent exited"],
+  ])("fires a notification when a panel transitions to %s", (targetState, title) => {
+    currentState = buildState(
+      [{ id: "p1", agentState: "working", location: "grid", title }],
+      ["p1"]
+    );
+    renderHook(() => useWatchedPanelNotifications());
+
+    act(() => {
+      fireUpdate(
+        buildState(
+          [{ id: "p1", agentState: targetState, location: "grid", title }],
+          ["p1"]
+        )
+      );
+    });
+    act(() => {
+      vi.runAllTimers();
+    });
+
+    expect(fireWatchNotificationMock).toHaveBeenCalledTimes(1);
+    expect(fireWatchNotificationMock).toHaveBeenCalledWith("p1", title, targetState);
+  });
+
+  it("ignores transitions that are not completed/waiting/exited", () => {
+    currentState = buildState(
+      [{ id: "p1", agentState: "idle", location: "grid", title: "Panel 1" }],
+      ["p1"]
+    );
+    renderHook(() => useWatchedPanelNotifications());
+
+    act(() => {
+      fireUpdate(
+        buildState(
+          [{ id: "p1", agentState: "working", location: "grid", title: "Panel 1" }],
+          ["p1"]
+        )
+      );
+    });
+    act(() => {
+      vi.runAllTimers();
+    });
+
+    expect(fireWatchNotificationMock).not.toHaveBeenCalled();
   });
 
   it("skips notifications for trashed panels and unwatches them", () => {
@@ -144,7 +245,6 @@ describe("useWatchedPanelNotifications", () => {
     act(() => {
       fireUpdate(next);
     });
-
     act(() => {
       vi.runAllTimers();
     });
@@ -153,122 +253,55 @@ describe("useWatchedPanelNotifications", () => {
     expect(next.unwatchPanel).toHaveBeenCalledWith("p1");
   });
 
-  it("does not warn when a normal-sized burst is processed", () => {
-    const BURST_SIZE = 50;
-    const workingPanels: TerminalShape[] = Array.from({ length: BURST_SIZE }, (_, i) => ({
-      id: `p${i}`,
-      agentState: "working",
-      location: "grid",
-      title: `Panel ${i}`,
-    }));
+  it("does not emit an overflow warning under a normal-sized burst", () => {
+    const workingPanels: TerminalShape[] = Array.from(
+      { length: MAX_STAGGER_QUEUE_LENGTH },
+      (_, i) => ({
+        id: `p${i}`,
+        agentState: "working",
+        location: "grid",
+        title: `Panel ${i}`,
+      })
+    );
     const watchedIds = workingPanels.map((p) => p.id);
     currentState = buildState(workingPanels, watchedIds);
     renderHook(() => useWatchedPanelNotifications());
 
-    const completedPanels: TerminalShape[] = workingPanels.map((p) => ({
-      ...p,
-      agentState: "completed",
-    }));
+    const completedPanels = workingPanels.map((p) => ({ ...p, agentState: "completed" }));
 
     act(() => {
       fireUpdate(buildState(completedPanels, watchedIds));
     });
-
     act(() => {
       vi.runAllTimers();
     });
 
     expect(warnSpy).not.toHaveBeenCalled();
-    expect(fireWatchNotificationMock).toHaveBeenCalledTimes(BURST_SIZE);
+    expect(fireWatchNotificationMock).toHaveBeenCalledTimes(MAX_STAGGER_QUEUE_LENGTH);
   });
 
-  it("caps queue growth and warns once when the overflow threshold is exceeded", () => {
-    const BURST_SIZE = 120;
-    // First mount with working state so transitions are detected.
-    const workingPanels: TerminalShape[] = Array.from({ length: BURST_SIZE }, (_, i) => ({
-      id: `p${i}`,
-      agentState: "working",
-      location: "grid",
-      title: `Panel ${i}`,
-    }));
-    const watchedIds = workingPanels.map((p) => p.id);
-    currentState = buildState(workingPanels, watchedIds);
-
-    // Re-enter the subscriber during a fire so pushes arrive while drain is still running.
-    // This is how the queue can realistically grow past its initial length of 1.
-    let reentered = false;
-    fireWatchNotificationMock.mockImplementation(() => {
-      if (reentered) return;
-      reentered = true;
-      // During the first fire, flip the remaining panels to completed, which causes
-      // the subscriber to iterate again and push more items into the queue.
-      const nowCompleted: TerminalShape[] = workingPanels.map((p, i) => ({
-        ...p,
-        agentState: i === 0 ? "working" : "completed",
-      }));
-      fireUpdate(buildState(nowCompleted, watchedIds));
-    });
-
-    renderHook(() => useWatchedPanelNotifications());
-
-    // Trigger the first fire by transitioning just the first panel.
-    act(() => {
-      const first: TerminalShape[] = workingPanels.map((p, i) => ({
-        ...p,
-        agentState: i === 0 ? "completed" : "working",
-      }));
-      fireUpdate(buildState(first, watchedIds));
-    });
-
-    act(() => {
-      vi.runAllTimers();
-    });
-
-    // Warning fires at most once regardless of overflow depth.
-    const warnCalls = warnSpy.mock.calls.filter((call) =>
-      String(call[0]).includes("[WatchedPanel] stagger queue overflow")
-    );
-    expect(warnCalls.length).toBeLessThanOrEqual(1);
-
-    // If the queue did grow and the cap kicked in, some notifications were dropped.
-    // The exact count depends on drain timing, but total fires must not exceed BURST_SIZE.
-    expect(fireWatchNotificationMock.mock.calls.length).toBeLessThanOrEqual(BURST_SIZE);
-  });
-
-  it("cleans up subscriptions and pending timer on unmount", () => {
-    const unsubSpy = vi.fn();
-    // Shadow subscribe mock to return our spy
-    mockSubscribe.mockImplementation((cb: (state: PanelStoreState) => void) => {
-      subscribers.push(cb);
-      return unsubSpy;
-    });
-
+  it("tears down all subscriptions on unmount", () => {
     const { unmount } = renderHook(() => useWatchedPanelNotifications());
 
-    // Two internal subscribe() calls are expected (watchedPanels sync + agent state)
+    // Two internal subscribe() calls are expected: watchedPanels sync + agent state.
     expect(mockSubscribe).toHaveBeenCalledTimes(2);
+    expect(subscribers.length).toBe(2);
 
     unmount();
 
-    // Both subscriptions torn down
-    expect(unsubSpy).toHaveBeenCalledTimes(2);
-
-    // No errors from advancing fake timers after unmount (pending timer cleared)
-    expect(() => {
-      vi.runAllTimers();
-    }).not.toThrow();
+    // Unsubscribers returned by mockSubscribe splice their cb out of subscribers.
+    expect(subscribers.length).toBe(0);
   });
 
-  it("does not fire notifications after unmount even with pending transitions", () => {
-    const panels: TerminalShape[] = [
-      { id: "p1", agentState: "working", location: "grid", title: "Panel 1" },
-    ];
-    currentState = buildState(panels, ["p1"]);
+  it("does not fire notifications after unmount even with subsequent transitions", () => {
+    currentState = buildState(
+      [{ id: "p1", agentState: "working", location: "grid", title: "Panel 1" }],
+      ["p1"]
+    );
     const { unmount } = renderHook(() => useWatchedPanelNotifications());
 
     unmount();
 
-    // After unmount, fire a transition — no notification should result.
     act(() => {
       fireUpdate(
         buildState(
@@ -277,7 +310,6 @@ describe("useWatchedPanelNotifications", () => {
         )
       );
     });
-
     act(() => {
       vi.runAllTimers();
     });
