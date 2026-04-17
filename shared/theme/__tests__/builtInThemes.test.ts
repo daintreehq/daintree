@@ -6,6 +6,7 @@ import { APP_THEME_TOKEN_KEYS } from "../types.js";
 
 describe("built-in themes", () => {
   it("every source compiles to a valid AppColorScheme", () => {
+    expect(BUILT_IN_THEME_SOURCES.length).toBeGreaterThan(0);
     expect(BUILT_IN_APP_SCHEMES).toHaveLength(BUILT_IN_THEME_SOURCES.length);
     for (const scheme of BUILT_IN_APP_SCHEMES) {
       expect(scheme.id).toBeTruthy();
