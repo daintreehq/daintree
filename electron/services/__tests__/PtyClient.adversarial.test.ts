@@ -91,6 +91,7 @@ describe("PtyClient adversarial", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   function createReadyClient(
