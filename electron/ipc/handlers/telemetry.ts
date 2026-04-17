@@ -25,6 +25,10 @@ export function registerTelemetryHandlers(): () => void {
   ipcMain.handle(CHANNELS.TELEMETRY_SET_ENABLED, async (_event, enabled: unknown) => {
     if (typeof enabled !== "boolean") return;
     await setTelemetryEnabled(enabled);
+    typedBroadcast("privacy:telemetry-consent-changed", {
+      level: getTelemetryLevel(),
+      hasSeenPrompt: hasTelemetryPromptBeenShown(),
+    });
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.TELEMETRY_SET_ENABLED));
 

@@ -117,6 +117,32 @@ describe("rendererSentry", () => {
     expect(opts.beforeSend!({ message: "post" })).toEqual({ message: "post" });
   });
 
+  it("broadcast arriving during initial hydration is not lost (regression)", async () => {
+    // Simulate the race: getConsentState returns slowly with a stale value,
+    // meanwhile another window broadcasts a fresh consent change. The fresh
+    // broadcast must win — the stale snapshot must NOT overwrite it.
+    let resolveSnapshot: (v: ConsentPayload) => void = () => {};
+    getConsentState.mockImplementationOnce(
+      () => new Promise<ConsentPayload>((r) => (resolveSnapshot = r))
+    );
+
+    const mod = await import("../rendererSentry");
+    const initPromise = mod.initRendererSentry();
+
+    // Broadcast fires while snapshot is still pending
+    await Promise.resolve();
+    consentListener?.({ level: "off", hasSeenPrompt: true });
+
+    // Now the stale snapshot resolves
+    resolveSnapshot({ level: "errors", hasSeenPrompt: true });
+    await initPromise;
+
+    const opts = sentryInit.mock.calls[0][0];
+    // The live broadcast must have won; beforeSend must still drop events.
+    expect(opts.beforeSend!({ message: "x" })).toBeNull();
+    expect(mod.getRendererSentryConsent()).toEqual({ level: "off", hasSeenPrompt: true });
+  });
+
   it("updateRendererSentryConsent also flips the gate", async () => {
     getConsentState.mockResolvedValueOnce({ level: "off", hasSeenPrompt: false });
     const mod = await import("../rendererSentry");

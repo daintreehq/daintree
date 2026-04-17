@@ -20,9 +20,21 @@ export async function initRendererSentry(): Promise<void> {
   if (initialized) return;
   initialized = true;
 
+  // Subscribe BEFORE fetching the initial snapshot so a consent change that
+  // lands during the await (e.g. another window flipping the level) is not
+  // lost in the gap between snapshot and subscription. If a broadcast fires
+  // during hydration, it wins — we must not overwrite fresher state with the
+  // stale snapshot.
+  let liveUpdateReceived = false;
+  consentUnsubscribe?.();
+  consentUnsubscribe = window.electron?.privacy?.onTelemetryConsentChanged?.((payload) => {
+    consentState = payload;
+    liveUpdateReceived = true;
+  });
+
   try {
     const state = await window.electron?.sentry?.getConsentState();
-    if (state) consentState = state;
+    if (state && !liveUpdateReceived) consentState = state;
   } catch {
     // IPC may not be available (e.g. test environments). Leave gate closed.
   }

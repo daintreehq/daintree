@@ -94,6 +94,21 @@ describe("registerTelemetryHandlers", () => {
     expect(telemetryServiceMock.setTelemetryEnabled).toHaveBeenCalledWith(true);
   });
 
+  it("TELEMETRY_SET_ENABLED handler broadcasts consent change on valid boolean", async () => {
+    telemetryServiceMock.getTelemetryLevel.mockReturnValue("errors");
+    telemetryServiceMock.hasTelemetryPromptBeenShown.mockReturnValue(true);
+    registerTelemetryHandlers();
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]) => ch.includes("telemetry:set-enabled")) ?? [];
+
+    await handler(null, true);
+    expect(utilsMock.typedBroadcast).toHaveBeenCalledWith("privacy:telemetry-consent-changed", {
+      level: "errors",
+      hasSeenPrompt: true,
+    });
+  });
+
   it("TELEMETRY_SET_ENABLED handler ignores non-boolean values", async () => {
     registerTelemetryHandlers();
 
