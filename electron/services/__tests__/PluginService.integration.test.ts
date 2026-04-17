@@ -96,15 +96,18 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await fs.rm(tmpDir, { recursive: true, force: true });
-  clearPanelKindRegistry();
-  clearToolbarButtonRegistry();
-  clearPluginMenuRegistry();
-  for (const key of globalMarkers) {
-    delete (globalThis as Record<string, unknown>)[key];
+  try {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  } finally {
+    clearPanelKindRegistry();
+    clearToolbarButtonRegistry();
+    clearPluginMenuRegistry();
+    for (const key of globalMarkers) {
+      delete (globalThis as Record<string, unknown>)[key];
+    }
+    globalMarkers.clear();
+    vi.clearAllMocks();
   }
-  globalMarkers.clear();
-  vi.clearAllMocks();
 });
 
 describe("PluginService integration — panel contributions", () => {
@@ -142,7 +145,7 @@ describe("PluginService integration — panel contributions", () => {
     });
   });
 
-  it("registers multiple panels from one plugin under namespaced IDs", async () => {
+  it("registers multiple panels from one plugin with full config per panel", async () => {
     await writePlugin("multi-panel", {
       name: "multi-panel",
       version: "1.0.0",
@@ -157,11 +160,54 @@ describe("PluginService integration — panel contributions", () => {
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
 
-    expect(getPanelKindConfig("multi-panel.viewer")?.name).toBe("Viewer");
-    expect(getPanelKindConfig("multi-panel.editor")?.name).toBe("Editor");
+    expect(getPanelKindConfig("multi-panel.viewer")).toMatchObject({
+      id: "multi-panel.viewer",
+      name: "Viewer",
+      iconId: "eye",
+      color: "#111",
+      extensionId: "multi-panel",
+    });
+    expect(getPanelKindConfig("multi-panel.editor")).toMatchObject({
+      id: "multi-panel.editor",
+      name: "Editor",
+      iconId: "pen",
+      color: "#222",
+      extensionId: "multi-panel",
+    });
   });
 
-  it("does not affect built-in panel kinds", async () => {
+  it("propagates non-default panel flags through to the registry", async () => {
+    await writePlugin("flag-plugin", {
+      name: "flag-plugin",
+      version: "1.0.0",
+      contributes: {
+        panels: [
+          {
+            id: "custom",
+            name: "Custom",
+            iconId: "box",
+            color: "#0f0",
+            hasPty: true,
+            canRestart: true,
+            canConvert: true,
+            showInPalette: false,
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    expect(getPanelKindConfig("flag-plugin.custom")).toMatchObject({
+      hasPty: true,
+      canRestart: true,
+      canConvert: true,
+      showInPalette: false,
+    });
+  });
+
+  it("preserves built-in panel kind configs intact after loading an extension", async () => {
     await writePlugin("built-in-coexist", {
       name: "built-in-coexist",
       version: "1.0.0",
@@ -173,9 +219,55 @@ describe("PluginService integration — panel contributions", () => {
     const service = new PluginService(tmpDir, "0.0.0");
     await service.initialize();
 
-    for (const kind of ["terminal", "agent", "browser", "notes", "dev-preview"]) {
-      expect(getPanelKindConfig(kind)).toBeDefined();
-    }
+    expect(getPanelKindConfig("terminal")).toMatchObject({
+      id: "terminal",
+      hasPty: true,
+      canRestart: true,
+      showInPalette: false,
+    });
+    expect(getPanelKindConfig("agent")).toMatchObject({
+      id: "agent",
+      hasPty: true,
+      showInPalette: false,
+    });
+    expect(getPanelKindConfig("browser")).toMatchObject({
+      id: "browser",
+      iconId: "globe",
+      hasPty: false,
+      showInPalette: true,
+    });
+    expect(getPanelKindConfig("notes")).toMatchObject({ id: "notes", iconId: "sticky-note" });
+    expect(getPanelKindConfig("dev-preview")).toMatchObject({
+      id: "dev-preview",
+      iconId: "monitor",
+    });
+  });
+
+  it("uses manifest.name not directory name when registering contributions", async () => {
+    await writePlugin("alias-dir", {
+      name: "real-plugin",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#abc" }],
+        toolbarButtons: [
+          { id: "btn", label: "B", iconId: "i", actionId: "real-plugin.act", priority: 2 },
+        ],
+        menuItems: [{ label: "M", actionId: "real-plugin.act", location: "view" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    expect(getPanelKindConfig("real-plugin.viewer")?.extensionId).toBe("real-plugin");
+    expect(getPanelKindConfig("alias-dir.viewer")).toBeUndefined();
+
+    expect(getToolbarButtonConfig("plugin.real-plugin.btn")?.pluginId).toBe("real-plugin");
+    expect(getToolbarButtonConfig("plugin.alias-dir.btn")).toBeUndefined();
+
+    const items = getPluginMenuItems();
+    expect(items).toHaveLength(1);
+    expect(items[0].pluginId).toBe("real-plugin");
   });
 });
 
@@ -293,7 +385,7 @@ describe("PluginService integration — main entry execution", () => {
     expect(readMarker(markerKey)).toBe(1);
   });
 
-  it("loads the plugin even when main entry import throws", async () => {
+  it("registers contributions even when main entry import throws", async () => {
     const pluginDir = await writePlugin("bad-main", {
       name: "bad-main",
       version: "1.0.0",
@@ -305,21 +397,60 @@ describe("PluginService integration — main entry execution", () => {
     );
     await fs.writeFile(
       path.join(pluginDir, "plugin.json"),
-      JSON.stringify({ name: "bad-main", version: "1.0.0", main: mainFile })
+      JSON.stringify({
+        name: "bad-main",
+        version: "1.0.0",
+        main: mainFile,
+        contributes: {
+          panels: [{ id: "p", name: "P", iconId: "i", color: "#000" }],
+          toolbarButtons: [{ id: "b", label: "B", iconId: "i", actionId: "bad-main.a" }],
+          menuItems: [{ label: "M", actionId: "bad-main.a", location: "view" }],
+        },
+      })
     );
 
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir, "0.0.0");
+      await service.initialize();
 
-    const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
+      expect(service.hasPlugin("bad-main")).toBe(true);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to load main entry for bad-main"),
+        expect.anything()
+      );
+      expect(getPanelKindConfig("bad-main.p")).toBeDefined();
+      expect(getToolbarButtonConfig("plugin.bad-main.b")).toBeDefined();
+      expect(getPluginMenuItems()).toHaveLength(1);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 
-    expect(service.hasPlugin("bad-main")).toBe(true);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to load main entry for bad-main"),
-      expect.anything()
+  it("does not import main when the path escapes the plugin directory", async () => {
+    const markerKey = makeMarkerKey();
+    const outsideFile = `outside-${randomUUID()}.mjs`;
+    await fs.writeFile(
+      path.join(tmpDir, outsideFile),
+      `globalThis[${JSON.stringify(markerKey)}] = true;\n`
     );
 
-    errorSpy.mockRestore();
+    await writePlugin("escape-main", {
+      name: "escape-main",
+      version: "1.0.0",
+      main: `../${outsideFile}`,
+    });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir, "0.0.0");
+      await service.initialize();
+
+      expect(service.hasPlugin("escape-main")).toBe(true);
+      expect(readMarker(markerKey)).toBeUndefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 
