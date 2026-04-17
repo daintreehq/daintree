@@ -1052,6 +1052,42 @@ describe("worktree cycling respects sidebar order", () => {
     expect(select).not.toHaveBeenCalled();
   });
 
+  it("up/down use first/last visible when active is filtered out", async () => {
+    installWorktrees([
+      { id: "main", name: "main", branch: "main", path: "/repo", isMainWorktree: true },
+      { id: "wt-idle", name: "idle", branch: "feature/idle", path: "/repo/idle" },
+      { id: "wt-working", name: "working", branch: "feature/working", path: "/repo/working" },
+    ]);
+    usePanelStore.setState({
+      panelsById: {
+        "term-working": createTerminal({
+          id: "term-working",
+          worktreeId: "wt-working",
+          agentState: "working",
+        }),
+      },
+      panelIds: ["term-working"],
+    });
+    useWorktreeFilterStore.setState({
+      orderBy: "alpha",
+      quickStateFilter: "working",
+      alwaysShowActive: false,
+    });
+    const select = spySelectWorktree();
+
+    // wt-idle is the active worktree but is filtered out (quickStateFilter=working,
+    // alwaysShowActive=false). Visible list is [main, wt-working].
+    const actions = buildRegistry(registerWorktreeActions, {
+      getActiveWorktreeId: () => "wt-idle",
+    });
+
+    await actions.get("worktree.down")!().run(undefined, {} as never);
+    await actions.get("worktree.up")!().run(undefined, {} as never);
+
+    expect(select).toHaveBeenNthCalledWith(1, "main"); // down → first visible
+    expect(select).toHaveBeenNthCalledWith(2, "wt-working"); // up → last visible
+  });
+
   it("quickStateFilter hides non-matching worktrees from cycling", async () => {
     installWorktrees([
       { id: "main", name: "main", branch: "main", path: "/repo", isMainWorktree: true },

@@ -143,4 +143,20 @@ describe("worktreeFilterStore", () => {
     useWorktreeFilterStore.getState().setQuickStateFilter("all");
     expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("all");
   });
+
+  it("counts quickStateFilter in hasActiveFilters and getActiveFilterCount", () => {
+    expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(false);
+
+    useWorktreeFilterStore.getState().setQuickStateFilter("waiting");
+
+    expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(true);
+    expect(useWorktreeFilterStore.getState().getActiveFilterCount()).toBe(1);
+  });
+
+  it('resets quickStateFilter to "all" on clearAll', () => {
+    useWorktreeFilterStore.getState().setQuickStateFilter("working");
+    useWorktreeFilterStore.getState().clearAll();
+
+    expect(useWorktreeFilterStore.getState().quickStateFilter).toBe("all");
+  });
 });

@@ -854,8 +854,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const rootPath = currentProject?.path ?? "";
   const hasNonMainWorktrees = deferredWorktrees.length > 1;
-  const hasQuickFilter = quickStateFilter !== "all";
-  const hasFilters = hasActiveFilters() || hasQuickFilter;
+  const hasFilters = hasActiveFilters();
   const worktreeMatchesQuery = (w: WorktreeState) => {
     if (!query) return true;
     const exactNum = parseExactNumber(query);
@@ -1024,10 +1023,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                     No worktrees match your filters
                   </p>
                   <button
-                    onClick={() => {
-                      clearAllFilters();
-                      setQuickStateFilter("all");
-                    }}
+                    onClick={clearAllFilters}
                     className="text-xs px-3 py-1.5 text-daintree-accent hover:bg-daintree-accent/10 rounded transition-colors"
                   >
                     Clear filters

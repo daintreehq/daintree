@@ -211,4 +211,50 @@ describe("getVisibleWorktreesForCycling", () => {
     expect(ixBug).toBeLessThan(ixChore);
     expect(ids[0]).toBe("main");
   });
+
+  it("resolves main fallback via useWorktrees sort when no worktree is marked main", () => {
+    // No entry has isMainWorktree=true. useWorktrees sorts by
+    // (isMainWorktree desc, lastActivityTimestamp desc, name asc), so the most
+    // recently active worktree should land in the main-fallback slot.
+    setWorktrees([
+      createSnapshot({
+        id: "wt-older",
+        name: "older",
+        branch: "feature/older",
+        lastActivityTimestamp: 100,
+      }),
+      createSnapshot({
+        id: "wt-newer",
+        name: "newer",
+        branch: "feature/newer",
+        lastActivityTimestamp: 500,
+      }),
+    ]);
+    useWorktreeFilterStore.setState({ orderBy: "alpha" });
+
+    const ids = getVisibleWorktreesForCycling().map((w) => w.id);
+    expect(ids[0]).toBe("wt-newer");
+  });
+
+  it("walks grouped + manual + pins in the flattened render order", () => {
+    useWorktreeFilterStore.setState({
+      groupByType: false, // manual sort cannot combine with groupByType — sidebar forces created
+      orderBy: "manual",
+      pinnedWorktrees: ["feat-1", "bug-2"],
+      manualOrder: ["bug-2", "feat-2", "feat-1", "chore-1"],
+    });
+    setWorktrees([
+      createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
+      createSnapshot({ id: "feat-1", name: "feat-1", branch: "feature/one" }),
+      createSnapshot({ id: "feat-2", name: "feat-2", branch: "feature/two" }),
+      createSnapshot({ id: "bug-2", name: "bug-2", branch: "bugfix/two" }),
+      createSnapshot({ id: "chore-1", name: "chore-1", branch: "chore/one" }),
+    ]);
+
+    const ids = getVisibleWorktreesForCycling().map((w) => w.id);
+    // Pins come first in pin order (feat-1, bug-2), then remaining non-main in
+    // manualOrder (bug-2 already pinned → skip, feat-2, feat-1 already pinned → skip,
+    // chore-1). Final: [main, feat-1, bug-2, feat-2, chore-1].
+    expect(ids).toEqual(["main", "feat-1", "bug-2", "feat-2", "chore-1"]);
+  });
 });

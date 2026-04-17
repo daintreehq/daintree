@@ -362,9 +362,15 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     const currentIndex = activeWorktreeId
       ? worktrees.findIndex((w) => w.id === activeWorktreeId)
       : -1;
-    const baseIndex = currentIndex === -1 ? 0 : currentIndex;
-    const nextIndex = baseIndex + offset;
-    if (nextIndex < 0 || nextIndex >= worktrees.length) return;
+    let nextIndex: number;
+    if (currentIndex === -1) {
+      // Active worktree is outside the visible list (filtered out or unset).
+      // Moving down lands on the first visible entry; moving up lands on the last.
+      nextIndex = offset > 0 ? 0 : worktrees.length - 1;
+    } else {
+      nextIndex = currentIndex + offset;
+      if (nextIndex < 0 || nextIndex >= worktrees.length) return;
+    }
     useWorktreeSelectionStore.getState().selectWorktree(worktrees[nextIndex].id);
   };
 

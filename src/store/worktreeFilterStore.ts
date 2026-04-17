@@ -233,6 +233,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
           sessionFilters: new Set(),
           activityFilters: new Set(),
           hideMainWorktree: false,
+          quickStateFilter: "all",
         }),
 
       getActiveFilterCount: () => {
@@ -244,7 +245,8 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
           state.typeFilters.size +
           state.githubFilters.size +
           state.sessionFilters.size +
-          state.activityFilters.size
+          state.activityFilters.size +
+          (state.quickStateFilter !== "all" ? 1 : 0)
         );
       },
 
@@ -257,7 +259,8 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
           state.typeFilters.size > 0 ||
           state.githubFilters.size > 0 ||
           state.sessionFilters.size > 0 ||
-          state.activityFilters.size > 0
+          state.activityFilters.size > 0 ||
+          state.quickStateFilter !== "all"
         );
       },
     }),

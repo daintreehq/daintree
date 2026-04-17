@@ -127,7 +127,19 @@ export function getVisibleWorktreesForCycling(
   } = filterState;
 
   const viewState = getCurrentViewStore().getState();
-  const rawWorktrees = Array.from(viewState.worktrees.values()).map(normalizeSnapshot);
+  const rawWorktrees = Array.from(viewState.worktrees.values())
+    .map(normalizeSnapshot)
+    // Pre-sort to match `useWorktrees()` so the fallback main worktree
+    // (when no `isMainWorktree===true` entry exists) resolves to the same
+    // element the sidebar would render.
+    .sort((a, b) => {
+      if (a.isMainWorktree && !b.isMainWorktree) return -1;
+      if (!a.isMainWorktree && b.isMainWorktree) return 1;
+      const timeA = a.lastActivityTimestamp ?? 0;
+      const timeB = b.lastActivityTimestamp ?? 0;
+      if (timeA !== timeB) return timeB - timeA;
+      return a.name.localeCompare(b.name);
+    });
   if (rawWorktrees.length === 0) return [];
 
   const panelState = usePanelStore.getState();
