@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/electron/renderer";
 import { useErrorStore, type ErrorType } from "@/store/errorStore";
 import { logError } from "@/utils/logger";
 import {
@@ -87,6 +88,21 @@ function reportRendererGlobalError(
       });
     } catch (storeError) {
       console.error("[Renderer] Failed to add error to store:", storeError);
+    }
+
+    try {
+      const sentryError = rawError instanceof Error ? rawError : new Error(message);
+      Sentry.captureException(sentryError, {
+        tags: { source: kind === "unhandledrejection" ? "renderer-rejection" : "renderer-error" },
+        extra: {
+          correlationId,
+          filename: metadata.filename,
+          lineno: metadata.lineno,
+          colno: metadata.colno,
+        },
+      });
+    } catch (sentryError) {
+      console.error("[Renderer] Failed to report error to Sentry:", sentryError);
     }
 
     try {

@@ -1532,6 +1532,12 @@ export interface IpcInvokeMap {
     result: string;
   };
 
+  // Sentry
+  "sentry:get-consent-state": {
+    args: [];
+    result: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean };
+  };
+
   // Onboarding
   "onboarding:get": {
     args: [];
@@ -1987,6 +1993,12 @@ export interface IpcEventMap {
 
   // Config reload events
   "app:config-reloaded": void;
+
+  // Privacy events
+  "privacy:telemetry-consent-changed": {
+    level: "off" | "errors" | "full";
+    hasSeenPrompt: boolean;
+  };
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];

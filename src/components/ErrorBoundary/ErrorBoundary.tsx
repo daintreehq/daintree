@@ -3,6 +3,7 @@ import { ErrorFallback, type ErrorFallbackProps } from "./ErrorFallback";
 import { useErrorStore } from "@/store/errorStore";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
+import { captureRendererException } from "@/utils/rendererSentry";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -51,6 +52,15 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     });
 
     const correlationId = crypto.randomUUID();
+
+    captureRendererException(error, {
+      tags: {
+        source: "react-error-boundary",
+        component: componentName ?? "ErrorBoundary",
+      },
+      contexts: { react: { componentStack } },
+      extra: { correlationId, ...(context ?? {}) },
+    });
 
     let incidentId: string | null = null;
     try {

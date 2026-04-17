@@ -884,6 +884,8 @@ const CHANNELS = {
   PRIVACY_CLEAR_CACHE: "privacy:clear-cache",
   PRIVACY_RESET_ALL_DATA: "privacy:reset-all-data",
   PRIVACY_GET_DATA_FOLDER_PATH: "privacy:get-data-folder-path",
+  PRIVACY_TELEMETRY_CONSENT_CHANGED: "privacy:telemetry-consent-changed",
+  SENTRY_GET_CONSENT_STATE: "sentry:get-consent-state",
 
   // Voice Input channels
   VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",
@@ -2598,6 +2600,13 @@ const api: ElectronAPI = {
     clearCache: () => _unwrappingInvoke(CHANNELS.PRIVACY_CLEAR_CACHE),
     resetAllData: () => _unwrappingInvoke(CHANNELS.PRIVACY_RESET_ALL_DATA),
     getDataFolderPath: () => _unwrappingInvoke(CHANNELS.PRIVACY_GET_DATA_FOLDER_PATH),
+    onTelemetryConsentChanged: (
+      callback: (payload: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean }) => void
+    ) => _typedOn(CHANNELS.PRIVACY_TELEMETRY_CONSENT_CHANGED, callback),
+  },
+
+  sentry: {
+    getConsentState: () => _unwrappingInvoke(CHANNELS.SENTRY_GET_CONSENT_STATE),
   },
 
   onboarding: {
@@ -2868,6 +2877,23 @@ const api: ElectronAPI = {
 // Expose the API to the renderer process only for trusted origins in the main frame
 if (window.top === window && isTrustedRendererUrl(window.location.href)) {
   contextBridge.exposeInMainWorld("electron", api);
+  // Bridge for @sentry/electron/renderer's IPC transport. The renderer SDK
+  // looks up window.__SENTRY_IPC__["sentry-ipc"] and uses these methods to
+  // forward envelopes to the main process (which owns the real DSN and HTTP
+  // transport). contextIsolation blocks Sentry's default preload injection,
+  // so we expose the bridge manually here — gated to the trusted main-frame
+  // origin just like the `electron` API above.
+  contextBridge.exposeInMainWorld("__SENTRY_IPC__", {
+    "sentry-ipc": {
+      sendRendererStart: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.start", ...args),
+      sendScope: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.scope", ...args),
+      sendEnvelope: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.envelope", ...args),
+      sendStatus: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.status", ...args),
+      sendStructuredLog: (...args: unknown[]) =>
+        ipcRenderer.send("sentry-ipc.structured-log", ...args),
+      sendMetric: (...args: unknown[]) => ipcRenderer.send("sentry-ipc.metric", ...args),
+    },
+  });
 } else {
   if (window.top !== window) {
     console.error(

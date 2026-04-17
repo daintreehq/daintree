@@ -12,10 +12,17 @@ const telemetryServiceMock = vi.hoisted(() => ({
   setTelemetryEnabled: vi.fn(() => Promise.resolve()),
   hasTelemetryPromptBeenShown: vi.fn(() => false),
   markTelemetryPromptShown: vi.fn(),
+  getTelemetryLevel: vi.fn(() => "off" as "off" | "errors" | "full"),
   trackEvent: vi.fn(),
 }));
 
 vi.mock("../../../services/TelemetryService.js", () => telemetryServiceMock);
+
+const utilsMock = vi.hoisted(() => ({
+  typedBroadcast: vi.fn(),
+}));
+
+vi.mock("../../utils.js", () => utilsMock);
 
 import { registerTelemetryHandlers } from "../telemetry.js";
 
@@ -87,6 +94,21 @@ describe("registerTelemetryHandlers", () => {
     expect(telemetryServiceMock.setTelemetryEnabled).toHaveBeenCalledWith(true);
   });
 
+  it("TELEMETRY_SET_ENABLED handler broadcasts consent change on valid boolean", async () => {
+    telemetryServiceMock.getTelemetryLevel.mockReturnValue("errors");
+    telemetryServiceMock.hasTelemetryPromptBeenShown.mockReturnValue(true);
+    registerTelemetryHandlers();
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]) => ch.includes("telemetry:set-enabled")) ?? [];
+
+    await handler(null, true);
+    expect(utilsMock.typedBroadcast).toHaveBeenCalledWith("privacy:telemetry-consent-changed", {
+      level: "errors",
+      hasSeenPrompt: true,
+    });
+  });
+
   it("TELEMETRY_SET_ENABLED handler ignores non-boolean values", async () => {
     registerTelemetryHandlers();
 
@@ -106,6 +128,21 @@ describe("registerTelemetryHandlers", () => {
 
     await handler();
     expect(telemetryServiceMock.markTelemetryPromptShown).toHaveBeenCalled();
+  });
+
+  it("TELEMETRY_MARK_PROMPT_SHOWN broadcasts the updated consent", async () => {
+    telemetryServiceMock.getTelemetryLevel.mockReturnValue("errors");
+    registerTelemetryHandlers();
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]) => ch.includes("telemetry:mark-prompt-shown")) ??
+      [];
+
+    await handler();
+    expect(utilsMock.typedBroadcast).toHaveBeenCalledWith("privacy:telemetry-consent-changed", {
+      level: "errors",
+      hasSeenPrompt: true,
+    });
   });
 
   it("TELEMETRY_TRACK handler dispatches valid event to service", async () => {

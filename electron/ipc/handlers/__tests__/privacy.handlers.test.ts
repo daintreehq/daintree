@@ -43,11 +43,18 @@ vi.mock("../../../store.js", () => ({ store: storeMock }));
 
 const telemetryServiceMock = vi.hoisted(() => ({
   closeTelemetry: vi.fn(() => Promise.resolve()),
-  getTelemetryLevel: vi.fn(() => "off"),
+  getTelemetryLevel: vi.fn(() => "off" as "off" | "errors" | "full"),
   setTelemetryLevel: vi.fn(() => Promise.resolve()),
+  hasTelemetryPromptBeenShown: vi.fn(() => false),
 }));
 
 vi.mock("../../../services/TelemetryService.js", () => telemetryServiceMock);
+
+const utilsMock = vi.hoisted(() => ({
+  typedBroadcast: vi.fn(),
+}));
+
+vi.mock("../../utils.js", () => utilsMock);
 
 import { registerPrivacyHandlers } from "../privacy.js";
 
@@ -93,5 +100,41 @@ describe("PRIVACY_RESET_ALL_DATA handler", () => {
     expect(appMock.relaunch).toHaveBeenCalledWith({
       args: expect.arrayContaining(["--reset-data"]),
     });
+  });
+});
+
+describe("registerPrivacyHandlers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ipcMainMock._handlers.clear();
+  });
+
+  it("PRIVACY_SET_TELEMETRY_LEVEL broadcasts consent change on valid level", async () => {
+    telemetryServiceMock.hasTelemetryPromptBeenShown.mockReturnValue(true);
+    registerPrivacyHandlers();
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]) => ch === "privacy:set-telemetry-level") ?? [];
+
+    await handler(null, "errors");
+
+    expect(telemetryServiceMock.setTelemetryLevel).toHaveBeenCalledWith("errors");
+    expect(utilsMock.typedBroadcast).toHaveBeenCalledWith("privacy:telemetry-consent-changed", {
+      level: "errors",
+      hasSeenPrompt: true,
+    });
+  });
+
+  it("PRIVACY_SET_TELEMETRY_LEVEL ignores invalid values and does not broadcast", async () => {
+    registerPrivacyHandlers();
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]) => ch === "privacy:set-telemetry-level") ?? [];
+
+    await handler(null, "nonsense");
+    await handler(null, 42);
+
+    expect(telemetryServiceMock.setTelemetryLevel).not.toHaveBeenCalled();
+    expect(utilsMock.typedBroadcast).not.toHaveBeenCalled();
   });
 });

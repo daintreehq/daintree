@@ -469,6 +469,10 @@ export const CHANNELS = {
   PRIVACY_CLEAR_CACHE: "privacy:clear-cache",
   PRIVACY_RESET_ALL_DATA: "privacy:reset-all-data",
   PRIVACY_GET_DATA_FOLDER_PATH: "privacy:get-data-folder-path",
+  PRIVACY_TELEMETRY_CONSENT_CHANGED: "privacy:telemetry-consent-changed",
+
+  // Sentry channels
+  SENTRY_GET_CONSENT_STATE: "sentry:get-consent-state",
 
   // MCP Server channels
   MCP_SERVER_GET_STATUS: "mcp-server:get-status",

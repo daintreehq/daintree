@@ -5,9 +5,11 @@ import {
   setTelemetryEnabled,
   hasTelemetryPromptBeenShown,
   markTelemetryPromptShown,
+  getTelemetryLevel,
   trackEvent,
 } from "../../services/TelemetryService.js";
 import { ANALYTICS_EVENTS } from "../../../shared/config/telemetry.js";
+import { typedBroadcast } from "../utils.js";
 
 const ALLOWED_EVENTS = new Set<string>(ANALYTICS_EVENTS);
 
@@ -23,11 +25,19 @@ export function registerTelemetryHandlers(): () => void {
   ipcMain.handle(CHANNELS.TELEMETRY_SET_ENABLED, async (_event, enabled: unknown) => {
     if (typeof enabled !== "boolean") return;
     await setTelemetryEnabled(enabled);
+    typedBroadcast("privacy:telemetry-consent-changed", {
+      level: getTelemetryLevel(),
+      hasSeenPrompt: hasTelemetryPromptBeenShown(),
+    });
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.TELEMETRY_SET_ENABLED));
 
   ipcMain.handle(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN, () => {
     markTelemetryPromptShown();
+    typedBroadcast("privacy:telemetry-consent-changed", {
+      level: getTelemetryLevel(),
+      hasSeenPrompt: true,
+    });
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN));
 

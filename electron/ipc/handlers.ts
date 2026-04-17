@@ -37,6 +37,7 @@ import { registerClipboardHandlers } from "./handlers/clipboard.js";
 import { registerGitWriteHandlers } from "./handlers/git-write.js";
 import { registerTelemetryHandlers } from "./handlers/telemetry.js";
 import { registerPrivacyHandlers } from "./handlers/privacy.js";
+import { registerSentryHandlers } from "./handlers/sentry.js";
 import { registerOnboardingHandlers } from "./handlers/onboarding.js";
 import { registerMilestonesHandlers } from "./handlers/milestones.js";
 import { registerShortcutHintsHandlers } from "./handlers/shortcutHints.js";
@@ -131,6 +132,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerGitWriteHandlers(deps));
     register(() => registerTelemetryHandlers());
     register(() => registerPrivacyHandlers());
+    register(() => registerSentryHandlers());
     register(() => registerOnboardingHandlers());
     register(() => registerMilestonesHandlers());
     register(() => registerShortcutHintsHandlers());

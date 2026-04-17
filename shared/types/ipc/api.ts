@@ -1116,6 +1116,15 @@ export interface ElectronAPI {
     clearCache(): Promise<void>;
     resetAllData(): Promise<void>;
     getDataFolderPath(): Promise<string>;
+    onTelemetryConsentChanged(
+      callback: (payload: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean }) => void
+    ): () => void;
+  };
+  sentry: {
+    getConsentState(): Promise<{
+      level: "off" | "errors" | "full";
+      hasSeenPrompt: boolean;
+    }>;
   };
   onboarding: {
     get(): Promise<OnboardingState>;

@@ -13,6 +13,7 @@ import { ensureTerminalFontLoaded } from "./config/terminalFont";
 import { initStoreOrchestrator } from "./store/rendererStoreOrchestrator";
 import { useAgentSettingsStore } from "./store/agentSettingsStore";
 import { registerRendererGlobalErrorHandlers } from "./utils/rendererGlobalErrorHandlers";
+import { initRendererSentry } from "./utils/rendererSentry";
 import { renderBootstrapError } from "./utils/renderBootstrapError";
 import {
   onCaughtError,
@@ -25,6 +26,8 @@ let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupOrchestrator: (() => void) | undefined;
 
 async function bootstrap() {
+  await initRendererSentry();
+
   cleanupGlobalErrorHandlers = registerRendererGlobalErrorHandlers();
 
   applyDefaultAppTheme(document.documentElement);
@@ -64,6 +67,15 @@ async function bootstrap() {
 
 bootstrap().catch((error: unknown) => {
   console.error("Bootstrap failed:", error);
+
+  void (async () => {
+    try {
+      const { captureException } = await import("@sentry/electron/renderer");
+      captureException(error);
+    } catch {
+      // Sentry may not have initialized yet
+    }
+  })();
 
   try {
     const errObj =
