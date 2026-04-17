@@ -87,6 +87,11 @@ vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
 }));
 
+const mockGetAll = vi.fn<() => Array<{ projectId?: string; agentState?: string }>>(() => []);
+vi.mock("../../services/PtyManager.js", () => ({
+  getPtyManager: vi.fn(() => ({ getAll: mockGetAll })),
+}));
+
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { logInfo } from "../../utils/logger.js";
 
@@ -112,6 +117,8 @@ describe("ProjectViewManager — eviction safety", () => {
   beforeEach(() => {
     nextWebContentsId = 100;
     vi.clearAllMocks();
+    mockGetAll.mockReset();
+    mockGetAll.mockReturnValue([]);
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -186,6 +193,70 @@ describe("ProjectViewManager — eviction safety", () => {
     const viewIds = views.map((v) => v.projectId || "");
     expect(viewIds).toContain("proj-b");
   });
+
+  it("skips LRU candidate when its project has an active agent", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+
+    // proj-a (oldest) has an active agent. Eviction must skip it and evict proj-b instead
+    // once we go over the limit with proj-c.
+    mockGetAll.mockReturnValue([
+      { projectId: "proj-a", agentState: "working" },
+      { projectId: "proj-b", agentState: "idle" },
+    ]);
+
+    const wcBEntry = managerWithLimit.getAllViews().find((v) => v.projectId === "proj-b");
+    const wcB = wcBEntry?.view.webContents as ReturnType<typeof createMockWebContents> | undefined;
+
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+
+    const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+    expect(remaining).toContain("proj-a");
+    expect(remaining).toContain("proj-c");
+    expect(remaining).not.toContain("proj-b");
+    expect(wcA.close).not.toHaveBeenCalled();
+    expect(wcB?.close).toHaveBeenCalled();
+  });
+
+  it("falls back to evicting an active-agent view when all candidates are protected", async () => {
+    const managerWithLimit = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 2,
+    });
+
+    const wcA = createMockWebContents();
+    const viewA = { webContents: wcA, setBounds: vi.fn() };
+    managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+    await managerWithLimit.switchTo("proj-b", "/path/b");
+
+    // Both background candidates have active agents — fallback must evict the LRU
+    // (proj-a) and emit a telemetry event rather than let the pool grow unbounded.
+    mockGetAll.mockReturnValue([
+      { projectId: "proj-a", agentState: "directing" },
+      { projectId: "proj-b", agentState: "running" },
+    ]);
+
+    await managerWithLimit.switchTo("proj-c", "/path/c");
+
+    const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+    expect(remaining).not.toContain("proj-a");
+    expect(remaining).toContain("proj-b");
+    expect(remaining).toContain("proj-c");
+    expect(wcA.close).toHaveBeenCalled();
+    expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
+      "projectview.eviction",
+      expect.objectContaining({ projectId: "proj-a", activeAgent: true })
+    );
+  });
 });
 
 describe("ProjectViewManager — telemetry", () => {
@@ -214,6 +285,7 @@ describe("ProjectViewManager — telemetry", () => {
       projectId: "proj-a",
       reason: "lru",
       ageMs: expect.any(Number),
+      activeAgent: false,
     });
 
     const evictionCall = vi

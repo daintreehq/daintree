@@ -21,9 +21,11 @@ import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isLocalhostUrl } from "../../shared/utils/urlUtils.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
+import { getPtyManager } from "../services/PtyManager.js";
 import { notifyError } from "../ipc/errorHandlers.js";
 import { logInfo } from "../utils/logger.js";
 import { injectSkeletonCss } from "./skeletonCss.js";
+import { ACTIVE_AGENT_STATES } from "../../shared/types/agent.js";
 
 const GC_DELAY_MS = 100;
 const LOAD_TIMEOUT_MS = 10_000;
@@ -623,6 +625,14 @@ export class ProjectViewManager {
     this.views.delete(projectId);
   }
 
+  private hasActiveAgent(projectId: string): boolean {
+    const terminals = getPtyManager().getAll();
+    return terminals.some(
+      (t) =>
+        t.projectId === projectId && t.agentState != null && ACTIVE_AGENT_STATES.has(t.agentState)
+    );
+  }
+
   private evictStaleViews(reason: EvictionReason): void {
     if (this.views.size <= this.maxCachedViews) return;
     if (this.activeProjectId === null) return;
@@ -631,10 +641,27 @@ export class ProjectViewManager {
       .filter(([id]) => id !== this.activeProjectId)
       .sort(([, a], [, b]) => a.lastUsed - b.lastUsed);
 
-    while (this.views.size > this.maxCachedViews && evictable.length > 0) {
-      const [projectId, entry] = evictable.shift()!;
+    // Partition: evict views without active agents first, only fall back to
+    // active-agent views when safe candidates are exhausted. This keeps memory
+    // bounded (each WebContentsView is ~400-500MB) without silently killing
+    // agent renderers mid-task.
+    const safeToEvict: Array<[string, ViewEntry, boolean]> = [];
+    const activeAgentFallback: Array<[string, ViewEntry, boolean]> = [];
+    for (const [projectId, entry] of evictable) {
+      const active = this.hasActiveAgent(projectId);
+      if (active) {
+        activeAgentFallback.push([projectId, entry, true]);
+      } else {
+        safeToEvict.push([projectId, entry, false]);
+      }
+    }
+
+    const candidates = [...safeToEvict, ...activeAgentFallback];
+
+    while (this.views.size > this.maxCachedViews && candidates.length > 0) {
+      const [projectId, entry, activeAgent] = candidates.shift()!;
       const ageMs = Date.now() - entry.lastUsed;
-      logInfo("projectview.eviction", { projectId, reason, ageMs });
+      logInfo("projectview.eviction", { projectId, reason, ageMs, activeAgent });
       this.evictionTimestamps.set(projectId, Date.now());
       this.cleanupEntry(projectId);
     }

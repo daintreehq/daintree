@@ -8,6 +8,14 @@ export type AgentState =
   | "completed"
   | "exited";
 
+/** Agent states that indicate in-flight work — used to protect against eviction/hibernation */
+export const ACTIVE_AGENT_STATES: ReadonlySet<AgentState> = new Set([
+  "working",
+  "running",
+  "waiting",
+  "directing",
+]);
+
 /** Classification of why an agent is in the "waiting" state */
 export type WaitingReason = "prompt" | "question";
 
