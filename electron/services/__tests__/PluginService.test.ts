@@ -251,7 +251,6 @@ describe("PluginService", () => {
       name: "acme.escape-test",
       version: "1.0.0",
       main: "../evil.js",
-      renderer: "dist/renderer.js",
     });
 
     const service = new PluginService(tmpDir);
@@ -259,29 +258,8 @@ describe("PluginService", () => {
 
     const plugins = service.listPlugins();
     expect(plugins).toHaveLength(1);
-    // Valid renderer should be resolved, but escaping main should not
-    expect(plugins[0].resolvedRenderer).toBe(
-      path.join(tmpDir, "escape-test", "dist", "renderer.js")
-    );
     // The plugin loads but main is silently rejected (no import attempted)
     expect(plugins[0].manifest.main).toBe("../evil.js");
-  });
-
-  it("resolves valid renderer entry path", async () => {
-    await writePlugin("renderer-test", {
-      name: "acme.renderer-test",
-      version: "1.0.0",
-      renderer: "dist/renderer.js",
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    const plugins = service.listPlugins();
-    expect(plugins).toHaveLength(1);
-    expect(plugins[0].resolvedRenderer).toBe(
-      path.join(tmpDir, "renderer-test", "dist", "renderer.js")
-    );
   });
 
   it("does not include resolvedMain in listPlugins output", async () => {
@@ -893,6 +871,100 @@ describe("Plugin unload lifecycle", () => {
     expect(registerPanelKind).toHaveBeenCalledTimes(1);
     expect(registerPanelKind).toHaveBeenCalledWith(
       expect.objectContaining({ id: "acme.lifecycle.viewer", extensionId: "acme.lifecycle" })
+    );
+  });
+});
+
+describe("deprecated renderer field", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it("warns when plugin manifest contains renderer field", async () => {
+    await writePlugin("renderer-deprecated", {
+      name: "renderer-deprecated",
+      version: "1.0.0",
+      renderer: "dist/renderer.js",
+      engines: { daintree: "*" },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      `[PluginService] Plugin "renderer-deprecated" uses deprecated 'renderer' field. This field is no longer supported and will be ignored. Daintree plugins use main process entry points only; renderer-side plugins are not supported.`
+    );
+  });
+
+  it("does not warn when plugin manifest lacks renderer field", async () => {
+    await writePlugin("no-renderer", {
+      name: "no-renderer",
+      version: "1.0.0",
+      engines: { daintree: "*" },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not include resolvedRenderer in listPlugins output", async () => {
+    await writePlugin("renderer-test", {
+      name: "renderer-test",
+      version: "1.0.0",
+      renderer: "dist/renderer.js",
+      engines: { daintree: "*" },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    expect(Object.keys(plugins[0])).not.toContain("resolvedRenderer");
+  });
+
+  it("does not warn for incompatible plugins that fail compatibility gate", async () => {
+    await writePlugin("incompatible-with-renderer", {
+      name: "incompatible-with-renderer",
+      version: "1.0.0",
+      renderer: "dist/renderer.js",
+      engines: { daintree: "^1.0.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.8.0");
+    await service.initialize();
+
+    expect(service.listPlugins()).toEqual([]);
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("uses deprecated 'renderer' field")
+    );
+  });
+
+  it("warns once per load attempt even with both main and renderer", async () => {
+    await writePlugin("both-entries", {
+      name: "both-entries",
+      version: "1.0.0",
+      main: "dist/main.js",
+      renderer: "dist/renderer.js",
+      engines: { daintree: "*" },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("uses deprecated 'renderer' field")
     );
   });
 });

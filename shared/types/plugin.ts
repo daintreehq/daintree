@@ -32,6 +32,9 @@ export interface PluginManifest {
   displayName?: string;
   description?: string;
   main?: string;
+  /**
+   * @deprecated Use main instead. Renderer entry points are no longer supported.
+   */
   renderer?: string;
   engines?: {
     daintree?: string;
@@ -46,7 +49,6 @@ export interface PluginManifest {
 export interface LoadedPluginInfo {
   manifest: PluginManifest;
   dir: string;
-  resolvedRenderer?: string;
   loadedAt: number;
 }
 

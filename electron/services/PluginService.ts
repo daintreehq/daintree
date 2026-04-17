@@ -24,7 +24,6 @@ interface LoadedPlugin {
   manifest: PluginManifest;
   dir: string;
   resolvedMain?: string;
-  resolvedRenderer?: string;
   loadedAt: number;
 }
 
@@ -120,6 +119,12 @@ export class PluginService {
       );
     }
 
+    if (manifest.renderer) {
+      console.warn(
+        `[PluginService] Plugin "${manifest.name}" uses deprecated 'renderer' field. This field is no longer supported and will be ignored. Daintree plugins use main process entry points only; renderer-side plugins are not supported.`
+      );
+    }
+
     const plugin: LoadedPlugin = {
       manifest,
       dir: pluginDir,
@@ -133,17 +138,6 @@ export class PluginService {
       } else {
         console.warn(
           `[PluginService] Plugin ${manifest.name}: main entry path escapes plugin directory, ignoring`
-        );
-      }
-    }
-
-    if (manifest.renderer) {
-      const resolved = this.resolveEntryPath(pluginDir, manifest.renderer);
-      if (resolved) {
-        plugin.resolvedRenderer = resolved;
-      } else {
-        console.warn(
-          `[PluginService] Plugin ${manifest.name}: renderer entry path escapes plugin directory, ignoring`
         );
       }
     }
@@ -254,7 +248,6 @@ export class PluginService {
     return Array.from(this.plugins.values()).map((p) => ({
       manifest: p.manifest,
       dir: p.dir,
-      resolvedRenderer: p.resolvedRenderer,
       loadedAt: p.loadedAt,
     }));
   }
