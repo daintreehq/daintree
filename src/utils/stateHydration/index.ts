@@ -773,10 +773,7 @@ export async function hydrateAppState(
               // Orphaned backend terminals no longer carry worktreeId — infer it
               // from cwd against the loaded worktrees, then fall back to the
               // active worktree so the panel still appears in the grid filter.
-              const inferred = inferWorktreeIdFromCwd(
-                terminal.cwd,
-                worktreesForInfer ?? undefined
-              );
+              const inferred = inferWorktreeIdFromCwd(terminal.cwd, worktreesForInfer ?? undefined);
               if (inferred) {
                 orphanArgs.worktreeId = inferred;
               } else if (activeWorktreeId) {

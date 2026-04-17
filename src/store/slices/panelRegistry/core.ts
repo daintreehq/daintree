@@ -69,11 +69,13 @@ type Get = PanelRegistryStoreApi["getState"];
  * at a time. `HydrationBatchToken` protects against stale flushes from cancelled
  * hydrations colliding with a fresh batch started by the superseding hydration.
  */
+// `globalThis.Set` qualifier avoids a collision with the local `type Set` alias
+// above (which is the Zustand `setState` function type).
 let activeHydrationBatch: {
   token: HydrationBatchToken;
   /** Ids pending append to `panelIds`; deduplicated via `seenIds`. */
   pendingIds: string[];
-  seenIds: Set<string>;
+  seenIds: globalThis.Set<string>;
 } | null = null;
 
 /**

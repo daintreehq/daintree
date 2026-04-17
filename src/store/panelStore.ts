@@ -153,10 +153,7 @@ export const usePanelStore = create<PanelGridState>()((set, get, api) => {
       // defeat the batch's single-render guarantee. The arbitrary "last panel added"
       // focus also isn't meaningful during restore — focus is resolved elsewhere once
       // the active worktree is set.
-      if (
-        (!options.location || options.location === "grid") &&
-        !isHydrationBatchActive()
-      ) {
+      if ((!options.location || options.location === "grid") && !isHydrationBatchActive()) {
         set({ focusedId: id });
       }
       return id;
