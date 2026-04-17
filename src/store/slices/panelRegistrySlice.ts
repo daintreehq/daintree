@@ -2,6 +2,7 @@
 export {
   createPanelRegistrySlice,
   flushPanelPersistence,
+  isHydrationBatchActive,
   selectOrderedTerminals,
   MAX_GRID_TERMINALS,
   deriveRuntimeStatus,

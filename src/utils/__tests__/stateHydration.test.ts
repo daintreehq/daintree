@@ -2658,4 +2658,135 @@ describe("hydrateAppState", () => {
       expect(appClientMock.hydrate).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("hydration batching (#5196)", () => {
+    it("pairs beginHydrationBatch and flushHydrationBatch for each non-empty restore phase", async () => {
+      // Three panel kinds exercise three phases simultaneously: browser (non-PTY),
+      // a saved terminal without a backend process (background PTY respawn), and
+      // an orphan backend terminal not in the saved list.
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "browser-1",
+              kind: "browser",
+              title: "Browser",
+              cwd: "/project",
+              location: "grid",
+            },
+            {
+              id: "terminal-1",
+              kind: "terminal",
+              type: "terminal",
+              title: "Terminal",
+              cwd: "/project",
+              location: "grid",
+              worktreeId: "wt-other",
+            },
+          ],
+          activeWorktreeId: "wt-active",
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        { id: "orphan-1", kind: "terminal", type: "terminal", cwd: "/project", hasPty: true },
+      ]);
+      terminalClientMock.reconnect.mockResolvedValue({ exists: false });
+
+      const beginHydrationBatch = vi.fn(() => Symbol("batch"));
+      const flushHydrationBatch = vi.fn();
+
+      await hydrateAppState({
+        addPanel: vi.fn().mockResolvedValue("panel-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+        beginHydrationBatch,
+        flushHydrationBatch,
+      });
+
+      // Every begin must be matched by a flush with the same token.
+      expect(flushHydrationBatch).toHaveBeenCalledTimes(beginHydrationBatch.mock.calls.length);
+      const tokens = beginHydrationBatch.mock.results.map((r) => r.value);
+      tokens.forEach((token, i) => {
+        expect(flushHydrationBatch.mock.calls[i]?.[0]).toBe(token);
+      });
+
+      // Non-PTY + background-PTY + orphan phases each fire at least one begin/flush.
+      expect(beginHydrationBatch.mock.calls.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it("falls through to legacy per-panel commits when batch hooks are omitted", async () => {
+      // Regression guard: existing callers (and tests) that don't pass begin/flush
+      // must still hydrate correctly. This is the same shape as the first test in
+      // this suite, but without any batch hooks in the options object.
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "browser-1",
+              kind: "browser",
+              title: "Browser",
+              cwd: "/project",
+              location: "grid",
+            },
+          ],
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      const addPanel = vi.fn().mockResolvedValue("browser-1");
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(addPanel).toHaveBeenCalledTimes(1);
+    });
+
+    it("flushes the batch even if a panel addition throws mid-phase", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "browser-1",
+              kind: "browser",
+              title: "Browser",
+              cwd: "/project",
+              location: "grid",
+            },
+          ],
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      const beginHydrationBatch = vi.fn(() => Symbol("batch"));
+      const flushHydrationBatch = vi.fn();
+
+      // If `addPanel` rejects, hydration swallows the error (logWarn). The batch
+      // still needs to flush so the store isn't left stuck with a dangling batch.
+      const addPanel = vi.fn().mockRejectedValue(new Error("boom"));
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+        beginHydrationBatch,
+        flushHydrationBatch,
+      });
+
+      expect(beginHydrationBatch).toHaveBeenCalled();
+      expect(flushHydrationBatch).toHaveBeenCalledTimes(beginHydrationBatch.mock.calls.length);
+    });
+  });
 });

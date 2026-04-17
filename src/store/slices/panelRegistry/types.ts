@@ -43,6 +43,13 @@ export interface BackgroundedTerminal {
   groupMetadata?: TrashedTerminalGroupMetadata;
 }
 
+/**
+ * Opaque token returned by `beginHydrationBatch`. Callers must pass the same token
+ * to `flushHydrationBatch` so a stale batch from a cancelled hydration cannot be
+ * flushed by a later, unrelated caller.
+ */
+export type HydrationBatchToken = symbol;
+
 export interface PanelRegistrySlice {
   panelsById: Record<string, TerminalInstance>;
   panelIds: string[];
@@ -52,6 +59,17 @@ export interface PanelRegistrySlice {
   tabGroups: Map<string, TabGroup>;
 
   addPanel: (options: AddPanelOptions) => Promise<string | null>;
+  /**
+   * Hydration-only: collect subsequent `addPanel` mutations into one batched commit
+   * instead of applying each individually. Every `addPanel` between begin and flush
+   * still returns its final id and runs per-panel side effects, but store mutations
+   * are deferred until `flushHydrationBatch` fires exactly one `set()` +
+   * `saveNormalized()` for all collected panels. Collapses an N-panel restore phase
+   * from N re-renders into 1.
+   */
+  beginHydrationBatch: () => HydrationBatchToken;
+  /** Apply all panels collected since `beginHydrationBatch` in a single `set()` call. */
+  flushHydrationBatch: (token: HydrationBatchToken) => void;
   removePanel: (id: string) => void;
   updateTitle: (id: string, newTitle: string) => void;
   updateLastObservedTitle: (id: string, title: string) => void;

@@ -4,6 +4,7 @@ import type {
   PanelRegistrySlice,
   PanelRegistryMiddleware,
   TerminalInstance,
+  HydrationBatchToken,
 } from "./types";
 import { terminalClient, projectClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -55,6 +56,32 @@ async function resolveProjectStore() {
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
 
+interface HydrationBatchEntry {
+  terminal: TerminalInstance;
+  /** Reconnect entries preserve existing runtime fields (agentState, exitBehavior, …) during merge. */
+  isReconnect: boolean;
+}
+
+// Module-level singleton: hydration runs sequentially (guarded by `isCurrent()` checks),
+// so at most one batch is active at a time. The token identity prevents a late flush from
+// a cancelled hydration from colliding with a fresh batch started by the new hydration.
+let activeHydrationBatch: { token: HydrationBatchToken; entries: HydrationBatchEntry[] } | null =
+  null;
+
+/**
+ * Exposed so higher-level `addPanel` wrappers (e.g. the focus-setting wrapper in
+ * `panelStore.ts`) can skip their own `set()` calls while a batch is active —
+ * otherwise they'd trigger one render per panel and defeat the batching.
+ */
+export function isHydrationBatchActive(): boolean {
+  return activeHydrationBatch !== null;
+}
+
+function collectForBatch(entry: HydrationBatchEntry): void {
+  if (activeHydrationBatch === null) return;
+  activeHydrationBatch.entries.push(entry);
+}
+
 function countNonTrashTerminals(state: PanelRegistrySlice): number {
   let count = 0;
   for (const id of state.panelIds) {
@@ -85,6 +112,8 @@ export const createCorePanelActions = (
 ): Pick<
   PanelRegistrySlice,
   | "addPanel"
+  | "beginHydrationBatch"
+  | "flushHydrationBatch"
   | "removePanel"
   | "updateTitle"
   | "updateLastObservedTitle"
@@ -97,6 +126,53 @@ export const createCorePanelActions = (
   | "moveTerminalToGrid"
   | "toggleTerminalLocation"
 > => ({
+  beginHydrationBatch: () => {
+    // A leftover batch from a cancelled hydration is discarded — we prioritize the
+    // fresh hydration and never flush stale panels into the store.
+    const token: HydrationBatchToken = Symbol("hydration-batch");
+    activeHydrationBatch = { token, entries: [] };
+    return token;
+  },
+
+  flushHydrationBatch: (token) => {
+    // Token mismatch means the batch was superseded or already flushed — ignore.
+    if (activeHydrationBatch === null || activeHydrationBatch.token !== token) return;
+    const entries = activeHydrationBatch.entries;
+    activeHydrationBatch = null;
+    if (entries.length === 0) return;
+
+    set((state) => {
+      const newById = { ...state.panelsById };
+      let newIds = state.panelIds;
+      let idsChanged = false;
+      for (const { terminal, isReconnect } of entries) {
+        const existing = newById[terminal.id];
+        if (existing) {
+          // Matches the single-panel reconnect merge in addPanel's PTY path: keep the
+          // existing runtime fields when the restored snapshot has them unset.
+          newById[terminal.id] = isReconnect
+            ? {
+                ...terminal,
+                agentState: terminal.agentState ?? existing.agentState,
+                lastStateChange: terminal.lastStateChange ?? existing.lastStateChange,
+                exitBehavior: terminal.exitBehavior ?? existing.exitBehavior,
+                extensionState: terminal.extensionState ?? existing.extensionState,
+              }
+            : terminal;
+        } else {
+          newById[terminal.id] = terminal;
+          if (!idsChanged) {
+            newIds = [...newIds];
+            idsChanged = true;
+          }
+          newIds.push(terminal.id);
+        }
+      }
+      saveNormalized(newById, newIds);
+      return idsChanged ? { panelsById: newById, panelIds: newIds } : { panelsById: newById };
+    });
+  },
+
   addPanel: async (options) => {
     // Panel limit enforcement (Tier 2: confirmation, Tier 3: hard block)
     if (!options.bypassLimits) {
@@ -189,19 +265,23 @@ export const createCorePanelActions = (
         ...kindFields,
       };
 
-      set((state) => {
-        const existing = state.panelsById[id];
-        if (existing) {
-          logDebug("[TerminalStore] Panel already exists, updating instead of adding", { id });
+      if (isHydrationBatchActive()) {
+        collectForBatch({ terminal, isReconnect: false });
+      } else {
+        set((state) => {
+          const existing = state.panelsById[id];
+          if (existing) {
+            logDebug("[TerminalStore] Panel already exists, updating instead of adding", { id });
+            const newById = { ...state.panelsById, [id]: terminal };
+            saveNormalized(newById, state.panelIds);
+            return { panelsById: newById };
+          }
           const newById = { ...state.panelsById, [id]: terminal };
-          saveNormalized(newById, state.panelIds);
-          return { panelsById: newById };
-        }
-        const newById = { ...state.panelsById, [id]: terminal };
-        const newIds = [...state.panelIds, id];
-        saveNormalized(newById, newIds);
-        return { panelsById: newById, panelIds: newIds };
-      });
+          const newIds = [...state.panelIds, id];
+          saveNormalized(newById, newIds);
+          return { panelsById: newById, panelIds: newIds };
+        });
+      }
 
       return id;
     }
@@ -453,30 +533,34 @@ export const createCorePanelActions = (
         startedAt: Date.now(),
       };
 
-      set((state) => {
-        const existing = state.panelsById[id];
-        if (existing) {
-          // Update existing terminal in place (reconnection case or double hydration)
-          logDebug("[TerminalStore] Terminal already exists, updating instead of adding", { id });
-          // Preserve existing agentState/lastStateChange/exitBehavior if new values are undefined
-          const preservedTerminal = isReconnect
-            ? {
-                ...terminal,
-                agentState: terminal.agentState ?? existing.agentState,
-                lastStateChange: terminal.lastStateChange ?? existing.lastStateChange,
-                exitBehavior: terminal.exitBehavior ?? existing.exitBehavior,
-                extensionState: terminal.extensionState ?? existing.extensionState,
-              }
-            : terminal;
-          const newById = { ...state.panelsById, [id]: preservedTerminal };
-          saveNormalized(newById, state.panelIds);
-          return { panelsById: newById };
-        }
-        const newById = { ...state.panelsById, [id]: terminal };
-        const newIds = [...state.panelIds, id];
-        saveNormalized(newById, newIds);
-        return { panelsById: newById, panelIds: newIds };
-      });
+      if (isHydrationBatchActive()) {
+        collectForBatch({ terminal, isReconnect });
+      } else {
+        set((state) => {
+          const existing = state.panelsById[id];
+          if (existing) {
+            // Update existing terminal in place (reconnection case or double hydration)
+            logDebug("[TerminalStore] Terminal already exists, updating instead of adding", { id });
+            // Preserve existing agentState/lastStateChange/exitBehavior if new values are undefined
+            const preservedTerminal = isReconnect
+              ? {
+                  ...terminal,
+                  agentState: terminal.agentState ?? existing.agentState,
+                  lastStateChange: terminal.lastStateChange ?? existing.lastStateChange,
+                  exitBehavior: terminal.exitBehavior ?? existing.exitBehavior,
+                  extensionState: terminal.extensionState ?? existing.extensionState,
+                }
+              : terminal;
+            const newById = { ...state.panelsById, [id]: preservedTerminal };
+            saveNormalized(newById, state.panelIds);
+            return { panelsById: newById };
+          }
+          const newById = { ...state.panelsById, [id]: terminal };
+          const newIds = [...state.panelIds, id];
+          saveNormalized(newById, newIds);
+          return { panelsById: newById, panelIds: newIds };
+        });
+      }
 
       // Determine if terminal should start backgrounded:
       // 1. Dock terminals are always backgrounded (offscreen)

@@ -32,10 +32,11 @@ import {
   splitSnapshotRestoreTasks,
   scheduleBackgroundFetchAndRestore,
   registerLazyScrollRestore,
-  runInBatches,
   RESTORE_SPAWN_BATCH_SIZE,
   RESTORE_SPAWN_BATCH_DELAY_MS,
+  delay,
 } from "./batchScheduler";
+import type { HydrationBatchToken } from "@/store/slices/panelRegistry/types";
 import { normalizeAndApplyScrollback } from "./scrollbackConfig";
 import { reconnectWithTimeout } from "./reconnectManager";
 import {
@@ -159,6 +160,15 @@ export interface HydrationOptions {
   hydrateMru?: (list: string[]) => void;
   hydrateActionMru?: (list: string[]) => void;
   restoreTerminalOrder?: (orderedIds: string[]) => void;
+  /**
+   * Optional hydration-batch hooks. When both are provided, each restore phase is
+   * wrapped in a begin/flush pair so the N `addPanel` mutations within the phase
+   * collapse into a single store commit. Leaving them undefined keeps the legacy
+   * per-panel commit behavior (tests and callers that don't care about render
+   * reduction don't need to pass these).
+   */
+  beginHydrationBatch?: () => HydrationBatchToken;
+  flushHydrationBatch?: (token: HydrationBatchToken) => void;
 }
 
 export async function hydrateAppState(
@@ -167,8 +177,34 @@ export async function hydrateAppState(
   isCurrent?: () => boolean,
   prefetchedHydrateResult?: import("@shared/types/ipc/app").HydrateResult
 ): Promise<void> {
-  const { addPanel, setActiveWorktree, loadRecipes, openDiagnosticsDock } = options;
+  const {
+    addPanel,
+    setActiveWorktree,
+    loadRecipes,
+    openDiagnosticsDock,
+    beginHydrationBatch,
+    flushHydrationBatch,
+  } = options;
   const hydrationStartedAt = Date.now();
+
+  /**
+   * Wrap a restore phase in a hydration batch so every `addPanel` call inside `run`
+   * collapses into a single store commit when the phase completes. If the caller
+   * didn't wire the batch hooks (e.g. tests), fall through to the legacy per-panel
+   * commit behavior.
+   */
+  const withHydrationBatch = async (run: () => Promise<void>): Promise<void> => {
+    if (!beginHydrationBatch || !flushHydrationBatch) {
+      await run();
+      return;
+    }
+    const token = beginHydrationBatch();
+    try {
+      await run();
+    } finally {
+      flushHydrationBatch(token);
+    }
+  };
   let panelRestoreStartedAt: number | null = null;
   let panelRestoreCount = 0;
   let tabGroupRestoreCount = 0;
@@ -629,49 +665,68 @@ export async function hydrateAppState(
 
           // Restore all non-PTY panels concurrently (browser, notes, dev-preview).
           // These only perform synchronous store mutations, so no throttling is needed.
+          // The begin/flush wrapper collapses the N addPanel mutations into one store
+          // commit, reducing this phase from N re-renders to 1.
           if (nonPtyTasks.length > 0) {
             logHydrationInfo(`Restoring ${nonPtyTasks.length} non-PTY panel(s) concurrently`);
-            await Promise.allSettled(
-              nonPtyTasks.map(async (task) => {
+            await withHydrationBatch(async () => {
+              await Promise.allSettled(
+                nonPtyTasks.map(async (task) => {
+                  try {
+                    await task.execute();
+                  } catch (error) {
+                    logWarn("Failed to restore non-PTY panel", { error });
+                  }
+                })
+              );
+            });
+          }
+
+          if (!checkCurrent()) return;
+
+          // Restore priority PTY panels sequentially (active worktree, for instant
+          // interactivity). Batched so the sequential `await`s — which normally break
+          // React 19 auto-batching and cause one render per panel — collapse into a
+          // single store commit at phase end.
+          if (ptyPriorityTasks.length > 0) {
+            await withHydrationBatch(async () => {
+              for (const task of ptyPriorityTasks) {
                 try {
                   await task.execute();
                 } catch (error) {
-                  logWarn("Failed to restore non-PTY panel", { error });
+                  logWarn("Failed to restore priority panel", { error });
                 }
-              })
-            );
+              }
+            });
           }
 
           if (!checkCurrent()) return;
 
-          // Restore priority PTY panels sequentially (active worktree, for instant interactivity)
-          for (const task of ptyPriorityTasks) {
-            try {
-              await task.execute();
-            } catch (error) {
-              logWarn("Failed to restore priority panel", { error });
-            }
-          }
-
-          if (!checkCurrent()) return;
-
-          // Restore background PTY panels in staggered batches
+          // Restore background PTY panels in staggered batches. Each batch is its own
+          // hydration batch: we still want staggered spawning to throttle PTY pressure,
+          // but within a batch the N panels commit in one render rather than N.
+          // N background panels -> ceil(N / RESTORE_SPAWN_BATCH_SIZE) renders instead of N.
           if (ptyBackgroundTasks.length > 0) {
             logHydrationInfo(
               `Staggering ${ptyBackgroundTasks.length} background PTY panel(s) in batches of ${RESTORE_SPAWN_BATCH_SIZE}`
             );
-            await runInBatches(
-              ptyBackgroundTasks,
-              RESTORE_SPAWN_BATCH_SIZE,
-              RESTORE_SPAWN_BATCH_DELAY_MS,
-              async (task) => {
-                try {
-                  await task.execute();
-                } catch (error) {
-                  logWarn("Failed to restore background panel", { error });
-                }
+            for (let i = 0; i < ptyBackgroundTasks.length; i += RESTORE_SPAWN_BATCH_SIZE) {
+              const batch = ptyBackgroundTasks.slice(i, i + RESTORE_SPAWN_BATCH_SIZE);
+              await withHydrationBatch(async () => {
+                await Promise.allSettled(
+                  batch.map(async (task) => {
+                    try {
+                      await task.execute();
+                    } catch (error) {
+                      logWarn("Failed to restore background panel", { error });
+                    }
+                  })
+                );
+              });
+              if (i + RESTORE_SPAWN_BATCH_SIZE < ptyBackgroundTasks.length) {
+                await delay(RESTORE_SPAWN_BATCH_DELAY_MS);
               }
-            );
+            }
           }
 
           // Restore saved panel order. The three-phase restore (non-PTY first, then
@@ -708,64 +763,74 @@ export async function hydrateAppState(
           // back to activeWorktreeId so they still appear in the grid.
           const worktreesForInfer = await worktreesPromise;
 
-          await runInBatches(
-            orphanedTerminals,
-            RESTORE_SPAWN_BATCH_SIZE,
-            RESTORE_SPAWN_BATCH_DELAY_MS,
-            async (terminal) => {
-              try {
-                logHydrationInfo(`Reconnecting to orphaned terminal: ${terminal.id}`);
+          const restoreOrphan = async (
+            terminal: (typeof orphanedTerminals)[number]
+          ): Promise<void> => {
+            try {
+              logHydrationInfo(`Reconnecting to orphaned terminal: ${terminal.id}`);
 
-                const orphanArgs = buildArgsForOrphanedTerminal(terminal, projectRoot || "");
-                // Orphaned backend terminals no longer carry worktreeId — infer it
-                // from cwd against the loaded worktrees, then fall back to the
-                // active worktree so the panel still appears in the grid filter.
-                const inferred = inferWorktreeIdFromCwd(
-                  terminal.cwd,
-                  worktreesForInfer ?? undefined
+              const orphanArgs = buildArgsForOrphanedTerminal(terminal, projectRoot || "");
+              // Orphaned backend terminals no longer carry worktreeId — infer it
+              // from cwd against the loaded worktrees, then fall back to the
+              // active worktree so the panel still appears in the grid filter.
+              const inferred = inferWorktreeIdFromCwd(
+                terminal.cwd,
+                worktreesForInfer ?? undefined
+              );
+              if (inferred) {
+                orphanArgs.worktreeId = inferred;
+              } else if (activeWorktreeId) {
+                orphanArgs.worktreeId = activeWorktreeId;
+              }
+              const restoredTerminalId = await addPanel(orphanArgs);
+
+              if (terminal.activityTier) {
+                terminalInstanceService.initializeBackendTier(
+                  restoredTerminalId,
+                  terminal.activityTier
                 );
-                if (inferred) {
-                  orphanArgs.worktreeId = inferred;
-                } else if (activeWorktreeId) {
-                  orphanArgs.worktreeId = activeWorktreeId;
-                }
-                const restoredTerminalId = await addPanel(orphanArgs);
+              }
 
-                if (terminal.activityTier) {
-                  terminalInstanceService.initializeBackendTier(
+              if (terminalSizes && typeof terminalSizes === "object") {
+                const savedSize = terminalSizes[restoredTerminalId];
+                if (
+                  savedSize &&
+                  Number.isFinite(savedSize.cols) &&
+                  Number.isFinite(savedSize.rows) &&
+                  savedSize.cols > 0 &&
+                  savedSize.rows > 0
+                ) {
+                  terminalInstanceService.setTargetSize(
                     restoredTerminalId,
-                    terminal.activityTier
+                    savedSize.cols,
+                    savedSize.rows
                   );
                 }
-
-                if (terminalSizes && typeof terminalSizes === "object") {
-                  const savedSize = terminalSizes[restoredTerminalId];
-                  if (
-                    savedSize &&
-                    Number.isFinite(savedSize.cols) &&
-                    Number.isFinite(savedSize.rows) &&
-                    savedSize.cols > 0 &&
-                    savedSize.rows > 0
-                  ) {
-                    terminalInstanceService.setTargetSize(
-                      restoredTerminalId,
-                      savedSize.cols,
-                      savedSize.rows
-                    );
-                  }
-                }
-
-                restoreTasks.push({
-                  terminalId: restoredTerminalId,
-                  label: terminal.id,
-                  worktreeId: orphanArgs.worktreeId,
-                  location: "grid",
-                });
-              } catch (error) {
-                logWarn(`Failed to reconnect to orphaned terminal ${terminal.id}`, { error });
               }
+
+              restoreTasks.push({
+                terminalId: restoredTerminalId,
+                label: terminal.id,
+                worktreeId: orphanArgs.worktreeId,
+                location: "grid",
+              });
+            } catch (error) {
+              logWarn(`Failed to reconnect to orphaned terminal ${terminal.id}`, { error });
             }
-          );
+          };
+
+          // Same staggered-batch pattern as the background PTY phase: one hydration
+          // batch per spawn batch so orphan restores commit once per batch rather
+          // than once per terminal.
+          for (let i = 0; i < orphanedTerminals.length; i += RESTORE_SPAWN_BATCH_SIZE) {
+            const batch = orphanedTerminals.slice(i, i + RESTORE_SPAWN_BATCH_SIZE);
+            await withHydrationBatch(async () => {
+              await Promise.allSettled(batch.map(restoreOrphan));
+            });
+            if (i + RESTORE_SPAWN_BATCH_SIZE < orphanedTerminals.length) {
+              await delay(RESTORE_SPAWN_BATCH_DELAY_MS);
+            }
+          }
         }
 
         const { criticalTasks, deferredTasks } = splitSnapshotRestoreTasks(

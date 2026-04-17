@@ -16,6 +16,8 @@ export function useAppHydration(enabled = true) {
   const hydrateTabGroups = usePanelStore((s) => s.hydrateTabGroups);
   const restoreTerminalOrder = usePanelStore((s) => s.restoreTerminalOrder);
   const hydrateMru = usePanelStore((s) => s.hydrateMru);
+  const beginHydrationBatch = usePanelStore((s) => s.beginHydrationBatch);
+  const flushHydrationBatch = usePanelStore((s) => s.flushHydrationBatch);
   const setActiveWorktree = useWorktreeSelectionStore((s) => s.setActiveWorktree);
   const loadRecipes = useRecipeStore((s) => s.loadRecipes);
   const openDiagnosticsDock = useDiagnosticsStore((s) => s.openDock);
@@ -45,6 +47,8 @@ export function useAppHydration(enabled = true) {
           restoreTerminalOrder,
           hydrateMru,
           hydrateActionMru,
+          beginHydrationBatch,
+          flushHydrationBatch,
         });
       } catch (error) {
         console.error("Failed to restore app state:", error);
@@ -67,6 +71,8 @@ export function useAppHydration(enabled = true) {
     restoreTerminalOrder,
     hydrateMru,
     hydrateActionMru,
+    beginHydrationBatch,
+    flushHydrationBatch,
   ]);
 
   return { isStateLoaded };
