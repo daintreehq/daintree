@@ -7,6 +7,7 @@ import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
 import { useUrlHistoryStore } from "./urlHistoryStore";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { panelPersistence, panelToSnapshot } from "./persistence/panelPersistence";
 import { useTerminalInputStore } from "./terminalInputStore";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
@@ -645,6 +646,12 @@ export const useProjectStore = create<ProjectState>()(
     )
   )
 );
+
+registerPersistedStore({
+  storeId: "projectStore",
+  store: useProjectStore,
+  persistedStateType: "{ projects: Project[] }",
+});
 
 // Break circular dependency by injecting project ID getter
 panelPersistence.setProjectIdGetter(() => useProjectStore.getState().currentProject?.id);

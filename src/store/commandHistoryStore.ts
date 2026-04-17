@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 const MAX_HISTORY_SIZE = 100;
 
@@ -72,3 +73,9 @@ export const useCommandHistoryStore = create<CommandHistoryState>()(
     }
   )
 );
+
+registerPersistedStore({
+  storeId: "commandHistoryStore",
+  store: useCommandHistoryStore,
+  persistedStateType: "{ history: Record<string, PromptHistoryEntry[]> }",
+});

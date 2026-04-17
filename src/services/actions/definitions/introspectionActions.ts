@@ -4,6 +4,22 @@ import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { listPersistedStores } from "@/store/persistence/persistedStoreRegistry";
+import { readLocalStorageItemSafely } from "@/store/persistence/safeStorage";
+
+interface PersistedStoreInfo {
+  storeId: string;
+  storageKey: string;
+  declaredVersion: number | null;
+  persistedBlobVersion: number | null;
+  hasMigrate: boolean;
+  hasMerge: boolean;
+  hasPartialize: boolean;
+  persistedStateType: string;
+  hasPersistedValue: boolean;
+  sizeBytes: number;
+  parseStatus: "ok" | "missing" | "corrupt";
+}
 
 export function registerIntrospectionActions(
   actions: ActionRegistry,
@@ -107,6 +123,59 @@ export function registerIntrospectionActions(
         ).length,
         worktreeCount: worktrees.size,
       };
+    },
+  }));
+
+  actions.set("actions.persistedStores", () => ({
+    id: "actions.persistedStores",
+    title: "List Persisted Stores",
+    description:
+      "Enumerate renderer-side Zustand stores that persist to localStorage (storage key, persist version, migrate/merge/partialize flags, current size). Intended for diagnostics and support dumps; does not modify persisted state.",
+    category: "introspection",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const registrations = listPersistedStores();
+      const stores: PersistedStoreInfo[] = registrations.map((reg) => {
+        const options = reg.store.persist.getOptions();
+        const storageKey = typeof options.name === "string" ? options.name : "";
+        const declaredVersion = typeof options.version === "number" ? options.version : null;
+
+        const raw = storageKey ? readLocalStorageItemSafely(storageKey) : null;
+        const hasPersistedValue = raw !== null;
+        const sizeBytes = raw !== null ? raw.length * 2 : 0;
+
+        let persistedBlobVersion: number | null = null;
+        let parseStatus: "ok" | "missing" | "corrupt" = "missing";
+        if (raw !== null) {
+          try {
+            const parsed = JSON.parse(raw) as { version?: unknown };
+            parseStatus = "ok";
+            if (typeof parsed?.version === "number") {
+              persistedBlobVersion = parsed.version;
+            }
+          } catch {
+            parseStatus = "corrupt";
+          }
+        }
+
+        return {
+          storeId: reg.storeId,
+          storageKey,
+          declaredVersion,
+          persistedBlobVersion,
+          hasMigrate: typeof options.migrate === "function",
+          hasMerge: typeof options.merge === "function",
+          hasPartialize: typeof options.partialize === "function",
+          persistedStateType: reg.persistedStateType,
+          hasPersistedValue,
+          sizeBytes,
+          parseStatus,
+        };
+      });
+
+      return { storeCount: stores.length, stores };
     },
   }));
 }

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 export interface TwoPaneSplitConfig {
   enabled: boolean;
@@ -151,3 +152,9 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
     }
   )
 );
+
+registerPersistedStore({
+  storeId: "twoPaneSplitStore",
+  store: useTwoPaneSplitStore,
+  persistedStateType: "TwoPaneSplitState",
+});

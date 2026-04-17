@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 export type DockDensity = "compact" | "normal" | "comfortable";
 
@@ -80,3 +81,9 @@ export const usePreferencesStore = create<PreferencesState>()(
     }
   )
 );
+
+registerPersistedStore({
+  storeId: "preferencesStore",
+  store: usePreferencesStore,
+  persistedStateType: "PreferencesState",
+});

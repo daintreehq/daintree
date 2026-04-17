@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { UrlHistoryEntry } from "@shared/types/browser";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 const MAX_ENTRIES_PER_PROJECT = 500;
 
@@ -101,3 +102,9 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
     }
   )
 );
+
+registerPersistedStore({
+  storeId: "urlHistoryStore",
+  store: useUrlHistoryStore,
+  persistedStateType: "{ entries: Record<string, UrlHistoryEntry[]> }",
+});

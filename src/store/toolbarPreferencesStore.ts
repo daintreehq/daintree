@@ -6,6 +6,7 @@ import type {
   AnyToolbarButtonId,
 } from "@/../../shared/types/toolbar";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
 const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
@@ -245,3 +246,9 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }
   )
 );
+
+registerPersistedStore({
+  storeId: "toolbarPreferencesStore",
+  store: useToolbarPreferencesStore,
+  persistedStateType: "ToolbarPreferences",
+});

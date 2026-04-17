@@ -174,6 +174,7 @@ export type BuiltInActionId =
   | "action.palette.open"
   | "actions.list"
   | "actions.getContext"
+  | "actions.persistedStores"
   | "terminal.moveToDock"
   | "terminal.moveToGrid"
   | "terminal.toggleDock"

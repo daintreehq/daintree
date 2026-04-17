@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import type { QuickStateFilter } from "@/lib/worktreeFilters";
 
 export type OrderBy = "recent" | "created" | "alpha" | "manual";
@@ -310,3 +311,9 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
     }
   )
 );
+
+registerPersistedStore({
+  storeId: "worktreeFilterStore",
+  store: useWorktreeFilterStore,
+  persistedStateType: "PersistedState",
+});

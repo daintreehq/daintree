@@ -10,6 +10,7 @@ import {
   DEFAULT_SYSTEM_LINKS,
 } from "@shared/types";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 interface PortalState {
   isOpen: boolean;
@@ -468,3 +469,9 @@ const portalStoreCreator: StateCreator<
 });
 
 export const usePortalStore = create<PortalState & PortalActions>()(portalStoreCreator);
+
+registerPersistedStore({
+  storeId: "portalStore",
+  store: usePortalStore,
+  persistedStateType: "Partial<PortalState> (links, width, tabs, defaultNewTabUrl)",
+});

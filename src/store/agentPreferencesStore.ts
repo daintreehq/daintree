@@ -5,6 +5,7 @@ import {
   readLocalStorageItemSafely,
   safeJSONParse,
 } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 
 export type DefaultAgentId = BuiltInAgentId;
@@ -69,3 +70,9 @@ export const useAgentPreferencesStore = create<AgentPreferencesState>()(
     }
   )
 );
+
+registerPersistedStore({
+  storeId: "agentPreferencesStore",
+  store: useAgentPreferencesStore,
+  persistedStateType: "AgentPreferences",
+});

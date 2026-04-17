@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 
 export const DEFAULT_SOFT_WARNING_LIMIT = 12;
 export const DEFAULT_CONFIRMATION_LIMIT = 20;
@@ -194,6 +195,13 @@ export const usePanelLimitStore = create<PanelLimitState>()(
     }
   )
 );
+
+registerPersistedStore({
+  storeId: "panelLimitStore",
+  store: usePanelLimitStore,
+  persistedStateType:
+    "Pick<PanelLimitState, 'softWarningLimit' | 'confirmationLimit' | 'hardLimit' | 'warningsDisabled' | 'hardwareDefaultsApplied' | 'lastSoftWarningDismissedAt'>",
+});
 
 export function _resetInitPromise(): void {
   _initPromise = null;
