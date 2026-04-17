@@ -277,19 +277,13 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Both concurrency slots fill immediately (concurrency = 2) — the
+    // All three concurrency slots fill immediately (concurrency = 3) — the
     // backend leaky-bucket rate limiter drives the real cadence.
-    expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
-
-    // Resolve first to free a concurrency slot so the third task starts
-    await act(async () => {
-      resolvers[0]?.("wt-1");
-      await vi.advanceTimersByTimeAsync(0);
-    });
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
 
-    // Resolve remaining
+    // Resolve all
     await act(async () => {
+      resolvers[0]?.("wt-1");
       resolvers[1]?.("wt-2");
       resolvers[2]?.("wt-3");
       await vi.advanceTimersByTimeAsync(0);
@@ -316,8 +310,8 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Should show "Creating worktree..." label for the two items that started
-    // immediately under concurrency = 2.
+    // Should show "Creating worktree..." labels for the items that started
+    // immediately under concurrency = 3.
     expect(screen.getAllByText("Creating worktree\u2026").length).toBeGreaterThanOrEqual(1);
 
     // Resolve all
@@ -979,16 +973,22 @@ describe("BulkCreateWorktreeDialog", () => {
     );
 
     const onClose = vi.fn();
-    render(<BulkCreateWorktreeDialog {...defaultProps} onClose={onClose} />);
+    // Use 4 items so that with concurrency=3 at least one item stays queued,
+    // letting us verify the queue-clearing + stale-handler cancel semantics.
+    const props = {
+      ...defaultProps,
+      selectedIssues: [makeIssue(1), makeIssue(2), makeIssue(3), makeIssue(4)],
+    };
+    render(<BulkCreateWorktreeDialog {...props} onClose={onClose} />);
 
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Items 1 and 2 both start immediately under concurrency = 2; item 3
-    // is still queued. Cancel before any resolve so the queue is cleared
-    // and item 3 never starts.
-    expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
+    // Items 1-3 start immediately under concurrency = 3; item 4 is still
+    // queued. Cancel before any resolve so the queue is cleared and item 4
+    // never starts.
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
 
     // Close the dialog before remaining items finish
     await act(async () => {
@@ -1000,15 +1000,16 @@ describe("BulkCreateWorktreeDialog", () => {
 
     expect(onClose).toHaveBeenCalled();
 
-    // Resolving the in-flight items after cancel must not trigger item 3 —
+    // Resolving the in-flight items after cancel must not trigger item 4 —
     // runIdRef has been bumped so the stale handlers exit early.
     await act(async () => {
       resolvers[0]?.("wt-1");
       resolvers[1]?.("wt-2");
+      resolvers[2]?.("wt-3");
       await vi.advanceTimersByTimeAsync(1000);
     });
 
-    expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
     expect(screen.queryByTestId("bulk-create-done-button")).toBeNull();
   });
 
@@ -1027,7 +1028,7 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Advance to let the first two items start (concurrency = 2)
+    // Advance to let all three items start (concurrency = 3)
     await advanceTimersGradually(400);
 
     // Resolve the first item
@@ -1095,20 +1096,17 @@ describe("BulkCreateWorktreeDialog", () => {
 
     // With 3 issues, pre-query runs getAvailableBranch + getDefaultPath once each
     // per item BEFORE any worktree.create call. After the button click and
-    // microtask flush, all pre-queries have completed and both concurrency
+    // microtask flush, all pre-queries have completed and all three concurrency
     // slots have filled — but no further pre-query IPC should fire.
     expect(mockGetAvailableBranch).toHaveBeenCalledTimes(3);
     expect(mockGetDefaultPath).toHaveBeenCalledTimes(3);
 
-    // The queue has started worktree.create for the first 2 items (concurrency=2)
-    expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
+    // The queue has started worktree.create for all 3 items (concurrency=3)
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
 
     // Resolve all creates and advance
     await act(async () => {
       createResolvers[0]?.("wt-1");
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    await act(async () => {
       createResolvers[1]?.("wt-2");
       createResolvers[2]?.("wt-3");
       await vi.advanceTimersByTimeAsync(0);

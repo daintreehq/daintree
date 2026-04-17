@@ -223,12 +223,14 @@ function progressReducer(state: ProgressState, action: ProgressAction): Progress
 }
 
 const MAX_AUTO_RETRIES = 2;
-// Cap in-flight creation requests as defense-in-depth for `.git/` lock
-// contention (see #3807). The backend leaky-bucket rate limiter is the
-// primary throttle — pacing at the producer side would only create a
-// conflicting secondary rate limiter and re-introduce the feast/famine
-// burst pattern (see #5098).
-const QUEUE_CONCURRENCY = 2;
+// Cap in-flight creation requests at a small parallel fan-out. The backend
+// leaky-bucket rate limiter remains the primary throttle — pacing at the
+// producer side would only create a conflicting secondary rate limiter and
+// re-introduce the feast/famine burst pattern (see #5098). Raised from 2 to
+// 3 now that `--no-track` (see #5163, PR #5165) avoids `install_branch_config`
+// and its `.git/config.lock` write, eliminating the contention that
+// previously justified the tighter cap (see #3807).
+const QUEUE_CONCURRENCY = 3;
 const BACKOFF_BASE_MS = 3000;
 const BACKOFF_CAP_MS = 30000;
 const VERIFICATION_SETTLE_MS = 800;
