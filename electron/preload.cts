@@ -212,6 +212,7 @@ class WorktreePortClient {
   private eventListeners = new Map<string, Set<WorktreePortEventCallback>>();
   private readyCallbacks: Array<() => void> = [];
   private disconnectedCallbacks: Array<() => void> = [];
+  private fatalCallbacks: Array<() => void> = [];
   private _isReady = false;
   // Monotonic counter so stale close signals (e.g. a delayed IPC
   // WORKTREE_HOST_DISCONNECTED that arrives AFTER a replacement port has
@@ -405,6 +406,29 @@ class WorktreePortClient {
       if (idx >= 0) this.disconnectedCallbacks.splice(idx, 1);
     };
   }
+
+  onFatalDisconnect(callback: () => void): () => void {
+    this.fatalCallbacks.push(callback);
+    return () => {
+      const idx = this.fatalCallbacks.indexOf(callback);
+      if (idx >= 0) this.fatalCallbacks.splice(idx, 1);
+    };
+  }
+
+  /**
+   * Fire fatal callbacks when the workspace host exhausts its restart budget.
+   * Callers should surface a terminal error state (e.g. "Workspace host
+   * crashed — please restart") since no further port will arrive.
+   */
+  _handleFatal(): void {
+    for (const cb of this.fatalCallbacks) {
+      try {
+        cb();
+      } catch {
+        // Don't let listener errors block other listeners
+      }
+    }
+  }
 }
 
 const worktreePortClient = new WorktreePortClient();
@@ -413,6 +437,21 @@ ipcRenderer.on("worktree-port", (event: Electron.IpcRendererEvent) => {
   if (!event.ports || event.ports.length === 0) return;
   worktreePortClient.attach(event.ports[0]);
 });
+
+// Main broadcasts this on every host exit.  Only the fatal payload is acted
+// on in the renderer — it marks max-restart-budget exhaustion and means no
+// replacement port will arrive, so the UI must transition to a terminal
+// error state instead of staying in the reconnecting spinner forever.
+// Non-fatal broadcasts are ignored here; the MessagePort `close` event is
+// the authoritative disconnect signal for the transient case.
+ipcRenderer.on(
+  "worktree:host-disconnected",
+  (_event: Electron.IpcRendererEvent, payload: { fatal?: boolean } | undefined) => {
+    if (payload?.fatal) {
+      worktreePortClient._handleFatal();
+    }
+  }
+);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches ipcRenderer.invoke return type
 async function _unwrappingInvoke(channel: string, ...args: unknown[]): Promise<any> {
@@ -465,6 +504,7 @@ const CHANNELS = {
   WORKTREE_DETACH_ISSUE: "worktree:detach-issue",
   WORKTREE_GET_ISSUE_ASSOCIATION: "worktree:get-issue-association",
   WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS: "worktree:get-all-issue-associations",
+  WORKTREE_HOST_DISCONNECTED: "worktree:host-disconnected",
 
   // Terminal channels
   TERMINAL_SPAWN: "terminal:spawn",
@@ -1146,6 +1186,9 @@ const api: ElectronAPI = {
 
     onDisconnected: (callback: () => void): (() => void) =>
       worktreePortClient.onDisconnected(callback),
+
+    onFatalDisconnect: (callback: () => void): (() => void) =>
+      worktreePortClient.onFatalDisconnect(callback),
   },
 
   // Terminal API
