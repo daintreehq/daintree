@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { EventEmitter } from "events";
+import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 
 const shared = vi.hoisted(() => ({
   forkMock: vi.fn(),
@@ -23,6 +24,11 @@ vi.mock("electron", () => ({
 
 vi.mock("../TrashedPidTracker.js", () => ({
   getTrashedPidTracker: () => shared.tracker,
+}));
+
+vi.mock("../../utils/logger.js", () => ({
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
 }));
 
 interface MockUtilityProcess extends EventEmitter {
@@ -391,5 +397,105 @@ describe("PtyClient adversarial", () => {
 
     vi.advanceTimersByTime(1000);
     expect(mockChild.kill).toHaveBeenCalledTimes(1);
+  });
+
+  const MAX_PENDING_SPAWNS = 250;
+
+  function baseSpawnOptions(overrides: Partial<PtyHostSpawnOptions> = {}): PtyHostSpawnOptions {
+    return {
+      cwd: "/tmp",
+      cols: 80,
+      rows: 24,
+      ...overrides,
+    };
+  }
+
+  function countSpawnMessages(child: MockUtilityProcess): number {
+    return child.postMessage.mock.calls.filter(
+      (call: unknown[]) => (call[0] as { type?: string })?.type === "spawn"
+    ).length;
+  }
+
+  it("PENDING_SPAWNS_REJECTED_AT_CAP", async () => {
+    const client = createReadyClient();
+    const { logWarn } = await import("../../utils/logger.js");
+    mockChild.postMessage.mockClear();
+
+    for (let i = 0; i < MAX_PENDING_SPAWNS; i++) {
+      client.spawn(`t-${i}`, baseSpawnOptions());
+    }
+    expect(countSpawnMessages(mockChild)).toBe(MAX_PENDING_SPAWNS);
+
+    client.spawn("t-overflow", baseSpawnOptions());
+
+    expect(client.hasTerminal("t-overflow")).toBe(false);
+    expect(countSpawnMessages(mockChild)).toBe(MAX_PENDING_SPAWNS);
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("spawn rejected")
+    );
+  });
+
+  it("KILL_FREES_SLOT_BELOW_CAP", () => {
+    const client = createReadyClient();
+    mockChild.postMessage.mockClear();
+
+    for (let i = 0; i < MAX_PENDING_SPAWNS; i++) {
+      client.spawn(`t-${i}`, baseSpawnOptions());
+    }
+    expect(countSpawnMessages(mockChild)).toBe(MAX_PENDING_SPAWNS);
+
+    client.kill("t-0");
+    client.spawn("t-new", baseSpawnOptions());
+
+    expect(client.hasTerminal("t-new")).toBe(true);
+    expect(client.hasTerminal("t-0")).toBe(false);
+    const spawnIds = mockChild.postMessage.mock.calls
+      .filter((call: unknown[]) => (call[0] as { type?: string })?.type === "spawn")
+      .map((call: unknown[]) => (call[0] as { id?: string })?.id);
+    expect(spawnIds).toContain("t-new");
+  });
+
+  it("SAME_ID_AT_CAP_IS_UPDATED_NOT_REJECTED", async () => {
+    const client = createReadyClient();
+    const { logWarn } = await import("../../utils/logger.js");
+
+    for (let i = 0; i < MAX_PENDING_SPAWNS; i++) {
+      client.spawn(`t-${i}`, baseSpawnOptions());
+    }
+    (logWarn as Mock).mockClear();
+    mockChild.postMessage.mockClear();
+
+    client.spawn("t-0", baseSpawnOptions({ cwd: "/updated" }));
+
+    expect(logWarn).not.toHaveBeenCalledWith(expect.stringContaining("spawn rejected"));
+    const updatedSpawns = mockChild.postMessage.mock.calls.filter(
+      (call: unknown[]) =>
+        (call[0] as { type?: string })?.type === "spawn" &&
+        (call[0] as { id?: string })?.id === "t-0"
+    );
+    expect(updatedSpawns).toHaveLength(1);
+    expect(
+      (updatedSpawns[0][0] as { options: PtyHostSpawnOptions }).options.cwd
+    ).toBe("/updated");
+  });
+
+  it("RESPAWN_AFTER_CRASH_DOES_NOT_EXCEED_CAP", () => {
+    const client = createReadyClient();
+    const restartedChild = createMockChild();
+
+    for (let i = 0; i < MAX_PENDING_SPAWNS; i++) {
+      client.spawn(`t-${i}`, baseSpawnOptions());
+    }
+    client.spawn("t-overflow", baseSpawnOptions());
+
+    shared.forkMock.mockReturnValue(restartedChild);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(2000);
+    restartedChild.emit("message", { type: "ready" });
+
+    expect(countSpawnMessages(restartedChild)).toBe(MAX_PENDING_SPAWNS);
+    expect(client.hasTerminal("t-overflow")).toBe(false);
+    // dispose to avoid leaking timers/listeners across tests
+    client.dispose();
   });
 });
