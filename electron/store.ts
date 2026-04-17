@@ -147,12 +147,9 @@ export interface StoreSchema {
   >;
   worktreeIssueMap: Record<string, IssueAssociation>;
   appTheme: Partial<AppThemeConfig>;
-  telemetry: {
-    enabled: boolean;
-    hasSeenPrompt: boolean;
-  };
   privacy: {
     telemetryLevel: "off" | "errors" | "full";
+    hasSeenPrompt: boolean;
     logRetentionDays: 7 | 30 | 90 | 0;
   };
   voiceInput: {
@@ -273,12 +270,9 @@ const storeOptions = {
     windowStates: {},
     worktreeIssueMap: {},
     appTheme: {},
-    telemetry: {
-      enabled: false,
-      hasSeenPrompt: false,
-    },
     privacy: {
       telemetryLevel: "off" as const,
+      hasSeenPrompt: false,
       logRetentionDays: 30 as const,
     },
     voiceInput: {

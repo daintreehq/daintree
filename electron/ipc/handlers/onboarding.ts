@@ -96,8 +96,7 @@ export function registerOnboardingHandlers(): () => void {
     if (state.migratedFromLocalStorage) return state;
 
     const p = (payload ?? {}) as Partial<MigratePayload>;
-    const telemetryState = store.get("telemetry");
-    const telemetrySeen = telemetryState?.hasSeenPrompt ?? false;
+    const telemetrySeen = store.get("privacy")?.hasSeenPrompt ?? false;
     const agentSelectionDismissed = p.agentSelectionDismissed === true;
     const agentSetupComplete = p.agentSetupComplete === true;
     const firstRunToastSeen = p.firstRunToastSeen === true;

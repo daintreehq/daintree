@@ -24,6 +24,7 @@ import { taskQueueService } from "../services/TaskQueueService.js";
 import { store } from "../store.js";
 import { MigrationRunner } from "../services/StoreMigrations.js";
 import { migrations } from "../services/migrations/index.js";
+import { initializeTelemetry } from "../services/TelemetryService.js";
 import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import { secureStorage } from "../services/SecureStorage.js";
 import { notificationService } from "../services/NotificationService.js";
@@ -301,6 +302,10 @@ export async function setupWindowServices(
         .catch(() => app.exit(1));
       return;
     }
+
+    // Initialize Sentry after migrations — reads privacy.telemetryLevel,
+    // which is guaranteed populated by migration014.
+    void initializeTelemetry();
 
     // Initialize GitHubAuth
     GitHubAuth.initializeStorage({

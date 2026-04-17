@@ -68,8 +68,7 @@ const preConsentBuffer: BufferedEvent[] = [];
 const BUFFER_MAX = 100;
 
 export async function initializeTelemetry(): Promise<void> {
-  const { enabled } = store.get("telemetry") ?? { enabled: false, hasSeenPrompt: false };
-  if (!enabled) return;
+  if (getTelemetryLevel() === "off") return;
 
   const dsn = process.env.SENTRY_DSN;
   if (!dsn) return;
@@ -101,60 +100,41 @@ export async function initializeTelemetry(): Promise<void> {
   }
 }
 
-export function isTelemetryEnabled(): boolean {
-  return store.get("telemetry")?.enabled ?? false;
-}
-
 export type TelemetryLevel = "off" | "errors" | "full";
 
-export function getTelemetryLevel(): TelemetryLevel {
-  const privacy = store.get("privacy");
-  if (privacy?.telemetryLevel) return privacy.telemetryLevel;
+const DEFAULT_PRIVACY = {
+  telemetryLevel: "off" as const,
+  hasSeenPrompt: false,
+  logRetentionDays: 30 as const,
+};
 
-  // Migrate from legacy boolean
-  const enabled = store.get("telemetry")?.enabled ?? false;
-  const level: TelemetryLevel = enabled ? "errors" : "off";
-  store.set("privacy", { ...privacy, telemetryLevel: level });
-  return level;
+export function getTelemetryLevel(): TelemetryLevel {
+  return store.get("privacy")?.telemetryLevel ?? "off";
+}
+
+export function isTelemetryEnabled(): boolean {
+  return getTelemetryLevel() !== "off";
 }
 
 export async function setTelemetryLevel(level: TelemetryLevel): Promise<void> {
-  const privacy = store.get("privacy") ?? {
-    telemetryLevel: "off" as const,
-    logRetentionDays: 30 as const,
-  };
+  const privacy = store.get("privacy") ?? DEFAULT_PRIVACY;
   store.set("privacy", { ...privacy, telemetryLevel: level });
 
-  // Keep legacy telemetry.enabled in sync
-  const enabled = level !== "off";
-  const telemetry = store.get("telemetry") ?? { enabled: false, hasSeenPrompt: false };
-  store.set("telemetry", { ...telemetry, enabled });
-
-  if (enabled) {
+  if (level === "full") {
     await initializeTelemetry();
     flushPreConsentBuffer();
+  } else if (level === "errors") {
+    // Errors-only consent covers crash reports, not analytics — drop any
+    // buffered onboarding analytics rather than replaying them to Sentry.
+    preConsentBuffer.length = 0;
+    await initializeTelemetry();
   } else {
     preConsentBuffer.length = 0;
   }
 }
 
 export async function setTelemetryEnabled(enabled: boolean): Promise<void> {
-  const current = store.get("telemetry") ?? { enabled: false, hasSeenPrompt: false };
-  store.set("telemetry", { ...current, enabled });
-
-  // Keep privacy.telemetryLevel in sync
-  const privacy = store.get("privacy") ?? {
-    telemetryLevel: "off" as const,
-    logRetentionDays: 30 as const,
-  };
-  store.set("privacy", { ...privacy, telemetryLevel: enabled ? "errors" : "off" });
-
-  if (enabled) {
-    await initializeTelemetry();
-    flushPreConsentBuffer();
-  } else {
-    preConsentBuffer.length = 0;
-  }
+  await setTelemetryLevel(enabled ? "errors" : "off");
 }
 
 function flushPreConsentBuffer(): void {
@@ -171,8 +151,7 @@ function flushPreConsentBuffer(): void {
 }
 
 export function trackEvent(event: string, properties: Record<string, unknown> = {}): void {
-  const telemetry = store.get("telemetry");
-  const hasSeenPrompt = telemetry?.hasSeenPrompt ?? false;
+  const hasSeenPrompt = hasTelemetryPromptBeenShown();
   const level = getTelemetryLevel();
 
   // Only send analytics events at "full" level; "errors" only permits crash reports via Sentry
@@ -197,12 +176,12 @@ export function trackEvent(event: string, properties: Record<string, unknown> = 
 }
 
 export function hasTelemetryPromptBeenShown(): boolean {
-  return store.get("telemetry")?.hasSeenPrompt ?? false;
+  return store.get("privacy")?.hasSeenPrompt ?? false;
 }
 
 export function markTelemetryPromptShown(): void {
-  const current = store.get("telemetry") ?? { enabled: false, hasSeenPrompt: false };
-  store.set("telemetry", { ...current, hasSeenPrompt: true });
+  const privacy = store.get("privacy") ?? DEFAULT_PRIVACY;
+  store.set("privacy", { ...privacy, hasSeenPrompt: true });
 }
 
 export function _getPreConsentBufferLength(): number {

@@ -58,7 +58,6 @@ import { store } from "./store.js";
 import { pruneOldLogs, initializeLogger, registerLoggerTransport } from "./utils/logger.js";
 import { broadcastToRenderer } from "./ipc/utils.js";
 import { registerCommands } from "./services/commands/index.js";
-import { initializeTelemetry } from "./services/TelemetryService.js";
 import { initializeCrashRecoveryService } from "./services/CrashRecoveryService.js";
 import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
 import { initializeTrashedPidCleanup } from "./services/TrashedPidTracker.js";
@@ -137,8 +136,6 @@ if (!gotTheLock) {
   registerLoggerTransport(broadcastToRenderer, () => BrowserWindow.getAllWindows().length > 0);
 
   registerCommands();
-
-  void initializeTelemetry();
 
   crashReporter.start({ uploadToServer: false });
   initializeCrashLoopGuard();
