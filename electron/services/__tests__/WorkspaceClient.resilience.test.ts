@@ -830,6 +830,59 @@ describe("WorkspaceClient multi-process manager", () => {
     });
   });
 
+  describe("host-disconnected broadcast", () => {
+    it("broadcasts WORKTREE_HOST_DISCONNECTED to affected views when host emits host-recovering", async () => {
+      const wc = createMockWebContents();
+
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+      client.attachDirectPort(1, wc as any);
+
+      wc.send.mockClear();
+      h(0).emit("host-recovering", 1);
+
+      expect(wc.send).toHaveBeenCalledWith("worktree:host-disconnected", { fatal: false });
+    });
+
+    it("does not broadcast host-recovering to views of other projects", async () => {
+      const wcA = createMockWebContents();
+      const wcB = createMockWebContents();
+
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+      client.attachDirectPort(1, wcA as any);
+
+      const load2 = client.loadProject("/project-b", 2);
+      await readyAndResolveLoad(1);
+      await load2;
+      client.attachDirectPort(2, wcB as any);
+
+      wcA.send.mockClear();
+      wcB.send.mockClear();
+
+      h(0).emit("host-recovering", 1);
+
+      expect(wcA.send).toHaveBeenCalledWith("worktree:host-disconnected", { fatal: false });
+      expect(wcB.send).not.toHaveBeenCalled();
+    });
+
+    it("broadcasts fatal: true on host-crash (max retries exhausted)", async () => {
+      const wc = createMockWebContents();
+
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+      client.attachDirectPort(1, wc as any);
+
+      wc.send.mockClear();
+      h(0).emit("host-crash", 137);
+
+      expect(wc.send).toHaveBeenCalledWith("worktree:host-disconnected", { fatal: true });
+    });
+  });
+
   describe("setActiveWorktree", () => {
     it("emits WORKTREE_ACTIVATED by default", async () => {
       const wc = createMockWebContents();

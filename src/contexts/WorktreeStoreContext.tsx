@@ -267,6 +267,17 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     }
     cleanups.push(worktreePort.onReady(fetchInitialState));
 
+    // Surface a "Reconnecting…" state the moment the workspace host dies, so
+    // the UI doesn't appear frozen while we wait (up to 2–4s) for the
+    // replacement port.  Cleared by applySnapshot when the new port returns
+    // data — this avoids flashing the indicator during normal port replacement
+    // where a new port arrives within milliseconds.
+    cleanups.push(
+      worktreePort.onDisconnected(() => {
+        store.getState().setReconnecting(true);
+      })
+    );
+
     // Snapshot-on-wake: when a cached view is reactivated (addChildView),
     // Chromium fires visibilitychange. Request a fresh snapshot to rehydrate
     // state that may have changed while the view was backgrounded.

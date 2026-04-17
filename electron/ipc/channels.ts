@@ -21,6 +21,7 @@ export const CHANNELS = {
   WORKTREE_DETACH_ISSUE: "worktree:detach-issue",
   WORKTREE_GET_ISSUE_ASSOCIATION: "worktree:get-issue-association",
   WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS: "worktree:get-all-issue-associations",
+  WORKTREE_HOST_DISCONNECTED: "worktree:host-disconnected",
 
   TERMINAL_SPAWN: "terminal:spawn",
   TERMINAL_SPAWN_RESULT: "terminal:spawn-result",

@@ -208,6 +208,7 @@ export interface ElectronAPI {
     onEvent(type: string, callback: (data: unknown) => void): () => void;
     isReady(): boolean;
     onReady(callback: () => void): () => void;
+    onDisconnected(callback: () => void): () => void;
   };
   terminal: {
     spawn(options: TerminalSpawnOptions): Promise<string>;

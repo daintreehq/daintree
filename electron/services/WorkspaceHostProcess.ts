@@ -332,6 +332,11 @@ export class WorkspaceHostProcess extends EventEmitter {
 
       if (this.isDisposed) return;
 
+      // Fire the recovery signal before restart scheduling so the renderer can
+      // reject in-flight requests immediately instead of waiting up to ~10s for
+      // the per-request timeout.
+      this.emit("host-recovering", code);
+
       if (this.restartAttempts < this.config.maxRestartAttempts) {
         this.restartAttempts++;
         const delay = Math.min(1000 * Math.pow(2, this.restartAttempts), 10000);

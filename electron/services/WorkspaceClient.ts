@@ -128,7 +128,19 @@ export class WorkspaceClient extends EventEmitter {
       this.routeHostEvent(entry, event);
     });
 
+    host.on("host-recovering", () => {
+      // Fired on every unexpected exit (before restart scheduling).  Broadcast
+      // to affected views so WorktreePortClient can reject pending requests
+      // immediately instead of waiting for the per-request timeout.
+      this.sendToEntryWindows(entry, CHANNELS.WORKTREE_HOST_DISCONNECTED, {
+        fatal: false,
+      });
+    });
+
     host.on("host-crash", (code: number) => {
+      this.sendToEntryWindows(entry, CHANNELS.WORKTREE_HOST_DISCONNECTED, {
+        fatal: true,
+      });
       this.emit("host-crash", code);
     });
 

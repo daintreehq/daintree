@@ -290,7 +290,7 @@ interface SidebarContentProps {
 }
 
 function SidebarContent({ onOpenOverview }: SidebarContentProps) {
-  const { worktrees, isLoading, error, refresh } = useWorktrees();
+  const { worktrees, isLoading, isReconnecting, error, refresh } = useWorktrees();
   const deferredWorktrees = useDeferredValue(worktrees);
   const [isRefreshing, startRefreshTransition] = useTransition();
   const currentProject = useProjectStore((state) => state.currentProject);
@@ -899,6 +899,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 ? `(${visibleCount} of ${deferredWorktrees.length})`
                 : `(${deferredWorktrees.length})`}
             </span>
+            {isReconnecting && (
+              <span
+                role="status"
+                aria-live="polite"
+                className="flex items-center gap-1 text-daintree-text/60 text-xs"
+              >
+                <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
+                Reconnecting…
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1">
             <div className="invisible group-hover/header:visible group-focus-within/header:visible flex items-center gap-1">

@@ -8,6 +8,7 @@ export interface UseWorktreesReturn {
   activeId: string | null;
   isLoading: boolean;
   isInitialized: boolean;
+  isReconnecting: boolean;
   error: string | null;
   refresh: () => Promise<void>;
   setActive: (id: string) => void;
@@ -25,6 +26,7 @@ export function useWorktrees(): UseWorktreesReturn {
   const worktreeMap = useWorktreeStore((state) => state.worktrees);
   const isLoading = useWorktreeStore((state) => state.isLoading);
   const isInitialized = useWorktreeStore((state) => state.isInitialized);
+  const isReconnecting = useWorktreeStore((state) => state.isReconnecting);
   const error = useWorktreeStore((state) => state.error);
 
   const refresh = useCallback(async () => {
@@ -64,6 +66,7 @@ export function useWorktrees(): UseWorktreesReturn {
     activeId: worktrees.length > 0 ? worktrees[0].id : null,
     isLoading,
     isInitialized,
+    isReconnecting,
     error,
     refresh,
     setActive,

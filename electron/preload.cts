@@ -211,16 +211,32 @@ class WorktreePortClient {
   >();
   private eventListeners = new Map<string, Set<WorktreePortEventCallback>>();
   private readyCallbacks: Array<() => void> = [];
+  private disconnectedCallbacks: Array<() => void> = [];
   private _isReady = false;
+  // Monotonic counter so stale close signals (e.g. a delayed IPC
+  // WORKTREE_HOST_DISCONNECTED that arrives AFTER a replacement port has
+  // already been attached) are ignored and do not clobber the new port.
+  private portGeneration = 0;
 
   attach(newPort: MessagePort): void {
-    // Close old port and reject pending requests
+    // Bump generation FIRST so any synchronous close event fired by the old
+    // port during detach() will be recognised as stale by _handlePortClose
+    // and ignored — the disconnect callbacks must only fire on unexpected
+    // host crashes, never on normal port replacement.
+    const attachedGeneration = ++this.portGeneration;
+
     if (this.port) {
       this.detach();
     }
 
     this.port = newPort;
     this._isReady = true;
+
+    // Fires when the peer (workspace host UtilityProcess) dies — Electron's
+    // MessagePort delivers a `close` event even on SIGKILL via the Mojo
+    // channel.  The generation guard ensures stale close events from old
+    // ports cannot reject requests on a newer port.
+    newPort.addEventListener("close", () => this._handlePortClose(attachedGeneration));
 
     this.port.onmessage = (msg: MessageEvent) => {
       const data = msg.data;
@@ -287,6 +303,43 @@ class WorktreePortClient {
     this._isReady = false;
   }
 
+  /**
+   * Handle unexpected port closure (workspace host crashed or was killed).
+   * Idempotent — safe to call multiple times.  Rejects pending requests
+   * immediately so the UI does not wait for per-request timeouts.
+   *
+   * @param generation The port generation the caller was registered against.
+   *   If it no longer matches the current generation, this is a stale signal
+   *   from a previous port lifetime and is ignored.
+   */
+  _handlePortClose(generation: number): void {
+    if (generation !== this.portGeneration) return;
+    if (!this.port) return;
+
+    try {
+      this.port.close();
+    } catch {
+      // ignore
+    }
+
+    for (const [, entry] of this.pending) {
+      clearTimeout(entry.timeout);
+      entry.reject(new Error("Worktree port disconnected"));
+    }
+    this.pending.clear();
+
+    this.port = null;
+    this._isReady = false;
+
+    for (const cb of this.disconnectedCallbacks) {
+      try {
+        cb();
+      } catch {
+        // Don't let listener errors block other listeners
+      }
+    }
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   request(action: string, payload?: Record<string, unknown>, timeoutMs = 10000): Promise<any> {
     return new Promise((resolve, reject) => {
@@ -342,6 +395,14 @@ class WorktreePortClient {
     return () => {
       const idx = this.readyCallbacks.indexOf(callback);
       if (idx >= 0) this.readyCallbacks.splice(idx, 1);
+    };
+  }
+
+  onDisconnected(callback: () => void): () => void {
+    this.disconnectedCallbacks.push(callback);
+    return () => {
+      const idx = this.disconnectedCallbacks.indexOf(callback);
+      if (idx >= 0) this.disconnectedCallbacks.splice(idx, 1);
     };
   }
 }
@@ -1082,6 +1143,9 @@ const api: ElectronAPI = {
     isReady: (): boolean => worktreePortClient.isReady(),
 
     onReady: (callback: () => void): (() => void) => worktreePortClient.onReady(callback),
+
+    onDisconnected: (callback: () => void): (() => void) =>
+      worktreePortClient.onDisconnected(callback),
   },
 
   // Terminal API

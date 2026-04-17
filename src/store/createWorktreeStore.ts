@@ -24,6 +24,7 @@ export interface WorktreeViewState {
   isLoading: boolean;
   error: string | null;
   isInitialized: boolean;
+  isReconnecting: boolean;
 }
 
 export interface WorktreeViewActions {
@@ -33,6 +34,7 @@ export interface WorktreeViewActions {
   applyRemove(worktreeId: string, version: number): void;
   setLoading(loading: boolean): void;
   setError(error: string | null): void;
+  setReconnecting(reconnecting: boolean): void;
 }
 
 export type WorktreeViewStore = WorktreeViewState & WorktreeViewActions;
@@ -47,6 +49,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     isLoading: true,
     error: null,
     isInitialized: false,
+    isReconnecting: false,
 
     nextVersion() {
       return ++versionCounter;
@@ -55,7 +58,14 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     applySnapshot(states: WorktreeSnapshot[], version: number) {
       if (version <= get().version) return;
       const map = new Map(states.map((s) => [s.id, s]));
-      set({ worktrees: map, version, isLoading: false, isInitialized: true, error: null });
+      set({
+        worktrees: map,
+        version,
+        isLoading: false,
+        isInitialized: true,
+        error: null,
+        isReconnecting: false,
+      });
     },
 
     applyUpdate(state: WorktreeSnapshot, version: number) {
@@ -89,6 +99,10 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
 
     setError(error: string | null) {
       set({ error });
+    },
+
+    setReconnecting(reconnecting: boolean) {
+      set({ isReconnecting: reconnecting });
     },
   }));
 }
