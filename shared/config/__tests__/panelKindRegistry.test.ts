@@ -1,8 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import {
   getPanelKindConfig,
   getExtensionFallbackDefaults,
+  getPanelKindIds,
   panelKindUsesTerminalUi,
+  registerPanelKind,
+  unregisterPluginPanelKinds,
+  type PanelKindConfig,
 } from "../panelKindRegistry.js";
 
 describe("panelKindRegistry metadata", () => {
@@ -38,5 +42,86 @@ describe("panelKindRegistry metadata", () => {
 
   it("returns undefined for unknown kind", () => {
     expect(getPanelKindConfig("unknown-kind")).toBeUndefined();
+  });
+});
+
+const BUILT_IN_KINDS = ["terminal", "agent", "browser", "notes", "dev-preview"] as const;
+
+const makeExtensionConfig = (id: string, extensionId: string): PanelKindConfig => ({
+  id,
+  name: `${extensionId}:${id}`,
+  iconId: "puzzle",
+  color: "#123456",
+  hasPty: false,
+  canRestart: false,
+  canConvert: false,
+  extensionId,
+});
+
+describe("unregisterPluginPanelKinds", () => {
+  // Use afterEach so cleanup still runs when a test fails.
+  afterEach(() => {
+    unregisterPluginPanelKinds("ext-a");
+    unregisterPluginPanelKinds("ext-b");
+  });
+
+  it("removes only entries owned by the target plugin", () => {
+    registerPanelKind(makeExtensionConfig("ext-a.one", "ext-a"));
+    registerPanelKind(makeExtensionConfig("ext-a.two", "ext-a"));
+    registerPanelKind(makeExtensionConfig("ext-b.three", "ext-b"));
+
+    unregisterPluginPanelKinds("ext-a");
+
+    expect(getPanelKindConfig("ext-a.one")).toBeUndefined();
+    expect(getPanelKindConfig("ext-a.two")).toBeUndefined();
+    expect(getPanelKindConfig("ext-b.three")?.extensionId).toBe("ext-b");
+  });
+
+  it("never removes built-in panel kinds", () => {
+    registerPanelKind(makeExtensionConfig("ext-a.viewer", "ext-a"));
+
+    // Calling with any plugin ID (even matching no entries) must preserve built-ins.
+    unregisterPluginPanelKinds("ext-a");
+    unregisterPluginPanelKinds("never-loaded");
+    unregisterPluginPanelKinds("");
+
+    for (const kind of BUILT_IN_KINDS) {
+      const config = getPanelKindConfig(kind);
+      expect(config, `built-in panel kind "${kind}" must survive unregister`).toBeDefined();
+      expect(config!.id).toBe(kind);
+      expect(config!.extensionId).toBeUndefined();
+    }
+  });
+
+  it("is a no-op when unregistering an unknown pluginId", () => {
+    const before = getPanelKindIds().length;
+    expect(() => unregisterPluginPanelKinds("never-loaded")).not.toThrow();
+    expect(getPanelKindIds()).toHaveLength(before);
+  });
+
+  it("is a no-op when unregistering the same plugin twice", () => {
+    registerPanelKind(makeExtensionConfig("ext-a.viewer", "ext-a"));
+    unregisterPluginPanelKinds("ext-a");
+    expect(() => unregisterPluginPanelKinds("ext-a")).not.toThrow();
+    expect(getPanelKindConfig("ext-a.viewer")).toBeUndefined();
+  });
+
+  it("supports register → unregister → re-register round-trip", () => {
+    registerPanelKind(makeExtensionConfig("ext-a.viewer", "ext-a"));
+    unregisterPluginPanelKinds("ext-a");
+    expect(getPanelKindConfig("ext-a.viewer")).toBeUndefined();
+
+    registerPanelKind({ ...makeExtensionConfig("ext-a.viewer", "ext-a"), name: "Refreshed" });
+    expect(getPanelKindConfig("ext-a.viewer")?.name).toBe("Refreshed");
+  });
+
+  it("leaves other plugins' entries intact when one plugin is unregistered", () => {
+    registerPanelKind(makeExtensionConfig("ext-a.panel", "ext-a"));
+    registerPanelKind(makeExtensionConfig("ext-b.panel", "ext-b"));
+
+    unregisterPluginPanelKinds("ext-a");
+
+    expect(getPanelKindConfig("ext-a.panel")).toBeUndefined();
+    expect(getPanelKindConfig("ext-b.panel")?.extensionId).toBe("ext-b");
   });
 });

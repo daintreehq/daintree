@@ -4,6 +4,7 @@ import {
   getToolbarButtonConfig,
   getPluginToolbarButtonIds,
   isRegisteredPluginButton,
+  unregisterPluginToolbarButtons,
   clearToolbarButtonRegistry,
   type ToolbarButtonConfig,
 } from "../toolbarButtonRegistry.js";
@@ -77,5 +78,43 @@ describe("toolbarButtonRegistry", () => {
 
     clearToolbarButtonRegistry();
     expect(getPluginToolbarButtonIds()).toHaveLength(0);
+  });
+});
+
+describe("unregisterPluginToolbarButtons", () => {
+  it("removes only buttons owned by the target plugin", () => {
+    registerToolbarButton(makeConfig("plugin.owner-a.one", { pluginId: "owner-a" }));
+    registerToolbarButton(makeConfig("plugin.owner-a.two", { pluginId: "owner-a" }));
+    registerToolbarButton(makeConfig("plugin.owner-b.three", { pluginId: "owner-b" }));
+
+    unregisterPluginToolbarButtons("owner-a");
+
+    const remaining = getPluginToolbarButtonIds();
+    expect(remaining).toEqual(["plugin.owner-b.three"]);
+    expect(getToolbarButtonConfig("plugin.owner-a.one")).toBeUndefined();
+    expect(getToolbarButtonConfig("plugin.owner-a.two")).toBeUndefined();
+    expect(getToolbarButtonConfig("plugin.owner-b.three")?.pluginId).toBe("owner-b");
+  });
+
+  it("is a no-op when unregistering an unknown pluginId", () => {
+    registerToolbarButton(makeConfig("plugin.owner-a.btn", { pluginId: "owner-a" }));
+    expect(() => unregisterPluginToolbarButtons("never-loaded")).not.toThrow();
+    expect(getPluginToolbarButtonIds()).toHaveLength(1);
+  });
+
+  it("is a no-op when unregistering the same plugin twice", () => {
+    registerToolbarButton(makeConfig("plugin.owner-a.btn", { pluginId: "owner-a" }));
+    unregisterPluginToolbarButtons("owner-a");
+    expect(() => unregisterPluginToolbarButtons("owner-a")).not.toThrow();
+    expect(getPluginToolbarButtonIds()).toHaveLength(0);
+  });
+
+  it("supports register → unregister → re-register round-trip", () => {
+    registerToolbarButton(makeConfig("plugin.owner-a.btn", { pluginId: "owner-a", label: "V1" }));
+    unregisterPluginToolbarButtons("owner-a");
+    expect(getPluginToolbarButtonIds()).toHaveLength(0);
+
+    registerToolbarButton(makeConfig("plugin.owner-a.btn", { pluginId: "owner-a", label: "V2" }));
+    expect(getToolbarButtonConfig("plugin.owner-a.btn")?.label).toBe("V2");
   });
 });

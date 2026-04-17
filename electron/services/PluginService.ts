@@ -6,9 +6,15 @@ import { app } from "electron";
 import * as semver from "semver";
 import { PluginManifestSchema } from "../schemas/plugin.js";
 import type { PluginManifest, PluginIpcHandler } from "../../shared/types/plugin.js";
-import { registerPanelKind } from "../../shared/config/panelKindRegistry.js";
-import { registerToolbarButton } from "../../shared/config/toolbarButtonRegistry.js";
-import { registerPluginMenuItem } from "./pluginMenuRegistry.js";
+import {
+  registerPanelKind,
+  unregisterPluginPanelKinds,
+} from "../../shared/config/panelKindRegistry.js";
+import {
+  registerToolbarButton,
+  unregisterPluginToolbarButtons,
+} from "../../shared/config/toolbarButtonRegistry.js";
+import { registerPluginMenuItem, unregisterPluginMenuItems } from "./pluginMenuRegistry.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
@@ -233,6 +239,15 @@ export class PluginService {
         this.handlerMap.delete(key);
       }
     }
+  }
+
+  unloadPlugin(pluginId: string): void {
+    if (!this.plugins.has(pluginId)) return;
+    this.removeHandlers(pluginId);
+    unregisterPluginMenuItems(pluginId);
+    unregisterPluginToolbarButtons(pluginId);
+    unregisterPluginPanelKinds(pluginId);
+    this.plugins.delete(pluginId);
   }
 
   listPlugins(): LoadedPluginInfo[] {

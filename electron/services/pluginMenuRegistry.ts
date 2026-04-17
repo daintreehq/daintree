@@ -18,6 +18,10 @@ export function getPluginMenuItems(): Array<{ pluginId: string; item: MenuItemCo
   return result;
 }
 
+export function unregisterPluginMenuItems(pluginId: string): void {
+  PLUGIN_MENU_ITEMS.delete(pluginId);
+}
+
 export function clearPluginMenuRegistry(): void {
   PLUGIN_MENU_ITEMS.clear();
 }

@@ -141,6 +141,21 @@ export function registerPanelKind(config: PanelKindConfig): void {
 }
 
 /**
+ * Unregister all panel kinds owned by a given plugin.
+ * Only removes entries whose `extensionId` matches. Built-in panel kinds
+ * have no `extensionId` and will never match a real plugin ID.
+ *
+ * @param pluginId - The plugin whose contributed panel kinds should be removed
+ */
+export function unregisterPluginPanelKinds(pluginId: string): void {
+  for (const [key, config] of Object.entries(PANEL_KIND_REGISTRY)) {
+    if (config.extensionId === pluginId) {
+      delete PANEL_KIND_REGISTRY[key];
+    }
+  }
+}
+
+/**
  * Get the configuration for a panel kind.
  *
  * @param kind - The panel kind to look up

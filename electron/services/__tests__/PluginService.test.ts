@@ -16,18 +16,27 @@ vi.mock("../../ipc/utils.js", () => ({
 }));
 vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
   registerPanelKind: vi.fn(),
+  unregisterPluginPanelKinds: vi.fn(),
 }));
 vi.mock("../../../shared/config/toolbarButtonRegistry.js", () => ({
   registerToolbarButton: vi.fn(),
+  unregisterPluginToolbarButtons: vi.fn(),
 }));
 vi.mock("../pluginMenuRegistry.js", () => ({
   registerPluginMenuItem: vi.fn(),
+  unregisterPluginMenuItems: vi.fn(),
 }));
 
 import { PluginService } from "../PluginService.js";
-import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
-import { registerToolbarButton } from "../../../shared/config/toolbarButtonRegistry.js";
-import { registerPluginMenuItem } from "../pluginMenuRegistry.js";
+import {
+  registerPanelKind,
+  unregisterPluginPanelKinds,
+} from "../../../shared/config/panelKindRegistry.js";
+import {
+  registerToolbarButton,
+  unregisterPluginToolbarButtons,
+} from "../../../shared/config/toolbarButtonRegistry.js";
+import { registerPluginMenuItem, unregisterPluginMenuItems } from "../pluginMenuRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 
 let tmpDir: string;
@@ -719,5 +728,114 @@ describe("engines.daintree compatibility gate", () => {
 
     expect(service.listPlugins()).toEqual([]);
     expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Plugin unload lifecycle", () => {
+  it("unloadPlugin calls all registry unregister functions for the plugin", async () => {
+    await writePlugin("unloadable", {
+      name: "unloadable",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+        toolbarButtons: [{ id: "btn", label: "Btn", iconId: "icon", actionId: "x.y" }],
+        menuItems: [{ label: "L", actionId: "x.y", location: "terminal" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(service.hasPlugin("unloadable")).toBe(true);
+
+    service.unloadPlugin("unloadable");
+
+    expect(unregisterPluginMenuItems).toHaveBeenCalledWith("unloadable");
+    expect(unregisterPluginToolbarButtons).toHaveBeenCalledWith("unloadable");
+    expect(unregisterPluginPanelKinds).toHaveBeenCalledWith("unloadable");
+  });
+
+  it("unloadPlugin removes the plugin from hasPlugin and listPlugins", async () => {
+    await writePlugin("goodbye", { name: "goodbye", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    expect(service.hasPlugin("goodbye")).toBe(true);
+
+    service.unloadPlugin("goodbye");
+
+    expect(service.hasPlugin("goodbye")).toBe(false);
+    expect(service.listPlugins()).toEqual([]);
+  });
+
+  it("unloadPlugin removes IPC handlers registered for the plugin", async () => {
+    await writePlugin("handler-host", { name: "handler-host", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    service.registerHandler("handler-host", "ping", () => "pong");
+    expect(await service.dispatchHandler("handler-host", "ping", [])).toBe("pong");
+
+    service.unloadPlugin("handler-host");
+
+    await expect(service.dispatchHandler("handler-host", "ping", [])).rejects.toThrow(
+      "No plugin handler registered for handler-host:ping"
+    );
+  });
+
+  it("unloadPlugin is a no-op when the plugin is not loaded", async () => {
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    expect(() => service.unloadPlugin("never-loaded")).not.toThrow();
+    expect(unregisterPluginMenuItems).not.toHaveBeenCalled();
+    expect(unregisterPluginToolbarButtons).not.toHaveBeenCalled();
+    expect(unregisterPluginPanelKinds).not.toHaveBeenCalled();
+  });
+
+  it("unloadPlugin is idempotent across repeated calls", async () => {
+    await writePlugin("twice", { name: "twice", version: "1.0.0" });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    service.unloadPlugin("twice");
+    expect(service.hasPlugin("twice")).toBe(false);
+
+    // Second call finds nothing to remove and stays silent.
+    service.unloadPlugin("twice");
+    expect(unregisterPluginMenuItems).toHaveBeenCalledTimes(1);
+    expect(unregisterPluginToolbarButtons).toHaveBeenCalledTimes(1);
+    expect(unregisterPluginPanelKinds).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports load → unload → reload lifecycle via fresh service instance", async () => {
+    await writePlugin("lifecycle", {
+      name: "lifecycle",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
+      },
+    });
+
+    const first = new PluginService(tmpDir);
+    await first.initialize();
+    expect(registerPanelKind).toHaveBeenCalledTimes(1);
+
+    first.unloadPlugin("lifecycle");
+    expect(unregisterPluginPanelKinds).toHaveBeenCalledWith("lifecycle");
+    expect(first.hasPlugin("lifecycle")).toBe(false);
+
+    // A fresh service instance re-reads the plugin directory and re-registers.
+    vi.clearAllMocks();
+    const second = new PluginService(tmpDir);
+    await second.initialize();
+
+    expect(second.hasPlugin("lifecycle")).toBe(true);
+    expect(registerPanelKind).toHaveBeenCalledTimes(1);
+    expect(registerPanelKind).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "lifecycle.viewer", extensionId: "lifecycle" })
+    );
   });
 });
