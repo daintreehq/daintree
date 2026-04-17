@@ -246,4 +246,41 @@ describe("WorkspaceService adversarial", () => {
     );
     expect(monitorEntries.length).toBeLessThanOrEqual(1);
   });
+
+  it("emits 10 successful local create-worktree results under concurrent load without config.lock errors", async () => {
+    // Guards the QUEUE_CONCURRENCY=3 bump in BulkCreateWorktreeDialog (#5163):
+    // with --no-track on the local-create path (PR #5165), install_branch_config
+    // is skipped, so .git/config.lock contention that previously capped the
+    // producer queue at 2 no longer applies. Run 10 concurrent createWorktree
+    // calls on the fromRemote=false path and assert no result event reports a
+    // "could not lock config file" failure.
+    const promises = Array.from({ length: 10 }, (_, i) =>
+      service.createWorktree(`req-stress-${i}`, "/repo", {
+        baseBranch: "main",
+        newBranch: `feature/stress-${i}`,
+        path: `/repo/wt-stress-${i}`,
+        fromRemote: false,
+      })
+    );
+
+    await Promise.allSettled(promises);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const resultEvents = sentEvents.filter(
+      (e): e is WorkspaceHostEvent & { type: "create-worktree-result" } =>
+        e.type === "create-worktree-result"
+    );
+
+    expect(resultEvents).toHaveLength(10);
+    for (const event of resultEvents) {
+      expect(event.success).toBe(true);
+      if ("error" in event && event.error) {
+        expect(event.error).not.toMatch(/could not lock config file/i);
+      }
+    }
+
+    // Guard against accidentally drifting onto the fromRemote=true --track
+    // path, which still writes to .git/config and reintroduces lock contention.
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith(expect.arrayContaining(["--no-track"]));
+  });
 });
