@@ -63,15 +63,6 @@ export class Stage {
     },
   };
 
-  readonly camera = {
-    zoom: async (factor: number, options?: { durationMs?: number }): Promise<void> => {
-      await this.page.evaluate(([f, dur]) => (window as any).electron.demo.setZoom(f, dur), [
-        factor,
-        options?.durationMs,
-      ] as const);
-    },
-  };
-
   readonly wait = {
     forSelector: async (selector: string, options?: { timeoutMs?: number }): Promise<void> => {
       await this.page.evaluate(

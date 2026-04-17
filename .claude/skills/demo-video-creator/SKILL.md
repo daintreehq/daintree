@@ -62,12 +62,6 @@ stage.pressKey(key, code?, modifiers?, selector?)  // press a single key
 // modifiers: "mod" | "ctrl" | "shift" | "alt" | "meta"
 ```
 
-### Camera
-
-```typescript
-stage.camera.zoom(factor, { durationMs? })
-```
-
 ### Scroll & Drag
 
 ```typescript

@@ -10,7 +10,6 @@ import type {
   DemoMoveToPayload,
   DemoMoveToSelectorPayload,
   DemoTypePayload,
-  DemoSetZoomPayload,
   DemoWaitForSelectorPayload,
   DemoSleepPayload,
   DemoScreenshotResult,
@@ -103,13 +102,6 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     payload: DemoTypePayload
   ): Promise<void> => {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_TYPE, payload);
-  };
-
-  const handleSetZoom = async (
-    _event: Electron.IpcMainInvokeEvent,
-    payload: DemoSetZoomPayload
-  ): Promise<void> => {
-    await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SET_ZOOM, payload);
   };
 
   const handleScreenshot = async (): Promise<DemoScreenshotResult> => {
@@ -682,7 +674,6 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.DEMO_CLICK, handleClick);
   ipcMain.handle(CHANNELS.DEMO_SCREENSHOT, handleScreenshot);
   ipcMain.handle(CHANNELS.DEMO_TYPE, handleType);
-  ipcMain.handle(CHANNELS.DEMO_SET_ZOOM, handleSetZoom);
   ipcMain.handle(CHANNELS.DEMO_WAIT_FOR_SELECTOR, handleWaitForSelector);
   ipcMain.handle(CHANNELS.DEMO_PAUSE, handlePause);
   ipcMain.handle(CHANNELS.DEMO_RESUME, handleResume);
@@ -710,7 +701,6 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     ipcMain.removeHandler(CHANNELS.DEMO_CLICK);
     ipcMain.removeHandler(CHANNELS.DEMO_SCREENSHOT);
     ipcMain.removeHandler(CHANNELS.DEMO_TYPE);
-    ipcMain.removeHandler(CHANNELS.DEMO_SET_ZOOM);
     ipcMain.removeHandler(CHANNELS.DEMO_WAIT_FOR_SELECTOR);
     ipcMain.removeHandler(CHANNELS.DEMO_PAUSE);
     ipcMain.removeHandler(CHANNELS.DEMO_RESUME);

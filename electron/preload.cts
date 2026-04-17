@@ -951,7 +951,6 @@ const CHANNELS = {
   DEMO_MOVE_TO_SELECTOR: "demo:move-to-selector",
   DEMO_CLICK: "demo:click",
   DEMO_TYPE: "demo:type",
-  DEMO_SET_ZOOM: "demo:set-zoom",
   DEMO_SCREENSHOT: "demo:screenshot",
   DEMO_WAIT_FOR_SELECTOR: "demo:wait-for-selector",
   DEMO_PAUSE: "demo:pause",
@@ -960,7 +959,6 @@ const CHANNELS = {
   DEMO_EXEC_MOVE_TO_SELECTOR: "demo:exec-move-to-selector",
   DEMO_EXEC_CLICK: "demo:exec-click",
   DEMO_EXEC_TYPE: "demo:exec-type",
-  DEMO_EXEC_SET_ZOOM: "demo:exec-set-zoom",
   DEMO_EXEC_PAUSE: "demo:exec-pause",
   DEMO_EXEC_RESUME: "demo:exec-resume",
   DEMO_EXEC_WAIT_FOR_SELECTOR: "demo:exec-wait-for-selector",
@@ -2806,8 +2804,6 @@ const api: ElectronAPI = {
           click: () => _unwrappingInvoke(CHANNELS.DEMO_CLICK),
           type: (selector: string, text: string, cps?: number) =>
             _unwrappingInvoke(CHANNELS.DEMO_TYPE, { selector, text, cps }),
-          setZoom: (factor: number, durationMs?: number) =>
-            _unwrappingInvoke(CHANNELS.DEMO_SET_ZOOM, { factor, durationMs }),
           screenshot: () => _unwrappingInvoke(CHANNELS.DEMO_SCREENSHOT),
           waitForSelector: (selector: string, timeoutMs?: number) =>
             _unwrappingInvoke(CHANNELS.DEMO_WAIT_FOR_SELECTOR, { selector, timeoutMs }),
@@ -2867,8 +2863,6 @@ const api: ElectronAPI = {
           sendCommandDone: (requestId: string, error?: string) => {
             ipcRenderer.send(CHANNELS.DEMO_COMMAND_DONE, { requestId, error });
           },
-          getZoomFactor: () => webFrame.getZoomFactor(),
-          setZoomFactor: (factor: number) => webFrame.setZoomFactor(factor),
         },
       }
     : {}),

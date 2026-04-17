@@ -10,11 +10,6 @@ export interface DemoTypePayload {
   cps?: number;
 }
 
-export interface DemoSetZoomPayload {
-  factor: number;
-  durationMs?: number;
-}
-
 export interface DemoWaitForSelectorPayload {
   selector: string;
   timeoutMs?: number;

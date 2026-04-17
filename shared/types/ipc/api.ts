@@ -1297,7 +1297,6 @@ export interface ElectronAPI {
     ): Promise<void>;
     click(): Promise<void>;
     type(selector: string, text: string, cps?: number): Promise<void>;
-    setZoom(factor: number, durationMs?: number): Promise<void>;
     screenshot(): Promise<DemoScreenshotResult>;
     waitForSelector(selector: string, timeoutMs?: number): Promise<void>;
     pause(): Promise<void>;
@@ -1331,8 +1330,6 @@ export interface ElectronAPI {
       callback: (payload: Record<string, unknown>) => void
     ): () => void;
     sendCommandDone(requestId: string, error?: string): void;
-    getZoomFactor(): number;
-    setZoomFactor(factor: number): void;
   };
 }
 

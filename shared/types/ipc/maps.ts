@@ -145,7 +145,6 @@ import type {
   DemoMoveToPayload,
   DemoMoveToSelectorPayload,
   DemoTypePayload,
-  DemoSetZoomPayload,
   DemoWaitForSelectorPayload,
   DemoSleepPayload,
   DemoScreenshotResult,
@@ -1753,10 +1752,6 @@ export interface IpcInvokeMap {
     args: [payload: DemoTypePayload];
     result: void;
   };
-  "demo:set-zoom": {
-    args: [payload: DemoSetZoomPayload];
-    result: void;
-  };
   "demo:screenshot": {
     args: [];
     result: DemoScreenshotResult;
@@ -1972,7 +1967,6 @@ export interface IpcEventMap {
   "demo:exec-move-to-selector": DemoMoveToSelectorPayload;
   "demo:exec-click": void;
   "demo:exec-type": DemoTypePayload;
-  "demo:exec-set-zoom": DemoSetZoomPayload;
   "demo:exec-pause": void;
   "demo:exec-resume": void;
   "demo:exec-wait-for-selector": DemoWaitForSelectorPayload;

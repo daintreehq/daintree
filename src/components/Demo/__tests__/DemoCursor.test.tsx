@@ -18,8 +18,6 @@ const demoMock = {
     };
   }),
   sendCommandDone: vi.fn(),
-  getZoomFactor: vi.fn(() => 1),
-  setZoomFactor: vi.fn(),
 };
 
 // Set up window.electron.demo before importing the component
@@ -85,7 +83,6 @@ describe("DemoCursor", () => {
     );
     expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-click", expect.any(Function));
     expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-type", expect.any(Function));
-    expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-set-zoom", expect.any(Function));
     expect(demoMock.onExecCommand).toHaveBeenCalledWith(
       "demo:exec-wait-for-selector",
       expect.any(Function)
@@ -107,8 +104,8 @@ describe("DemoCursor", () => {
 
   it("cleans up listeners on unmount", () => {
     const { unmount } = render(<DemoCursor />);
-    // All 13 onExecCommand calls return cleanup functions (9 original + 4 new: scroll, drag, pressKey, waitForIdle)
-    expect(demoMock.onExecCommand).toHaveBeenCalledTimes(13);
+    // All 12 onExecCommand calls return cleanup functions (move-to, move-to-selector, click, type, wait-for-selector, sleep, pause, resume, scroll, drag, press-key, wait-for-idle)
+    expect(demoMock.onExecCommand).toHaveBeenCalledTimes(12);
     unmount();
     // After unmount, listeners should be removed
     expect(listenerMap.get("demo:exec-move-to")?.length ?? 0).toBe(0);
