@@ -343,8 +343,8 @@ export class PtyManager extends EventEmitter {
             await persistAgentSession({
               sessionId,
               agentId: info.agentId,
-              worktreeId: null,
-              title: info.title ?? null,
+              worktreeId: info.worktreeId ?? null,
+              title: info.lastObservedTitle ?? info.title ?? null,
               projectId: info.projectId ?? null,
               agentLaunchFlags: info.agentLaunchFlags,
               agentModelId: info.agentModelId,
@@ -520,6 +520,17 @@ export class PtyManager extends EventEmitter {
    */
   markChecked(id: string): void {
     this.registry.markChecked(id);
+  }
+
+  /**
+   * Store the last observed (non-useless) OSC title for a terminal so that
+   * persistAgentSession can capture a meaningful label even if the agent
+   * clears its title right before shutdown.
+   */
+  updateObservedTitle(id: string, title: string): void {
+    const terminal = this.registry.get(id);
+    if (!terminal) return;
+    terminal.setObservedTitle(title);
   }
 
   /**

@@ -541,6 +541,7 @@ const CHANNELS = {
   TERMINAL_BACKEND_READY: "terminal:backend-ready",
   TERMINAL_SEND_KEY: "terminal:send-key",
   TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
+  TERMINAL_UPDATE_OBSERVED_TITLE: "terminal:update-observed-title",
   TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",
   TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
   TERMINAL_RESTART_SERVICE: "terminal:restart-service",
@@ -1343,6 +1344,9 @@ const api: ElectronAPI = {
 
     reportTitleState: (id: string, state: "working" | "waiting") =>
       ipcRenderer.send(CHANNELS.TERMINAL_AGENT_TITLE_STATE, { id, state }),
+
+    updateObservedTitle: (id: string, title: string) =>
+      ipcRenderer.send(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id, title }),
 
     onSpawnResult: (callback: (id: string, result: SpawnResultPayload) => void): (() => void) => {
       const handler = (_event: Electron.IpcRendererEvent, id: unknown, result: unknown) => {

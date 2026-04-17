@@ -87,6 +87,7 @@ export const createCorePanelActions = (
   | "addPanel"
   | "removePanel"
   | "updateTitle"
+  | "updateLastObservedTitle"
   | "updateAgentState"
   | "updateActivity"
   | "updateLastCommand"
@@ -335,6 +336,7 @@ export const createCorePanelActions = (
           restore: options.restore,
           agentLaunchFlags: options.agentLaunchFlags,
           agentModelId: options.agentModelId,
+          worktreeId: options.worktreeId,
         });
       }
 
@@ -569,6 +571,21 @@ export const createCorePanelActions = (
       const effectiveTitle =
         newTitle.trim() || getDefaultTitle(terminal.kind, terminal.type, terminal.agentId);
       const newById = { ...state.panelsById, [id]: { ...terminal, title: effectiveTitle } };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
+    });
+  },
+
+  updateLastObservedTitle: (id, title) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal) return state;
+      const trimmed = title.trim();
+      if (!trimmed || terminal.lastObservedTitle === trimmed) return state;
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...terminal, lastObservedTitle: trimmed },
+      };
       saveNormalized(newById, state.panelIds);
       return { panelsById: newById };
     });

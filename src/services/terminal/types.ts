@@ -93,6 +93,11 @@ export interface ManagedTerminal {
   titleReportTimer?: number;
   pendingTitleState?: "working" | "waiting";
 
+  // Last-meaningful-title tracking for agent session history
+  observedTitleTimer?: number;
+  pendingObservedTitle?: string;
+  lastObservedTitleSent?: string;
+
   // Input lock state (read-only monitor mode)
   isInputLocked?: boolean;
 

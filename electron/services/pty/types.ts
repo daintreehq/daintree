@@ -55,6 +55,10 @@ export interface TerminalPublicState {
   spawnArgs?: string[];
   /** Exit code from the PTY process (set on clean exit) */
   exitCode?: number;
+  /** Worktree the terminal was spawned in; used when persisting agent session history */
+  worktreeId?: string;
+  /** Last non-useless title observed from xterm OSC updates (renderer-synced) */
+  lastObservedTitle?: string;
 }
 
 /**

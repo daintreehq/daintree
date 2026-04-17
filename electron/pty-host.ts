@@ -1167,6 +1167,10 @@ port.on("message", async (rawMsg: any) => {
         ptyManager.markChecked(msg.id);
         break;
 
+      case "update-observed-title":
+        ptyManager.updateObservedTitle(msg.id, msg.title);
+        break;
+
       case "transition-state": {
         const success = ptyManager.transitionState(
           msg.id,

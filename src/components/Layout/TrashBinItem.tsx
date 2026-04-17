@@ -6,6 +6,8 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { TrashedTerminal } from "@/store/slices";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { isUselessTitle } from "@shared/utils/isUselessTitle";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 
 interface TrashBinItemProps {
   terminal: TerminalInstance;
@@ -53,7 +55,17 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
     removePanel(terminal.id);
   }, [removePanel, terminal.id]);
 
-  const terminalName = terminal.title || terminal.type || "Terminal";
+  const terminalName = (() => {
+    const observed = terminal.lastObservedTitle;
+    if (observed && !isUselessTitle(observed)) return observed;
+    if (terminal.kind === "agent" || terminal.agentId) {
+      if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
+      const agentConfig = terminal.agentId ? getEffectiveAgentConfig(terminal.agentId) : undefined;
+      const agentName = agentConfig?.name ?? terminal.agentId ?? terminal.type ?? "Agent";
+      return worktreeName ? `${agentName} · ${worktreeName}` : agentName;
+    }
+    return terminal.title || terminal.type || "Terminal";
+  })();
 
   return (
     <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors group">

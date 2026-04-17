@@ -145,6 +145,30 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     ipcMain.removeListener(CHANNELS.TERMINAL_AGENT_TITLE_STATE, handleTerminalAgentTitleState)
   );
 
+  const handleTerminalUpdateObservedTitle = (
+    _event: Electron.IpcMainEvent,
+    payload: { id: string; title: string }
+  ) => {
+    try {
+      if (!payload || typeof payload !== "object") return;
+      const { id, title } = payload;
+      if (typeof id !== "string" || !id) return;
+      if (typeof title !== "string") return;
+      const trimmed = title.trim();
+      if (!trimmed) return;
+      ptyClient.updateObservedTitle(id, trimmed);
+    } catch (error) {
+      console.error("[IPC] Error handling observed title update:", error);
+    }
+  };
+  ipcMain.on(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, handleTerminalUpdateObservedTitle);
+  handlers.push(() =>
+    ipcMain.removeListener(
+      CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE,
+      handleTerminalUpdateObservedTitle
+    )
+  );
+
   const handleTerminalForceResume = async (
     _event: Electron.IpcMainInvokeEvent,
     id: string

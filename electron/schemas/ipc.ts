@@ -248,6 +248,7 @@ export const TerminalSpawnOptionsSchema = z.object({
   isEphemeral: z.boolean().optional(),
   agentLaunchFlags: z.array(z.string()).optional(),
   agentModelId: z.string().optional(),
+  worktreeId: z.string().optional(),
 });
 
 export const TerminalResizePayloadSchema = z.object({

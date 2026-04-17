@@ -301,6 +301,7 @@ export class TerminalProcess {
       analysisEnabled: this.isAgentTerminal,
       agentLaunchFlags: options.agentLaunchFlags,
       agentModelId: options.agentModelId,
+      worktreeId: options.worktreeId,
       spawnArgs,
     };
 
@@ -454,6 +455,8 @@ export class TerminalProcess {
       agentModelId: t.agentModelId,
       spawnArgs: t.spawnArgs,
       exitCode: t.exitCode,
+      worktreeId: t.worktreeId,
+      lastObservedTitle: t.lastObservedTitle,
     };
   }
 
@@ -474,6 +477,10 @@ export class TerminalProcess {
 
   setAnalysisEnabled(enabled: boolean): void {
     this.terminalInfo.analysisEnabled = enabled;
+  }
+
+  setObservedTitle(title: string): void {
+    this.terminalInfo.lastObservedTitle = title;
   }
 
   acknowledgeData(_charCount: number): void {

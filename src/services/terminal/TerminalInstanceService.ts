@@ -35,6 +35,8 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
+import { isUselessTitle } from "@shared/utils/isUselessTitle";
+import { usePanelStore } from "@/store/panelStore";
 import { isNonKeyboardInput } from "./inputUtils";
 
 export { isNonKeyboardInput } from "./inputUtils";
@@ -815,6 +817,46 @@ class TerminalInstanceService {
 
     if (agentId) {
       const agentConfig = getEffectiveAgentConfig(agentId);
+
+      const observedTitleDisposable = terminal.onTitleChange((title: string) => {
+        if (isUselessTitle(title)) return;
+        const trimmed = title.trim();
+        if (trimmed === managed.lastObservedTitleSent) return;
+        managed.pendingObservedTitle = trimmed;
+        if (managed.observedTitleTimer !== undefined) {
+          clearTimeout(managed.observedTitleTimer);
+        }
+        managed.observedTitleTimer = window.setTimeout(() => {
+          managed.observedTitleTimer = undefined;
+          const pending = managed.pendingObservedTitle;
+          managed.pendingObservedTitle = undefined;
+          if (!pending || pending === managed.lastObservedTitleSent) return;
+          managed.lastObservedTitleSent = pending;
+          try {
+            window.electron.terminal.updateObservedTitle(id, pending);
+          } catch (err) {
+            logWarn("[TerminalInstanceService] updateObservedTitle failed", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          try {
+            usePanelStore.getState().updateLastObservedTitle(id, pending);
+          } catch (err) {
+            logWarn("[TerminalInstanceService] panel store title update failed", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }, 150);
+      });
+      listeners.push(() => {
+        observedTitleDisposable.dispose();
+        if (managed.observedTitleTimer !== undefined) {
+          clearTimeout(managed.observedTitleTimer);
+          managed.observedTitleTimer = undefined;
+          managed.pendingObservedTitle = undefined;
+        }
+      });
+
       const titlePatterns = agentConfig?.detection?.titleStatePatterns;
       if (titlePatterns) {
         let lastReportedTitleState: "working" | "waiting" | undefined;
@@ -1756,6 +1798,11 @@ class TerminalInstanceService {
       clearTimeout(managed.titleReportTimer);
       managed.titleReportTimer = undefined;
       managed.pendingTitleState = undefined;
+    }
+    if (managed.observedTitleTimer !== undefined) {
+      clearTimeout(managed.observedTitleTimer);
+      managed.observedTitleTimer = undefined;
+      managed.pendingObservedTitle = undefined;
     }
     if (managed.resizeSuppressionTimer !== undefined) {
       clearTimeout(managed.resizeSuppressionTimer);

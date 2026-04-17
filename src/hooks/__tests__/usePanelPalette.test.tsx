@@ -56,6 +56,13 @@ vi.mock("@/store/cliAvailabilityStore", () => {
   return { useCliAvailabilityStore: store };
 });
 
+vi.mock("@/store/worktreeStore", () => {
+  const state = { activeWorktreeId: null as string | null };
+  const store = (selector: (s: typeof state) => unknown) => selector(state);
+  store.getState = () => state;
+  return { useWorktreeSelectionStore: store };
+});
+
 import { usePanelPalette } from "../usePanelPalette";
 
 describe("usePanelPalette", () => {
@@ -166,6 +173,77 @@ describe("usePanelPalette", () => {
       const browserIdx = ids.indexOf("browser");
       const resumeIdx = ids.findIndex((id) => id.startsWith("resume:"));
       expect(resumeIdx).toBeGreaterThan(browserIdx);
+    });
+  });
+
+  it("filters out resume sessions with missing sessionId", async () => {
+    (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        sessionId: "",
+        agentId: "claude",
+        worktreeId: null,
+        title: "Fixing bug",
+        projectId: null,
+        savedAt: Date.now() - 1000,
+      },
+      {
+        sessionId: "valid-session",
+        agentId: "claude",
+        worktreeId: null,
+        title: null,
+        projectId: null,
+        savedAt: Date.now() - 2000,
+      },
+    ]);
+
+    const { result, rerender } = renderHook(() => usePanelPalette());
+    await vi.waitFor(() => {
+      rerender();
+      const resumeItems = result.current.results.filter((item) => item.id.startsWith("resume:"));
+      expect(resumeItems).toHaveLength(1);
+      expect(resumeItems[0].id).toBe("resume:valid-session");
+    });
+  });
+
+  it("prefers a meaningful session title in the resume label", async () => {
+    (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        sessionId: "with-title",
+        agentId: "claude",
+        worktreeId: null,
+        title: "Fixing auth bug",
+        projectId: null,
+        savedAt: Date.now() - 1000,
+      },
+    ]);
+
+    const { result, rerender } = renderHook(() => usePanelPalette());
+    await vi.waitFor(() => {
+      rerender();
+      const resume = result.current.results.find((item) => item.id.startsWith("resume:"));
+      expect(resume).toBeDefined();
+      expect(resume!.name).toBe("Resume: Fixing auth bug");
+    });
+  });
+
+  it("falls back to agent name when session title is useless", async () => {
+    (window.electron!.agentSessionHistory!.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        sessionId: "useless-title",
+        agentId: "claude",
+        worktreeId: null,
+        title: "claude",
+        projectId: null,
+        savedAt: Date.now() - 1000,
+      },
+    ]);
+
+    const { result, rerender } = renderHook(() => usePanelPalette());
+    await vi.waitFor(() => {
+      rerender();
+      const resume = result.current.results.find((item) => item.id.startsWith("resume:"));
+      expect(resume).toBeDefined();
+      expect(resume!.name).toBe("Resume Claude");
     });
   });
 

@@ -259,6 +259,7 @@ export interface ElectronAPI {
     onBackendReady(callback: () => void): () => void;
     sendKey(id: string, key: string): void;
     reportTitleState(id: string, state: "working" | "waiting"): void;
+    updateObservedTitle(id: string, title: string): void;
     onSpawnResult(callback: (id: string, result: SpawnResult) => void): () => void;
     onReduceScrollback(
       callback: (data: { terminalIds: string[]; targetLines: number }) => void

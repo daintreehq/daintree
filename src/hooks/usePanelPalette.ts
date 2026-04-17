@@ -5,9 +5,11 @@ import { getPanelKindDefinition } from "@/registry";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { keybindingService } from "@/services/KeybindingService";
 import { formatTimeAgo } from "@/utils/timeAgo";
+import { isUselessTitle } from "@shared/utils/isUselessTitle";
 import type { KeyAction } from "@shared/types/keymap";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 
@@ -66,16 +68,10 @@ export function usePanelPalette(): UsePanelPaletteReturn {
   const isAvailabilityInitialized = useCliAvailabilityStore((state) => state.isInitialized);
   const [keybindingVersion, setKeybindingVersion] = useState(0);
   const [resumeSessions, setResumeSessions] = useState<AgentSessionRecord[]>([]);
+  const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
   useEffect(() => {
     return keybindingService.subscribe(() => setKeybindingVersion((v) => v + 1));
-  }, []);
-
-  useEffect(() => {
-    window.electron?.agentSessionHistory
-      ?.list()
-      .then(setResumeSessions)
-      .catch(() => {});
   }, []);
 
   const availableKinds = useMemo<PanelKindOption[]>(() => {
@@ -141,21 +137,30 @@ export function usePanelPalette(): UsePanelPaletteReturn {
       }
     }
 
-    const resumeOptions: PanelKindOption[] = resumeSessions.slice(0, 5).map((session) => {
-      const agentConfig = getEffectiveAgentConfig(session.agentId);
-      const timeAgo = formatTimeAgo(session.savedAt);
-      const modelPart = session.agentModelId ? prettifyModelId(session.agentModelId) : null;
-      const description = modelPart ? `${modelPart} · ${timeAgo}` : timeAgo;
-      return {
-        id: `resume:${session.sessionId}`,
-        name: `Resume ${agentConfig?.name ?? session.agentId}`,
-        iconId: agentConfig?.iconId ?? "terminal",
-        color: agentConfig?.color ?? "var(--color-daintree-text)",
-        description,
-        category: "resume" as const,
-        resumeSession: session,
-      };
-    });
+    const resumeOptions: PanelKindOption[] = resumeSessions
+      .filter((session) => !!session.sessionId)
+      .slice(0, 5)
+      .map((session) => {
+        const agentConfig = getEffectiveAgentConfig(session.agentId);
+        const timeAgo = formatTimeAgo(session.savedAt);
+        const modelPart = session.agentModelId ? prettifyModelId(session.agentModelId) : null;
+        const agentName = agentConfig?.name ?? session.agentId;
+        const hasMeaningfulTitle = !!session.title && !isUselessTitle(session.title);
+        const name = hasMeaningfulTitle ? `Resume: ${session.title}` : `Resume ${agentName}`;
+        const descriptionParts = [modelPart, hasMeaningfulTitle ? agentName : null, timeAgo].filter(
+          (part): part is string => !!part
+        );
+        const description = descriptionParts.join(" · ");
+        return {
+          id: `resume:${session.sessionId}`,
+          name,
+          iconId: agentConfig?.iconId ?? "terminal",
+          color: agentConfig?.color ?? "var(--color-daintree-text)",
+          description,
+          category: "resume" as const,
+          resumeSession: session,
+        };
+      });
 
     return [
       ...agentDedup.values(),
@@ -192,6 +197,19 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     const isStale = !lastCheckedAt || Date.now() - lastCheckedAt > STALE_THRESHOLD_MS;
     if (isStale) void refresh().catch(() => {});
   }, [isOpen]);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.electron?.agentSessionHistory
+      ?.list(activeWorktreeId ?? undefined)
+      .then((sessions) => {
+        if (!cancelled) setResumeSessions(sessions);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, activeWorktreeId]);
 
   const handleSelect = useCallback(
     (option: PanelKindOption): PanelKindOption | null => {

@@ -193,6 +193,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         isEphemeral: validatedOptions.isEphemeral,
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
+        worktreeId: validatedOptions.worktreeId,
       });
 
       // For non-agent terminals (or Windows agent terminals), write command to stdin

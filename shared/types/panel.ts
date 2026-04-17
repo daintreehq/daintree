@@ -339,6 +339,8 @@ export interface TerminalInstance {
   type?: TerminalType;
   agentId?: AgentId;
   title: string;
+  /** Last meaningful OSC title observed from the running agent — survives the trash window for display. */
+  lastObservedTitle?: string;
   /** Working directory - only present for PTY panels */
   cwd?: string;
   pid?: number;

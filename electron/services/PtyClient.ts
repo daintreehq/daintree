@@ -1394,6 +1394,10 @@ export class PtyClient extends EventEmitter {
     this.send({ type: "mark-checked", id });
   }
 
+  updateObservedTitle(id: string, title: string): void {
+    this.send({ type: "update-observed-title", id, title });
+  }
+
   async transitionState(
     id: string,
     event: { type: string; [key: string]: unknown },

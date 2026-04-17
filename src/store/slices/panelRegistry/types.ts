@@ -54,6 +54,7 @@ export interface PanelRegistrySlice {
   addPanel: (options: AddPanelOptions) => Promise<string | null>;
   removePanel: (id: string) => void;
   updateTitle: (id: string, newTitle: string) => void;
+  updateLastObservedTitle: (id: string, title: string) => void;
   updateAgentState: (
     id: string,
     agentState: AgentState,

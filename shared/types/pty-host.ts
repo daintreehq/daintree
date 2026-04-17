@@ -34,6 +34,8 @@ export interface PtyHostSpawnOptions {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** Worktree the terminal was spawned in; used when persisting agent session history */
+  worktreeId?: string;
 }
 
 /**
@@ -70,6 +72,7 @@ export type PtyHostRequest =
   | { type: "get-snapshot"; id: string; requestId: string }
   | { type: "get-all-snapshots"; requestId: string }
   | { type: "mark-checked"; id: string }
+  | { type: "update-observed-title"; id: string; title: string }
   | {
       type: "transition-state";
       id: string;
@@ -269,6 +272,8 @@ export interface PtyHostTerminalInfo {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** Worktree the terminal was spawned in; used when persisting agent session history */
+  worktreeId?: string;
 }
 
 /** Payload for agent:spawned event */

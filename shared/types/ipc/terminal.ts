@@ -36,6 +36,8 @@ export interface TerminalSpawnOptions {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time */
   agentModelId?: string;
+  /** Worktree the terminal is spawned in; persisted in agent session history */
+  worktreeId?: string;
 }
 
 /** Terminal state for app state persistence */
