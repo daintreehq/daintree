@@ -17,8 +17,10 @@ export interface GitFileWatcherOptions {
   onChange: () => void;
   /** Watch the working tree recursively for file edits (macOS FSEvents). */
   watchWorktree?: boolean;
-  /** Debounce for working tree events. Defaults to debounceMs if not set. */
-  worktreeDebounceMs?: number;
+  /** Minimum debounce delay for worktree events — first event in a burst fires at this delay. */
+  worktreeMinDebounceMs?: number;
+  /** Maximum debounce delay for worktree events — sustained bursts ramp up to this. */
+  worktreeMaxDebounceMs?: number;
   /** Max wait ceiling for worktree debounce — forces a flush during sustained bursts. */
   worktreeMaxWaitMs?: number;
   /** Called when the recursive worktree watcher fails at runtime (error or startup). */
@@ -31,11 +33,15 @@ export class GitFileWatcher {
   private debounceTimer: NodeJS.Timeout | null = null;
   private worktreeDebounceTimer: NodeJS.Timeout | null = null;
   private worktreeMaxWaitTimer: NodeJS.Timeout | null = null;
+  private worktreeBurstCount = 0;
   private disposed = false;
   private readonly worktreePath: string;
   private readonly debounceMs: number;
-  private readonly worktreeDebounceMs: number;
+  private readonly worktreeMinDebounceMs: number;
+  private readonly worktreeMaxDebounceMs: number;
   private readonly worktreeMaxWaitMs: number | undefined;
+  /** Per-event ramp applied inside the min..max range. Private tuning constant. */
+  private readonly worktreeDebounceRampMs = 10;
   private readonly onChange: () => void;
   private readonly onWatcherFailed: (() => void) | undefined;
   private readonly watchWorktree: boolean;
@@ -44,7 +50,8 @@ export class GitFileWatcher {
   constructor(options: GitFileWatcherOptions) {
     this.worktreePath = options.worktreePath;
     this.debounceMs = options.debounceMs;
-    this.worktreeDebounceMs = options.worktreeDebounceMs ?? options.debounceMs;
+    this.worktreeMinDebounceMs = options.worktreeMinDebounceMs ?? options.debounceMs;
+    this.worktreeMaxDebounceMs = options.worktreeMaxDebounceMs ?? this.worktreeMinDebounceMs;
     this.worktreeMaxWaitMs = options.worktreeMaxWaitMs;
     this.onChange = options.onChange;
     this.onWatcherFailed = options.onWatcherFailed;
@@ -116,6 +123,7 @@ export class GitFileWatcher {
       clearTimeout(this.worktreeMaxWaitTimer);
       this.worktreeMaxWaitTimer = null;
     }
+    this.worktreeBurstCount = 0;
 
     for (const watcher of this.watchers) {
       try {
@@ -303,39 +311,48 @@ export class GitFileWatcher {
     }, this.debounceMs);
   }
 
-  /** Handle working tree file changes. Separate debounce (can be longer). */
+  /**
+   * Handle working tree file changes with an adaptive debounce. The first event
+   * in a burst fires at `worktreeMinDebounceMs`; each subsequent event adds
+   * `worktreeDebounceRampMs` to the pending delay up to `worktreeMaxDebounceMs`.
+   * A `worktreeMaxWaitMs` ceiling forces a flush during sustained bursts.
+   */
   private handleWorktreeChange(): void {
     if (this.disposed) {
       return;
     }
 
+    this.worktreeBurstCount++;
+    const delay = Math.min(
+      this.worktreeMaxDebounceMs,
+      this.worktreeMinDebounceMs + (this.worktreeBurstCount - 1) * this.worktreeDebounceRampMs
+    );
+
     if (this.worktreeDebounceTimer) {
       clearTimeout(this.worktreeDebounceTimer);
     }
+    this.worktreeDebounceTimer = setTimeout(() => this.flushWorktreeChange(), delay);
 
-    // Start max-wait ceiling on first event in a burst
     if (this.worktreeMaxWaitMs != null && !this.worktreeMaxWaitTimer) {
-      this.worktreeMaxWaitTimer = setTimeout(() => {
-        this.worktreeMaxWaitTimer = null;
-        if (this.worktreeDebounceTimer) {
-          clearTimeout(this.worktreeDebounceTimer);
-          this.worktreeDebounceTimer = null;
-        }
-        if (!this.disposed) {
-          this.onChange();
-        }
-      }, this.worktreeMaxWaitMs);
+      this.worktreeMaxWaitTimer = setTimeout(
+        () => this.flushWorktreeChange(),
+        this.worktreeMaxWaitMs
+      );
     }
+  }
 
-    this.worktreeDebounceTimer = setTimeout(() => {
+  private flushWorktreeChange(): void {
+    if (this.worktreeDebounceTimer) {
+      clearTimeout(this.worktreeDebounceTimer);
       this.worktreeDebounceTimer = null;
-      if (this.worktreeMaxWaitTimer) {
-        clearTimeout(this.worktreeMaxWaitTimer);
-        this.worktreeMaxWaitTimer = null;
-      }
-      if (!this.disposed) {
-        this.onChange();
-      }
-    }, this.worktreeDebounceMs);
+    }
+    if (this.worktreeMaxWaitTimer) {
+      clearTimeout(this.worktreeMaxWaitTimer);
+      this.worktreeMaxWaitTimer = null;
+    }
+    this.worktreeBurstCount = 0;
+    if (!this.disposed) {
+      this.onChange();
+    }
   }
 }

@@ -180,13 +180,16 @@ describe("GitFileWatcher", () => {
       return w;
     }) as unknown as typeof watch);
 
+    // Fixed debounce (min === max) — keeps this test's timing assertion stable
+    // while the adaptive ramp is covered by its own dedicated tests.
     const gitWatcher = new GitFileWatcher({
       worktreePath: "/repo",
       branch: "main",
       debounceMs: 300,
       onChange,
       watchWorktree: true,
-      worktreeDebounceMs: 500,
+      worktreeMinDebounceMs: 500,
+      worktreeMaxDebounceMs: 500,
       worktreeMaxWaitMs: 2000,
     });
 
@@ -224,7 +227,8 @@ describe("GitFileWatcher", () => {
       debounceMs: 300,
       onChange,
       watchWorktree: true,
-      worktreeDebounceMs: 500,
+      worktreeMinDebounceMs: 500,
+      worktreeMaxDebounceMs: 500,
       worktreeMaxWaitMs: 2000,
     });
 
@@ -269,7 +273,8 @@ describe("GitFileWatcher", () => {
       debounceMs: 300,
       onChange,
       watchWorktree: true,
-      worktreeDebounceMs: 500,
+      worktreeMinDebounceMs: 500,
+      worktreeMaxDebounceMs: 500,
       worktreeMaxWaitMs: 2000,
     });
 
@@ -296,7 +301,8 @@ describe("GitFileWatcher", () => {
       debounceMs: 300,
       onChange,
       watchWorktree: true,
-      worktreeDebounceMs: 500,
+      worktreeMinDebounceMs: 500,
+      worktreeMaxDebounceMs: 500,
       worktreeMaxWaitMs: 2000,
     });
 
@@ -313,6 +319,289 @@ describe("GitFileWatcher", () => {
     dotGitCallback?.("rename", "HEAD");
     await vi.advanceTimersByTimeAsync(300);
     expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("single worktree event flushes at minimum debounce", async () => {
+    const onChange = vi.fn();
+    let worktreeCallback: ((eventType: string, filename: string | null) => void) | undefined;
+
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      cb?: (eventType: string, filename: string | null) => void
+    ) => {
+      const w = createMockWatcher();
+      if (opts?.recursive) {
+        worktreeCallback = cb;
+      }
+      return w;
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      worktreeMinDebounceMs: 150,
+      worktreeMaxDebounceMs: 800,
+      worktreeMaxWaitMs: 1500,
+    });
+
+    expect(gitWatcher.start()).toBe(true);
+
+    worktreeCallback?.("change", "src/a.ts");
+
+    await vi.advanceTimersByTimeAsync(149);
+    expect(onChange).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("burst ramps debounce delay proportional to event count", async () => {
+    const onChange = vi.fn();
+    let worktreeCallback: ((eventType: string, filename: string | null) => void) | undefined;
+
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      cb?: (eventType: string, filename: string | null) => void
+    ) => {
+      const w = createMockWatcher();
+      if (opts?.recursive) {
+        worktreeCallback = cb;
+      }
+      return w;
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      worktreeMinDebounceMs: 150,
+      worktreeMaxDebounceMs: 800,
+      worktreeMaxWaitMs: 1500,
+    });
+
+    expect(gitWatcher.start()).toBe(true);
+
+    // Emit 5 synchronous events — delay = 150 + (5-1)*10 = 190ms
+    for (let i = 0; i < 5; i++) {
+      worktreeCallback?.("change", `src/file${i}.ts`);
+    }
+
+    await vi.advanceTimersByTimeAsync(189);
+    expect(onChange).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("ramp saturates at worktreeMaxDebounceMs ceiling", async () => {
+    const onChange = vi.fn();
+    let worktreeCallback: ((eventType: string, filename: string | null) => void) | undefined;
+
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      cb?: (eventType: string, filename: string | null) => void
+    ) => {
+      const w = createMockWatcher();
+      if (opts?.recursive) {
+        worktreeCallback = cb;
+      }
+      return w;
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      worktreeMinDebounceMs: 150,
+      worktreeMaxDebounceMs: 800,
+      // No max-wait — isolate ramp saturation from ceiling flush
+    });
+
+    expect(gitWatcher.start()).toBe(true);
+
+    // 200 synchronous events far exceed the ramp window (65 events saturate at 800ms)
+    for (let i = 0; i < 200; i++) {
+      worktreeCallback?.("change", `src/file${i}.ts`);
+    }
+
+    await vi.advanceTimersByTimeAsync(799);
+    expect(onChange).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("burst count resets after flush so next session starts at min debounce", async () => {
+    const onChange = vi.fn();
+    let worktreeCallback: ((eventType: string, filename: string | null) => void) | undefined;
+
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      cb?: (eventType: string, filename: string | null) => void
+    ) => {
+      const w = createMockWatcher();
+      if (opts?.recursive) {
+        worktreeCallback = cb;
+      }
+      return w;
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      worktreeMinDebounceMs: 150,
+      worktreeMaxDebounceMs: 800,
+      worktreeMaxWaitMs: 1500,
+    });
+
+    expect(gitWatcher.start()).toBe(true);
+
+    // Burst of 10 events → delay = 150 + 9*10 = 240ms
+    for (let i = 0; i < 10; i++) {
+      worktreeCallback?.("change", `src/a${i}.ts`);
+    }
+    await vi.advanceTimersByTimeAsync(240);
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    // Long quiet period to confirm no stale timers and no stale count
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    // New single-event session must fire at minDelay (150ms), not stale ramp (240ms)
+    worktreeCallback?.("change", "src/new.ts");
+    await vi.advanceTimersByTimeAsync(149);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves no pending timers after trailing debounce flush", async () => {
+    const onChange = vi.fn();
+    let worktreeCallback: ((eventType: string, filename: string | null) => void) | undefined;
+
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      cb?: (eventType: string, filename: string | null) => void
+    ) => {
+      const w = createMockWatcher();
+      if (opts?.recursive) {
+        worktreeCallback = cb;
+      }
+      return w;
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      worktreeMinDebounceMs: 150,
+      worktreeMaxDebounceMs: 800,
+      worktreeMaxWaitMs: 1500,
+    });
+
+    expect(gitWatcher.start()).toBe(true);
+
+    worktreeCallback?.("change", "src/a.ts");
+    worktreeCallback?.("change", "src/b.ts");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("leaves no pending timers after max-wait flush", async () => {
+    const onChange = vi.fn();
+    let worktreeCallback: ((eventType: string, filename: string | null) => void) | undefined;
+
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      cb?: (eventType: string, filename: string | null) => void
+    ) => {
+      const w = createMockWatcher();
+      if (opts?.recursive) {
+        worktreeCallback = cb;
+      }
+      return w;
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      worktreeMinDebounceMs: 500,
+      worktreeMaxDebounceMs: 500,
+      worktreeMaxWaitMs: 1500,
+    });
+
+    expect(gitWatcher.start()).toBe(true);
+
+    // Sustained burst that never lets trailing debounce fire — forces max-wait flush
+    worktreeCallback?.("change", "src/file0.ts");
+    for (let i = 1; i <= 9; i++) {
+      await vi.advanceTimersByTimeAsync(150);
+      worktreeCallback?.("change", `src/file${i}.ts`);
+    }
+    // Advance past max-wait (1500ms total from first event)
+    await vi.advanceTimersByTimeAsync(200);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("dispose during active burst prevents callback and clears timers", async () => {
+    const onChange = vi.fn();
+    let worktreeCallback: ((eventType: string, filename: string | null) => void) | undefined;
+
+    vi.mocked(watch).mockImplementation(((
+      _path: string,
+      opts: Record<string, unknown>,
+      cb?: (eventType: string, filename: string | null) => void
+    ) => {
+      const w = createMockWatcher();
+      if (opts?.recursive) {
+        worktreeCallback = cb;
+      }
+      return w;
+    }) as unknown as typeof watch);
+
+    const gitWatcher = new GitFileWatcher({
+      worktreePath: "/repo",
+      branch: "main",
+      debounceMs: 300,
+      onChange,
+      watchWorktree: true,
+      worktreeMinDebounceMs: 150,
+      worktreeMaxDebounceMs: 800,
+      worktreeMaxWaitMs: 1500,
+    });
+
+    expect(gitWatcher.start()).toBe(true);
+
+    worktreeCallback?.("change", "src/a.ts");
+    worktreeCallback?.("change", "src/b.ts");
+    gitWatcher.dispose();
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("onWatcherFailed is called when recursive watcher emits error on Linux ENOSPC", () => {

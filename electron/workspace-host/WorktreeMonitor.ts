@@ -23,7 +23,9 @@ const GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS = 1000;
 const WATCHER_FALLBACK_POLL_INTERVAL_MS = 30_000;
 const WATCHER_RETRY_INTERVAL_MS = 30_000;
 const WATCHER_MAX_RETRIES = 5;
-const WATCHER_WORKTREE_MAX_WAIT_MS = 2000;
+const WATCHER_WORKTREE_MIN_DEBOUNCE_MS = 150;
+const WATCHER_WORKTREE_MAX_DEBOUNCE_MS = 800;
+const WATCHER_WORKTREE_MAX_WAIT_MS = 1500;
 const PLAN_FILE_CANDIDATES = ["TODO.md", "PLAN.md", "plan.md", "TASKS.md"] as const;
 const RESOURCE_POLL_DEFAULT_ACTIVE_MS = 30_000;
 const RESOURCE_POLL_DEFAULT_BACKGROUND_MS = 120_000;
@@ -662,7 +664,8 @@ export class WorktreeMonitor {
       debounceMs: this.gitWatchDebounceMs,
       onChange: () => this.handleGitFileChange(),
       watchWorktree: true,
-      worktreeDebounceMs: 1000,
+      worktreeMinDebounceMs: WATCHER_WORKTREE_MIN_DEBOUNCE_MS,
+      worktreeMaxDebounceMs: WATCHER_WORKTREE_MAX_DEBOUNCE_MS,
       worktreeMaxWaitMs: WATCHER_WORKTREE_MAX_WAIT_MS,
       onWatcherFailed: () => this.handleWatcherFailed(),
     });

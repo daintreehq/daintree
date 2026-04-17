@@ -39,12 +39,14 @@ vi.mock("../../utils/gitUtils.js", () => ({
 
 let mockWatcherStartResult = false;
 let capturedOnWatcherFailed: (() => void) | undefined;
+let capturedWatcherOptions: Record<string, unknown> | undefined;
 
 vi.mock("../../utils/gitFileWatcher.js", () => {
   return {
     GitFileWatcher: class {
-      constructor(opts: { onWatcherFailed?: () => void }) {
+      constructor(opts: { onWatcherFailed?: () => void } & Record<string, unknown>) {
         capturedOnWatcherFailed = opts.onWatcherFailed;
+        capturedWatcherOptions = opts;
       }
       start() {
         return mockWatcherStartResult;
@@ -109,6 +111,7 @@ describe("WorktreeMonitor", () => {
     vi.clearAllMocks();
     mockWatcherStartResult = false;
     capturedOnWatcherFailed = undefined;
+    capturedWatcherOptions = undefined;
   });
 
   afterEach(() => {
@@ -346,6 +349,32 @@ describe("WorktreeMonitor", () => {
       await monitor.start();
 
       expect(monitor.hasWatcher).toBe(true);
+      monitor.stop();
+    });
+
+    it("constructs GitFileWatcher with adaptive worktree debounce options", async () => {
+      mockWatcherStartResult = true;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      expect(capturedWatcherOptions).toBeDefined();
+      expect(capturedWatcherOptions).toMatchObject({
+        watchWorktree: true,
+        worktreeMinDebounceMs: 150,
+        worktreeMaxDebounceMs: 800,
+        worktreeMaxWaitMs: 1500,
+      });
+      expect(capturedWatcherOptions).not.toHaveProperty("worktreeDebounceMs");
+
       monitor.stop();
     });
 
