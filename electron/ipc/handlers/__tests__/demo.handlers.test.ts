@@ -15,7 +15,6 @@ vi.mock("crypto", () => ({
 }));
 
 vi.mock("fs", () => ({
-  readdirSync: vi.fn(() => ["frame-000001.png", "frame-000002.png", "frame-000003.png"]),
   mkdirSync: vi.fn(),
 }));
 
@@ -25,21 +24,15 @@ class MockStdin extends EventEmitter {
 }
 
 let mockProc: EventEmitter & {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
   stdin: MockStdin;
   kill: ReturnType<typeof vi.fn>;
 };
 
 function createMockProc() {
   const proc = new EventEmitter() as EventEmitter & {
-    stdout: EventEmitter;
-    stderr: EventEmitter;
     stdin: MockStdin;
     kill: ReturnType<typeof vi.fn>;
   };
-  proc.stdout = new EventEmitter();
-  proc.stderr = new EventEmitter();
   proc.stdin = new MockStdin();
   proc.kill = vi.fn();
   return proc;
@@ -121,6 +114,7 @@ describe("registerDemoHandlers", () => {
     expect(channels).toContain("demo:start-capture");
     expect(channels).toContain("demo:stop-capture");
     expect(channels).toContain("demo:get-capture-status");
+    expect(channels).not.toContain("demo:encode");
     expect(channels).toContain("demo:scroll");
     expect(channels).toContain("demo:drag");
     expect(channels).toContain("demo:press-key");
@@ -156,6 +150,7 @@ describe("registerDemoHandlers", () => {
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:start-capture");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:stop-capture");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:get-capture-status");
+    expect(ipcMainMock.removeHandler).not.toHaveBeenCalledWith("demo:encode");
   });
 
   it("screenshot handler returns Uint8Array with PNG magic bytes", async () => {
