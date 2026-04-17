@@ -10,13 +10,11 @@ vi.mock("electron", () => ({
   },
 }));
 
-const { mockGetCurrentProject, mockGetProjectById, mockGetProjectSettings, mockGetMonitorAsync } =
-  vi.hoisted(() => ({
-    mockGetCurrentProject: vi.fn(),
-    mockGetProjectById: vi.fn(),
-    mockGetProjectSettings: vi.fn(),
-    mockGetMonitorAsync: vi.fn(),
-  }));
+const { mockGetCurrentProject, mockGetProjectById, mockGetProjectSettings } = vi.hoisted(() => ({
+  mockGetCurrentProject: vi.fn(),
+  mockGetProjectById: vi.fn(),
+  mockGetProjectSettings: vi.fn(),
+}));
 
 vi.mock("../../../../services/ProjectStore.js", () => ({
   projectStore: {

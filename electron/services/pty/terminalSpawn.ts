@@ -65,7 +65,6 @@ export function buildTerminalEnv(
       paneId: id,
       cwd: options.cwd,
       projectId: options.projectId,
-      worktreeId: options.worktreeId,
     }
   );
 

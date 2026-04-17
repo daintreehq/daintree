@@ -487,6 +487,11 @@ export async function hydrateAppState(
                         saved,
                         projectRoot || ""
                       );
+                      // Assign to active worktree when a legacy saved panel has
+                      // no worktreeId (mirrors the matched-backend path).
+                      if (!reconnectArgs.worktreeId && activeWorktreeId) {
+                        reconnectArgs.worktreeId = activeWorktreeId;
+                      }
                       const restoredTerminalId = await addPanel(reconnectArgs);
                       restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 

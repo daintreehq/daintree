@@ -327,8 +327,8 @@ export function buildArgsForNonPtyRecreation(
 /**
  * Infer a worktreeId from a terminal's cwd by longest-prefix matching against the
  * worktrees list. Returns undefined when no worktree's path is a prefix of cwd.
- * Uses segment-aware matching to avoid false positives where `/repo/wt` would
- * match `/repo/wt-long`.
+ * Uses segment-aware matching (both POSIX and Windows separators) to avoid false
+ * positives where `/repo/wt` would match `/repo/wt-long`.
  */
 export function inferWorktreeIdFromCwd(
   cwd: string | undefined,
@@ -338,7 +338,7 @@ export function inferWorktreeIdFromCwd(
   let best: { id: string; path: string } | undefined;
   for (const wt of worktrees) {
     if (!wt.path) continue;
-    if (cwd === wt.path || cwd.startsWith(wt.path + "/")) {
+    if (cwd === wt.path || cwd.startsWith(wt.path + "/") || cwd.startsWith(wt.path + "\\")) {
       if (!best || wt.path.length > best.path.length) {
         best = wt;
       }

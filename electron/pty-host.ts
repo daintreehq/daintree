@@ -493,6 +493,7 @@ events.on("agent:state-changed", (payload) => {
       traceId: payload.traceId,
       trigger: payload.trigger,
       confidence: payload.confidence,
+      cwd: payload.cwd,
       waitingReason: payload.waitingReason,
       sessionCost: payload.sessionCost,
       sessionTokens: payload.sessionTokens,

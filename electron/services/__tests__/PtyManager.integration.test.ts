@@ -179,13 +179,13 @@ describe.skipIf(shouldSkip)("PtyManager Integration", () => {
       expect(terminal?.type).toBe("claude");
     }, 10000);
 
-    it("should store worktree ID", async () => {
-      const id = await spawnShellTerminal(manager, { worktreeId: "test-worktree" });
+    it("should spawn successfully without worktreeId (renderer-owned layout state, #5139)", async () => {
+      const id = await spawnShellTerminal(manager);
 
       const terminal = manager.getTerminal(id);
 
       expect(terminal).toBeDefined();
-      expect(terminal?.worktreeId).toBe("test-worktree");
+      expect(terminal?.id).toBe(id);
     }, 10000);
 
     it("should track spawned timestamp", async () => {

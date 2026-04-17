@@ -184,7 +184,7 @@ export function getShellCommand(command: string): { shell: string; args: string[
 export async function spawnEchoTerminal(
   manager: PtyManager,
   message: string,
-  options?: { type?: string; worktreeId?: string }
+  options?: { type?: string }
 ): Promise<string> {
   const { shell, args } = getShellCommand(`echo "${message}"`);
   const id = randomUUID();
@@ -196,7 +196,6 @@ export async function spawnEchoTerminal(
     cols: 80,
     rows: 24,
     type: options?.type as any,
-    worktreeId: options?.worktreeId,
   });
 
   return id;
@@ -207,7 +206,6 @@ export async function spawnShellTerminal(
   options?: {
     cwd?: string;
     type?: string;
-    worktreeId?: string;
     projectId?: string;
     cols?: number;
     rows?: number;
@@ -228,7 +226,6 @@ export async function spawnShellTerminal(
     cols: options?.cols || 80,
     rows: options?.rows || 24,
     type: options?.type as any,
-    worktreeId: options?.worktreeId,
     projectId: options?.projectId,
     kind: isAgent ? "agent" : (options?.kind ?? "terminal"),
     agentId: isAgent ? id : undefined,

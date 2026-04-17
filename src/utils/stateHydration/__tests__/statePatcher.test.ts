@@ -678,6 +678,11 @@ describe("inferWorktreeIdFromCwd", () => {
     expect(inferWorktreeIdFromCwd("/a", [])).toBeUndefined();
     expect(inferWorktreeIdFromCwd("/a", undefined)).toBeUndefined();
   });
+
+  it("matches Windows-style paths with backslash separators", () => {
+    const worktrees = [{ id: "C:\\repo\\wt-a", path: "C:\\repo\\wt-a" }];
+    expect(inferWorktreeIdFromCwd("C:\\repo\\wt-a\\src\\lib", worktrees)).toBe("C:\\repo\\wt-a");
+  });
 });
 
 describe("buildArgsForBackendTerminal — extensionState", () => {

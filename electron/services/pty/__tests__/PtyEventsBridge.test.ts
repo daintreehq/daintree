@@ -48,7 +48,7 @@ describe("bridgePtyEvent", () => {
       timestamp: Date.now(),
       trigger: "activity",
       confidence: 1.0,
-      worktreeId: "wt-1",
+      cwd: "/repo/wt-1",
       waitingReason: "prompt",
     });
 
