@@ -49,6 +49,7 @@ const registerMocks = vi.hoisted(() => ({
   registerHelpHandlers: vi.fn(),
   registerClipboardHandlers: vi.fn(),
   registerGitWriteHandlers: vi.fn(),
+  registerGitReadHandlers: vi.fn(),
   registerTelemetryHandlers: vi.fn(),
   registerPrivacyHandlers: vi.fn(),
   registerOnboardingHandlers: vi.fn(),
@@ -170,6 +171,9 @@ vi.mock("../handlers/clipboard.js", () => ({
 }));
 vi.mock("../handlers/git-write.js", () => ({
   registerGitWriteHandlers: registerMocks.registerGitWriteHandlers,
+}));
+vi.mock("../handlers/git-read.js", () => ({
+  registerGitReadHandlers: registerMocks.registerGitReadHandlers,
 }));
 vi.mock("../handlers/telemetry.js", () => ({
   registerTelemetryHandlers: registerMocks.registerTelemetryHandlers,
