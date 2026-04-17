@@ -16,18 +16,77 @@ const root = path.resolve(here, "../..");
 const CHANNELS_FILE = path.join(root, "electron/ipc/channels.ts");
 const PRELOAD_FILE = path.join(root, "electron/preload.cts");
 
+const CHANNELS_ANCHOR = /(?:^|\s)CHANNELS\s*=\s*\{/;
 const ENTRY_RE = /^\s+([A-Z][A-Z0-9_]*):\s+"([^"]+)",?$/gm;
 
+// Slice the body of the `CHANNELS = { ... }` object literal out of `src`.
+// Walks from the opening `{` to its matching `}`, tracking string/comment state
+// so braces inside values or block comments don't throw off the depth counter.
+function extractChannelsBody(src, filePath) {
+  const anchor = src.match(CHANNELS_ANCHOR);
+  if (!anchor) {
+    console.error(`::error file=${filePath}::could not locate \`CHANNELS = {\` in source`);
+    process.exit(1);
+  }
+  const openIdx = src.indexOf("{", anchor.index);
+  let depth = 1;
+  let i = openIdx + 1;
+  let inString = false;
+  let stringQuote = "";
+  let inLineComment = false;
+  let inBlockComment = false;
+  while (i < src.length && depth > 0) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (inLineComment) {
+      if (ch === "\n") inLineComment = false;
+    } else if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+    } else if (inString) {
+      if (ch === "\\") {
+        i++;
+      } else if (ch === stringQuote) {
+        inString = false;
+      }
+    } else if (ch === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+    } else if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+    } else if (ch === '"' || ch === "'" || ch === "`") {
+      inString = true;
+      stringQuote = ch;
+    } else if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) return src.slice(openIdx + 1, i);
+    }
+    i++;
+  }
+  console.error(`::error file=${filePath}::unterminated \`CHANNELS = {\` — missing closing brace`);
+  process.exit(1);
+}
+
 function parseChannels(src, filePath) {
+  const body = extractChannelsBody(src, filePath);
   const map = new Map();
   const re = new RegExp(ENTRY_RE.source, ENTRY_RE.flags);
   let m;
-  while ((m = re.exec(src)) !== null) {
+  while ((m = re.exec(body)) !== null) {
+    if (map.has(m[1])) {
+      console.error(`::error file=${filePath}::duplicate channel key ${m[1]}`);
+      process.exit(1);
+    }
     map.set(m[1], m[2]);
   }
   if (map.size === 0) {
     console.error(
-      `::error file=${filePath}::parsed zero channel entries — file format may have changed`
+      `::error file=${filePath}::parsed zero channel entries from CHANNELS block — file format may have changed`
     );
     process.exit(1);
   }
