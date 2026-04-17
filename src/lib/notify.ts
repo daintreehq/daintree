@@ -55,6 +55,8 @@ export interface NotifyPayload {
   countable?: boolean;
   /** When true, the notification bypasses the startup quiet period gate */
   urgent?: boolean;
+  /** Fires exactly once when the user explicitly dismisses the toast via the close or action button */
+  onDismiss?: () => void;
 }
 
 interface CoalesceEntry {

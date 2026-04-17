@@ -200,6 +200,8 @@ export interface StoreSchema {
   orchestrationMilestones: Record<string, boolean>;
   shortcutHintCounts: Record<string, number>;
   updateChannel: "stable" | "nightly";
+  dismissedUpdateVersion?: string;
+  dismissedUpdateAt?: number;
 }
 
 const storeOptions = {

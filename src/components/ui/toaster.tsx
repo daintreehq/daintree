@@ -52,11 +52,22 @@ function Toast({ notification }: { notification: Notification }) {
   }, []);
 
   const handleDismiss = useCallback(() => {
+    // If the notification is already dismissed, this click came in during the
+    // 300ms fade after an eviction (or a double-click race). Skip the
+    // user-dismiss callback so eviction/reentrancy don't fire onDismiss.
+    if (notification.dismissed) return;
     restoreFocus();
+    // Fire onDismiss exactly once, before marking dismissed, so callers see
+    // a clean user-driven signal distinct from MAX_VISIBLE_TOASTS eviction.
+    try {
+      notification.onDismiss?.();
+    } catch (err) {
+      console.error("[Toast] onDismiss handler threw:", err);
+    }
     dismissNotification(notification.id);
     setIsVisible(false);
     setTimeout(() => removeNotification(notification.id), 300);
-  }, [notification.id, dismissNotification, removeNotification, restoreFocus]);
+  }, [notification, dismissNotification, removeNotification, restoreFocus]);
 
   useEffect(() => {
     if (notification.dismissed && isVisible) {

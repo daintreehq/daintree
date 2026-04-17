@@ -3,6 +3,7 @@ import path from "path";
 import { app, ipcMain } from "electron";
 import electronUpdater from "electron-updater";
 import type { UpdateInfo, ProgressInfo } from "electron-updater";
+import * as semver from "semver";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { getCrashRecoveryService } from "./CrashRecoveryService.js";
@@ -10,6 +11,7 @@ import { store } from "../store.js";
 import { PRODUCT_NAME } from "../utils/productBranding.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+const DISMISS_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
 // The legacy Canopy variant uses its own updater feed and does not ship a
 // nightly channel — nightly falls back to the Canopy stable feed so a user
 // who previously opted into nightly doesn't get stranded.
@@ -27,12 +29,62 @@ class AutoUpdaterService {
   private channelHandlersRegistered = false;
   private updateDownloaded = false;
   private isManualCheck = false;
+  private lastBroadcastVersion: string | null = null;
   private checkingHandler: (() => void) | null = null;
   private availableHandler: ((info: UpdateInfo) => void) | null = null;
   private notAvailableHandler: ((info: UpdateInfo) => void) | null = null;
   private errorHandler: ((err: Error) => void) | null = null;
   private progressHandler: ((progress: ProgressInfo) => void) | null = null;
   private downloadedHandler: ((info: UpdateInfo) => void) | null = null;
+
+  private shouldSuppressUpdateAvailable(version: string): boolean {
+    // Manual checks always bypass suppression so users see a result.
+    if (this.isManualCheck) return false;
+
+    // In-session dedup: electron-updater refires `update-available` on every
+    // poll for the same pending version. Swallow repeats within this session.
+    if (this.lastBroadcastVersion === version) return true;
+
+    const dismissedVersion = store.get("dismissedUpdateVersion");
+    const dismissedAt = store.get("dismissedUpdateAt");
+    if (
+      typeof dismissedVersion !== "string" ||
+      typeof dismissedAt !== "number" ||
+      !Number.isFinite(dismissedAt)
+    ) {
+      // Corrupt record (e.g., NaN/Infinity from a future writer or hand-edited
+      // config) — clear it and fall through so the user still sees updates.
+      if (typeof dismissedVersion === "string" || typeof dismissedAt === "number") {
+        store.delete("dismissedUpdateVersion");
+        store.delete("dismissedUpdateAt");
+      }
+      return false;
+    }
+
+    // Newer version bypasses the cooldown. If either side fails to coerce,
+    // fall back to not-newer (fail closed — keep suppressing) to match the
+    // AgentVersionService pattern.
+    const incoming = semver.coerce(version);
+    const dismissed = semver.coerce(dismissedVersion);
+    if (incoming && dismissed) {
+      try {
+        if (semver.gt(incoming, dismissed)) return false;
+      } catch {
+        // fall through
+      }
+    }
+
+    const elapsed = Date.now() - dismissedAt;
+    if (elapsed < 0 || elapsed >= DISMISS_COOLDOWN_MS) {
+      // Cooldown expired (or clock skew) — clear stale record and broadcast.
+      store.delete("dismissedUpdateVersion");
+      store.delete("dismissedUpdateAt");
+      return false;
+    }
+
+    // Same version is still within the 24h cooldown.
+    return dismissedVersion === version;
+  }
 
   private configureFeedForChannel(channel: "stable" | "nightly"): void {
     // The legacy Canopy variant has no nightly channel — pin to stable so the
@@ -152,7 +204,10 @@ class AutoUpdaterService {
 
       this.availableHandler = (info: UpdateInfo) => {
         console.log("[MAIN] Update available:", info.version);
+        const suppressed = this.shouldSuppressUpdateAvailable(info.version);
         this.isManualCheck = false;
+        if (suppressed) return;
+        this.lastBroadcastVersion = info.version;
         broadcastToRenderer(CHANNELS.UPDATE_AVAILABLE, { version: info.version });
       };
       autoUpdater.on("update-available", this.availableHandler);
@@ -218,6 +273,15 @@ class AutoUpdaterService {
       // Handle manual check-for-updates request from renderer
       ipcMain.handle(CHANNELS.UPDATE_CHECK_FOR_UPDATES, () => {
         this.checkForUpdatesManually();
+      });
+
+      // Persist dismiss of the "Update Available" toast — the renderer sends
+      // this when the user closes the toast so the same version is suppressed
+      // across app restarts for the 24h cooldown window.
+      ipcMain.handle(CHANNELS.UPDATE_DISMISS_TOAST, (_event, version: unknown) => {
+        if (typeof version !== "string" || version.trim().length === 0) return;
+        store.set("dismissedUpdateVersion", version);
+        store.set("dismissedUpdateAt", Date.now());
       });
 
       this.runUpdateCheck("Initial");
@@ -289,8 +353,15 @@ class AutoUpdaterService {
       // Handler may not have been registered
     }
 
+    try {
+      ipcMain.removeHandler(CHANNELS.UPDATE_DISMISS_TOAST);
+    } catch {
+      // Handler may not have been registered
+    }
+
     this.updateDownloaded = false;
     this.isManualCheck = false;
+    this.lastBroadcastVersion = null;
     this.channelHandlersRegistered = false;
     this.initialized = false;
   }

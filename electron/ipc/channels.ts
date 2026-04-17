@@ -389,6 +389,7 @@ export const CHANNELS = {
   UPDATE_CHECK_FOR_UPDATES: "update:check-for-updates",
   UPDATE_GET_CHANNEL: "update:get-channel",
   UPDATE_SET_CHANNEL: "update:set-channel",
+  UPDATE_DISMISS_TOAST: "update:dismiss-toast",
 
   SLASH_COMMANDS_LIST: "slash-commands:list",
 

@@ -269,6 +269,90 @@ describe("Toast accessibility", () => {
     expect(screen.queryByText("Updated")).toBeNull();
   });
 
+  it("fires onDismiss when the user clicks the close button", async () => {
+    const onDismiss = vi.fn();
+    render(<Toaster />);
+    await act(async () => {
+      addToast({ onDismiss });
+      vi.advanceTimersByTime(16);
+    });
+
+    const dismissButton = screen.getByLabelText("Dismiss notification");
+    await act(async () => {
+      fireEvent.click(dismissButton);
+    });
+
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT fire onDismiss when the toast was programmatically dismissed (e.g. eviction)", async () => {
+    const onDismiss = vi.fn();
+    render(<Toaster />);
+    let toastId: string;
+    await act(async () => {
+      toastId = addToast({ onDismiss });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Simulate MAX_VISIBLE_TOASTS eviction: dismissed flag gets set externally,
+    // without the user ever clicking the X button.
+    await act(async () => {
+      useNotificationStore.getState().dismissNotification(toastId!);
+    });
+
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it("does NOT double-fire onDismiss during the eviction fade window if the user then clicks X", async () => {
+    const onDismiss = vi.fn();
+    render(<Toaster />);
+    let toastId: string;
+    await act(async () => {
+      toastId = addToast({ onDismiss });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Eviction-style dismissal already flipped `dismissed: true`.
+    await act(async () => {
+      useNotificationStore.getState().dismissNotification(toastId!);
+    });
+
+    // User clicks X during the 300ms fade window before removeNotification.
+    const dismissButton = screen.getByLabelText("Dismiss notification");
+    await act(async () => {
+      fireEvent.click(dismissButton);
+    });
+
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it("still dismisses the toast when the onDismiss handler throws synchronously", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        onDismiss: () => {
+          throw new Error("boom");
+        },
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    const dismissButton = screen.getByLabelText("Dismiss notification");
+    await act(async () => {
+      fireEvent.click(dismissButton);
+    });
+
+    // Toast still enters the fade-out path; after the 300ms cleanup runs it
+    // is removed from the store entirely.
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(screen.queryByText("Test message")).toBeNull();
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
   it("re-announces via screen reader when updatedAt changes", async () => {
     render(<Toaster />);
     let toastId: string;

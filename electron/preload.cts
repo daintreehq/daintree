@@ -916,6 +916,7 @@ const CHANNELS = {
   UPDATE_CHECK_FOR_UPDATES: "update:check-for-updates",
   UPDATE_GET_CHANNEL: "update:get-channel",
   UPDATE_SET_CHANNEL: "update:set-channel",
+  UPDATE_DISMISS_TOAST: "update:dismiss-toast",
 
   // Slash command channels
   SLASH_COMMANDS_LIST: "slash-commands:list",
@@ -2486,6 +2487,8 @@ const api: ElectronAPI = {
 
     setChannel: (channel: "stable" | "nightly") =>
       _unwrappingInvoke(CHANNELS.UPDATE_SET_CHANNEL, channel),
+
+    notifyDismiss: (version: string) => _unwrappingInvoke(CHANNELS.UPDATE_DISMISS_TOAST, version),
   },
 
   // Gemini API

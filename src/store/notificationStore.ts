@@ -37,6 +37,13 @@ export interface Notification {
   updatedAt?: number;
   /** Links this toast to its notification history entry for overflow tracking */
   historyEntryId?: string;
+  /**
+   * Fires exactly once when the user closes the toast via the close button
+   * (or an action button). Does NOT fire on MAX_VISIBLE_TOASTS eviction or on
+   * programmatic dismissNotification from elsewhere — only on the user-driven
+   * Toast handleDismiss path.
+   */
+  onDismiss?: () => void;
 }
 
 export type NotificationPatch = Partial<Omit<Notification, "id">>;
