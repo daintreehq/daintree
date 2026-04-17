@@ -95,7 +95,7 @@ export class CcrConfigService {
       }
     };
 
-    poll();
+    void poll().catch(() => {});
   }
 
   stopWatching(): void {

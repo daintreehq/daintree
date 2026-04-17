@@ -169,14 +169,13 @@ export function getMergedFlavor(
   customFlavors?: AgentFlavor[],
   ccrFlavors?: AgentFlavor[]
 ): AgentFlavor | undefined {
+  if (flavorId !== undefined && !flavorId) return undefined;
+  const config = getAgentConfig(agentId);
+  const merged = getMergedFlavors(agentId, customFlavors, ccrFlavors ?? config?.flavors ?? []);
   if (flavorId === undefined) {
-    const merged = getMergedFlavors(agentId, customFlavors, ccrFlavors);
-    const config = getAgentConfig(agentId);
     const defaultId = config?.defaultFlavorId;
     if (defaultId) return merged.find((f) => f.id === defaultId);
     return merged[0];
   }
-  if (!flavorId) return undefined;
-  const merged = getMergedFlavors(agentId, customFlavors, ccrFlavors);
   return merged.find((f) => f.id === flavorId);
 }
