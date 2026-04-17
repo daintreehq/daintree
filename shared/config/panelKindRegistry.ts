@@ -299,3 +299,19 @@ export function panelKindKeepsAliveOnProjectSwitch(kind: PanelKind): boolean {
 export function getBuiltInPanelKinds(): BuiltInPanelKind[] {
   return ["terminal", "agent", "browser", "notes", "dev-preview"];
 }
+
+/**
+ * Remove all extension-contributed panel kinds while preserving built-ins.
+ *
+ * Built-in entries have no `extensionId` field, so this deletes only entries
+ * registered via plugins. Intended for test cleanup — in a singleFork Vitest
+ * pool the module-level registry persists across tests, so integration tests
+ * must clear extension entries between cases.
+ */
+export function clearPanelKindRegistry(): void {
+  for (const [key, config] of Object.entries(PANEL_KIND_REGISTRY)) {
+    if (config.extensionId !== undefined) {
+      delete PANEL_KIND_REGISTRY[key];
+    }
+  }
+}

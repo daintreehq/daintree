@@ -6,6 +6,8 @@ import {
   panelKindUsesTerminalUi,
   registerPanelKind,
   unregisterPluginPanelKinds,
+  clearPanelKindRegistry,
+  getBuiltInPanelKinds,
   type PanelKindConfig,
 } from "../panelKindRegistry.js";
 
@@ -126,5 +128,57 @@ describe("unregisterPluginPanelKinds", () => {
 
     expect(getPanelKindConfig("ext-a.panel")).toBeUndefined();
     expect(getPanelKindConfig("ext-b.panel")?.extensionId).toBe("ext-b");
+  });
+});
+
+describe("clearPanelKindRegistry", () => {
+  afterEach(() => {
+    clearPanelKindRegistry();
+  });
+
+  it("removes extension-contributed panel kinds", () => {
+    registerPanelKind({
+      id: "ext-plugin.viewer",
+      name: "Viewer",
+      iconId: "eye",
+      color: "#ff0000",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "ext-plugin",
+    });
+    expect(getPanelKindConfig("ext-plugin.viewer")).toBeDefined();
+
+    clearPanelKindRegistry();
+
+    expect(getPanelKindConfig("ext-plugin.viewer")).toBeUndefined();
+  });
+
+  it("preserves all built-in panel kinds", () => {
+    registerPanelKind({
+      id: "ext-plugin.tmp",
+      name: "Tmp",
+      iconId: "eye",
+      color: "#000",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "ext-plugin",
+    });
+
+    clearPanelKindRegistry();
+
+    for (const kind of getBuiltInPanelKinds()) {
+      const config = getPanelKindConfig(kind);
+      expect(config).toBeDefined();
+      expect(config!.id).toBe(kind);
+    }
+  });
+
+  it("is a no-op when no extension entries are registered", () => {
+    expect(() => clearPanelKindRegistry()).not.toThrow();
+    for (const kind of getBuiltInPanelKinds()) {
+      expect(getPanelKindConfig(kind)).toBeDefined();
+    }
   });
 });
