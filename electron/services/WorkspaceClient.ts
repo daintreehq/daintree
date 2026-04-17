@@ -46,6 +46,14 @@ interface ProcessEntry {
   host: WorkspaceHostProcess;
   refCount: number;
   initPromise: Promise<void>;
+  /**
+   * Tracks the most recent readiness promise for this entry. Starts as
+   * `initPromise` and is replaced by the `reloadProjectAfterRestart` promise
+   * whenever the host restarts, so `waitForReady()` blocks until the restarted
+   * host has finished loading the project. `initPromise` is retained unchanged
+   * for the poisoned-entry detection in `loadProject`.
+   */
+  currentReadyPromise: Promise<void>;
   cleanupTimeout: NodeJS.Timeout | null;
   windowIds: Set<number>;
   projectPath: string;
@@ -75,7 +83,7 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   async waitForReady(): Promise<void> {
-    const promises = [...this.entries.values()].map((e) => e.initPromise);
+    const promises = [...this.entries.values()].map((e) => e.currentReadyPromise);
     if (promises.length === 0) return;
     await Promise.all(promises);
   }
@@ -145,8 +153,15 @@ export class WorkspaceClient extends EventEmitter {
     });
 
     host.on("restarted", () => {
-      this.reloadProjectAfterRestart(entry).catch((err) => {
+      const restartPromise = this.reloadProjectAfterRestart(entry);
+      // Gate `waitForReady()` on the restart reload so callers (e.g. the
+      // power-monitor resume handler) don't send follow-up requests to a host
+      // that hasn't finished `load-project` yet.
+      entry.currentReadyPromise = restartPromise.catch((err) => {
         console.error(`[WorkspaceClient] Failed to reload project after host restart:`, err);
+        // Swallow the rejection so subsequent `waitForReady()` calls don't
+        // hang forever on a failed reload — downstream IPC calls already
+        // tolerate a partially-broken host.
       });
     });
   }
@@ -410,6 +425,7 @@ export class WorkspaceClient extends EventEmitter {
       host,
       refCount: 1,
       initPromise,
+      currentReadyPromise: initPromise,
       cleanupTimeout: null,
       windowIds: new Set([windowId]),
       projectPath: normalizedPath,
@@ -472,6 +488,7 @@ export class WorkspaceClient extends EventEmitter {
       host,
       refCount: 0,
       initPromise,
+      currentReadyPromise: initPromise,
       cleanupTimeout: null,
       windowIds: new Set(),
       projectPath: normalizedPath,
