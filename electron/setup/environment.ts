@@ -305,9 +305,8 @@ if (process.platform === "linux") {
 
 app.commandLine.appendSwitch("enable-features", enabledFeatures.join(","));
 
-// Cap GPU tile memory budget and disable MSAA to reduce VRAM usage
-app.commandLine.appendSwitch("force-gpu-mem-available-mb", "512");
-app.commandLine.appendSwitch("gpu-rasterization-msaa-sample-count", "0");
+// Raise GPU tile memory budget to keep Retina/multi-panel rendering from exhausting Chromium's default cap
+app.commandLine.appendSwitch("force-gpu-mem-available-mb", "1024");
 
 if (process.platform === "win32") {
   const extraPaths = getWindowsExtraPaths();

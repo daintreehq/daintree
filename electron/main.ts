@@ -109,10 +109,8 @@ app.commandLine.appendSwitch(
 // Allow autoplay without user gesture (voice input, media panels).
 // Per-view throttling is managed by ProjectViewManager.setBackgroundThrottling().
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
-// Disable unused Chromium features: BackForwardCache wastes memory (no browser navigation),
-// CalculateNativeWinOcclusion causes unnecessary power usage on macOS
+// BackForwardCache wastes memory in an Electron app (no browser navigation history).
 const disabledFeatures = ["BackForwardCache"];
-if (process.platform === "darwin") disabledFeatures.push("CalculateNativeWinOcclusion");
 app.commandLine.appendSwitch("disable-features", disabledFeatures.join(","));
 
 const __filename = fileURLToPath(import.meta.url);
