@@ -937,12 +937,20 @@ const CHANNELS = {
   APP_AGENT_HAS_API_KEY: "app-agent:has-api-key",
   APP_AGENT_TEST_API_KEY: "app-agent:test-api-key",
   APP_AGENT_TEST_MODEL: "app-agent:test-model",
+  APP_AGENT_DISPATCH_ACTION_REQUEST: "app-agent:dispatch-action-request",
+  APP_AGENT_DISPATCH_ACTION_RESPONSE: "app-agent:dispatch-action-response",
+  APP_AGENT_CONFIRMATION_REQUEST: "app-agent:confirmation-request",
+  APP_AGENT_CONFIRMATION_RESPONSE: "app-agent:confirmation-response",
 
   // Agent Capabilities channels
   AGENT_CAPABILITIES_GET_REGISTRY: "agent-capabilities:get-registry",
   AGENT_CAPABILITIES_GET_AGENT_IDS: "agent-capabilities:get-agent-ids",
   AGENT_CAPABILITIES_GET_AGENT_METADATA: "agent-capabilities:get-agent-metadata",
   AGENT_CAPABILITIES_IS_AGENT_ENABLED: "agent-capabilities:is-agent-enabled",
+
+  // Daintree CLI install channels
+  CLI_INSTALL: "cli:install",
+  CLI_GET_STATUS: "cli:get-status",
 
   // Help workspace channels
   HELP_GET_FOLDER_PATH: "help:get-folder-path",
@@ -2580,15 +2588,15 @@ const api: ElectronAPI = {
           confirmed?: boolean;
         }
       ) => callback(payload);
-      ipcRenderer.on("app-agent:dispatch-action-request", handler);
-      return () => ipcRenderer.removeListener("app-agent:dispatch-action-request", handler);
+      ipcRenderer.on(CHANNELS.APP_AGENT_DISPATCH_ACTION_REQUEST, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.APP_AGENT_DISPATCH_ACTION_REQUEST, handler);
     },
 
     // Send action dispatch response back to main process
     sendDispatchActionResponse: (payload: {
       requestId: string;
       result: { ok: boolean; result?: unknown; error?: { code: string; message: string } };
-    }) => ipcRenderer.send("app-agent:dispatch-action-response", payload),
+    }) => ipcRenderer.send(CHANNELS.APP_AGENT_DISPATCH_ACTION_RESPONSE, payload),
 
     // Listen for action confirmation requests from main process
     onConfirmationRequest: (
@@ -2610,13 +2618,13 @@ const api: ElectronAPI = {
           danger: "safe" | "confirm" | "restricted";
         }
       ) => callback(payload);
-      ipcRenderer.on("app-agent:confirmation-request", handler);
-      return () => ipcRenderer.removeListener("app-agent:confirmation-request", handler);
+      ipcRenderer.on(CHANNELS.APP_AGENT_CONFIRMATION_REQUEST, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.APP_AGENT_CONFIRMATION_REQUEST, handler);
     },
 
     // Send confirmation response back to main process
     sendConfirmationResponse: (payload: { requestId: string; approved: boolean }) =>
-      ipcRenderer.send("app-agent:confirmation-response", payload),
+      ipcRenderer.send(CHANNELS.APP_AGENT_CONFIRMATION_RESPONSE, payload),
   },
 
   // Agent Capabilities API
