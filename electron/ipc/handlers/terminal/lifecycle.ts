@@ -36,7 +36,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
     const bypassedRateLimit = validatedOptions.restore === true && consumeRestoreQuota();
     if (!bypassedRateLimit) {
-      await waitForRateLimitSlot("terminalSpawn", 10, 30_000);
+      await waitForRateLimitSlot("terminalSpawn", 1_000);
     }
 
     const cols = Math.max(1, Math.min(500, Math.floor(validatedOptions.cols) || 80));

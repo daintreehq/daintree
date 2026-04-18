@@ -31,7 +31,7 @@ vi.mock("../../../../services/pty/terminalShell.js", () => ({
   getDefaultShell: vi.fn(() => "/bin/zsh"),
 }));
 
-vi.mock("../../utils.js", () => ({
+vi.mock("../../../utils.js", () => ({
   waitForRateLimitSlot: vi.fn(async () => {}),
   consumeRestoreQuota: vi.fn(() => false),
   typedHandle: (channel: string, handler: unknown) => {
