@@ -9,6 +9,37 @@ import {
 import { SETTINGS_SEARCH_INDEX } from "../settingsSearchIndex";
 import type { SettingsTab } from "../SettingsDialog";
 
+// Golden query regression test dataset
+const GOLDEN_QUERIES = [
+  { query: "theme", expectedTopResults: ["appearance-theme"] },
+  { query: "font", expectedTopResults: ["appearance-font-size", "appearance-font-family"] },
+  { query: "dark", expectedTopResults: ["appearance-theme"] },
+  { query: "shortcut", expectedTopResults: ["keyboard-shortcuts"] },
+  { query: "keybinding", expectedTopResults: ["keyboard-shortcuts"] },
+  { query: "keyboard", expectedTopResults: ["keyboard-shortcuts"] },
+  {
+    query: "notification",
+    expectedTopResults: ["notifications-sound", "notifications-completed", "tab-nav-notifications"],
+  },
+  {
+    query: "notifications",
+    expectedTopResults: ["tab-nav-notifications", "notifications-sound", "notifications-completed"],
+  },
+  { query: "sound", expectedTopResults: ["notifications-sound"] },
+  { query: "agent", expectedTopResults: ["agents-default-agent"] },
+  { query: "scrollback", expectedTopResults: ["terminal-scrollback"] },
+  { query: "telemetry", expectedTopResults: ["privacy-telemetry-level", "tab-nav-privacy"] },
+  { query: "env", expectedTopResults: ["tab-nav-environment", "environment-variables"] },
+  { query: "environment", expectedTopResults: ["tab-nav-environment"] },
+  { query: "worktree", expectedTopResults: ["tab-nav-worktree", "worktree-path-pattern"] },
+  { query: "update", expectedTopResults: ["general-update-channel"] },
+  { query: "voice", expectedTopResults: ["tab-nav-voice", "voice-enable"] },
+  { query: "microphone", expectedTopResults: ["tab-nav-voice", "voice-enable"] },
+  { query: "appearance", expectedTopResults: ["tab-nav-terminalAppearance", "appearance-theme"] },
+  { query: "hibernate", expectedTopResults: ["general-hibernation"] },
+  { query: "github", expectedTopResults: ["github-token", "tab-nav-github"] },
+] as const;
+
 describe("filterSettings", () => {
   it("returns empty array for empty query", () => {
     expect(filterSettings(SETTINGS_SEARCH_INDEX, "")).toHaveLength(0);
@@ -710,4 +741,50 @@ describe("help dock discoverability", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "keyboard shortcut");
     expect(results.some((r) => r.id === "agents-default-agent")).toBe(true);
   });
+});
+
+describe("golden-query fixture validity", () => {
+  const allIds = new Set(SETTINGS_SEARCH_INDEX.map((e) => e.id));
+
+  it("every expected ID in GOLDEN_QUERIES exists in SETTINGS_SEARCH_INDEX", () => {
+    for (const { query, expectedTopResults } of GOLDEN_QUERIES) {
+      for (const expectedId of expectedTopResults) {
+        expect(
+          allIds.has(expectedId),
+          `query "${query}" references non-existent entry "${expectedId}"`
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("no blank queries in GOLDEN_QUERIES", () => {
+    for (const { query } of GOLDEN_QUERIES) {
+      expect(query.trim(), `query "${query}" should not be blank`).toBeTruthy();
+    }
+  });
+
+  it("no empty expectedTopResults arrays in GOLDEN_QUERIES", () => {
+    for (const { expectedTopResults } of GOLDEN_QUERIES) {
+      expect(expectedTopResults.length, `expectedTopResults should not be empty`).toBeGreaterThan(
+        0
+      );
+    }
+  });
+});
+
+describe("golden-query ranking", () => {
+  it.each(GOLDEN_QUERIES)(
+    '"$query" returns expected entries in top 3',
+    ({ query, expectedTopResults }) => {
+      const results = filterSettings(SETTINGS_SEARCH_INDEX, query, { scope: "global" });
+      const top3Ids = results.slice(0, 3).map((r) => r.id);
+
+      for (const expectedId of expectedTopResults) {
+        expect(
+          top3Ids.includes(expectedId),
+          `query "${query}" should return "${expectedId}" in top 3, got: ${top3Ids.join(", ")}`
+        ).toBe(true);
+      }
+    }
+  );
 });
