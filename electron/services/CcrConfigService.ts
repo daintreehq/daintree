@@ -25,7 +25,18 @@ const CCR_CONFIG_PATH = join(homedir(), ".claude-code-router", "config.json");
 function flavorsChanged(prev: AgentFlavor[] | null, next: AgentFlavor[]): boolean {
   if (!prev) return next.length > 0;
   if (prev.length !== next.length) return true;
-  return prev.some((f, i) => f.id !== next[i].id || f.name !== next[i].name);
+  // Deep compare: id/name/env/args/color/description. Environment and routing
+  // fields (ANTHROPIC_MODEL, ANTHROPIC_BASE_URL, API keys) are encoded in each
+  // flavor's env map — if those change in ~/.claude-code-router/config.json we
+  // must rebroadcast so the renderer doesn't keep launching with stale baseUrl.
+  // JSON.stringify is sufficient for the small flavor count and sidesteps the
+  // field-by-field drift risk.
+  try {
+    return JSON.stringify(prev) !== JSON.stringify(next);
+  } catch {
+    // Circular structures shouldn't occur in AgentFlavor but be defensive.
+    return true;
+  }
 }
 
 export class CcrConfigService {

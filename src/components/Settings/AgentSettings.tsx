@@ -127,6 +127,29 @@ export function AgentSettings({
     activeSubtab === GENERAL_SUBTAB_ID || activeSubtab === null || !agentIds.includes(activeSubtab);
   const activeAgentId = isGeneralActive ? null : activeSubtab;
 
+  // Stale-flavor cleanup in Settings: when a saved flavorId no longer resolves
+  // (deleted custom flavor, CCR route removed from config), clear it so the
+  // Settings UI and the stored settings agree. useAgentLauncher.ts does this
+  // cleanup on the next launch, but the UI otherwise shows vanilla with a
+  // zombie flavorId in storage until the user launches the agent again.
+  useEffect(() => {
+    if (!activeAgentId) return;
+    const entry = settings?.agents?.[activeAgentId];
+    if (!entry?.flavorId) return;
+    const ccr = ccrFlavorsByAgent[activeAgentId];
+    const merged = getMergedFlavors(activeAgentId, entry.customFlavors, ccr);
+    const stillExists = merged.some((f) => f.id === entry.flavorId);
+    if (!stillExists) {
+      void (async () => {
+        await updateAgent(activeAgentId, { flavorId: undefined });
+        onSettingsChange?.();
+      })();
+    }
+    // We intentionally omit updateAgent/onSettingsChange from deps — they're
+    // stable Zustand actions / prop callbacks and including them causes loops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAgentId, settings, ccrFlavorsByAgent]);
+
   const agentOptions = useMemo(
     () =>
       agentIds

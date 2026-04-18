@@ -328,11 +328,25 @@ export function buildArgsForRespawn(
   const isDevPreview = kind === "dev-preview";
   const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
 
+  // Stale-flavor split-brain: when saved.agentFlavorId was set but the flavor
+  // no longer resolves (deleted custom flavor, CCR route removed from config),
+  // clear agentFlavorId/agentFlavorColor and strip the flavor suffix from the
+  // title so the respawned panel doesn't lie about its identity — it's now
+  // running vanilla env/command, so it should look like vanilla.
+  const flavorWasStale = isAgentPanel && !!saved.agentFlavorId && !flavor;
+  const respawnAgentFlavorId = flavorWasStale ? undefined : saved.agentFlavorId;
+  const respawnAgentFlavorColor = flavorWasStale
+    ? undefined
+    : (flavor?.color ?? saved.agentFlavorColor);
+  const respawnTitle = flavorWasStale
+    ? (agentId ? getAgentConfig(agentId)?.name : saved.title) || saved.title
+    : saved.title;
+
   return {
     kind: respawnKind,
     type: saved.type,
     agentId,
-    title: saved.title,
+    title: respawnTitle,
     cwd: saved.cwd || projectRoot || "",
     worktreeId: saved.worktreeId,
     location,
@@ -347,8 +361,8 @@ export function buildArgsForRespawn(
     exitBehavior: isAgentPanel ? undefined : saved.exitBehavior,
     agentLaunchFlags: saved.agentLaunchFlags,
     agentModelId: saved.agentModelId,
-    agentFlavorId: saved.agentFlavorId,
-    agentFlavorColor: flavor?.color ?? saved.agentFlavorColor,
+    agentFlavorId: respawnAgentFlavorId,
+    agentFlavorColor: respawnAgentFlavorColor,
     env: flavorEnv,
     extensionState: saved.extensionState,
     restore: true,

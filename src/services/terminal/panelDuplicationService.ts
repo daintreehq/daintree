@@ -2,18 +2,31 @@ import type { TerminalInstance } from "@/store";
 import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
 import type { TabGroupLocation } from "@/types";
 import { generateAgentCommand } from "@shared/types";
-import { getAgentConfig, isRegisteredAgent, getMergedFlavor } from "@/config/agents";
+import {
+  getAgentConfig,
+  isRegisteredAgent,
+  getMergedFlavor,
+  sanitizeAgentEnv,
+} from "@/config/agents";
 import { agentSettingsClient, systemClient } from "@/clients";
 import { useCcrFlavorsStore } from "@/store/ccrFlavorsStore";
 
+export interface ResolvedCommand {
+  command: string | undefined;
+  env: Record<string, string> | undefined;
+  /** Resolved flavor, or undefined if the saved flavorId is stale/deleted. */
+  flavor: import("@/config/agents").AgentFlavor | undefined;
+  /** True when the caller requested a flavor but it no longer resolves. */
+  flavorWasStale: boolean;
+}
+
 /**
  * Generate the startup command for a panel being duplicated.
- * For agent panels, re-generates the command from current settings.
- * For all others, copies the existing command.
+ * For agent panels, re-generates the command from current settings and
+ * merges globalEnv + flavor env the same way useAgentLauncher does (global
+ * first, flavor overrides). For all others, copies the existing command.
  */
-async function resolveCommandForPanel(
-  panel: TerminalInstance
-): Promise<{ command: string | undefined; env: Record<string, string> | undefined }> {
+async function resolveCommandForPanel(panel: TerminalInstance): Promise<ResolvedCommand> {
   if (panel.agentId && isRegisteredAgent(panel.agentId)) {
     const agentConfig = getAgentConfig(panel.agentId);
     if (agentConfig) {
@@ -27,6 +40,7 @@ async function resolveCommandForPanel(
         const flavor = panel.agentFlavorId
           ? getMergedFlavor(panel.agentId, panel.agentFlavorId, entry.customFlavors, ccrFlavors)
           : undefined;
+        const flavorWasStale = !!panel.agentFlavorId && !flavor;
         const effectiveEntry = flavor
           ? {
               ...entry,
@@ -44,17 +58,31 @@ async function resolveCommandForPanel(
           modelId: panel.agentModelId,
           flavorArgs: flavor?.args?.join(" "),
         });
-        return { command, env: flavor?.env };
+        // Mirror useAgentLauncher.ts: global env first, flavor env wins on
+        // conflicts. Critical for duplicates — dropping globalEnv here
+        // silently routes the duplicated panel to the default backend.
+        const sanitizedGlobal = sanitizeAgentEnv(entry.globalEnv as Record<string, unknown>);
+        const sanitizedFlavor = flavor?.env;
+        const mergedEnv =
+          sanitizedGlobal || sanitizedFlavor
+            ? { ...sanitizedGlobal, ...sanitizedFlavor }
+            : undefined;
+        return { command, env: mergedEnv, flavor, flavorWasStale };
       } catch (error) {
         console.warn(
           `Failed to get agent settings for ${panel.agentId}, using existing command:`,
           error
         );
-        return { command: panel.command ?? agentConfig.command, env: undefined };
+        return {
+          command: panel.command ?? agentConfig.command,
+          env: undefined,
+          flavor: undefined,
+          flavorWasStale: false,
+        };
       }
     }
   }
-  return { command: panel.command, env: undefined };
+  return { command: panel.command, env: undefined, flavor: undefined, flavorWasStale: false };
 }
 
 function buildBrowserOptions(panel: TerminalInstance) {
@@ -180,7 +208,7 @@ export async function buildPanelDuplicateOptions(
   targetLocation: TabGroupLocation
 ): Promise<AddPanelOptions> {
   const kind = sourcePanel.kind ?? "terminal";
-  const { command, env } = await resolveCommandForPanel(sourcePanel);
+  const { command, env, flavorWasStale } = await resolveCommandForPanel(sourcePanel);
 
   if (kind === "agent") {
     if (!sourcePanel.agentId || !command) {
@@ -188,20 +216,29 @@ export async function buildPanelDuplicateOptions(
         `Cannot duplicate agent panel: ${!sourcePanel.agentId ? "agentId" : "command"} is missing`
       );
     }
+    // When the saved flavor no longer resolves (deleted custom flavor, CCR
+    // route removed from config), null out the flavor-derived fields so the
+    // duplicate doesn't lie about its identity — blue "Claude (Pro)" title
+    // with vanilla env is the split-brain the review flagged.
+    const agentConfig = getAgentConfig(sourcePanel.agentId);
+    const fallbackTitle = agentConfig?.name ?? sourcePanel.title;
+    const agentFlavorId = flavorWasStale ? undefined : sourcePanel.agentFlavorId;
+    const agentFlavorColor = flavorWasStale ? undefined : sourcePanel.agentFlavorColor;
+    const title = flavorWasStale ? fallbackTitle : sourcePanel.title;
     return {
       kind: "agent",
       type: sourcePanel.type,
       agentId: sourcePanel.agentId,
       command,
-      title: sourcePanel.title,
+      title,
       cwd: sourcePanel.cwd || "",
       worktreeId: sourcePanel.worktreeId,
       location: targetLocation,
       exitBehavior: sourcePanel.exitBehavior,
       isInputLocked: sourcePanel.isInputLocked,
       agentModelId: sourcePanel.agentModelId,
-      agentFlavorId: sourcePanel.agentFlavorId,
-      agentFlavorColor: sourcePanel.agentFlavorColor,
+      agentFlavorId,
+      agentFlavorColor,
       agentLaunchFlags: sourcePanel.agentLaunchFlags,
       env,
     };

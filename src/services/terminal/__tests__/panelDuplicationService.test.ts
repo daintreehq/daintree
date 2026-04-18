@@ -28,12 +28,23 @@ vi.mock("@/config/agents", () => ({
   isRegisteredAgent: vi.fn((id: string) => id === "claude" || id === "gemini"),
   getAgentConfig: vi.fn((id: string) =>
     id === "claude"
-      ? { command: "claude-cmd" }
+      ? { command: "claude-cmd", name: "Claude" }
       : id === "gemini"
-        ? { command: "gemini-cmd" }
+        ? { command: "gemini-cmd", name: "Gemini" }
         : undefined
   ),
   getMergedFlavor: (...args: unknown[]) => getMergedFlavorMock(...args),
+  // Pass-through sanitizer: in production this blocks PATH/LD_PRELOAD etc.,
+  // but for these tests we just need it to return the input unchanged
+  // (filtered to string values) so the service can merge globalEnv + flavorEnv.
+  sanitizeAgentEnv: (env: Record<string, unknown> | undefined) => {
+    if (!env || typeof env !== "object") return undefined;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(env)) {
+      if (typeof v === "string") out[k] = v;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  },
 }));
 
 vi.mock("@/store/ccrFlavorsStore", () => ({
@@ -413,6 +424,81 @@ describe("panelDuplicationService", () => {
     const result = await buildPanelDuplicateOptions(panel, "grid");
 
     expect(result.env).toBeUndefined();
+  });
+
+  // Regression: duplicating must carry forward the agent's globalEnv. The
+  // previous implementation only propagated flavor.env, so duplicates silently
+  // ran against the default backend instead of the user-configured env (e.g.
+  // ANTHROPIC_BASE_URL pointed at a proxy).
+  it("merges agent globalEnv into duplicate options (not just flavor env)", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      agents: {
+        claude: {
+          globalEnv: { ANTHROPIC_BASE_URL: "https://proxy.example.com" },
+        },
+      },
+    });
+
+    const panel = makePanel({ kind: "agent", agentId: "claude", agentFlavorId: undefined });
+    const result = await buildPanelDuplicateOptions(panel, "grid");
+
+    expect(result.env).toEqual({ ANTHROPIC_BASE_URL: "https://proxy.example.com" });
+  });
+
+  it("flavor env overrides globalEnv on key conflict (mirrors useAgentLauncher)", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      agents: {
+        claude: {
+          globalEnv: { SHARED_KEY: "global-wins-when-no-flavor", EXTRA: "globalExtra" },
+        },
+      },
+    });
+    getMergedFlavorMock.mockReturnValue({
+      id: "user-abc",
+      name: "Flavor",
+      env: { SHARED_KEY: "flavor-wins", FLAVOR_ONLY: "yes" },
+    });
+
+    const panel = makePanel({ kind: "agent", agentId: "claude", agentFlavorId: "user-abc" });
+    const result = await buildPanelDuplicateOptions(panel, "grid");
+
+    expect(result.env).toEqual({
+      EXTRA: "globalExtra",
+      SHARED_KEY: "flavor-wins",
+      FLAVOR_ONLY: "yes",
+    });
+  });
+
+  // Regression: when a saved agentFlavorId no longer resolves (deleted custom
+  // flavor, CCR route removed), we must not carry stale flavorId/color/title
+  // forward — otherwise a duplicated vanilla-env panel will be mislabeled as
+  // "Claude (Deleted)" and keep the blue swatch from the missing flavor.
+  it("clears stale flavor fields when agentFlavorId no longer resolves", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      agents: { claude: {} },
+    });
+    // Simulate a deleted flavor: agentFlavorId is set, but getMergedFlavor returns undefined.
+    getMergedFlavorMock.mockReturnValue(undefined);
+
+    const panel = makePanel({
+      kind: "agent",
+      agentId: "claude",
+      agentFlavorId: "user-deleted",
+      agentFlavorColor: "#ff00ff",
+      title: "Claude (Deleted Flavor)",
+    });
+    const result = (await buildPanelDuplicateOptions(panel, "grid")) as {
+      agentFlavorId?: string;
+      agentFlavorColor?: string;
+      title?: string;
+    };
+
+    expect(result.agentFlavorId).toBeUndefined();
+    expect(result.agentFlavorColor).toBeUndefined();
+    expect(result.title).not.toContain("(Deleted");
   });
 });
 

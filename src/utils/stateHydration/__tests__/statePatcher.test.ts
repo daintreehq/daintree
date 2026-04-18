@@ -8,7 +8,10 @@ const getMergedFlavorMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/config/agents", () => ({
   isRegisteredAgent: (type: string) => ["claude", "gemini", "codex", "opencode"].includes(type),
-  getAgentConfig: (id: string) => ({ command: id }),
+  getAgentConfig: (id: string) => ({
+    command: id,
+    name: id.charAt(0).toUpperCase() + id.slice(1),
+  }),
   getMergedFlavor: (...args: unknown[]) => getMergedFlavorMock(...args),
   // Pass-through: global env sanitization is tested separately in agents-adversarial
   sanitizeAgentEnv: (env: Record<string, unknown> | undefined) => {
@@ -602,6 +605,68 @@ describe("buildArgsForRespawn", () => {
       "/tmp/daintree-clipboard"
     );
     expect(result.command).not.toContain("--include-directories");
+  });
+
+  // Regression: stale-flavor split-brain on respawn. If saved.agentFlavorId
+  // was set but the flavor no longer resolves (deleted custom flavor, CCR
+  // route removed), the respawned panel should NOT carry forward the stale
+  // agentFlavorId, agentFlavorColor, or a flavor-suffixed title — otherwise
+  // a vanilla-running panel appears labeled and colored as the missing flavor.
+  it("clears stale agentFlavorId/color/title when flavor no longer resolves", () => {
+    // getMergedFlavor mock returns undefined by default when no value is set.
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "agent" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentFlavorId: "user-deleted",
+        agentFlavorColor: "#ff00ff",
+        title: "Claude (Deleted Flavor)",
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(result.agentFlavorId).toBeUndefined();
+    expect(result.agentFlavorColor).toBeUndefined();
+    expect(result.title).not.toContain("Deleted");
+  });
+
+  // Regression: the inverse — when the flavor still resolves, everything is preserved.
+  it("preserves agentFlavorId/color/title when flavor still resolves", () => {
+    getMergedFlavorMock.mockReturnValueOnce({
+      id: "user-live",
+      name: "LiveFlavor",
+      color: "#00ff00",
+    });
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "agent" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentFlavorId: "user-live",
+        agentFlavorColor: "#00ff00",
+        title: "Claude (LiveFlavor)",
+      },
+      "agent",
+      "/p",
+      {
+        agents: {
+          claude: { customFlavors: [{ id: "user-live", name: "LiveFlavor", color: "#00ff00" }] },
+        },
+      },
+      false,
+      undefined
+    );
+    expect(result.agentFlavorId).toBe("user-live");
+    expect(result.agentFlavorColor).toBe("#00ff00");
+    expect(result.title).toContain("LiveFlavor");
   });
 });
 
@@ -1325,7 +1390,12 @@ describe("adversarial: agentFlavorColor must be carried through buildArgsForResp
     expect(result.agentFlavorColor).toBeUndefined();
   });
 
-  it("falls back to saved.agentFlavorColor when the live flavor is gone (deleted flavor)", () => {
+  it("clears saved.agentFlavorColor when the live flavor is gone (deleted flavor)", () => {
+    // A stale saved flavor should NOT carry forward its color — a deleted
+    // flavor means the panel is now running vanilla env/command, so any
+    // flavor-derived visual (color chip, title suffix) would lie about its
+    // identity. The fix in buildArgsForRespawn nulls these out when
+    // getMergedFlavor returns undefined despite a saved flavorId.
     getMergedFlavorMock.mockReturnValue(undefined); // flavor deleted
     const result = buildArgsForRespawn(
       {
@@ -1343,7 +1413,8 @@ describe("adversarial: agentFlavorColor must be carried through buildArgsForResp
       false,
       undefined
     );
-    expect(result.agentFlavorColor).toBe("#aabbcc");
+    expect(result.agentFlavorColor).toBeUndefined();
+    expect(result.agentFlavorId).toBeUndefined();
   });
 });
 

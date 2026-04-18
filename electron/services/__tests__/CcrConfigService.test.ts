@@ -160,4 +160,80 @@ describe("CcrConfigService", () => {
       expect(a).toBe(b);
     });
   });
+
+  describe("change detection (regression: env/baseUrl edits must broadcast)", () => {
+    it("broadcasts when the model id/name changes", async () => {
+      const { broadcastToRenderer } = await import("../../ipc/utils.js");
+      const broadcastMock = vi.mocked(broadcastToRenderer);
+
+      mockReadFile.mockResolvedValueOnce(
+        JSON.stringify({ models: [{ id: "one", model: "claude-3-sonnet" }] })
+      );
+      await service.loadAndApply();
+      const initialCalls = broadcastMock.mock.calls.length;
+
+      mockReadFile.mockResolvedValueOnce(
+        JSON.stringify({ models: [{ id: "two", model: "claude-3-sonnet" }] })
+      );
+      await service.loadAndApply();
+      expect(broadcastMock.mock.calls.length).toBeGreaterThan(initialCalls);
+    });
+
+    it("broadcasts when env-only fields change (baseUrl edit)", async () => {
+      const { broadcastToRenderer } = await import("../../ipc/utils.js");
+      const broadcastMock = vi.mocked(broadcastToRenderer);
+
+      mockReadFile.mockResolvedValueOnce(
+        JSON.stringify({
+          models: [{ id: "one", model: "claude-3-sonnet", baseUrl: "https://a.example.com" }],
+        })
+      );
+      await service.loadAndApply();
+      const initialCalls = broadcastMock.mock.calls.length;
+
+      // Same id and same name (name is derived from id when unspecified) —
+      // only baseUrl differs. The old field-by-field check missed this.
+      mockReadFile.mockResolvedValueOnce(
+        JSON.stringify({
+          models: [{ id: "one", model: "claude-3-sonnet", baseUrl: "https://b.example.com" }],
+        })
+      );
+      await service.loadAndApply();
+      expect(broadcastMock.mock.calls.length).toBeGreaterThan(initialCalls);
+    });
+
+    it("broadcasts when apiKeyEnv changes", async () => {
+      const { broadcastToRenderer } = await import("../../ipc/utils.js");
+      const broadcastMock = vi.mocked(broadcastToRenderer);
+
+      mockReadFile.mockResolvedValueOnce(
+        JSON.stringify({ models: [{ id: "one", model: "m", apiKeyEnv: "KEY_A" }] })
+      );
+      await service.loadAndApply();
+      const initialCalls = broadcastMock.mock.calls.length;
+
+      mockReadFile.mockResolvedValueOnce(
+        JSON.stringify({ models: [{ id: "one", model: "m", apiKeyEnv: "KEY_B" }] })
+      );
+      await service.loadAndApply();
+      expect(broadcastMock.mock.calls.length).toBeGreaterThan(initialCalls);
+    });
+
+    it("does NOT broadcast when flavors are fully unchanged", async () => {
+      const { broadcastToRenderer } = await import("../../ipc/utils.js");
+      const broadcastMock = vi.mocked(broadcastToRenderer);
+      const config = JSON.stringify({
+        models: [{ id: "one", model: "m", baseUrl: "https://a.example.com" }],
+      });
+
+      mockReadFile.mockResolvedValueOnce(config);
+      await service.loadAndApply();
+      const initialCalls = broadcastMock.mock.calls.length;
+
+      // Second load with identical config — no-op, no rebroadcast.
+      mockReadFile.mockResolvedValueOnce(config);
+      await service.loadAndApply();
+      expect(broadcastMock.mock.calls.length).toBe(initialCalls);
+    });
+  });
 });
