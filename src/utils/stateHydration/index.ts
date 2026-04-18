@@ -8,11 +8,13 @@ import type {
   TerminalType,
   AgentState,
   PanelKind,
+  PanelSnapshot,
   TerminalReconnectError,
   TabGroup,
 } from "@/types";
 import { keybindingService } from "@/services/KeybindingService";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { panelPersistence } from "@/store/persistence/panelPersistence";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
@@ -349,6 +351,20 @@ export async function hydrateAppState(
 
         // Restore all panels in saved order (mix of PTY reconnects and non-PTY recreations)
         if (appState.terminals && appState.terminals.length > 0) {
+          // Seed the persistence cache so the first save after launch can
+          // preserve kind-specific fields for unregistered kinds (e.g., an
+          // extension that hasn't re-registered yet). Without this priming,
+          // a first save cycle would drop those fields — see issue #5201.
+          // appState.terminals is TerminalState[] (IPC wire type, more
+          // lenient); the on-disk data was written by panelToSnapshot so is
+          // structurally PanelSnapshot[].
+          if (currentProjectId) {
+            panelPersistence.primeProject(
+              currentProjectId,
+              appState.terminals as unknown as PanelSnapshot[]
+            );
+          }
+
           panelRestoreStartedAt = Date.now();
           panelRestoreCount = appState.terminals.length;
           markRendererPerformance(PERF_MARKS.HYDRATE_RESTORE_PANELS_START, {
