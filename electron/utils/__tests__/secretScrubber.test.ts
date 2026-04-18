@@ -32,6 +32,16 @@ describe("secretScrubber", () => {
         expected: `token=${REDACTED}`,
       },
       {
+        name: "github-user-to-server-token",
+        input: `token=ghu_${"A".repeat(36)}`,
+        expected: `token=${REDACTED}`,
+      },
+      {
+        name: "github-oauth-token",
+        input: `token=gho_${"z".repeat(36)}`,
+        expected: `token=${REDACTED}`,
+      },
+      {
         name: "anthropic-api-key",
         input: `key=sk-ant-${"a".repeat(95)}`,
         expected: `key=${REDACTED}`,
@@ -65,6 +75,21 @@ describe("secretScrubber", () => {
         name: "aws-access-key",
         input: "aws_access_key=AKIAIOSFODNN7EXAMPLE trailing",
         expected: `aws_access_key=${REDACTED} trailing`,
+      },
+      {
+        name: "aws-secret-access-key-credentials-file",
+        input: "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY end",
+        expected: `${REDACTED} end`,
+      },
+      {
+        name: "aws-secret-access-key-env-var",
+        input: "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY next",
+        expected: `${REDACTED} next`,
+      },
+      {
+        name: "aws-secret-access-key-sts-json",
+        input: `"SecretAccessKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"`,
+        expected: `"${REDACTED}`,
       },
       {
         name: "npm-token",
@@ -101,6 +126,11 @@ describe("secretScrubber", () => {
         name: "oauth-client_secret",
         input: "?client_secret=supersecretvalue&other=1",
         expected: `?client_secret=${REDACTED}&other=1`,
+      },
+      {
+        name: "oauth-code-in-url",
+        input: "https://example.com/callback?code=abcd1234xyz&state=zz",
+        expected: `https://example.com/callback?code=${REDACTED}&state=zz`,
       },
     ];
 
@@ -140,6 +170,22 @@ describe("secretScrubber", () => {
     it("does not re-redact an already redacted placeholder", () => {
       const already = `prefix ${REDACTED} suffix`;
       expect(scrubSecrets(already)).toBe(already);
+    });
+
+    it("leaves plain `code=` log lines alone (not in a URL query)", () => {
+      const logLine = "code=42 not found in handler";
+      expect(scrubSecrets(logLine)).toBe(logLine);
+    });
+
+    it("leaves a `code=` log line at a subsequent line start alone", () => {
+      const multiline = "ERROR at 12:00:00\ncode=ENOENT path=/tmp/foo";
+      expect(scrubSecrets(multiline)).toBe(multiline);
+    });
+
+    it("does not flag an unrelated 40-char base64-ish string as an AWS secret", () => {
+      // No `aws_secret_access_key` / `SecretAccessKey` context — must pass through.
+      const hashish = "sha256=" + "A".repeat(40);
+      expect(scrubSecrets(hashish)).toBe(hashish);
     });
   });
 

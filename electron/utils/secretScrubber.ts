@@ -35,7 +35,9 @@ export const PATTERNS: readonly SecretPattern[] = [
   },
   {
     name: "github-app-token",
-    regex: /\bghs_[A-Za-z0-9_]{36}\b/g,
+    // Covers `ghs_` (app server-to-server), `ghu_` (user-to-server), and `gho_` (OAuth).
+    // All three appear in `gh` CLI output and git-credential-manager logs.
+    regex: /\bgh[sou]_[A-Za-z0-9_]{36}\b/g,
     replacement: REDACTED,
   },
   {
@@ -66,6 +68,17 @@ export const PATTERNS: readonly SecretPattern[] = [
   {
     name: "aws-access-key-id",
     regex: /\bAKIA[0-9A-Z]{16}\b/g,
+    replacement: REDACTED,
+  },
+  {
+    name: "aws-secret-access-key",
+    // A raw 40-char `[A-Za-z0-9/+=]{40}` regex would collide with base64 chunks,
+    // hashes, and random IDs, so this requires the surrounding key name as context.
+    // Covers credentials-file (`aws_secret_access_key = ...`), env (`AWS_SECRET_ACCESS_KEY=...`),
+    // and STS JSON (`"SecretAccessKey": "..."`) forms. Case-insensitive so it also
+    // matches `secret_access_key` alone without the `aws_` prefix.
+    regex:
+      /\b(?:aws_secret_access_key|secret_access_key|SecretAccessKey)["']?\s{0,8}[:=]\s{0,8}["']?[A-Za-z0-9/+=]{40}["']?/gi,
     replacement: REDACTED,
   },
   {
@@ -106,9 +119,19 @@ export const PATTERNS: readonly SecretPattern[] = [
     // or at the start of a form-urlencoded body (including bodies that appear
     // after a newline in a log line). The `m` flag makes `^` match line starts.
     // `(^|[?&])` keeps the preceding separator in the output so `&other=1` isn't
-    // merged into the token.
-    regex: /(^|[?&])(access_token|refresh_token|client_secret|code)=[^&\s]{1,1000}/gm,
+    // merged into the token. `code` is handled separately below because it is
+    // too noisy to anchor at line starts — plain log lines like
+    // `code=42 not found` should not be touched.
+    regex: /(^|[?&])(access_token|refresh_token|client_secret)=[^&\s]{1,1000}/gm,
     replacement: `$1$2=${REDACTED}`,
+  },
+  {
+    name: "oauth-code-query-param",
+    // OAuth `code=` only when clearly inside a URL/form body, i.e. preceded by
+    // `?` or `&`. Anchoring at line start would catch unrelated log output like
+    // `code=42 not found`.
+    regex: /([?&])code=[^&\s]{1,1000}/g,
+    replacement: `$1code=${REDACTED}`,
   },
 ];
 
