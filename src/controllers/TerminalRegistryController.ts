@@ -25,11 +25,7 @@ import type {
   SpawnResult,
 } from "@shared/types";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
-import { useScrollbackStore } from "@/store/scrollbackStore";
-import { usePerformanceModeStore } from "@/store/performanceModeStore";
-import { useTerminalFontStore } from "@/store/terminalFontStore";
-import { useScreenReaderStore } from "@/store/screenReaderStore";
-import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
+import { getTerminalAppearanceSnapshot } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
 import { TerminalRefreshTier } from "@/types";
@@ -144,23 +140,22 @@ class TerminalRegistryController {
     location: PanelLocation
   ): void {
     try {
-      const { scrollbackLines } = useScrollbackStore.getState();
-      const { performanceMode } = usePerformanceModeStore.getState();
-      const { fontSize, fontFamily } = useTerminalFontStore.getState();
+      const appearance = getTerminalAppearanceSnapshot();
+      const { fontSize, fontFamily, performanceMode } = appearance;
 
+      // Project-level scrollback override applies to non-agent terminals only
+      const projectScrollback = kind !== "agent" ? appearance.projectScrollback : undefined;
       const effectiveScrollback = performanceMode
         ? PERFORMANCE_MODE_SCROLLBACK
-        : getScrollbackForType(type, scrollbackLines);
+        : getScrollbackForType(type, projectScrollback ?? appearance.scrollbackLines);
 
-      const { getEffectiveTheme } = useTerminalColorSchemeStore.getState();
-      const screenReaderMode = useScreenReaderStore.getState().resolvedScreenReaderEnabled();
       const terminalOptions = getXtermOptions({
         fontSize,
         fontFamily,
         scrollback: effectiveScrollback,
         performanceMode,
-        theme: getEffectiveTheme(),
-        screenReaderMode,
+        theme: appearance.effectiveTheme,
+        screenReaderMode: appearance.screenReaderMode,
       });
 
       const offscreen = location === "dock";

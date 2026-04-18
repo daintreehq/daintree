@@ -16,14 +16,9 @@ import {
   getPanelKindConfig,
   getExtensionFallbackDefaults,
 } from "@shared/config/panelKindRegistry";
-import { useScrollbackStore } from "@/store/scrollbackStore";
-import { useProjectSettingsStore } from "@/store/projectSettingsStore";
-import { usePerformanceModeStore } from "@/store/performanceModeStore";
-import { useTerminalFontStore } from "@/store/terminalFontStore";
+import { getTerminalAppearanceSnapshot } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
-import { useScreenReaderStore } from "@/store/screenReaderStore";
-import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { usePanelLimitStore, evaluatePanelLimit } from "@/store/panelLimitStore";
@@ -516,29 +511,23 @@ export const createCorePanelActions = (
       // Prewarm renderer-side xterm immediately so we never drop startup output/ANSI while hidden.
       // For docked terminals, also open + fit offscreen so the PTY starts with correct dimensions.
       try {
-        const { scrollbackLines } = useScrollbackStore.getState();
-        const { performanceMode } = usePerformanceModeStore.getState();
-        const { fontSize, fontFamily } = useTerminalFontStore.getState();
+        const appearance = getTerminalAppearanceSnapshot();
+        const { fontSize, fontFamily, performanceMode } = appearance;
 
         // Project-level scrollback override for non-agent terminals
-        const projectScrollback =
-          kind !== "agent"
-            ? useProjectSettingsStore.getState().settings?.terminalSettings?.scrollbackLines
-            : undefined;
+        const projectScrollback = kind !== "agent" ? appearance.projectScrollback : undefined;
 
         const effectiveScrollback = performanceMode
           ? PERFORMANCE_MODE_SCROLLBACK
-          : getScrollbackForType(legacyType, projectScrollback ?? scrollbackLines);
+          : getScrollbackForType(legacyType, projectScrollback ?? appearance.scrollbackLines);
 
-        const { getEffectiveTheme } = useTerminalColorSchemeStore.getState();
-        const screenReaderMode = useScreenReaderStore.getState().resolvedScreenReaderEnabled();
         const terminalOptions = getXtermOptions({
           fontSize,
           fontFamily,
           scrollback: effectiveScrollback,
           performanceMode,
-          theme: getEffectiveTheme(),
-          screenReaderMode,
+          theme: appearance.effectiveTheme,
+          screenReaderMode: appearance.screenReaderMode,
         });
 
         // Prewarm ALL terminal types to ensure managed instance exists.
