@@ -13,7 +13,6 @@ export function DockDensityPicker() {
 
   return (
     <SettingsChoicebox
-      label="Dock density"
       value={dockDensity}
       onChange={setDockDensity}
       options={DOCK_DENSITY_OPTIONS}

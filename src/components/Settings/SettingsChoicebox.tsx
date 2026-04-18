@@ -14,7 +14,7 @@ interface SettingsChoiceboxProps<T extends string = string> extends Omit<
   ComponentPropsWithoutRef<"div">,
   "onChange"
 > {
-  label: string;
+  label?: string;
   description?: ReactNode;
   error?: string;
   isModified?: boolean;
@@ -65,6 +65,15 @@ export function SettingsChoicebox<T extends string = string>({
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  const initiallyFocusableIndex = (() => {
+    const selectedIndex = options.findIndex((o) => o.value === value);
+    if (selectedIndex >= 0 && !disabled && !options[selectedIndex]?.disabled) {
+      return selectedIndex;
+    }
+    const firstEnabledIndex = options.findIndex((o) => !o.disabled && !disabled);
+    return firstEnabledIndex >= 0 ? firstEnabledIndex : -1;
+  })();
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -96,7 +105,7 @@ export function SettingsChoicebox<T extends string = string>({
         const button = buttons[currentIndex];
         if (!button) return;
         const buttonValue = button.getAttribute("data-value");
-        if (buttonValue) onChange(buttonValue as T);
+        if (buttonValue !== null) onChange(buttonValue as T);
         return;
       }
 
@@ -113,17 +122,36 @@ export function SettingsChoicebox<T extends string = string>({
 
   return (
     <div className={cn("group flex flex-col gap-2", className)} {...props}>
-      <div className="flex items-center gap-2">
-        <label id={labelId} htmlFor={id} className="text-sm text-daintree-text/70">
-          {label}
-        </label>
-        {isModified && (
-          <span className="w-1.5 h-1.5 rounded-full bg-daintree-accent" aria-hidden="true" />
-        )}
-        {showReset && (
+      {label && (
+        <div className="flex items-center gap-2">
+          <label id={labelId} htmlFor={id} className="text-sm text-daintree-text/70">
+            {label}
+          </label>
+          {isModified && (
+            <span className="w-1.5 h-1.5 rounded-full bg-daintree-accent" aria-hidden="true" />
+          )}
+          {showReset && (
+            <button
+              type="button"
+              aria-label={resetAriaLabel ?? `Reset ${label} to default`}
+              className={cn(
+                "p-0.5 rounded-sm text-daintree-text/40 hover:text-daintree-accent",
+                "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+                "transition-colors"
+              )}
+              onClick={onReset}
+            >
+              <RotateCcw className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+      )}
+      {!label && showReset && (
+        <div className="flex items-center gap-2 justify-end">
           <button
             type="button"
-            aria-label={resetAriaLabel ?? `Reset ${label} to default`}
+            aria-label="Reset to default"
             className={cn(
               "p-0.5 rounded-sm text-daintree-text/40 hover:text-daintree-accent",
               "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
@@ -134,13 +162,13 @@ export function SettingsChoicebox<T extends string = string>({
           >
             <RotateCcw className="w-3 h-3" />
           </button>
-        )}
-      </div>
+        </div>
+      )}
       <div
         ref={containerRef}
         id={id}
         role="radiogroup"
-        aria-labelledby={labelId}
+        aria-labelledby={label && labelId}
         aria-describedby={describedBy}
         aria-invalid={error ? true : undefined}
         className={cn("flex gap-2", {
@@ -160,7 +188,15 @@ export function SettingsChoicebox<T extends string = string>({
               role="radio"
               aria-checked={isSelected}
               aria-disabled={isOptionDisabled}
-              tabIndex={isSelected || (focusedIndex === -1 && index === 0) ? 0 : -1}
+              tabIndex={
+                isSelected
+                  ? 0
+                  : focusedIndex === index
+                    ? 0
+                    : focusedIndex === -1 && index === initiallyFocusableIndex
+                      ? 0
+                      : -1
+              }
               disabled={isOptionDisabled}
               data-value={option.value}
               onClick={() => {
