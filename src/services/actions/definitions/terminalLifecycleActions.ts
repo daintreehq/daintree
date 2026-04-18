@@ -311,8 +311,7 @@ export function registerTerminalLifecycleActions(
   actions.set("terminal.restartService", () => ({
     id: "terminal.restartService",
     title: "Restart Terminal Service",
-    description:
-      "Restart the PTY host process without reloading the application. Only available when the terminal backend is disconnected.",
+    description: "Restart the PTY host. Available only when the terminal backend is disconnected.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -326,8 +325,7 @@ export function registerTerminalLifecycleActions(
   actions.set("terminal.watch", () => ({
     id: "terminal.watch",
     title: "Watch This Terminal",
-    description:
-      "Toggle a one-shot watch on the focused terminal — fires a high-priority notification when the agent completes or waits for input",
+    description: "Toggle a one-shot watch — notifies when the agent completes or waits for input.",
     category: "terminal",
     kind: "command",
     danger: "safe",

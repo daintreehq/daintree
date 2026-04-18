@@ -137,7 +137,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "slashCommands.list",
       title: "List Slash Commands",
       description: "List available slash commands for an agent",
-      category: "agents",
+      category: "agent",
       kind: "query",
       danger: "safe",
       scope: "renderer",

@@ -149,7 +149,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     id: "fleet.interrupt",
     title: "Fleet: Interrupt",
     description:
-      "Send a double-Escape to armed agents in working/waiting/running state (confirms when 3+ targets; 50ms per-PTY gap scheduled in the PTY host)",
+      "Send double-Escape to armed working/waiting/running agents. Confirms when 3+ targets.",
     category: "terminal",
     kind: "command",
     danger: "safe",

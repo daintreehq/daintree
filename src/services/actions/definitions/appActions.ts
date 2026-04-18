@@ -91,8 +91,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
   actions.set("app.reloadConfig", () => ({
     id: "app.reloadConfig",
     title: "Reload Configuration",
-    description:
-      "Re-read config.json from disk and refresh all derived in-memory state (agent registry, agent settings, keybindings, CLI availability, application menu)",
+    description: "Reload config from disk and refresh agent, keybinding, CLI, and menu state.",
     category: "app",
     kind: "command",
     danger: "safe",

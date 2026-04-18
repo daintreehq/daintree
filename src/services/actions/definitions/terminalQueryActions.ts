@@ -64,8 +64,7 @@ export function registerTerminalQueryActions(
   actions.set("terminal.getOutput", () => ({
     id: "terminal.getOutput",
     title: "Get Terminal Output",
-    description:
-      "Get terminal serialized state (last N lines from buffer, ANSI codes stripped by default). Note: includes terminal control sequences and alternate buffer content.",
+    description: "Get terminal output with optional line limit and ANSI stripping.",
     category: "terminal",
     kind: "query",
     danger: "safe",

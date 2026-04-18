@@ -59,10 +59,10 @@ describe("env action definitions", () => {
   });
 
   it.each([
-    ["env.global.get", "query", "safe", "env"],
-    ["env.global.set", "command", "confirm", "env"],
-    ["env.project.get", "query", "safe", "env"],
-    ["env.project.set", "command", "confirm", "env"],
+    ["env.global.get", "query", "safe", "settings"],
+    ["env.global.set", "command", "confirm", "settings"],
+    ["env.project.get", "query", "safe", "settings"],
+    ["env.project.set", "command", "confirm", "settings"],
     ["worktree.resource.config.get", "query", "safe", "worktree"],
     ["worktree.resource.config.set", "command", "confirm", "worktree"],
   ] as const)("%s has expected kind/danger/category", (id, kind, danger, category) => {

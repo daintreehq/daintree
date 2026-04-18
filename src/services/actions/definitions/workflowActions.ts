@@ -10,8 +10,7 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
   actions.set("worktree.createWithRecipe", () => ({
     id: "worktree.createWithRecipe",
     title: "Create Worktree with Recipe",
-    description:
-      "Create a new worktree and optionally run a recipe. Handles branch name collision, path generation, and recipe execution in one atomic operation.",
+    description: "Create a worktree, handle branch and path setup, and optionally run a recipe.",
     category: "worktree",
     kind: "command",
     danger: "safe",

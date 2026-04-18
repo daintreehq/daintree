@@ -32,7 +32,7 @@ export function registerIntrospectionActions(
     id: "actions.list",
     title: "List Actions",
     description:
-      "Get a manifest of available actions. Use category or search to filter. Note: MCP clients already receive the tool list via the MCP protocol — use this only if you need action metadata like danger level or enabled state.",
+      "List available actions. Filter by category or search. Includes metadata like danger level and enabled state.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -129,7 +129,7 @@ export function registerIntrospectionActions(
     id: "actions.persistedStores",
     title: "List Persisted Stores",
     description:
-      "Enumerate renderer-side Zustand stores that persist to localStorage (storage key, persist version, migrate/merge/partialize flags, current size). Intended for diagnostics and support dumps; does not modify persisted state.",
+      "List persisted renderer stores with storage key, version, migration flags, size, and parse status.",
     category: "introspection",
     kind: "query",
     danger: "safe",
