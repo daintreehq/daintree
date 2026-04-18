@@ -90,8 +90,11 @@ describe("registerPluginHandlers", () => {
     )![1] as (...args: unknown[]) => unknown;
 
     const trustedEvent = { senderFrame: { url: "app://daintree/" } };
-    const result = await invokeHandler(trustedEvent, "my-plugin", "get-data", "arg1", "arg2");
-    expect(mockDispatchHandler).toHaveBeenCalledWith("my-plugin", "get-data", ["arg1", "arg2"]);
+    const result = await invokeHandler(trustedEvent, "acme.my-plugin", "get-data", "arg1", "arg2");
+    expect(mockDispatchHandler).toHaveBeenCalledWith("acme.my-plugin", "get-data", [
+      "arg1",
+      "arg2",
+    ]);
     expect(result).toEqual({ data: "hello" });
   });
 
@@ -116,9 +119,9 @@ describe("registerPluginHandlers", () => {
     )![1] as (...args: unknown[]) => unknown;
 
     const untrustedEvent = { senderFrame: { url: "https://evil.com/attack.html" } };
-    await expect(invokeHandler(untrustedEvent, "my-plugin", "get-data", "arg1")).rejects.toThrow(
-      "plugin:invoke rejected: untrusted sender"
-    );
+    await expect(
+      invokeHandler(untrustedEvent, "acme.my-plugin", "get-data", "arg1")
+    ).rejects.toThrow("plugin:invoke rejected: untrusted sender");
     expect(mockDispatchHandler).not.toHaveBeenCalled();
   });
 
@@ -129,7 +132,7 @@ describe("registerPluginHandlers", () => {
     )![1] as (...args: unknown[]) => unknown;
 
     const nullFrameEvent = { senderFrame: null };
-    await expect(invokeHandler(nullFrameEvent, "my-plugin", "get-data")).rejects.toThrow(
+    await expect(invokeHandler(nullFrameEvent, "acme.my-plugin", "get-data")).rejects.toThrow(
       "plugin:invoke rejected: untrusted sender"
     );
     expect(mockDispatchHandler).not.toHaveBeenCalled();
@@ -160,7 +163,7 @@ describe("PLUGIN_VALIDATE_ACTION_IDS handler", () => {
       iconId: "icon",
       actionId: "action.known",
       priority: 3,
-      pluginId: "my-plugin",
+      pluginId: "acme.my-plugin",
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const handler = getValidateHandler();
@@ -177,14 +180,14 @@ describe("PLUGIN_VALIDATE_ACTION_IDS handler", () => {
       iconId: "icon",
       actionId: "action.missing",
       priority: 3,
-      pluginId: "my-plugin",
+      pluginId: "acme.my-plugin",
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const handler = getValidateHandler();
     await handler({}, ["action.known"]);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      '[Plugin] Unknown actionId "action.missing" on toolbar button "plugin.my.button" (plugin: my-plugin)'
+      '[Plugin] Unknown actionId "action.missing" on toolbar button "plugin.my.button" (plugin: acme.my-plugin)'
     );
     warn.mockRestore();
   });
@@ -192,7 +195,7 @@ describe("PLUGIN_VALIDATE_ACTION_IDS handler", () => {
   it("warns with the exact message when a menu item actionId is unknown", async () => {
     mockGetPluginMenuItems.mockReturnValue([
       {
-        pluginId: "my-plugin",
+        pluginId: "acme.my-plugin",
         item: {
           label: "Do Thing",
           actionId: "action.missing",
@@ -205,7 +208,7 @@ describe("PLUGIN_VALIDATE_ACTION_IDS handler", () => {
     await handler({}, ["action.known"]);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      '[Plugin] Unknown actionId "action.missing" on menu item "Do Thing" (plugin: my-plugin)'
+      '[Plugin] Unknown actionId "action.missing" on menu item "Do Thing" (plugin: acme.my-plugin)'
     );
     warn.mockRestore();
   });
@@ -324,14 +327,14 @@ describe("PLUGIN_VALIDATE_ACTION_IDS handler", () => {
 describe("registerPluginHandler", () => {
   it("delegates to pluginService.registerHandler", () => {
     const handler = vi.fn();
-    registerPluginHandler("my-plugin", "my-channel", handler);
-    expect(mockRegisterHandler).toHaveBeenCalledWith("my-plugin", "my-channel", handler);
+    registerPluginHandler("acme.my-plugin", "my-channel", handler);
+    expect(mockRegisterHandler).toHaveBeenCalledWith("acme.my-plugin", "my-channel", handler);
   });
 });
 
 describe("removePluginHandlers", () => {
   it("delegates to pluginService.removeHandlers", () => {
-    removePluginHandlers("my-plugin");
-    expect(mockRemoveHandlers).toHaveBeenCalledWith("my-plugin");
+    removePluginHandlers("acme.my-plugin");
+    expect(mockRemoveHandlers).toHaveBeenCalledWith("acme.my-plugin");
   });
 });
