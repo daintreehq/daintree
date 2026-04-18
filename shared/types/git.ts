@@ -60,11 +60,39 @@ export interface StagingFileEntry {
   deletions: number | null;
 }
 
+/**
+ * In-progress repository operation state. `CLEAN` means no operation markers
+ * and no unmerged entries; `DIRTY` means unmerged entries exist without an
+ * operation marker (unusual). `MERGING`/`REBASING`/`CHERRY_PICKING`/`REVERTING`
+ * correspond to the matching `.git/` state files.
+ */
+export type RepoState = "CLEAN" | "DIRTY" | "MERGING" | "REBASING" | "CHERRY_PICKING" | "REVERTING";
+
+/** XY code from `git status --porcelain=v2` unmerged (`u`) entries. */
+export type ConflictXYCode = "UU" | "AA" | "DD" | "AU" | "UA" | "DU" | "UD";
+
+export interface ConflictedFileEntry {
+  path: string;
+  /** The two-letter unmerged code (e.g. `UU`). Unknown codes are passed through as-is. */
+  xy: string;
+  /** Human-readable label derived from the XY code (e.g. "both modified"). */
+  label: string;
+}
+
 export interface StagingStatus {
   staged: StagingFileEntry[];
   unstaged: StagingFileEntry[];
+  /** @deprecated Use `conflictedFiles` for richer per-file details. Kept for backward compat. */
   conflicted: string[];
+  /** Per-file conflict entries parsed from `git status --porcelain=v2` u-lines. */
+  conflictedFiles: ConflictedFileEntry[];
   isDetachedHead: boolean;
   currentBranch: string | null;
   hasRemote: boolean;
+  /** Current in-progress repository operation, or `CLEAN`/`DIRTY`. */
+  repoState: RepoState;
+  /** When `repoState === "REBASING"`, the current step number (1-based). Null otherwise. */
+  rebaseStep: number | null;
+  /** When `repoState === "REBASING"`, the total step count. Null otherwise. */
+  rebaseTotalSteps: number | null;
 }

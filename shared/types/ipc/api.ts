@@ -761,6 +761,8 @@ export interface ElectronAPI {
       recoveryAction?: RecoveryAction;
     }>;
     getStagingStatus(cwd: string): Promise<StagingStatus>;
+    abortRepositoryOperation(cwd: string): Promise<void>;
+    continueRepositoryOperation(cwd: string): Promise<void>;
     compareWorktrees(
       cwd: string,
       branch1: string,

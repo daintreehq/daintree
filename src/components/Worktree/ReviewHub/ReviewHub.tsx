@@ -17,6 +17,7 @@ import {
 import { Spinner } from "@/components/ui/Spinner";
 import { FileStageRow } from "./FileStageRow";
 import { CommitPanel } from "./CommitPanel";
+import { ConflictPanel } from "./ConflictPanel";
 import { FileDiffModal } from "../FileDiffModal";
 import { BaseBranchDiffModal } from "./BaseBranchDiffModal";
 import { Button } from "@/components/ui/button";
@@ -287,6 +288,46 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
     [worktreePath, refresh]
   );
 
+  const handleAbortOperation = useCallback(async () => {
+    setActionError(null);
+    debouncedBgRefreshRef.current?.cancel();
+    try {
+      await window.electron.git.abortRepositoryOperation(worktreePath);
+      await refresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  }, [worktreePath, refresh]);
+
+  const handleContinueOperation = useCallback(async () => {
+    setActionError(null);
+    debouncedBgRefreshRef.current?.cancel();
+    try {
+      await window.electron.git.continueRepositoryOperation(worktreePath);
+      await refresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  }, [worktreePath, refresh]);
+
+  const handleOpenInEditor = useCallback(
+    async (filePath: string) => {
+      setActionError(null);
+      try {
+        const separator = worktreePath.includes("\\") ? "\\" : "/";
+        const fullPath = worktreePath.endsWith(separator)
+          ? `${worktreePath}${filePath}`
+          : `${worktreePath}${separator}${filePath}`;
+        await window.electron.system.openInEditor({ path: fullPath });
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [worktreePath]
+  );
+
   const handleCommitAndPush = useCallback(
     async (message: string) => {
       setActionError(null);
@@ -375,6 +416,12 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
     (status?.unstaged.length ?? 0) +
     (status?.conflicted.length ?? 0);
   const hasConflicts = (status?.conflicted.length ?? 0) > 0;
+  const repoState = status?.repoState ?? "CLEAN";
+  const isOperationState =
+    repoState === "MERGING" ||
+    repoState === "REBASING" ||
+    repoState === "CHERRY_PICKING" ||
+    repoState === "REVERTING";
 
   return createPortal(
     <>
@@ -647,6 +694,14 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                       Retry
                     </Button>
                   </div>
+                ) : status && isOperationState ? (
+                  <ConflictPanel
+                    status={status}
+                    onMarkResolved={handleStageFile}
+                    onOpenInEditor={handleOpenInEditor}
+                    onAbort={handleAbortOperation}
+                    onContinue={handleContinueOperation}
+                  />
                 ) : status && totalChanges === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12 text-daintree-text/50">
                     <CheckSquare className="w-8 h-8 mb-2 text-daintree-text/30" />
@@ -756,19 +811,23 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
             )}
           </div>
 
-          {/* Commit panel — only in working-tree mode */}
-          {diffMode === "working-tree" && status && totalChanges > 0 && !loadError && (
-            <CommitPanel
-              stagedCount={status.staged.length}
-              isDetachedHead={status.isDetachedHead}
-              hasConflicts={hasConflicts}
-              hasRemote={status.hasRemote}
-              commitMessage={commitMessage}
-              onCommitMessageChange={setCommitMessage}
-              onCommit={handleCommit}
-              onCommitAndPush={handleCommitAndPush}
-            />
-          )}
+          {/* Commit panel — only in working-tree mode, and never during a conflict op */}
+          {diffMode === "working-tree" &&
+            status &&
+            totalChanges > 0 &&
+            !loadError &&
+            !isOperationState && (
+              <CommitPanel
+                stagedCount={status.staged.length}
+                isDetachedHead={status.isDetachedHead}
+                hasConflicts={hasConflicts}
+                hasRemote={status.hasRemote}
+                commitMessage={commitMessage}
+                onCommitMessageChange={setCommitMessage}
+                onCommit={handleCommit}
+                onCommitAndPush={handleCommitAndPush}
+              />
+            )}
         </div>
       </div>
 

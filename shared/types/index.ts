@@ -12,6 +12,9 @@ export type {
   WorktreeChanges,
   StagingFileEntry,
   StagingStatus,
+  RepoState,
+  ConflictXYCode,
+  ConflictedFileEntry,
 } from "./git.js";
 
 // Worktree types

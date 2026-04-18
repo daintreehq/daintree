@@ -1073,6 +1073,14 @@ export interface IpcInvokeMap {
     args: [cwd: string];
     result: StagingStatus;
   };
+  "git:abort-repository-operation": {
+    args: [cwd: string];
+    result: void;
+  };
+  "git:continue-repository-operation": {
+    args: [cwd: string];
+    result: void;
+  };
   "git:compare-worktrees": {
     args: [payload: GitCompareWorktreesPayload];
     result: CrossWorktreeDiffResult | string;

@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { StagingStatus } from "@shared/types";
 import type { WorktreeState } from "@shared/types";
@@ -13,6 +13,10 @@ const {
   debounceCancelSpy,
   compareWorktreesMock,
   openPRMock,
+  abortRepositoryOperationMock,
+  continueRepositoryOperationMock,
+  openInEditorMock,
+  stageFileMock,
   worktreeStoreData,
 } = vi.hoisted(() => ({
   getStagingStatusMock: vi.fn(),
@@ -20,6 +24,10 @@ const {
   debounceCancelSpy: vi.fn(),
   compareWorktreesMock: vi.fn(),
   openPRMock: vi.fn().mockResolvedValue(undefined),
+  abortRepositoryOperationMock: vi.fn().mockResolvedValue(undefined),
+  continueRepositoryOperationMock: vi.fn().mockResolvedValue(undefined),
+  openInEditorMock: vi.fn().mockResolvedValue(undefined),
+  stageFileMock: vi.fn().mockResolvedValue(undefined),
   worktreeStoreData: {
     current: new Map<string, Partial<WorktreeState>>([
       [
@@ -73,6 +81,8 @@ vi.mock("@/components/ui/button", () => ({
     children,
     onClick,
     disabled,
+    "aria-label": ariaLabel,
+    "data-testid": testId,
   }: {
     children: ReactNode;
     onClick?: () => void;
@@ -80,11 +90,55 @@ vi.mock("@/components/ui/button", () => ({
     variant?: string;
     size?: string;
     className?: string;
+    "aria-label"?: string;
+    "data-testid"?: string;
   }) => (
-    <button type="button" onClick={onClick} disabled={disabled}>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      data-testid={testId}
+    >
       {children}
     </button>
   ),
+}));
+
+vi.mock("@/components/ui/ConfirmDialog", () => ({
+  ConfirmDialog: ({
+    isOpen,
+    title,
+    description,
+    onConfirm,
+    onClose,
+    confirmLabel,
+    cancelLabel,
+  }: {
+    isOpen: boolean;
+    title: ReactNode;
+    description?: ReactNode;
+    onConfirm: () => void;
+    onClose?: () => void;
+    confirmLabel?: string;
+    cancelLabel?: string;
+  }) => {
+    if (!isOpen) return null;
+    return (
+      <div role="alertdialog" aria-label={typeof title === "string" ? title : "confirm"}>
+        <div>{title}</div>
+        {description && <div>{description}</div>}
+        <button type="button" onClick={onConfirm}>
+          {confirmLabel ?? "Confirm"}
+        </button>
+        {onClose && (
+          <button type="button" onClick={onClose}>
+            {cancelLabel ?? "Cancel"}
+          </button>
+        )}
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -102,9 +156,13 @@ const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
   staged: [{ path: "src/index.ts", status: "modified", insertions: 5, deletions: 2 }],
   unstaged: [{ path: "src/app.ts", status: "modified", insertions: 3, deletions: 1 }],
   conflicted: [],
+  conflictedFiles: [],
   isDetachedHead: false,
   currentBranch: "feature/test",
   hasRemote: false,
+  repoState: "DIRTY",
+  rebaseStep: null,
+  rebaseTotalSteps: null,
   ...overrides,
 });
 
@@ -152,18 +210,26 @@ describe("ReviewHub", () => {
 
     compareWorktreesMock.mockResolvedValue({ branch1: "main", branch2: "feature/test", files: [] });
 
+    abortRepositoryOperationMock.mockReset().mockResolvedValue(undefined);
+    continueRepositoryOperationMock.mockReset().mockResolvedValue(undefined);
+    openInEditorMock.mockReset().mockResolvedValue(undefined);
+    stageFileMock.mockReset().mockResolvedValue(undefined);
+
     Object.defineProperty(window, "electron", {
       value: {
         git: {
           getStagingStatus: getStagingStatusMock,
-          stageFile: vi.fn().mockResolvedValue(undefined),
+          stageFile: stageFileMock,
           unstageFile: vi.fn().mockResolvedValue(undefined),
           stageAll: vi.fn().mockResolvedValue(undefined),
           unstageAll: vi.fn().mockResolvedValue(undefined),
           commit: vi.fn().mockResolvedValue(undefined),
           push: vi.fn().mockResolvedValue({ success: true }),
           compareWorktrees: compareWorktreesMock,
+          abortRepositoryOperation: abortRepositoryOperationMock,
+          continueRepositoryOperation: continueRepositoryOperationMock,
         },
+        system: { openInEditor: openInEditorMock },
         worktree: { onUpdate: onUpdateMock },
       },
       writable: true,
@@ -717,6 +783,158 @@ describe("ReviewHub", () => {
         screen.getByText("#99");
         screen.getByText("merged");
       });
+    });
+  });
+
+  describe("conflict mode", () => {
+    const makeMergingStatus = (overrides?: Partial<StagingStatus>): StagingStatus =>
+      makeStatus({
+        staged: [],
+        unstaged: [],
+        conflicted: ["src/app.ts"],
+        conflictedFiles: [{ path: "src/app.ts", xy: "UU", label: "both modified" }],
+        repoState: "MERGING",
+        ...overrides,
+      });
+
+    it("renders the conflict panel instead of staging sections when merging", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByTestId("conflict-panel"));
+      screen.getByText(/Resolve Merge Conflicts/i);
+      expect(screen.queryByText(/^Staged$/i)).toBeNull();
+      expect(screen.queryByPlaceholderText("Commit message…")).toBeNull();
+    });
+
+    it("shows rebase step progress in the banner", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          repoState: "REBASING",
+          rebaseStep: 3,
+          rebaseTotalSteps: 8,
+        })
+      );
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByTestId("conflict-rebase-progress"));
+      expect(screen.getByTestId("conflict-rebase-progress").textContent).toMatch(/Step 3 of 8/);
+    });
+
+    it("disables Continue when conflicted files remain", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByRole("button", { name: /^Continue /i }));
+      expect(screen.getByRole("button", { name: /^Continue /i }).hasAttribute("disabled")).toBe(
+        true
+      );
+    });
+
+    it("enables Continue when all conflicts are resolved", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflicted: [],
+          conflictedFiles: [],
+          staged: [{ path: "src/app.ts", status: "modified", insertions: 1, deletions: 1 }],
+        })
+      );
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByRole("button", { name: /^Continue /i }));
+      expect(screen.getByRole("button", { name: /^Continue /i }).hasAttribute("disabled")).toBe(
+        false
+      );
+    });
+
+    it("stages a file when Mark resolved is clicked", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByTestId("conflict-panel"));
+      const resolveBtn = screen.getByRole("button", {
+        name: /Mark src\/app\.ts as resolved/i,
+      });
+      fireEvent.click(resolveBtn);
+
+      await waitFor(() => {
+        expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/app.ts");
+      });
+    });
+
+    it("opens the file in the external editor with the absolute path", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByTestId("conflict-panel"));
+      const openBtn = screen.getByRole("button", {
+        name: /Open src\/app\.ts in external editor/i,
+      });
+      fireEvent.click(openBtn);
+
+      await waitFor(() => {
+        expect(openInEditorMock).toHaveBeenCalledWith({
+          path: `${WORKTREE_PATH}/src/app.ts`,
+        });
+      });
+    });
+
+    it("opens confirm dialog before aborting and calls abort on confirm", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByRole("button", { name: /^Abort /i }));
+      fireEvent.click(screen.getByRole("button", { name: /^Abort /i }));
+
+      const dialog = await screen.findByRole("alertdialog");
+      expect(abortRepositoryOperationMock).not.toHaveBeenCalled();
+
+      fireEvent.click(within(dialog).getByRole("button", { name: /Abort merge/i }));
+
+      await waitFor(() => {
+        expect(abortRepositoryOperationMock).toHaveBeenCalledWith(WORKTREE_PATH);
+      });
+    });
+
+    it("invokes continue when Continue is clicked", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeMergingStatus({
+          conflicted: [],
+          conflictedFiles: [],
+          staged: [{ path: "src/app.ts", status: "modified", insertions: 1, deletions: 1 }],
+        })
+      );
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByRole("button", { name: /^Continue /i }));
+      fireEvent.click(screen.getByRole("button", { name: /^Continue /i }));
+
+      await waitFor(() => {
+        expect(continueRepositoryOperationMock).toHaveBeenCalledWith(WORKTREE_PATH);
+      });
+    });
+
+    it("renders normal staging UI when repoState is DIRTY with conflicts", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({
+          conflicted: ["src/weird.ts"],
+          conflictedFiles: [{ path: "src/weird.ts", xy: "UU", label: "both modified" }],
+          repoState: "DIRTY",
+        })
+      );
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByText("index.ts"));
+      expect(screen.queryByTestId("conflict-panel")).toBeNull();
     });
   });
 });

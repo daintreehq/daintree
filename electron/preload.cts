@@ -2097,6 +2097,12 @@ const api: ElectronAPI = {
 
     getStagingStatus: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_GET_STAGING_STATUS, cwd),
 
+    abortRepositoryOperation: (cwd: string) =>
+      _unwrappingInvoke(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, cwd),
+
+    continueRepositoryOperation: (cwd: string) =>
+      _unwrappingInvoke(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, cwd),
+
     compareWorktrees: (
       cwd: string,
       branch1: string,

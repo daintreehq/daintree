@@ -1,7 +1,15 @@
+import fs from "node:fs";
+import path from "node:path";
+import type { SimpleGit } from "simple-git";
 import { CHANNELS } from "../channels.js";
 import { checkRateLimit, typedHandle } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
-import type { GitStatus } from "../../../shared/types/git.js";
+import type {
+  ConflictedFileEntry,
+  GitStatus,
+  RepoState,
+  StagingStatus,
+} from "../../../shared/types/git.js";
 import { validateCwd, createHardenedGit, createAuthenticatedGit } from "../../utils/hardenedGit.js";
 import { store } from "../../store.js";
 import { soundService } from "../../services/SoundService.js";
@@ -20,13 +28,112 @@ interface StagingFileEntry {
   deletions: number | null;
 }
 
-export interface StagingStatus {
-  staged: StagingFileEntry[];
-  unstaged: StagingFileEntry[];
-  conflicted: string[];
-  isDetachedHead: boolean;
-  currentBranch: string | null;
-  hasRemote: boolean;
+const CONFLICT_LABELS: Record<string, string> = {
+  UU: "both modified",
+  AA: "both added",
+  DD: "both deleted",
+  AU: "added by us",
+  UA: "added by them",
+  DU: "deleted by us",
+  UD: "deleted by them",
+};
+
+async function pathExists(p: string): Promise<boolean> {
+  return fs.promises
+    .access(p)
+    .then(() => true)
+    .catch(() => false);
+}
+
+async function readTextOrNull(p: string): Promise<string | null> {
+  return fs.promises.readFile(p, "utf8").catch(() => null);
+}
+
+async function resolveGitDir(git: SimpleGit, cwd: string): Promise<string> {
+  const raw = (await git.revparse(["--git-dir"])).trim();
+  return path.isAbsolute(raw) ? raw : path.resolve(cwd, raw);
+}
+
+interface RepoOperationState {
+  state: RepoState;
+  rebaseStep: number | null;
+  rebaseTotalSteps: number | null;
+}
+
+async function detectRepoOperationState(
+  gitDir: string,
+  hasUnmerged: boolean
+): Promise<RepoOperationState> {
+  const [hasMergeHead, hasRebaseMerge, hasRebaseApply, hasCherryPickHead, hasRevertHead] =
+    await Promise.all([
+      pathExists(path.join(gitDir, "MERGE_HEAD")),
+      pathExists(path.join(gitDir, "rebase-merge")),
+      pathExists(path.join(gitDir, "rebase-apply")),
+      pathExists(path.join(gitDir, "CHERRY_PICK_HEAD")),
+      pathExists(path.join(gitDir, "REVERT_HEAD")),
+    ]);
+
+  // REBASING takes precedence: during rebase conflict, MERGE_HEAD may also appear.
+  if (hasRebaseMerge || hasRebaseApply) {
+    const { step, total } = await readRebaseProgress(gitDir, hasRebaseMerge ? "merge" : "apply");
+    return { state: "REBASING", rebaseStep: step, rebaseTotalSteps: total };
+  }
+  if (hasCherryPickHead) {
+    return { state: "CHERRY_PICKING", rebaseStep: null, rebaseTotalSteps: null };
+  }
+  if (hasRevertHead) {
+    return { state: "REVERTING", rebaseStep: null, rebaseTotalSteps: null };
+  }
+  if (hasMergeHead) {
+    return { state: "MERGING", rebaseStep: null, rebaseTotalSteps: null };
+  }
+  return {
+    state: hasUnmerged ? "DIRTY" : "CLEAN",
+    rebaseStep: null,
+    rebaseTotalSteps: null,
+  };
+}
+
+async function readRebaseProgress(
+  gitDir: string,
+  backend: "merge" | "apply"
+): Promise<{ step: number | null; total: number | null }> {
+  const dir = path.join(gitDir, backend === "merge" ? "rebase-merge" : "rebase-apply");
+  const [stepRaw, totalRaw] = await Promise.all([
+    readTextOrNull(path.join(dir, backend === "merge" ? "msgnum" : "next")),
+    readTextOrNull(path.join(dir, backend === "merge" ? "end" : "last")),
+  ]);
+  const toInt = (raw: string | null): number | null => {
+    if (raw == null) return null;
+    const n = Number.parseInt(raw.trim(), 10);
+    return Number.isFinite(n) ? n : null;
+  };
+  return { step: toInt(stepRaw), total: toInt(totalRaw) };
+}
+
+/**
+ * Parse `u` lines from `git status --porcelain=v2` (no `-z`) into conflict
+ * entries. Each u-line has the form:
+ *   `u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>`
+ */
+export function parsePorcelainV2Conflicts(raw: string): ConflictedFileEntry[] {
+  const entries: ConflictedFileEntry[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.startsWith("u ")) continue;
+    // Ten whitespace-separated fields before the path; the path itself may
+    // contain spaces, so split with a small limit and rejoin the tail.
+    const parts = line.split(" ");
+    if (parts.length < 11) continue;
+    const xy = parts[1] ?? "";
+    const filePath = parts.slice(10).join(" ");
+    if (!filePath) continue;
+    entries.push({
+      path: filePath,
+      xy,
+      label: CONFLICT_LABELS[xy] ?? xy,
+    });
+  }
+  return entries;
 }
 
 export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void {
@@ -265,9 +372,113 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       // no remotes
     }
 
-    return { staged, unstaged, conflicted, isDetachedHead, currentBranch, hasRemote };
+    let conflictedFiles: ConflictedFileEntry[] = [];
+    if (conflicted.length > 0) {
+      try {
+        const porcelain = await git.raw(["status", "--porcelain=v2"]);
+        conflictedFiles = parsePorcelainV2Conflicts(porcelain);
+      } catch {
+        // Fall back to the simple-git path list without XY labels.
+      }
+      if (conflictedFiles.length === 0) {
+        conflictedFiles = conflicted.map((p) => ({ path: p, xy: "UU", label: "conflicted" }));
+      }
+    }
+
+    let repoState: RepoState = conflicted.length > 0 ? "DIRTY" : "CLEAN";
+    let rebaseStep: number | null = null;
+    let rebaseTotalSteps: number | null = null;
+    try {
+      const gitDir = await resolveGitDir(git, cwd);
+      const detected = await detectRepoOperationState(gitDir, conflicted.length > 0);
+      repoState = detected.state;
+      rebaseStep = detected.rebaseStep;
+      rebaseTotalSteps = detected.rebaseTotalSteps;
+    } catch {
+      // If git-dir resolution fails, fall back to CLEAN/DIRTY from index alone.
+    }
+
+    return {
+      staged,
+      unstaged,
+      conflicted,
+      conflictedFiles,
+      isDetachedHead,
+      currentBranch,
+      hasRemote,
+      repoState,
+      rebaseStep,
+      rebaseTotalSteps,
+    };
   };
   handlers.push(typedHandle(CHANNELS.GIT_GET_STAGING_STATUS, handleGetStagingStatus));
+
+  const withNonInteractiveEnv = (git: SimpleGit): SimpleGit =>
+    git.env({
+      ...process.env,
+      GIT_EDITOR: "true",
+      GIT_MERGE_AUTOEDIT: "no",
+      GIT_TERMINAL_PROMPT: "0",
+    });
+
+  const handleAbortRepositoryOperation = async (cwd: string): Promise<void> => {
+    checkRateLimit(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, 5, 10_000);
+    validateCwd(cwd);
+
+    const git = createHardenedGit(cwd);
+    const gitDir = await resolveGitDir(git, cwd);
+    const { state } = await detectRepoOperationState(gitDir, false);
+
+    switch (state) {
+      case "MERGING":
+        await git.merge(["--abort"]);
+        return;
+      case "REBASING":
+        await git.rebase(["--abort"]);
+        return;
+      case "CHERRY_PICKING":
+        await git.raw(["cherry-pick", "--abort"]);
+        return;
+      case "REVERTING":
+        await git.raw(["revert", "--abort"]);
+        return;
+      default:
+        throw new Error("No merge, rebase, cherry-pick, or revert operation is in progress");
+    }
+  };
+  handlers.push(
+    typedHandle(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, handleAbortRepositoryOperation)
+  );
+
+  const handleContinueRepositoryOperation = async (cwd: string): Promise<void> => {
+    checkRateLimit(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, 5, 10_000);
+    validateCwd(cwd);
+
+    const git = withNonInteractiveEnv(createHardenedGit(cwd));
+    const gitDir = await resolveGitDir(git, cwd);
+    const { state } = await detectRepoOperationState(gitDir, false);
+
+    switch (state) {
+      case "MERGING":
+        await git.merge(["--continue", "--no-edit"]);
+        return;
+      case "REBASING":
+        // `git rebase --continue` has no `--no-edit`; the env overlay covers it.
+        await git.rebase(["--continue"]);
+        return;
+      case "CHERRY_PICKING":
+        await git.raw(["cherry-pick", "--continue", "--no-edit"]);
+        return;
+      case "REVERTING":
+        await git.raw(["revert", "--continue", "--no-edit"]);
+        return;
+      default:
+        throw new Error("No merge, rebase, cherry-pick, or revert operation is in progress");
+    }
+  };
+  handlers.push(
+    typedHandle(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, handleContinueRepositoryOperation)
+  );
 
   const DIFF_LINE_LIMIT = 500;
 
