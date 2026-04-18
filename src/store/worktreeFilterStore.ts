@@ -231,7 +231,7 @@ const _legacySeed = loadLegacySeedForProject();
 
 const _globalPrefsStore = create<GlobalPrefsState>()(
   persist(
-    () => ({
+    (): GlobalPrefsState => ({
       orderBy: "created",
       groupByType: false,
       alwaysShowActive: true,
@@ -285,7 +285,7 @@ const _globalPrefsStore = create<GlobalPrefsState>()(
 
 const _projectStore = create<ProjectScopedState>()(
   persist(
-    () => ({
+    (): ProjectScopedState => ({
       query: _legacySeed.query ?? "",
       statusFilters: new Set<StatusFilter>(_legacySeed.statusFilters ?? []),
       typeFilters: new Set<TypeFilter>(_legacySeed.typeFilters ?? []),
@@ -581,12 +581,17 @@ interface UseWorktreeFilterStoreHook {
   persist: (typeof _globalPrefsStore)["persist"];
 }
 
+function identitySelector(state: WorktreeFilterStore): WorktreeFilterStore {
+  return state;
+}
+
 function useWorktreeFilterStoreHook(): WorktreeFilterStore;
 function useWorktreeFilterStoreHook<U>(selector: (state: WorktreeFilterStore) => U): U;
 function useWorktreeFilterStoreHook<U>(
   selector?: (state: WorktreeFilterStore) => U
 ): U | WorktreeFilterStore {
-  return selector ? useStore(_mergedApi, selector) : useStore(_mergedApi);
+  const resolved = (selector ?? identitySelector) as (state: WorktreeFilterStore) => U;
+  return useStore(_mergedApi, resolved);
 }
 
 const hook = useWorktreeFilterStoreHook as UseWorktreeFilterStoreHook;
