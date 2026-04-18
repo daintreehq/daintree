@@ -182,8 +182,7 @@ export function useProjectHealth(): UseProjectHealthReturn {
         scheduleNextPoll();
       }
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [fetchHealth, scheduleNextPoll]);
 
   useEffect(() => {
     const handleSidebarRefresh = () => {

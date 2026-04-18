@@ -155,8 +155,19 @@ export function useTokenResolution({
       setTerminalContext(null);
       setSelectionContext(null);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs are stable
-    [applyEditorValue, agentId, cwd, terminalId]
+    [
+      applyEditorValue,
+      agentId,
+      cwd,
+      terminalId,
+      latestRef,
+      setAtContext,
+      setDiffContext,
+      setIsExpanded,
+      setSelectionContext,
+      setSlashContext,
+      setTerminalContext,
+    ]
   );
 
   return { sendText };

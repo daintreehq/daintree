@@ -1,4 +1,13 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import { AlertTriangle, RefreshCw, Settings } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
@@ -257,14 +266,10 @@ function TerminalPaneComponent({
     }
   }, [isTrashedOrRemoved]);
 
-  // Auto-restart logic: when exitBehavior === "restart" and terminal exits (any code except 130)
-  useEffect(() => {
-    if (!isExited) return;
-    if (exitBehavior !== "restart") return;
-    if (exitCode === 130) return;
-    if (isTrashedOrRemoved) return;
-    if (isRestarting) return;
-
+  // Auto-restart logic: when exitBehavior === "restart" and terminal exits (any code except 130).
+  // The scheduling body reads non-reactive values (id, restartTerminal, refs) and is wrapped
+  // in useEffectEvent so the React Compiler can memoize this component.
+  const scheduleAutoRestart = useEffectEvent(() => {
     if (autoRestartTimerRef.current !== null) {
       clearTimeout(autoRestartTimerRef.current);
       autoRestartTimerRef.current = null;
@@ -294,6 +299,16 @@ function TerminalPaneComponent({
       restartTerminal(id);
       setIsAutoRestarting(false);
     }, delay);
+  });
+
+  useEffect(() => {
+    if (!isExited) return;
+    if (exitBehavior !== "restart") return;
+    if (exitCode === 130) return;
+    if (isTrashedOrRemoved) return;
+    if (isRestarting) return;
+
+    scheduleAutoRestart();
 
     return () => {
       if (autoRestartTimerRef.current !== null) {
@@ -302,8 +317,7 @@ function TerminalPaneComponent({
         setIsAutoRestarting(false);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isExited, exitBehavior, exitCode, isTrashedOrRemoved]);
+  }, [isExited, exitBehavior, exitCode, isTrashedOrRemoved, isRestarting]);
 
   // Track drag state in a ref to avoid useEffect cleanup timing issues.
   // If isDragging is in the dependency array, cleanup runs on drag START

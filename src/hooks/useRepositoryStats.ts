@@ -256,8 +256,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         scheduleNextPoll();
       }
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [fetchStats, scheduleNextPoll]);
 
   useEffect(() => {
     const handleSidebarRefresh = () => {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useEffectEvent, useRef, useCallback } from "react";
 import { notesClient, type NoteListItem, type NoteMetadata } from "@/clients/notesClient";
 import { normalizeTag } from "../../shared/utils/noteTags";
 
@@ -79,8 +79,9 @@ export function useNoteEditor({
     };
   }, [selectedNotePath]);
 
-  // Load note content when selected
-  useEffect(() => {
+  // Load note content when selected. selectedNote is captured by useEffectEvent
+  // for concurrent-mode safety; the effect re-runs only when id changes.
+  const loadNoteContent = useEffectEvent((token: { cancelled: boolean }) => {
     const note = selectedNote;
     if (!note) {
       setNoteContent("");
@@ -90,29 +91,31 @@ export function useNoteEditor({
       return;
     }
 
-    let cancelled = false;
     setIsLoadingContent(true);
     setHasConflict(false);
 
     notesClient
       .read(note.path)
       .then((content) => {
-        if (cancelled) return;
+        if (token.cancelled) return;
         setNoteContent(content.content);
         setNoteMetadata(content.metadata);
         setNoteLastModified(content.lastModified);
         setIsLoadingContent(false);
       })
       .catch((e) => {
-        if (cancelled) return;
+        if (token.cancelled) return;
         console.error("Failed to load note:", e);
         setIsLoadingContent(false);
       });
+  });
 
+  useEffect(() => {
+    const token = { cancelled: false };
+    loadNoteContent(token);
     return () => {
-      cancelled = true;
+      token.cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only on id change; selectedNote captured via closure for concurrent-mode safety
   }, [selectedNote?.id]);
 
   const handleContentChange = useCallback(
