@@ -223,9 +223,16 @@ describe("round-trip serialization", () => {
     expect(restored.currentLastModified).toBe(12345);
   });
 
-  it("round-trips a GitOperationError discriminator through the properties bag", () => {
-    // Synthesize the shape produced by errorTypes.GitOperationError without a
-    // direct import — shared/ tests must not depend on electron/ modules.
+  it("round-trips a GitOperationError discriminator via serialize -> structuredClone -> deserialize", () => {
+    // Shared-layer test synthesizes the GitOperationError shape without importing
+    // the electron/ module — shared/ must not depend on electron/.
+    //
+    // NOTE: electron/setup/security.ts strips `properties` from the IPC envelope in
+    // packaged builds. This test proves the `properties` bag survives a naive
+    // serialize/clone/deserialize cycle, which is what dev-mode IPC uses and what
+    // our renderer event payloads (e.g. fetch-pr-branch-result, handlePush return)
+    // use. In packaged builds we rely on top-level AppError.gitReason, not on the
+    // wrapped-error properties bag.
     const original = Object.assign(new Error("fatal: not a git repository"), {
       name: "GitOperationError",
       context: { cwd: "/repo", op: "status", reason: "not-a-repository" },
@@ -234,7 +241,9 @@ describe("round-trip serialization", () => {
       rawMessage: "fatal: not a git repository",
     });
 
-    const restored = deserializeError(serializeError(original)) as Error & {
+    const serialized = serializeError(original);
+    const cloned = structuredClone(serialized);
+    const restored = deserializeError(cloned) as Error & {
       reason: string;
       op: string;
       rawMessage: string;

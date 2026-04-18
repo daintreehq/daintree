@@ -170,14 +170,16 @@ describe("WorkspaceService.fetchPRBranch", () => {
       requestId: "req-2",
       success: false,
       error: "fatal: couldn't find remote ref pull/99999/head",
-      gitReason: "unknown",
+      gitReason: "pathspec-invalid",
       recoveryAction: undefined,
     });
   });
 
   it("should handle network errors gracefully", async () => {
     mockSimpleGit.raw.mockRejectedValueOnce(
-      new Error("fatal: unable to access 'https://github.com/...'")
+      new Error(
+        "fatal: unable to access 'https://github.com/foo.git/': Could not resolve host: github.com"
+      )
     );
 
     await service.fetchPRBranch("req-3", "/test/root", 10, "some-branch");
@@ -186,8 +188,9 @@ describe("WorkspaceService.fetchPRBranch", () => {
       type: "fetch-pr-branch-result",
       requestId: "req-3",
       success: false,
-      error: "fatal: unable to access 'https://github.com/...'",
-      gitReason: "unknown",
+      error:
+        "fatal: unable to access 'https://github.com/foo.git/': Could not resolve host: github.com",
+      gitReason: "network-unavailable",
       recoveryAction: undefined,
     });
   });

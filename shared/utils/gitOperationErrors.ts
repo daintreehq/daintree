@@ -36,15 +36,19 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
   ["dubious-ownership", /fatal: detected dubious ownership in repository at/i],
   [
     "auth-failed",
-    /Authentication failed|Permission denied \(publickey\)|could not read Username for/i,
+    // HTTPS 401/403/407 (auth/perm/proxy-auth) as well as the direct SSH/HTTPS messages.
+    /Authentication failed|Permission denied \(publickey\)|could not read Username for|unable to access.*: The requested URL returned error: 40[137]/i,
+  ],
+  [
+    // Run BEFORE repository-not-found: when both signals appear (network failure plus
+    // the generic "Could not read from remote repository" follow-up), the network
+    // classification is the more actionable root cause.
+    "network-unavailable",
+    /Could not resolve host:|Failed to connect to.*port.*: Connection refused|unable to access.*: The requested URL returned error: 5\d\d/i,
   ],
   [
     "repository-not-found",
     /Repository not found|fatal: repository '.*' not found|Could not read from remote repository/i,
-  ],
-  [
-    "network-unavailable",
-    /Could not resolve host:|Failed to connect to.*port.*: Connection refused|unable to access.*: The requested URL returned error: 5\d\d/i,
   ],
   [
     "hook-rejected",
@@ -52,9 +56,11 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
   ],
   [
     "push-rejected-policy",
-    /GH006: Protected branch|error:.*protected branch|error:.*file size|pack exceeds maximum allowed size/i,
+    // GH006: protected branch, GH013: ruleset violation (modern GitHub), generic 'protected
+    // branch' / 'file size' / pack-size / ruleset-violation wording.
+    /GH006: Protected branch|GH013: Repository rule violations|error:.*protected branch|error:.*file size|pack exceeds maximum allowed size|push declined due to repository rule violations/i,
   ],
-  ["push-rejected-outdated", /! \[rejected\].*\(non-fast-forward\)/],
+  ["push-rejected-outdated", /! \[rejected\].*\(non-fast-forward\)/i],
   [
     "conflict-unresolved",
     /CONFLICT \(|Merge conflict in |error: (?:merge is not possible because you have unmerged files|pull is not possible because you have unmerged files)/i,
@@ -65,12 +71,14 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
   ],
   [
     "pathspec-invalid",
-    /fatal: (?:bad revision|needed a single revision|pathspec '.*' did not match|ambiguous argument)/i,
+    // `couldn't find remote ref ...` is also a missing-ref error (e.g. `git fetch pull/99999/head`).
+    /fatal: (?:bad revision|needed a single revision|pathspec '.*' did not match|ambiguous argument)|couldn't find remote ref/i,
   ],
   ["lfs-missing", /external filter 'git-lfs filter-process' failed|smudge filter lfs failed/i],
   [
     "config-missing",
-    /fatal: unable to read config file|fatal: bad config|fatal: The current branch .* has no upstream branch/i,
+    // Covers the older 'has no upstream branch' and the newer 'no upstream configured for branch'.
+    /fatal: unable to read config file|fatal: bad config|fatal: The current branch .* has no upstream branch|fatal: no upstream configured for branch/i,
   ],
   [
     "system-io-error",

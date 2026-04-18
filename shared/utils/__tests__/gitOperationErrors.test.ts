@@ -21,6 +21,10 @@ describe("classifyGitError — table-driven", () => {
       "auth-failed",
       "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
     ],
+    [
+      "auth-failed",
+      "fatal: unable to access 'https://github.com/acme/private.git/': The requested URL returned error: 403",
+    ],
     ["repository-not-found", "remote: ERROR: Repository not found."],
     ["repository-not-found", "fatal: repository 'https://github.com/foo/bar.git/' not found"],
     [
@@ -45,6 +49,14 @@ describe("classifyGitError — table-driven", () => {
       "push-rejected-policy",
       "remote: error: GH006: Protected branch update failed for refs/heads/main.",
     ],
+    [
+      "push-rejected-policy",
+      "remote: error: GH013: Repository rule violations found for refs/heads/main.",
+    ],
+    [
+      "push-rejected-policy",
+      " ! [remote rejected] main -> main (push declined due to repository rule violations)",
+    ],
     ["push-rejected-policy", "remote: pack exceeds maximum allowed size"],
     ["push-rejected-outdated", " ! [rejected]        main -> main (non-fast-forward)"],
     ["conflict-unresolved", "CONFLICT (content): Merge conflict in src/index.ts"],
@@ -55,11 +67,13 @@ describe("classifyGitError — table-driven", () => {
     ],
     ["pathspec-invalid", "fatal: bad revision 'HEAD~999'"],
     ["pathspec-invalid", "fatal: pathspec 'nonexistent' did not match any file(s) known to git"],
+    ["pathspec-invalid", "fatal: couldn't find remote ref pull/99999/head"],
     [
       "lfs-missing",
       "Smudge error: Error downloading file.bin: external filter 'git-lfs filter-process' failed",
     ],
     ["config-missing", "fatal: The current branch feature/foo has no upstream branch."],
+    ["config-missing", "fatal: no upstream configured for branch 'feature/foo'"],
     ["config-missing", "fatal: unable to read config file '/etc/gitconfig': Permission denied"],
     ["system-io-error", "ENOENT: no such file or directory, open '/path/to/file'"],
     ["system-io-error", "could not create work tree dir '/path/to/wt': Permission denied"],
@@ -118,6 +132,31 @@ describe("classifyGitError — ordering and normalization", () => {
   it("matches case-insensitively where appropriate", () => {
     expect(classifyGitError("authentication failed")).toBe("auth-failed");
     expect(classifyGitError("AUTHENTICATION FAILED")).toBe("auth-failed");
+    // push-rejected-outdated is also case-insensitive to survive wording drift
+    expect(classifyGitError(" ! [Rejected]        main -> main (Non-Fast-Forward)")).toBe(
+      "push-rejected-outdated"
+    );
+  });
+
+  it("prefers network-unavailable over repository-not-found when both signals appear", () => {
+    const msg =
+      "fatal: Could not read from remote repository.\n" +
+      "fatal: unable to access 'https://github.com/foo.git/': Could not resolve host: github.com";
+    expect(classifyGitError(msg)).toBe("network-unavailable");
+  });
+
+  it("prefers auth-failed over repository-not-found when both signals appear", () => {
+    const msg =
+      "fatal: Could not read from remote repository.\n" +
+      "fatal: could not read Username for 'https://github.com': terminal prompts disabled";
+    expect(classifyGitError(msg)).toBe("auth-failed");
+  });
+
+  it("combines CRLF, remote-stripping, and ordering for hook rejection", () => {
+    const msg =
+      "remote:  ! [remote rejected] main -> main (pre-receive hook declined)\r\n" +
+      " ! [rejected]        main -> main (non-fast-forward)";
+    expect(classifyGitError(msg)).toBe("hook-rejected");
   });
 });
 
