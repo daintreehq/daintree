@@ -66,6 +66,27 @@ describe("SettingsInput", () => {
     render(<SettingsInput label="Test" ref={ref} />);
     expect(ref).toHaveBeenCalledWith(expect.any(HTMLInputElement));
   });
+
+  it("uses semantic tokens for background and focus", () => {
+    const { container } = render(<SettingsInput label="Host" />);
+    const input = screen.getByLabelText("Host");
+    expect(input.className).toContain("bg-surface-input");
+    expect(input.className).toContain("focus-visible:ring-2");
+    expect(input.className).toContain("focus-visible:ring-ring");
+    expect(input.className).toContain("focus-visible:ring-offset-2");
+    expect(input.className).toContain("focus-visible:ring-offset-background");
+    expect(input.className).toContain("outline-2");
+    expect(input.className).toContain("outline-transparent");
+    expect(input.className).toContain("outline-offset-2");
+  });
+
+  it("uses semantic text tokens for label and description", () => {
+    render(<SettingsInput label="Host" description="The server hostname" />);
+    const label = screen.getByText("Host");
+    const description = screen.getByText("The server hostname");
+    expect(label.className).toContain("text-text-secondary");
+    expect(description.className).toContain("text-text-muted");
+  });
 });
 
 describe("SettingsSelect", () => {
@@ -141,6 +162,29 @@ describe("SettingsTextarea", () => {
     const ref = vi.fn();
     render(<SettingsTextarea label="Bio" ref={ref} />);
     expect(ref).toHaveBeenCalledWith(expect.any(HTMLTextAreaElement));
+  });
+
+  it("uses semantic tokens for background and focus", () => {
+    render(<SettingsTextarea label="Notes" />);
+    const textarea = screen.getByLabelText("Notes");
+    expect(textarea.className).toContain("bg-surface-input");
+    expect(textarea.className).toContain("focus-visible:ring-2");
+    expect(textarea.className).toContain("focus-visible:ring-ring");
+    expect(textarea.className).toContain("focus-visible:ring-offset-2");
+    expect(textarea.className).toContain("focus-visible:ring-offset-background");
+    expect(textarea.className).toContain("outline-2");
+    expect(textarea.className).toContain("outline-transparent");
+    expect(textarea.className).toContain("outline-offset-2");
+    expect(textarea.className).toContain("font-mono");
+    expect(textarea.className).toContain("resize-y");
+  });
+
+  it("uses semantic text tokens for label and description", () => {
+    render(<SettingsTextarea label="Notes" description="Additional notes" />);
+    const label = screen.getByText("Notes");
+    const description = screen.getByText("Additional notes");
+    expect(label.className).toContain("text-text-secondary");
+    expect(description.className).toContain("text-text-muted");
   });
 });
 

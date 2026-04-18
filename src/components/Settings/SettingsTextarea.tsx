@@ -4,7 +4,7 @@ import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const TEXTAREA_CLASSES =
-  "w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-daintree-text placeholder:text-text-muted focus:outline-none focus:border-daintree-accent transition-colors resize-y disabled:opacity-50 disabled:cursor-not-allowed";
+  "w-full bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-daintree-text placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background outline-2 outline-transparent outline-offset-2 transition-colors resize-y disabled:opacity-50 disabled:cursor-not-allowed";
 
 interface SettingsTextareaProps extends Omit<ComponentPropsWithoutRef<"textarea">, "id"> {
   label: string;
@@ -41,7 +41,7 @@ export function SettingsTextarea({
   return (
     <div className="group flex flex-col gap-2">
       <div className="flex items-center gap-2">
-        <label htmlFor={id} className="text-sm text-daintree-text/70">
+        <label htmlFor={id} className="text-sm text-text-secondary">
           {label}
         </label>
         {isModified && (
@@ -52,7 +52,7 @@ export function SettingsTextarea({
             type="button"
             aria-label={resetAriaLabel ?? `Reset ${label} to default`}
             className={cn(
-              "p-0.5 rounded-sm text-daintree-text/40 hover:text-daintree-accent",
+              "p-0.5 rounded-sm text-text-muted hover:text-daintree-accent",
               "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
               "transition-colors"
@@ -69,15 +69,11 @@ export function SettingsTextarea({
         disabled={disabled}
         aria-describedby={describedBy}
         aria-invalid={error ? true : undefined}
-        className={cn(
-          TEXTAREA_CLASSES,
-          error && "border-status-error focus:border-status-error",
-          className
-        )}
+        className={cn(TEXTAREA_CLASSES, error && "border-status-error", className)}
         {...props}
       />
       {description && !error && (
-        <p id={descriptionId} className="text-xs text-daintree-text/40 select-text">
+        <p id={descriptionId} className="text-xs text-text-muted select-text">
           {description}
         </p>
       )}
