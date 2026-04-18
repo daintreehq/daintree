@@ -130,11 +130,29 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
     return () => el.removeEventListener("pointerdown", handler, true);
   }, [row.id, onLaunch]);
 
+  // Keyboard: Enter/Space on the SubTrigger must launch vanilla (primary action)
+  // rather than Radix's default of opening the submenu. ArrowRight still opens
+  // the submenu for picking a specific flavor. Without this, keyboard users
+  // cannot trigger the left-side vanilla launch at all.
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      e.stopPropagation();
+      onLaunch(row.id, null);
+    }
+  };
+
+  const ccrFlavors = (row.flavors ?? []).filter((f) => f.id.startsWith("ccr-"));
+  const customFlavors = (row.flavors ?? []).filter((f) => !f.id.startsWith("ccr-"));
+  const hasBothGroups = ccrFlavors.length > 0 && customFlavors.length > 0;
+
   return (
     <DropdownMenuSub>
       <DropdownMenuSubTrigger
         className="p-0 [&>svg:last-child]:hidden overflow-hidden"
         data-testid="submenu-trigger"
+        onKeyDown={handleKeyDown}
+        aria-label={`${row.name} (press Enter to launch, Right Arrow for flavors)`}
       >
         <span ref={leftAreaRef} className="flex flex-1 items-center gap-2 px-2.5 py-1.5">
           <span className="inline-flex h-4 w-4 items-center justify-center shrink-0">
@@ -142,8 +160,11 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
           </span>
           {row.name}
         </span>
-        <span className="flex items-center px-2 py-1.5 border-l border-daintree-border/50">
-          <ChevronRight className="h-3.5 w-3.5 text-daintree-text/40" aria-hidden="true" />
+        <span
+          className="flex items-center px-2 py-1.5 border-l border-daintree-border/50"
+          aria-hidden="true"
+        >
+          <ChevronRight className="h-3.5 w-3.5 text-daintree-text/40" />
         </span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent data-testid="submenu-content">
@@ -153,14 +174,34 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
           </span>
           Vanilla
         </DropdownMenuItem>
-        {row.flavors!.map((flavor) => (
-          <DropdownMenuItem key={flavor.id} onSelect={() => onLaunch(row.id, flavor.id)}>
-            <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-              <row.Icon brandColor={flavor.color ?? getBrandColorHex(row.id)} />
-            </span>
-            {flavor.name.replace(/^CCR:\s*/, "")}
-          </DropdownMenuItem>
-        ))}
+        {ccrFlavors.length > 0 && (
+          <>
+            {hasBothGroups && <DropdownMenuSeparator />}
+            {hasBothGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
+            {ccrFlavors.map((flavor) => (
+              <DropdownMenuItem key={flavor.id} onSelect={() => onLaunch(row.id, flavor.id)}>
+                <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                  <row.Icon brandColor={flavor.color ?? getBrandColorHex(row.id)} />
+                </span>
+                {flavor.name.replace(/^CCR:\s*/, "")}
+              </DropdownMenuItem>
+            ))}
+          </>
+        )}
+        {customFlavors.length > 0 && (
+          <>
+            {hasBothGroups && <DropdownMenuSeparator />}
+            {hasBothGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
+            {customFlavors.map((flavor) => (
+              <DropdownMenuItem key={flavor.id} onSelect={() => onLaunch(row.id, flavor.id)}>
+                <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                  <row.Icon brandColor={flavor.color ?? getBrandColorHex(row.id)} />
+                </span>
+                {flavor.name}
+              </DropdownMenuItem>
+            ))}
+          </>
+        )}
       </DropdownMenuSubContent>
     </DropdownMenuSub>
   );

@@ -5,6 +5,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -97,8 +99,13 @@ export function AgentButton({
 
   const entry = agentSettings?.agents?.[type] ?? {};
   const flavors = getMergedFlavors(type, entry.customFlavors, ccrFlavors);
-  const hasFlavors = flavors.length > 0;
+  // Only show the split/chevron UI when there are at least 2 flavors; a single
+  // flavor is implicitly the default and doesn't warrant a picker.
+  const hasFlavors = flavors.length >= 2;
   const savedFlavorId = agentSettings?.agents?.[type]?.flavorId;
+  const ccrFlavorGroup = flavors.filter((f) => f.id.startsWith("ccr-"));
+  const customFlavorGroup = flavors.filter((f) => !f.id.startsWith("ccr-"));
+  const hasBothFlavorGroups = ccrFlavorGroup.length > 0 && customFlavorGroup.length > 0;
 
   const tooltipDetails = config.tooltip ? ` — ${config.tooltip}` : "";
   const shortcut = displayCombo ? ` (${displayCombo})` : "";
@@ -125,7 +132,15 @@ export function AgentButton({
 
   const handleClick = () => {
     if (isReady) {
-      void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
+      // MRU semantics: primary-button click launches with the saved flavor if
+      // one is stored (user's last pick), otherwise vanilla (no flavorId).
+      // Passing `flavorId: null` would force explicit vanilla and override a
+      // saved default — we want undefined fallthrough to useAgentLauncher.
+      void actionService.dispatch(
+        "agent.launch",
+        savedFlavorId ? { agentId: type, flavorId: savedFlavorId } : { agentId: type },
+        { source: "user" }
+      );
     } else {
       void actionService.dispatch(
         "app.settings.openTab",
@@ -296,18 +311,17 @@ export function AgentButton({
                   <DropdownMenuTrigger asChild>
                     <Button
                       variant="ghost"
-                      size="icon"
                       disabled={isLoading || !isReady}
                       data-toolbar-item={dataToolbarItem}
                       className={cn(
-                        "toolbar-agent-button text-daintree-text transition-colors rounded-l-none px-0.5",
+                        "toolbar-agent-button text-daintree-text transition-colors rounded-l-none",
+                        "h-8 w-4 p-0 flex items-center justify-center",
                         "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
                         !isReady && !isLoading && "opacity-60"
                       )}
-                      aria-label={`${ariaLabel} — choose flavor`}
+                      aria-label={`Choose ${config.name} flavor`}
                     >
-                      {iconElement}
-                      <ChevronDown className="absolute bottom-0.5 right-0.5 h-2 w-2 opacity-60" />
+                      <ChevronDown className="h-3 w-3 opacity-70" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" sideOffset={4} className="min-w-[12rem]">
@@ -326,24 +340,54 @@ export function AgentButton({
                       </span>
                       Vanilla
                     </DropdownMenuItem>
-                    {flavors.map((flavor) => (
-                      <DropdownMenuItem
-                        key={flavor.id}
-                        className={cn(savedFlavorId === flavor.id && "font-medium")}
-                        onSelect={() => {
-                          void actionService.dispatch(
-                            "agent.launch",
-                            { agentId: type, flavorId: flavor.id },
-                            { source: "user" }
-                          );
-                        }}
-                      >
-                        <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-                          <config.icon brandColor={flavor.color ?? getBrandColorHex(type)} />
-                        </span>
-                        {flavor.name.replace(/^CCR:\s*/, "")}
-                      </DropdownMenuItem>
-                    ))}
+                    {ccrFlavorGroup.length > 0 && (
+                      <>
+                        {hasBothFlavorGroups && <DropdownMenuSeparator />}
+                        {hasBothFlavorGroups && <DropdownMenuLabel>CCR Routes</DropdownMenuLabel>}
+                        {ccrFlavorGroup.map((flavor) => (
+                          <DropdownMenuItem
+                            key={flavor.id}
+                            className={cn(savedFlavorId === flavor.id && "font-medium")}
+                            onSelect={() => {
+                              void actionService.dispatch(
+                                "agent.launch",
+                                { agentId: type, flavorId: flavor.id },
+                                { source: "user" }
+                              );
+                            }}
+                          >
+                            <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                              <config.icon brandColor={flavor.color ?? getBrandColorHex(type)} />
+                            </span>
+                            {flavor.name.replace(/^CCR:\s*/, "")}
+                          </DropdownMenuItem>
+                        ))}
+                      </>
+                    )}
+                    {customFlavorGroup.length > 0 && (
+                      <>
+                        {hasBothFlavorGroups && <DropdownMenuSeparator />}
+                        {hasBothFlavorGroups && <DropdownMenuLabel>Custom</DropdownMenuLabel>}
+                        {customFlavorGroup.map((flavor) => (
+                          <DropdownMenuItem
+                            key={flavor.id}
+                            className={cn(savedFlavorId === flavor.id && "font-medium")}
+                            onSelect={() => {
+                              void actionService.dispatch(
+                                "agent.launch",
+                                { agentId: type, flavorId: flavor.id },
+                                { source: "user" }
+                              );
+                            }}
+                          >
+                            <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
+                              <config.icon brandColor={flavor.color ?? getBrandColorHex(type)} />
+                            </span>
+                            {flavor.name}
+                          </DropdownMenuItem>
+                        ))}
+                      </>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </span>
