@@ -325,7 +325,8 @@ export function registerTerminalLifecycleActions(
   actions.set("terminal.watch", () => ({
     id: "terminal.watch",
     title: "Watch This Terminal",
-    description: "Toggle a one-shot watch — notifies when the agent completes or waits for input.",
+    description:
+      "Toggle a one-shot watch — notifies when the agent completes, exits, or waits for input.",
     category: "terminal",
     kind: "command",
     danger: "safe",
