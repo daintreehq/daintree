@@ -3,6 +3,7 @@ import { persist, subscribeWithSelector } from "zustand/middleware";
 import type { Project, ProjectCloseResult } from "@shared/types";
 import { projectClient } from "@/clients";
 import { notify } from "@/lib/notify";
+import { actionService } from "@/services/ActionService";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
 import { useUrlHistoryStore } from "./urlHistoryStore";
@@ -116,7 +117,10 @@ interface ProjectState {
   loadProjects: () => Promise<void>;
   getCurrentProject: () => Promise<void>;
   addProject: () => Promise<void>;
-  addProjectByPath: (path: string) => Promise<void>;
+  addProjectByPath: (
+    path: string,
+    options?: { skipDubiousOwnershipRetry?: boolean }
+  ) => Promise<void>;
   createProjectFolder: (parentPath: string, folderName: string) => Promise<void>;
   switchProject: (projectId: string) => Promise<void>;
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
@@ -186,6 +190,12 @@ function getProjectStoreListenerState(): ProjectStoreListenerState {
   return created;
 }
 
+function isDubiousOwnershipError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  return lower.includes("dubious ownership") || lower.includes("safe.directory");
+}
+
 function getProjectOpenErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const lower = message.toLowerCase();
@@ -194,7 +204,7 @@ function getProjectOpenErrorMessage(error: unknown): string {
     return "Git executable not found. Install Git and ensure it is available on your PATH.";
   }
 
-  if (lower.includes("dubious ownership") || lower.includes("safe.directory")) {
+  if (isDubiousOwnershipError(error)) {
     return (
       "Git refused to open this repository due to 'dubious ownership'. " +
       "Mark it as safe.directory in Git settings and try again."
@@ -244,7 +254,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   cloneRepoDialogOpen: false,
   error: null,
 
-  addProjectByPath: async (path) => {
+  addProjectByPath: async (path, options) => {
     set({ isLoading: true, error: null });
     let resolvedPath: string | undefined | null;
     try {
@@ -281,13 +291,72 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       });
       const errorMessage = error instanceof Error ? error.message : String(error);
 
+      // Absolute-path check: POSIX (/...), Windows drive letter (C:\... / C:/...),
+      // and Windows UNC (\\server\share...) are all "absolute" here.
+      const isAbsolutePath = (p: string) =>
+        p.startsWith("/") || p.startsWith("\\\\") || /^[a-zA-Z]:[\\/]/.test(p);
+
       if (errorMessage.includes("Not a git repository")) {
         const gitInitPath =
           resolvedPath || path.trim() || errorMessage.match(/Not a git repository: (.+)/)?.[1];
-        const isAbsolutePath = (p: string) => p.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(p);
         if (gitInitPath && isAbsolutePath(gitInitPath)) {
           set({ isLoading: false });
           get().openGitInitDialog(gitInitPath);
+          return;
+        }
+      }
+
+      if (isDubiousOwnershipError(error) && !options?.skipDubiousOwnershipRetry) {
+        const targetPath = resolvedPath ?? path.trim();
+        if (targetPath && isAbsolutePath(targetPath)) {
+          notify({
+            type: "error",
+            title: "Repository ownership issue",
+            message:
+              "Git refused to open this repository due to an ownership mismatch. " +
+              "You can mark it as trusted to open it.",
+            duration: 0,
+            actions: [
+              {
+                label: "Mark as safe",
+                variant: "primary",
+                onClick: async () => {
+                  try {
+                    await window.electron.git.markSafeDirectory(targetPath);
+                  } catch (markError) {
+                    const markMessage =
+                      markError instanceof Error ? markError.message : String(markError);
+                    notify({
+                      type: "error",
+                      title: "Failed to mark as safe",
+                      message: markMessage,
+                      duration: 6000,
+                    });
+                    return;
+                  }
+                  // Pass skipDubiousOwnershipRetry so a persistent dubious
+                  // ownership error (e.g., the path we wrote doesn't match
+                  // what git canonicalizes to) falls through to the generic
+                  // error toast instead of showing the same CTA indefinitely.
+                  await get().addProjectByPath(targetPath, {
+                    skipDubiousOwnershipRetry: true,
+                  });
+                },
+              },
+              {
+                label: "Open logs",
+                variant: "secondary",
+                actionId: "errors.openLogs",
+                onClick: () => {
+                  void actionService.dispatch("errors.openLogs", undefined, { source: "user" });
+                },
+              },
+            ],
+          });
+          set({
+            error: "Git refused to open repository due to dubious ownership.",
+            isLoading: false,
+          });
           return;
         }
       }

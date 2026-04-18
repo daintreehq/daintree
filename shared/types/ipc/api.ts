@@ -776,6 +776,7 @@ export interface ElectronAPI {
     snapshotList(): Promise<SnapshotInfo[]>;
     snapshotRevert(worktreeId: string): Promise<SnapshotRevertResult>;
     snapshotDelete(worktreeId: string): Promise<void>;
+    markSafeDirectory(path: string): Promise<void>;
   };
   terminalConfig: {
     get(): Promise<TerminalConfig>;

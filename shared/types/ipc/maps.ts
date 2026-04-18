@@ -1109,6 +1109,10 @@ export interface IpcInvokeMap {
     args: [worktreeId: string];
     result: void;
   };
+  "git:mark-safe-directory": {
+    args: [path: string];
+    result: void;
+  };
 
   // Portal channels
   "portal:create": {

@@ -298,6 +298,7 @@ export const CHANNELS = {
   GIT_SNAPSHOT_DELETE: "git:snapshot-delete",
   GIT_ABORT_REPOSITORY_OPERATION: "git:abort-repository-operation",
   GIT_CONTINUE_REPOSITORY_OPERATION: "git:continue-repository-operation",
+  GIT_MARK_SAFE_DIRECTORY: "git:mark-safe-directory",
 
   PORTAL_CREATE: "portal:create",
   PORTAL_SHOW: "portal:show",
