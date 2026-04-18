@@ -182,6 +182,9 @@ export function NewWorktreeDialog({
   const [loading, setLoading] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [errorField, setErrorField] = useState<
+    "base-branch" | "new-branch" | "worktree-path" | null
+  >(null);
   const [creationError, setCreationError] = useState<WorktreeCreationError | null>(null);
   const [baseBranch, setBaseBranch] = useState("");
   const [prBranchResolved, setPrBranchResolved] = useState<boolean | null>(null);
@@ -322,6 +325,7 @@ export function NewWorktreeDialog({
     setSelectedExistingBranch(null);
     setExistingBranchQuery("");
     setValidationError(null);
+    setErrorField(null);
     setCreationError(null);
   }, []);
 
@@ -384,6 +388,7 @@ export function NewWorktreeDialog({
 
     setLoading(true);
     setValidationError(null);
+    setErrorField(null);
     setCreationError(null);
     setPrBranchResolved(null);
     setBranches([]);
@@ -476,6 +481,7 @@ export function NewWorktreeDialog({
       .catch((err) => {
         if (!isCurrent) return;
         setValidationError(`Failed to load branches: ${err.message}`);
+        setErrorField(null);
         setBranches([]);
         setBaseBranch("");
         setFromRemote(false);
@@ -556,14 +562,17 @@ export function NewWorktreeDialog({
     if (isExistingMode) {
       if (!selectedExistingBranch) {
         setValidationError("Please select a branch");
+        setErrorField(null);
         return;
       }
       if (!worktreePath.trim()) {
         setValidationError("Please enter a worktree path");
+        setErrorField("worktree-path");
         return;
       }
 
       setValidationError(null);
+      setErrorField(null);
       setCreationError(null);
 
       startTransition(async () => {
@@ -653,12 +662,14 @@ export function NewWorktreeDialog({
 
     if (!baseBranch) {
       setValidationError("Please select a base branch");
+      setErrorField("base-branch");
       return;
     }
 
     const trimmedInput = branchInput.trim();
     if (!trimmedInput) {
       setValidationError("Please enter a branch name");
+      setErrorField("new-branch");
       return;
     }
 
@@ -667,6 +678,7 @@ export function NewWorktreeDialog({
     if (parsed.hasPrefix) {
       if (!parsed.slug || !parsed.slug.trim()) {
         setValidationError("Please enter a branch name after the prefix");
+        setErrorField("new-branch");
         return;
       }
       if (
@@ -675,35 +687,42 @@ export function NewWorktreeDialog({
         parsed.prefix.includes("..")
       ) {
         setValidationError("Branch prefix contains invalid characters");
+        setErrorField("new-branch");
         return;
       }
       if (/[\s.]$/.test(parsed.slug) || /^[.-]/.test(parsed.slug)) {
         setValidationError("Branch name cannot start with '.', '-' or end with space or '.'");
+        setErrorField("new-branch");
         return;
       }
       if (/[\\:]/.test(parsed.slug) || parsed.slug.includes("..")) {
         setValidationError("Branch name contains invalid characters");
+        setErrorField("new-branch");
         return;
       }
     } else {
       if (/[\s.]$/.test(trimmedInput) || /^[.-]/.test(trimmedInput)) {
         setValidationError("Branch name cannot start with '.', '-' or end with space or '.'");
+        setErrorField("new-branch");
         return;
       }
       if (/[/\\:]/.test(trimmedInput) || trimmedInput.includes("..")) {
         setValidationError("Branch name contains invalid characters");
+        setErrorField("new-branch");
         return;
       }
     }
 
     if (!worktreePath.trim()) {
       setValidationError("Please enter a worktree path");
+      setErrorField("worktree-path");
       return;
     }
 
     const fullBranchName = parsed.fullBranchName;
 
     setValidationError(null);
+    setErrorField(null);
     setCreationError(null);
 
     startTransition(async () => {
@@ -1014,6 +1033,10 @@ export function NewWorktreeDialog({
                         role="combobox"
                         aria-expanded={branchPickerOpen}
                         aria-haspopup="listbox"
+                        aria-invalid={errorField === "base-branch" ? true : undefined}
+                        aria-describedby={
+                          errorField === "base-branch" ? "validation-error" : undefined
+                        }
                         className="w-full justify-between bg-daintree-bg border-daintree-border text-daintree-text hover:bg-daintree-bg hover:text-daintree-text"
                         disabled={isPending}
                       >
@@ -1201,6 +1224,7 @@ export function NewWorktreeDialog({
                                 setExistingBranchPickerOpen(false);
                                 setExistingBranchQuery("");
                                 setValidationError(null);
+                                setErrorField(null);
                                 setCreationError(null);
                               }}
                               className={cn(
@@ -1240,14 +1264,21 @@ export function NewWorktreeDialog({
                             setBranchInput(e.target.value);
                             markBranchInputTouched();
                             setValidationError(null);
+                            setErrorField(null);
                             setCreationError(null);
                           }}
                           onKeyDown={handlePrefixKeyDown}
                           placeholder="feature/add-user-auth"
                           className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent font-mono text-sm"
                           disabled={isPending}
+                          aria-invalid={errorField === "new-branch" ? true : undefined}
                           aria-describedby={
-                            branchWasAutoResolved ? "branch-resolved-hint" : undefined
+                            [
+                              errorField === "new-branch" ? "validation-error" : null,
+                              branchWasAutoResolved ? "branch-resolved-hint" : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" ") || undefined
                           }
                           role="combobox"
                           aria-autocomplete="list"
@@ -1365,11 +1396,16 @@ export function NewWorktreeDialog({
                         setWorktreePath(e.target.value);
                         pathTouchedRef.current = true;
                         setValidationError(null);
+                        setErrorField(null);
                         setCreationError(null);
                       }}
                       placeholder="/path/to/worktree"
                       className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-none focus:ring-2 focus:ring-daintree-accent"
                       disabled={isPending}
+                      aria-invalid={errorField === "worktree-path" ? true : undefined}
+                      aria-describedby={
+                        errorField === "worktree-path" ? "validation-error" : undefined
+                      }
                     />
                     {isGeneratingPath && (
                       <Spinner
@@ -1394,12 +1430,14 @@ export function NewWorktreeDialog({
                           setWorktreePath(result.result as string);
                           pathTouchedRef.current = true;
                           setValidationError(null);
+                          setErrorField(null);
                           setCreationError(null);
                         }
                       } catch (err: unknown) {
                         console.error("Failed to open directory picker:", err);
                         const message = err instanceof Error ? err.message : "Unknown error";
                         setValidationError(`Failed to open directory picker: ${message}`);
+                        setErrorField(null);
                       }
                     }}
                     disabled={isPending}
@@ -1715,6 +1753,7 @@ export function NewWorktreeDialog({
 
               {validationError && (
                 <div
+                  id="validation-error"
                   role="alert"
                   className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)]"
                 >
