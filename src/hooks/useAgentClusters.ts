@@ -141,7 +141,7 @@ export function deriveHighestPriorityCluster(params: DeriveParams): ClusterGroup
     return a.memberIds.join(",").localeCompare(b.memberIds.join(","));
   });
 
-  return candidates[0];
+  return candidates[0]!;
 }
 
 /**
