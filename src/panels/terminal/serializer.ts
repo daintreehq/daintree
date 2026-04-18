@@ -1,7 +1,13 @@
-import type { TerminalInstance } from "@shared/types/panel";
-import type { TerminalSnapshot } from "@shared/types/project";
+import type { PtyPanelData } from "@shared/types/panel";
+import type { PanelSnapshot } from "@shared/types/project";
 
-export function serializePtyPanel(t: TerminalInstance): Partial<TerminalSnapshot> {
+/**
+ * Serializer input: `PtyPanelData` plus the legacy `createdAt` field, which is
+ * persisted but intentionally not declared on the shared variant interface.
+ */
+type PtySerializeInput = PtyPanelData & { createdAt?: number };
+
+export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> {
   return {
     type: t.type,
     agentId: t.agentId,

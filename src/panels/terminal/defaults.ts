@@ -1,6 +1,6 @@
-import type { TerminalInstance } from "@shared/types/panel";
-import type { AddPanelOptions } from "@shared/types/addPanelOptions";
+import type { PtyPanelData } from "@shared/types/panel";
+import type { TerminalPanelOptions } from "@shared/types/addPanelOptions";
 
-export function createTerminalDefaults(_options: AddPanelOptions): Partial<TerminalInstance> {
+export function createTerminalDefaults(_options: TerminalPanelOptions): Partial<PtyPanelData> {
   return {};
 }

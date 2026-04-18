@@ -1,7 +1,7 @@
-import type { TerminalInstance } from "@shared/types/panel";
-import type { TerminalSnapshot } from "@shared/types/project";
+import type { BrowserPanelData } from "@shared/types/panel";
+import type { PanelSnapshot } from "@shared/types/project";
 
-export function serializeBrowser(t: TerminalInstance): Partial<TerminalSnapshot> {
+export function serializeBrowser(t: BrowserPanelData): Partial<PanelSnapshot> {
   return {
     ...(t.browserUrl != null && { browserUrl: t.browserUrl }),
     ...(t.browserHistory && { browserHistory: t.browserHistory }),
