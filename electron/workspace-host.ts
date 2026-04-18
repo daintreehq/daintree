@@ -17,6 +17,7 @@ import { projectPulseService } from "./services/ProjectPulseService.js";
 import type { CopyTreeProgress } from "../shared/types/ipc.js";
 import type { WorkspaceHostRequest, WorkspaceHostEvent } from "../shared/types/workspace-host.js";
 import { WorkspaceService } from "./workspace-host/WorkspaceService.js";
+import { gitHubRateLimitService } from "./services/github/index.js";
 import { ensureSerializable } from "../shared/utils/serialization.js";
 
 // Validate we're running in UtilityProcess context
@@ -247,6 +248,17 @@ const shutdownController = new AbortController();
 
 // Create singleton instance
 const workspaceService = new WorkspaceService(sendEvent);
+
+// Forward GitHub rate-limit state changes observed by utility-process HTTP
+// calls (e.g. PullRequestService polling) up to the main process so they
+// reach the toolbar countdown and block main-process GitHub calls too.
+// `broadcastToRenderer` is BrowserWindow-backed and therefore main-only;
+// this relay is how utility-side limits ever become visible elsewhere.
+// Register synchronously before `ready` is sent — otherwise the first
+// event emitted during startup racing polling would be silently dropped.
+gitHubRateLimitService.onStateChange((state) => {
+  sendEvent({ type: "github-rate-limit-changed", state });
+});
 
 // Handle requests from Main
 port.on("message", async (rawMsg: any) => {

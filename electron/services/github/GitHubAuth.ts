@@ -1,4 +1,5 @@
 import { graphql } from "@octokit/graphql";
+import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 
 export const GITHUB_API_TIMEOUT_MS = 15_000;
 export const GITHUB_AUTH_TIMEOUT_MS = 10_000;
@@ -75,6 +76,7 @@ export class GitHubAuth {
     this.cachedUsername = null;
     this.cachedAvatarUrl = null;
     this.cachedScopes = [];
+    gitHubRateLimitService.clear();
   }
 
   static hasToken(): boolean {
@@ -93,6 +95,7 @@ export class GitHubAuth {
     this.cachedUsername = null;
     this.cachedAvatarUrl = null;
     this.cachedScopes = [];
+    gitHubRateLimitService.clear();
   }
 
   static clearToken(): void {
@@ -103,6 +106,7 @@ export class GitHubAuth {
     this.tokenVersion++;
     this.pendingValidation = null;
     this.storage.delete();
+    gitHubRateLimitService.clear();
   }
 
   private static pendingValidation: Promise<void> | null = null;
@@ -177,6 +181,9 @@ export class GitHubAuth {
       headers: {
         authorization: `token ${token}`,
       },
+      request: {
+        fetch: rateLimitAwareFetch,
+      },
     });
   }
 
@@ -247,4 +254,57 @@ export class GitHubAuth {
       return { valid: false, scopes: [], error: message };
     }
   }
+}
+
+/**
+ * Custom fetch wrapper used by `@octokit/graphql` via
+ * `graphql.defaults({ request: { fetch } })`.
+ *
+ * `@octokit/graphql` v9 resolves to the parsed `data.data` payload — the raw
+ * `Response` (and its headers) are dropped before the promise resolves.
+ * Installing this fetch wrapper is the only reliable place to observe GitHub
+ * rate-limit headers on every response (both 2xx and error paths).
+ *
+ * The wrapper is intentionally two-phase: a synchronous header-only
+ * classification runs first so the response can return to Octokit
+ * immediately, and the body-text classification (used to detect secondary
+ * rate limits that GitHub reports via a 403 body rather than a `retry-after`
+ * header) runs off the critical path. This prevents a stuck response body
+ * from blocking every GitHub call behind the fetch wrapper.
+ */
+async function rateLimitAwareFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): Promise<Response> {
+  const response = await globalThis.fetch(input, init);
+
+  // Phase 1 — header-only classification runs immediately so the Response
+  // can flow back to Octokit without waiting on the body.
+  try {
+    gitHubRateLimitService.update(response.headers, response.status);
+  } catch {
+    // Rate-limit bookkeeping must never break the underlying request.
+  }
+
+  // Phase 2 — secondary-limit fallback classification when the 403/429
+  // response carries no `retry-after` but explains the block in its body.
+  // Scheduled off the hot path; any failures are swallowed.
+  if (!response.ok && (response.status === 403 || response.status === 429)) {
+    void response
+      .clone()
+      .text()
+      .then((bodyText) => {
+        try {
+          gitHubRateLimitService.update(response.headers, response.status, bodyText);
+        } catch {
+          // Swallow — see Phase 1 comment.
+        }
+      })
+      .catch(() => {
+        // Cloning can fail on aborted streams; header-only classification
+        // is already safe.
+      });
+  }
+
+  return response;
 }

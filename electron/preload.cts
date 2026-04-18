@@ -32,6 +32,7 @@ import type {
   PRClearedPayload,
   IssueDetectedPayload,
   IssueNotFoundPayload,
+  GitHubRateLimitPayload,
   GitStatus,
   KeyAction,
   TerminalRecipe,
@@ -642,6 +643,7 @@ const CHANNELS = {
   GITHUB_GET_ISSUE_BY_NUMBER: "github:get-issue-by-number",
   GITHUB_GET_PR_BY_NUMBER: "github:get-pr-by-number",
   GITHUB_LIST_REMOTES: "github:list-remotes",
+  GITHUB_RATE_LIMIT_CHANGED: "github:rate-limit-changed",
 
   // Notes channels
   NOTES_CREATE: "notes:create",
@@ -1994,6 +1996,9 @@ const api: ElectronAPI = {
 
     onIssueNotFound: (callback: (data: IssueNotFoundPayload) => void) =>
       _typedOn(CHANNELS.ISSUE_NOT_FOUND, callback),
+
+    onRateLimitChanged: (callback: (data: GitHubRateLimitPayload) => void) =>
+      _typedOn(CHANNELS.GITHUB_RATE_LIMIT_CHANGED, callback),
   },
 
   // Notes API

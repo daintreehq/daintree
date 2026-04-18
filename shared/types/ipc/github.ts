@@ -1,3 +1,6 @@
+/** Kind of GitHub rate limit currently active */
+export type GitHubRateLimitKind = "primary" | "secondary";
+
 /** Repository stats from GitHub API */
 export interface RepositoryStats {
   /** Total commit count for current branch */
@@ -14,6 +17,20 @@ export interface RepositoryStats {
   stale?: boolean;
   /** Timestamp when stats were last successfully fetched from API */
   lastUpdated?: number;
+  /** Unix epoch milliseconds when a GitHub rate limit resumes */
+  rateLimitResetAt?: number;
+  /** Kind of active GitHub rate limit (primary quota vs secondary abuse) */
+  rateLimitKind?: GitHubRateLimitKind;
+}
+
+/** Push payload describing the current GitHub rate-limit state */
+export interface GitHubRateLimitPayload {
+  /** Whether outbound GitHub calls are currently blocked */
+  blocked: boolean;
+  /** Kind of active rate limit, or null when unblocked */
+  kind: GitHubRateLimitKind | null;
+  /** Unix epoch milliseconds when the block is expected to resume (primary only) */
+  resetAt?: number;
 }
 
 /** Project health data from GitHub API */

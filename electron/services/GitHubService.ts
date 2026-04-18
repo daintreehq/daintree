@@ -25,6 +25,8 @@ import {
   GET_ISSUE_QUERY,
   GET_PR_QUERY,
   buildBatchPRQuery,
+  gitHubRateLimitService,
+  GitHubRateLimitError,
 } from "./github/index.js";
 
 import type {
@@ -240,6 +242,24 @@ export async function getRepoStats(
     return { stats: null, error: "GitHub token not configured. Set it in Settings." };
   }
 
+  const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest();
+  if (rateLimitBlock.blocked && rateLimitBlock.reason && rateLimitBlock.resumeAt) {
+    const diskCached = persistentCache.get(cacheKey);
+    const message = rateLimitMessage(rateLimitBlock.reason, rateLimitBlock.resumeAt);
+    if (diskCached) {
+      return {
+        stats: {
+          issueCount: diskCached.issueCount,
+          prCount: diskCached.prCount,
+          stale: true,
+          lastUpdated: diskCached.lastUpdated,
+        },
+        error: message,
+      };
+    }
+    return { stats: null, error: message };
+  }
+
   if (!bypassCache) {
     const cached = repoStatsCache.get(cacheKey);
     if (cached) {
@@ -398,6 +418,14 @@ export async function getProjectHealth(
   const client = GitHubAuth.createClient();
   if (!client) {
     return { health: null, error: "GitHub token not configured. Set it in Settings." };
+  }
+
+  const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest();
+  if (rateLimitBlock.blocked && rateLimitBlock.reason && rateLimitBlock.resumeAt) {
+    return {
+      health: null,
+      error: rateLimitMessage(rateLimitBlock.reason, rateLimitBlock.resumeAt),
+    };
   }
 
   if (!bypassCache) {
@@ -612,6 +640,15 @@ export async function batchCheckLinkedPRs(
     return { results: new Map(), error: "Not a GitHub repository" };
   }
 
+  const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest();
+  if (rateLimitBlock.blocked && rateLimitBlock.reason && rateLimitBlock.resumeAt) {
+    return {
+      results: new Map(),
+      error: rateLimitMessage(rateLimitBlock.reason, rateLimitBlock.resumeAt),
+      rateLimit: { kind: rateLimitBlock.reason, resumeAt: rateLimitBlock.resumeAt },
+    };
+  }
+
   try {
     const query = buildBatchPRQuery(context.owner, context.repo, candidates);
     const response = (await client(query, {
@@ -635,12 +672,27 @@ export async function batchCheckLinkedPRs(
           })) as Record<string, unknown>;
           return { results: parseBatchPRResponse(retryResponse, candidates) };
         } catch (retryError) {
-          return { results: new Map(), error: parseGitHubError(retryError) };
+          return { results: new Map(), error: parseGitHubError(retryError), ...rateLimitMeta() };
         }
       }
     }
-    return { results: new Map(), error: parseGitHubError(error) };
+    return { results: new Map(), error: parseGitHubError(error), ...rateLimitMeta() };
   }
+}
+
+/**
+ * Capture the rate-limit snapshot synchronously after a caller's request
+ * fails, so downstream schedulers can route the failure as a rate-limit
+ * pause even if a concurrent 2xx clears the singleton before `handleError`
+ * reads it. Returns an empty object when no block is active so it spreads
+ * cleanly into result objects via rest-spread.
+ */
+function rateLimitMeta(): { rateLimit?: { kind: "primary" | "secondary"; resumeAt: number } } {
+  const block = gitHubRateLimitService.shouldBlockRequest();
+  if (block.blocked && block.reason && block.resumeAt) {
+    return { rateLimit: { kind: block.reason, resumeAt: block.resumeAt } };
+  }
+  return {};
 }
 
 export async function getRepoUrl(cwd: string): Promise<string | null> {
@@ -792,7 +844,32 @@ function updateIssueAssigneeInCache(
   }
 }
 
+function rateLimitMessage(kind: "primary" | "secondary", resumeAt: number): string {
+  const seconds = Math.max(0, Math.ceil((resumeAt - Date.now()) / 1000));
+  const human = formatCountdown(seconds);
+  if (kind === "secondary") {
+    return `GitHub secondary rate limit triggered. Resuming in ${human}.`;
+  }
+  return `GitHub rate limit exceeded. Resets in ${human}.`;
+}
+
+function formatCountdown(totalSeconds: number): string {
+  if (totalSeconds <= 0) return "a moment";
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
+}
+
 function parseGitHubError(error: unknown): string {
+  if (error instanceof GitHubRateLimitError) {
+    return rateLimitMessage(error.kind, error.resumeAt);
+  }
   const message = error instanceof Error ? error.message : String(error);
   const isTimeout = error instanceof Error && error.name === "TimeoutError";
 
@@ -807,6 +884,11 @@ function parseGitHubError(error: unknown): string {
     message === "Cannot reach GitHub. Check your internet connection."
   ) {
     return message;
+  }
+
+  const blockState = gitHubRateLimitService.shouldBlockRequest();
+  if (blockState.blocked && blockState.reason && blockState.resumeAt) {
+    return rateLimitMessage(blockState.reason, blockState.resumeAt);
   }
 
   if (message.includes("rate limit") || message.includes("API rate limit")) {

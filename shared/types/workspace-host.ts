@@ -356,6 +356,14 @@ export type WorkspaceHostEvent =
       worktreeId: string;
       issueNumber: number;
     }
+  // GitHub rate-limit state observed in the workspace-host utility process.
+  // The main process applies this to its own `GitHubRateLimitService`
+  // singleton so that main-process callers (IPC handlers, toolbar
+  // countdown) see limits triggered by PullRequestService polling too.
+  | {
+      type: "github-rate-limit-changed";
+      state: import("./ipc/github.js").GitHubRateLimitPayload;
+    }
   // CopyTree events
   | { type: "copytree:progress"; operationId: string; progress: CopyTreeProgress }
   | {

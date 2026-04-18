@@ -4,6 +4,7 @@ import type {
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
+  GitHubRateLimitPayload,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -95,6 +96,10 @@ export const githubClient = {
 
   onIssueNotFound: (callback: (data: IssueNotFoundPayload) => void): (() => void) => {
     return window.electron.github.onIssueNotFound(callback);
+  },
+
+  onRateLimitChanged: (callback: (data: GitHubRateLimitPayload) => void): (() => void) => {
+    return window.electron.github.onRateLimitChanged(callback);
   },
 
   getIssueUrl: (cwd: string, issueNumber: number): Promise<string | null> => {

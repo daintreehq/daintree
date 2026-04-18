@@ -154,6 +154,8 @@ export type {
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
+  GitHubRateLimitPayload,
+  GitHubRateLimitKind,
   // Hibernation types
   HibernationConfig,
   HibernationProjectHibernatedPayload,

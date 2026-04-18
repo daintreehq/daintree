@@ -13,6 +13,7 @@ import crypto from "crypto";
 import { events } from "./events.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
+import { gitHubRateLimitService } from "./github/index.js";
 import { store } from "../store.js";
 
 import { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
@@ -71,6 +72,15 @@ export class WorkspaceClient extends EventEmitter {
 
   // Reverse map: worktree path → project path (populated from worktree-update events)
   private worktreePathToProject = new Map<string, string>();
+
+  // Timestamp of the most recent main-initiated GitHub token change. Used to
+  // discard utility-process rate-limit events that predate the mutation —
+  // without this, a "blocked: true" event emitted by utility *before* the
+  // token change can arrive at main *after* main cleared state, reblocking
+  // main with obsolete pre-token-change observations until the utility
+  // eventually sends its own clear.
+  private githubTokenChangeAt = 0;
+  private static readonly RATE_LIMIT_TOKEN_CHANGE_GUARD_MS = 5_000;
 
   // CopyTree progress callbacks by operationId (manager-level)
   private copyTreeProgressCallbacks = new Map<string, CopyTreeProgressCallback>();
@@ -261,6 +271,28 @@ export class WorkspaceClient extends EventEmitter {
         };
         events.emit("sys:issue:not-found", notFoundPayload);
         this.sendToEntryWindows(entry, CHANNELS.ISSUE_NOT_FOUND, notFoundPayload);
+        break;
+      }
+
+      case "github-rate-limit-changed": {
+        // Apply the utility-process observation to main's own singleton so
+        // that subsequent main-process GitHub calls preflight-block. The
+        // main-process transport registered in `registerGithubHandlers`
+        // then rebroadcasts the state to all renderer windows.
+        //
+        // Guard against stale "blocked" observations that predate a local
+        // token mutation — they can arrive after main has already cleared
+        // state and would incorrectly re-block main until the utility
+        // eventually catches up with its own clear. Unblock events are
+        // always applied (they never make state worse).
+        if (
+          event.state.blocked &&
+          this.githubTokenChangeAt > 0 &&
+          Date.now() - this.githubTokenChangeAt < WorkspaceClient.RATE_LIMIT_TOKEN_CHANGE_GUARD_MS
+        ) {
+          break;
+        }
+        gitHubRateLimitService.applyRemoteState(event.state);
         break;
       }
 
@@ -777,6 +809,7 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   updateGitHubToken(token: string | null): void {
+    this.githubTokenChangeAt = Date.now();
     for (const entry of this.entries.values()) {
       entry.host.send({ type: "update-github-token", token });
     }

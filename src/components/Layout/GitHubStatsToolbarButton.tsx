@@ -27,6 +27,19 @@ import { GitHubStatusIndicator, type GitHubStatusIndicatorStatus } from "./GitHu
 import type { Project } from "@shared/types";
 import type { RepositoryStats } from "@shared/types";
 
+function formatRateLimitCountdown(remainingMs: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
+}
+
 const LazyGitHubResourceList = lazy(() =>
   import("@/components/GitHub/GitHubResourceList").then((m) => ({
     default: m.GitHubResourceList,
@@ -62,6 +75,8 @@ export const GitHubStatsToolbarButton = memo(
       refresh: refreshStats,
       isStale,
       lastUpdated,
+      rateLimitResetAt,
+      rateLimitKind,
     } = useRepositoryStats();
 
     const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
@@ -76,7 +91,44 @@ export const GitHubStatsToolbarButton = memo(
     const [prsOpen, setPrsOpen] = useState(false);
     const [commitsOpen, setCommitsOpen] = useState(false);
     const [statsJustUpdated, setStatsJustUpdated] = useState(false);
+    const [rateLimitCountdown, setRateLimitCountdown] = useState<string | null>(null);
     const prevLastUpdatedRef = useRef<number | null>(null);
+
+    useEffect(() => {
+      if (rateLimitResetAt === null || rateLimitResetAt <= Date.now()) {
+        setRateLimitCountdown(null);
+        return;
+      }
+      let intervalId: number | null = null;
+      const tick = () => {
+        const remainingMs = rateLimitResetAt - Date.now();
+        if (remainingMs <= 0) {
+          setRateLimitCountdown(null);
+          // Stop ticking once we've hit zero — otherwise the 1Hz interval
+          // keeps running uselessly until the component unmounts.
+          if (intervalId !== null) {
+            window.clearInterval(intervalId);
+            intervalId = null;
+          }
+          return;
+        }
+        setRateLimitCountdown(formatRateLimitCountdown(remainingMs));
+      };
+      tick();
+      intervalId = window.setInterval(tick, 1000);
+      return () => {
+        if (intervalId !== null) {
+          window.clearInterval(intervalId);
+        }
+      };
+    }, [rateLimitResetAt]);
+
+    const rateLimitActive = rateLimitCountdown !== null;
+    const rateLimitLabel = rateLimitActive
+      ? rateLimitKind === "secondary"
+        ? `Paused · resumes in ${rateLimitCountdown}`
+        : `Resets in ${rateLimitCountdown}`
+      : null;
 
     const issuesButtonRef = useRef<HTMLButtonElement>(null);
     const prsButtonRef = useRef<HTMLButtonElement>(null);
@@ -401,6 +453,31 @@ export const GitHubStatsToolbarButton = memo(
           error={statsError ?? undefined}
           onTransitionEnd={handleGitHubStatusTransitionEnd}
         />
+        {rateLimitActive && rateLimitLabel ? (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div
+                  role="status"
+                  aria-live="polite"
+                  aria-label={
+                    rateLimitKind === "secondary"
+                      ? `GitHub secondary rate limit — resuming in ${rateLimitCountdown}`
+                      : `GitHub rate limit — resets in ${rateLimitCountdown}`
+                  }
+                  className="flex h-full items-center px-2 text-[10px] font-medium text-muted-foreground opacity-60"
+                >
+                  {rateLimitLabel}
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {rateLimitKind === "secondary"
+                  ? "GitHub triggered a secondary (abuse) rate limit — polling paused until it clears."
+                  : "GitHub API quota exhausted — polling paused until the quota resets."}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ) : null}
       </div>
     );
   })

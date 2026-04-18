@@ -52,6 +52,7 @@ vi.mock("electron", () => ({
 
 vi.mock("../../utils.js", () => ({
   checkRateLimit: checkRateLimitMock,
+  broadcastToRenderer: vi.fn(),
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
       (handler as (...a: unknown[]) => unknown)(...args)
@@ -83,6 +84,10 @@ vi.mock("../../../services/WorkspaceClient.js", () => ({
 
 vi.mock("../../../services/github/index.js", () => ({
   GitHubAuth: gitHubAuthMock,
+  gitHubRateLimitService: {
+    onStateChange: vi.fn().mockReturnValue(() => {}),
+    getState: vi.fn().mockReturnValue({ blocked: false, kind: null }),
+  },
 }));
 
 vi.mock("../../../services/GitService.js", () => ({

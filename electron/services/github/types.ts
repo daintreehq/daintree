@@ -39,6 +39,13 @@ export interface PRCheckCandidate {
 export interface BatchPRCheckResult {
   results: Map<string, PRCheckResult>;
   error?: string;
+  /**
+   * When set, the error originated from a GitHub rate limit and includes
+   * the resume timestamp. Callers use this to park retry scheduling at
+   * the known resume time without counting the failure toward a
+   * circuit-breaker threshold.
+   */
+  rateLimit?: { kind: "primary" | "secondary"; resumeAt: number };
 }
 
 export type CIStatus = "success" | "failure" | "error" | "pending" | "expected" | "none";

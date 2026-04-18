@@ -97,6 +97,7 @@ import type {
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
+  GitHubRateLimitPayload,
   PRDetectedPayload,
   PRClearedPayload,
   IssueDetectedPayload,
@@ -2193,6 +2194,9 @@ export interface IpcEventMap {
   // Issue detection events
   "issue:detected": IssueDetectedPayload;
   "issue:not-found": IssueNotFoundPayload;
+
+  // GitHub rate-limit state push
+  "github:rate-limit-changed": GitHubRateLimitPayload;
 
   // Error events
   "error:notify": AppError;

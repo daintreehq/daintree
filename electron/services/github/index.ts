@@ -1,6 +1,9 @@
 export { GitHubAuth, GITHUB_API_TIMEOUT_MS, GITHUB_AUTH_TIMEOUT_MS } from "./GitHubAuth.js";
 export type { GitHubTokenConfig, GitHubTokenValidation } from "./GitHubAuth.js";
 
+export { gitHubRateLimitService, GitHubRateLimitError } from "./GitHubRateLimitService.js";
+export type { ShouldBlockResult } from "./GitHubRateLimitService.js";
+
 export {
   REPO_STATS_QUERY,
   PROJECT_HEALTH_QUERY,

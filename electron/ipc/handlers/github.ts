@@ -2,7 +2,7 @@ import { shell } from "electron";
 import fs from "fs/promises";
 import path from "path";
 import { CHANNELS } from "../channels.js";
-import { checkRateLimit, typedHandle } from "../utils.js";
+import { broadcastToRenderer, checkRateLimit, typedHandle } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   RepositoryStats,
@@ -11,6 +11,7 @@ import type {
   GitHubTokenConfig,
   GitHubTokenValidation,
 } from "../../types/index.js";
+import { gitHubRateLimitService } from "../../services/github/index.js";
 import { getWorkspaceClient } from "../../services/WorkspaceClient.js";
 
 export function buildGitHubSearchQuery(
@@ -53,6 +54,15 @@ export function buildGitHubSearchQuery(
 export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
+  // Main-process transport: every time the main-process rate-limit singleton
+  // changes state (either from a local fetch observation or a forwarded
+  // utility-process observation via WorkspaceClient.routeHostEvent), push
+  // the new state to every renderer window.
+  const unsubscribeRateLimit = gitHubRateLimitService.onStateChange((state) => {
+    broadcastToRenderer(CHANNELS.GITHUB_RATE_LIMIT_CHANGED, state);
+  });
+  handlers.push(unsubscribeRateLimit);
+
   const handleGitHubGetRepoStats = async (
     cwd: string,
     bypassCache = false
@@ -85,6 +95,8 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
 
       const commitCount = await getCommitCount(resolved).catch(() => 0);
 
+      const rateLimitState = gitHubRateLimitService.getState();
+
       return {
         commitCount,
         issueCount: statsResult.stats?.issueCount ?? null,
@@ -93,6 +105,9 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
         ghError: statsResult.error,
         stale: statsResult.stats?.stale,
         lastUpdated: statsResult.stats?.lastUpdated,
+        rateLimitResetAt:
+          rateLimitState.blocked && rateLimitState.resetAt ? rateLimitState.resetAt : undefined,
+        rateLimitKind: rateLimitState.blocked ? (rateLimitState.kind ?? undefined) : undefined,
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

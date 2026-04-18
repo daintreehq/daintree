@@ -57,6 +57,23 @@ vi.mock("../github/index.js", () => ({
   GET_ISSUE_QUERY: "GET_ISSUE_QUERY",
   GET_PR_QUERY: "GET_PR_QUERY",
   buildBatchPRQuery: vi.fn(),
+  gitHubRateLimitService: {
+    onStateChange: vi.fn().mockReturnValue(() => {}),
+    shouldBlockRequest: vi.fn().mockReturnValue({ blocked: false, reason: null }),
+    getState: vi.fn().mockReturnValue({ blocked: false, kind: null }),
+    clear: vi.fn(),
+    applyRemoteState: vi.fn(),
+  },
+  GitHubRateLimitError: class GitHubRateLimitError extends Error {
+    kind: "primary" | "secondary";
+    resumeAt: number;
+    constructor(kind: "primary" | "secondary", resumeAt: number) {
+      super("rate limited");
+      this.kind = kind;
+      this.resumeAt = resumeAt;
+      this.name = "GitHubRateLimitError";
+    }
+  },
 }));
 
 vi.mock("../GitHubStatsCache.js", () => ({

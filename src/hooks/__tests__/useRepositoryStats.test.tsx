@@ -3,11 +3,14 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RepositoryStats } from "@/types";
 
-const { getCurrentMock, onSwitchMock, getRepoStatsMock } = vi.hoisted(() => ({
-  getCurrentMock: vi.fn(),
-  onSwitchMock: vi.fn(),
-  getRepoStatsMock: vi.fn(),
-}));
+const { getCurrentMock, onSwitchMock, getRepoStatsMock, onRateLimitChangedMock } = vi.hoisted(
+  () => ({
+    getCurrentMock: vi.fn(),
+    onSwitchMock: vi.fn(),
+    getRepoStatsMock: vi.fn(),
+    onRateLimitChangedMock: vi.fn<(cb: (payload: unknown) => void) => () => void>(() => () => {}),
+  })
+);
 
 vi.mock("@/clients", () => ({
   projectClient: {
@@ -16,6 +19,7 @@ vi.mock("@/clients", () => ({
   },
   githubClient: {
     getRepoStats: getRepoStatsMock,
+    onRateLimitChanged: onRateLimitChangedMock,
   },
 }));
 
@@ -250,6 +254,73 @@ describe("useRepositoryStats", () => {
       expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
       expect(getRepoStatsMock.mock.calls[1]?.[0]).toBe("/repo/b");
       expect(result.current.stats?.commitCount).toBe(77);
+    });
+  });
+
+  describe("rate limits", () => {
+    it("surfaces rateLimitResetAt and rateLimitKind from the stats payload", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      const resetAt = Date.now() + 60_000;
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 0,
+        issueCount: 0,
+        prCount: 0,
+        loading: false,
+        ghError: "GitHub rate limit exceeded. Resets in 1m.",
+        rateLimitResetAt: resetAt,
+        rateLimitKind: "primary",
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.rateLimitResetAt).toBe(resetAt);
+        expect(result.current.rateLimitKind).toBe("primary");
+      });
+    });
+
+    it("applies rate-limit state pushed via onRateLimitChanged and clears on unblock", async () => {
+      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
+      onSwitchMock.mockReturnValue(() => {});
+      let pushHandler:
+        | ((p: { blocked: boolean; kind: unknown; resetAt?: number }) => void)
+        | undefined;
+      onRateLimitChangedMock.mockImplementation((cb: (p: unknown) => void) => {
+        pushHandler = cb as typeof pushHandler;
+        return () => {};
+      });
+      getRepoStatsMock.mockResolvedValue({
+        commitCount: 0,
+        issueCount: 0,
+        prCount: 0,
+        loading: false,
+      });
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.rateLimitResetAt).toBeNull();
+      });
+
+      const resetAt = Date.now() + 30_000;
+      act(() => {
+        pushHandler?.({ blocked: true, kind: "secondary", resetAt });
+      });
+
+      await waitFor(() => {
+        expect(result.current.rateLimitResetAt).toBe(resetAt);
+        expect(result.current.rateLimitKind).toBe("secondary");
+      });
+
+      act(() => {
+        pushHandler?.({ blocked: false, kind: null });
+      });
+
+      await waitFor(() => {
+        expect(result.current.rateLimitResetAt).toBeNull();
+        expect(result.current.rateLimitKind).toBeNull();
+      });
     });
   });
 });
