@@ -5,6 +5,7 @@ export { usePanelStoreBootstrap } from "./usePanelStoreBootstrap";
 export { useSemanticWorkerLifecycle } from "./useSemanticWorkerLifecycle";
 export { useSystemWakeHandler } from "./useSystemWakeHandler";
 export { useCloudSyncWarning } from "./useCloudSyncWarning";
+export { useContextFilesOffer } from "./useContextFilesOffer";
 export { useAccessibilityAnnouncements } from "./useAccessibilityAnnouncements";
 export { useGettingStartedChecklist } from "./useGettingStartedChecklist";
 export { useUnloadCleanup } from "./useUnloadCleanup";

@@ -832,6 +832,10 @@ export interface IpcInvokeMap {
     args: [projectId: string];
     result: Project;
   };
+  "project:detect-context-files": {
+    args: [projectId: string];
+    result: string[];
+  };
   "project:check-missing": {
     args: [];
     result: string[];

@@ -529,6 +529,11 @@ export interface ElectronAPI {
      */
     disableInRepoSettings(projectId: string): Promise<Project>;
     /**
+     * Detect agent context files (e.g. CLAUDE.md, AGENTS.md, .mcp.json) at the project root.
+     * Returns the display names of the files that exist. Order is stable.
+     */
+    detectContextFiles(projectId: string): Promise<string[]>;
+    /**
      * Checks all non-active projects for missing directories.
      * Updates status to "missing" for projects whose paths no longer exist,
      * and resets "missing" back to "closed" for paths that are accessible again.

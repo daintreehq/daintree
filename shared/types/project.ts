@@ -305,6 +305,8 @@ export interface ProjectSettings {
   devServerAutoDetected?: boolean;
   /** User dismissed cloud sync folder warning for this project */
   cloudSyncWarningDismissed?: boolean;
+  /** User dismissed the offer to import detected project context files (CLAUDE.md, AGENTS.md, etc.) */
+  contextFilesOfferDismissed?: boolean;
   /** Timeout in seconds before a slow-loading dev preview is automatically reloaded (default: 30, max: 120) */
   devServerLoadTimeout?: number;
   /** Whether to auto-inject --turbopack for Next.js 15+ projects (default: true) */

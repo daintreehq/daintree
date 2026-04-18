@@ -131,5 +131,45 @@ export function registerProjectInRepoSettingsHandlers(_deps: HandlerDependencies
     typedHandle(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, handleProjectDisableInRepoSettings)
   );
 
+  const CONTEXT_FILE_CANDIDATES: readonly string[] = [
+    "CLAUDE.md",
+    "AGENTS.md",
+    ".mcp.json",
+    ".cursorrules",
+    ".windsurfrules",
+    ".claude/settings.json",
+  ];
+
+  const handleProjectDetectContextFiles = async (projectId: string): Promise<string[]> => {
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    const project = projectStore.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    const checks = await Promise.all(
+      CONTEXT_FILE_CANDIDATES.map(async (relative) => {
+        const absolute = path.join(project.path, relative);
+        try {
+          // lstat (not stat) — reject symlinks to avoid advertising files that
+          // point outside the project tree. All candidates are expected to be
+          // regular files; directories named like a candidate are ignored.
+          const info = await fs.lstat(absolute);
+          if (!info.isFile()) return null;
+          return relative;
+        } catch {
+          return null;
+        }
+      })
+    );
+
+    return checks.filter((name): name is string => name !== null);
+  };
+  handlers.push(
+    typedHandle(CHANNELS.PROJECT_DETECT_CONTEXT_FILES, handleProjectDetectContextFiles)
+  );
+
   return () => handlers.forEach((cleanup) => cleanup());
 }

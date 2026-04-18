@@ -282,6 +282,10 @@ export const projectClient = {
     return window.electron.project.disableInRepoSettings(projectId);
   },
 
+  detectContextFiles: (projectId: string): Promise<string[]> => {
+    return window.electron.project.detectContextFiles(projectId);
+  },
+
   checkMissing: (): Promise<string[]> => {
     return window.electron.project.checkMissing();
   },
