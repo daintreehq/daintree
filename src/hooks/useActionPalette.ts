@@ -1,5 +1,4 @@
 import { useCallback, useMemo } from "react";
-import Fuse, { type IFuseOptions } from "fuse.js";
 import { useShallow } from "zustand/react/shallow";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
@@ -8,6 +7,7 @@ import type { ActionManifestEntry } from "@shared/types/actions";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useActionMruStore } from "@/store/actionMruStore";
 import { useSearchablePalette } from "./useSearchablePalette";
+import { rankActionMatches } from "@/lib/actionPaletteSearch";
 
 export interface ActionPaletteItem {
   id: string;
@@ -36,18 +36,7 @@ export interface UseActionPaletteReturn {
   confirmSelection: () => void;
 }
 
-const FUSE_OPTIONS: IFuseOptions<ActionPaletteItem> = {
-  keys: [
-    { name: "title", weight: 2 },
-    { name: "category", weight: 1.5 },
-    { name: "description", weight: 1 },
-  ],
-  threshold: 0.4,
-  includeScore: true,
-};
-
 const MAX_RESULTS = 20;
-const MRU_BOOST_FACTOR = 0.05;
 
 function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
   const title =
@@ -79,13 +68,19 @@ export function useActionPalette(): UseActionPaletteReturn {
     return entries.filter((e) => e.kind === "command" && !e.requiresArgs).map(toActionPaletteItem);
   }, [isActionOpen]);
 
-  const fuse = useMemo(() => new Fuse(allActions, FUSE_OPTIONS), [allActions]);
+  const actionIdString = useMemo(
+    () =>
+      allActions
+        .map((a) => a.id)
+        .sort()
+        .join(","),
+    [allActions]
+  );
 
   const filterFn = useCallback(
     (items: ActionPaletteItem[], query: string): ActionPaletteItem[] => {
       const mruIndexMap = new Map<string, number>();
       actionMruList.forEach((id, index) => mruIndexMap.set(id, index));
-      const mruSize = actionMruList.length;
 
       if (!query.trim()) {
         return [...items].sort((a, b) => {
@@ -97,21 +92,10 @@ export function useActionPalette(): UseActionPaletteReturn {
         });
       }
 
-      const fuseResults = fuse.search(query);
-      return fuseResults
-        .map((r) => {
-          const rank = mruIndexMap.get(r.item.id);
-          const boost =
-            rank !== undefined ? (1 - rank / Math.max(mruSize, 1)) * MRU_BOOST_FACTOR : 0;
-          return { item: r.item, boostedScore: (r.score ?? 1) - boost };
-        })
-        .sort((a, b) => {
-          if (a.item.enabled !== b.item.enabled) return a.item.enabled ? -1 : 1;
-          return a.boostedScore - b.boostedScore;
-        })
-        .map((r) => r.item);
+      const scored = rankActionMatches(query, items, mruIndexMap);
+      return scored.slice(0, MAX_RESULTS).map((s) => s.item);
     },
-    [fuse, actionMruList]
+    [actionMruList, actionIdString]
   );
 
   const {
