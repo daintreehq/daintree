@@ -190,7 +190,6 @@ export function AgentInstallSection({
   // the user gets actionable info (allowlist guidance, resolved path) — the
   // binary exists, reinstall instructions would be misleading, but we do
   // want to show why it isn't runnable and where it was found.
-  if (availability === "ready" && !isAgentBlocked(availability)) return null;
   if (availability === "ready") return null;
 
   if (isCliLoading) {
