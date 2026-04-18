@@ -478,6 +478,7 @@ describe("useActionPalette", () => {
       listMock.mockReturnValue([
         makeEntry("browser.close", "Close", true, "browser"),
         makeEntry("devServer.close", "Close", true, "devServer"),
+        makeEntry("panel.close", "Close", true, "panel"),
       ]);
       getContextMock.mockReturnValue({ focusedTerminalKind: "dev-preview" });
 
@@ -485,28 +486,33 @@ describe("useActionPalette", () => {
       act(() => result.current.open());
       act(() => result.current.setQuery("close"));
 
-      await waitFor(() => expect(result.current.results.length).toBe(2), { timeout: 2000 });
+      await waitFor(() => expect(result.current.results.length).toBe(3), { timeout: 2000 });
 
-      expect(result.current.results[0]!.id).toBe("devServer.close");
+      const ids = result.current.results.map((r) => r.id);
+      expect(ids.indexOf("devServer.close")).toBeLessThan(ids.indexOf("browser.close"));
+      expect(ids.indexOf("panel.close")).toBeLessThan(ids.indexOf("browser.close"));
     });
 
-    it("does not boost worktree categories when focusedWorktreeId is whitespace", async () => {
-      listMock.mockReturnValue([
-        makeEntry("browser.open", "Open", true, "browser"),
-        makeEntry("worktree.open", "Open", true, "worktree"),
-      ]);
-      useActionMruStore.setState({ actionMruList: ["browser.open"] });
-      getContextMock.mockReturnValue({ focusedWorktreeId: "   " });
+    it.each(["   ", "\t\n", " \t\n "])(
+      "does not boost worktree categories when focusedWorktreeId is whitespace (%j)",
+      async (whitespace) => {
+        listMock.mockReturnValue([
+          makeEntry("browser.open", "Open", true, "browser"),
+          makeEntry("worktree.open", "Open", true, "worktree"),
+        ]);
+        useActionMruStore.getState().hydrateActionMru(["browser.open"]);
+        getContextMock.mockReturnValue({ focusedWorktreeId: whitespace });
 
-      const { result } = renderHook(() => useActionPalette());
-      act(() => result.current.open());
-      act(() => result.current.setQuery("open"));
+        const { result } = renderHook(() => useActionPalette());
+        act(() => result.current.open());
+        act(() => result.current.setQuery("open"));
 
-      await waitFor(() => expect(result.current.results.length).toBe(2), { timeout: 2000 });
+        await waitFor(() => expect(result.current.results.length).toBe(2), { timeout: 2000 });
 
-      // No context boost on worktree — MRU on browser keeps it first
-      expect(result.current.results[0]!.id).toBe("browser.open");
-    });
+        // No context boost on worktree — MRU on browser keeps it first
+        expect(result.current.results[0]!.id).toBe("browser.open");
+      }
+    );
 
     it("keeps disabled context-boosted items below enabled items", async () => {
       listMock.mockReturnValue([
