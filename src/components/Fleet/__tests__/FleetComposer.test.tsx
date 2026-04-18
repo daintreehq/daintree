@@ -139,7 +139,7 @@ describe("FleetComposer", () => {
 
     await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(2));
     expect(submitMock.mock.calls.map(([id]) => id).sort()).toEqual(["t1", "t2"]);
-    expect(submitMock.mock.calls[0][1]).toBe("run tests");
+    expect(submitMock.mock.calls[0]![1]).toBe("run tests");
   });
 
   it("does not submit while IME is composing", () => {
@@ -203,7 +203,7 @@ describe("FleetComposer", () => {
     fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
 
     await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(2));
-    expect(submitMock.mock.calls[0][1]).toBe("rm -rf node_modules");
+    expect(submitMock.mock.calls[0]![1]).toBe("rm -rf node_modules");
   });
 
   it("Ctrl+Enter also force-sends (Windows/Linux parity)", async () => {
@@ -367,7 +367,7 @@ describe("FleetComposer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
-    expect(submitMock.mock.calls[0][0]).toBe("a");
+    expect(submitMock.mock.calls[0]![0]).toBe("a");
     await waitFor(() => {
       const last = useNotificationStore.getState().notifications.at(-1)?.message ?? "";
       expect(last).toBe("Sent to 1 agent");
@@ -500,7 +500,7 @@ describe("FleetComposer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
-    expect(submitMock.mock.calls[0][1]).toBe("still send me");
+    expect(submitMock.mock.calls[0]![1]).toBe("still send me");
   });
 
   it("leaves unresolved variables empty when worktree context is missing", async () => {
@@ -517,7 +517,7 @@ describe("FleetComposer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     await waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
-    expect(submitMock.mock.calls[0][1]).toBe("branch is ");
+    expect(submitMock.mock.calls[0]![1]).toBe("branch is ");
   });
 
   it("Escape inside the confirm strip closes it and keeps fleet armed", async () => {

@@ -196,7 +196,7 @@ export function FleetComposer(): ReactElement | null {
         }
         const next = Math.min(historyIndex + 1, historyEntries.length - 1);
         setHistoryIndex(next);
-        setDraft(historyEntries[next].prompt);
+        setDraft(historyEntries[next]!.prompt);
         return;
       }
 
@@ -209,7 +209,7 @@ export function FleetComposer(): ReactElement | null {
           setDraft(historySnapshotRef.current);
           historySnapshotRef.current = "";
         } else {
-          setDraft(historyEntries[next].prompt);
+          setDraft(historyEntries[next]!.prompt);
         }
       }
     },
