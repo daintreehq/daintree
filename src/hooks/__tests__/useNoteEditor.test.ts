@@ -373,6 +373,70 @@ describe("useNoteEditor", () => {
     expect(notesClient.write).not.toHaveBeenCalled();
   });
 
+  it("resets content during loading window when switching notes", async () => {
+    const noteA = makeNote({ id: "a", path: "/notes/a.md" });
+    const noteB = makeNote({ id: "b", path: "/notes/b.md" });
+
+    vi.mocked(notesClient.read).mockResolvedValueOnce(
+      makeContent({
+        metadata: { id: "a", title: "A", scope: "project", createdAt: 1000 },
+        content: "A body",
+        path: "/notes/a.md",
+        lastModified: 5000,
+      })
+    );
+
+    let resolveB: (v: NoteContent) => void = () => {};
+    vi.mocked(notesClient.read).mockImplementationOnce(
+      () =>
+        new Promise<NoteContent>((r) => {
+          resolveB = r;
+        })
+    );
+
+    const { result, rerender } = renderHook(
+      ({ selectedNote }: { selectedNote: NoteListItem | null }) =>
+        useNoteEditor({
+          selectedNote,
+          refresh: vi.fn(),
+          setLastSelectedNoteId: vi.fn(),
+        }),
+      { initialProps: { selectedNote: noteA } }
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(result.current.noteContent).toBe("A body");
+    expect(result.current.noteLastModified).toBe(5000);
+
+    // Switch to note B — the async read for B is pending
+    rerender({ selectedNote: noteB });
+
+    // During the loading window, state must not expose stale note A content
+    expect(result.current.noteContent).toBe("");
+    expect(result.current.noteMetadata).toBeNull();
+    expect(result.current.noteLastModified).toBeNull();
+    expect(result.current.isLoadingContent).toBe(true);
+
+    await act(async () => {
+      resolveB(
+        makeContent({
+          metadata: { id: "b", title: "B", scope: "project", createdAt: 1500 },
+          content: "B body",
+          path: "/notes/b.md",
+          lastModified: 8000,
+        })
+      );
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(result.current.noteContent).toBe("B body");
+    expect(result.current.noteLastModified).toBe(8000);
+    expect(result.current.isLoadingContent).toBe(false);
+  });
+
   it("cancels pending save when adding a tag", async () => {
     const { result } = renderHook(() => useNoteEditor(defaultProps()));
 

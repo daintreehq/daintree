@@ -553,6 +553,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                           {!editor.hasConflict && <MarkdownToolbar editorViewRef={editorViewRef} />}
                           <div className="flex-1 overflow-hidden text-[13px] [&_.cm-editor]:h-full [&_.cm-scroller]:p-4 [&_.cm-placeholder]:text-daintree-text/30 [&_.cm-placeholder]:italic">
                             <CodeMirror
+                              key={selectedNote?.id ?? "empty"}
                               value={editor.noteContent}
                               height="100%"
                               theme={daintreeTheme}

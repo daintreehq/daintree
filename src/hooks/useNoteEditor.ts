@@ -91,6 +91,9 @@ export function useNoteEditor({
       return;
     }
 
+    setNoteContent("");
+    setNoteMetadata(null);
+    setNoteLastModified(null);
     setIsLoadingContent(true);
     setHasConflict(false);
 
