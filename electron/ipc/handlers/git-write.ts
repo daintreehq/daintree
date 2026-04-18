@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { SimpleGit } from "simple-git";
@@ -573,7 +574,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     const resolved = path.resolve(repoPath);
     let canonical: string;
     try {
-      canonical = await fs.promises.realpath(resolved);
+      canonical = await realpath(resolved);
     } catch {
       canonical = resolved;
     }
