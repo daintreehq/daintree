@@ -643,6 +643,7 @@ const CHANNELS = {
   GITHUB_GET_ISSUE_BY_NUMBER: "github:get-issue-by-number",
   GITHUB_GET_PR_BY_NUMBER: "github:get-pr-by-number",
   GITHUB_LIST_REMOTES: "github:list-remotes",
+  GITHUB_RATE_LIMIT_CHANGED: "github:rate-limit-changed",
 
   // Notes channels
   NOTES_CREATE: "notes:create",
