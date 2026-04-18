@@ -50,6 +50,15 @@ const mockBindings: Array<KeybindingConfig & { effectiveCombo: string }> = [
     category: "System",
     effectiveCombo: "Cmd+,",
   },
+  {
+    actionId: "app.commandPalette",
+    combo: "Cmd+Shift+P",
+    scope: "global",
+    priority: 0,
+    description: "Command Palette",
+    category: "System",
+    effectiveCombo: "Cmd+Shift+P",
+  },
 ];
 
 const mockDisplayCombos: Record<string, string> = {
@@ -57,14 +66,26 @@ const mockDisplayCombos: Record<string, string> = {
   "app.toggleSidebar": "⌘B",
   "terminal.newPanel": "⌘T",
   "app.openSettings": "⌘,",
+  "app.commandPalette": "⌘⇧P",
 };
 
-vi.mock("@/services/KeybindingService", () => ({
-  keybindingService: {
-    getAllBindingsWithEffectiveCombos: vi.fn(() => mockBindings),
-    getDisplayCombo: vi.fn((actionId: string) => mockDisplayCombos[actionId] || actionId),
-  },
-}));
+vi.mock("@/services/KeybindingService", () => {
+  const listeners: Array<() => void> = [];
+  return {
+    keybindingService: {
+      getAllBindingsWithEffectiveCombos: vi.fn(() => mockBindings),
+      getDisplayCombo: vi.fn((actionId: string) => mockDisplayCombos[actionId] || actionId),
+      subscribe: vi.fn((listener: () => void) => {
+        listeners.push(listener);
+        return () => {
+          const index = listeners.indexOf(listener);
+          if (index > -1) listeners.splice(index, 1);
+        };
+      }),
+      notifyListeners: vi.fn(() => listeners.forEach((l) => l())),
+    },
+  };
+});
 
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
@@ -196,7 +217,6 @@ describe("ShortcutReferenceDialog", () => {
   it("shows Esc to close hint in footer", () => {
     render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
 
-    // The footer text is split across multiple elements, check the container
     const footer = screen.getByText(/Esc/i).closest("div");
     expect(footer?.textContent).toContain("Esc");
     expect(footer?.textContent).toContain("close");
@@ -210,6 +230,54 @@ describe("ShortcutReferenceDialog", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Stash Current Input")).toBeTruthy();
+      expect(screen.queryByText("Toggle Sidebar")).toBeNull();
+    });
+  });
+
+  it("modifier-like words use fuzzy search, not chord prefix", async () => {
+    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+
+    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
+    fireEvent.change(searchInput, { target: { value: "commander" } });
+
+    await waitFor(() => {
+      // Should find "Command Palette" via fuzzy search, not trigger chord prefix
+      expect(screen.getByText("Command Palette")).toBeTruthy();
+    });
+  });
+
+  it("trailing separator falls back to fuzzy search", async () => {
+    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+
+    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
+    fireEvent.change(searchInput, { target: { value: "cmd+" } });
+
+    await waitFor(() => {
+      // Should use fuzzy search and find Cmd-related bindings
+      expect(screen.getByText("Stash Current Input")).toBeTruthy();
+    });
+  });
+
+  it("multiple modifier chord prefix works", async () => {
+    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+
+    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
+    fireEvent.change(searchInput, { target: { value: "cmd+shift+p" } });
+
+    await waitFor(() => {
+      expect(screen.getByText("Command Palette")).toBeTruthy();
+      expect(screen.queryByText("Toggle Sidebar")).toBeNull();
+    });
+  });
+
+  it("unicode multiple modifier chord prefix works", async () => {
+    render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+
+    const searchInput = screen.getByPlaceholderText("Search shortcuts...");
+    fireEvent.change(searchInput, { target: { value: "⌘⇧p" } });
+
+    await waitFor(() => {
+      expect(screen.getByText("Command Palette")).toBeTruthy();
       expect(screen.queryByText("Toggle Sidebar")).toBeNull();
     });
   });

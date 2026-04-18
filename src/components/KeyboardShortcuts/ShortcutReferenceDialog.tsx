@@ -32,7 +32,54 @@ const MODIFIER_MAP: Record<string, string> = {
   "⇧": "shift",
 };
 
-function normalizeChordQuery(query: string): string {
+// Valid key characters for chord detection (letters, digits, punctuation keys)
+const VALID_KEY_PATTERN = /^[a-z0-9`~!@#$%^&*()_\-=[\]{}\\|;:'",.<>/?]$/i;
+
+function isChordPrefix(query: string): boolean {
+  const trimmed = query.toLowerCase().trim();
+  if (!trimmed) return false;
+
+  // Look for modifier symbols (⌘, ⌥, ⌃, ⇧) or modifier text with separator
+  const hasModifierSymbol = /[⌘⌥⌃⇧]/.test(trimmed);
+  const hasModifierText = /^(cmd|command|meta|ctrl|control|alt|option|shift)[+\s]/i.test(trimmed);
+
+  if (!hasModifierSymbol && !hasModifierText) return false;
+
+  // Normalize for validation
+  let normalized = trimmed.replace(/\s*\+\s*/g, "+").replace(/\s+/g, "+");
+
+  // Replace unicode symbols with text equivalents
+  for (const [symbol, text] of Object.entries(MODIFIER_MAP)) {
+    if (symbol !== text) {
+      normalized = normalized.replace(new RegExp(symbol, "g"), text);
+    }
+  }
+
+  // Find the modifier at the start
+  const modifierMatch = Object.values(MODIFIER_MAP).find((m) => normalized.startsWith(m));
+  if (!modifierMatch) return false;
+
+  // Must have more than just the modifier
+  if (normalized.length <= modifierMatch.length) return false;
+
+  // Split by + and check we have at least 2 parts
+  const parts = normalized.split("+").filter(Boolean);
+  if (parts.length >= 2) {
+    // All parts should be valid: either a modifier or a valid key
+    return parts.every((p) => {
+      if (Object.values(MODIFIER_MAP).includes(p)) return true;
+      // Check it's a valid key character, not just empty or another modifier word
+      return p.length > 0 && VALID_KEY_PATTERN.test(p);
+    });
+  }
+
+  // Handle cases without separator (e.g., "cmdk" or "⌘k")
+  const remaining = normalized.slice(modifierMatch.length);
+  // The remaining part must be a valid key, not empty or modifier-like
+  return remaining.length > 0 && VALID_KEY_PATTERN.test(remaining);
+}
+
+function normalizeQuery(query: string): string {
   let normalized = query.toLowerCase().trim();
   normalized = normalized.replace(/\s*\+\s*/g, "+").replace(/\s+/g, "+");
 
@@ -46,35 +93,24 @@ function normalizeChordQuery(query: string): string {
   return normalized;
 }
 
-function isChordPrefix(query: string): boolean {
-  const normalized = normalizeChordQuery(query);
-
-  // Check if it starts with a modifier symbol or text
-  const modifierMatch = Object.values(MODIFIER_MAP).find((m) => normalized.startsWith(m));
-  if (!modifierMatch) return false;
-
-  // Must have more than just the modifier
-  if (normalized.length <= modifierMatch.length) return false;
-
-  // Split by + and check we have at least 2 parts
-  const parts = normalized.split("+").filter(Boolean);
-  if (parts.length >= 2) {
-    // All parts should be valid: either a modifier or a non-empty key
-    return parts.every((p) => Object.values(MODIFIER_MAP).includes(p) || p.length > 0);
-  }
-
-  // Handle cases without separator (e.g., "cmdk" or "⌘k")
-  // If there's content after the modifier, it's a valid prefix query
-  const remaining = normalized.slice(modifierMatch.length);
-  return remaining.length > 0;
-}
-
 export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDialogProps) {
   useOverlayState(isOpen);
   const [searchQuery, setSearchQuery] = useState("");
+  const [bindingsVersion, setBindingsVersion] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  const allBindings = useMemo(() => keybindingService.getAllBindingsWithEffectiveCombos(), []);
+  useEffect(() => {
+    const unsubscribe = keybindingService.subscribe(() => {
+      setBindingsVersion((v) => v + 1);
+    });
+    return unsubscribe;
+  }, []);
+
+  const allBindings = useMemo(
+    () => keybindingService.getAllBindingsWithEffectiveCombos(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bindingsVersion]
+  );
 
   const searchItems = useMemo<ShortcutSearchItem[]>(() => {
     return allBindings.map((binding) => {
@@ -116,7 +152,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
       return searchItems;
     }
 
-    const normalizedQuery = normalizeChordQuery(searchQuery);
+    const normalizedQuery = normalizeQuery(searchQuery);
 
     if (isChordPrefix(searchQuery)) {
       const queryPrefix = normalizedQuery.replace(/\+/g, "");
@@ -164,7 +200,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
       if (bIndex === -1) return -1;
       return aIndex - bIndex;
     });
-  }, [groupedBindings]);
+  }, [groupedBindings, categoryOrder]);
 
   useEffect(() => {
     if (isOpen) {
