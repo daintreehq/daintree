@@ -12,6 +12,7 @@ export const APP_THEME_TOKEN_KEYS = [
   "surface-inset",
   "surface-hover",
   "surface-active",
+  "surface-disabled",
 
   // Text hierarchy
   "text-primary",
@@ -49,6 +50,7 @@ export const APP_THEME_TOKEN_KEYS = [
   "status-warning",
   "status-danger",
   "status-info",
+  "status-danger-surface",
 
   // Activity (real-time agent states)
   "activity-active",
@@ -172,6 +174,8 @@ export const APP_THEME_TOKEN_KEYS = [
   "panel-state-edge-width",
   "panel-state-edge-inset-block",
   "panel-state-edge-radius",
+  "knob-base",
+  "state-modified",
   "focus-ring-offset",
   "chrome-noise-texture",
 

@@ -89,4 +89,44 @@ describe("built-in themes", () => {
       ).toBeGreaterThan(0);
     }
   });
+
+  it("surface-disabled token derives as opaque color (not rgba)", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      expect(
+        scheme.tokens["surface-disabled"],
+        `${scheme.id} surface-disabled should be opaque`
+      ).not.toMatch(/^rgba\(/);
+    }
+  });
+
+  it("status-danger-surface token derives as transparent wash", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      expect(
+        scheme.tokens["status-danger-surface"],
+        `${scheme.id} status-danger-surface should be transparent wash`
+      ).toMatch(
+        /rgba\(.*,\s*0\.\d+\)|color-mix\(in oklab,\s*var\(--theme-status-danger\)\s*\d+%,\s*transparent\)/
+      );
+    }
+  });
+
+  it("knob-base token is polarity-aware (dark vs light)", () => {
+    const darkScheme = BUILT_IN_APP_SCHEMES.find((s) => s.type === "dark");
+    const lightScheme = BUILT_IN_APP_SCHEMES.find((s) => s.type === "light");
+    expect(darkScheme).toBeDefined();
+    expect(lightScheme).toBeDefined();
+    const darkKnob = darkScheme!.tokens["knob-base"];
+    const lightKnob = lightScheme!.tokens["knob-base"];
+    expect(darkKnob, "dark theme knob should be light color").toMatch(/oklch\([0-9]\.[8-9]/);
+    expect(lightKnob, "light theme knob should be dark color").toMatch(/oklch\([0-1]\.[0-2]/);
+  });
+
+  it("state-modified token derives from status-info base", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const modified = scheme.tokens["state-modified"];
+      expect(modified, `${scheme.id} state-modified should derive from status-info`).toContain(
+        "color-mix"
+      );
+    }
+  });
 });
