@@ -150,9 +150,10 @@ function scheduleDrain(state: RateLimitState, maxCalls: number, windowMs: number
  *
  * 2. `waitForRateLimitSlot(key, maxCalls, windowMs)` — **sliding window.**
  *    Up to `maxCalls` callers may run within any `windowMs` window; excess
- *    callers queue and drain as the window rolls forward. Used by batch-
- *    tolerant callers (e.g. terminal spawn) that accept bursts but need an
- *    overall cap.
+ *    callers queue and drain as the window rolls forward. Suited to callers
+ *    that accept bursts but need an overall cap. Note that this variant
+ *    produces step-function pauses for sustained batches once `maxCalls` is
+ *    hit — prefer the leaky-bucket form for smooth batch cadence.
  */
 export async function waitForRateLimitSlot(key: string, intervalMs: number): Promise<void>;
 export async function waitForRateLimitSlot(

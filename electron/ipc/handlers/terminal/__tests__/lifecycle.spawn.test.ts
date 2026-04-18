@@ -18,6 +18,9 @@ const { mockGetCurrentProject, mockGetProjectById, mockGetProjectSettings } = vi
   mockGetProjectSettings: vi.fn(),
 }));
 
+const waitForRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const consumeRestoreQuotaMock = vi.hoisted(() => vi.fn(() => false));
+
 vi.mock("../../../../services/ProjectStore.js", () => ({
   projectStore: {
     getCurrentProject: mockGetCurrentProject,
@@ -30,9 +33,9 @@ vi.mock("../../../services/pty/terminalShell.js", () => ({
   getDefaultShell: vi.fn(() => "/bin/zsh"),
 }));
 
-vi.mock("../../utils.js", () => ({
-  waitForRateLimitSlot: vi.fn(),
-  consumeRestoreQuota: vi.fn(() => false),
+vi.mock("../../../utils.js", () => ({
+  waitForRateLimitSlot: waitForRateLimitSlotMock,
+  consumeRestoreQuota: consumeRestoreQuotaMock,
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
       (handler as (...a: unknown[]) => unknown)(...args)
@@ -281,5 +284,73 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.worktreeId).toBe("wt-123");
+  });
+});
+
+describe("terminal spawn rate limiting (#5352)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    waitForRateLimitSlotMock.mockResolvedValue(undefined);
+    consumeRestoreQuotaMock.mockReturnValue(false);
+    ptyClient = {
+      spawn: vi.fn(),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    mockGetCurrentProject.mockReturnValue({ id: "p1", path: "/tmp", name: "p" });
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+  });
+
+  it("uses the leaky-bucket form so batch spawns drain at a smooth 1/sec cadence", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24 });
+
+    // Exactly ("terminalSpawn", 1_000) — 2 args, not 3. The 3-arg overload
+    // silently picks the sliding-window implementation and reintroduces the
+    // every-10-terminals stall described in #5352.
+    expect(waitForRateLimitSlotMock).toHaveBeenCalledWith("terminalSpawn", 1_000);
+    expect(waitForRateLimitSlotMock.mock.calls[0]).toHaveLength(2);
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects without calling ptyClient.spawn when the rate-limit slot rejects", async () => {
+    waitForRateLimitSlotMock.mockRejectedValueOnce(new Error("Spawn queue full"));
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await expect(
+      handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24 })
+    ).rejects.toThrow("Spawn queue full");
+
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+  });
+
+  it("bypasses the rate limiter entirely for restore spawns", async () => {
+    consumeRestoreQuotaMock.mockReturnValueOnce(true);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      restore: true,
+    } as unknown as Parameters<typeof handler>[1]);
+
+    expect(waitForRateLimitSlotMock).not.toHaveBeenCalled();
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
   });
 });
