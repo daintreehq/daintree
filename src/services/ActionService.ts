@@ -46,7 +46,7 @@ export class ActionService {
 
   register<Args = unknown, Result = unknown>(definition: ActionDefinition<Args, Result>): void {
     if (this.registry.has(definition.id)) {
-      logWarn(`Action "${definition.id}" already registered. Overwriting.`);
+      throw new Error(`Action "${definition.id}" is already registered.`);
     }
     this.registry.set(definition.id, definition as ActionDefinition<unknown, unknown>);
   }

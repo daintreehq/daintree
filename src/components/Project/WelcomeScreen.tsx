@@ -39,7 +39,7 @@ const SHORTCUT_TIPS: { label: string; actionId: string }[] = [
   { label: "New Panel", actionId: "panel.palette" },
   { label: "Quick Switcher", actionId: "nav.quickSwitcher" },
   { label: "New Terminal", actionId: "terminal.new" },
-  { label: "Command Palette", actionId: "action.palette" },
+  { label: "Command Palette", actionId: "action.palette.open" },
   { label: "Keyboard Shortcuts", actionId: "help.shortcuts" },
   { label: "Settings", actionId: "app.settings" },
 ];

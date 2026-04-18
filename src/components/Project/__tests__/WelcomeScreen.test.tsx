@@ -18,7 +18,7 @@ const { getDisplayComboMock } = vi.hoisted(() => ({
       "panel.palette": "⌘N",
       "nav.quickSwitcher": "⌘P",
       "terminal.new": "⌘⌥T",
-      "action.palette": "⌘K",
+      "action.palette.open": "⌘K",
       "help.shortcuts": "⌘/",
       "app.settings": "⌘,",
     };
