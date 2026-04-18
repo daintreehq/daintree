@@ -81,10 +81,13 @@ export const PATTERNS: readonly SecretPattern[] = [
   },
   {
     name: "pem-block",
-    // CRITICAL: bounded `{1,10000}?` avoids quadratic backtracking on
+    // CRITICAL: bounded `{1,100000}?` avoids quadratic backtracking on
     // malformed input where `-----END ...-----` is missing. Unbounded
-    // `[\s\S]+?` would O(N^2)-scan to EOF per BEGIN occurrence.
-    regex: /-----BEGIN [A-Z ]{1,64}-----[\s\S]{1,10000}?-----END [A-Z ]{1,64}-----/g,
+    // `[\s\S]+?` would O(N^2)-scan to EOF per BEGIN occurrence. The upper
+    // bound is generous enough for chained certificate bundles (a single
+    // fullchain.pem is typically 4-8KB; multi-issuer bundles can reach
+    // tens of KB). `safe-regex2` still passes at this bound.
+    regex: /-----BEGIN [A-Z ]{1,64}-----[\s\S]{1,100000}?-----END [A-Z ]{1,64}-----/g,
     replacement: REDACTED,
   },
   {

@@ -162,14 +162,16 @@ describe("secretScrubber", () => {
     it("scrubs secrets in oversized strings without truncating (no prefix leak)", () => {
       // Place the secret deep inside a 200KB input. Prior 100KB pre-truncation
       // would have severed the secret and leaked its head. With no truncation,
-      // the full secret must be recognized and redacted wherever it sits.
+      // the full secret must be recognized and redacted wherever it sits, and
+      // the post-secret tail must survive untruncated.
       const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
-      const buried = `${"a ".repeat(60_000)}${secret} tail`;
+      const buried = `${"a ".repeat(60_000)}${secret} tail-marker`;
       expect(buried.length).toBeGreaterThan(100_000);
       const out = scrubSecrets(buried);
       expect(out).not.toContain(secret);
-      // Also: no prefix of the secret longer than the sigil alone remains.
       expect(out).not.toContain(secret.slice(0, 12));
+      // Proves nothing was silently dropped after the secret position.
+      expect(out).toContain(`${REDACTED} tail-marker`);
     });
 
     it("scrubs a secret that would have straddled a legacy 100KB cap", () => {
@@ -180,7 +182,9 @@ describe("secretScrubber", () => {
       const straddle = `${prefix}${secret} keep-this`;
       const out = scrubSecrets(straddle);
       expect(out).not.toContain(secret);
-      expect(out).not.toContain(secret.slice(0, 20));
+      // Even a 10-char head of the secret must be gone — guards against a
+      // re-introduced slice that severs the secret mid-string.
+      expect(out).not.toContain(secret.slice(0, 10));
       expect(out).toContain("keep-this");
     });
   });
@@ -203,6 +207,20 @@ describe("secretScrubber", () => {
       const out = scrubSecrets(input);
       expect(out).toContain(`client_secret=${REDACTED}`);
       expect(out).not.toContain("abc123xyz");
+    });
+
+    it("oauth param at byte 0 (no preceding separator) is scrubbed", () => {
+      const input = "access_token=supersecretvalue123&other=1";
+      expect(scrubSecrets(input)).toBe(`access_token=${REDACTED}&other=1`);
+    });
+
+    it("chained PEM bundle (>10KB) is scrubbed end-to-end", () => {
+      // A fullchain.pem with three certs is ~15-20KB. Prior {1,10000}? cap
+      // would refuse to match the outermost BEGIN..END pair.
+      const longBody = "a".repeat(20_000);
+      const pem = `-----BEGIN CERTIFICATE-----\n${longBody}\n-----END CERTIFICATE-----`;
+      const out = scrubSecrets(`prefix ${pem} suffix`);
+      expect(out).toBe(`prefix ${REDACTED} suffix`);
     });
   });
 
