@@ -196,9 +196,15 @@ export interface StoreSchema {
         openedProject: boolean;
         launchedAgent: boolean;
         createdWorktree: boolean;
-        subscribedNewsletter: boolean;
+        ranSecondParallelAgent: boolean;
       };
     };
+  };
+  activationFunnel: {
+    firstAgentTaskStartedAt?: number;
+    firstAgentTaskCompletedAt?: number;
+    firstParallelAgentsAt?: number;
+    timeToFirstAgentTaskMs?: number;
   };
   orchestrationMilestones: Record<string, boolean>;
   shortcutHintCounts: Record<string, number>;
@@ -322,10 +328,11 @@ const storeOptions = {
           openedProject: false,
           launchedAgent: false,
           createdWorktree: false,
-          subscribedNewsletter: false,
+          ranSecondParallelAgent: false,
         },
       },
     },
+    activationFunnel: {},
     orchestrationMilestones: {},
     shortcutHintCounts: {},
     updateChannel: "stable" as const,

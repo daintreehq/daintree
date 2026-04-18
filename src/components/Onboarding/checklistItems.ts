@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { FolderOpen, Mail } from "lucide-react";
+import { FolderOpen } from "lucide-react";
 import { DaintreeAgentIcon, WorktreeIcon } from "@/components/icons";
 import type { ActionId } from "@shared/types/actions";
 import type { ChecklistItemId } from "@shared/types/ipc/maps";
@@ -37,12 +37,11 @@ export const CHECKLIST_ITEMS: ChecklistItemDef[] = [
     actionId: "worktree.createDialog.open",
   },
   {
-    id: "subscribedNewsletter",
-    label: "Stay in the loop",
-    description: "Get product updates and tips in your inbox.",
-    icon: Mail,
-    actionId: "system.openExternal",
-    actionArgs: { url: "https://daintree.org/newsletter" },
-    markOnClick: true,
+    id: "ranSecondParallelAgent",
+    label: "Run two agents in parallel",
+    description:
+      "Kick off a second agent while the first keeps working — that's the Daintree superpower.",
+    icon: DaintreeAgentIcon,
+    actionId: "worktree.createDialog.open",
   },
 ];

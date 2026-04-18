@@ -1055,6 +1055,7 @@ const CHANNELS = {
   ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
   ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN: "onboarding:checklist-mark-celebration-shown",
+  ONBOARDING_CHECKLIST_PUSH: "onboarding:checklist-push",
 
   // Shortcut Hints channels
   MILESTONES_GET: "milestones:get",
@@ -2765,6 +2766,9 @@ const api: ElectronAPI = {
       _unwrappingInvoke(CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM, item),
     markChecklistCelebrationShown: () =>
       _unwrappingInvoke(CHANNELS.ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN),
+    onChecklistPush: (
+      callback: (state: IpcEventMap["onboarding:checklist-push"]) => void
+    ): (() => void) => _typedOn(CHANNELS.ONBOARDING_CHECKLIST_PUSH, callback),
   },
 
   milestones: {

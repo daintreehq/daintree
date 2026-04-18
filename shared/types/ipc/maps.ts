@@ -180,13 +180,13 @@ export type ChecklistItemId =
   | "openedProject"
   | "launchedAgent"
   | "createdWorktree"
-  | "subscribedNewsletter";
+  | "ranSecondParallelAgent";
 
 export interface ChecklistItems {
   openedProject: boolean;
   launchedAgent: boolean;
   createdWorktree: boolean;
-  subscribedNewsletter: boolean;
+  ranSecondParallelAgent: boolean;
 }
 
 export interface ChecklistState {
@@ -2337,6 +2337,9 @@ export interface IpcEventMap {
     level: "off" | "errors" | "full";
     hasSeenPrompt: boolean;
   };
+
+  // Onboarding checklist push (main → renderer)
+  "onboarding:checklist-push": ChecklistState;
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];

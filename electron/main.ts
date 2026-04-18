@@ -1,6 +1,18 @@
 // Environment setup must run first (GC exposure, userData, flags, sandbox)
 import "./setup/environment.js";
 
+/**
+ * Wall-clock milliseconds at which the Electron process was created, captured
+ * as early as possible. Used to compute `time_to_first_agent_task_ms` for the
+ * activation funnel. Falls back to `Date.now()` on the rare platforms where
+ * `process.getCreationTime()` returns null. Electron 41 does not ship
+ * `app.getStartupTimestamp()`, so this is the earliest reliable origin point.
+ */
+export const APP_LAUNCH_MS: number =
+  typeof process.getCreationTime === "function"
+    ? (process.getCreationTime() ?? Date.now())
+    : Date.now();
+
 import { app, BrowserWindow, crashReporter, protocol } from "electron";
 import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
 import path from "path";
@@ -236,6 +248,7 @@ if (!gotTheLock) {
       initialProjectId,
       projectViewManager: pvm,
       initialAppView: appView,
+      appLaunchMs: APP_LAUNCH_MS,
     });
 
     if (!powerMonitorInitialized) {

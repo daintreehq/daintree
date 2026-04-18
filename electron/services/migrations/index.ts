@@ -12,6 +12,7 @@ import { migration011 } from "./011-minimal-soundscape-defaults.js";
 import { migration012 } from "./012-default-pin-agents.js";
 import { migration013 } from "./013-cleanup-phantom-pins.js";
 import { migration014 } from "./014-consolidate-telemetry-consent.js";
+import { migration015 } from "./015-activation-funnel-and-checklist-rename.js";
 
 export const migrations: Migration[] = [
   migration002,
@@ -27,4 +28,5 @@ export const migrations: Migration[] = [
   migration012,
   migration013,
   migration014,
+  migration015,
 ];

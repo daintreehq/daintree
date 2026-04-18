@@ -23,7 +23,8 @@ import { projectStore } from "../services/ProjectStore.js";
 import { taskQueueService } from "../services/TaskQueueService.js";
 import { store } from "../store.js";
 import { LATEST_SCHEMA_VERSION, MigrationRunner } from "../services/StoreMigrations.js";
-import { initializeTelemetry } from "../services/TelemetryService.js";
+import { initializeTelemetry, setOnboardingCompleteTag } from "../services/TelemetryService.js";
+import { activationFunnelService } from "../services/ActivationFunnelService.js";
 import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import { secureStorage } from "../services/SecureStorage.js";
 import { notificationService } from "../services/NotificationService.js";
@@ -261,6 +262,13 @@ export interface SetupWindowServicesOptions {
   initialProjectId?: string;
   projectViewManager?: import("./ProjectViewManager.js").ProjectViewManager;
   initialAppView?: import("electron").WebContentsView;
+  /**
+   * Wall-clock ms at which the Electron process started (captured as early as
+   * possible in the entry point). Threaded through so the activation funnel
+   * service can compute `time_to_first_agent_task_ms` without reaching back
+   * into the main-module singleton.
+   */
+  appLaunchMs?: number;
 }
 
 export async function setupWindowServices(
@@ -312,8 +320,13 @@ export async function setupWindowServices(
     }
 
     // Initialize Sentry after migrations — reads privacy.telemetryLevel,
-    // which is guaranteed populated by migration014.
-    void initializeTelemetry();
+    // which is guaranteed populated by migration014. Once the SDK is ready,
+    // stamp the `onboarding_complete` scope tag so every subsequent event
+    // (crashes, analytics) is filterable by whether the user has finished
+    // first-run onboarding.
+    void initializeTelemetry().then(() => {
+      setOnboardingCompleteTag(store.get("onboarding")?.completed === true);
+    });
 
     // Initialize GitHubAuth
     GitHubAuth.initializeStorage({
@@ -348,6 +361,7 @@ export async function setupWindowServices(
     // Notifications (global singletons)
     agentNotificationService.initialize();
     preAgentSnapshotService.initialize();
+    activationFunnelService.initialize({ appLaunchMs: opts.appLaunchMs ?? Date.now() });
 
     // Auto-updater
     autoUpdaterService.initialize();
@@ -1063,6 +1077,7 @@ export async function setupWindowServices(
     getSystemSleepService().dispose();
     notificationService.dispose();
     agentNotificationService.dispose();
+    activationFunnelService.dispose();
     preAgentSnapshotService.dispose();
     autoUpdaterService.dispose();
   });

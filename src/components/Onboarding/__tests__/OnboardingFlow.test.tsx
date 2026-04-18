@@ -24,7 +24,7 @@ const defaultOnboardingState: OnboardingState = {
       openedProject: false,
       launchedAgent: false,
       createdWorktree: false,
-      subscribedNewsletter: false,
+      ranSecondParallelAgent: false,
     },
   },
 };

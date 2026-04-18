@@ -26,7 +26,7 @@ const allIncomplete: ChecklistState = {
     openedProject: false,
     launchedAgent: false,
     createdWorktree: false,
-    subscribedNewsletter: false,
+    ranSecondParallelAgent: false,
   },
 };
 
@@ -37,7 +37,7 @@ const allComplete: ChecklistState = {
     openedProject: true,
     launchedAgent: true,
     createdWorktree: true,
-    subscribedNewsletter: true,
+    ranSecondParallelAgent: true,
   },
 };
 
@@ -48,7 +48,7 @@ const mixedState: ChecklistState = {
     openedProject: true,
     launchedAgent: false,
     createdWorktree: false,
-    subscribedNewsletter: false,
+    ranSecondParallelAgent: false,
   },
 };
 
@@ -68,7 +68,7 @@ describe("GettingStartedChecklist", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
 
     const buttons = screen.getAllByRole("button", {
-      name: /open your project|ask ai to help with your code|start a parallel task|stay in the loop/i,
+      name: /open your project|ask ai to help with your code|start a parallel task|run two agents in parallel/i,
     });
     expect(buttons).toHaveLength(4);
   });
@@ -77,21 +77,21 @@ describe("GettingStartedChecklist", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allComplete} />);
 
     const stepButtons = screen.queryAllByRole("button", {
-      name: /open your project|ask ai to help with your code|start a parallel task|stay in the loop/i,
+      name: /open your project|ask ai to help with your code|start a parallel task|run two agents in parallel/i,
     });
     expect(stepButtons).toHaveLength(0);
 
     expect(screen.getByText("Open your project")).toBeTruthy();
     expect(screen.getByText("Ask AI to help with your code")).toBeTruthy();
     expect(screen.getByText("Start a parallel task")).toBeTruthy();
-    expect(screen.getByText("Stay in the loop")).toBeTruthy();
+    expect(screen.getByText("Run two agents in parallel")).toBeTruthy();
   });
 
   it("renders mixed state correctly — only incomplete steps are buttons", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={mixedState} />);
 
     const stepButtons = screen.getAllByRole("button", {
-      name: /ask ai to help with your code|start a parallel task|stay in the loop/i,
+      name: /ask ai to help with your code|start a parallel task|run two agents in parallel/i,
     });
     expect(stepButtons).toHaveLength(3);
 
@@ -125,17 +125,15 @@ describe("GettingStartedChecklist", () => {
     });
   });
 
-  it("dispatches system.openExternal with newsletter URL and calls onMarkItem when 'Stay in the loop' is clicked", () => {
+  it("dispatches worktree.createDialog.open when 'Run two agents in parallel' is clicked and does NOT mark the item (auto-mark is owned by the activation funnel service)", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /stay in the loop/i }));
+    fireEvent.click(screen.getByRole("button", { name: /run two agents in parallel/i }));
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "system.openExternal",
-      { url: "https://daintree.org/newsletter" },
-      { source: "user" }
-    );
-    expect(defaultProps.onMarkItem).toHaveBeenCalledWith("subscribedNewsletter");
+    expect(dispatchMock).toHaveBeenCalledWith("worktree.createDialog.open", undefined, {
+      source: "user",
+    });
+    expect(defaultProps.onMarkItem).not.toHaveBeenCalled();
   });
 
   it("does not call onMarkItem for non-markOnClick items", () => {

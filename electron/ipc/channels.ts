@@ -526,6 +526,7 @@ export const CHANNELS = {
   ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
   ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN: "onboarding:checklist-mark-celebration-shown",
+  ONBOARDING_CHECKLIST_PUSH: "onboarding:checklist-push",
 
   // Milestone channels
   MILESTONES_GET: "milestones:get",

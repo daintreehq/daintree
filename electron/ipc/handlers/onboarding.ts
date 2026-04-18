@@ -2,6 +2,7 @@ import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import type { StoreSchema } from "../../store.js";
 import { typedHandle } from "../utils.js";
+import { setOnboardingCompleteTag } from "../../services/TelemetryService.js";
 
 type OnboardingState = StoreSchema["onboarding"];
 type ChecklistState = OnboardingState["checklist"];
@@ -13,7 +14,7 @@ const DEFAULT_CHECKLIST: ChecklistState = {
     openedProject: false,
     launchedAgent: false,
     createdWorktree: false,
-    subscribedNewsletter: false,
+    ranSecondParallelAgent: false,
   },
 };
 
@@ -46,7 +47,7 @@ function getOnboardingState(): OnboardingState {
           openedProject: true,
           launchedAgent: true,
           createdWorktree: true,
-          subscribedNewsletter: true,
+          ranSecondParallelAgent: true,
         },
       },
     };
@@ -86,8 +87,7 @@ function getOnboardingState(): OnboardingState {
       ...checklist,
       items: {
         ...mergedItems,
-        subscribedNewsletter:
-          mergedItems.subscribedNewsletter || (raw.newsletterPromptSeen ?? false),
+        ranSecondParallelAgent: mergedItems.ranSecondParallelAgent ?? false,
       },
     },
   };
@@ -135,12 +135,15 @@ export function registerOnboardingHandlers(): () => void {
                 openedProject: true,
                 launchedAgent: true,
                 createdWorktree: true,
-                subscribedNewsletter: true,
+                ranSecondParallelAgent: true,
               },
             }
           : state.checklist,
       };
       store.set("onboarding", updated);
+      if (allPreviouslyComplete) {
+        setOnboardingCompleteTag(true);
+      }
       return updated;
     })
   );
@@ -173,6 +176,7 @@ export function registerOnboardingHandlers(): () => void {
         currentStep: null,
         agentSetupIds: [],
       });
+      setOnboardingCompleteTag(true);
     })
   );
 
@@ -274,7 +278,7 @@ export function registerOnboardingHandlers(): () => void {
         "openedProject",
         "launchedAgent",
         "createdWorktree",
-        "subscribedNewsletter",
+        "ranSecondParallelAgent",
       ];
       if (typeof item !== "string" || !validItems.includes(item)) return;
       const state = getOnboardingState();

@@ -4,6 +4,7 @@ import os from "os";
 const sentryInitMock = vi.hoisted(() => vi.fn());
 const captureEventMock = vi.hoisted(() => vi.fn(() => "mock-event-id"));
 const sentryCloseMock = vi.hoisted(() => vi.fn(() => Promise.resolve(true)));
+const sentrySetTagMock = vi.hoisted(() => vi.fn());
 
 const storeMock = vi.hoisted(() => {
   const data: Record<string, unknown> = {
@@ -28,6 +29,7 @@ vi.mock("@sentry/electron/main", () => ({
   init: sentryInitMock,
   captureEvent: captureEventMock,
   close: sentryCloseMock,
+  setTag: sentrySetTagMock,
 }));
 
 import {
@@ -163,6 +165,82 @@ describe("setTelemetryLevel", () => {
       "privacy",
       expect.objectContaining({ telemetryLevel: "full", hasSeenPrompt: true })
     );
+  });
+});
+
+describe("setTelemetryLevel — onboarding_complete re-stamp", () => {
+  // Use isolated module instances so each test starts with a clean `initialized` flag.
+  async function loadFreshModule() {
+    vi.resetModules();
+    return await import("../TelemetryService.js");
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setPrivacy({ telemetryLevel: "off", hasSeenPrompt: false });
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+  });
+
+  it("re-stamps onboarding_complete=true when switching mid-session to 'full' while onboarding is complete", async () => {
+    storeMock._data.onboarding = {
+      completed: true,
+    } as unknown as typeof storeMock._data.onboarding;
+    const mod = await loadFreshModule();
+    await mod.setTelemetryLevel("full");
+    expect(sentrySetTagMock).toHaveBeenCalledWith("onboarding_complete", "true");
+  });
+
+  it("re-stamps onboarding_complete=false when switching mid-session to 'errors' while onboarding is incomplete", async () => {
+    storeMock._data.onboarding = {
+      completed: false,
+    } as unknown as typeof storeMock._data.onboarding;
+    const mod = await loadFreshModule();
+    await mod.setTelemetryLevel("errors");
+    expect(sentrySetTagMock).toHaveBeenCalledWith("onboarding_complete", "false");
+  });
+
+  it("does NOT re-stamp when switching to 'off' (SDK is unloaded)", async () => {
+    storeMock._data.onboarding = {
+      completed: true,
+    } as unknown as typeof storeMock._data.onboarding;
+    const mod = await loadFreshModule();
+    setPrivacy({ telemetryLevel: "full" });
+    sentrySetTagMock.mockClear();
+    await mod.setTelemetryLevel("off");
+    expect(sentrySetTagMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("setOnboardingCompleteTag", () => {
+  async function loadFreshModule() {
+    vi.resetModules();
+    return await import("../TelemetryService.js");
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setPrivacy({ telemetryLevel: "off", hasSeenPrompt: false });
+  });
+
+  it("is a safe no-op when Sentry has not been initialized", async () => {
+    const mod = await loadFreshModule();
+    expect(() => mod.setOnboardingCompleteTag(true)).not.toThrow();
+    expect(sentrySetTagMock).not.toHaveBeenCalled();
+  });
+
+  it("calls Sentry.setTag with string booleans once Sentry is initialized", async () => {
+    setPrivacy({ telemetryLevel: "errors" });
+    process.env.SENTRY_DSN = "https://example@sentry.io/123";
+    try {
+      const mod = await loadFreshModule();
+      await mod.initializeTelemetry();
+      mod.setOnboardingCompleteTag(true);
+      expect(sentrySetTagMock).toHaveBeenCalledWith("onboarding_complete", "true");
+      mod.setOnboardingCompleteTag(false);
+      expect(sentrySetTagMock).toHaveBeenCalledWith("onboarding_complete", "false");
+    } finally {
+      delete process.env.SENTRY_DSN;
+    }
   });
 });
 

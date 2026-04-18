@@ -108,6 +108,31 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
       .catch(console.error);
   }, [isStateLoaded]);
 
+  // Subscribe to main-process checklist pushes (e.g., parallel-agents milestone
+  // auto-marks the `ranSecondParallelAgent` item from the activation funnel
+  // service). Every active WebContentsView receives the push via
+  // `broadcastToRenderer`, so cached views stay in sync. We merge by taking
+  // the union of truthy items rather than overwriting — this prevents a
+  // pre-push `getChecklist()` hydration promise from clobbering a newer push.
+  useEffect(() => {
+    if (!isElectronAvailable() || !window.electron?.onboarding?.onChecklistPush) return;
+    return window.electron.onboarding.onChecklistPush((next) => {
+      setChecklist((prev) => {
+        if (!prev) return next;
+        const mergedItems = { ...prev.items } as typeof prev.items;
+        for (const key of Object.keys(next.items) as Array<keyof typeof next.items>) {
+          if (next.items[key] || prev.items[key]) mergedItems[key] = true;
+        }
+        return {
+          ...next,
+          items: mergedItems,
+          dismissed: prev.dismissed || next.dismissed,
+          celebrationShown: prev.celebrationShown || next.celebrationShown,
+        };
+      });
+    });
+  }, []);
+
   // Set up Zustand subscriptions for auto-completion + reconcile current state
   useEffect(() => {
     if (!isElectronAvailable() || !isStateLoaded) return;

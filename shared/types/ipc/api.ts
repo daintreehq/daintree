@@ -1152,6 +1152,7 @@ export interface ElectronAPI {
     dismissChecklist(): Promise<void>;
     markChecklistItem(item: ChecklistItemId): Promise<void>;
     markChecklistCelebrationShown(): Promise<void>;
+    onChecklistPush(callback: (state: ChecklistState) => void): () => void;
   };
   milestones: {
     get(): Promise<Record<string, boolean>>;

@@ -201,7 +201,7 @@ const allIncomplete: ChecklistState = {
     openedProject: false,
     launchedAgent: false,
     createdWorktree: false,
-    subscribedNewsletter: false,
+    ranSecondParallelAgent: false,
   },
 };
 
@@ -212,7 +212,7 @@ const oneComplete: ChecklistState = {
     openedProject: true,
     launchedAgent: false,
     createdWorktree: false,
-    subscribedNewsletter: false,
+    ranSecondParallelAgent: false,
   },
 };
 
@@ -223,7 +223,7 @@ const allComplete: ChecklistState = {
     openedProject: true,
     launchedAgent: true,
     createdWorktree: true,
-    subscribedNewsletter: true,
+    ranSecondParallelAgent: true,
   },
 };
 
@@ -234,7 +234,7 @@ const dismissed: ChecklistState = {
     openedProject: false,
     launchedAgent: false,
     createdWorktree: false,
-    subscribedNewsletter: false,
+    ranSecondParallelAgent: false,
   },
 };
 

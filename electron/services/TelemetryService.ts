@@ -141,12 +141,17 @@ export async function setTelemetryLevel(level: TelemetryLevel): Promise<void> {
 
   if (level === "full") {
     await initializeTelemetry();
+    // If the user flips telemetry on mid-session, Sentry has only just loaded
+    // — stamp the onboarding_complete tag now so the rest of this session's
+    // events carry it (we don't wait for the next launch).
+    setOnboardingCompleteTag(store.get("onboarding")?.completed === true);
     flushPreConsentBuffer();
   } else if (level === "errors") {
     // Errors-only consent covers crash reports, not analytics — drop any
     // buffered onboarding analytics rather than replaying them to Sentry.
     preConsentBuffer.length = 0;
     await initializeTelemetry();
+    setOnboardingCompleteTag(store.get("onboarding")?.completed === true);
   } else {
     preConsentBuffer.length = 0;
   }
@@ -196,6 +201,23 @@ export function trackEvent(event: string, properties: Record<string, unknown> = 
 
 export function hasTelemetryPromptBeenShown(): boolean {
   return store.get("privacy")?.hasSeenPrompt ?? false;
+}
+
+/**
+ * Sets the `onboarding_complete` Sentry scope tag so all subsequent captured
+ * events are tagged with the user's onboarding state. Lets us separate
+ * first-run crashes from established-user crashes in Sentry issue triage.
+ *
+ * Safe to call before telemetry is initialized — becomes a no-op. When called
+ * after init (or re-called when state changes), it updates the global scope
+ * and applies to all events captured afterward.
+ */
+export function setOnboardingCompleteTag(completed: boolean): void {
+  try {
+    sentryModule?.setTag("onboarding_complete", completed ? "true" : "false");
+  } catch {
+    // never let telemetry errors escape into product code paths
+  }
 }
 
 export function markTelemetryPromptShown(): void {
