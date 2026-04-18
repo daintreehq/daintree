@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { PtyClient } from "../../services/PtyClient.js";
 import type { SpawnErrorCode, SpawnResult } from "../../../shared/types/pty-host.js";
 
 const sleepMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -56,13 +57,11 @@ function createNonTransientError(message: string): Error {
   return err;
 }
 
-interface MockPtyClient extends EventEmitter {
-  spawn: Mock;
-}
+type MockPtyClient = EventEmitter & { spawn: Mock };
 
-function createPtyClientMock(spawn: Mock): MockPtyClient {
+function createPtyClientMock(spawn: Mock): MockPtyClient & PtyClient {
   const emitter = new EventEmitter();
-  return Object.assign(emitter, { spawn }) as MockPtyClient;
+  return Object.assign(emitter, { spawn }) as unknown as MockPtyClient & PtyClient;
 }
 
 function emitSpawnSuccess(client: MockPtyClient, id: string): void {
