@@ -1,4 +1,4 @@
-import { useMemo, useRef, type Dispatch, type SetStateAction } from "react";
+import { useRef, type Dispatch, type SetStateAction } from "react";
 import { EditorView } from "@codemirror/view";
 import {
   getSlashCommandContext,
@@ -23,9 +23,12 @@ interface LatestRefShape {
 
 interface UseContextDetectionParams {
   latestRef: React.RefObject<LatestRefShape | null>;
-  lastEmittedValueRef: React.MutableRefObject<string>;
-  isApplyingExternalValueRef: React.MutableRefObject<boolean>;
-  setValue: Dispatch<SetStateAction<string>>;
+  // Owner stores the next document value (typically into a ref + setState pair).
+  // Returning true signals the value actually changed (i.e. differed from the last emit).
+  applyDocChange: (next: string) => boolean;
+  // Reads-and-clears an "external value being applied" flag. Returning true means the
+  // change came from our own dispatch and should not be treated as user input.
+  consumeExternalValueFlag: () => boolean;
   setAtContext: Dispatch<SetStateAction<AtFileContext | null>>;
   setSlashContext: Dispatch<SetStateAction<SlashCommandContext | null>>;
   setDiffContext: Dispatch<SetStateAction<AtDiffContext | null>>;
@@ -35,9 +38,8 @@ interface UseContextDetectionParams {
 
 export function useContextDetection({
   latestRef,
-  lastEmittedValueRef,
-  isApplyingExternalValueRef,
-  setValue,
+  applyDocChange,
+  consumeExternalValueFlag,
   setAtContext,
   setSlashContext,
   setDiffContext,
@@ -50,182 +52,174 @@ export function useContextDetection({
   const lastTerminalContextRef = useRef<AtTerminalContext | null>(null);
   const lastSelectionContextRef = useRef<AtSelectionContext | null>(null);
 
-  const editorUpdateListener = useMemo(
-    () =>
-      EditorView.updateListener.of((update) => {
-        if (update.docChanged) {
-          const nextValue = update.state.doc.toString();
-          if (nextValue !== lastEmittedValueRef.current) {
-            lastEmittedValueRef.current = nextValue;
-            setValue(nextValue);
-          }
+  // Listener is consumed once at editor construction time (HybridInputBar useLayoutEffect),
+  // so a fresh extension per render is harmless and lets the React Compiler memoize this hook.
+  const editorUpdateListener = EditorView.updateListener.of((update) => {
+    if (update.docChanged) {
+      const nextValue = update.state.doc.toString();
+      applyDocChange(nextValue);
 
-          if (isApplyingExternalValueRef.current) {
-            isApplyingExternalValueRef.current = false;
-          } else {
-            const latest = latestRef.current;
-            if (latest?.isInHistoryMode) {
-              latest.resetHistoryIndex(latest.terminalId, latest.projectId);
-            }
+      if (!consumeExternalValueFlag()) {
+        const latest = latestRef.current;
+        if (latest?.isInHistoryMode) {
+          latest.resetHistoryIndex(latest.terminalId, latest.projectId);
+        }
 
-            const isUserChange = update.transactions.some(
-              (tr) => tr.isUserEvent("input") || tr.isUserEvent("delete")
-            );
-            if (isUserChange) {
-              const terminalId = latest?.terminalId;
-              if (terminalId) {
-                const resultingValue = update.state.doc.toString();
-                if (resultingValue.trim().length === 0) {
-                  terminalInstanceService.clearDirectingState(terminalId);
-                } else {
-                  terminalInstanceService.notifyUserInput(terminalId);
-                }
-              }
+        const isUserChange = update.transactions.some(
+          (tr) => tr.isUserEvent("input") || tr.isUserEvent("delete")
+        );
+        if (isUserChange) {
+          const terminalId = latest?.terminalId;
+          if (terminalId) {
+            const resultingValue = update.state.doc.toString();
+            if (resultingValue.trim().length === 0) {
+              terminalInstanceService.clearDirectingState(terminalId);
+            } else {
+              terminalInstanceService.notifyUserInput(terminalId);
             }
           }
         }
+      }
+    }
 
-        if (update.docChanged || update.selectionSet) {
-          const caret = update.state.selection.main.head;
-          const text = update.state.doc.toString();
+    if (update.docChanged || update.selectionSet) {
+      const caret = update.state.selection.main.head;
+      const text = update.state.doc.toString();
 
-          const slash = getSlashCommandContext(text, caret);
-          if (slash) {
-            const prev = lastSlashContextRef.current;
-            if (
-              !prev ||
-              prev.start !== slash.start ||
-              prev.tokenEnd !== slash.tokenEnd ||
-              prev.query !== slash.query
-            ) {
-              lastSlashContextRef.current = slash;
-              setSlashContext(slash);
-            }
-            if (lastAtContextRef.current !== null) {
-              lastAtContextRef.current = null;
-              setAtContext(null);
-            }
-            if (lastDiffContextRef.current !== null) {
-              lastDiffContextRef.current = null;
-              setDiffContext(null);
-            }
-            if (lastTerminalContextRef.current !== null) {
-              lastTerminalContextRef.current = null;
-              setTerminalContext(null);
-            }
-            if (lastSelectionContextRef.current !== null) {
-              lastSelectionContextRef.current = null;
-              setSelectionContext(null);
-            }
-            return;
-          }
-
-          const termCtx = getTerminalContext(text, caret);
-          if (termCtx) {
-            const prev = lastTerminalContextRef.current;
-            if (!prev || prev.atStart !== termCtx.atStart || prev.tokenEnd !== termCtx.tokenEnd) {
-              lastTerminalContextRef.current = termCtx;
-              setTerminalContext(termCtx);
-            }
-            if (lastAtContextRef.current !== null) {
-              lastAtContextRef.current = null;
-              setAtContext(null);
-            }
-            if (lastSlashContextRef.current !== null) {
-              lastSlashContextRef.current = null;
-              setSlashContext(null);
-            }
-            if (lastDiffContextRef.current !== null) {
-              lastDiffContextRef.current = null;
-              setDiffContext(null);
-            }
-            if (lastSelectionContextRef.current !== null) {
-              lastSelectionContextRef.current = null;
-              setSelectionContext(null);
-            }
-            return;
-          }
-          if (lastTerminalContextRef.current !== null) {
-            lastTerminalContextRef.current = null;
-            setTerminalContext(null);
-          }
-
-          const selCtx = getSelectionContext(text, caret);
-          if (selCtx) {
-            const prev = lastSelectionContextRef.current;
-            if (!prev || prev.atStart !== selCtx.atStart || prev.tokenEnd !== selCtx.tokenEnd) {
-              lastSelectionContextRef.current = selCtx;
-              setSelectionContext(selCtx);
-            }
-            if (lastAtContextRef.current !== null) {
-              lastAtContextRef.current = null;
-              setAtContext(null);
-            }
-            if (lastSlashContextRef.current !== null) {
-              lastSlashContextRef.current = null;
-              setSlashContext(null);
-            }
-            if (lastDiffContextRef.current !== null) {
-              lastDiffContextRef.current = null;
-              setDiffContext(null);
-            }
-            return;
-          }
-          if (lastSelectionContextRef.current !== null) {
-            lastSelectionContextRef.current = null;
-            setSelectionContext(null);
-          }
-
-          const diffCtx = getDiffContext(text, caret);
-          if (diffCtx) {
-            const prevDiff = lastDiffContextRef.current;
-            if (
-              !prevDiff ||
-              prevDiff.atStart !== diffCtx.atStart ||
-              prevDiff.tokenEnd !== diffCtx.tokenEnd ||
-              prevDiff.diffType !== diffCtx.diffType
-            ) {
-              lastDiffContextRef.current = diffCtx;
-              setDiffContext(diffCtx);
-            }
-            if (lastAtContextRef.current !== null) {
-              lastAtContextRef.current = null;
-              setAtContext(null);
-            }
-            if (lastSlashContextRef.current !== null) {
-              lastSlashContextRef.current = null;
-              setSlashContext(null);
-            }
-            return;
-          }
-
-          if (lastDiffContextRef.current !== null) {
-            lastDiffContextRef.current = null;
-            setDiffContext(null);
-          }
-
-          const atCtx = getAtFileContext(text, caret);
-          const prevAt = lastAtContextRef.current;
-          if (
-            (atCtx &&
-              (!prevAt ||
-                prevAt.atStart !== atCtx.atStart ||
-                prevAt.tokenEnd !== atCtx.tokenEnd ||
-                prevAt.queryRaw !== atCtx.queryRaw)) ||
-            (!atCtx && prevAt)
-          ) {
-            lastAtContextRef.current = atCtx;
-            setAtContext(atCtx);
-          }
-          if (lastSlashContextRef.current !== null) {
-            lastSlashContextRef.current = null;
-            setSlashContext(null);
-          }
+      const slash = getSlashCommandContext(text, caret);
+      if (slash) {
+        const prev = lastSlashContextRef.current;
+        if (
+          !prev ||
+          prev.start !== slash.start ||
+          prev.tokenEnd !== slash.tokenEnd ||
+          prev.query !== slash.query
+        ) {
+          lastSlashContextRef.current = slash;
+          setSlashContext(slash);
         }
-      }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
-  );
+        if (lastAtContextRef.current !== null) {
+          lastAtContextRef.current = null;
+          setAtContext(null);
+        }
+        if (lastDiffContextRef.current !== null) {
+          lastDiffContextRef.current = null;
+          setDiffContext(null);
+        }
+        if (lastTerminalContextRef.current !== null) {
+          lastTerminalContextRef.current = null;
+          setTerminalContext(null);
+        }
+        if (lastSelectionContextRef.current !== null) {
+          lastSelectionContextRef.current = null;
+          setSelectionContext(null);
+        }
+        return;
+      }
+
+      const termCtx = getTerminalContext(text, caret);
+      if (termCtx) {
+        const prev = lastTerminalContextRef.current;
+        if (!prev || prev.atStart !== termCtx.atStart || prev.tokenEnd !== termCtx.tokenEnd) {
+          lastTerminalContextRef.current = termCtx;
+          setTerminalContext(termCtx);
+        }
+        if (lastAtContextRef.current !== null) {
+          lastAtContextRef.current = null;
+          setAtContext(null);
+        }
+        if (lastSlashContextRef.current !== null) {
+          lastSlashContextRef.current = null;
+          setSlashContext(null);
+        }
+        if (lastDiffContextRef.current !== null) {
+          lastDiffContextRef.current = null;
+          setDiffContext(null);
+        }
+        if (lastSelectionContextRef.current !== null) {
+          lastSelectionContextRef.current = null;
+          setSelectionContext(null);
+        }
+        return;
+      }
+      if (lastTerminalContextRef.current !== null) {
+        lastTerminalContextRef.current = null;
+        setTerminalContext(null);
+      }
+
+      const selCtx = getSelectionContext(text, caret);
+      if (selCtx) {
+        const prev = lastSelectionContextRef.current;
+        if (!prev || prev.atStart !== selCtx.atStart || prev.tokenEnd !== selCtx.tokenEnd) {
+          lastSelectionContextRef.current = selCtx;
+          setSelectionContext(selCtx);
+        }
+        if (lastAtContextRef.current !== null) {
+          lastAtContextRef.current = null;
+          setAtContext(null);
+        }
+        if (lastSlashContextRef.current !== null) {
+          lastSlashContextRef.current = null;
+          setSlashContext(null);
+        }
+        if (lastDiffContextRef.current !== null) {
+          lastDiffContextRef.current = null;
+          setDiffContext(null);
+        }
+        return;
+      }
+      if (lastSelectionContextRef.current !== null) {
+        lastSelectionContextRef.current = null;
+        setSelectionContext(null);
+      }
+
+      const diffCtx = getDiffContext(text, caret);
+      if (diffCtx) {
+        const prevDiff = lastDiffContextRef.current;
+        if (
+          !prevDiff ||
+          prevDiff.atStart !== diffCtx.atStart ||
+          prevDiff.tokenEnd !== diffCtx.tokenEnd ||
+          prevDiff.diffType !== diffCtx.diffType
+        ) {
+          lastDiffContextRef.current = diffCtx;
+          setDiffContext(diffCtx);
+        }
+        if (lastAtContextRef.current !== null) {
+          lastAtContextRef.current = null;
+          setAtContext(null);
+        }
+        if (lastSlashContextRef.current !== null) {
+          lastSlashContextRef.current = null;
+          setSlashContext(null);
+        }
+        return;
+      }
+
+      if (lastDiffContextRef.current !== null) {
+        lastDiffContextRef.current = null;
+        setDiffContext(null);
+      }
+
+      const atCtx = getAtFileContext(text, caret);
+      const prevAt = lastAtContextRef.current;
+      if (
+        (atCtx &&
+          (!prevAt ||
+            prevAt.atStart !== atCtx.atStart ||
+            prevAt.tokenEnd !== atCtx.tokenEnd ||
+            prevAt.queryRaw !== atCtx.queryRaw)) ||
+        (!atCtx && prevAt)
+      ) {
+        lastAtContextRef.current = atCtx;
+        setAtContext(atCtx);
+      }
+      if (lastSlashContextRef.current !== null) {
+        lastSlashContextRef.current = null;
+        setSlashContext(null);
+      }
+    }
+  });
 
   return { editorUpdateListener };
 }

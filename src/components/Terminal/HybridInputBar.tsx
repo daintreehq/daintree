@@ -2,6 +2,7 @@ import {
   forwardRef,
   useCallback,
   useEffect,
+  useEffectEvent,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
@@ -819,9 +820,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const { editorUpdateListener } = useContextDetection({
       latestRef,
-      lastEmittedValueRef,
-      isApplyingExternalValueRef,
-      setValue,
+      applyDocChange: (next) => {
+        if (next === lastEmittedValueRef.current) return false;
+        lastEmittedValueRef.current = next;
+        setValue(next);
+        return true;
+      },
+      consumeExternalValueFlag: () => {
+        if (!isApplyingExternalValueRef.current) return false;
+        isApplyingExternalValueRef.current = false;
+        return true;
+      },
       setAtContext,
       setSlashContext,
       setDiffContext,
@@ -942,11 +951,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     // --- Editor lifecycle ---
 
-    useLayoutEffect(() => {
-      const host = editorHostRef.current;
-      if (!host) return;
-      if (editorViewRef.current) return;
-
+    // Editor is constructed once per terminalId from non-reactive props (compartments
+    // handle live updates). Wrapping in useEffectEvent keeps the construction body
+    // out of the dependency array so the React Compiler can memoize this component.
+    const createEditor = useEffectEvent((host: HTMLDivElement) => {
       const state = EditorState.create({
         doc: value,
         extensions: [
@@ -990,12 +998,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
       const view = new EditorView({ state, parent: host });
       editorViewRef.current = view;
+      return view;
+    });
+
+    useLayoutEffect(() => {
+      const host = editorHostRef.current;
+      if (!host) return;
+      if (editorViewRef.current) return;
+
+      const view = createEditor(host);
 
       return () => {
         view.destroy();
         editorViewRef.current = null;
       };
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- Editor created once, updated via compartments
     }, [terminalId]);
 
     useEffect(() => {
@@ -1005,15 +1021,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     // --- Compartment reconfigure effects ---
 
-    // Compartment refs are stable (useRef inside useEditorCompartments) — intentionally omitted from deps.
-    /* eslint-disable react-hooks/exhaustive-deps */
     useEffect(() => {
       const view = editorViewRef.current;
       if (!view) return;
       view.dispatch({
         effects: themeCompartmentRef.current.reconfigure(buildInputBarTheme(effectiveTheme)),
       });
-    }, [effectiveTheme]);
+    }, [effectiveTheme, themeCompartmentRef]);
 
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1021,7 +1035,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       view.dispatch({
         effects: placeholderCompartmentRef.current.reconfigure(createPlaceholder(placeholder)),
       });
-    }, [placeholder]);
+    }, [placeholder, placeholderCompartmentRef]);
 
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1029,7 +1043,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       view.dispatch({
         effects: editableCompartmentRef.current.reconfigure(EditorView.editable.of(!disabled)),
       });
-    }, [disabled]);
+    }, [disabled, editableCompartmentRef]);
 
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1037,7 +1051,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       view.dispatch({
         effects: chipCompartmentRef.current.reconfigure(createSlashChipField({ commandMap })),
       });
-    }, [commandMap]);
+    }, [commandMap, chipCompartmentRef]);
 
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1047,7 +1061,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           !disabled ? createSlashTooltip(commandMap) : []
         ),
       });
-    }, [commandMap, disabled]);
+    }, [commandMap, disabled, tooltipCompartmentRef]);
 
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1057,7 +1071,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           !disabled ? createFileChipTooltip() : []
         ),
       });
-    }, [disabled]);
+    }, [disabled, fileChipTooltipCompartmentRef]);
 
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1067,7 +1081,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           !disabled ? createImageChipTooltip() : []
         ),
       });
-    }, [disabled]);
+    }, [disabled, imageChipTooltipCompartmentRef]);
 
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1077,7 +1091,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           !disabled ? createFileDropChipTooltip() : []
         ),
       });
-    }, [disabled]);
+    }, [disabled, fileDropChipTooltipCompartmentRef]);
 
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1087,8 +1101,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           !disabled ? createDiffChipTooltip() : []
         ),
       });
-    }, [disabled]);
-    /* eslint-enable react-hooks/exhaustive-deps */
+    }, [disabled, diffChipTooltipCompartmentRef]);
 
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1125,7 +1138,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           view.focus();
         });
       }
-    }, [isExpanded]);
+    }, [isExpanded, autoSizeCompartmentRef]);
 
     const shellVars = {
       "--ib-bg": inputBarColors.shellBg,
