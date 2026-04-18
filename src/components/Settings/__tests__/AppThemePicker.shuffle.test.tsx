@@ -97,6 +97,8 @@ describe("AppThemePicker shuffle button", () => {
       addCustomScheme: vi.fn(),
       accentColorOverride: null,
       setAccentColorOverride: vi.fn(),
+      previewSchemeId: null,
+      setPreviewSchemeId: vi.fn(),
     });
   });
 
@@ -186,6 +188,8 @@ describe("AppThemePicker image loading attributes", () => {
       addCustomScheme: vi.fn(),
       accentColorOverride: null,
       setAccentColorOverride: vi.fn(),
+      previewSchemeId: null,
+      setPreviewSchemeId: vi.fn(),
     });
   });
 

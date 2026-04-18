@@ -15,7 +15,15 @@ interface AppThemeState {
   preferredLightSchemeId: string;
   recentSchemeIds: string[];
   accentColorOverride: string | null;
+  /**
+   * Ephemeral override used by the picker for live hover/focus preview.
+   * Never persisted. The picker reads this to drive the hero panel image
+   * and aria-live announcement during preview, while calling
+   * `injectSchemeToDOM` imperatively for the CSS variable side-effect.
+   */
+  previewSchemeId: string | null;
   setSelectedSchemeId: (id: string) => void;
+  setPreviewSchemeId: (id: string | null) => void;
   /**
    * Updates Zustand state for a deliberate scheme selection (selectedSchemeId
    * + recentSchemeIds LRU) WITHOUT touching the DOM. The caller is responsible
@@ -63,6 +71,7 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
   preferredLightSchemeId: "bondi",
   recentSchemeIds: [],
   accentColorOverride: null,
+  previewSchemeId: null,
 
   setSelectedSchemeId: (id) => {
     const { customSchemes } = useAppThemeStore.getState();
@@ -76,6 +85,8 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     }));
     injectSchemeToDOM(scheme);
   },
+
+  setPreviewSchemeId: (id) => set({ previewSchemeId: id }),
 
   commitSchemeSelection: (id) => {
     const { customSchemes } = useAppThemeStore.getState();
@@ -102,16 +113,24 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     })),
 
   removeCustomScheme: (id) => {
-    const { selectedSchemeId } = useAppThemeStore.getState();
-    const needsFallback = selectedSchemeId === id;
+    const prev = useAppThemeStore.getState();
+    const needsFallback = prev.selectedSchemeId === id;
+    const wasPreviewing = prev.previewSchemeId === id;
     set((state) => ({
       customSchemes: state.customSchemes.filter((s) => s.id !== id),
       selectedSchemeId: needsFallback ? DEFAULT_APP_SCHEME_ID : state.selectedSchemeId,
+      previewSchemeId: wasPreviewing ? null : state.previewSchemeId,
       recentSchemeIds: state.recentSchemeIds.filter((x) => x !== id),
     }));
     if (needsFallback) {
       const defaultScheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === DEFAULT_APP_SCHEME_ID)!;
       injectSchemeToDOM(defaultScheme);
+    } else if (wasPreviewing) {
+      // Preview was pointing at the deleted scheme — CSS vars on :root still
+      // reflect it. Revert the DOM to the (still-committed) selected scheme
+      // so the app theme doesn't silently get stuck on a deleted theme.
+      const { selectedSchemeId, customSchemes } = useAppThemeStore.getState();
+      injectSchemeToDOM(resolveAppTheme(selectedSchemeId, customSchemes));
     }
   },
 
@@ -134,8 +153,12 @@ export const useAppThemeStore = create<AppThemeState>()((set) => ({
     set({ accentColorOverride: color });
     // Re-inject the currently active scheme so the override (or its removal)
     // takes effect immediately via the single injectSchemeToDOM pipeline.
-    const { selectedSchemeId, customSchemes } = useAppThemeStore.getState();
-    const scheme = resolveAppTheme(selectedSchemeId, customSchemes);
+    // When a hover preview is active, the previewed scheme is what's on the
+    // DOM — re-injecting the committed scheme here would flip the DOM off
+    // the preview until the pointer moved.
+    const { selectedSchemeId, previewSchemeId, customSchemes } = useAppThemeStore.getState();
+    const activeId = previewSchemeId ?? selectedSchemeId;
+    const scheme = resolveAppTheme(activeId, customSchemes);
     injectSchemeToDOM(scheme);
   },
 }));

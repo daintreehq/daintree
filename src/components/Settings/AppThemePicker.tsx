@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -17,6 +18,7 @@ import { applyAccentOverrideToScheme, resolveAppTheme } from "@shared/theme";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { APP_THEME_PREVIEW_KEYS, getAppThemeWarnings } from "@shared/theme";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
+import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 
 function shuffleArray<T>(arr: T[]): T[] {
@@ -78,11 +80,17 @@ function ThemeRow({
   scheme,
   isSelected,
   onSelect,
+  onPreviewEnter,
+  onPreviewLeave,
+  onFocusPreview,
   warnings,
 }: {
   scheme: AppColorScheme;
   isSelected: boolean;
   onSelect: (id: string, origin: { x: number; y: number }) => void;
+  onPreviewEnter: (id: string) => void;
+  onPreviewLeave: () => void;
+  onFocusPreview: (id: string) => void;
   warnings: AppThemeValidationWarning[];
 }) {
   return (
@@ -91,6 +99,10 @@ function ThemeRow({
       role="option"
       aria-selected={isSelected}
       onClick={(e) => onSelect(scheme.id, { x: e.clientX, y: e.clientY })}
+      onPointerEnter={() => onPreviewEnter(scheme.id)}
+      onPointerLeave={onPreviewLeave}
+      onFocus={() => onFocusPreview(scheme.id)}
+      onBlur={onPreviewLeave}
       className={cn(
         "w-full flex items-center gap-2.5 px-2.5 py-2 text-left transition-colors",
         isSelected ? "bg-daintree-accent/10" : "hover:bg-surface-hover"
@@ -148,9 +160,12 @@ export function AppThemePicker() {
   const setPreferredLightSchemeId = useAppThemeStore((s) => s.setPreferredLightSchemeId);
   const accentColorOverride = useAppThemeStore((s) => s.accentColorOverride);
   const setAccentColorOverride = useAppThemeStore((s) => s.setAccentColorOverride);
+  const previewSchemeId = useAppThemeStore((s) => s.previewSchemeId);
+  const setPreviewSchemeId = useAppThemeStore((s) => s.setPreviewSchemeId);
   const [importWarnings, setImportWarnings] = useState<AppThemeValidationWarning[]>([]);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [previewAnnouncement, setPreviewAnnouncement] = useState("");
   const [typeFilter, setTypeFilter] = useState<"dark" | "light">(() =>
     (selectedSchemeId &&
       [...BUILT_IN_APP_SCHEMES, ...customSchemes].find((s) => s.id === selectedSchemeId)?.type) ===
@@ -160,6 +175,8 @@ export function AppThemePicker() {
   );
 
   const shuffleQueueRef = useRef<string[]>([]);
+  const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const revertRafRef = useRef<number | null>(null);
 
   const allSchemes = useMemo(() => [...BUILT_IN_APP_SCHEMES, ...customSchemes], [customSchemes]);
   const darkSchemes = useMemo(() => allSchemes.filter((s) => s.type !== "light"), [allSchemes]);
@@ -167,6 +184,11 @@ export function AppThemePicker() {
   const selectedScheme = useMemo(
     () => allSchemes.find((s) => s.id === selectedSchemeId) ?? allSchemes[0]!,
     [allSchemes, selectedSchemeId]
+  );
+  const effectiveSchemeId = previewSchemeId ?? selectedSchemeId;
+  const effectiveScheme = useMemo(
+    () => allSchemes.find((s) => s.id === effectiveSchemeId) ?? selectedScheme,
+    [allSchemes, effectiveSchemeId, selectedScheme]
   );
 
   const lowerQuery = query.toLowerCase();
@@ -220,6 +242,103 @@ export function AppThemePicker() {
     });
   }, [setAccentColorOverride]);
 
+  const handlePreviewEnter = useCallback(
+    (id: string) => {
+      if (revertRafRef.current !== null) {
+        cancelAnimationFrame(revertRafRef.current);
+        revertRafRef.current = null;
+      }
+      if (previewDebounceRef.current !== null) {
+        clearTimeout(previewDebounceRef.current);
+      }
+      previewDebounceRef.current = setTimeout(() => {
+        previewDebounceRef.current = null;
+        const scheme = resolveAppTheme(id, useAppThemeStore.getState().customSchemes);
+        setPreviewSchemeId(id);
+        injectSchemeToDOM(scheme);
+        setPreviewAnnouncement(`Previewing: ${scheme.name}`);
+      }, 300);
+    },
+    [setPreviewSchemeId]
+  );
+
+  const handleFocusPreview = useCallback(
+    (id: string) => {
+      if (previewDebounceRef.current !== null) {
+        clearTimeout(previewDebounceRef.current);
+        previewDebounceRef.current = null;
+      }
+      if (revertRafRef.current !== null) {
+        cancelAnimationFrame(revertRafRef.current);
+        revertRafRef.current = null;
+      }
+      const scheme = resolveAppTheme(id, useAppThemeStore.getState().customSchemes);
+      setPreviewSchemeId(id);
+      injectSchemeToDOM(scheme);
+      setPreviewAnnouncement(`Previewing: ${scheme.name}`);
+    },
+    [setPreviewSchemeId]
+  );
+
+  const handlePreviewLeave = useCallback(() => {
+    if (previewDebounceRef.current !== null) {
+      clearTimeout(previewDebounceRef.current);
+      previewDebounceRef.current = null;
+    }
+    if (revertRafRef.current !== null) {
+      cancelAnimationFrame(revertRafRef.current);
+    }
+    revertRafRef.current = requestAnimationFrame(() => {
+      revertRafRef.current = null;
+      const state = useAppThemeStore.getState();
+      if (state.previewSchemeId !== null) {
+        const committed = resolveAppTheme(state.selectedSchemeId, state.customSchemes);
+        setPreviewSchemeId(null);
+        injectSchemeToDOM(committed);
+      }
+      setPreviewAnnouncement("");
+    });
+  }, [setPreviewSchemeId]);
+
+  const clearPreview = useCallback(() => {
+    if (previewDebounceRef.current !== null) {
+      clearTimeout(previewDebounceRef.current);
+      previewDebounceRef.current = null;
+    }
+    if (revertRafRef.current !== null) {
+      cancelAnimationFrame(revertRafRef.current);
+      revertRafRef.current = null;
+    }
+    const state = useAppThemeStore.getState();
+    if (state.previewSchemeId !== null) {
+      const committed = resolveAppTheme(state.selectedSchemeId, state.customSchemes);
+      setPreviewSchemeId(null);
+      injectSchemeToDOM(committed);
+    }
+    setPreviewAnnouncement("");
+  }, [setPreviewSchemeId]);
+
+  useEscapeStack(previewSchemeId !== null, clearPreview);
+
+  useEffect(() => {
+    return () => {
+      if (previewDebounceRef.current !== null) {
+        clearTimeout(previewDebounceRef.current);
+        previewDebounceRef.current = null;
+      }
+      if (revertRafRef.current !== null) {
+        cancelAnimationFrame(revertRafRef.current);
+        revertRafRef.current = null;
+      }
+      const state = useAppThemeStore.getState();
+      if (state.previewSchemeId !== null) {
+        const committed = resolveAppTheme(state.selectedSchemeId, state.customSchemes);
+        setPreviewSchemeId(null);
+        injectSchemeToDOM(committed);
+      }
+    };
+  }, [setPreviewSchemeId]);
+
   const handleSelect = useCallback(
     async (id: string, origin?: { x: number; y: number }) => {
       if (followSystem) {
@@ -227,8 +346,23 @@ export function AppThemePicker() {
         appThemeClient.setFollowSystem(false).catch(console.error);
       }
 
-      const scheme = resolveAppTheme(id, useAppThemeStore.getState().customSchemes);
+      // Cancel any in-flight preview work and clear preview state BEFORE the
+      // View Transition fires. Otherwise `runThemeReveal`'s async callback
+      // would still see `previewSchemeId` in the store and `injectSchemeToDOM`
+      // could be undone on the next preview cycle (see PR #5087).
+      if (previewDebounceRef.current !== null) {
+        clearTimeout(previewDebounceRef.current);
+        previewDebounceRef.current = null;
+      }
+      if (revertRafRef.current !== null) {
+        cancelAnimationFrame(revertRafRef.current);
+        revertRafRef.current = null;
+      }
+      setPreviewSchemeId(null);
+      setPreviewAnnouncement("");
+
       commitSchemeSelection(id);
+      const scheme = resolveAppTheme(id, useAppThemeStore.getState().customSchemes);
       setTypeFilter(scheme.type === "light" ? "light" : "dark");
       runThemeReveal(origin ?? null, () => injectSchemeToDOM(scheme));
 
@@ -239,7 +373,7 @@ export function AppThemePicker() {
         console.error("Failed to persist app theme:", error);
       }
     },
-    [commitSchemeSelection, followSystem, setFollowSystem]
+    [commitSchemeSelection, followSystem, setFollowSystem, setPreviewSchemeId]
   );
 
   const handleToggleFollowSystem = useCallback(async () => {
@@ -396,29 +530,29 @@ export function AppThemePicker() {
 
       <div className="flex flex-col rounded-[var(--radius-md)] border border-daintree-border overflow-hidden">
         <div className="relative h-[200px] shrink-0 overflow-hidden">
-          {selectedScheme.heroImage ? (
+          {effectiveScheme.heroImage ? (
             <img
-              src={selectedScheme.heroImage}
-              alt={selectedScheme.name}
+              src={effectiveScheme.heroImage}
+              alt={effectiveScheme.name}
               className="w-full h-full object-cover"
             />
           ) : (
             <div
               className="w-full h-full flex items-center justify-center"
               style={{
-                backgroundColor: selectedScheme.tokens[APP_THEME_PREVIEW_KEYS.background],
+                backgroundColor: effectiveScheme.tokens[APP_THEME_PREVIEW_KEYS.background],
               }}
             >
-              <PaletteStrip scheme={selectedScheme} />
+              <PaletteStrip scheme={effectiveScheme} />
             </div>
           )}
           <div className="absolute bottom-0 inset-x-0 bg-black/40 backdrop-blur-sm px-3 py-1.5 flex items-center justify-between">
             <span className="text-sm font-medium text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
-              {selectedScheme.name}
+              {effectiveScheme.name}
             </span>
-            {selectedScheme.location && (
+            {effectiveScheme.location && (
               <span className="text-[11px] text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
-                {selectedScheme.location}
+                {effectiveScheme.location}
               </span>
             )}
           </div>
@@ -432,8 +566,17 @@ export function AppThemePicker() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Escape") {
+                if (e.key === "Escape" && query !== "") {
+                  // Only intercept Escape when there's a query to clear. The
+                  // preventDefault is required in addition to stopPropagation
+                  // because `useGlobalEscapeDispatcher` listens on the native
+                  // `window` keydown and only checks `defaultPrevented` —
+                  // React's synthetic `stopPropagation` does not block it.
+                  // Letting Escape bubble when the query is empty lets the
+                  // global dispatcher clear an active preview or close the
+                  // modal instead of trapping focus.
                   e.stopPropagation();
+                  e.preventDefault();
                   setQuery("");
                 }
               }}
@@ -482,10 +625,17 @@ export function AppThemePicker() {
                 scheme={scheme}
                 isSelected={scheme.id === selectedSchemeId}
                 onSelect={handleSelect}
+                onPreviewEnter={handlePreviewEnter}
+                onPreviewLeave={handlePreviewLeave}
+                onFocusPreview={handleFocusPreview}
                 warnings={warningsByScheme.get(scheme.id) ?? []}
               />
             ))
           )}
+        </div>
+
+        <div aria-live="polite" aria-atomic="true" className="sr-only">
+          {previewAnnouncement}
         </div>
       </div>
 

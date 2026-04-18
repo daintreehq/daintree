@@ -14,6 +14,7 @@ describe("appThemeStore.recentSchemeIds LRU", () => {
       preferredLightSchemeId: "bondi",
       recentSchemeIds: [],
       accentColorOverride: null,
+      previewSchemeId: null,
     });
   });
 
@@ -142,6 +143,84 @@ describe("appThemeStore.recentSchemeIds LRU", () => {
     expect(document.documentElement.style.getPropertyValue("--theme-accent-primary")).toBe(
       "#abcdef"
     );
+  });
+
+  it("setPreviewSchemeId does not mutate selectedSchemeId or recentSchemeIds", () => {
+    useAppThemeStore.getState().setSelectedSchemeId("daintree");
+    const recentBefore = useAppThemeStore.getState().recentSchemeIds;
+
+    useAppThemeStore.getState().setPreviewSchemeId("bondi");
+    expect(useAppThemeStore.getState().previewSchemeId).toBe("bondi");
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe("daintree");
+    expect(useAppThemeStore.getState().recentSchemeIds).toEqual(recentBefore);
+
+    useAppThemeStore.getState().setPreviewSchemeId(null);
+    expect(useAppThemeStore.getState().previewSchemeId).toBeNull();
+  });
+
+  it("removeCustomScheme clears previewSchemeId when it points at the removed id", () => {
+    const customScheme = {
+      id: "custom-preview-target",
+      name: "CustomPreview",
+      type: "dark" as const,
+      builtin: false,
+      tokens: {} as never,
+    };
+    useAppThemeStore.getState().addCustomScheme(customScheme);
+    useAppThemeStore.getState().setPreviewSchemeId("custom-preview-target");
+    expect(useAppThemeStore.getState().previewSchemeId).toBe("custom-preview-target");
+
+    useAppThemeStore.getState().removeCustomScheme("custom-preview-target");
+    expect(useAppThemeStore.getState().previewSchemeId).toBeNull();
+  });
+
+  it("removeCustomScheme reverts the DOM to the committed scheme when removing an actively previewed scheme", () => {
+    // Commit to daintree so we have a known baseline for the revert target.
+    useAppThemeStore.getState().setSelectedSchemeIdSilent("daintree");
+    const daintree = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
+
+    const customScheme = {
+      id: "custom-preview-target",
+      name: "CustomPreview",
+      type: "dark" as const,
+      builtin: false,
+      tokens: {
+        ...daintree.tokens,
+        "accent-primary": "#abcdef",
+      },
+    } as unknown as (typeof BUILT_IN_APP_SCHEMES)[number];
+
+    useAppThemeStore.getState().addCustomScheme(customScheme);
+    useAppThemeStore.getState().setPreviewSchemeId("custom-preview-target");
+    // Simulate the picker having injected the previewed scheme's tokens.
+    useAppThemeStore.getState().injectTheme(customScheme);
+    expect(document.documentElement.style.getPropertyValue("--theme-accent-primary")).toBe(
+      "#abcdef"
+    );
+
+    useAppThemeStore.getState().removeCustomScheme("custom-preview-target");
+
+    expect(useAppThemeStore.getState().previewSchemeId).toBeNull();
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe("daintree");
+    // DOM should now reflect the committed daintree accent, not the deleted scheme.
+    expect(document.documentElement.style.getPropertyValue("--theme-accent-primary")).toBe(
+      daintree.tokens["accent-primary"]
+    );
+  });
+
+  it("removeCustomScheme leaves previewSchemeId alone when unrelated id is removed", () => {
+    const customScheme = {
+      id: "some-custom",
+      name: "Some Custom",
+      type: "dark" as const,
+      builtin: false,
+      tokens: {} as never,
+    };
+    useAppThemeStore.getState().addCustomScheme(customScheme);
+    useAppThemeStore.getState().setPreviewSchemeId("daintree");
+
+    useAppThemeStore.getState().removeCustomScheme("some-custom");
+    expect(useAppThemeStore.getState().previewSchemeId).toBe("daintree");
   });
 
   it("removeCustomScheme strips the removed id from recentSchemeIds", () => {
