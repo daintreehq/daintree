@@ -60,8 +60,8 @@ export function gridTabGroupPropsAreEqual(
   if (prevPanels !== nextPanels) {
     if (prevPanels.length !== nextPanels.length) return false;
     for (let i = 0; i < prevPanels.length; i++) {
-      const a = prevPanels[i];
-      const b = nextPanels[i];
+      const a = prevPanels[i]!;
+      const b = nextPanels[i]!;
       if (a !== b) {
         if (
           a.id !== b.id ||

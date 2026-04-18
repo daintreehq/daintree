@@ -426,7 +426,7 @@ describe("copilot configuration", () => {
   it("has models with claude-sonnet-4.6 as first (default)", () => {
     const config = getAgentConfig("copilot");
     expect(config?.models).toBeDefined();
-    expect(config!.models![0].id).toBe("claude-sonnet-4.6");
+    expect(config!.models![0]!.id).toBe("claude-sonnet-4.6");
     const modelIds = config!.models!.map((m) => m.id);
     expect(modelIds).toContain("gpt-5.4");
     expect(modelIds).toContain("gemini-2.5-pro");
@@ -810,8 +810,8 @@ describe("cursor install metadata", () => {
     const windows = config?.install?.byOs?.windows;
     expect(windows).toBeDefined();
     expect(windows).toHaveLength(1);
-    expect(windows![0].label).toBe("PowerShell");
-    expect(windows![0].commands).toEqual(["irm 'https://cursor.com/install?win32=true' | iex"]);
+    expect(windows![0]!.label).toBe("PowerShell");
+    expect(windows![0]!.commands).toEqual(["irm 'https://cursor.com/install?win32=true' | iex"]);
   });
 
   it("has install blocks for all three platforms", () => {

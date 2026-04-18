@@ -271,7 +271,7 @@ export const createTerminalFocusSlice =
         const { focusedId, activateTerminal } = get();
         const currentIndex = focusedId ? cycleList.findIndex((t) => t.id === focusedId) : -1;
         const nextIndex = (currentIndex + 1) % cycleList.length;
-        activateTerminal(cycleList[nextIndex].id);
+        activateTerminal(cycleList[nextIndex]!.id);
       },
 
       focusPrevious: () => {
@@ -290,7 +290,7 @@ export const createTerminalFocusSlice =
         const { focusedId, activateTerminal } = get();
         const currentIndex = focusedId ? cycleList.findIndex((t) => t.id === focusedId) : 0;
         const prevIndex = currentIndex <= 0 ? cycleList.length - 1 : currentIndex - 1;
-        activateTerminal(cycleList[prevIndex].id);
+        activateTerminal(cycleList[prevIndex]!.id);
       },
 
       focusDirection: (direction, findNearest) => {
@@ -375,7 +375,7 @@ export const createTerminalFocusSlice =
 
         // Calculate next index with wrap-around
         const nextIndex = (currentIndex + 1) % waitingTerminals.length;
-        const nextTerminal = waitingTerminals[nextIndex];
+        const nextTerminal = waitingTerminals[nextIndex]!;
 
         // Activate and ping the terminal for visual feedback
         activateTerminal(nextTerminal.id);
@@ -398,7 +398,7 @@ export const createTerminalFocusSlice =
 
         // Calculate next index with wrap-around
         const nextIndex = (currentIndex + 1) % workingTerminals.length;
-        const nextTerminal = workingTerminals[nextIndex];
+        const nextTerminal = workingTerminals[nextIndex]!;
 
         // Activate and ping the terminal for visual feedback
         activateTerminal(nextTerminal.id);
@@ -423,7 +423,7 @@ export const createTerminalFocusSlice =
 
         // Calculate next index with wrap-around
         const nextIndex = (currentIndex + 1) % agentTerminals.length;
-        const nextTerminal = agentTerminals[nextIndex];
+        const nextTerminal = agentTerminals[nextIndex]!;
 
         // Activate and ping the terminal for visual feedback
         activateTerminal(nextTerminal.id);
@@ -448,7 +448,7 @@ export const createTerminalFocusSlice =
 
         // Calculate previous index with wrap-around
         const prevIndex = currentIndex <= 0 ? agentTerminals.length - 1 : currentIndex - 1;
-        const prevTerminal = agentTerminals[prevIndex];
+        const prevTerminal = agentTerminals[prevIndex]!;
 
         // Activate and ping the terminal for visual feedback
         activateTerminal(prevTerminal.id);
@@ -475,7 +475,7 @@ export const createTerminalFocusSlice =
 
         const currentIndex = sorted.findIndex((t) => t.id === activeDockTerminalId);
         const nextIndex = (currentIndex + 1) % sorted.length;
-        const nextTerminal = sorted[nextIndex];
+        const nextTerminal = sorted[nextIndex]!;
 
         // Activate the correct tab in the group before opening the dock popover
         if (getPanelGroup) {

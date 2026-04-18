@@ -1,4 +1,4 @@
-import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
+import type { PanelRegistryStoreApi, PanelRegistrySlice, TerminalInstance } from "./types";
 import type { TrashExpiryHelpers } from "./trash";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -52,9 +52,11 @@ export const createTrashActions = (
     }
 
     set((state) => {
-      const newById = {
+      const existing = state.panelsById[id];
+      if (!existing) return state;
+      const newById: Record<string, TerminalInstance> = {
         ...state.panelsById,
-        [id]: { ...state.panelsById[id], location: "trash" as const },
+        [id]: { ...existing, location: "trash" as const },
       };
       const newTrashed = new Map(state.trashedTerminals);
       newTrashed.set(id, { id, expiresAt, originalLocation });
@@ -158,17 +160,17 @@ export const createTrashActions = (
     }
 
     set((state) => {
-      const newById = { ...state.panelsById };
+      const newById: Record<string, TerminalInstance> = { ...state.panelsById };
       for (const tid of trashPanelIds) {
-        if (newById[tid]) {
-          newById[tid] = { ...newById[tid], location: "trash" as const };
+        const current = newById[tid];
+        if (current) {
+          newById[tid] = { ...current, location: "trash" as const };
         }
       }
 
       const newTrashed = new Map(state.trashedTerminals);
 
-      for (let i = 0; i < trashPanelIds.length; i++) {
-        const id = trashPanelIds[i];
+      for (const [i, id] of trashPanelIds.entries()) {
         const isAnchor = i === 0;
         newTrashed.set(id, {
           id,
@@ -380,9 +382,14 @@ export const createTrashActions = (
         }),
         ...(existingTrashed?.groupMetadata && { groupMetadata: existingTrashed.groupMetadata }),
       });
-      const newById = {
+      const existing = state.panelsById[id];
+      if (!existing) {
+        saveNormalized(state.panelsById, state.panelIds);
+        return { trashedTerminals: newTrashed };
+      }
+      const newById: Record<string, TerminalInstance> = {
         ...state.panelsById,
-        [id]: { ...state.panelsById[id], location: "trash" as const },
+        [id]: { ...existing, location: "trash" as const },
       };
       saveNormalized(newById, state.panelIds);
       return { trashedTerminals: newTrashed, panelsById: newById };

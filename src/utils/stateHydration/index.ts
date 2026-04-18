@@ -423,6 +423,7 @@ export async function hydrateAppState(
 
           for (let savedIndex = 0; savedIndex < appState.terminals.length; savedIndex++) {
             const saved = appState.terminals[savedIndex];
+            if (saved === undefined) continue;
             if (isSmokeTestTerminalId(saved.id)) {
               logHydrationInfo(`Skipping smoke test terminal snapshot: ${saved.id}`);
               continue;
@@ -942,7 +943,7 @@ export async function hydrateAppState(
           if (!a.isMainWorktree && b.isMainWorktree) return 1;
           return a.name.localeCompare(b.name);
         });
-        const fallbackWorktree = sortedWorktrees[0];
+        const fallbackWorktree = sortedWorktrees[0]!;
         logHydrationInfo(
           `Active worktree ${savedActiveId ?? "(none)"} not found, falling back to: ${fallbackWorktree.name}`
         );

@@ -479,12 +479,12 @@ export function getAppThemeById(
 export function getBuiltInAppSchemeForType(type: "dark" | "light"): AppColorScheme {
   return (
     BUILT_IN_APP_SCHEMES.find((scheme) => scheme.type === type) ??
-    (type === "light" ? INTERNAL_LIGHT_FALLBACK_SCHEME : BUILT_IN_APP_SCHEMES[0])
+    (type === "light" ? INTERNAL_LIGHT_FALLBACK_SCHEME : BUILT_IN_APP_SCHEMES[0]!)
   );
 }
 
 export function resolveAppTheme(id: string, customSchemes: AppColorScheme[] = []): AppColorScheme {
-  return getAppThemeById(id, customSchemes) ?? BUILT_IN_APP_SCHEMES[0];
+  return getAppThemeById(id, customSchemes) ?? BUILT_IN_APP_SCHEMES[0]!;
 }
 
 export function getAppThemeCssVariables(scheme: AppColorScheme): Record<string, string> {
@@ -506,7 +506,7 @@ export function getAppThemeCssVariables(scheme: AppColorScheme): Record<string, 
 
 export function normalizeAppThemeTokens(
   maybeTokens: Record<string, unknown>,
-  fallback: AppColorSchemeTokens = BUILT_IN_APP_SCHEMES[0].tokens
+  fallback: AppColorSchemeTokens = BUILT_IN_APP_SCHEMES[0]!.tokens
 ): AppColorSchemeTokens {
   const normalized = { ...fallback };
   for (const token of Object.keys(fallback) as AppThemeTokenKey[]) {
@@ -581,7 +581,7 @@ function pickReadableForeground(background: string, candidates: string[]): strin
   if (!isHexColor(background) || validCandidates.length === 0) {
     return "#000000";
   }
-  let bestCandidate = validCandidates[0];
+  let bestCandidate = validCandidates[0]!;
   let bestContrast = contrastRatio(bestCandidate, background);
   for (const candidate of validCandidates.slice(1)) {
     const candidateContrast = contrastRatio(candidate, background);
@@ -693,7 +693,7 @@ function compilePaletteToTokens(palette: ThemePalette): AppColorSchemeTokens {
 
 export function normalizeAppColorScheme(
   maybeScheme: Partial<Omit<AppColorScheme, "tokens">> & { tokens?: Record<string, unknown> },
-  fallback: AppColorScheme = BUILT_IN_APP_SCHEMES[0]
+  fallback: AppColorScheme = BUILT_IN_APP_SCHEMES[0]!
 ): AppColorScheme {
   const palette = maybeScheme.palette;
   const explicitType =

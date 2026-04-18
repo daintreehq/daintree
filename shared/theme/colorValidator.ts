@@ -243,7 +243,7 @@ function isValidColorMix(value: string): boolean {
   const inner = value.slice("color-mix(".length, -1).trim();
   const parts = splitTopLevelArgs(inner).map((part) => part.trim());
   if (parts.length !== 3) return false;
-  if (!COLOR_MIX_INTERPOLATION_RE.test(parts[0])) return false;
+  if (!COLOR_MIX_INTERPOLATION_RE.test(parts[0]!)) return false;
   for (const part of parts.slice(1)) {
     if (!part) return false;
     const withoutPercent = part.replace(COLOR_COMPONENT_PERCENT_RE, "").trim();
@@ -259,7 +259,7 @@ function isValidVarExpression(value: string): boolean {
   const inner = value.slice("var(".length, -1).trim();
   const parts = splitTopLevelArgs(inner).map((part) => part.trim());
   if (parts.length === 0 || parts.length > 2) return false;
-  if (!VAR_NAME_RE.test(parts[0])) return false;
+  if (!VAR_NAME_RE.test(parts[0]!)) return false;
   if (parts.length === 2) {
     const fallback = parts[1];
     if (!fallback) return false;
