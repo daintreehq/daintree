@@ -78,6 +78,14 @@ const BUILT_IN_KINDS = [
   "dev-preview",
 ] as const satisfies readonly BuiltInPanelKind[];
 
+// Compile-time exhaustiveness pin: if a new BuiltInPanelKind is added and not
+// listed above, this assignment fails with a message naming the missing kind.
+type _MissingBuiltInKinds = Exclude<BuiltInPanelKind, (typeof BUILT_IN_KINDS)[number]>;
+const _builtInKindsExhaustive: [_MissingBuiltInKinds] extends [never]
+  ? true
+  : _MissingBuiltInKinds = true;
+void _builtInKindsExhaustive;
+
 const browserHistoryFixture: BrowserHistory = {
   past: ["https://prev.example"],
   present: "https://example.com",
@@ -189,6 +197,13 @@ function assertCovers(
         (outputKey === field ? "" : ` (output key "${outputKey}")`) +
         `; keys=${keys.join(",")}`
     ).toContain(outputKey);
+    // Reject stub implementations that emit the key with an `undefined` value.
+    // All fixtures below supply defined, non-undefined values for every field,
+    // so a real serializer/deserializer must propagate them.
+    expect(
+      output[outputKey],
+      `${label} persisted field "${field}" was present but undefined — stub implementation?`
+    ).not.toBeUndefined();
   }
 }
 
