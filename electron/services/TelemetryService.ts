@@ -1,6 +1,7 @@
 import os from "os";
 import { app } from "electron";
 import { store } from "../store.js";
+import type { ActionBreadcrumb } from "../../shared/types/ipc/crashRecovery.js";
 
 export interface SentryEvent {
   exception?: {
@@ -212,6 +213,35 @@ export function hasTelemetryPromptBeenShown(): boolean {
  * after init (or re-called when state changes), it updates the global scope
  * and applies to all events captured afterward.
  */
+/**
+ * Record an action breadcrumb in the active Sentry scope so subsequent crash
+ * events carry the user-action timeline. No-op when telemetry is disabled or
+ * Sentry is not yet initialized. Never throws — telemetry must never escape
+ * into product code.
+ */
+export function addActionBreadcrumb(crumb: ActionBreadcrumb): void {
+  if (!isTelemetryEnabled()) return;
+  if (!sentryModule) return;
+  try {
+    // Sentry expects `timestamp` in Unix seconds, not milliseconds.
+    sentryModule.addBreadcrumb({
+      category: crumb.category ? `action.${crumb.category}` : "action",
+      message: crumb.actionId,
+      level: "info",
+      type: "user",
+      timestamp: crumb.timestamp / 1000,
+      data: {
+        source: crumb.source,
+        durationMs: crumb.durationMs,
+        ...(crumb.count > 1 ? { count: crumb.count } : {}),
+        ...(crumb.args ? { args: crumb.args } : {}),
+      },
+    });
+  } catch {
+    // never let telemetry errors escape into product code paths
+  }
+}
+
 export function setOnboardingCompleteTag(completed: boolean): void {
   try {
     sentryModule?.setTag("onboarding_complete", completed ? "true" : "false");

@@ -10,6 +10,7 @@ import type {
 } from "../../shared/types/ipc/crashRecovery.js";
 import { store } from "../store.js";
 import { isGpuDisabledByFlag } from "./GpuCrashMonitorService.js";
+import { getActionBreadcrumbService } from "./ActionBreadcrumbService.js";
 
 const MAX_CRASH_LOGS = 10;
 const MARKER_FILENAME = "running.lock";
@@ -330,6 +331,7 @@ export class CrashRecoveryService {
 
     this.enrichWithEnvironmentMetadata(entry);
     this.enrichWithPanelData(entry, store.get("appState"));
+    this.enrichWithRecentActions(entry);
 
     return entry;
   }
@@ -349,8 +351,20 @@ export class CrashRecoveryService {
     this.enrichWithEnvironmentMetadata(entry);
     const backupAppState = this.cachedBackupSnapshot?.appState;
     this.enrichWithPanelData(entry, backupAppState);
+    this.enrichWithRecentActions(entry);
 
     return entry;
+  }
+
+  private enrichWithRecentActions(entry: CrashLogEntry): void {
+    try {
+      const recent = getActionBreadcrumbService().getRecentActions();
+      if (recent.length > 0) {
+        entry.recentActions = recent;
+      }
+    } catch {
+      // best-effort
+    }
   }
 
   private enrichWithEnvironmentMetadata(entry: CrashLogEntry): void {

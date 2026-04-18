@@ -590,12 +590,18 @@ export type DaintreeEventMap = {
   }>;
 
   /**
-   * Emitted when an action is dispatched from the renderer.
+   * Emitted after an action completes successfully from the renderer.
    * Tracks user actions, keybindings, menu actions, context menus, and agent-driven actions.
    */
   "action:dispatched": {
     actionId: string;
     args?: unknown;
+    /**
+     * Allowlist-filtered args derived from ActionDefinition.safeBreadcrumbArgs.
+     * Safe to surface in Sentry breadcrumbs. Separate from `args`, which is
+     * redacted but not allowlisted.
+     */
+    safeArgs?: Record<string, unknown>;
     source: "user" | "keybinding" | "menu" | "agent" | "context-menu";
     context: {
       projectId?: string;
@@ -603,6 +609,8 @@ export type DaintreeEventMap = {
       focusedTerminalId?: string;
     };
     timestamp: number;
+    category: string;
+    durationMs: number;
   };
 
   // Terminal Trash Events

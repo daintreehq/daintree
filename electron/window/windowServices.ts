@@ -30,6 +30,7 @@ import { secureStorage } from "../services/SecureStorage.js";
 import { notificationService } from "../services/NotificationService.js";
 import { agentNotificationService } from "../services/AgentNotificationService.js";
 import { preAgentSnapshotService } from "../services/PreAgentSnapshotService.js";
+import { getActionBreadcrumbService } from "../services/ActionBreadcrumbService.js";
 import {
   initializeAgentAvailabilityStore,
   disposeAgentAvailabilityStore,
@@ -362,6 +363,7 @@ export async function setupWindowServices(
     agentNotificationService.initialize();
     preAgentSnapshotService.initialize();
     activationFunnelService.initialize({ appLaunchMs: opts.appLaunchMs ?? Date.now() });
+    getActionBreadcrumbService().initialize();
 
     // Auto-updater
     autoUpdaterService.initialize();

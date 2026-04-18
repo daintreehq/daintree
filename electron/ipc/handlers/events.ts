@@ -63,12 +63,33 @@ function normalizeActionDispatchedPayload(
           ? { _redacted: "payload_too_large", size: argsSize }
           : args;
 
+  const categoryRaw = payload.category;
+  const category = typeof categoryRaw === "string" && categoryRaw.length <= 100 ? categoryRaw : "";
+
+  const durationRaw = payload.durationMs;
+  const durationMs =
+    typeof durationRaw === "number" && Number.isFinite(durationRaw) && durationRaw >= 0
+      ? durationRaw
+      : 0;
+
+  const safeArgsRaw = payload.safeArgs;
+  let safeBreadcrumbArgs: Record<string, unknown> | undefined;
+  if (isPlainObject(safeArgsRaw)) {
+    const size = safeJsonSize(safeArgsRaw);
+    if (size !== null && size <= 1024) {
+      safeBreadcrumbArgs = safeArgsRaw;
+    }
+  }
+
   return {
     actionId,
     args: safeArgs,
     source,
     context,
     timestamp,
+    category,
+    durationMs,
+    ...(safeBreadcrumbArgs ? { safeArgs: safeBreadcrumbArgs } : {}),
   };
 }
 

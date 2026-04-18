@@ -331,6 +331,154 @@ describe("ActionService", () => {
     });
   });
 
+  describe("action:dispatched event emission", () => {
+    function installEmit(emit: (channel: string, payload: unknown) => Promise<void>) {
+      const originalWindow = (globalThis as { window?: unknown }).window;
+      const existing = (globalThis as unknown as { window?: Record<string, unknown> }).window;
+      Object.defineProperty(globalThis, "window", {
+        value: { ...existing, electron: { events: { emit } } },
+        writable: true,
+        configurable: true,
+      });
+      return () => {
+        Object.defineProperty(globalThis, "window", {
+          value: originalWindow,
+          writable: true,
+          configurable: true,
+        });
+      };
+    }
+
+    it("emits action:dispatched after run with category and durationMs", async () => {
+      const emit = vi.fn().mockResolvedValue(undefined);
+      const restore = installEmit(emit);
+      try {
+        const action: ActionDefinition = {
+          id: "actions.list" as ActionId,
+          title: "T",
+          description: "T",
+          category: "preferences",
+          kind: "command",
+          danger: "safe",
+          scope: "renderer",
+          run: vi.fn().mockResolvedValue(undefined),
+        };
+        service.register(action);
+        await service.dispatch("actions.list" as ActionId);
+        await Promise.resolve();
+
+        expect(emit).toHaveBeenCalledTimes(1);
+        const payload = emit.mock.calls[0]![1] as Record<string, unknown>;
+        expect(payload.actionId).toBe("actions.list");
+        expect(payload.category).toBe("preferences");
+        expect(typeof payload.durationMs).toBe("number");
+        expect(payload.durationMs as number).toBeGreaterThanOrEqual(0);
+        expect(payload.safeArgs).toBeUndefined();
+      } finally {
+        restore();
+      }
+    });
+
+    it("does not emit action:dispatched when run throws", async () => {
+      const emit = vi.fn().mockResolvedValue(undefined);
+      const restore = installEmit(emit);
+      try {
+        service.register({
+          id: "actions.list" as ActionId,
+          title: "T",
+          description: "T",
+          category: "test",
+          kind: "command",
+          danger: "safe",
+          scope: "renderer",
+          run: vi.fn().mockRejectedValue(new Error("boom")),
+        });
+        const result = await service.dispatch("actions.list" as ActionId);
+        expect(result.ok).toBe(false);
+        await Promise.resolve();
+        expect(emit).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
+
+    it("does not emit action:dispatched on validation failure", async () => {
+      const emit = vi.fn().mockResolvedValue(undefined);
+      const restore = installEmit(emit);
+      try {
+        const schema = z.object({ count: z.number() });
+        service.register({
+          id: "actions.list" as ActionId,
+          title: "T",
+          description: "T",
+          category: "test",
+          kind: "command",
+          danger: "safe",
+          scope: "renderer",
+          argsSchema: schema,
+          run: vi.fn().mockResolvedValue(undefined),
+        });
+        await service.dispatch("actions.list" as ActionId, { count: "bad" });
+        await Promise.resolve();
+        expect(emit).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
+
+    it("includes safeArgs when action opts in via safeBreadcrumbArgs", async () => {
+      const emit = vi.fn().mockResolvedValue(undefined);
+      const restore = installEmit(emit);
+      try {
+        service.register({
+          id: "actions.list" as ActionId,
+          title: "T",
+          description: "T",
+          category: "preferences",
+          kind: "command",
+          danger: "safe",
+          scope: "renderer",
+          safeBreadcrumbArgs: ["show"],
+          run: vi.fn().mockResolvedValue(undefined),
+        });
+        await service.dispatch("actions.list" as ActionId, {
+          show: true,
+          secret: "should-not-leak",
+        });
+        await Promise.resolve();
+
+        expect(emit).toHaveBeenCalledTimes(1);
+        const payload = emit.mock.calls[0]![1] as Record<string, unknown>;
+        expect(payload.safeArgs).toEqual({ show: true });
+      } finally {
+        restore();
+      }
+    });
+
+    it("omits safeArgs when action has no safeBreadcrumbArgs allowlist", async () => {
+      const emit = vi.fn().mockResolvedValue(undefined);
+      const restore = installEmit(emit);
+      try {
+        service.register({
+          id: "actions.list" as ActionId,
+          title: "T",
+          description: "T",
+          category: "test",
+          kind: "command",
+          danger: "safe",
+          scope: "renderer",
+          run: vi.fn().mockResolvedValue(undefined),
+        });
+        await service.dispatch("actions.list" as ActionId, { path: "/etc/passwd" });
+        await Promise.resolve();
+        const payload = emit.mock.calls[0]![1] as Record<string, unknown>;
+        expect(payload.safeArgs).toBeUndefined();
+      } finally {
+        restore();
+      }
+    });
+  });
+
   describe("dispatch resilience", () => {
     it("should complete dispatch even when events.emit never resolves", async () => {
       const originalWindow = (globalThis as Record<string, unknown>).window;
