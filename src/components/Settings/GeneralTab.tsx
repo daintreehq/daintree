@@ -27,7 +27,11 @@ import type {
   CliAvailability,
   AgentSettings,
 } from "@shared/types";
-import { isAgentInstalled, isAgentReady } from "../../../shared/utils/agentAvailability";
+import {
+  isAgentInstalled,
+  isAgentReady,
+  isAgentBlocked,
+} from "../../../shared/utils/agentAvailability";
 import { usePreferencesStore } from "@/store";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
@@ -491,6 +495,17 @@ export function GeneralTab({
                       const config = getAgentConfig(id);
                       const name = config?.name ?? id;
                       const ready = isAgentReady(cliAvailability[id]);
+                      const blocked = isAgentBlocked(cliAvailability[id]);
+                      // A blocked agent is installed but can't run — show it
+                      // distinctly from the authentication-needed case so the
+                      // user doesn't waste time re-authenticating a binary
+                      // that an endpoint security tool is blocking.
+                      const statusLabel = blocked ? "Blocked" : ready ? "Ready" : "Needs setup";
+                      const statusClass = blocked
+                        ? "text-status-warning"
+                        : ready
+                          ? "text-status-success"
+                          : "text-status-warning";
 
                       return (
                         <button
@@ -502,20 +517,8 @@ export function GeneralTab({
                         >
                           <span className="text-text-secondary">{name}</span>
                           <span className="flex items-center gap-2">
-                            <CheckCircle
-                              className={cn(
-                                "w-3.5 h-3.5",
-                                ready ? "text-status-success" : "text-status-warning"
-                              )}
-                            />
-                            <span
-                              className={cn(
-                                "text-xs",
-                                ready ? "text-status-success" : "text-status-warning"
-                              )}
-                            >
-                              {ready ? "Ready" : "Needs setup"}
-                            </span>
+                            <CheckCircle className={cn("w-3.5 h-3.5", statusClass)} />
+                            <span className={cn("text-xs", statusClass)}>{statusLabel}</span>
                           </span>
                         </button>
                       );

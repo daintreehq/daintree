@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
 import { useAgentSettingsStore, useCliAvailabilityStore, useAgentPreferencesStore } from "@/store";
+import { cliAvailabilityClient } from "@/clients";
 import { Button } from "@/components/ui/button";
 import {
   DEFAULT_AGENT_SETTINGS,
   getAgentSettingsEntry,
   DEFAULT_DANGEROUS_ARGS,
+  type AgentCliDetails,
 } from "@shared/types";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import { RotateCcw, ExternalLink } from "lucide-react";
@@ -60,16 +62,37 @@ export function AgentSettings({
     void initializeCliAvailability();
   }, [initializeCliAvailability]);
 
+  // Detail map (resolved path, probe source, block reason) is a separate,
+  // read-only IPC call populated by the same detection cycle as availability.
+  // Refetched after a user-initiated refresh so the surfaced path/blocked
+  // state stays in sync.
+  const [cliDetails, setCliDetails] = useState<AgentCliDetails>({});
+  const fetchCliDetails = useCallback(async () => {
+    try {
+      const details = await cliAvailabilityClient.getDetails();
+      setCliDetails(details);
+    } catch (error) {
+      console.error("[AgentSettings] Failed to fetch CLI details:", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isCliLoading) {
+      void fetchCliDetails();
+    }
+  }, [isCliLoading, fetchCliDetails]);
+
   const handleRefreshCliAvailability = useCallback(async () => {
     if (isRefreshingCli) return;
     try {
       // Explicit user gesture — bypass the 30s throttle that exists for
       // passive triggers (tray-open, window focus, visibility change).
       await refreshCliAvailability(true);
+      await fetchCliDetails();
     } catch (error) {
       console.error("[AgentSettings] Failed to refresh CLI availability:", error);
     }
-  }, [isRefreshingCli, refreshCliAvailability]);
+  }, [isRefreshingCli, refreshCliAvailability, fetchCliDetails]);
 
   const defaultAgent = useAgentPreferencesStore((state) => state.defaultAgent);
   const setDefaultAgent = useAgentPreferencesStore((state) => state.setDefaultAgent);
@@ -423,6 +446,7 @@ export function AgentSettings({
               agentId={activeAgent.id}
               agentName={activeAgent.name}
               availability={cliAvailability[activeAgent.id]}
+              detail={cliDetails[activeAgent.id]}
               isCliLoading={isCliLoading}
               isRefreshingCli={isRefreshingCli}
               cliError={cliError}

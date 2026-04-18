@@ -62,6 +62,7 @@ import type {
   SystemWakePayload,
   SystemOpenInEditorPayload,
   CliAvailability,
+  AgentCliDetails,
   AgentVersionInfo,
   AgentUpdateSettings,
   StartAgentUpdatePayload,
@@ -314,6 +315,7 @@ export interface ElectronAPI {
     getTmpDir(): Promise<string>;
     getCliAvailability(): Promise<CliAvailability>;
     refreshCliAvailability(): Promise<CliAvailability>;
+    getAgentCliDetails(): Promise<AgentCliDetails>;
     getAgentVersions(): Promise<AgentVersionInfo[]>;
     refreshAgentVersions(): Promise<AgentVersionInfo[]>;
     getAgentUpdateSettings(): Promise<AgentUpdateSettings>;

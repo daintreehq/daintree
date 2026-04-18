@@ -1470,6 +1470,8 @@ const api: ElectronAPI = {
 
     refreshCliAvailability: () => _unwrappingInvoke(CHANNELS.SYSTEM_REFRESH_CLI_AVAILABILITY),
 
+    getAgentCliDetails: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_AGENT_CLI_DETAILS),
+
     getAgentVersions: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_AGENT_VERSIONS),
 
     refreshAgentVersions: () => _unwrappingInvoke(CHANNELS.SYSTEM_REFRESH_AGENT_VERSIONS),
