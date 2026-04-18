@@ -274,6 +274,8 @@ describe("hydration batch (#5196)", () => {
     const token = beginHydrationBatch();
     await addPanel({
       kind: "agent",
+      agentId: "claude",
+      command: "claude",
       existingId: "term-1",
       cwd: "/",
       bypassLimits: true,
@@ -296,6 +298,8 @@ describe("hydration batch (#5196)", () => {
     const token = beginHydrationBatch();
     await addPanel({
       kind: "agent",
+      agentId: "claude",
+      command: "claude",
       type: "terminal",
       requestedId: "term-1",
       cwd: "/",
