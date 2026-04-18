@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionContext, ActionId } from "@shared/types/actions";
+import { actionService } from "@/services/ActionService";
 import { copyTreeClient, githubClient, systemClient, worktreeClient } from "@/clients";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -608,7 +609,6 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       })
       .optional(),
     run: async (args: unknown) => {
-      const { actionService } = await import("@/services/ActionService");
       const result = await actionService.dispatch("worktree.copyTree", args, { source: "user" });
       if (!result.ok) {
         throw new Error(result.error.message);
@@ -761,7 +761,6 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         return;
       }
 
-      const { actionService } = await import("@/services/ActionService");
       await actionService.dispatch(
         "portal.openUrl",
         {
@@ -816,7 +815,6 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       const issueUrl = await githubClient.getIssueUrl(worktree.path, worktree.issueNumber);
       if (!issueUrl) return;
 
-      const { actionService } = await import("@/services/ActionService");
       await actionService.dispatch(
         "portal.openUrl",
         {

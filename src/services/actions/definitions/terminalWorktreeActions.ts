@@ -1,5 +1,6 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
+import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 export function registerTerminalWorktreeActions(
@@ -43,7 +44,6 @@ export function registerTerminalWorktreeActions(
       const data = getTerminalWorktree(ctx);
       if (!data) return;
 
-      const { actionService } = await import("@/services/ActionService");
       const result = await actionService.dispatch(
         "worktree.openEditor",
         { worktreeId: data.worktree.id },
@@ -81,7 +81,6 @@ export function registerTerminalWorktreeActions(
       const data = getTerminalWorktree(ctx);
       if (!data || !data.worktree.issueNumber) return;
 
-      const { actionService } = await import("@/services/ActionService");
       const result = await actionService.dispatch(
         "worktree.openIssue",
         { worktreeId: data.worktree.id },
@@ -119,7 +118,6 @@ export function registerTerminalWorktreeActions(
       const data = getTerminalWorktree(ctx);
       if (!data || !data.worktree.prUrl) return;
 
-      const { actionService } = await import("@/services/ActionService");
       const result = await actionService.dispatch(
         "worktree.openPR",
         { worktreeId: data.worktree.id },

@@ -4,8 +4,15 @@ import type { ActionDefinition, ActionContext } from "@shared/types/actions";
 
 // Stubs for other actions' dependencies (actions.list, actions.getContext). These
 // are not exercised by the persistedStores tests but must load without errors.
+vi.mock("@/services/ActionService", () => ({
+  actionService: { list: () => [] },
+}));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => ({}) } }));
+vi.mock("@/store/portalStore", () => ({ usePortalStore: { getState: () => ({}) } }));
 vi.mock("@/store/projectStore", () => ({ useProjectStore: { getState: () => ({}) } }));
+vi.mock("@/store/worktreeStore", () => ({
+  useWorktreeSelectionStore: { getState: () => ({}) },
+}));
 vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStore: () => ({ getState: () => ({ worktrees: new Map() }) }),
 }));

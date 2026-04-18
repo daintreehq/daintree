@@ -1,32 +1,42 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { CliAvailability } from "@shared/types";
 
-const mockDispatch = vi.fn().mockResolvedValue({ ok: true });
+const {
+  mockDispatch,
+  mockNotify,
+  mockGetAgentPrefsState,
+  mockGetCliAvailabilityState,
+  mockGetAgentSettingsState,
+  mockGetEffectiveAgentConfig,
+} = vi.hoisted(() => ({
+  mockDispatch: vi.fn().mockResolvedValue({ ok: true }),
+  mockNotify: vi.fn().mockReturnValue(""),
+  mockGetAgentPrefsState: vi.fn(),
+  mockGetCliAvailabilityState: vi.fn(),
+  mockGetAgentSettingsState: vi.fn(),
+  mockGetEffectiveAgentConfig: vi.fn(),
+}));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: mockDispatch },
 }));
 
-const mockNotify = vi.fn().mockReturnValue("");
 vi.mock("@/lib/notify", () => ({
   notify: (...args: unknown[]) => mockNotify(...args),
 }));
 
-const mockGetAgentPrefsState = vi.fn();
 vi.mock("@/store/agentPreferencesStore", () => ({
   useAgentPreferencesStore: { getState: () => mockGetAgentPrefsState() },
 }));
 
-const mockGetCliAvailabilityState = vi.fn();
 vi.mock("@/store/cliAvailabilityStore", () => ({
   useCliAvailabilityStore: { getState: () => mockGetCliAvailabilityState() },
 }));
 
-const mockGetAgentSettingsState = vi.fn();
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: { getState: () => mockGetAgentSettingsState() },
 }));
 
-const mockGetEffectiveAgentConfig = vi.fn();
 vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@shared/config/agentRegistry")>();
   return {

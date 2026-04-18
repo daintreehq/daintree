@@ -1,6 +1,9 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
+import { actionService } from "@/services/ActionService";
 import { terminalClient } from "@/clients";
+import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
 export function registerTerminalLifecycleActions(
   actions: ActionRegistry,
@@ -124,8 +127,6 @@ export function registerTerminalLifecycleActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        const { terminalInstanceService } =
-          await import("@/services/terminal/TerminalInstanceService");
         terminalInstanceService.resetRenderer(targetId);
       }
     },
@@ -348,7 +349,6 @@ export function registerTerminalLifecycleActions(
           terminal?.agentState === "waiting" ||
           terminal?.agentState === "exited"
         ) {
-          const { fireWatchNotification } = await import("@/lib/watchNotification");
           fireWatchNotification(targetId, terminal.title ?? targetId, terminal.agentState);
         } else {
           state.watchPanel(targetId);
@@ -376,7 +376,6 @@ export function registerTerminalLifecycleActions(
         notePath: string;
         noteTitle?: string;
       };
-      const { actionService } = await import("@/services/ActionService");
       const result = await actionService.dispatch(
         "notes.delete",
         { notePath, noteTitle },
