@@ -1,4 +1,4 @@
-import { createContext, useEffect, useRef, type ReactNode } from "react";
+import { createContext, useEffect, useState, type ReactNode } from "react";
 import {
   createWorktreeStore,
   setCurrentViewStore,
@@ -57,11 +57,7 @@ interface WorktreeActivatedEvent {
 }
 
 export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
-  const storeRef = useRef<WorktreeViewStoreApi>(null);
-  if (!storeRef.current) {
-    storeRef.current = createWorktreeStore();
-  }
-  const store = storeRef.current;
+  const [store] = useState<WorktreeViewStoreApi>(() => createWorktreeStore());
 
   // Register module-level store reference for non-React code (action definitions, services)
   useEffect(() => {

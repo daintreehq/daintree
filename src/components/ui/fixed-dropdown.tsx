@@ -50,9 +50,12 @@ export function FixedDropdown({
   const baselineOverlayCountRef = useRef<number>(0);
   // Carry the latest overlay count into the grace-setup effect without
   // adding it as a reactive dependency — re-running on every count change
-  // would wrongly reset the grace window on each in-flight rise.
+  // would wrongly reset the grace window on each in-flight rise. Sync in
+  // an effect so the React Compiler doesn't reject render-time ref mutation.
   const latestOverlayCountRef = useRef<number>(overlayCount);
-  latestOverlayCountRef.current = overlayCount;
+  useEffect(() => {
+    latestOverlayCountRef.current = overlayCount;
+  }, [overlayCount]);
 
   useEffect(() => {
     if (!open) {
