@@ -645,6 +645,7 @@ export async function batchCheckLinkedPRs(
     return {
       results: new Map(),
       error: rateLimitMessage(rateLimitBlock.reason, rateLimitBlock.resumeAt),
+      rateLimit: { kind: rateLimitBlock.reason, resumeAt: rateLimitBlock.resumeAt },
     };
   }
 
@@ -671,12 +672,27 @@ export async function batchCheckLinkedPRs(
           })) as Record<string, unknown>;
           return { results: parseBatchPRResponse(retryResponse, candidates) };
         } catch (retryError) {
-          return { results: new Map(), error: parseGitHubError(retryError) };
+          return { results: new Map(), error: parseGitHubError(retryError), ...rateLimitMeta() };
         }
       }
     }
-    return { results: new Map(), error: parseGitHubError(error) };
+    return { results: new Map(), error: parseGitHubError(error), ...rateLimitMeta() };
   }
+}
+
+/**
+ * Capture the rate-limit snapshot synchronously after a caller's request
+ * fails, so downstream schedulers can route the failure as a rate-limit
+ * pause even if a concurrent 2xx clears the singleton before `handleError`
+ * reads it. Returns an empty object when no block is active so it spreads
+ * cleanly into result objects via rest-spread.
+ */
+function rateLimitMeta(): { rateLimit?: { kind: "primary" | "secondary"; resumeAt: number } } {
+  const block = gitHubRateLimitService.shouldBlockRequest();
+  if (block.blocked && block.reason && block.resumeAt) {
+    return { rateLimit: { kind: block.reason, resumeAt: block.resumeAt } };
+  }
+  return {};
 }
 
 export async function getRepoUrl(cwd: string): Promise<string | null> {
