@@ -30,8 +30,15 @@ import type {
 } from "../../../shared/types/ipc/demo.js";
 
 export function resolveFfmpegPath(): string {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require("ffmpeg-static") as string;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require("ffmpeg-static") as string;
+  } catch {
+    throw new Error(
+      "ffmpeg-static is not installed. Demo video capture is an optional feature — " +
+        "run `npm install ffmpeg-static` to enable it."
+    );
+  }
 }
 
 export function registerDemoHandlers(deps: HandlerDependencies): () => void {

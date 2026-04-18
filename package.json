@@ -76,6 +76,9 @@
     "js-yaml": "^4.1.1",
     "node-pty": "1.2.0-beta.12"
   },
+  "optionalDependencies": {
+    "ffmpeg-static": "^5.2.0"
+  },
   "overrides": {
     "node-gyp": "^10.3.1",
     "eslint-plugin-react-hooks": "$eslint-plugin-react-hooks",
@@ -150,7 +153,6 @@
     "eslint-plugin-react-hooks": "7.1.0-canary-c80a0750-20260312",
     "execa": "^9.6.0",
     "fast-check": "^3.23.2",
-    "ffmpeg-static": "^5.2.0",
     "fix-path": "^5.0.0",
     "framer-motion": "^12.37.0",
     "frimousse": "^0.3.0",

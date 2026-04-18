@@ -42,6 +42,8 @@ vi.mock("child_process", () => ({
   spawn: vi.fn(() => mockProc),
 }));
 
+vi.mock("ffmpeg-static", () => ({ default: "/mock/bin/ffmpeg" }));
+
 import { registerDemoHandlers } from "../demo.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { BrowserWindow } from "electron";
