@@ -2,6 +2,22 @@ import os from "os";
 import { app } from "electron";
 import { store } from "../store.js";
 import type { ActionBreadcrumb } from "../../shared/types/ipc/crashRecovery.js";
+import { scrubSecrets } from "../utils/secretScrubber.js";
+
+export interface SentryBreadcrumb {
+  message?: string;
+  data?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface SentryRequest {
+  url?: string;
+  headers?: Record<string, unknown>;
+  cookies?: unknown;
+  data?: unknown;
+  query_string?: unknown;
+  [key: string]: unknown;
+}
 
 export interface SentryEvent {
   exception?: {
@@ -13,7 +29,9 @@ export interface SentryEvent {
     }>;
   };
   message?: string;
-  request?: { url?: string };
+  request?: SentryRequest;
+  breadcrumbs?: SentryBreadcrumb[];
+  extra?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -29,31 +47,105 @@ export function sanitizePath(str: string): string {
     .replace(/C:\/Users\/[^/]+\//gi, "C:/Users/USER/");
 }
 
-function sanitizeEvent(event: SentryEvent): SentryEvent | null {
-  if (event.exception?.values) {
-    for (const ex of event.exception.values) {
-      if (ex.stacktrace?.frames) {
-        for (const frame of ex.stacktrace.frames) {
-          if (frame.filename) frame.filename = sanitizePath(frame.filename);
-          if (frame.abs_path) frame.abs_path = sanitizePath(frame.abs_path);
+function sanitizeString(value: string): string {
+  return scrubSecrets(sanitizePath(value));
+}
+
+// Recurse through arrays and plain objects, sanitizing every string leaf.
+// Depth-capped to guard against pathological / circular inputs — Sentry
+// breadcrumbs and `event.extra` are typically shallow, so 10 levels is well
+// beyond any realistic payload.
+const MAX_DEEP_SANITIZE_DEPTH = 10;
+
+function sanitizeStringsDeep(value: unknown, depth = 0): unknown {
+  // Scrub scalar strings regardless of depth — a secret nested beyond the
+  // recursion cap is still worth redacting. Only the descent into containers
+  // is stopped when depth overflows.
+  if (typeof value === "string") return sanitizeString(value);
+  if (depth > MAX_DEEP_SANITIZE_DEPTH) return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeStringsDeep(item, depth + 1));
+  }
+  if (value && typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      result[key] = sanitizeStringsDeep(val, depth + 1);
+    }
+    return result;
+  }
+  return value;
+}
+
+export function sanitizeEvent(event: SentryEvent): SentryEvent | null {
+  // `beforeSend` must never throw — a throw causes Sentry to drop the event
+  // silently. Fail closed on unexpected input rather than leaking unscrubbed
+  // data by returning the event as-is.
+  try {
+    if (Array.isArray(event.exception?.values)) {
+      for (const ex of event.exception.values) {
+        if (!ex || typeof ex !== "object") continue;
+        if (Array.isArray(ex.stacktrace?.frames)) {
+          for (const frame of ex.stacktrace.frames) {
+            if (!frame || typeof frame !== "object") continue;
+            if (frame.filename) frame.filename = sanitizeString(frame.filename);
+            if (frame.abs_path) frame.abs_path = sanitizeString(frame.abs_path);
+          }
+        }
+        if (ex.value) ex.value = sanitizeString(ex.value);
+      }
+    }
+    if (typeof event.message === "string") {
+      event.message = sanitizeString(event.message);
+    }
+    if (event.request) {
+      if (typeof event.request.url === "string") {
+        try {
+          const u = new URL(event.request.url);
+          u.search = "";
+          u.hash = "";
+          u.username = "";
+          u.password = "";
+          event.request.url = u.toString();
+        } catch {
+          // Not parseable as an absolute URL (relative path, mailto:, etc.)
+          // Still scrub any inline free-text secrets before giving up.
+          event.request.url = sanitizeString(event.request.url);
         }
       }
-      if (ex.value) ex.value = sanitizePath(ex.value);
+      if (event.request.headers && typeof event.request.headers === "object") {
+        event.request.headers = sanitizeStringsDeep(event.request.headers) as Record<
+          string,
+          unknown
+        >;
+      }
+      if (event.request.cookies !== undefined) {
+        event.request.cookies = sanitizeStringsDeep(event.request.cookies);
+      }
+      if (event.request.data !== undefined) {
+        event.request.data = sanitizeStringsDeep(event.request.data);
+      }
+      if (event.request.query_string !== undefined) {
+        event.request.query_string = sanitizeStringsDeep(event.request.query_string);
+      }
     }
-  }
-  if (typeof event.message === "string") {
-    event.message = sanitizePath(event.message);
-  }
-  if (event.request?.url) {
-    try {
-      const u = new URL(event.request.url);
-      u.search = "";
-      event.request.url = u.toString();
-    } catch {
-      // not a valid URL, leave as-is
+    if (Array.isArray(event.breadcrumbs)) {
+      for (const breadcrumb of event.breadcrumbs) {
+        if (!breadcrumb || typeof breadcrumb !== "object") continue;
+        if (typeof breadcrumb.message === "string") {
+          breadcrumb.message = sanitizeString(breadcrumb.message);
+        }
+        if (breadcrumb.data && typeof breadcrumb.data === "object") {
+          breadcrumb.data = sanitizeStringsDeep(breadcrumb.data) as Record<string, unknown>;
+        }
+      }
     }
+    if (event.extra && typeof event.extra === "object") {
+      event.extra = sanitizeStringsDeep(event.extra) as Record<string, unknown>;
+    }
+    return event;
+  } catch {
+    return null;
   }
-  return event;
 }
 
 let initialized = false;
@@ -95,8 +187,11 @@ export async function initializeTelemetry(): Promise<void> {
         environment: app.isPackaged ? "production" : "development",
         // Do not set `sampleRate` — it defaults to 1.0 (100% error capture). If
         // performance tracing is ever added, use `tracesSampleRate` instead.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        beforeSend: sanitizeEvent as any,
+        // The local `SentryEvent` interface is a narrower projection of the
+        // SDK's `Event` type — cast through `unknown` at the hook boundary so
+        // our scrubbing logic can use the shape we control.
+        beforeSend: (event) =>
+          sanitizeEvent(event as unknown as SentryEvent) as unknown as typeof event,
         initialScope: {
           tags: {
             platform: process.platform,
@@ -105,7 +200,7 @@ export async function initializeTelemetry(): Promise<void> {
           },
         },
       });
-      captureEventFn = sentry.captureEvent;
+      captureEventFn = sentry.captureEvent as unknown as (event: SentryEvent) => string;
       sentryModule = sentry;
       initialized = true;
     } catch (err) {

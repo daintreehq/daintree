@@ -5,6 +5,7 @@ import { app, screen } from "electron";
 import { sanitizePath } from "./TelemetryService.js";
 import { logBuffer } from "./LogBuffer.js";
 import { getPtyManager } from "./PtyManager.js";
+import { scrubSecrets } from "../utils/secretScrubber.js";
 import { store } from "../store.js";
 import type { HandlerDependencies } from "../ipc/types.js";
 
@@ -24,11 +25,15 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
 const SENSITIVE_KEY_PATTERN =
   /token|password|secret|apiKey|api_key|credential|authorization|private_key|passphrase/i;
 
+function sanitizeString(value: string): string {
+  return scrubSecrets(sanitizePath(value));
+}
+
 function redactDeep(value: unknown): unknown {
   if (value === null || value === undefined) return value;
 
   if (typeof value === "string") {
-    let result = sanitizePath(value);
+    let result = sanitizeString(value);
     result = result.replace(/https?:\/\/[^@\s]+@/g, "https://<redacted>@");
     return result;
   }
@@ -365,7 +370,7 @@ async function collectLogs() {
       totalEntries: entries.length,
       recentEntries: recent.map((e) => ({
         ...e,
-        message: truncateDiagnosticString(sanitizePath(e.message)),
+        message: truncateDiagnosticString(sanitizeString(e.message)),
         context: e.context ? truncateDeep(redactDeep(e.context)) : undefined,
       })),
     };

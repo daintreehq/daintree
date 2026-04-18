@@ -176,6 +176,7 @@
     "refractor": "^5.0.0",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
+    "safe-regex2": "^5.1.0",
     "semver": "^7.7.3",
     "simple-git": "^3.33.0",
     "stopword": "^3.1.5",
