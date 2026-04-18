@@ -156,6 +156,7 @@ function TerminalPaneComponent({
   const autoRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoRestartAttemptRef = useRef(0);
   const processStartTimeRef = useRef<number>(0);
+  const [inputTracker] = useState(() => new InputTracker());
 
   if (isFocused && !prevFocusedRef.current) {
     justFocusedUntilRef.current = performance.now() + 250;
@@ -177,10 +178,10 @@ function TerminalPaneComponent({
 
   useEffect(() => {
     setDismissedRestartPrompt(false);
-    inputTrackerRef.current?.reset();
+    inputTracker.reset();
     // Track process start time on each restart for backoff stability window
     processStartTimeRef.current = Date.now();
-  }, [restartKey]);
+  }, [restartKey, inputTracker]);
 
   const updateVisibility = usePanelStore((state) => state.updateVisibility);
   const getTerminal = usePanelStore((state) => state.getTerminal);
@@ -396,18 +397,9 @@ function TerminalPaneComponent({
 
   const handleReady = useCallback(() => {}, []);
 
-  const inputTrackerRef = useRef<InputTracker | null>(null);
-
-  if (!inputTrackerRef.current) {
-    inputTrackerRef.current = new InputTracker();
-  }
-
   const handleInput = useCallback(
     (data: string) => {
-      const tracker = inputTrackerRef.current;
-      if (!tracker) return;
-
-      const results = tracker.process(data);
+      const results = inputTracker.process(data);
 
       for (const result of results) {
         if (result.isClear) {
@@ -550,8 +542,8 @@ function TerminalPaneComponent({
 
   const handleRestart = useCallback(() => {
     restartTerminal(id);
-    inputTrackerRef.current?.reset();
-  }, [restartTerminal, id]);
+    inputTracker.reset();
+  }, [restartTerminal, id, inputTracker]);
 
   const handleUpdateCwd = useCallback(() => {
     setIsUpdateCwdOpen(true);
