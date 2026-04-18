@@ -171,7 +171,7 @@ describe("TerminalInfoDialog", () => {
     fireEvent.click(screen.getByText("Copy to Clipboard"));
 
     expect(writeTextMock).toHaveBeenCalledOnce();
-    const clipboardText = writeTextMock.mock.calls[0][0] as string;
+    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
     expect(clipboardText).toContain("PTY Diagnostics:");
     expect(clipboardText).toContain("Shell PID: 12345");
     expect(clipboardText).toContain("TTY Device: /dev/ttys004");
@@ -286,7 +286,7 @@ describe("TerminalInfoDialog", () => {
     fireEvent.click(screen.getByText("Copy to Clipboard"));
 
     expect(writeTextMock).toHaveBeenCalledOnce();
-    const clipboardText = writeTextMock.mock.calls[0][0] as string;
+    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
     expect(clipboardText).toContain("Spawn Command:");
     expect(clipboardText).toContain("Shell: /usr/local/bin/claude");
     expect(clipboardText).toContain("Args: --model claude-opus-4-7");
@@ -317,7 +317,7 @@ describe("TerminalInfoDialog", () => {
 
     // Clipboard also includes the Agent section — UI and clipboard guards must agree
     fireEvent.click(screen.getByText("Copy to Clipboard"));
-    const clipboardText = writeTextMock.mock.calls[0][0] as string;
+    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
     expect(clipboardText).toContain("Agent:");
     expect(clipboardText).toContain("Detected Agent: claude");
   });
@@ -338,7 +338,7 @@ describe("TerminalInfoDialog", () => {
     expect(screen.queryByText("Args:")).toBeNull();
 
     fireEvent.click(screen.getByText("Copy to Clipboard"));
-    const clipboardText = writeTextMock.mock.calls[0][0] as string;
+    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
     expect(clipboardText).toContain("Args: (none)");
     expect(clipboardText).not.toContain("Args: N/A");
   });
@@ -357,7 +357,7 @@ describe("TerminalInfoDialog", () => {
 
     fireEvent.click(screen.getByText("Copy to Clipboard"));
 
-    const clipboardText = writeTextMock.mock.calls[0][0] as string;
+    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
     expect(clipboardText).toContain("Spawn Command:");
     expect(clipboardText).toContain("Args: -l");
     expect(clipboardText).not.toContain("\nAgent:\n");

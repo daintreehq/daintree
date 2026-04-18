@@ -137,7 +137,7 @@ describe("PanelPersistence", () => {
         ])
       );
 
-      const savedTerminals = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
       expect(savedTerminals).toHaveLength(2);
       expect(savedTerminals).not.toContainEqual(expect.objectContaining({ id: "trash-1" }));
     });
@@ -152,7 +152,7 @@ describe("PanelPersistence", () => {
       persistence.save([normalTerminal, smokeTerminal], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const savedTerminals = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
       expect(savedTerminals).toHaveLength(1);
       expect(savedTerminals[0]).toEqual(expect.objectContaining({ id: "grid-1" }));
     });
@@ -208,7 +208,7 @@ describe("PanelPersistence", () => {
       persistence.save([terminal], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const savedTerminals = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
       expect(savedTerminals).toHaveLength(1);
       expect(savedTerminals[0]).not.toHaveProperty("detectedProcessId");
     });
@@ -226,7 +226,7 @@ describe("PanelPersistence", () => {
       persistence.save([shellTerminal, claudeTerminal], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const savedTerminals = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
       expect(savedTerminals).toHaveLength(1);
       expect(savedTerminals[0]).toEqual(expect.objectContaining({ id: "claude-1" }));
     });
@@ -452,7 +452,7 @@ describe("PanelPersistence", () => {
       persistence.save([extensionPanel], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const savedTerminals = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
       expect(savedTerminals).toHaveLength(1);
       expect(savedTerminals[0]).toEqual(
         expect.objectContaining({
@@ -472,7 +472,7 @@ describe("PanelPersistence", () => {
       persistence.save([terminal], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const savedTerminals = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
       expect(savedTerminals[0]).not.toHaveProperty("extensionState");
     });
 
@@ -491,7 +491,7 @@ describe("PanelPersistence", () => {
       persistence.save([ptyPanel], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const savedTerminals = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      const savedTerminals = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
       expect(savedTerminals[0]).toEqual(
         expect.objectContaining({
           id: "pty-ext",
@@ -519,7 +519,7 @@ describe("PanelPersistence", () => {
       persistence.save([panel], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const saved = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      const saved = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
       expect(saved).toHaveLength(1);
       expect(saved[0]).toEqual({
         id: "ext-unknown",
@@ -563,7 +563,7 @@ describe("PanelPersistence", () => {
       persistence.save([panel], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const saved = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      const saved = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
       expect(saved).toHaveLength(1);
       expect(saved[0]).toEqual(
         expect.objectContaining({
@@ -608,7 +608,7 @@ describe("PanelPersistence", () => {
       await vi.advanceTimersByTimeAsync(100);
 
       expect(client.setTerminals).toHaveBeenCalledTimes(2);
-      const secondSave = client.setTerminals.mock.calls[1][1] as TerminalSnapshot[];
+      const secondSave = client.setTerminals.mock.calls[1]![1] as TerminalSnapshot[];
       expect(secondSave[0]).toEqual(
         expect.objectContaining({
           id: "ext-unknown",
@@ -644,7 +644,7 @@ describe("PanelPersistence", () => {
       persistence.save([panel], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const saved = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      const saved = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
       expect(saved[0]).not.toHaveProperty("browserUrl");
       expect(saved[0]).toEqual(expect.objectContaining({ id: "ext-unknown", kind: "new-kind" }));
     });
@@ -688,7 +688,7 @@ describe("PanelPersistence", () => {
       await vi.advanceTimersByTimeAsync(100);
 
       expect(customTransform).toHaveBeenCalledTimes(1);
-      const saved = client.setTerminals.mock.calls[0][1] as TerminalSnapshot[];
+      const saved = client.setTerminals.mock.calls[0]![1] as TerminalSnapshot[];
       expect(saved[0]).not.toHaveProperty("browserUrl");
     });
 
@@ -722,7 +722,7 @@ describe("PanelPersistence", () => {
       persistence.save([createMockTerminal({ ...panel, title: "Second" })], projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const secondSave = client.setTerminals.mock.calls[1][1] as TerminalSnapshot[];
+      const secondSave = client.setTerminals.mock.calls[1]![1] as TerminalSnapshot[];
       expect(secondSave[0]).not.toHaveProperty("browserUrl");
       expect(secondSave[0]).toEqual(
         expect.objectContaining({ id: "ext-unknown", title: "Second" })
@@ -822,7 +822,7 @@ describe("PanelPersistence", () => {
       await vi.advanceTimersByTimeAsync(100);
 
       expect(client.setTerminals).toHaveBeenCalledTimes(2);
-      const secondSave = client.setTerminals.mock.calls[1][1] as TerminalSnapshot[];
+      const secondSave = client.setTerminals.mock.calls[1]![1] as TerminalSnapshot[];
       expect(secondSave[0]).toEqual(
         expect.objectContaining({
           id: "ext-unknown",
@@ -868,7 +868,7 @@ describe("PanelPersistence", () => {
         }),
       ]);
 
-      const saved = client.setTerminals.mock.calls[0][1][0] as Record<string, unknown>;
+      const saved = client.setTerminals.mock.calls[0]![1][0] as Record<string, unknown>;
       expect(saved.devServerStatus).toBeUndefined();
       expect(saved.devServerUrl).toBeUndefined();
       expect(saved.devServerError).toBeUndefined();

@@ -220,7 +220,7 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     );
     expect(focusable.length).toBeGreaterThanOrEqual(2);
 
-    const lastEl = focusable[focusable.length - 1];
+    const lastEl = focusable[focusable.length - 1]!;
     lastEl.focus();
     expect(document.activeElement).toBe(lastEl);
 
@@ -242,7 +242,7 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
       'input, button, [tabindex]:not([tabindex="-1"])'
     );
 
-    const firstEl = focusable[0];
+    const firstEl = focusable[0]!;
     firstEl.focus();
     expect(document.activeElement).toBe(firstEl);
 

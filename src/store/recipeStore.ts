@@ -282,7 +282,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       }
     }
 
-    const recipe = recipes[index];
+    const recipe = recipes[index]!;
     const isInRepo = isInRepoRecipeId(id);
     const isGlobal = !isInRepo && recipe.projectId === undefined;
     const sanitizedTerminals = updates.terminals?.map(sanitizeRecipeTerminal);
@@ -294,10 +294,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     const nameChanged = isInRepo && updates.name && stableInRepoId(updates.name) !== id;
     const newId = nameChanged ? stableInRepoId(updates.name!) : id;
 
-    const updatedRecipe = {
+    const updatedRecipe: TerminalRecipe = {
       ...recipe,
       ...sanitizedUpdates,
       id: newId,
+      name: sanitizedUpdates.name ?? recipe.name,
       terminals: sanitizedTerminals ?? recipe.terminals,
     };
 
@@ -778,7 +779,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const activeTerminals = terminalStore.panelIds
       .map((id) => terminalStore.panelsById[id])
-      .filter((t) => t && t.location !== "trash" && t.worktreeId === worktreeId);
+      .filter(
+        (t): t is NonNullable<typeof t> =>
+          Boolean(t) && t!.location !== "trash" && t!.worktreeId === worktreeId
+      );
 
     const terminalsToCapture = activeTerminals.slice(0, MAX_TERMINALS_PER_RECIPE);
 

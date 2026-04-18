@@ -101,7 +101,7 @@ export function createProjectSettingsSnapshot(
   const sortedEnvKeys = Object.keys(envVarRecord).sort();
   const sortedEnvVars: Record<string, string> = {};
   for (const key of sortedEnvKeys) {
-    sortedEnvVars[key] = envVarRecord[key];
+    sortedEnvVars[key] = envVarRecord[key]!;
   }
 
   const sanitizedRunCommands = runCommands
@@ -234,12 +234,14 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
 
   if (a.runCommands.length !== b.runCommands.length) return false;
   for (let i = 0; i < a.runCommands.length; i++) {
+    const aCmd = a.runCommands[i]!;
+    const bCmd = b.runCommands[i]!;
     if (
-      a.runCommands[i].id !== b.runCommands[i].id ||
-      a.runCommands[i].name !== b.runCommands[i].name ||
-      a.runCommands[i].command !== b.runCommands[i].command ||
-      a.runCommands[i].preferredLocation !== b.runCommands[i].preferredLocation ||
-      a.runCommands[i].preferredAutoRestart !== b.runCommands[i].preferredAutoRestart
+      aCmd.id !== bCmd.id ||
+      aCmd.name !== bCmd.name ||
+      aCmd.command !== bCmd.command ||
+      aCmd.preferredLocation !== bCmd.preferredLocation ||
+      aCmd.preferredAutoRestart !== bCmd.preferredAutoRestart
     ) {
       return false;
     }
@@ -247,8 +249,8 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
 
   if (a.commandOverrides.length !== b.commandOverrides.length) return false;
   for (let i = 0; i < a.commandOverrides.length; i++) {
-    const aOverride = a.commandOverrides[i];
-    const bOverride = b.commandOverrides[i];
+    const aOverride = a.commandOverrides[i]!;
+    const bOverride = b.commandOverrides[i]!;
     if (aOverride.commandId !== bOverride.commandId) return false;
     if (aOverride.disabled !== bOverride.disabled) return false;
     if (aOverride.prompt !== bOverride.prompt) return false;

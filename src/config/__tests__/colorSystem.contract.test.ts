@@ -57,7 +57,7 @@ function collectSourceFiles(dir: string): string[] {
 describe("color system contract", () => {
   const indexCss = fs.readFileSync(INDEX_CSS_PATH, "utf8");
   const exportedColorVars = new Set(
-    Array.from(indexCss.matchAll(/--color-([a-z0-9-]+):/g), (match) => match[1])
+    Array.from(indexCss.matchAll(/--color-([a-z0-9-]+):/g), (match) => match[1]!)
   );
 
   it("exports every app theme token to the CSS layer", () => {
@@ -74,7 +74,7 @@ describe("color system contract", () => {
 
     for (const filePath of collectSourceFiles(SRC_ROOT)) {
       const source = fs.readFileSync(filePath, "utf8");
-      const matches = new Set(Array.from(source.matchAll(utilityRegex), (match) => match[1]));
+      const matches = new Set(Array.from(source.matchAll(utilityRegex), (match) => match[1]!));
 
       for (const token of matches) {
         if (exportedColorVars.has(token)) {

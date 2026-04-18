@@ -26,7 +26,7 @@ export function updateHandler(id: symbol, handler: EscapeHandler): void {
 
 export function dispatchEscape(): boolean {
   if (stack.length === 0) return false;
-  const top = stack[stack.length - 1];
+  const top = stack[stack.length - 1]!;
   try {
     top.handler();
   } catch (err) {

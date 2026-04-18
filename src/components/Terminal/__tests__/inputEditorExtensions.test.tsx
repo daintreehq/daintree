@@ -602,10 +602,10 @@ describe("fileDropChipField", () => {
 
     const entries = view.state.field(fileDropChipField);
     expect(entries).toHaveLength(1);
-    expect(entries[0].filePath).toBe("/Users/test/file.ts");
-    expect(entries[0].fileName).toBe("file.ts");
-    expect(entries[0].from).toBe(0);
-    expect(entries[0].to).toBe(20);
+    expect(entries[0]!.filePath).toBe("/Users/test/file.ts");
+    expect(entries[0]!.fileName).toBe("file.ts");
+    expect(entries[0]!.from).toBe(0);
+    expect(entries[0]!.to).toBe(20);
 
     view.destroy();
   });
@@ -630,8 +630,8 @@ describe("fileDropChipField", () => {
 
     const entries = view.state.field(fileDropChipField);
     expect(entries).toHaveLength(1);
-    expect(entries[0].from).toBe(7); // shifted by "prefix " (7 chars)
-    expect(entries[0].to).toBe(27);
+    expect(entries[0]!.from).toBe(7); // shifted by "prefix " (7 chars)
+    expect(entries[0]!.to).toBe(27);
 
     view.destroy();
   });
@@ -684,8 +684,8 @@ describe("fileDropChipField", () => {
 
     const entries = view.state.field(fileDropChipField);
     expect(entries).toHaveLength(2);
-    expect(entries[0].fileName).toBe("a.ts");
-    expect(entries[1].fileName).toBe("b.ts");
+    expect(entries[0]!.fileName).toBe("a.ts");
+    expect(entries[1]!.fileName).toBe("b.ts");
 
     view.destroy();
   });
@@ -1108,9 +1108,9 @@ describe("diffChipField", () => {
     });
     const chipState = state.field(diffChipField);
     expect(chipState.tokens).toHaveLength(1);
-    expect(chipState.tokens[0].diffType).toBe("unstaged");
-    expect(chipState.tokens[0].start).toBe(6);
-    expect(chipState.tokens[0].end).toBe(11);
+    expect(chipState.tokens[0]!.diffType).toBe("unstaged");
+    expect(chipState.tokens[0]!.start).toBe(6);
+    expect(chipState.tokens[0]!.end).toBe(11);
   });
 
   it("creates decorations for @diff:staged tokens", () => {
@@ -1120,7 +1120,7 @@ describe("diffChipField", () => {
     });
     const chipState = state.field(diffChipField);
     expect(chipState.tokens).toHaveLength(1);
-    expect(chipState.tokens[0].diffType).toBe("staged");
+    expect(chipState.tokens[0]!.diffType).toBe("staged");
   });
 
   it("creates decorations for @diff:head tokens", () => {
@@ -1130,7 +1130,7 @@ describe("diffChipField", () => {
     });
     const chipState = state.field(diffChipField);
     expect(chipState.tokens).toHaveLength(1);
-    expect(chipState.tokens[0].diffType).toBe("head");
+    expect(chipState.tokens[0]!.diffType).toBe("head");
   });
 
   it("finds multiple diff tokens", () => {
@@ -1174,7 +1174,7 @@ describe("fileChipField excludes diff tokens", () => {
     });
     const chipState = state.field(fileChipStateField);
     expect(chipState.tokens).toHaveLength(1);
-    expect(chipState.tokens[0].path).toBe("src/file.ts");
+    expect(chipState.tokens[0]!.path).toBe("src/file.ts");
   });
 
   it("does not treat @diff:staged or @diff:head as file tokens", () => {
@@ -1185,7 +1185,7 @@ describe("fileChipField excludes diff tokens", () => {
     });
     const chipState = state.field(fileChipStateField);
     expect(chipState.tokens).toHaveLength(1);
-    expect(chipState.tokens[0].path).toBe("src/App.tsx");
+    expect(chipState.tokens[0]!.path).toBe("src/App.tsx");
   });
 
   it("does not treat @terminal as a file token", () => {
@@ -1196,7 +1196,7 @@ describe("fileChipField excludes diff tokens", () => {
     });
     const chipState = state.field(fileChipStateField);
     expect(chipState.tokens).toHaveLength(1);
-    expect(chipState.tokens[0].path).toBe("src/file.ts");
+    expect(chipState.tokens[0]!.path).toBe("src/file.ts");
   });
 
   it("does not treat @selection as a file token", () => {
@@ -1207,7 +1207,7 @@ describe("fileChipField excludes diff tokens", () => {
     });
     const chipState = state.field(fileChipStateField);
     expect(chipState.tokens).toHaveLength(1);
-    expect(chipState.tokens[0].path).toBe("src/file.ts");
+    expect(chipState.tokens[0]!.path).toBe("src/file.ts");
   });
 });
 
@@ -1219,8 +1219,8 @@ describe("terminalChipField", () => {
     });
     const chipState = state.field(terminalChipField);
     expect(chipState.tokens).toHaveLength(1);
-    expect(chipState.tokens[0].start).toBe(6);
-    expect(chipState.tokens[0].end).toBe(15);
+    expect(chipState.tokens[0]!.start).toBe(6);
+    expect(chipState.tokens[0]!.end).toBe(15);
   });
 
   it("returns empty for text without @terminal", () => {
@@ -1254,8 +1254,8 @@ describe("selectionChipField", () => {
     });
     const chipState = state.field(selectionChipField);
     expect(chipState.tokens).toHaveLength(1);
-    expect(chipState.tokens[0].start).toBe(6);
-    expect(chipState.tokens[0].end).toBe(16);
+    expect(chipState.tokens[0]!.start).toBe(6);
+    expect(chipState.tokens[0]!.end).toBe(16);
   });
 
   it("returns empty for text without @selection", () => {

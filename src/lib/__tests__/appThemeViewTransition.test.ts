@@ -132,7 +132,7 @@ describe("appThemeViewTransition", () => {
       await Promise.resolve();
 
       expect(animateSpy).toHaveBeenCalledTimes(1);
-      const [keyframes, options] = animateSpy.mock.calls[0];
+      const [keyframes, options] = animateSpy.mock.calls[0]!;
       expect(keyframes).toEqual({
         clipPath: ["inset(0 0 0 0)", "inset(0 0 0 100%)"],
       });
@@ -150,7 +150,7 @@ describe("appThemeViewTransition", () => {
       runThemeReveal({ x: 800, y: 400 }, () => {});
       await Promise.resolve();
 
-      const [keyframes] = animateSpy.mock.calls[0];
+      const [keyframes] = animateSpy.mock.calls[0]!;
       expect(keyframes).toEqual({
         clipPath: ["inset(0 0 0 0)", "inset(0 100% 0 0)"],
       });
@@ -162,7 +162,7 @@ describe("appThemeViewTransition", () => {
       runThemeReveal(null, () => {});
       await Promise.resolve();
 
-      const [keyframes] = animateSpy.mock.calls[0];
+      const [keyframes] = animateSpy.mock.calls[0]!;
       expect(keyframes).toEqual({
         clipPath: ["inset(0 0 0 0)", "inset(0 0 0 100%)"],
       });

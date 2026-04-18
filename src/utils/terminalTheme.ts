@@ -8,7 +8,7 @@ import {
 
 const DEFAULT_APP_SCHEME =
   BUILT_IN_APP_SCHEMES.find((scheme) => scheme.id === DEFAULT_APP_SCHEME_ID) ??
-  BUILT_IN_APP_SCHEMES[0];
+  BUILT_IN_APP_SCHEMES[0]!;
 
 export const DAINTREE_TERMINAL_THEME = getTerminalThemeFromAppScheme(DEFAULT_APP_SCHEME);
 

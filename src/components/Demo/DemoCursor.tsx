@@ -192,10 +192,10 @@ export function DemoCursor() {
         });
         await ballisticAnim.finished;
 
-        const lastBallistic = allKeyframes[splitIndex].transform;
+        const lastBallistic = allKeyframes[splitIndex]!.transform;
         const match = lastBallistic.match(/translate\(([^p]+)px,\s*([^p]+)px\)/);
-        const midX = fromX + (match ? parseFloat(match[1]) : dx * 0.8);
-        const midY = fromY + (match ? parseFloat(match[2]) : dy * 0.8);
+        const midX = fromX + (match ? parseFloat(match[1]!) : dx * 0.8);
+        const midY = fromY + (match ? parseFloat(match[2]!) : dy * 0.8);
         el.style.left = `${midX}px`;
         el.style.top = `${midY}px`;
         el.style.transform = "";
@@ -205,8 +205,8 @@ export function DemoCursor() {
           if (i === 0) return { transform: "translate(0px, 0px)" };
           const m = kf.transform.match(/translate\(([^p]+)px,\s*([^p]+)px\)/);
           if (!m) return kf;
-          const origX = parseFloat(m[1]) + fromX;
-          const origY = parseFloat(m[2]) + fromY;
+          const origX = parseFloat(m[1]!) + fromX;
+          const origY = parseFloat(m[2]!) + fromY;
           return { transform: `translate(${origX - midX}px, ${origY - midY}px)` };
         });
 

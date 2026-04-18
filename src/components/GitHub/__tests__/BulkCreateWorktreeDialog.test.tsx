@@ -1569,9 +1569,9 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
     // Should have called create with fromRemote: true
     const createCalls = mockWorktreeCreate.mock.calls;
     expect(createCalls.length).toBe(3);
-    expect(createCalls[0][0].fromRemote).toBe(true);
-    expect(createCalls[0][0].baseBranch).toBe("origin/feature/pr-10");
-    expect(createCalls[0][0].newBranch).toBe("feature/pr-10");
+    expect(createCalls[0]![0].fromRemote).toBe(true);
+    expect(createCalls[0]![0].baseBranch).toBe("origin/feature/pr-10");
+    expect(createCalls[0]![0].newBranch).toBe("feature/pr-10");
   });
 
   it("includes fork PRs in plan", () => {
@@ -1630,8 +1630,8 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
 
     expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
     const createCalls = mockWorktreeCreate.mock.calls;
-    expect(createCalls[0][0].useExistingBranch).toBe(true);
-    expect(createCalls[0][0].fromRemote).toBe(false);
+    expect(createCalls[0]![0].useExistingBranch).toBe(true);
+    expect(createCalls[0]![0].fromRemote).toBe(false);
   });
 
   it("calls listBranches once per batch, not once per PR", async () => {

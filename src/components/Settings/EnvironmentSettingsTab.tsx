@@ -68,6 +68,7 @@ export function EnvironmentSettingsTab() {
     setEnvRows((prev) => {
       const updated = [...prev];
       const row = updated[index];
+      if (!row) return prev;
       const oldKey = row.key;
       const rowId = row.id;
       updated[index] = { ...row, [field]: value };
@@ -129,17 +130,18 @@ export function EnvironmentSettingsTab() {
     let valid = true;
 
     for (let i = 0; i < envRows.length; i++) {
-      const trimmedKey = envRows[i].key.trim();
+      const row = envRows[i]!;
+      const trimmedKey = row.key.trim();
       if (!trimmedKey) continue;
 
       if (!ENV_KEY_REGEX.test(trimmedKey)) {
-        errors[envRows[i].id] = "Invalid name: use letters, digits, and underscores only";
+        errors[row.id] = "Invalid name: use letters, digits, and underscores only";
         valid = false;
       }
 
       const prevIndex = seenKeys.get(trimmedKey);
       if (prevIndex !== undefined) {
-        errors[envRows[i].id] = `Duplicate variable name`;
+        errors[row.id] = `Duplicate variable name`;
         valid = false;
       }
       seenKeys.set(trimmedKey, i);

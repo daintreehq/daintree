@@ -197,7 +197,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
 
   const confirmSelection = useCallback(() => {
     if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-      selectItem(results[selectedIndex]);
+      selectItem(results[selectedIndex]!);
     }
   }, [results, selectedIndex, selectItem]);
 

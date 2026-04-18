@@ -230,7 +230,7 @@ export function PanelPalette({
           aria-controls="panel-list"
           aria-activedescendant={
             results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length
-              ? `panel-option-${results[selectedIndex].id}`
+              ? `panel-option-${results[selectedIndex]!.id}`
               : undefined
           }
         />

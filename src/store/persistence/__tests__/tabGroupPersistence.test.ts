@@ -136,7 +136,7 @@ describe("PanelPersistence.saveTabGroups", () => {
         projectId,
         expect.arrayContaining([group1, group2])
       );
-      const savedGroups = client.setTabGroups.mock.calls[0][1] as TabGroup[];
+      const savedGroups = client.setTabGroups.mock.calls[0]![1] as TabGroup[];
       expect(savedGroups).toHaveLength(2);
     });
 
@@ -322,8 +322,8 @@ describe("PanelPersistence.saveTabGroups", () => {
       persistence.saveTabGroups(new Map([["group-1", worktreeGroup]]), projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const savedGroups = client.setTabGroups.mock.calls[0][1] as TabGroup[];
-      expect(savedGroups[0].worktreeId).toBe("wt-123");
+      const savedGroups = client.setTabGroups.mock.calls[0]![1] as TabGroup[];
+      expect(savedGroups[0]!.worktreeId).toBe("wt-123");
     });
 
     it("preserves undefined worktreeId for global groups", async () => {
@@ -341,8 +341,8 @@ describe("PanelPersistence.saveTabGroups", () => {
       persistence.saveTabGroups(new Map([["group-1", globalGroup]]), projectId);
       await vi.advanceTimersByTimeAsync(100);
 
-      const savedGroups = client.setTabGroups.mock.calls[0][1] as TabGroup[];
-      expect(savedGroups[0].worktreeId).toBeUndefined();
+      const savedGroups = client.setTabGroups.mock.calls[0]![1] as TabGroup[];
+      expect(savedGroups[0]!.worktreeId).toBeUndefined();
     });
   });
 });

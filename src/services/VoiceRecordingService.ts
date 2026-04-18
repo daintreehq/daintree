@@ -70,12 +70,12 @@ function findCorrectionRange(
       ? occurrences.filter((idx) => Math.abs(idx - segmentStart) <= CORRECTION_MATCH_RADIUS)
       : [];
   if (nearby.length === 1) {
-    const start = nearby[0];
+    const start = nearby[0]!;
     return { start, end: start + rawText.length };
   }
 
   if (occurrences.length === 1) {
-    const start = occurrences[0];
+    const start = occurrences[0]!;
     return { start, end: start + rawText.length };
   }
 
@@ -94,7 +94,7 @@ function resolveQueuedCorrectionStart(draft: string, rawText: string): number {
   }
 
   const occurrences = collectOccurrences(draft, rawText);
-  return occurrences.length === 1 ? occurrences[0] : -1;
+  return occurrences.length === 1 ? occurrences[0]! : -1;
 }
 
 class VoiceRecordingService {
@@ -658,7 +658,7 @@ class VoiceRecordingService {
       const samples = new Int16Array(event.data);
       let sumSq = 0;
       for (let i = 0; i < samples.length; i++) {
-        const n = samples[i] / 32768;
+        const n = samples[i]! / 32768;
         sumSq += n * n;
       }
       const rms = Math.sqrt(sumSq / samples.length);

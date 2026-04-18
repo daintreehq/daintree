@@ -64,7 +64,7 @@ function HighlightBranchText({
   let lastIndex = 0;
 
   for (let i = 0; i < matchRanges.length; i++) {
-    const { start, end } = matchRanges[i];
+    const { start, end } = matchRanges[i]!;
     if (start >= nameLength) break;
     const clampedEnd = Math.min(end, nameLength - 1);
     if (start > lastIndex) {

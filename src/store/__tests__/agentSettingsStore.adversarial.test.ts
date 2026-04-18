@@ -59,8 +59,8 @@ describe("agentSettingsStore adversarial", () => {
 
     const availability = { claude: "missing", codex: "ready" } as unknown as CliAvailability;
     const after = normalizeAgentSelection(before, availability, true);
-    expect(after.agents.claude.pinned).toBe(true);
-    expect(after.agents.codex.pinned).toBe(false);
+    expect(after.agents.claude!.pinned).toBe(true);
+    expect(after.agents.codex!.pinned).toBe(false);
   });
 
   it("normalizeAgentSelection returns the same reference when no changes are needed", () => {

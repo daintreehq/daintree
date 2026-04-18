@@ -75,7 +75,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
     palette.results.length > 0 &&
     palette.selectedIndex >= 0 &&
     palette.selectedIndex < palette.results.length
-      ? palette.results[palette.selectedIndex]
+      ? (palette.results[palette.selectedIndex] ?? null)
       : null;
 
   const doConfirm = useCallback(

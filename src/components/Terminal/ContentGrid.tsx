@@ -206,7 +206,7 @@ function RotatingTip() {
 
   if (filteredTips.length === 0) return null;
 
-  const tip = filteredTips[mountIndex.current % filteredTips.length];
+  const tip = filteredTips[mountIndex.current % filteredTips.length]!;
 
   return (
     <div className="flex flex-col items-center gap-2 animate-in fade-in duration-300">
@@ -706,7 +706,7 @@ export function ContentGrid({
         if (cancelled || index >= ids.length) return;
         if (isDraggingRef.current) return;
 
-        const id = ids[index++];
+        const id = ids[index++]!;
         const managed = terminalInstanceService.get(id);
 
         if (managed?.hostElement.isConnected) {
@@ -1065,7 +1065,7 @@ export function ContentGrid({
                       const isGroupDisabled = groupPanels.some((p) => isInTrash(p.id));
 
                       if (groupPanels.length === 1) {
-                        const terminal = groupPanels[0];
+                        const terminal = groupPanels[0]!;
                         elements.push(
                           <SortableTerminal
                             key={group.id}
@@ -1084,7 +1084,7 @@ export function ContentGrid({
                           </SortableTerminal>
                         );
                       } else {
-                        const firstPanel = groupPanels[0];
+                        const firstPanel = groupPanels[0]!;
                         elements.push(
                           <SortableTerminal
                             key={group.id}

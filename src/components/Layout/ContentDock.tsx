@@ -209,7 +209,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
                       // Single-panel group: render DockedTerminalItem directly
                       if (groupPanels.length === 1) {
-                        const terminal = groupPanels[0];
+                        const terminal = groupPanels[0]!;
                         return (
                           <SortableDockItem key={group.id} terminal={terminal} sourceIndex={index}>
                             <DockedTerminalItem terminal={terminal} />
@@ -218,7 +218,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                       }
 
                       // Multi-panel group: pass group context for group-aware DnD
-                      const firstPanel = groupPanels[0];
+                      const firstPanel = groupPanels[0]!;
                       return (
                         <SortableDockItem
                           key={group.id}

@@ -29,7 +29,7 @@ function isMissedDay(cells: HeatCell[], index: number): boolean {
 
   let hasRecentActivityBefore = false;
   for (let i = Math.max(0, index - MISSED_DAY_WINDOW); i < index; i += 1) {
-    if (cells[i].count > 0) {
+    if (cells[i]!.count > 0) {
       hasRecentActivityBefore = true;
       break;
     }
@@ -40,7 +40,7 @@ function isMissedDay(cells: HeatCell[], index: number): boolean {
   }
 
   for (let i = index + 1; i <= Math.min(cells.length - 1, index + MISSED_DAY_WINDOW); i += 1) {
-    if (cells[i].count > 0) {
+    if (cells[i]!.count > 0) {
       return true;
     }
   }

@@ -12,9 +12,9 @@ describe("urlHistoryStore", () => {
     store.recordVisit("proj1", "http://localhost:3000/", "Home");
     const entries = useUrlHistoryStore.getState().entries["proj1"];
     expect(entries).toHaveLength(1);
-    expect(entries[0].url).toBe("http://localhost:3000/");
-    expect(entries[0].title).toBe("Home");
-    expect(entries[0].visitCount).toBe(1);
+    expect(entries![0]!.url).toBe("http://localhost:3000/");
+    expect(entries![0]!.title).toBe("Home");
+    expect(entries![0]!.visitCount).toBe(1);
   });
 
   it("increments visitCount on repeated visits", () => {
@@ -24,7 +24,7 @@ describe("urlHistoryStore", () => {
     store.recordVisit("proj1", "http://localhost:3000/", "Home");
     const entries = useUrlHistoryStore.getState().entries["proj1"];
     expect(entries).toHaveLength(1);
-    expect(entries[0].visitCount).toBe(3);
+    expect(entries![0]!.visitCount).toBe(3);
   });
 
   it("updates title on repeated visit with new title", () => {
@@ -32,7 +32,7 @@ describe("urlHistoryStore", () => {
     store.recordVisit("proj1", "http://localhost:3000/", "Old Title");
     store.recordVisit("proj1", "http://localhost:3000/", "New Title");
     const entries = useUrlHistoryStore.getState().entries["proj1"];
-    expect(entries[0].title).toBe("New Title");
+    expect(entries![0]!.title).toBe("New Title");
   });
 
   it("keeps existing title when new title is empty", () => {
@@ -40,7 +40,7 @@ describe("urlHistoryStore", () => {
     store.recordVisit("proj1", "http://localhost:3000/", "My Title");
     store.recordVisit("proj1", "http://localhost:3000/");
     const entries = useUrlHistoryStore.getState().entries["proj1"];
-    expect(entries[0].title).toBe("My Title");
+    expect(entries![0]!.title).toBe("My Title");
   });
 
   it("isolates entries by project", () => {
@@ -49,8 +49,8 @@ describe("urlHistoryStore", () => {
     store.recordVisit("proj2", "http://localhost:5173/", "P2");
     expect(useUrlHistoryStore.getState().entries["proj1"]).toHaveLength(1);
     expect(useUrlHistoryStore.getState().entries["proj2"]).toHaveLength(1);
-    expect(useUrlHistoryStore.getState().entries["proj1"][0].url).toBe("http://localhost:3000/");
-    expect(useUrlHistoryStore.getState().entries["proj2"][0].url).toBe("http://localhost:5173/");
+    expect(useUrlHistoryStore.getState().entries["proj1"]![0]!.url).toBe("http://localhost:3000/");
+    expect(useUrlHistoryStore.getState().entries["proj2"]![0]!.url).toBe("http://localhost:5173/");
   });
 
   it("updateTitle updates title for an existing entry", () => {
@@ -58,7 +58,7 @@ describe("urlHistoryStore", () => {
     store.recordVisit("proj1", "http://localhost:3000/", "Old");
     store.updateTitle("proj1", "http://localhost:3000/", "New Title");
     const entries = useUrlHistoryStore.getState().entries["proj1"];
-    expect(entries[0].title).toBe("New Title");
+    expect(entries![0]!.title).toBe("New Title");
   });
 
   it("updateTitle is a no-op for non-existent URL", () => {
@@ -66,7 +66,7 @@ describe("urlHistoryStore", () => {
     store.recordVisit("proj1", "http://localhost:3000/", "Title");
     store.updateTitle("proj1", "http://localhost:5000/", "New");
     expect(useUrlHistoryStore.getState().entries["proj1"]).toHaveLength(1);
-    expect(useUrlHistoryStore.getState().entries["proj1"][0].title).toBe("Title");
+    expect(useUrlHistoryStore.getState().entries["proj1"]![0]!.title).toBe("Title");
   });
 
   it("removeProjectHistory clears all entries for a project", () => {
@@ -81,10 +81,10 @@ describe("urlHistoryStore", () => {
   it("updates lastVisitAt on repeated visits", () => {
     const store = useUrlHistoryStore.getState();
     store.recordVisit("proj1", "http://localhost:3000/", "Home");
-    const firstVisitAt = useUrlHistoryStore.getState().entries["proj1"][0].lastVisitAt;
+    const firstVisitAt = useUrlHistoryStore.getState().entries["proj1"]![0]!.lastVisitAt;
     // Small delay to ensure timestamp differs
     store.recordVisit("proj1", "http://localhost:3000/", "Home");
-    const secondVisitAt = useUrlHistoryStore.getState().entries["proj1"][0].lastVisitAt;
+    const secondVisitAt = useUrlHistoryStore.getState().entries["proj1"]![0]!.lastVisitAt;
     expect(secondVisitAt).toBeGreaterThanOrEqual(firstVisitAt);
   });
 
@@ -94,7 +94,7 @@ describe("urlHistoryStore", () => {
       store.recordVisit("proj1", `http://localhost:3000/page-${i}`, `Page ${i}`);
     }
     const entries = useUrlHistoryStore.getState().entries["proj1"];
-    expect(entries.length).toBeLessThanOrEqual(500);
+    expect(entries!.length).toBeLessThanOrEqual(500);
   });
 });
 
@@ -172,12 +172,12 @@ describe("getFrecencySuggestions", () => {
   it("filters by title match (case-insensitive)", () => {
     const results = getFrecencySuggestions(entries, "dashboard");
     expect(results).toHaveLength(1);
-    expect(results[0].title).toBe("Dashboard");
+    expect(results[0]!.title).toBe("Dashboard");
   });
 
   it("sorts by frecency score descending", () => {
     const results = getFrecencySuggestions(entries, "localhost");
-    expect(results[0].url).toBe("http://localhost:3000/dashboard");
+    expect(results[0]!.url).toBe("http://localhost:3000/dashboard");
   });
 
   it("limits results to specified count", () => {

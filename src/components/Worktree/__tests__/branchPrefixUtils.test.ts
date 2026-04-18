@@ -143,14 +143,14 @@ describe("suggestPrefixes", () => {
   it("suggests prefixes matching at start", () => {
     const suggestions = suggestPrefixes("fea");
     expect(suggestions.length).toBeGreaterThan(0);
-    expect(suggestions[0].type.prefix).toBe("feature");
-    expect(suggestions[0].matchScore).toBeGreaterThan(0);
+    expect(suggestions[0]!.type.prefix).toBe("feature");
+    expect(suggestions[0]!.matchScore).toBeGreaterThan(0);
   });
 
   it("suggests exact match with highest score", () => {
     const suggestions = suggestPrefixes("feature");
-    expect(suggestions[0].type.prefix).toBe("feature");
-    expect(suggestions[0].matchScore).toBe(100);
+    expect(suggestions[0]!.type.prefix).toBe("feature");
+    expect(suggestions[0]!.matchScore).toBe(100);
   });
 
   it("suggests aliases", () => {
@@ -167,14 +167,14 @@ describe("suggestPrefixes", () => {
   it("handles case-insensitive matching", () => {
     const suggestions = suggestPrefixes("FEAT");
     expect(suggestions.length).toBeGreaterThan(0);
-    expect(suggestions[0].type.prefix).toBe("feature");
+    expect(suggestions[0]!.type.prefix).toBe("feature");
   });
 
   it("sorts by match score descending", () => {
     const suggestions = suggestPrefixes("f");
     if (suggestions.length > 1) {
       for (let i = 0; i < suggestions.length - 1; i++) {
-        expect(suggestions[i].matchScore).toBeGreaterThanOrEqual(suggestions[i + 1].matchScore);
+        expect(suggestions[i]!.matchScore).toBeGreaterThanOrEqual(suggestions[i + 1]!.matchScore);
       }
     }
   });

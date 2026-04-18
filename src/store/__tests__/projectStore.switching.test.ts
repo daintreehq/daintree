@@ -210,7 +210,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
     await useProjectStore.getState().switchProject(projectB.id);
     await Promise.resolve();
 
-    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    const outgoing = projectClientMock.switch.mock.calls[0]![1];
     expect(outgoing.terminals).toEqual([{ id: "browser-1", kind: "browser" }]);
   });
 
@@ -234,7 +234,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
     await useProjectStore.getState().switchProject(projectB.id);
     await Promise.resolve();
 
-    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    const outgoing = projectClientMock.switch.mock.calls[0]![1];
     expect(outgoing.terminals).toEqual([{ id: "dev-1", kind: "dev-preview" }]);
   });
 
@@ -259,7 +259,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
     await useProjectStore.getState().switchProject(projectB.id);
     await Promise.resolve();
 
-    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    const outgoing = projectClientMock.switch.mock.calls[0]![1];
     expect(outgoing.terminals).toHaveLength(1);
     expect(outgoing.terminals[0].id).toBe("t-keep");
   });
@@ -282,7 +282,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
     await useProjectStore.getState().switchProject(projectB.id);
     await Promise.resolve();
 
-    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    const outgoing = projectClientMock.switch.mock.calls[0]![1];
     expect(outgoing.tabGroups).toEqual([
       { id: "g1", location: "grid", activeTabId: "a", panelIds: ["a", "b"] },
     ]);
@@ -330,7 +330,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
     // Without the fix, outgoing terminals would be base-only. With it, the
     // preserved fragment (browserUrl) reaches the main-process pre-apply.
     expect(panelPersistence.getPreviousSnapshotMap).toHaveBeenCalledWith(projectA.id);
-    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    const outgoing = projectClientMock.switch.mock.calls[0]![1];
     expect(outgoing.terminals).toHaveLength(1);
     expect(outgoing.terminals[0]).toEqual(
       expect.objectContaining({
@@ -355,7 +355,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
     await useProjectStore.getState().switchProject(projectB.id);
     await Promise.resolve();
 
-    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    const outgoing = projectClientMock.switch.mock.calls[0]![1];
     expect(outgoing.tabGroups).toEqual([]);
   });
 
@@ -374,7 +374,7 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
     await useProjectStore.getState().reopenProject(projectB.id);
     await Promise.resolve();
 
-    const outgoing = projectClientMock.reopen.mock.calls[0][1];
+    const outgoing = projectClientMock.reopen.mock.calls[0]![1];
     expect(outgoing.terminals).toEqual([{ id: "b-1", kind: "browser" }]);
   });
 });
@@ -390,7 +390,7 @@ describe("buildOutgoingState worktree selection (#5000)", () => {
     await useProjectStore.getState().switchProject(projectB.id);
     await Promise.resolve();
 
-    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    const outgoing = projectClientMock.switch.mock.calls[0]![1];
     expect(outgoing.activeWorktreeId).toBe("wt-feature");
   });
 
@@ -404,7 +404,7 @@ describe("buildOutgoingState worktree selection (#5000)", () => {
     await useProjectStore.getState().reopenProject(projectB.id);
     await Promise.resolve();
 
-    const outgoing = projectClientMock.reopen.mock.calls[0][1];
+    const outgoing = projectClientMock.reopen.mock.calls[0]![1];
     expect(outgoing.activeWorktreeId).toBe("wt-feature");
   });
 
@@ -418,7 +418,7 @@ describe("buildOutgoingState worktree selection (#5000)", () => {
     await useProjectStore.getState().switchProject(projectB.id);
     await Promise.resolve();
 
-    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    const outgoing = projectClientMock.switch.mock.calls[0]![1];
     expect(outgoing.activeWorktreeId).toBeUndefined();
     expect("activeWorktreeId" in outgoing).toBe(true);
   });
@@ -434,7 +434,7 @@ describe("buildOutgoingState worktree selection (#5000)", () => {
     await useProjectStore.getState().switchProject(projectB.id);
     await Promise.resolve();
 
-    const outgoing = projectClientMock.switch.mock.calls[0][1];
+    const outgoing = projectClientMock.switch.mock.calls[0]![1];
     expect(outgoing.activeWorktreeId).toBe("wt-early");
   });
 });
@@ -456,7 +456,7 @@ describe("fleet arming clear on project switch (#5298)", () => {
     // Called before the fire-and-forget IPC
     const clearOrder = clearSpy.mock.invocationCallOrder[0];
     const switchOrder = projectClientMock.switch.mock.invocationCallOrder[0];
-    expect(clearOrder).toBeLessThan(switchOrder);
+    expect(clearOrder).toBeLessThan(switchOrder!);
   });
 
   it("does not throw when the callback is a no-op", async () => {

@@ -265,6 +265,6 @@ describe("convertAnsiLinesToHtml", () => {
     expect(result[0]).toContain("Bold Red");
     expect(result[0]).toContain("Normal");
     // Should have some styling (exact output depends on Anser implementation)
-    expect(result[0].length).toBeGreaterThan("Bold Red Normal".length);
+    expect(result[0]!.length).toBeGreaterThan("Bold Red Normal".length);
   });
 });

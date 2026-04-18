@@ -105,9 +105,9 @@ describe("Worktree-scoped bulk actions", () => {
     const moved0 = state.panelsById["wt1-dock-0"];
     const moved1 = state.panelsById["wt1-dock-1"];
     const allTerminals = state.panelIds.map((id) => state.panelsById[id]);
-    const gridCount = allTerminals.filter((t) => t.location === "grid").length;
+    const gridCount = allTerminals.filter((t) => t!.location === "grid").length;
     const dockCountWt1 = allTerminals.filter(
-      (t) => t.worktreeId === "wt1" && t.location === "dock"
+      (t) => t!.worktreeId === "wt1" && t!.location === "dock"
     ).length;
 
     expect(moved0?.location).toBe("grid");

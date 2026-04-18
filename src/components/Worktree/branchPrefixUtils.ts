@@ -50,7 +50,7 @@ export function parseBranchInput(input: string): ParsedBranchInput {
 
   if (isKnownPrefix) {
     // Normalize alias to canonical prefix (e.g., "feat" -> "feature")
-    const canonicalPrefix = BRANCH_PREFIX_MAP[potentialPrefix.toLowerCase()].prefix;
+    const canonicalPrefix = BRANCH_PREFIX_MAP[potentialPrefix.toLowerCase()]!.prefix;
     return {
       prefix: canonicalPrefix,
       slug,

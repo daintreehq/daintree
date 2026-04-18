@@ -147,7 +147,7 @@ function KeyRecorder({ onCapture, onCancel, excludeActionId }: KeyRecorderProps)
             ) : chordStep === "waiting" ? (
               <span>
                 <span className="font-mono">
-                  {keybindingService.formatComboForDisplay(capturedCombos[0])}
+                  {keybindingService.formatComboForDisplay(capturedCombos[0]!)}
                 </span>
                 <span className="text-daintree-accent/70">
                   {" "}

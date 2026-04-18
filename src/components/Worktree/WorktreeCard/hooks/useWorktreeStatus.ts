@@ -96,7 +96,7 @@ export function useWorktreeStatus({
   const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
 
   const rawLastCommitMessage = worktree.worktreeChanges?.lastCommitMessage;
-  const firstLineLastCommitMessage = rawLastCommitMessage?.split("\n")[0].trim();
+  const firstLineLastCommitMessage = rawLastCommitMessage?.split("\n")[0]?.trim();
 
   const isSummarySameAsCommit = useMemo(() => {
     if (!worktree.summary || !rawLastCommitMessage) return false;

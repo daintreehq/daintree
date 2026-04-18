@@ -92,8 +92,8 @@ export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProp
     if (prevTabs == null || nextTabs == null) return false;
     if (prevTabs.length !== nextTabs.length) return false;
     for (let i = 0; i < prevTabs.length; i++) {
-      const pt = prevTabs[i];
-      const nt = nextTabs[i];
+      const pt = prevTabs[i]!;
+      const nt = nextTabs[i]!;
       if (
         pt.id !== nt.id ||
         pt.title !== nt.title ||

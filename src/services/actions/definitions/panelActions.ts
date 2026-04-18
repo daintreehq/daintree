@@ -5,7 +5,7 @@ import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { usePortalStore } from "@/store/portalStore";
-import { usePanelStore } from "@/store/panelStore";
+import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 
 export function registerPanelActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   // Query action: list all panels with metadata
@@ -29,7 +29,9 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
         location?: "grid" | "dock" | "trash" | "background";
       };
       const state = usePanelStore.getState();
-      let panels = state.panelIds.map((id) => state.panelsById[id]).filter(Boolean);
+      let panels = state.panelIds
+        .map((id) => state.panelsById[id])
+        .filter((p): p is TerminalInstance => p !== undefined);
 
       if (worktreeId) {
         panels = panels.filter((p) => p.worktreeId === worktreeId);

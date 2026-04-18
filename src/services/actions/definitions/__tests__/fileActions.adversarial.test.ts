@@ -57,7 +57,7 @@ describe("fileActions adversarial", () => {
       col: 4,
     });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
       detail: { path: string; rootPath?: string; line?: number; col?: number };
     };
@@ -106,7 +106,7 @@ describe("fileActions adversarial", () => {
     const run = setupActions();
     await run("file.view", { path: "/just/a/path.txt" });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       detail: { path: string; rootPath?: string; line?: number; col?: number };
     };
     expect(event.detail.path).toBe("/just/a/path.txt");

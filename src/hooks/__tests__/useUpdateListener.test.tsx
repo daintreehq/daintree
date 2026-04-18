@@ -163,7 +163,7 @@ describe("useUpdateListener", () => {
       capturedAvailable!({ version: "2.5.0" });
     });
 
-    const payload = notifyMock.mock.calls[0][0];
+    const payload = notifyMock.mock.calls[0]![0];
     expect(payload.inboxMessage).toContain("Check for Updates");
   });
 
@@ -185,7 +185,7 @@ describe("useUpdateListener", () => {
         inboxMessage: "Downloading update: 43%",
       })
     );
-    const patch = updateNotificationMock.mock.calls[0][1];
+    const patch = updateNotificationMock.mock.calls[0]![1];
     expect(typeof patch.message).not.toBe("string");
   });
 
@@ -212,7 +212,7 @@ describe("useUpdateListener", () => {
       })
     );
 
-    const patch = updateNotificationMock.mock.calls[0][1];
+    const patch = updateNotificationMock.mock.calls[0]![1];
     patch.action!.onClick();
     expect(window.electron.update.quitAndInstall).toHaveBeenCalledTimes(1);
   });
@@ -312,7 +312,7 @@ describe("useUpdateListener", () => {
     act(() => {
       capturedAvailable!({ version: "2.5.0" });
     });
-    const firstId = notifyMock.mock.results[0].value as string;
+    const firstId = notifyMock.mock.results[0]!.value as string;
 
     act(() => {
       userDismiss(firstId);
@@ -330,7 +330,7 @@ describe("useUpdateListener", () => {
     act(() => {
       capturedAvailable!({ version: "2.5.0" });
     });
-    const toastId = notifyMock.mock.results[0].value as string;
+    const toastId = notifyMock.mock.results[0]!.value as string;
 
     act(() => {
       userDismiss(toastId);
@@ -346,7 +346,7 @@ describe("useUpdateListener", () => {
     act(() => {
       capturedAvailable!({ version: "2.5.0" });
     });
-    const toastId = notifyMock.mock.results[0].value as string;
+    const toastId = notifyMock.mock.results[0]!.value as string;
 
     // Eviction marks dismissed: true WITHOUT running the Toast's handleDismiss,
     // so onDismiss must not fire — the user didn't actually dismiss this.
@@ -363,7 +363,7 @@ describe("useUpdateListener", () => {
     act(() => {
       capturedAvailable!({ version: "2.5.0" });
     });
-    const toastId = notifyMock.mock.results[0].value as string;
+    const toastId = notifyMock.mock.results[0]!.value as string;
 
     // Stage transition: Available → Downloaded (in-place). The hook must
     // clear onDismiss so dismissing the Update Ready toast does not start the
@@ -391,7 +391,7 @@ describe("useUpdateListener", () => {
     act(() => {
       capturedAvailable!({ version: "2.5.0" });
     });
-    const firstId = notifyMock.mock.results[0].value as string;
+    const firstId = notifyMock.mock.results[0]!.value as string;
 
     act(() => {
       userDismiss(firstId);

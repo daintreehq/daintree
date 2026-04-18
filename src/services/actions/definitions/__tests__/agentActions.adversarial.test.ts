@@ -161,7 +161,7 @@ describe("agentActions adversarial", () => {
     await callAction(actions, "agent.focusNextWaiting");
 
     expect(focusNextWaiting).toHaveBeenCalledTimes(1);
-    const [isInTrash, set] = focusNextWaiting.mock.calls[0];
+    const [isInTrash, set] = focusNextWaiting.mock.calls[0]!;
     expect(isInTrash).toBe(true);
     expect(set instanceof Set).toBe(true);
     expect([...(set as Set<string>)].sort()).toEqual(["alias-a", "key-a", "key-b"]);
@@ -243,7 +243,7 @@ describe("agentActions adversarial", () => {
     const actions = setupActions(callbacks);
     await callAction(actions, "agent.focusNextAgent");
 
-    const [, set] = focusNextAgent.mock.calls[0];
+    const [, set] = focusNextAgent.mock.calls[0]!;
     expect([...(set as Set<string>)].sort()).toEqual(["backup", "other", "primary"]);
   });
 });

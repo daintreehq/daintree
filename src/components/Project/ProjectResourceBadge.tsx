@@ -162,8 +162,8 @@ function ProjectBreakdown({
           >
             <span className="text-daintree-text/60 truncate max-w-[140px]">{entry.name}</span>
             <div className="flex gap-2 text-daintree-text/40 shrink-0">
-              <span>{entry.stats.terminalCount} terms</span>
-              <span>{entry.stats.estimatedMemoryMB}MB</span>
+              <span>{entry.stats!.terminalCount} terms</span>
+              <span>{entry.stats!.estimatedMemoryMB}MB</span>
             </div>
           </div>
         ))}
@@ -184,7 +184,7 @@ function DiagnosticsSection({
   const [expanded, setExpanded] = useState(false);
 
   const trendDeltaMB =
-    trendSamples.length >= 2 ? trendSamples[trendSamples.length - 1] - trendSamples[0] : 0;
+    trendSamples.length >= 2 ? trendSamples[trendSamples.length - 1]! - trendSamples[0]! : 0;
   const trendText =
     trend === "up"
       ? `Memory grew ${Math.abs(Math.round(trendDeltaMB))}MB in last 2 min`

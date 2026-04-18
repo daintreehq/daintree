@@ -323,7 +323,7 @@ export function useNoteActions({
             setSelectedIndex((prev) => Math.max(0, prev - 1));
             if (visibleNotes.length > 0) {
               const newIndex = Math.max(0, selectedIndex - 1);
-              setSelectedNote(visibleNotes[newIndex]);
+              setSelectedNote(visibleNotes[newIndex] ?? null);
             }
           }
           break;
@@ -333,7 +333,7 @@ export function useNoteActions({
             setSelectedIndex((prev) => Math.min(visibleNotes.length - 1, prev + 1));
             if (visibleNotes.length > 0) {
               const newIndex = Math.min(visibleNotes.length - 1, selectedIndex + 1);
-              setSelectedNote(visibleNotes[newIndex]);
+              setSelectedNote(visibleNotes[newIndex] ?? null);
             }
           }
           break;
@@ -348,7 +348,7 @@ export function useNoteActions({
           } else if (showCreateItem) {
             handleCreateNote(trimmedQuery);
           } else if (visibleNotes.length > 0 && !selectedNote) {
-            setSelectedNote(visibleNotes[selectedIndex]);
+            setSelectedNote(visibleNotes[selectedIndex] ?? null);
           }
           break;
         case "n":

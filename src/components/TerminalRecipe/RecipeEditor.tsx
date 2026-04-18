@@ -178,7 +178,9 @@ export function RecipeEditor({
     value: string | Record<string, string>
   ) => {
     const newTerminals = [...terminals];
-    newTerminals[index] = { ...newTerminals[index], [field]: value };
+    const current = newTerminals[index];
+    if (!current) return;
+    newTerminals[index] = { ...current, [field]: value };
     setTerminals(newTerminals);
   };
 
@@ -375,23 +377,25 @@ export function RecipeEditor({
                         const newType = e.target.value as RecipeTerminalType;
                         setTerminals((prev) => {
                           const updated = [...prev];
-                          const prevType = updated[index].type;
+                          const current = updated[index];
+                          if (!current) return prev;
+                          const prevType = current.type;
                           updated[index] = {
-                            ...updated[index],
+                            ...current,
                             type: newType,
                             // Clear command when switching between types so the new type uses its default
-                            command: newType === prevType ? updated[index].command : "",
+                            command: newType === prevType ? current.command : "",
                             // Clear initialPrompt and args when switching to terminal or dev-preview
                             initialPrompt:
                               newType === "terminal" || newType === "dev-preview"
                                 ? ""
-                                : updated[index].initialPrompt,
+                                : current.initialPrompt,
                             args:
                               newType === "terminal" || newType === "dev-preview"
                                 ? ""
-                                : updated[index].args,
+                                : current.args,
                             // Clear devCommand when switching away from dev-preview
-                            devCommand: newType !== "dev-preview" ? "" : updated[index].devCommand,
+                            devCommand: newType !== "dev-preview" ? "" : current.devCommand,
                           };
                           return updated;
                         });

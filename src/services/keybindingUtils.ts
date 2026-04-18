@@ -65,7 +65,7 @@ export function normalizeKeyForBinding(event: KeyboardEvent): string {
 
   // Prefer physical key code for punctuation (handles Option/Alt modifiers)
   if (event.code && CODE_TO_KEY[event.code]) {
-    return CODE_TO_KEY[event.code];
+    return CODE_TO_KEY[event.code]!;
   }
 
   // Handle letter keys when Alt is pressed on macOS only (Alt+P produces π instead of P)

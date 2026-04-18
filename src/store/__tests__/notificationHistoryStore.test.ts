@@ -33,17 +33,17 @@ describe("notificationHistorySlice", () => {
     addEntry({ message: "Hello" });
     const { entries } = getState();
     expect(entries).toHaveLength(1);
-    expect(entries[0].message).toBe("Hello");
-    expect(entries[0].id).toBeDefined();
-    expect(entries[0].timestamp).toBeGreaterThan(0);
+    expect(entries[0]!.message).toBe("Hello");
+    expect(entries[0]!.id).toBeDefined();
+    expect(entries[0]!.timestamp).toBeGreaterThan(0);
   });
 
   it("prepends new entries (most recent first)", () => {
     addEntry({ message: "first" });
     addEntry({ message: "second" });
     const { entries } = getState();
-    expect(entries[0].message).toBe("second");
-    expect(entries[1].message).toBe("first");
+    expect(entries[0]!.message).toBe("second");
+    expect(entries[1]!.message).toBe("first");
   });
 
   it("increments unreadCount on each add", () => {
@@ -59,8 +59,8 @@ describe("notificationHistorySlice", () => {
     }
     const { entries } = getState();
     expect(entries).toHaveLength(200);
-    expect(entries[0].message).toBe("msg-204");
-    expect(entries[199].message).toBe("msg-5");
+    expect(entries[0]!.message).toBe("msg-204");
+    expect(entries[199]!.message).toBe("msg-5");
   });
 
   it("unreadCount never exceeds 200 even with overflow", () => {
@@ -93,9 +93,9 @@ describe("notificationHistorySlice", () => {
     addEntry({ message: "second", correlationId: "panel-1" });
     addEntry({ message: "third" });
     const { entries } = getState();
-    expect(entries[0].correlationId).toBeUndefined();
-    expect(entries[1].correlationId).toBe("panel-1");
-    expect(entries[2].correlationId).toBe("panel-1");
+    expect(entries[0]!.correlationId).toBeUndefined();
+    expect(entries[1]!.correlationId).toBe("panel-1");
+    expect(entries[2]!.correlationId).toBe("panel-1");
   });
 
   it("getEntriesByCorrelationId returns matching entries", () => {
@@ -119,16 +119,16 @@ describe("notificationHistorySlice", () => {
         ],
       });
       const entry = getState().entries[0];
-      expect(entry.actions).toHaveLength(1);
-      expect(entry.actions![0].label).toBe("Go to terminal");
-      expect(entry.actions![0].actionId).toBe("panel.focus");
-      expect(entry.actions![0].actionArgs).toEqual({ panelId: "p1" });
+      expect(entry!.actions).toHaveLength(1);
+      expect(entry!.actions![0]!.label).toBe("Go to terminal");
+      expect(entry!.actions![0]!.actionId).toBe("panel.focus");
+      expect(entry!.actions![0]!.actionArgs).toEqual({ panelId: "p1" });
     });
 
     it("works with no actions (backward compat)", () => {
       addEntry({ message: "No actions" });
       const entry = getState().entries[0];
-      expect(entry.actions).toBeUndefined();
+      expect(entry!.actions).toBeUndefined();
     });
 
     it("stores multiple actions", () => {
@@ -140,19 +140,19 @@ describe("notificationHistorySlice", () => {
           { label: "Action 2", actionId: "panel.focus", variant: "secondary" },
         ],
       });
-      expect(getState().entries[0].actions).toHaveLength(2);
+      expect(getState().entries[0]!.actions).toHaveLength(2);
     });
   });
 
   describe("seenAsToast and badge count", () => {
     it("defaults seenAsToast to false when not provided", () => {
       addEntry({ message: "test" });
-      expect(getState().entries[0].seenAsToast).toBe(false);
+      expect(getState().entries[0]!.seenAsToast).toBe(false);
     });
 
     it("stores seenAsToast=true when provided", () => {
       getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
-      expect(getState().entries[0].seenAsToast).toBe(true);
+      expect(getState().entries[0]!.seenAsToast).toBe(true);
     });
 
     it("does not increment unreadCount when seenAsToast is true", () => {
@@ -184,7 +184,7 @@ describe("notificationHistorySlice", () => {
       const before = getState().entries[0];
       getState().markAllRead();
       const after = getState().entries[0];
-      expect(after).toBe(before);
+      expect(after).toBe(before!);
     });
 
     it("unreadCount stays accurate when overflow evicts an unseen entry", () => {
@@ -199,7 +199,7 @@ describe("notificationHistorySlice", () => {
 
     it("defaults countable to true on new entries", () => {
       addEntry({ message: "test" });
-      expect(getState().entries[0].countable).toBe(true);
+      expect(getState().entries[0]!.countable).toBe(true);
     });
 
     it("does not increment unreadCount when countable is false", () => {
@@ -220,7 +220,7 @@ describe("notificationHistorySlice", () => {
       addEntry({ message: "countable" });
       addEntry({ message: "uncountable", countable: false });
       expect(getState().unreadCount).toBe(1);
-      const uncountableId = getState().entries[0].id;
+      const uncountableId = getState().entries[0]!.id;
       getState().dismissEntry(uncountableId);
       expect(getState().entries).toHaveLength(1);
       expect(getState().unreadCount).toBe(1);
@@ -230,7 +230,7 @@ describe("notificationHistorySlice", () => {
   describe("markSummarized", () => {
     it("defaults summarized to false on new entries", () => {
       addEntry({ message: "test" });
-      expect(getState().entries[0].summarized).toBe(false);
+      expect(getState().entries[0]!.summarized).toBe(false);
     });
 
     it("marks only targeted entries as summarized", () => {
@@ -238,11 +238,11 @@ describe("notificationHistorySlice", () => {
       addEntry({ message: "b" });
       addEntry({ message: "c" });
       const entries = getState().entries;
-      getState().markSummarized([entries[0].id, entries[2].id]);
+      getState().markSummarized([entries[0]!.id, entries[2]!.id]);
       const updated = getState().entries;
-      expect(updated[0].summarized).toBe(true);
-      expect(updated[1].summarized).toBe(false);
-      expect(updated[2].summarized).toBe(true);
+      expect(updated[0]!.summarized).toBe(true);
+      expect(updated[1]!.summarized).toBe(false);
+      expect(updated[2]!.summarized).toBe(true);
     });
 
     it("does not change unreadCount", () => {
@@ -256,30 +256,30 @@ describe("notificationHistorySlice", () => {
 
     it("is independent from markAllRead", () => {
       addEntry({ message: "test" });
-      const id = getState().entries[0].id;
+      const id = getState().entries[0]!.id;
       getState().markSummarized([id]);
-      expect(getState().entries[0].summarized).toBe(true);
-      expect(getState().entries[0].seenAsToast).toBe(false);
+      expect(getState().entries[0]!.summarized).toBe(true);
+      expect(getState().entries[0]!.seenAsToast).toBe(false);
       getState().markAllRead();
-      expect(getState().entries[0].summarized).toBe(true);
-      expect(getState().entries[0].seenAsToast).toBe(true);
+      expect(getState().entries[0]!.summarized).toBe(true);
+      expect(getState().entries[0]!.seenAsToast).toBe(true);
     });
 
     it("does not mutate already-summarized entries", () => {
       addEntry({ message: "test" });
-      const id = getState().entries[0].id;
+      const id = getState().entries[0]!.id;
       getState().markSummarized([id]);
       const before = getState().entries[0];
       getState().markSummarized([id]);
       const after = getState().entries[0];
-      expect(after).toBe(before);
+      expect(after).toBe(before!);
     });
 
     it("new entries after markSummarized default to summarized=false", () => {
       addEntry({ message: "old" });
-      getState().markSummarized([getState().entries[0].id]);
+      getState().markSummarized([getState().entries[0]!.id]);
       addEntry({ message: "new" });
-      expect(getState().entries[0].summarized).toBe(false);
+      expect(getState().entries[0]!.summarized).toBe(false);
     });
   });
 
@@ -291,7 +291,7 @@ describe("notificationHistorySlice", () => {
       });
       expect(typeof id).toBe("string");
       expect(id.length).toBeGreaterThan(0);
-      expect(getState().entries[0].id).toBe(id);
+      expect(getState().entries[0]!.id).toBe(id);
     });
   });
 
@@ -302,9 +302,9 @@ describe("notificationHistorySlice", () => {
         message: "seen",
         seenAsToast: true,
       });
-      expect(getState().entries[0].seenAsToast).toBe(true);
+      expect(getState().entries[0]!.seenAsToast).toBe(true);
       getState().markUnseenAsToast(id);
-      expect(getState().entries[0].seenAsToast).toBe(false);
+      expect(getState().entries[0]!.seenAsToast).toBe(false);
     });
 
     it("increments unreadCount when marking seen entry as unseen", () => {
@@ -328,7 +328,7 @@ describe("notificationHistorySlice", () => {
       const before = getState().entries[0];
       getState().markUnseenAsToast(id);
       const after = getState().entries[0];
-      expect(after).toBe(before);
+      expect(after).toBe(before!);
       expect(getState().unreadCount).toBe(1);
     });
 
@@ -358,7 +358,7 @@ describe("notificationHistorySlice", () => {
   describe("dismissEntry", () => {
     it("removes the entry and decrements unreadCount when entry is unread", () => {
       addEntry({ message: "missed" });
-      const id = getState().entries[0].id;
+      const id = getState().entries[0]!.id;
       expect(getState().unreadCount).toBe(1);
       getState().dismissEntry(id);
       expect(getState().entries).toHaveLength(0);
@@ -369,10 +369,10 @@ describe("notificationHistorySlice", () => {
       getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
       addEntry({ message: "missed" });
       expect(getState().unreadCount).toBe(1);
-      const seenId = getState().entries[1].id;
+      const seenId = getState().entries[1]!.id;
       getState().dismissEntry(seenId);
       expect(getState().entries).toHaveLength(1);
-      expect(getState().entries[0].message).toBe("missed");
+      expect(getState().entries[0]!.message).toBe("missed");
       expect(getState().unreadCount).toBe(1);
     });
 
@@ -386,14 +386,14 @@ describe("notificationHistorySlice", () => {
     it("works correctly with markAllRead", () => {
       addEntry({ message: "missed 1" });
       addEntry({ message: "missed 2" });
-      const id = getState().entries[0].id;
+      const id = getState().entries[0]!.id;
       getState().dismissEntry(id);
       expect(getState().unreadCount).toBe(1);
-      expect(getState().entries[0].message).toBe("missed 1");
+      expect(getState().entries[0]!.message).toBe("missed 1");
       getState().markAllRead();
       expect(getState().unreadCount).toBe(0);
       expect(getState().entries).toHaveLength(1);
-      expect(getState().entries[0].message).toBe("missed 1");
+      expect(getState().entries[0]!.message).toBe("missed 1");
     });
   });
 });

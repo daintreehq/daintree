@@ -97,7 +97,7 @@ describe("useMainProcessToastListener", () => {
     );
 
     // Click the action button
-    const call = notifyMock.mock.calls[0][0];
+    const call = notifyMock.mock.calls[0]![0];
     call.action!.onClick();
     expect(checkForUpdatesMock).toHaveBeenCalledTimes(1);
   });

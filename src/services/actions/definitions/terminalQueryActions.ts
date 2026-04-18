@@ -2,7 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
 import { terminalClient } from "@/clients";
-import { usePanelStore } from "@/store/panelStore";
+import { usePanelStore, type TerminalInstance } from "@/store/panelStore";
 export function registerTerminalQueryActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -28,7 +28,9 @@ export function registerTerminalQueryActions(
         location?: "grid" | "dock" | "trash" | "background";
       };
       const state = usePanelStore.getState();
-      let terminals = state.panelIds.map((id) => state.panelsById[id]).filter(Boolean);
+      let terminals = state.panelIds
+        .map((id) => state.panelsById[id])
+        .filter((t): t is TerminalInstance => t !== undefined);
 
       // Filter by worktree if specified
       if (worktreeId) {

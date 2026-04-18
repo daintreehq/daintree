@@ -71,10 +71,10 @@ describe("markRendererPerformance", () => {
 
     expect(result).toBe("ok");
     expect(window.__DAINTREE_PERF_MARKS__).toHaveLength(2);
-    expect(window.__DAINTREE_PERF_MARKS__![0].mark).toBe("test-span:start");
-    expect(window.__DAINTREE_PERF_MARKS__![0].meta).toEqual({ key: "val" });
-    expect(window.__DAINTREE_PERF_MARKS__![1].mark).toBe("test-span:end");
-    expect(window.__DAINTREE_PERF_MARKS__![1].meta).toEqual(
+    expect(window.__DAINTREE_PERF_MARKS__![0]!.mark).toBe("test-span:start");
+    expect(window.__DAINTREE_PERF_MARKS__![0]!.meta).toEqual({ key: "val" });
+    expect(window.__DAINTREE_PERF_MARKS__![1]!.mark).toBe("test-span:end");
+    expect(window.__DAINTREE_PERF_MARKS__![1]!.meta).toEqual(
       expect.objectContaining({ key: "val", durationMs: expect.any(Number) })
     );
   });
@@ -89,8 +89,8 @@ describe("markRendererPerformance", () => {
     ).rejects.toThrow("boom");
 
     expect(window.__DAINTREE_PERF_MARKS__).toHaveLength(2);
-    expect(window.__DAINTREE_PERF_MARKS__![0].mark).toBe("fail-span:start");
-    expect(window.__DAINTREE_PERF_MARKS__![1].mark).toBe("fail-span:end");
+    expect(window.__DAINTREE_PERF_MARKS__![0]!.mark).toBe("fail-span:start");
+    expect(window.__DAINTREE_PERF_MARKS__![1]!.mark).toBe("fail-span:end");
   });
 
   it("starts renderer memory monitor without throwing when memory API is unavailable", () => {

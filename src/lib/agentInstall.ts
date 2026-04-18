@@ -34,7 +34,7 @@ export function getInstallBlocksForCurrentOS(agent: AgentConfig): AgentInstallBl
 
 export function getDefaultInstallBlock(agent: AgentConfig): AgentInstallBlock | null {
   const blocks = getInstallBlocksForCurrentOS(agent);
-  return blocks && blocks.length > 0 ? blocks[0] : null;
+  return blocks && blocks.length > 0 ? (blocks[0] ?? null) : null;
 }
 
 export function getInstallCommand(block: AgentInstallBlock): string | null {

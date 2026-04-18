@@ -93,7 +93,7 @@ function ArtifactItem({
     }
   }, [artifact, onApplyPatch, showFeedback]);
 
-  const colorClass = ARTIFACT_TYPE_COLORS[artifact.type] || ARTIFACT_TYPE_COLORS.other;
+  const colorClass = ARTIFACT_TYPE_COLORS[artifact.type] || ARTIFACT_TYPE_COLORS.other!;
   const icon = ARTIFACT_TYPE_ICONS[artifact.type] || ARTIFACT_TYPE_ICONS.other;
   const title = artifact.filename || artifact.language || artifact.type;
   const previewLines = artifact.content.split("\n").slice(0, 2);

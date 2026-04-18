@@ -213,7 +213,7 @@ describe("useWorktreeTerminals logic", () => {
     const result = calculateWorktreeCounts(terminals, "worktree-1");
 
     expect(result.terminals).toHaveLength(1);
-    expect(result.terminals[0].id).toBe("term-2");
+    expect(result.terminals[0]!.id).toBe("term-2");
     expect(result.counts.total).toBe(1);
   });
 

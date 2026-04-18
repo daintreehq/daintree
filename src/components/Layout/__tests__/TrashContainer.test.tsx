@@ -86,7 +86,7 @@ describe("TrashContainer", () => {
     const items = [makeTrashedItem("1"), makeTrashedItem("2")];
     const { container, rerender } = render(<TrashContainer trashedTerminals={items} />);
 
-    rerender(<TrashContainer trashedTerminals={[items[0]]} />);
+    rerender(<TrashContainer trashedTerminals={[items[0]!]} />);
     expect(container.querySelector(".animate-trash-pulse")).toBeNull();
   });
 
@@ -107,7 +107,7 @@ describe("TrashContainer", () => {
     const { rerender } = render(<TrashContainer trashedTerminals={items} />);
 
     useAnnouncerStore.setState({ polite: null });
-    rerender(<TrashContainer trashedTerminals={[items[0]]} />);
+    rerender(<TrashContainer trashedTerminals={[items[0]!]} />);
 
     expect(useAnnouncerStore.getState().polite).toBeNull();
   });
@@ -121,7 +121,7 @@ describe("TrashContainer", () => {
     expect(container.querySelector(".animate-trash-pulse")).not.toBeNull();
 
     // Restore a panel (count decreases) before timeout
-    rerender(<TrashContainer trashedTerminals={[items[0]]} />);
+    rerender(<TrashContainer trashedTerminals={[items[0]!]} />);
     expect(container.querySelector(".animate-trash-pulse")).toBeNull();
   });
 

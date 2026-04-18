@@ -32,8 +32,8 @@ describe("FileLinksAddon", () => {
         addon.provideLinks(1, (links) => {
           expect(links).toBeDefined();
           expect(links).toHaveLength(1);
-          expect(links![0].text).toBe("/home/user/project/src/App.tsx:45:12");
-          expect(links![0].range.start.y).toBe(1);
+          expect(links![0]!.text).toBe("/home/user/project/src/App.tsx:45:12");
+          expect(links![0]!.range.start.y).toBe(1);
           resolve();
         });
       });
@@ -51,7 +51,7 @@ describe("FileLinksAddon", () => {
         addon.provideLinks(1, (links) => {
           expect(links).toBeDefined();
           expect(links).toHaveLength(1);
-          expect(links![0].text).toBe("src/App.tsx:45:12");
+          expect(links![0]!.text).toBe("src/App.tsx:45:12");
           resolve();
         });
       });
@@ -69,7 +69,7 @@ describe("FileLinksAddon", () => {
         addon.provideLinks(1, (links) => {
           expect(links).toBeDefined();
           expect(links).toHaveLength(1);
-          expect(links![0].text).toBe("C:\\Users\\user\\project\\src\\App.tsx:45:12");
+          expect(links![0]!.text).toBe("C:\\Users\\user\\project\\src\\App.tsx:45:12");
           resolve();
         });
       });
@@ -87,7 +87,7 @@ describe("FileLinksAddon", () => {
         addon.provideLinks(1, (links) => {
           expect(links).toBeDefined();
           expect(links).toHaveLength(1);
-          expect(links![0].text).toBe("src/App.tsx");
+          expect(links![0]!.text).toBe("src/App.tsx");
           resolve();
         });
       });

@@ -82,7 +82,7 @@ export function AgentSelectorDropdown({
         case "Enter":
           if (activeIndex >= 0 && activeIndex < items.length) {
             e.preventDefault();
-            handleSelect(items[activeIndex].id);
+            handleSelect(items[activeIndex]!.id);
           }
           break;
       }

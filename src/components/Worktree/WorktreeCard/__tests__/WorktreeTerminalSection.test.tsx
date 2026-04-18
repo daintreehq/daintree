@@ -188,7 +188,7 @@ describe("WorktreeTerminalSection arming click handlers", () => {
     });
 
     // The row button renders "Test Terminal" as the title
-    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0];
+    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
     fireEvent.click(button);
 
     expect(useFleetArmingStore.getState().armedIds.has("a1")).toBe(true);
@@ -206,8 +206,8 @@ describe("WorktreeTerminalSection arming click handlers", () => {
     });
 
     const buttons = screen.getAllByRole("button", { name: /Test Terminal/i });
-    fireEvent.click(buttons[0]); // arm a1 — becomes anchor
-    fireEvent.click(buttons[2], { shiftKey: true }); // extend to a3
+    fireEvent.click(buttons[0]!); // arm a1 — becomes anchor
+    fireEvent.click(buttons[2]!, { shiftKey: true }); // extend to a3
 
     const armed = useFleetArmingStore.getState().armedIds;
     expect([...armed].sort()).toEqual(["a1", "a2", "a3"]);
@@ -223,8 +223,8 @@ describe("WorktreeTerminalSection arming click handlers", () => {
     });
 
     const buttons = screen.getAllByRole("button", { name: /Test Terminal/i });
-    fireEvent.click(buttons[0]); // arm a1
-    fireEvent.click(buttons[1], { metaKey: true }); // cmd+click a2 — also arms
+    fireEvent.click(buttons[0]!); // arm a1
+    fireEvent.click(buttons[1]!, { metaKey: true }); // cmd+click a2 — also arms
 
     const armed = useFleetArmingStore.getState().armedIds;
     expect([...armed].sort()).toEqual(["a1", "a2"]);
@@ -245,7 +245,7 @@ describe("WorktreeTerminalSection arming click handlers", () => {
       onTerminalSelect: onSelect,
     });
 
-    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0];
+    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
     fireEvent.click(button);
 
     expect(onSelect).toHaveBeenCalledTimes(1);
@@ -263,7 +263,7 @@ describe("WorktreeTerminalSection arming click handlers", () => {
       useFleetArmingStore.getState().armId("a1");
     });
 
-    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0];
+    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
     expect(button.getAttribute("aria-selected")).toBe("true");
   });
 

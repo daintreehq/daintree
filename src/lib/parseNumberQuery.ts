@@ -18,7 +18,7 @@ export function parseNumberQuery(query: string): NumberQuery | null {
   // Open-ended: 130+ or #130+
   const openMatch = trimmed.match(OPEN_ENDED_RE);
   if (openMatch) {
-    const from = parseInt(openMatch[1], 10);
+    const from = parseInt(openMatch[1]!, 10);
     if (from <= 0 || !Number.isFinite(from)) return null;
     return { kind: "open-ended", from };
   }
@@ -26,8 +26,8 @@ export function parseNumberQuery(query: string): NumberQuery | null {
   // Range: 123..127 or #123..127
   const rangeMatch = trimmed.match(RANGE_RE);
   if (rangeMatch) {
-    const from = parseInt(rangeMatch[1], 10);
-    const to = parseInt(rangeMatch[2], 10);
+    const from = parseInt(rangeMatch[1]!, 10);
+    const to = parseInt(rangeMatch[2]!, 10);
     if (from <= 0 || to <= 0 || !Number.isFinite(from) || !Number.isFinite(to)) return null;
     if (from > to) return null;
     const count = to - from + 1;
@@ -53,14 +53,14 @@ export function parseNumberQuery(query: string): NumberQuery | null {
         numbers.push(num);
       }
     }
-    if (numbers.length === 1) return { kind: "single", number: numbers[0] };
+    if (numbers.length === 1) return { kind: "single", number: numbers[0]! };
     return { kind: "multi", numbers };
   }
 
   // Single: 123 or #123
   const singleMatch = trimmed.match(SINGLE_RE);
   if (singleMatch) {
-    const num = parseInt(singleMatch[1], 10);
+    const num = parseInt(singleMatch[1]!, 10);
     if (num <= 0 || !Number.isFinite(num)) return null;
     return { kind: "single", number: num };
   }

@@ -182,10 +182,10 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 />
               ) : (
                 <NotificationCenterEntry
-                  key={group.entries[0].id}
-                  entry={group.entries[0]}
-                  isNew={!group.entries[0].seenAsToast}
-                  onDismiss={() => dismissEntry(group.entries[0].id)}
+                  key={group.entries[0]!.id}
+                  entry={group.entries[0]!}
+                  isNew={!group.entries[0]!.seenAsToast}
+                  onDismiss={() => dismissEntry(group.entries[0]!.id)}
                 />
               )
             )}
@@ -205,6 +205,8 @@ function NotificationThread({
 }) {
   const latest = group.entries[0];
   const isNew = group.entries.some((e) => !e.seenAsToast);
+
+  if (!latest) return null;
 
   return (
     <div className="relative">

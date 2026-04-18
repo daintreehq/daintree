@@ -814,7 +814,7 @@ export function GitHubResourceList({
                   isSelectionActive={selection.isSelectionActive}
                   onToggleSelect={(e: React.MouseEvent) => {
                     if (e.shiftKey) {
-                      selection.toggleRange(index, (i) => data[i].number);
+                      selection.toggleRange(index, (i) => data[i]!.number);
                     } else {
                       selection.toggle(item.number, index);
                     }

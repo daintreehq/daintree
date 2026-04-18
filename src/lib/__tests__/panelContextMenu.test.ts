@@ -39,7 +39,7 @@ describe("openPanelContextMenu", () => {
     expect(result).toBe(true);
     expect(handler).toHaveBeenCalledTimes(1);
 
-    const event = handler.mock.calls[0][0] as MouseEvent;
+    const event = handler.mock.calls[0]![0] as MouseEvent;
     expect(event.bubbles).toBe(true);
     expect(event.cancelable).toBe(true);
     expect(event.clientX).toBe(200); // 100 + 200/2
@@ -87,7 +87,7 @@ describe("openPanelContextMenu", () => {
     expect(result).toBe(true);
     expect(handler).toHaveBeenCalledTimes(1);
 
-    const event = handler.mock.calls[0][0] as MouseEvent;
+    const event = handler.mock.calls[0]![0] as MouseEvent;
     expect(event.clientX).toBe(200); // 50 + 300/2
     expect(event.clientY).toBe(130); // 30 + 200/2
   });

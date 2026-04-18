@@ -207,7 +207,7 @@ describe("CrashRecoveryDialog", () => {
         })
       );
       // Verify t2 was excluded
-      const call = (onResolve as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      const call = (onResolve as ReturnType<typeof vi.fn>).mock.calls[0]![0];
       expect(call.panelIds).not.toContain("t2");
     });
 
@@ -360,7 +360,7 @@ describe("CrashRecoveryDialog", () => {
 
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
     const clipText = (navigator.clipboard.writeText as ReturnType<typeof vi.fn>).mock
-      .calls[0][0] as string;
+      .calls[0]![0] as string;
     expect(clipText).toContain("Electron");
     expect(clipText).toContain("40.0.0");
     expect(clipText).toContain("Node");
@@ -393,7 +393,7 @@ describe("CrashRecoveryDialog", () => {
 
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalled());
     const clipText = (navigator.clipboard.writeText as ReturnType<typeof vi.fn>).mock
-      .calls[0][0] as string;
+      .calls[0]![0] as string;
     expect(clipText).toContain("Daintree 1.0.0");
     expect(clipText).toContain("old crash");
     expect(clipText).not.toContain("Electron");

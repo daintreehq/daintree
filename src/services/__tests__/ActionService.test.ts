@@ -55,7 +55,7 @@ describe("ActionService", () => {
 
       const manifest = service.list();
       expect(manifest).toHaveLength(1);
-      expect(manifest[0].id).toBe("actions.list");
+      expect(manifest[0]!.id).toBe("actions.list");
     });
 
     it("should warn when registering duplicate action", () => {
@@ -237,7 +237,7 @@ describe("ActionService", () => {
       service.register(action);
       const manifest = service.list();
 
-      expect(manifest[0].inputSchema).toBeDefined();
+      expect(manifest[0]!.inputSchema).toBeDefined();
     });
 
     it("should include enablement status", () => {
@@ -257,8 +257,8 @@ describe("ActionService", () => {
       service.register(action);
       const manifest = service.list();
 
-      expect(manifest[0].enabled).toBe(false);
-      expect(manifest[0].disabledReason).toBe("Test disabled");
+      expect(manifest[0]!.enabled).toBe(false);
+      expect(manifest[0]!.disabledReason).toBe("Test disabled");
     });
 
     it("should omit restricted actions", () => {
@@ -289,7 +289,7 @@ describe("ActionService", () => {
 
       const manifest = service.list();
       expect(manifest).toHaveLength(1);
-      expect(manifest[0].id).toBe("actions.safe");
+      expect(manifest[0]!.id).toBe("actions.safe");
     });
   });
 

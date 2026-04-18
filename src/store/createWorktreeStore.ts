@@ -125,10 +125,10 @@ export function cleanupOrphanedTerminals(): void {
   const terminalStore = usePanelStore.getState();
   const orphanedTerminals = terminalStore.panelIds
     .map((id) => terminalStore.panelsById[id])
-    .filter((t) => {
+    .filter((t): t is NonNullable<typeof t> => {
       if (!t) return false;
       const worktreeId = typeof t.worktreeId === "string" ? t.worktreeId.trim() : "";
-      return worktreeId && !worktreeIds.has(worktreeId);
+      return Boolean(worktreeId && !worktreeIds.has(worktreeId));
     });
 
   if (orphanedTerminals.length > 0) {

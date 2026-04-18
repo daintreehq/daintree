@@ -62,10 +62,10 @@ const findNearest = (
 
       if (direction === "right") {
         const nextIndex = (currentIndex + 1) % rowMajor.length;
-        result = rowMajor[nextIndex].terminalId;
+        result = rowMajor[nextIndex]!.terminalId;
       } else {
         const prevIndex = (currentIndex - 1 + rowMajor.length) % rowMajor.length;
-        result = rowMajor[prevIndex].terminalId;
+        result = rowMajor[prevIndex]!.terminalId;
       }
       break;
     }
@@ -80,10 +80,10 @@ const findNearest = (
 
       if (direction === "down") {
         const nextIndex = (currentColIndex + 1) % colBucket.length;
-        result = colBucket[nextIndex].terminalId;
+        result = colBucket[nextIndex]!.terminalId;
       } else {
         const prevIndex = (currentColIndex - 1 + colBucket.length) % colBucket.length;
-        result = colBucket[prevIndex].terminalId;
+        result = colBucket[prevIndex]!.terminalId;
       }
       break;
     }
@@ -319,8 +319,8 @@ describe("Grid Navigation Logic", () => {
       const layout = buildGroupLayout(groups, 2);
 
       // The representative IDs should be the activeTabIds
-      expect(layout[0].terminalId).toBe("term-2");
-      expect(layout[1].terminalId).toBe("term-5");
+      expect(layout[0]!.terminalId).toBe("term-2");
+      expect(layout[1]!.terminalId).toBe("term-5");
     });
 
     it("falls back to panelIds[0] when activeTabId is invalid", () => {
@@ -330,7 +330,7 @@ describe("Grid Navigation Logic", () => {
       ];
       const layout = buildGroupLayout(groups, 2);
 
-      expect(layout[0].terminalId).toBe("term-1");
+      expect(layout[0]!.terminalId).toBe("term-1");
     });
 
     it("returns null for non-representative (hidden tab) ID", () => {

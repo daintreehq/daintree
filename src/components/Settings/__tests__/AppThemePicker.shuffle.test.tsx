@@ -114,7 +114,7 @@ describe("AppThemePicker shuffle button", () => {
     fireEvent.click(shuffleBtn);
 
     expect(commitSchemeSelection).toHaveBeenCalledTimes(1);
-    const selectedId = commitSchemeSelection.mock.calls[0][0];
+    const selectedId = commitSchemeSelection.mock.calls[0]![0];
     expect(selectedId).not.toBe("theme-a");
     expect(["theme-b", "theme-c"]).toContain(selectedId);
   });
@@ -206,6 +206,6 @@ describe("AppThemePicker image loading attributes", () => {
       "img[src='/themes/theme-a.webp']"
     );
     expect(heroImgs.length).toBe(1);
-    expect(heroImgs[0].getAttribute("loading")).not.toBe("lazy");
+    expect(heroImgs[0]!.getAttribute("loading")).not.toBe("lazy");
   });
 });

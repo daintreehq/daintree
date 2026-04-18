@@ -77,7 +77,7 @@ function createMockTabGroup(
   return {
     id,
     panelIds,
-    activeTabId: panelIds[0],
+    activeTabId: panelIds[0]!,
     location,
     worktreeId: "wt-1",
   };
@@ -103,9 +103,9 @@ describe("dock ↔ grid transitions", () => {
       usePanelStore.getState().moveTerminalToDock("t1");
 
       const updated = usePanelStore.getState().panelsById["t1"];
-      expect(updated.location).toBe("dock");
-      expect(updated.isVisible).toBe(false);
-      expect(updated.runtimeStatus).toBe("background");
+      expect(updated!.location).toBe("dock");
+      expect(updated!.isVisible).toBe(false);
+      expect(updated!.runtimeStatus).toBe("background");
     });
   });
 
@@ -120,8 +120,8 @@ describe("dock ↔ grid transitions", () => {
 
       expect(moved).toBe(true);
       const updated = usePanelStore.getState().panelsById["t1"];
-      expect(updated.location).toBe("grid");
-      expect(updated.isVisible).toBe(true);
+      expect(updated!.location).toBe("grid");
+      expect(updated!.isVisible).toBe(true);
     });
 
     it("is idempotent — calling twice on an already-grid panel returns false", () => {
@@ -149,8 +149,8 @@ describe("dock ↔ grid transitions", () => {
       usePanelStore.getState().hydrateTabGroups([group]);
 
       const updated = usePanelStore.getState().panelsById["t1"];
-      expect(updated.location).toBe("dock");
-      expect(updated.isVisible).toBe(false);
+      expect(updated!.location).toBe("dock");
+      expect(updated!.isVisible).toBe(false);
     });
 
     it("applies group location when terminal is already in grid", () => {
@@ -165,8 +165,8 @@ describe("dock ↔ grid transitions", () => {
 
       // Both terminals remain in grid — no override needed
       const updated = usePanelStore.getState().panelsById["t1"];
-      expect(updated.location).toBe("grid");
-      expect(updated.isVisible).toBe(true);
+      expect(updated!.location).toBe("grid");
+      expect(updated!.isVisible).toBe(true);
     });
 
     it("allows group to move terminal to dock (both agree on dock)", () => {
@@ -180,8 +180,8 @@ describe("dock ↔ grid transitions", () => {
       usePanelStore.getState().hydrateTabGroups([group]);
 
       const updated = usePanelStore.getState().panelsById["t1"];
-      expect(updated.location).toBe("dock");
-      expect(updated.isVisible).toBe(false);
+      expect(updated!.location).toBe("dock");
+      expect(updated!.isVisible).toBe(false);
     });
   });
 });

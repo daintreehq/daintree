@@ -185,10 +185,10 @@ describe("ActionService adversarial", () => {
 
     expect(result.ok).toBe(true);
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run.mock.calls[0][0]).toBe(circular);
+    expect(run.mock.calls[0]![0]).toBe(circular);
     await Promise.resolve();
     expect(emit).toHaveBeenCalledTimes(1);
-    const payload = emit.mock.calls[0][1] as { args: unknown };
+    const payload = emit.mock.calls[0]![1] as { args: unknown };
     expect(payload.args).toEqual({ _redacted: "unserializable" });
   });
 
@@ -205,7 +205,7 @@ describe("ActionService adversarial", () => {
 
     await Promise.resolve();
     expect(emit).toHaveBeenCalledTimes(1);
-    const payload = emit.mock.calls[0][1] as { args: Record<string, unknown> };
+    const payload = emit.mock.calls[0]![1] as { args: Record<string, unknown> };
     expect(payload.args.username).toBe("alice");
     expect(payload.args.password).toBe("[REDACTED]");
     expect((payload.args.nested as Record<string, unknown>).apiKey).toBe("[REDACTED]");
@@ -221,7 +221,7 @@ describe("ActionService adversarial", () => {
 
     expect(result.ok).toBe(true);
     await Promise.resolve();
-    const payload = emit.mock.calls[0][1] as { args: { _redacted: string; size: number } };
+    const payload = emit.mock.calls[0]![1] as { args: { _redacted: string; size: number } };
     expect(payload.args._redacted).toBe("payload_too_large");
     expect(payload.args.size).toBeGreaterThan(1024);
   });

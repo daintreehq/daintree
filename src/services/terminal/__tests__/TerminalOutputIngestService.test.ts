@@ -152,20 +152,20 @@ describe("TerminalOutputIngestService", () => {
     // First capped batch should be 2 chunks (300,000 > 256 KB cap, but do-while takes first
     // chunk unconditionally, second chunk fits: 150,000 + 150,000 = 300,000 > cap, so only
     // first chunk is taken = 150,000 bytes)
-    const secondCall = writeToTerminal.mock.calls[1][1] as string;
+    const secondCall = writeToTerminal.mock.calls[1]![1] as string;
     expect(secondCall.length).toBe(150_000);
 
     // Acknowledge to drain the next batch
     service.notifyWriteComplete("term-1", 150_000);
     expect(writeToTerminal).toHaveBeenCalledTimes(3);
     // Second batch: two remaining 150k chunks = 300k > cap, so takes only one
-    const thirdCall = writeToTerminal.mock.calls[2][1] as string;
+    const thirdCall = writeToTerminal.mock.calls[2]![1] as string;
     expect(thirdCall.length).toBe(150_000);
 
     // Acknowledge to drain the last chunk
     service.notifyWriteComplete("term-1", 150_000);
     expect(writeToTerminal).toHaveBeenCalledTimes(4);
-    const fourthCall = writeToTerminal.mock.calls[3][1] as string;
+    const fourthCall = writeToTerminal.mock.calls[3]![1] as string;
     expect(fourthCall.length).toBe(150_000);
   });
 
@@ -208,7 +208,7 @@ describe("TerminalOutputIngestService", () => {
     // Acknowledge to drain — should coalesce all into one write (fast path)
     service.notifyWriteComplete("term-1", 140_000);
     expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    const batch = writeToTerminal.mock.calls[1][1] as string;
+    const batch = writeToTerminal.mock.calls[1]![1] as string;
     expect(batch.length).toBe(262_144);
   });
 
@@ -230,7 +230,7 @@ describe("TerminalOutputIngestService", () => {
     // Acknowledge to trigger drain — first batch should be capped
     service.notifyWriteComplete("term-1", 140_000);
     expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    const firstBatch = writeToTerminal.mock.calls[1][1] as string;
+    const firstBatch = writeToTerminal.mock.calls[1]![1] as string;
     // do-while takes chunks until adding next would exceed 256 KB
     // 256 chunks × 1024 = 262144 = exactly cap, so 257th would push over
     expect(firstBatch.length).toBe(256 * 1024);
@@ -238,7 +238,7 @@ describe("TerminalOutputIngestService", () => {
     // Acknowledge to drain remainder (244 chunks × 1024 = 249856 < cap → fast path)
     service.notifyWriteComplete("term-1", firstBatch.length);
     expect(writeToTerminal).toHaveBeenCalledTimes(3);
-    const secondBatch = writeToTerminal.mock.calls[2][1] as string;
+    const secondBatch = writeToTerminal.mock.calls[2]![1] as string;
     expect(secondBatch.length).toBe(244 * 1024);
   });
 
@@ -260,7 +260,7 @@ describe("TerminalOutputIngestService", () => {
     // forceDrain (via flushForTerminal) should write ALL data in one call
     service.flushForTerminal("term-1");
     expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    const flushed = writeToTerminal.mock.calls[1][1] as string;
+    const flushed = writeToTerminal.mock.calls[1]![1] as string;
     expect(flushed.length).toBe(400_000);
   });
 

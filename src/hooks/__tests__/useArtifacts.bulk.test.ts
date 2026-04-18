@@ -221,8 +221,8 @@ describe("useArtifacts bulk operations logic", () => {
       expect(results.succeeded).toBe(0);
       expect(results.failed).toBe(2);
       expect(results.failures).toHaveLength(2);
-      expect(results.failures[0].error).toBe("Error 1");
-      expect(results.failures[1].error).toBe("Error 2");
+      expect(results.failures[0]!.error).toBe("Error 1");
+      expect(results.failures[1]!.error).toBe("Error 2");
     });
 
     it("aggregates modified files from patches without duplicates", () => {

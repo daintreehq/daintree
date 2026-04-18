@@ -97,7 +97,7 @@ describe("rankSearchResults", () => {
     ];
     const results = rankSearchResults(recipes, "deploy production", Date.now());
     expect(results.length).toBeGreaterThan(0);
-    expect(results[0].recipe.id).toBe("1");
+    expect(results[0]!.recipe.id).toBe("1");
   });
 
   it("boosts frequently used recipes via frecency", () => {
@@ -108,7 +108,7 @@ describe("rankSearchResults", () => {
     ];
     const results = rankSearchResults(recipes, "test", now);
     expect(results.length).toBe(2);
-    expect(results[0].recipe.id).toBe("2");
+    expect(results[0]!.recipe.id).toBe("2");
   });
 
   it("returns empty for empty recipe array", () => {

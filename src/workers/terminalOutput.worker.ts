@@ -164,8 +164,8 @@ function drainRingBuffer(): boolean {
     if (remainingBudget <= 0) break;
 
     const shardIndex = nextShardIndex % ringBuffers.length;
-    const shard = ringBuffers[shardIndex];
-    const parser = packetParsers[shardIndex];
+    const shard = ringBuffers[shardIndex]!;
+    const parser = packetParsers[shardIndex]!;
     nextShardIndex = (nextShardIndex + 1) % ringBuffers.length;
 
     const perReadBudget = Math.min(MAX_SAB_READ_BYTES, remainingBudget);

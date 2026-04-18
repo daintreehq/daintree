@@ -111,7 +111,7 @@ describe("env action definitions", () => {
     const def = registry.get("env.project.set")!();
     await def.run({ projectId: "p1", variables: { B: "2" } }, stubCtx);
     expect(mockSaveSettings).toHaveBeenCalledTimes(1);
-    const [savedProjectId, savedSettings] = mockSaveSettings.mock.calls[0];
+    const [savedProjectId, savedSettings] = mockSaveSettings.mock.calls[0]!;
     expect(savedProjectId).toBe("p1");
     expect(savedSettings.environmentVariables).toEqual({ A: "1", B: "2" });
     expect(savedSettings.runCommands).toEqual([]);
@@ -145,7 +145,7 @@ describe("env action definitions", () => {
       stubCtx
     );
     expect(mockSaveSettings).toHaveBeenCalledTimes(1);
-    const [savedProjectId, savedSettings] = mockSaveSettings.mock.calls[0];
+    const [savedProjectId, savedSettings] = mockSaveSettings.mock.calls[0]!;
     expect(savedProjectId).toBe("p1");
     expect(savedSettings.resourceEnvironments).toEqual({ new: { provision: ["a"] } });
     expect(savedSettings.runCommands).toEqual([]);

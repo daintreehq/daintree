@@ -49,10 +49,10 @@ export const useMacroFocusStore = create<MacroFocusState>((set, get) => ({
 
     let next: MacroRegion;
     if (focusedRegion === null) {
-      next = visible[0];
+      next = visible[0]!;
     } else {
       const idx = visible.indexOf(focusedRegion);
-      next = visible[(idx + 1) % visible.length];
+      next = visible[(idx + 1) % visible.length]!;
     }
 
     set({ focusedRegion: next });
@@ -66,10 +66,10 @@ export const useMacroFocusStore = create<MacroFocusState>((set, get) => ({
 
     let prev: MacroRegion;
     if (focusedRegion === null) {
-      prev = visible[visible.length - 1];
+      prev = visible[visible.length - 1]!;
     } else {
       const idx = visible.indexOf(focusedRegion);
-      prev = visible[(idx - 1 + visible.length) % visible.length];
+      prev = visible[(idx - 1 + visible.length) % visible.length]!;
     }
 
     set({ focusedRegion: prev });

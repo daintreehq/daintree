@@ -147,7 +147,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       let newActiveId = state.activeTabId;
       if (wasActive) {
         newActiveId =
-          newTabs.length === 0 ? null : newTabs[Math.min(closingIndex, newTabs.length - 1)].id;
+          newTabs.length === 0 ? null : newTabs[Math.min(closingIndex, newTabs.length - 1)]!.id;
       }
       const nextCreatedTabs = new Set(state.createdTabs);
       nextCreatedTabs.delete(id);
@@ -182,7 +182,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       if (state.tabs.length <= 1) return;
       const currentIndex = state.tabs.findIndex((t) => t.id === state.activeTabId);
       const nextIndex = currentIndex < state.tabs.length - 1 ? currentIndex + 1 : 0;
-      set({ activeTabId: state.tabs[nextIndex].id });
+      set({ activeTabId: state.tabs[nextIndex]!.id });
     },
 
     cyclePrevTab: () => {
@@ -190,7 +190,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       if (state.tabs.length <= 1) return;
       const currentIndex = state.tabs.findIndex((t) => t.id === state.activeTabId);
       const prevIndex = currentIndex > 0 ? currentIndex - 1 : state.tabs.length - 1;
-      set({ activeTabId: state.tabs[prevIndex].id });
+      set({ activeTabId: state.tabs[prevIndex]!.id });
     },
 
     closeAllTabs: () => {
@@ -351,6 +351,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
         }
         const links = [...s.links];
         const [moved] = links.splice(fromIndex, 1);
+        if (!moved) return s;
         links.splice(toIndex, 0, moved);
         return { links: links.map((l, i) => ({ ...l, order: i })) };
       }),
@@ -368,6 +369,7 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
         }
         const newTabs = [...s.tabs];
         const [moved] = newTabs.splice(fromIndex, 1);
+        if (!moved) return s;
         newTabs.splice(toIndex, 0, moved);
         return { tabs: newTabs };
       }),

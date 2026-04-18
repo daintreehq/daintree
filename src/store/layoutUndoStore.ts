@@ -35,7 +35,7 @@ function captureCurrentLayout(): LayoutSnapshot {
   return {
     terminals: state.panelIds
       .map((id) => state.panelsById[id])
-      .filter((t) => t && t.location !== "trash")
+      .filter((t): t is TerminalInstance => Boolean(t) && t!.location !== "trash")
       .map((t) => ({
         id: t.id,
         location: t.location,
@@ -210,6 +210,7 @@ export const useLayoutUndoStore = create<LayoutUndoState>()((set, get) => ({
     if (undoStack.length === 0) return;
 
     const snapshot = undoStack[undoStack.length - 1];
+    if (!snapshot) return;
     const currentLayout = captureCurrentLayout();
 
     if (!applySnapshot(snapshot)) return;
@@ -230,6 +231,7 @@ export const useLayoutUndoStore = create<LayoutUndoState>()((set, get) => ({
     if (redoStack.length === 0) return;
 
     const snapshot = redoStack[redoStack.length - 1];
+    if (!snapshot) return;
     const currentLayout = captureCurrentLayout();
 
     if (!applySnapshot(snapshot)) return;

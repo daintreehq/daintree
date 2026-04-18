@@ -64,7 +64,7 @@ describe("ErrorBoundary", () => {
     const errors = useErrorStore.getState().errors;
     expect(errors.length).toBe(1);
 
-    const storeId = errors[0].id;
+    const storeId = errors[0]!.id;
     const shortId = storeId.slice(-7);
     // In dev mode, incident ID is not displayed (only in prod)
     // but we can verify the error was added to the store
@@ -82,7 +82,7 @@ describe("ErrorBoundary", () => {
     );
 
     const errors = useErrorStore.getState().errors;
-    const storeId = errors[0].id;
+    const storeId = errors[0]!.id;
 
     expect(logError).toHaveBeenCalledWith(
       "React error boundary caught render error",
@@ -153,7 +153,7 @@ describe("ErrorBoundary", () => {
     );
 
     const errors = useErrorStore.getState().errors;
-    const shortId = errors[0].id.slice(-7);
+    const shortId = errors[0]!.id.slice(-7);
 
     expect(screen.getByText(`Error ID: ${shortId}`)).toBeTruthy();
     expect(screen.queryByText("Test render error")).toBeNull();

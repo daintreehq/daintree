@@ -353,7 +353,7 @@ export function PortalToolbar({
                       : currentIndex < tabs.length - 1
                         ? currentIndex + 1
                         : 0;
-                  onTabClick(tabs[nextIndex].id);
+                  onTabClick(tabs[nextIndex]!.id);
                 }
               }}
             >

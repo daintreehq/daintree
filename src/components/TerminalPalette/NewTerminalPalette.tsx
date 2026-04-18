@@ -95,7 +95,7 @@ export function NewTerminalPalette({
           aria-controls="new-terminal-list"
           aria-activedescendant={
             results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length
-              ? `new-terminal-option-${results[selectedIndex].id}`
+              ? `new-terminal-option-${results[selectedIndex]!.id}`
               : undefined
           }
         />

@@ -149,9 +149,9 @@ describe("useActionPalette", () => {
     });
 
     // Enabled actions first (alphabetical since neither is in MRU), then disabled
-    expect(result.current.results[0].id).toBe("a.action");
-    expect(result.current.results[1].id).toBe("c.action");
-    expect(result.current.results[2].id).toBe("b.action");
+    expect(result.current.results[0]!.id).toBe("a.action");
+    expect(result.current.results[1]!.id).toBe("c.action");
+    expect(result.current.results[2]!.id).toBe("b.action");
   });
 
   it("records MRU when executeAction is called on enabled item", async () => {
@@ -169,7 +169,7 @@ describe("useActionPalette", () => {
     });
 
     act(() => {
-      result.current.executeAction(result.current.results[0]);
+      result.current.executeAction(result.current.results[0]!);
     });
 
     expect(useActionMruStore.getState().actionMruList).toEqual(["a.action"]);
@@ -190,7 +190,7 @@ describe("useActionPalette", () => {
     });
 
     act(() => {
-      result.current.executeAction(result.current.results[0]);
+      result.current.executeAction(result.current.results[0]!);
     });
 
     expect(useActionMruStore.getState().actionMruList).toEqual([]);
@@ -227,6 +227,6 @@ describe("useActionPalette", () => {
     );
 
     // MRU-boosted item should appear first when scores are similar
-    expect(result.current.results[0].id).toBe("terminal.close");
+    expect(result.current.results[0]!.id).toBe("terminal.close");
   });
 });

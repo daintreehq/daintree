@@ -114,7 +114,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
                   {category}
                 </h3>
                 <div className="space-y-2">
-                  {filteredGroups[category].map((binding) => (
+                  {filteredGroups[category]!.map((binding) => (
                     <div
                       key={binding.actionId}
                       className="flex items-center justify-between py-2 px-3 rounded hover:bg-daintree-border/50"

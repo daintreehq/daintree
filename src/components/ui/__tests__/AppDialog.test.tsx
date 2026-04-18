@@ -108,7 +108,7 @@ describe("AppDialog focus trapping", () => {
     await act(() => vi.runAllTimersAsync());
 
     const buttons = screen.getAllByRole("button");
-    const lastButton = buttons[buttons.length - 1];
+    const lastButton = buttons[buttons.length - 1]!;
     lastButton.focus();
     expect(document.activeElement).toBe(lastButton);
 
@@ -123,7 +123,7 @@ describe("AppDialog focus trapping", () => {
     await act(() => vi.runAllTimersAsync());
 
     const buttons = screen.getAllByRole("button");
-    const firstButton = buttons[0];
+    const firstButton = buttons[0]!;
     firstButton.focus();
     expect(document.activeElement).toBe(firstButton);
 

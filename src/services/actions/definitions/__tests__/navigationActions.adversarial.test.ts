@@ -74,7 +74,7 @@ describe("navigationActions adversarial", () => {
     await call(actions, "find.inFocusedPanel");
 
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const event = dispatchSpy.mock.calls[0][0] as unknown as { type: string };
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as { type: string };
     expect(event.type).toBe("daintree:find-in-panel");
   });
 

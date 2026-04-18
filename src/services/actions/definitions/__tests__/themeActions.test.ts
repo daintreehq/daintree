@@ -155,7 +155,7 @@ describe("app.theme.toggle", () => {
     expect(mockSetSelectedSchemeId).toHaveBeenCalledTimes(1);
     expect(mockSetColorScheme).toHaveBeenCalledTimes(1);
     // Target must be a dark scheme — assert the fallback kicked in.
-    const targetId = mockSetSelectedSchemeId.mock.calls[0][0] as string;
+    const targetId = mockSetSelectedSchemeId.mock.calls[0]![0] as string;
     expect(targetId).not.toBe("light-a");
   });
 
@@ -173,7 +173,7 @@ describe("app.theme.toggle", () => {
     await toggle.run(undefined, stubCtx);
 
     expect(mockSetSelectedSchemeId).toHaveBeenCalledTimes(1);
-    const selectedId = mockSetSelectedSchemeId.mock.calls[0][0] as string;
+    const selectedId = mockSetSelectedSchemeId.mock.calls[0]![0] as string;
     // Must NOT be light-a (the wrong-type fallback). Must be some built-in dark scheme.
     expect(selectedId).not.toBe("light-a");
     expect(mockSetColorScheme).toHaveBeenCalledWith(selectedId);
@@ -213,7 +213,7 @@ describe("app.theme.pick", () => {
     const { pick } = getActions();
     await pick.run(undefined, stubCtx);
     expect(window.dispatchEvent).toHaveBeenCalledTimes(1);
-    const event = (window.dispatchEvent as ReturnType<typeof vi.fn>).mock.calls[0][0] as Event;
+    const event = (window.dispatchEvent as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Event;
     expect(event.type).toBe("daintree:open-theme-palette");
   });
 

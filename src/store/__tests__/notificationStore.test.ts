@@ -97,7 +97,7 @@ describe("notificationStore — toast cap", () => {
       message: "entry-for-toast-1",
       seenAsToast: true,
     });
-    const entryId = useNotificationHistoryStore.getState().entries[0].id;
+    const entryId = useNotificationHistoryStore.getState().entries[0]!.id;
 
     addToast({ message: "toast-1", historyEntryId: entryId });
     addToast({ message: "toast-2" });

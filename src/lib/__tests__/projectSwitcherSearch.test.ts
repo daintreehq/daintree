@@ -97,7 +97,7 @@ describe("rankProjectMatches", () => {
   it("ranks exact name substring matches first", () => {
     const results = rankProjectMatches("daintree", projects);
     expect(results.length).toBeGreaterThanOrEqual(2);
-    expect(results[0].name).toContain("daintree");
+    expect(results[0]!.name).toContain("daintree");
   });
 
   it("uses frecencyScore as tiebreaker for equal text scores", () => {
@@ -116,7 +116,7 @@ describe("rankProjectMatches", () => {
       }),
     ];
     const results = rankProjectMatches("alpha", tieProjects);
-    expect(results[0].id).toBe("b"); // higher frecencyScore wins
+    expect(results[0]!.id).toBe("b"); // higher frecencyScore wins
   });
 
   it("trims whitespace from query before matching", () => {

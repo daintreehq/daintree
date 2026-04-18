@@ -120,7 +120,7 @@ export function registerTerminalLayoutActions(
             (t.location === "grid" || t.location === undefined) &&
             (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
-      const currentIndex = gridTerminals.findIndex((t) => t.id === focusedId);
+      const currentIndex = gridTerminals.findIndex((t) => t!.id === focusedId);
       if (currentIndex > 0) {
         reorderTerminals(currentIndex, currentIndex - 1, "grid", activeWorktreeId);
       }
@@ -149,7 +149,7 @@ export function registerTerminalLayoutActions(
             (t.location === "grid" || t.location === undefined) &&
             (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
-      const currentIndex = gridTerminals.findIndex((t) => t.id === focusedId);
+      const currentIndex = gridTerminals.findIndex((t) => t!.id === focusedId);
       if (currentIndex >= 0 && currentIndex < gridTerminals.length - 1) {
         reorderTerminals(currentIndex, currentIndex + 1, "grid", activeWorktreeId);
       }
@@ -180,7 +180,7 @@ export function registerTerminalLayoutActions(
             (t.location === "grid" || t.location === undefined) &&
             (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
-      const currentIndex = gridTerminals.findIndex((t) => t.id === focusedId);
+      const currentIndex = gridTerminals.findIndex((t) => t!.id === focusedId);
       if (currentIndex < 0) return;
       const { layoutConfig } = useLayoutConfigStore.getState();
       const cols = computeGridColumns(
@@ -219,7 +219,7 @@ export function registerTerminalLayoutActions(
             (t.location === "grid" || t.location === undefined) &&
             (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
-      const currentIndex = gridTerminals.findIndex((t) => t.id === focusedId);
+      const currentIndex = gridTerminals.findIndex((t) => t!.id === focusedId);
       if (currentIndex < 0) return;
       const { layoutConfig } = useLayoutConfigStore.getState();
       const cols = computeGridColumns(
@@ -278,7 +278,7 @@ export function registerTerminalLayoutActions(
             t.location !== "trash" &&
             (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
-      const allDocked = activeTerminals.every((t) => t.location === "dock");
+      const allDocked = activeTerminals.every((t) => t!.location === "dock");
       if (allDocked) {
         state.bulkMoveToGrid();
       } else {

@@ -88,8 +88,8 @@ describe("ThemeSelector", () => {
         {...defaultProps}
         items={undefined}
         groups={[
-          { label: "Dark", items: [items[0], items[1]] },
-          { label: "Light", items: [items[2]] },
+          { label: "Dark", items: [items[0]!, items[1]!] },
+          { label: "Light", items: [items[2]!] },
         ]}
       />
     );
@@ -105,8 +105,8 @@ describe("ThemeSelector", () => {
         {...defaultProps}
         items={undefined}
         groups={[
-          { label: "Dark", items: [items[0], items[1]] },
-          { label: "Light", items: [items[2]] },
+          { label: "Dark", items: [items[0]!, items[1]!] },
+          { label: "Light", items: [items[2]!] },
         ]}
       />
     );

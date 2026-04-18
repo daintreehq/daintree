@@ -128,7 +128,7 @@ describe("actions.persistedStores", () => {
       stores: Array<{ storeId: string; declaredVersion: number | null }>;
     };
 
-    expect(result.stores[0].declaredVersion).toBeNull();
+    expect(result.stores[0]!.declaredVersion).toBeNull();
   });
 
   it("reads persistedBlobVersion and sizeBytes lazily from localStorage at call time", async () => {
@@ -199,7 +199,7 @@ describe("actions.persistedStores", () => {
       parseStatus: "corrupt",
       persistedBlobVersion: null,
     });
-    expect(result.stores[0].sizeBytes).toBe("{not-json".length * 2);
+    expect(result.stores[0]!.sizeBytes).toBe("{not-json".length * 2);
   });
 
   it("does not log or throw when parsing corrupt JSON", async () => {
@@ -232,8 +232,8 @@ describe("actions.persistedStores", () => {
       stores: Array<{ persistedBlobVersion: number | null; declaredVersion: number | null }>;
     };
 
-    expect(result.stores[0].persistedBlobVersion).toBeNull();
-    expect(result.stores[0].declaredVersion).toBe(1);
+    expect(result.stores[0]!.persistedBlobVersion).toBeNull();
+    expect(result.stores[0]!.declaredVersion).toBe(1);
   });
 
   it("falls back gracefully when localStorage access throws", async () => {

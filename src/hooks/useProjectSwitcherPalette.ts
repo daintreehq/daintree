@@ -167,7 +167,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   useEffect(() => {
     if (results.length === 0) return;
     if (selectedIndex < 0 || selectedIndex >= results.length) return;
-    selectedProjectIdRef.current = results[selectedIndex].id;
+    selectedProjectIdRef.current = results[selectedIndex]!.id;
   }, [results, selectedIndex]);
 
   useEffect(() => {
@@ -273,7 +273,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const confirmSelection = useCallback(() => {
     if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-      selectProject(results[selectedIndex]);
+      selectProject(results[selectedIndex]!);
     }
   }, [results, selectedIndex, selectProject]);
 

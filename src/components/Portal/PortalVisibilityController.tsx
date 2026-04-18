@@ -111,7 +111,7 @@ export function PortalVisibilityController(): null {
     if (activeTabId != null) return;
     if (tabs.length === 0) return;
 
-    usePortalStore.getState().setActiveTab(tabs[0].id);
+    usePortalStore.getState().setActiveTab(tabs[0]!.id);
   }, [portalOpen, tabs, activeTabId]);
 
   // Handle active tab changes (e.g., initial auto-select or programmatic switch)

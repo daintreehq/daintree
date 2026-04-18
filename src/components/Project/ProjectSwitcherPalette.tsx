@@ -329,17 +329,17 @@ function ProjectListContent({
       older: [],
     };
     for (const p of remaining) {
-      buckets[getTemporalBucket(p.lastOpened, todayStart, weekStart)].push(p);
+      buckets[getTemporalBucket(p.lastOpened, todayStart, weekStart)]!.push(p);
     }
 
     return [
       current.length > 0 ? { key: "current", label: null, items: current } : null,
       pinned.length > 0 ? { key: "pinned", label: "Pinned", items: pinned } : null,
-      buckets.today.length > 0 ? { key: "today", label: "Today", items: buckets.today } : null,
-      buckets["this-week"].length > 0
-        ? { key: "this-week", label: "This Week", items: buckets["this-week"] }
+      buckets.today!.length > 0 ? { key: "today", label: "Today", items: buckets.today! } : null,
+      buckets["this-week"]!.length > 0
+        ? { key: "this-week", label: "This Week", items: buckets["this-week"]! }
         : null,
-      buckets.older.length > 0 ? { key: "older", label: "Older", items: buckets.older } : null,
+      buckets.older!.length > 0 ? { key: "older", label: "Older", items: buckets.older! } : null,
     ].filter((s): s is TemporalSection => s !== null);
   }, [results, isSearching, mode]);
 
@@ -516,7 +516,7 @@ function ProjectPaletteInner({
   useEffect(() => {
     if (listRef.current && selectedIndex >= 0 && selectedIndex < results.length) {
       const selectedItem = listRef.current.querySelector(
-        `#project-option-${results[selectedIndex].id}`
+        `#project-option-${results[selectedIndex]!.id}`
       );
       if (selectedItem) {
         selectedItem.scrollIntoView({ block: "nearest" });
@@ -541,7 +541,7 @@ function ProjectPaletteInner({
           e.preventDefault();
           e.stopPropagation();
           if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-            const selected = results[selectedIndex];
+            const selected = results[selectedIndex]!;
             if (e.altKey && onSelectBackground) {
               onSelectBackground(selected);
             } else if (
@@ -571,7 +571,7 @@ function ProjectPaletteInner({
           ) {
             e.preventDefault();
             e.stopPropagation();
-            onCloseProject(results[selectedIndex].id);
+            onCloseProject(results[selectedIndex]!.id);
           }
           break;
       }

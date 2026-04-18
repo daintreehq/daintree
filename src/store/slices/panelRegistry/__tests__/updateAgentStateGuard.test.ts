@@ -71,7 +71,7 @@ describe("updateAgentState store action (#3217)", () => {
 
     usePanelStore.getState().updateAgentState("test-terminal-1", "waiting");
 
-    expect(usePanelStore.getState().panelsById["test-terminal-1"].agentState).toBe("waiting");
+    expect(usePanelStore.getState().panelsById["test-terminal-1"]!.agentState).toBe("waiting");
   });
 
   it("allows working to overwrite directing", () => {
@@ -82,7 +82,7 @@ describe("updateAgentState store action (#3217)", () => {
 
     usePanelStore.getState().updateAgentState("test-terminal-1", "working");
 
-    expect(usePanelStore.getState().panelsById["test-terminal-1"].agentState).toBe("working");
+    expect(usePanelStore.getState().panelsById["test-terminal-1"]!.agentState).toBe("working");
   });
 
   it("allows idle to overwrite directing", () => {
@@ -93,7 +93,7 @@ describe("updateAgentState store action (#3217)", () => {
 
     usePanelStore.getState().updateAgentState("test-terminal-1", "idle");
 
-    expect(usePanelStore.getState().panelsById["test-terminal-1"].agentState).toBe("idle");
+    expect(usePanelStore.getState().panelsById["test-terminal-1"]!.agentState).toBe("idle");
   });
 
   it("allows waiting when current state is not directing", () => {
@@ -105,7 +105,7 @@ describe("updateAgentState store action (#3217)", () => {
 
     usePanelStore.getState().updateAgentState("test-terminal-1", "waiting");
 
-    expect(usePanelStore.getState().panelsById["test-terminal-1"].agentState).toBe("waiting");
+    expect(usePanelStore.getState().panelsById["test-terminal-1"]!.agentState).toBe("waiting");
   });
 
   it("returns unchanged state for nonexistent terminal", () => {

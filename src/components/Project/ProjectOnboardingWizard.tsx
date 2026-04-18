@@ -258,8 +258,8 @@ export function ProjectOnboardingWizard({
                                   setRunCommands((prev) => {
                                     const updated = [...prev];
                                     [updated[index - 1], updated[index]] = [
-                                      updated[index],
-                                      updated[index - 1],
+                                      updated[index]!,
+                                      updated[index - 1]!,
                                     ];
                                     return updated;
                                   });
@@ -278,8 +278,8 @@ export function ProjectOnboardingWizard({
                                   setRunCommands((prev) => {
                                     const updated = [...prev];
                                     [updated[index], updated[index + 1]] = [
-                                      updated[index + 1],
-                                      updated[index],
+                                      updated[index + 1]!,
+                                      updated[index]!,
                                     ];
                                     return updated;
                                   });

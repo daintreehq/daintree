@@ -76,18 +76,18 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
     };
 
     availableTypes.forEach((type) => {
-      if (type.startsWith("sys:")) groups.system.push(type);
-      else if (type.startsWith("agent:")) groups.agent.push(type);
-      else if (type.startsWith("task:")) groups.task.push(type);
-      else if (type.startsWith("server:")) groups.devserver.push(type);
-      else if (type.startsWith("watcher:")) groups.watcher.push(type);
-      else if (type.startsWith("file:")) groups.file.push(type);
-      else if (type.startsWith("ui:")) groups.ui.push(type);
-      else groups.other.push(type);
+      if (type.startsWith("sys:")) groups.system!.push(type);
+      else if (type.startsWith("agent:")) groups.agent!.push(type);
+      else if (type.startsWith("task:")) groups.task!.push(type);
+      else if (type.startsWith("server:")) groups.devserver!.push(type);
+      else if (type.startsWith("watcher:")) groups.watcher!.push(type);
+      else if (type.startsWith("file:")) groups.file!.push(type);
+      else if (type.startsWith("ui:")) groups.ui!.push(type);
+      else groups.other!.push(type);
     });
 
     Object.keys(groups).forEach((key) => {
-      if (groups[key].length === 0) delete groups[key];
+      if (groups[key]!.length === 0) delete groups[key];
     });
 
     return groups;

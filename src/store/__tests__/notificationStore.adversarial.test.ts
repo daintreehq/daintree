@@ -135,7 +135,7 @@ describe("notificationStore adversarial", () => {
     useNotificationStore.getState().removeNotification("does-not-exist");
 
     expect(useNotificationStore.getState().notifications).toHaveLength(1);
-    expect(useNotificationStore.getState().notifications[0].id).toBe(id);
+    expect(useNotificationStore.getState().notifications[0]!.id).toBe(id);
   });
 
   it("clearNotifications and reset clear toasts but not history", () => {

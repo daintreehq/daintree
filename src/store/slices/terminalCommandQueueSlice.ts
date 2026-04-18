@@ -85,7 +85,7 @@ export const createTerminalCommandQueueSlice =
         const remaining = state.commandQueue.filter((c) => c.terminalId !== terminalId);
 
         if (forTerminal.length > 0) {
-          const cmd = forTerminal[0];
+          const cmd = forTerminal[0]!;
           terminalClient.write(cmd.terminalId, cmd.payload);
 
           return {

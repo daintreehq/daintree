@@ -289,7 +289,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         ? worktrees.findIndex((w) => w.id === activeWorktreeId)
         : -1;
       const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % worktrees.length;
-      useWorktreeSelectionStore.getState().selectWorktree(worktrees[nextIndex].id);
+      useWorktreeSelectionStore.getState().selectWorktree(worktrees[nextIndex]!.id);
     },
   }));
 
@@ -315,7 +315,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         currentIndex === -1
           ? worktrees.length - 1
           : (currentIndex - 1 + worktrees.length) % worktrees.length;
-      useWorktreeSelectionStore.getState().selectWorktree(worktrees[prevIndex].id);
+      useWorktreeSelectionStore.getState().selectWorktree(worktrees[prevIndex]!.id);
     },
   }));
 
@@ -334,7 +334,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       const worktrees = getVisibleWorktreesForCycling(activeWorktreeId);
       if (worktrees.length >= index) {
-        useWorktreeSelectionStore.getState().selectWorktree(worktrees[index - 1].id);
+        useWorktreeSelectionStore.getState().selectWorktree(worktrees[index - 1]!.id);
       }
     },
   }));
@@ -354,7 +354,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
         const activeWorktreeId = callbacks.getActiveWorktreeId();
         const worktrees = getVisibleWorktreesForCycling(activeWorktreeId);
         if (worktrees.length >= index) {
-          useWorktreeSelectionStore.getState().selectWorktree(worktrees[index - 1].id);
+          useWorktreeSelectionStore.getState().selectWorktree(worktrees[index - 1]!.id);
         }
       },
     }));
@@ -376,7 +376,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       nextIndex = currentIndex + offset;
       if (nextIndex < 0 || nextIndex >= worktrees.length) return;
     }
-    useWorktreeSelectionStore.getState().selectWorktree(worktrees[nextIndex].id);
+    useWorktreeSelectionStore.getState().selectWorktree(worktrees[nextIndex]!.id);
   };
 
   actions.set("worktree.up", () => ({
@@ -442,7 +442,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     run: async () => {
       const worktrees = getVisibleWorktreesForCycling(callbacks.getActiveWorktreeId());
       if (worktrees.length === 0) return;
-      useWorktreeSelectionStore.getState().selectWorktree(worktrees[0].id);
+      useWorktreeSelectionStore.getState().selectWorktree(worktrees[0]!.id);
     },
   }));
 
@@ -457,7 +457,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     run: async () => {
       const worktrees = getVisibleWorktreesForCycling(callbacks.getActiveWorktreeId());
       if (worktrees.length === 0) return;
-      useWorktreeSelectionStore.getState().selectWorktree(worktrees[worktrees.length - 1].id);
+      useWorktreeSelectionStore.getState().selectWorktree(worktrees[worktrees.length - 1]!.id);
     },
   }));
 

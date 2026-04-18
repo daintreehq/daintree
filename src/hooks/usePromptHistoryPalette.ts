@@ -65,7 +65,7 @@ export function usePromptHistoryPalette({ terminalId, projectId }: UsePromptHist
   const confirmSelection = useCallback(() => {
     const { results, selectedIndex } = palette;
     if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-      selectEntry(results[selectedIndex]);
+      selectEntry(results[selectedIndex]!);
     }
   }, [palette, selectEntry]);
 

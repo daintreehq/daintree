@@ -160,7 +160,7 @@ export function registerTerminalNavigationActions(
 
       const targetId =
         (state.activeDockTerminalId &&
-          dockTerminals.some((t) => t.id === state.activeDockTerminalId) &&
+          dockTerminals.some((t) => t!.id === state.activeDockTerminalId) &&
           state.activeDockTerminalId) ||
         dockTerminals[0]!.id;
       const group = state.getPanelGroup(targetId);

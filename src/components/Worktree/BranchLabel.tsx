@@ -58,7 +58,7 @@ export function BranchLabel({
     }
 
     const [prefix, ...tail] = parts;
-    const config = BRANCH_PREFIX_MAP[prefix.toLowerCase()];
+    const config = BRANCH_PREFIX_MAP[prefix!.toLowerCase()];
 
     if (config) {
       return {
@@ -69,9 +69,9 @@ export function BranchLabel({
     } else {
       return {
         displayName:
-          prefix.length <= 4
-            ? prefix.toUpperCase()
-            : prefix.charAt(0).toUpperCase() + prefix.slice(1).toLowerCase(),
+          prefix!.length <= 4
+            ? prefix!.toUpperCase()
+            : prefix!.charAt(0).toUpperCase() + prefix!.slice(1).toLowerCase(),
         typeId: DEFAULT_BRANCH_TYPE.id,
         rest: middleTruncate(tail.join("/"), 36),
       };

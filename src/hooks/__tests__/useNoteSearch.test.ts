@@ -135,7 +135,7 @@ describe("useNoteSearch", () => {
     });
 
     expect(result.current.visibleNotes).toHaveLength(1);
-    expect(result.current.visibleNotes[0].id).toBe("n1");
+    expect(result.current.visibleNotes[0]!.id).toBe("n1");
   });
 
   it("clears selected tag when it disappears from available tags", async () => {
@@ -201,14 +201,14 @@ describe("useNoteSearch", () => {
     });
 
     // Default is modified-desc
-    expect(result.current.visibleNotes[0].id).toBe("b");
+    expect(result.current.visibleNotes[0]!.id).toBe("b");
 
     act(() => {
       result.current.setSortOrder("title-asc");
     });
 
-    expect(result.current.visibleNotes[0].id).toBe("b"); // Apple
-    expect(result.current.visibleNotes[1].id).toBe("a"); // Zebra
+    expect(result.current.visibleNotes[0]!.id).toBe("b"); // Apple
+    expect(result.current.visibleNotes[1]!.id).toBe("a"); // Zebra
   });
 
   it("shows cached results instantly on re-open without loading flash", async () => {

@@ -201,7 +201,7 @@ describe("usePanelPalette", () => {
       rerender();
       const resumeItems = result.current.results.filter((item) => item.id.startsWith("resume:"));
       expect(resumeItems).toHaveLength(1);
-      expect(resumeItems[0].id).toBe("resume:valid-session");
+      expect(resumeItems[0]!.id).toBe("resume:valid-session");
     });
   });
 

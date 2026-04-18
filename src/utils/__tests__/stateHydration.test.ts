@@ -244,7 +244,7 @@ describe("hydrateAppState", () => {
       })
     );
 
-    const addPanelArg = addPanel.mock.calls[0][0] as Record<string, unknown>;
+    const addPanelArg = addPanel.mock.calls[0]![0] as Record<string, unknown>;
     expect(addPanelArg.devServerStatus).toBeUndefined();
     expect(addPanelArg.devServerUrl).toBeUndefined();
     expect(addPanelArg.devServerError).toBeUndefined();
@@ -329,8 +329,8 @@ describe("hydrateAppState", () => {
       })
     );
 
-    const firstAddArg = addPanel.mock.calls[0][0] as Record<string, unknown>;
-    const secondAddArg = addPanel.mock.calls[1][0] as Record<string, unknown>;
+    const firstAddArg = addPanel.mock.calls[0]![0] as Record<string, unknown>;
+    const secondAddArg = addPanel.mock.calls[1]![0] as Record<string, unknown>;
 
     expect(firstAddArg.devServerStatus).toBeUndefined();
     expect(firstAddArg.devServerUrl).toBeUndefined();
@@ -1376,7 +1376,7 @@ describe("hydrateAppState", () => {
     });
 
     expect(addPanel).toHaveBeenCalledTimes(1);
-    const callArgs = addPanel.mock.calls[0][0];
+    const callArgs = addPanel.mock.calls[0]![0];
 
     // On reconnect, agentSessionId should be preserved
     expect(callArgs.existingId).toBe("agent-1");
@@ -1524,7 +1524,7 @@ describe("hydrateAppState", () => {
     });
 
     expect(addPanel).toHaveBeenCalledTimes(1);
-    const callArgs = addPanel.mock.calls[0][0] as Record<string, unknown>;
+    const callArgs = addPanel.mock.calls[0]![0] as Record<string, unknown>;
     expect(callArgs.restore).toBe(true);
   });
 
@@ -1570,7 +1570,7 @@ describe("hydrateAppState", () => {
     });
 
     expect(addPanel).toHaveBeenCalledTimes(1);
-    const callArgs = addPanel.mock.calls[0][0] as Record<string, unknown>;
+    const callArgs = addPanel.mock.calls[0]![0] as Record<string, unknown>;
     // Reconnects should not have restore flag
     expect(callArgs.restore).toBeUndefined();
   });
@@ -1763,13 +1763,13 @@ describe("hydrateAppState", () => {
     expect(addPanel).toHaveBeenCalledTimes(3);
 
     // All three non-PTY panels should be restored with correct kinds in order
-    expect(addPanel.mock.calls[0][0]).toEqual(
+    expect(addPanel.mock.calls[0]![0]).toEqual(
       expect.objectContaining({ kind: "browser", requestedId: "browser-1" })
     );
-    expect(addPanel.mock.calls[1][0]).toEqual(
+    expect(addPanel.mock.calls[1]![0]).toEqual(
       expect.objectContaining({ kind: "notes", requestedId: "notes-1" })
     );
-    expect(addPanel.mock.calls[2][0]).toEqual(
+    expect(addPanel.mock.calls[2]![0]).toEqual(
       expect.objectContaining({ kind: "dev-preview", requestedId: "dev-preview-1" })
     );
   });
@@ -2037,8 +2037,8 @@ describe("hydrateAppState", () => {
           duration: 8000,
         })
       );
-      expect(notifyMock.mock.calls[0][0].message).toContain("restored from a backup");
-      expect(notifyMock.mock.calls[0][0].message).toContain("/path/to/config.json.corrupted.123");
+      expect(notifyMock.mock.calls[0]![0].message).toContain("restored from a backup");
+      expect(notifyMock.mock.calls[0]![0].message).toContain("/path/to/config.json.corrupted.123");
     });
 
     it("shows persistent warning toast when settings reset to defaults", async () => {
@@ -2069,8 +2069,8 @@ describe("hydrateAppState", () => {
           duration: 0,
         })
       );
-      expect(notifyMock.mock.calls[0][0].message).toContain("reset to defaults");
-      expect(notifyMock.mock.calls[0][0].message).toContain("/path/to/config.json.corrupted.456");
+      expect(notifyMock.mock.calls[0]![0].message).toContain("reset to defaults");
+      expect(notifyMock.mock.calls[0]![0].message).toContain("/path/to/config.json.corrupted.456");
     });
 
     it("does not show notification on normal startup", async () => {
@@ -2108,7 +2108,7 @@ describe("hydrateAppState", () => {
       });
 
       expect(notifyMock).toHaveBeenCalledTimes(1);
-      expect(notifyMock.mock.calls[0][0].message).not.toContain("preserved at");
+      expect(notifyMock.mock.calls[0]![0].message).not.toContain("preserved at");
     });
   });
 

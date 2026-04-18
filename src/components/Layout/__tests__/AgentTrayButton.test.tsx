@@ -439,7 +439,7 @@ describe("AgentTrayButton", () => {
     );
     // Only codex (installed) belongs in Needs Setup. Gemini (missing) must NOT appear.
     expect(setupItems.length).toBe(1);
-    expect(setupItems[0].textContent).toContain("Codex");
+    expect(setupItems[0]!.textContent).toContain("Codex");
     const allText = container.textContent ?? "";
     expect(allText).not.toMatch(/Needs Setup[\s\S]*Gemini/);
   });

@@ -216,7 +216,7 @@ export function ConsolePanel({ paneId, height = 200, webContentsId }: ConsolePan
     setIsAtBottom(el.scrollTop + el.clientHeight >= el.scrollHeight - threshold);
   }, []);
 
-  const lastVisibleId = filtered.length > 0 ? filtered[filtered.length - 1].id : null;
+  const lastVisibleId = filtered.length > 0 ? filtered[filtered.length - 1]!.id : null;
   useEffect(() => {
     if (lastVisibleId === prevLastIdRef.current) return;
     prevLastIdRef.current = lastVisibleId;

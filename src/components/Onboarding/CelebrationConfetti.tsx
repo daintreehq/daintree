@@ -40,7 +40,7 @@ function generateParticles(): Particle[] {
       y: Math.sin(angle) * distance,
       rotate: Math.random() * 360,
       size: 6 + Math.random() * 6,
-      color: colors[i % colors.length],
+      color: colors[i % colors.length]!,
     };
   });
 }

@@ -339,7 +339,7 @@ function TerminalPaneComponent({
     const observer = new IntersectionObserver(
       ([entry]) => {
         // Don't update visibility during drag - CSS transforms cause false negatives
-        if (isDraggingRef.current) return;
+        if (isDraggingRef.current || !entry) return;
 
         updateVisibility(id, entry.isIntersecting);
         terminalInstanceService.setVisible(id, entry.isIntersecting, gen);

@@ -63,7 +63,7 @@ export function useWorktreePalette({
 
   const confirmSelection = useCallback(() => {
     if (results.length > 0 && selectedIndex >= 0) {
-      handleSelect(results[selectedIndex]);
+      handleSelect(results[selectedIndex]!);
     } else {
       close();
     }

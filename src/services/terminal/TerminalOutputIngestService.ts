@@ -183,7 +183,7 @@ export class TerminalOutputIngestService {
 
   private coalesceBatch(queue: TerminalIngestQueue): string | Uint8Array {
     if (queue.chunks.length === 1) {
-      const chunk = queue.chunks[0];
+      const chunk = queue.chunks[0]!;
       queue.chunks.length = 0;
       queue.queuedBytes = 0;
       return chunk;
@@ -225,7 +225,7 @@ export class TerminalOutputIngestService {
     if (!queue || queue.chunks.length === 0) return;
 
     if (queue.chunks.length === 1) {
-      this.writeToTerminal(id, queue.chunks[0]);
+      this.writeToTerminal(id, queue.chunks[0]!);
     } else {
       const allStrings = queue.chunks.every((c) => typeof c === "string");
       if (allStrings) {

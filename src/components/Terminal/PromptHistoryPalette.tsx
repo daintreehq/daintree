@@ -20,7 +20,7 @@ function formatRelativeTime(timestamp: number): string {
 }
 
 function truncatePrompt(text: string, maxLen = 80): string {
-  const firstLine = text.split("\n")[0];
+  const firstLine = text.split("\n")[0] ?? "";
   if (firstLine.length <= maxLen) return firstLine;
   return firstLine.slice(0, maxLen) + "…";
 }

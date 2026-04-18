@@ -97,7 +97,7 @@ function toggleHeading(view: EditorView) {
       const match = line.text.match(/^(#{1,6}) /);
 
       if (match) {
-        const level = match[1].length;
+        const level = match[1]!.length;
         const removeLen = level + 1; // includes trailing space
         if (level < 3) {
           // # → ## → ### (cycle up)

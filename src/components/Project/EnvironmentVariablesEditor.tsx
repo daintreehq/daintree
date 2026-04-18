@@ -83,6 +83,7 @@ export function EnvironmentVariablesEditor({
     setRows((prev) => {
       const updated = [...prev];
       const row = updated[index];
+      if (!row) return prev;
       const rowId = row.id;
       updated[index] = { ...row, [field]: value };
       setRowErrors((prevErrors) => {

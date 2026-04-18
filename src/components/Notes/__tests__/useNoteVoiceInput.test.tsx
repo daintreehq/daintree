@@ -122,7 +122,7 @@ describe("useNoteVoiceInput", () => {
         panelBuffers: {
           ...prev.panelBuffers,
           "panel-1": {
-            ...prev.panelBuffers["panel-1"],
+            ...prev.panelBuffers["panel-1"]!,
             liveText: "world",
           },
         },
@@ -167,7 +167,7 @@ describe("useNoteVoiceInput", () => {
         panelBuffers: {
           ...prev.panelBuffers,
           "panel-1": {
-            ...prev.panelBuffers["panel-1"],
+            ...prev.panelBuffers["panel-1"]!,
             liveText: "",
             completedSegments: ["world"],
             transcriptPhase: "utterance_final",
@@ -264,7 +264,7 @@ describe("useNoteVoiceInput", () => {
         panelBuffers: {
           ...prev.panelBuffers,
           "panel-1": {
-            ...prev.panelBuffers["panel-1"],
+            ...prev.panelBuffers["panel-1"]!,
             liveText: "",
             completedSegments: ["first"],
           },
@@ -298,7 +298,7 @@ describe("useNoteVoiceInput", () => {
         panelBuffers: {
           ...prev.panelBuffers,
           "panel-1": {
-            ...prev.panelBuffers["panel-1"],
+            ...prev.panelBuffers["panel-1"]!,
             liveText: "",
             completedSegments: ["second"],
           },
@@ -347,7 +347,7 @@ describe("useNoteVoiceInput", () => {
         panelBuffers: {
           ...prev.panelBuffers,
           "panel-1": {
-            ...prev.panelBuffers["panel-1"],
+            ...prev.panelBuffers["panel-1"]!,
             liveText: "world",
           },
         },

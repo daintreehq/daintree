@@ -766,8 +766,8 @@ describe("WorktreeHeader collapsed session indicators", () => {
     const badges = indicators.querySelectorAll("[aria-hidden='true']");
     expect(badges.length).toBe(2);
     // First badge should be working (text-state-working), second waiting (text-state-waiting)
-    expect(badges[0].className).toContain("text-state-working");
-    expect(badges[1].className).toContain("text-state-waiting");
+    expect(badges[0]!.className).toContain("text-state-working");
+    expect(badges[1]!.className).toContain("text-state-waiting");
   });
 
   it("applies animate-spin-slow only to working icon", () => {
@@ -779,9 +779,9 @@ describe("WorktreeHeader collapsed session indicators", () => {
     const indicators = screen.getByTestId("collapsed-session-indicators");
     const svgs = indicators.querySelectorAll("svg");
     // First svg is working icon — should have animate-spin-slow
-    expect(svgs[0].getAttribute("class")).toContain("animate-spin-slow");
+    expect(svgs[0]!.getAttribute("class")).toContain("animate-spin-slow");
     // Second svg is completed icon — should NOT have animate-spin-slow
-    expect(svgs[1].getAttribute("class")).not.toContain("animate-spin-slow");
+    expect(svgs[1]!.getAttribute("class")).not.toContain("animate-spin-slow");
   });
 
   it("does not render when sessionStates is not provided", () => {

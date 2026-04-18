@@ -81,7 +81,7 @@ describe("createActionDefinitions", () => {
     const ids = new Set<string>();
     const regex = /\|\s*"([^"]+)"/g;
     for (const match of section.matchAll(regex)) {
-      ids.add(match[1]);
+      ids.add(match[1]!);
     }
 
     const missing = Array.from(ids)

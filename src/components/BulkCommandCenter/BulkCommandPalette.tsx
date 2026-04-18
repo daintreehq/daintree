@@ -106,7 +106,9 @@ function useWorktreeRows(): WorktreeRow[] {
 
   return useMemo(() => {
     const rows: WorktreeRow[] = [];
-    const terminals = panelIds.map((id) => panelsById[id]).filter(Boolean);
+    const terminals = panelIds
+      .map((id) => panelsById[id])
+      .filter((t): t is TerminalInstance => t !== undefined);
     for (const wt of worktrees.values()) {
       const eligible = getEligibleTerminals(terminals, wt.id);
       const dominantState = getDominantAgentState(eligible.map((t) => t.agentState));
@@ -352,7 +354,9 @@ function BulkCommandPaletteInner() {
     // so we drop anything that has exited or been trashed since selection.
     const { panelsById: tById, panelIds: tIds } = usePanelStore.getState();
     const liveEligible = new Set<string>();
-    const allTerminals = tIds.map((id) => tById[id]).filter(Boolean);
+    const allTerminals = tIds
+      .map((id) => tById[id])
+      .filter((t): t is TerminalInstance => t !== undefined);
     for (const t of allTerminals) {
       if (!t.worktreeId) continue;
       if (
@@ -640,13 +644,13 @@ function BulkCommandPaletteInner() {
                           e.preventDefault();
                           const next = Math.min(historyIndex + 1, historyEntries.length - 1);
                           setHistoryIndex(next);
-                          setCommandText(historyEntries[next].prompt);
+                          setCommandText(historyEntries[next]!.prompt);
                           setShowHistory(false);
                         } else if (e.key === "ArrowDown" && historyIndex >= 0) {
                           e.preventDefault();
                           const next = historyIndex - 1;
                           setHistoryIndex(next);
-                          setCommandText(next >= 0 ? historyEntries[next].prompt : "");
+                          setCommandText(next >= 0 ? historyEntries[next]!.prompt : "");
                           setShowHistory(false);
                         }
                       }}

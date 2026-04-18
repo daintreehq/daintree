@@ -69,7 +69,7 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
       if (notification.placement !== "grid-bar") {
         const active = notifications.filter((n) => !n.dismissed && n.placement !== "grid-bar");
         if (active.length >= MAX_VISIBLE_TOASTS) {
-          const oldest = active[0];
+          const oldest = active[0]!;
           notifications = notifications.map((n) =>
             n.id === oldest.id ? { ...n, dismissed: true } : n
           );

@@ -282,9 +282,9 @@ describe("restoreBackgroundGroup", () => {
     // Tab group recreated
     expect(state.tabGroups.size).toBe(1);
     const group = [...state.tabGroups.values()][0];
-    expect(group.panelIds).toEqual(["t1", "t2", "t3"]);
-    expect(group.activeTabId).toBe("t2");
-    expect(group.location).toBe("grid");
+    expect(group!.panelIds).toEqual(["t1", "t2", "t3"]);
+    expect(group!.activeTabId).toBe("t2");
+    expect(group!.location).toBe("grid");
   });
 
   it("should filter out panels that no longer exist", () => {
@@ -321,9 +321,9 @@ describe("restoreBackgroundGroup", () => {
     expect(state.tabGroups.size).toBe(1);
     const group = [...state.tabGroups.values()][0];
     // t2 should be filtered out
-    expect(group.panelIds).toEqual(["t1", "t3"]);
+    expect(group!.panelIds).toEqual(["t1", "t3"]);
     // activeTabId falls back since t2 is gone
-    expect(group.activeTabId).toBe("t1");
+    expect(group!.activeTabId).toBe("t1");
   });
 
   it("should be a no-op when groupRestoreId is not found", () => {
@@ -467,10 +467,10 @@ describe("round-trip: backgroundPanelGroup → restoreBackgroundGroup", () => {
     expect(state.tabGroups.size).toBe(1);
 
     const restoredGroup = [...state.tabGroups.values()][0];
-    expect(restoredGroup.panelIds).toEqual(["t1", "t2", "t3"]);
-    expect(restoredGroup.activeTabId).toBe("t2");
-    expect(restoredGroup.location).toBe("dock");
-    expect(restoredGroup.worktreeId).toBe("wt-1");
+    expect(restoredGroup!.panelIds).toEqual(["t1", "t2", "t3"]);
+    expect(restoredGroup!.activeTabId).toBe("t2");
+    expect(restoredGroup!.location).toBe("dock");
+    expect(restoredGroup!.worktreeId).toBe("wt-1");
 
     // All panels restored to dock with correct worktreeId
     for (const id of ["t1", "t2", "t3"]) {

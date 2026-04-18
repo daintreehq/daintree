@@ -114,13 +114,13 @@ export function useSearchablePalette<T>(
 
       let index = startIndex;
       const visited = new Set<number>();
-      while (!canNavigate(results[index]) && !visited.has(index)) {
+      while (!canNavigate(results[index]!) && !visited.has(index)) {
         visited.add(index);
         index = (index + direction + results.length) % results.length;
       }
 
       // If we visited all items and none are navigable, return -1
-      if (visited.size === results.length && !canNavigate(results[index])) {
+      if (visited.size === results.length && !canNavigate(results[index]!)) {
         return -1;
       }
 
@@ -145,7 +145,7 @@ export function useSearchablePalette<T>(
         ? ""
         : length <= 3
           ? results.map(getItemId).join(",")
-          : `${getItemId(results[0])},${getItemId(results[Math.floor(length / 2)])},${getItemId(results[length - 1])}`;
+          : `${getItemId(results[0]!)},${getItemId(results[Math.floor(length / 2)]!)},${getItemId(results[length - 1]!)}`;
     const prev = prevResultsRef.current;
     if (ids === prev.ids && length === prev.length) return;
     prevResultsRef.current = { ids, length };

@@ -146,7 +146,7 @@ export function useSendToAgentPalette() {
   const confirmSelection = useCallback(() => {
     const { results, selectedIndex } = palette;
     if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-      selectItem(results[selectedIndex]);
+      selectItem(results[selectedIndex]!);
     }
   }, [palette, selectItem]);
 

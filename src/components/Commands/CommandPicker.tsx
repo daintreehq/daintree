@@ -97,7 +97,7 @@ export function CommandPicker({
     const starts = new Map<string, CommandCategory>();
     for (const group of groupedCommands) {
       if (group.commands.length > 0) {
-        starts.set(group.commands[0].id, group.category);
+        starts.set(group.commands[0]!.id, group.category);
       }
     }
     return starts;
@@ -118,7 +118,7 @@ export function CommandPicker({
     setSelectedIndex((prev) => {
       if (flatCommands.length === 0) return 0;
       let next = (prev - 1 + flatCommands.length) % flatCommands.length;
-      while (!flatCommands[next].enabled && next !== prev) {
+      while (!flatCommands[next]!.enabled && next !== prev) {
         next = (next - 1 + flatCommands.length) % flatCommands.length;
       }
       return next;
@@ -129,7 +129,7 @@ export function CommandPicker({
     setSelectedIndex((prev) => {
       if (flatCommands.length === 0) return 0;
       let next = (prev + 1) % flatCommands.length;
-      while (!flatCommands[next].enabled && next !== prev) {
+      while (!flatCommands[next]!.enabled && next !== prev) {
         next = (next + 1) % flatCommands.length;
       }
       return next;

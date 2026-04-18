@@ -63,6 +63,7 @@ export function getWorktreeType(worktree: Worktree | WorktreeState): WorktreeTyp
 
   const branch = worktree.branch.toLowerCase();
   const prefix = branch.split(/[/-]/)[0];
+  if (!prefix) return "other";
 
   const branchType = BRANCH_PREFIX_MAP[prefix];
   if (branchType) {

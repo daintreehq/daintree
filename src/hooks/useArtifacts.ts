@@ -273,7 +273,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
         return {
           succeeded: 0,
           failed: sorted.length,
-          failures: [{ artifact: sorted[0], error: String(error) }],
+          failures: [{ artifact: sorted[0]!, error: String(error) }],
         };
       } finally {
         setBulkProgress(null);
@@ -292,7 +292,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
 
     try {
       for (let i = 0; i < sorted.length; i++) {
-        const artifact = sorted[i];
+        const artifact = sorted[i]!;
         setBulkProgress({ action: "save", current: i + 1, total: sorted.length });
 
         try {
@@ -362,7 +362,7 @@ export function useArtifacts(terminalId: string, worktreeId?: string, cwd?: stri
 
     try {
       for (let i = 0; i < sorted.length; i++) {
-        const artifact = sorted[i];
+        const artifact = sorted[i]!;
         setBulkProgress({ action: "apply", current: i + 1, total: sorted.length });
 
         try {

@@ -45,7 +45,10 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
     useShallow((state) =>
       state.panelIds
         .map((id) => state.panelsById[id])
-        .filter((t) => t && t.worktreeId === worktreeId && t.location !== "trash")
+        .filter(
+          (t): t is TerminalInstance =>
+            t !== undefined && t.worktreeId === worktreeId && t.location !== "trash"
+        )
     )
   );
 

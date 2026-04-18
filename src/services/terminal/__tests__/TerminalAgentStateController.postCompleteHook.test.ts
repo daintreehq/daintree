@@ -28,7 +28,7 @@ function makeMockBuffer(lines: string[]) {
   return {
     active: {
       length: lines.length,
-      getLine: (i: number) => (i >= 0 && i < lines.length ? makeMockBufferLine(lines[i]) : null),
+      getLine: (i: number) => (i >= 0 && i < lines.length ? makeMockBufferLine(lines[i]!) : null),
       baseY: 0,
       type: "normal",
     },

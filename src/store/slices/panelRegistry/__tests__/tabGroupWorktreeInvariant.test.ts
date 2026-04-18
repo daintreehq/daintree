@@ -536,7 +536,7 @@ describe("Tab Group Worktree Invariant", () => {
 
       expect(panelPersistence.saveTabGroups).toHaveBeenCalledTimes(1);
       // Verify the persisted data contains the expected group
-      const persistedGroups = vi.mocked(panelPersistence.saveTabGroups).mock.calls[0][0];
+      const persistedGroups = vi.mocked(panelPersistence.saveTabGroups).mock.calls[0]![0];
       expect(persistedGroups.has("g1")).toBe(true);
     });
   });

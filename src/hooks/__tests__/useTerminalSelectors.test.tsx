@@ -372,7 +372,7 @@ describe("useWaitingTerminals", () => {
 
     const { result } = renderHook(() => useWaitingTerminals());
     expect(result.current).toHaveLength(1);
-    expect(result.current[0].id).toBe("t1");
+    expect(result.current[0]!.id).toBe("t1");
   });
 
   it("excludes orphaned terminals when worktree IDs are known", () => {
@@ -387,7 +387,7 @@ describe("useWaitingTerminals", () => {
 
     const { result } = renderHook(() => useWaitingTerminals());
     expect(result.current).toHaveLength(1);
-    expect(result.current[0].id).toBe("t1");
+    expect(result.current[0]!.id).toBe("t1");
   });
 });
 
@@ -438,7 +438,7 @@ describe("useBackgroundedTerminals", () => {
 
     const { result } = renderHook(() => useBackgroundedTerminals());
     expect(result.current).toHaveLength(1);
-    expect(result.current[0].id).toBe("t1");
+    expect(result.current[0]!.id).toBe("t1");
   });
 });
 
@@ -500,7 +500,7 @@ describe("useConflictedWorktrees", () => {
 
     const { result } = renderHook(() => useConflictedWorktrees());
     expect(result.current).toHaveLength(1);
-    expect(result.current[0].id).toBe("wt-1");
+    expect(result.current[0]!.id).toBe("wt-1");
   });
 
   it("returns only conflicted worktrees from a mixed set", () => {
@@ -521,7 +521,7 @@ describe("useConflictedWorktrees", () => {
 
     const { result } = renderHook(() => useConflictedWorktrees());
     expect(result.current).toHaveLength(1);
-    expect(result.current[0].id).toBe("wt-conflict");
+    expect(result.current[0]!.id).toBe("wt-conflict");
   });
 });
 
@@ -542,7 +542,7 @@ describe("buildWorktreeIds memoization", () => {
     );
     const { result: r1 } = renderHook(() => useWaitingTerminals());
     expect(r1.current).toHaveLength(1);
-    expect(r1.current[0].id).toBe("t1");
+    expect(r1.current[0]!.id).toBe("t1");
 
     const map2 = new Map([["wt-1", { worktreeId: "wt-1", status: "changed" }]]);
     setupBoth(
@@ -554,7 +554,7 @@ describe("buildWorktreeIds memoization", () => {
     );
     const { result: r2 } = renderHook(() => useWaitingTerminals());
     expect(r2.current).toHaveLength(1);
-    expect(r2.current[0].id).toBe("t1");
+    expect(r2.current[0]!.id).toBe("t1");
   });
 
   it("detects when a worktree is added", () => {
@@ -568,7 +568,7 @@ describe("buildWorktreeIds memoization", () => {
     );
     const { result: r1 } = renderHook(() => useWaitingTerminals());
     expect(r1.current).toHaveLength(1);
-    expect(r1.current[0].id).toBe("t1");
+    expect(r1.current[0]!.id).toBe("t1");
 
     const map2 = new Map([
       ["wt-1", { worktreeId: "wt-1" }],
@@ -610,7 +610,7 @@ describe("buildWorktreeIds memoization", () => {
     );
     const { result: r2 } = renderHook(() => useWaitingTerminals());
     expect(r2.current).toHaveLength(1);
-    expect(r2.current[0].id).toBe("t1");
+    expect(r2.current[0]!.id).toBe("t1");
   });
 
   it("handles transition from empty to populated worktrees", () => {
@@ -628,6 +628,6 @@ describe("buildWorktreeIds memoization", () => {
     );
     const { result: r2 } = renderHook(() => useWaitingTerminals());
     expect(r2.current).toHaveLength(1);
-    expect(r2.current[0].id).toBe("t1");
+    expect(r2.current[0]!.id).toBe("t1");
   });
 });

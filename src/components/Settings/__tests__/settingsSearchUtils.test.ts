@@ -176,7 +176,7 @@ describe("subtab-aware search", () => {
     ];
     const results = filterSettings(index, "gemini");
     expect(results).toHaveLength(1);
-    expect(results[0].id).toBe("test-entry");
+    expect(results[0]!.id).toBe("test-entry");
   });
 
   it("returns subtab metadata in matched results", () => {
@@ -195,8 +195,8 @@ describe("subtab-aware search", () => {
       },
     ];
     const results = filterSettings(index, "enable");
-    expect(results[0].subtab).toBe("claude");
-    expect(results[0].subtabLabel).toBe("Claude");
+    expect(results[0]!.subtab).toBe("claude");
+    expect(results[0]!.subtabLabel).toBe("Claude");
   });
 
   it("does not require subtab or subtabLabel fields", () => {
@@ -213,7 +213,7 @@ describe("subtab-aware search", () => {
     ];
     const results = filterSettings(index, "version");
     expect(results).toHaveLength(1);
-    expect(results[0].subtab).toBeUndefined();
+    expect(results[0]!.subtab).toBeUndefined();
   });
 
   it("countMatchesPerTab is unaffected by subtab presence", () => {

@@ -72,7 +72,7 @@ describe("notesActions adversarial", () => {
 
     expect(notesClientMock.create).not.toHaveBeenCalled();
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const event = dispatchSpy.mock.calls[0][0] as unknown as { type: string };
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as { type: string };
     expect(event.type).toBe("daintree:open-notes-palette");
   });
 
@@ -177,14 +177,14 @@ describe("notesActions adversarial", () => {
     ).rejects.toThrow("permission denied");
 
     expect(alertSpy).toHaveBeenCalledTimes(1);
-    expect(alertSpy.mock.calls[0][0]).toContain("permission denied");
+    expect(alertSpy.mock.calls[0]![0]).toContain("permission denied");
   });
 
   it("notes.reveal dispatches highlight event with the note path", async () => {
     const run = setupActions();
     await run("notes.reveal", { notePath: "/notes/x.md" });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
       detail: { highlightNotePath: string };
     };

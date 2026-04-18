@@ -61,7 +61,7 @@ function mergeButtonList(
 
   // Find buttons in defaults that aren't in persisted (new buttons)
   for (let i = 0; i < defaults.length; i++) {
-    const buttonId = defaults[i];
+    const buttonId = defaults[i]!;
     if (!persistedSet.has(buttonId)) {
       // Insert at the same position as in defaults, or at end if beyond length
       const insertIndex = Math.min(i, result.length);

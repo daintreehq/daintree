@@ -470,10 +470,12 @@ export function SettingsDialog({
       } else if (e.key === "Enter" && activeResultIndex >= 0) {
         e.preventDefault();
         const result = searchResults[activeResultIndex];
-        handleResultClick(
-          { tab: result.tab, subtab: result.subtab, sectionId: result.id },
-          result.requiresEnabled
-        );
+        if (result) {
+          handleResultClick(
+            { tab: result.tab, subtab: result.subtab, sectionId: result.id },
+            result.requiresEnabled
+          );
+        }
       }
     }
   };
@@ -562,8 +564,8 @@ export function SettingsDialog({
       }
 
       e.preventDefault();
-      tabs[nextIndex].focus();
-      const tabId = tabs[nextIndex].dataset.tab as SettingsTab | undefined;
+      tabs[nextIndex]!.focus();
+      const tabId = tabs[nextIndex]!.dataset.tab as SettingsTab | undefined;
       if (tabId) handleNavSelect(tabId);
     },
     [handleNavSelect]

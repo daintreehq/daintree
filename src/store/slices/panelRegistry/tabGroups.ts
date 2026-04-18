@@ -496,6 +496,7 @@ export const createTabGroupActions = (
 
       const reorderedGroups = [...allGroups];
       const [movedGroup] = reorderedGroups.splice(fromGroupIndex, 1);
+      if (!movedGroup) return state;
       reorderedGroups.splice(toGroupIndex, 0, movedGroup);
 
       // Build new panelIds with the reordered groups
@@ -659,7 +660,7 @@ export const createTabGroupActions = (
 
       const activeTabId = finalPanelIds.includes(group.activeTabId)
         ? group.activeTabId
-        : finalPanelIds[0];
+        : finalPanelIds[0]!;
 
       sanitizedGroups.set(group.id, {
         ...group,

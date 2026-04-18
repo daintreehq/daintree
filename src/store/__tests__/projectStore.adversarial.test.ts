@@ -255,7 +255,7 @@ describe("projectStore adversarial", () => {
     expect(onUpdated).toHaveBeenCalledTimes(1);
     expect(onRemoved).toHaveBeenCalledTimes(1);
 
-    updatedCallbacks[0](projectB);
+    updatedCallbacks[0]!(projectB);
     expect(useProjectStore.getState().projects).toEqual([projectB]);
   });
 
@@ -330,14 +330,14 @@ describe("projectStore adversarial", () => {
     const { useProjectStore } = await import("../projectStore");
     useProjectStore.setState({ projects: [projectA], currentProject: projectA });
 
-    updatedCallbacks[0]({ ...projectA, name: "Updated A" });
-    removedCallbacks[0](projectA.id);
+    updatedCallbacks[0]!({ ...projectA, name: "Updated A" });
+    removedCallbacks[0]!(projectA.id);
     expect(useProjectStore.getState().projects).toEqual([]);
     expect(useProjectStore.getState().currentProject).toBeNull();
 
     useProjectStore.setState({ projects: [projectA], currentProject: projectA });
-    removedCallbacks[0](projectA.id);
-    updatedCallbacks[0]({ ...projectA, name: "Updated A" });
+    removedCallbacks[0]!(projectA.id);
+    updatedCallbacks[0]!({ ...projectA, name: "Updated A" });
     expect(useProjectStore.getState().projects).toEqual([{ ...projectA, name: "Updated A" }]);
     expect(useProjectStore.getState().currentProject).toBeNull();
   });

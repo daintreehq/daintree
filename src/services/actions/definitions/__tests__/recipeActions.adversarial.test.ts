@@ -224,7 +224,7 @@ describe("recipeActions adversarial", () => {
     await run("recipe.editor.openFromLayout", { worktreeId: "wt-a" });
 
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
       detail: { worktreeId: string; initialTerminals: unknown[] };
     };
@@ -254,7 +254,7 @@ describe("recipeActions adversarial", () => {
       initialTerminals: [{ title: "x" }],
     });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
       detail: { worktreeId: string; recipeId: string; initialTerminals: unknown };
     };
@@ -272,7 +272,7 @@ describe("recipeActions adversarial", () => {
     const run = setupActions();
     await run("recipe.manager.open");
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
       detail?: unknown;
     };

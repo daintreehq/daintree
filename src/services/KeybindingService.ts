@@ -275,7 +275,7 @@ class KeybindingService {
           }
         } else {
           // Check if this is the start of a chord
-          if (normalizedCurrentCombo === chordParts[0].trim().toLowerCase()) {
+          if (normalizedCurrentCombo === chordParts[0]!.trim().toLowerCase()) {
             foundChordPrefix = true;
           }
         }
@@ -407,9 +407,10 @@ class KeybindingService {
       if (!binding.effectiveCombo) continue;
       const parts = binding.effectiveCombo.trim().split(" ");
       if (parts.length < 3) continue;
-      if (parts[0].toLowerCase() !== normalizedPrefix) continue;
+      if (parts[0]!.toLowerCase() !== normalizedPrefix) continue;
 
       const nextKey = parts[1];
+      if (nextKey === undefined) continue;
       const normalizedNext = nextKey.toLowerCase();
       if (!deeperPrefixes.has(normalizedNext)) {
         deeperPrefixes.set(normalizedNext, {
@@ -426,9 +427,10 @@ class KeybindingService {
       const combo = binding.effectiveCombo.trim();
       const parts = combo.split(" ");
       if (parts.length !== 2) continue;
-      if (parts[0].toLowerCase() !== normalizedPrefix) continue;
+      if (parts[0]!.toLowerCase() !== normalizedPrefix) continue;
 
       const secondKey = parts[1];
+      if (secondKey === undefined) continue;
       const normalizedSecond = secondKey.toLowerCase();
       addedSecondKeys.add(normalizedSecond);
 

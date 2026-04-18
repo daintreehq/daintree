@@ -16,7 +16,7 @@ function hasImageClipboardItem(event: ClipboardEvent): boolean {
   const items = event.clipboardData?.items;
   if (!items) return false;
   for (let i = 0; i < items.length; i++) {
-    if (items[i].type.startsWith("image/")) return true;
+    if (items[i]!.type.startsWith("image/")) return true;
   }
   return false;
 }

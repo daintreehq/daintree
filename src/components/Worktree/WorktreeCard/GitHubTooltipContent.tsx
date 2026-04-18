@@ -76,7 +76,7 @@ export const IssueTooltipContent = memo(function IssueTooltipContent({
           <span className="flex items-center gap-1">
             <Users className="w-3 h-3" />
             {data.assignees.length === 1
-              ? data.assignees[0].login
+              ? data.assignees[0]!.login
               : `${data.assignees.length} assignees`}
           </span>
         )}
@@ -150,7 +150,7 @@ export const PRTooltipContent = memo(function PRTooltipContent({ data }: PRToolt
           <span className="flex items-center gap-1">
             <Users className="w-3 h-3" />
             {data.assignees.length === 1
-              ? data.assignees[0].login
+              ? data.assignees[0]!.login
               : `${data.assignees.length} assignees`}
           </span>
         )}

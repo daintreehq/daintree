@@ -41,6 +41,7 @@ export class FileLinksAddon implements ILinkProvider {
 
     while ((match = regex.exec(lineText)) !== null) {
       const fullMatch = match[1];
+      if (fullMatch === undefined) continue;
       if (this._isExcluded(fullMatch)) {
         continue;
       }
@@ -50,7 +51,7 @@ export class FileLinksAddon implements ILinkProvider {
         continue;
       }
 
-      const startIndex = match.index + match[0].indexOf(fullMatch);
+      const startIndex = match.index + match[0]!.indexOf(fullMatch);
 
       const range: IBufferRange = {
         start: { x: startIndex + 1, y: bufferLineNumber },
@@ -86,6 +87,7 @@ export class FileLinksAddon implements ILinkProvider {
     const match = /^(.*)(?::(\d+)(?::(\d+))?)?$/.exec(text);
     if (!match) return null;
     const pathPart = match[1];
+    if (pathPart === undefined) return null;
     const linePart = match[2] ? Number(match[2]) : undefined;
     const colPart = match[3] ? Number(match[3]) : undefined;
 

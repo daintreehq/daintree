@@ -4,8 +4,8 @@ const NAME_WEIGHT = 4;
 
 function isBoundary(str: string, index: number): boolean {
   if (index === 0) return true;
-  const prev = str[index - 1];
-  const curr = str[index];
+  const prev = str[index - 1] ?? "";
+  const curr = str[index] ?? "";
   return /[/\\\-._\s]/.test(prev) || (/[a-z]/.test(prev) && /[A-Z]/.test(curr));
 }
 

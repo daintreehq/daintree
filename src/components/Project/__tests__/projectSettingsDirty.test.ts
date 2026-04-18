@@ -155,8 +155,8 @@ describe("projectSettingsDirty", () => {
         {}
       );
 
-      expect(snapshot.commandOverrides[0].commandId).toBe("z");
-      expect(snapshot.commandOverrides[1].commandId).toBe("a");
+      expect(snapshot.commandOverrides[0]!.commandId).toBe("z");
+      expect(snapshot.commandOverrides[1]!.commandId).toBe("a");
     });
   });
 
@@ -502,8 +502,8 @@ describe("projectSettingsDirty", () => {
         {}
       );
 
-      expect(snapshot.runCommands[0].preferredLocation).toBe("grid");
-      expect(snapshot.runCommands[0].preferredAutoRestart).toBe(false);
+      expect(snapshot.runCommands[0]!.preferredLocation).toBe("grid");
+      expect(snapshot.runCommands[0]!.preferredAutoRestart).toBe(false);
     });
 
     it("should preserve preferredLocation and preferredAutoRestart in snapshot", () => {
@@ -528,8 +528,8 @@ describe("projectSettingsDirty", () => {
         {}
       );
 
-      expect(snapshot.runCommands[0].preferredLocation).toBe("dock");
-      expect(snapshot.runCommands[0].preferredAutoRestart).toBe(true);
+      expect(snapshot.runCommands[0]!.preferredLocation).toBe("dock");
+      expect(snapshot.runCommands[0]!.preferredAutoRestart).toBe(true);
     });
 
     it("should treat undefined and undefined devServerLoadTimeout as equal", () => {

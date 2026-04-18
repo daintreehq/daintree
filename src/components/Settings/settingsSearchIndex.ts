@@ -109,7 +109,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
       "integrations",
       "agents",
       ...BUILT_IN_AGENT_IDS.flatMap((id) =>
-        [id, AGENT_REGISTRY[id]?.name?.toLowerCase()].filter(Boolean)
+        [id, AGENT_REGISTRY[id]?.name?.toLowerCase()].filter((s): s is string => Boolean(s))
       ),
     ],
   },

@@ -186,10 +186,10 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
 
           if (direction === "right") {
             const nextIndex = (currentIndex + 1) % rowMajor.length;
-            result = rowMajor[nextIndex].terminalId;
+            result = rowMajor[nextIndex]!.terminalId;
           } else {
             const prevIndex = (currentIndex - 1 + rowMajor.length) % rowMajor.length;
-            result = rowMajor[prevIndex].terminalId;
+            result = rowMajor[prevIndex]!.terminalId;
           }
           break;
         }
@@ -204,10 +204,10 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
 
           if (direction === "down") {
             const nextIndex = (currentColIndex + 1) % colBucket.length;
-            result = colBucket[nextIndex].terminalId;
+            result = colBucket[nextIndex]!.terminalId;
           } else {
             const prevIndex = (currentColIndex - 1 + colBucket.length) % colBucket.length;
-            result = colBucket[prevIndex].terminalId;
+            result = colBucket[prevIndex]!.terminalId;
           }
           break;
         }
@@ -244,13 +244,13 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     (currentId: string, direction: "left" | "right"): string | null => {
       if (dockTerminals.length === 0) return null;
 
-      const currentIndex = dockTerminals.findIndex((t) => t.id === currentId);
+      const currentIndex = dockTerminals.findIndex((t) => t!.id === currentId);
       if (currentIndex === -1) return null;
 
       if (direction === "left") {
-        return currentIndex > 0 ? dockTerminals[currentIndex - 1].id : null;
+        return currentIndex > 0 ? dockTerminals[currentIndex - 1]!.id : null;
       } else {
-        return currentIndex < dockTerminals.length - 1 ? dockTerminals[currentIndex + 1].id : null;
+        return currentIndex < dockTerminals.length - 1 ? dockTerminals[currentIndex + 1]!.id : null;
       }
     },
     [dockTerminals]

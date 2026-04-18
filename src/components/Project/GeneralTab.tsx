@@ -35,7 +35,7 @@ function cssColorToHex(cssColor: string): string | undefined {
   ctx.fillStyle = cssColor;
   ctx.fillRect(0, 0, 1, 1);
   const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
-  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+  return `#${r!.toString(16).padStart(2, "0")}${g!.toString(16).padStart(2, "0")}${b!.toString(16).padStart(2, "0")}`;
 }
 
 interface GeneralTabProps {
@@ -315,10 +315,10 @@ export function GeneralTab({
           <div className="flex flex-wrap items-center gap-2 mb-3">
             {resolvedSwatches.map((hex, i) => (
               <button
-                key={PRESET_SWATCHES[i].cssVar}
+                key={PRESET_SWATCHES[i]!.cssVar}
                 type="button"
-                title={PRESET_SWATCHES[i].label}
-                aria-label={`Set project color to ${PRESET_SWATCHES[i].label}`}
+                title={PRESET_SWATCHES[i]!.label}
+                aria-label={`Set project color to ${PRESET_SWATCHES[i]!.label}`}
                 onClick={() => onColorChange(hex)}
                 className={cn(
                   "h-7 w-7 rounded-full transition border-2 shrink-0",

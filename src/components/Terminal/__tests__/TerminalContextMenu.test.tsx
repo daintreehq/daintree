@@ -119,7 +119,7 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
     });
 
     it("should handle legacy agent terminal (type without agentId)", () => {
-      const agentType = AGENT_IDS[0];
+      const agentType = AGENT_IDS[0]!;
       const terminal = { type: agentType, kind: "agent" };
       const submenu = buildConvertToSubmenu(terminal);
 

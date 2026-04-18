@@ -54,7 +54,7 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
           const now = Date.now();
 
           if (existingIndex >= 0) {
-            const existing = projectEntries[existingIndex];
+            const existing = projectEntries[existingIndex]!;
             projectEntries[existingIndex] = {
               ...existing,
               visitCount: existing.visitCount + 1,
@@ -85,7 +85,7 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
           const index = projectEntries.findIndex((e) => e.url === url);
           if (index < 0) return state;
           const updated = [...projectEntries];
-          updated[index] = { ...updated[index], title };
+          updated[index] = { ...updated[index]!, title };
           return { entries: { ...state.entries, [projectId]: updated } };
         }),
 

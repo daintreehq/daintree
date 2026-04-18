@@ -93,7 +93,7 @@ describe("appActions adversarial", () => {
 
   it("module reloads reuse a single onConfigReloaded subscription", async () => {
     register();
-    const cb = onConfigReloadedMock.mock.calls[0][0];
+    const cb = onConfigReloadedMock.mock.calls[0]![0];
 
     await loadFreshModule();
     register();
@@ -109,7 +109,7 @@ describe("appActions adversarial", () => {
 
   it("onConfigReloaded callback triggers the refresh fan-out", async () => {
     register();
-    const cb = onConfigReloadedMock.mock.calls[0][0];
+    const cb = onConfigReloadedMock.mock.calls[0]![0];
     await cb();
 
     expect(userAgentRefreshMock).toHaveBeenCalledTimes(1);
@@ -123,7 +123,7 @@ describe("appActions adversarial", () => {
   it("refresh-fan-out failure is caught and does not escape the onConfigReloaded callback", async () => {
     register();
     userAgentRefreshMock.mockRejectedValueOnce(new Error("boom"));
-    const cb = onConfigReloadedMock.mock.calls[0][0];
+    const cb = onConfigReloadedMock.mock.calls[0]![0];
 
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(cb()).resolves.toBeUndefined();

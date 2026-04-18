@@ -90,7 +90,7 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
     state.maximizeTarget = { type: "panel", id: "term-1" };
     state.preMaximizeLayout = { gridCols: 2, gridItemCount: 4, worktreeId: "worktree-1" };
 
-    state.handleTerminalRemoved("term-1", [mockTerminals[1]], 0);
+    state.handleTerminalRemoved("term-1", [mockTerminals[1]!], 0);
 
     expect(state.maximizedId).toBe(null);
     expect(state.maximizeTarget).toBe(null);
@@ -316,7 +316,7 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
   });
 
   it("should clear maximize when panel is moved to trash", () => {
-    const trashedTerminal = { ...mockTerminals[0], location: "trash" as const };
+    const trashedTerminal = { ...mockTerminals[0]!, location: "trash" as const };
     const mockGetTerminal = vi.fn((id: string) =>
       id === "term-1" ? trashedTerminal : mockTerminals.find((t) => t.id === id)
     );

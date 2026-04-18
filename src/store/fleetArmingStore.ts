@@ -29,7 +29,7 @@ interface FleetArmingState {
 function rebuildOrderById(order: string[]): Record<string, number> {
   const out: Record<string, number> = {};
   for (let i = 0; i < order.length; i++) {
-    out[order[i]] = i + 1;
+    out[order[i]!] = i + 1;
   }
   return out;
 }
@@ -45,7 +45,7 @@ function matchesPreset(state: AgentState | null | undefined, preset: FleetArmSta
   }
 }
 
-export function isFleetArmEligible(t: TerminalInstance | undefined): boolean {
+export function isFleetArmEligible(t: TerminalInstance | undefined): t is TerminalInstance {
   if (!t) return false;
   if (t.location === "trash" || t.location === "background") return false;
   if (t.hasPty === false) return false;

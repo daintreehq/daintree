@@ -278,7 +278,7 @@ describe("TerminalInstanceService adversarial", () => {
     service.attach("b", document.createElement("div"));
 
     expect(testState.webglAddons).toHaveLength(2);
-    expect(testState.webglAddons[0].dispose).toHaveBeenCalledTimes(1);
+    expect(testState.webglAddons[0]!.dispose).toHaveBeenCalledTimes(1);
     expect(service.webGLManager.isActive("a")).toBe(false);
     expect(service.webGLManager.isActive("b")).toBe(true);
   });

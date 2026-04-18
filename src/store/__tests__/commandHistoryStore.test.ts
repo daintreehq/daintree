@@ -11,9 +11,9 @@ describe("commandHistoryStore", () => {
     store.recordPrompt("proj1", "fix the bug", "claude");
     const entries = useCommandHistoryStore.getState().getProjectHistory("proj1");
     expect(entries).toHaveLength(1);
-    expect(entries[0].prompt).toBe("fix the bug");
-    expect(entries[0].agentId).toBe("claude");
-    expect(entries[0].addedAt).toBeGreaterThan(0);
+    expect(entries[0]!.prompt).toBe("fix the bug");
+    expect(entries[0]!.agentId).toBe("claude");
+    expect(entries[0]!.addedAt).toBeGreaterThan(0);
   });
 
   it("ignores blank prompts", () => {
@@ -30,8 +30,8 @@ describe("commandHistoryStore", () => {
     store.recordPrompt("proj1", "hello", null);
     const entries = useCommandHistoryStore.getState().getProjectHistory("proj1");
     expect(entries).toHaveLength(2);
-    expect(entries[0].prompt).toBe("hello");
-    expect(entries[1].prompt).toBe("world");
+    expect(entries[0]!.prompt).toBe("hello");
+    expect(entries[1]!.prompt).toBe("world");
   });
 
   it("caps entries at 100 per project", () => {
@@ -41,7 +41,7 @@ describe("commandHistoryStore", () => {
     }
     const entries = useCommandHistoryStore.getState().getProjectHistory("proj1");
     expect(entries).toHaveLength(100);
-    expect(entries[0].prompt).toBe("command 109");
+    expect(entries[0]!.prompt).toBe("command 109");
   });
 
   it("scopes history by project", () => {
@@ -50,7 +50,7 @@ describe("commandHistoryStore", () => {
     store.recordPrompt("proj2", "cmd-b", null);
     expect(useCommandHistoryStore.getState().getProjectHistory("proj1")).toHaveLength(1);
     expect(useCommandHistoryStore.getState().getProjectHistory("proj2")).toHaveLength(1);
-    expect(useCommandHistoryStore.getState().getProjectHistory("proj1")[0].prompt).toBe("cmd-a");
+    expect(useCommandHistoryStore.getState().getProjectHistory("proj1")[0]!.prompt).toBe("cmd-a");
   });
 
   it("returns empty array for undefined projectId", () => {
@@ -66,8 +66,8 @@ describe("commandHistoryStore", () => {
     store.recordPrompt("proj2", "shared", null);
     const global = useCommandHistoryStore.getState().getGlobalHistory();
     expect(global).toHaveLength(2);
-    expect(global[0].prompt).toBe("shared");
-    expect(global[1].prompt).toBe("unique");
+    expect(global[0]!.prompt).toBe("shared");
+    expect(global[1]!.prompt).toBe("unique");
   });
 
   it("removes project history", () => {
@@ -83,13 +83,13 @@ describe("commandHistoryStore", () => {
     const store = useCommandHistoryStore.getState();
     store.recordPrompt("proj1", "  spaced  ", null);
     const entries = useCommandHistoryStore.getState().getProjectHistory("proj1");
-    expect(entries[0].prompt).toBe("spaced");
+    expect(entries[0]!.prompt).toBe("spaced");
   });
 
   it("stores agentId as null when not provided", () => {
     const store = useCommandHistoryStore.getState();
     store.recordPrompt("proj1", "test", undefined);
     const entries = useCommandHistoryStore.getState().getProjectHistory("proj1");
-    expect(entries[0].agentId).toBeNull();
+    expect(entries[0]!.agentId).toBeNull();
   });
 });

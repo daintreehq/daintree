@@ -128,7 +128,7 @@ describe("terminalColorSchemeStore", () => {
 
     store.addCustomScheme({ ...CUSTOM_SCHEME, name: "Updated" });
     expect(useTerminalColorSchemeStore.getState().customSchemes).toHaveLength(1);
-    expect(useTerminalColorSchemeStore.getState().customSchemes[0].name).toBe("Updated");
+    expect(useTerminalColorSchemeStore.getState().customSchemes[0]!.name).toBe("Updated");
   });
 
   it("removeCustomScheme removes and resets selection if needed", () => {

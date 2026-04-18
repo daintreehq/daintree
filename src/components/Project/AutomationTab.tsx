@@ -142,7 +142,7 @@ export function AutomationTab({
                         type="button"
                         onClick={() => {
                           const updated = [...runCommands];
-                          const current = updated[index].preferredLocation;
+                          const current = updated[index]!.preferredLocation;
                           updated[index] = {
                             ...cmd,
                             preferredLocation: current === "dock" ? "grid" : "dock",
@@ -192,8 +192,8 @@ export function AutomationTab({
                         if (index > 0) {
                           const updated = [...runCommands];
                           [updated[index - 1], updated[index]] = [
-                            updated[index],
-                            updated[index - 1],
+                            updated[index]!,
+                            updated[index - 1]!,
                           ];
                           onRunCommandsChange(updated);
                         }
@@ -210,8 +210,8 @@ export function AutomationTab({
                         if (index < runCommands.length - 1) {
                           const updated = [...runCommands];
                           [updated[index], updated[index + 1]] = [
-                            updated[index + 1],
-                            updated[index],
+                            updated[index + 1]!,
+                            updated[index]!,
                           ];
                           onRunCommandsChange(updated);
                         }

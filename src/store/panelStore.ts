@@ -108,7 +108,9 @@ export const usePanelStore = create<PanelGridState>()(
         get().clearQueue(id);
         // Build remaining terminals array for the focus slice
         const state = get();
-        const remainingTerminals = remainingIds.map((tid) => state.panelsById[tid]).filter(Boolean);
+        const remainingTerminals = remainingIds
+          .map((tid) => state.panelsById[tid])
+          .filter((t): t is NonNullable<typeof t> => Boolean(t));
         get().handleTerminalRemoved(id, remainingTerminals, removedIndex);
 
         // Auto-clear watch if panel is removed while watched
@@ -337,11 +339,11 @@ export const usePanelStore = create<PanelGridState>()(
 
         registrySlice.restoreTrashedGroup(groupRestoreId, targetWorktreeId);
 
-        const focusId =
+        const focusId: string =
           anchorPanel?.groupMetadata?.activeTabId &&
           groupPanelIds.includes(anchorPanel.groupMetadata.activeTabId)
             ? anchorPanel.groupMetadata.activeTabId
-            : groupPanelIds[0];
+            : groupPanelIds[0]!;
         set({ focusedId: focusId, activeDockTerminalId: null });
 
         const group = get().getPanelGroup(focusId);
@@ -355,7 +357,7 @@ export const usePanelStore = create<PanelGridState>()(
         const trashedIds = Array.from(trashedTerminals.keys());
         if (trashedIds.length === 0) return;
 
-        const lastId = trashedIds[trashedIds.length - 1];
+        const lastId = trashedIds[trashedIds.length - 1]!;
         const lastTrashed = trashedTerminals.get(lastId);
 
         if (lastTrashed?.groupRestoreId) {

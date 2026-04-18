@@ -352,8 +352,8 @@ describe("sortWorktreesByRelevance", () => {
     ];
     // Alpha sort would put id:1 (aaa) first, but relevance puts id:2 first (score 4 vs 3)
     const result = sortWorktreesByRelevance(worktrees, "auth", "alpha");
-    expect(result[0].id).toBe("2"); // issueTitle starts-with (score 4)
-    expect(result[1].id).toBe("1"); // issueTitle contains (score 3)
+    expect(result[0]!.id).toBe("2"); // issueTitle starts-with (score 4)
+    expect(result[1]!.id).toBe("1"); // issueTitle contains (score 3)
   });
 
   it("preserves sortWorktrees order as tiebreaker for equal scores", () => {
@@ -363,8 +363,8 @@ describe("sortWorktreesByRelevance", () => {
     ];
     const result = sortWorktreesByRelevance(worktrees, "auth", "alpha");
     // Both score 4 (issueTitle starts-with), so alpha order preserved
-    expect(result[0].id).toBe("2");
-    expect(result[1].id).toBe("1");
+    expect(result[0]!.id).toBe("2");
+    expect(result[1]!.id).toBe("1");
   });
 
   it("places score-0 bypass items after scored items", () => {
@@ -373,8 +373,8 @@ describe("sortWorktreesByRelevance", () => {
       createMockWorktree({ id: "2", name: "auth-fix", issueTitle: "Auth fix" }),
     ];
     const result = sortWorktreesByRelevance(worktrees, "auth", "alpha");
-    expect(result[0].id).toBe("2");
-    expect(result[1].id).toBe("1");
+    expect(result[0]!.id).toBe("2");
+    expect(result[1]!.id).toBe("1");
   });
 
   it("keeps main worktree first as tiebreaker when scores are equal", () => {
@@ -384,8 +384,8 @@ describe("sortWorktreesByRelevance", () => {
     ];
     const result = sortWorktreesByRelevance(worktrees, "auth", "alpha");
     // Both score 4 (name starts-with), main first via sortWorktrees tiebreaker
-    expect(result[0].id).toBe("1");
-    expect(result[1].id).toBe("2");
+    expect(result[0]!.id).toBe("1");
+    expect(result[1]!.id).toBe("2");
   });
 });
 
@@ -663,7 +663,7 @@ describe("sortWorktrees", () => {
       createMockWorktree({ id: "2", name: "main", isMainWorktree: true }),
     ];
     const sorted = sortWorktrees(worktrees, "alpha");
-    expect(sorted[0].id).toBe("2");
+    expect(sorted[0]!.id).toBe("2");
   });
 
   it("sorts by recent activity (most recent first)", () => {
@@ -711,7 +711,7 @@ describe("sortWorktrees", () => {
       createMockWorktree({ id: "2", name: "b", lastActivityTimestamp: 1000 }),
     ];
     const sorted = sortWorktrees(worktrees, "recent");
-    expect(sorted[0].id).toBe("2");
+    expect(sorted[0]!.id).toBe("2");
   });
 
   it("uses createdAt when lastActivityTimestamp is null", () => {
@@ -765,7 +765,7 @@ describe("sortWorktrees", () => {
       createMockWorktree({ id: "2", name: "b", createdAt: 1000 }),
     ];
     const sorted = sortWorktrees(worktrees, "created");
-    expect(sorted[0].id).toBe("2");
+    expect(sorted[0]!.id).toBe("2");
   });
 
   it("does not mutate original array", () => {
@@ -796,9 +796,9 @@ describe("sortWorktrees", () => {
         createMockWorktree({ id: "3", name: "bugfix", isMainWorktree: false }),
       ];
       const sorted = sortWorktrees(worktrees, "alpha", ["1", "3"]);
-      expect(sorted[0].id).toBe("2"); // main first
-      expect(sorted[1].id).toBe("1"); // first pinned
-      expect(sorted[2].id).toBe("3"); // second pinned
+      expect(sorted[0]!.id).toBe("2"); // main first
+      expect(sorted[1]!.id).toBe("1"); // first pinned
+      expect(sorted[2]!.id).toBe("3"); // second pinned
     });
 
     it("applies normal sorting to unpinned worktrees", () => {
@@ -831,16 +831,16 @@ describe("sortWorktrees", () => {
       const pinnedOrder = ["1", "3"];
 
       const sortedByAlpha = sortWorktrees(worktrees, "alpha", pinnedOrder);
-      expect(sortedByAlpha[0].id).toBe("1");
-      expect(sortedByAlpha[1].id).toBe("3");
+      expect(sortedByAlpha[0]!.id).toBe("1");
+      expect(sortedByAlpha[1]!.id).toBe("3");
 
       const sortedByCreated = sortWorktrees(worktrees, "created", pinnedOrder);
-      expect(sortedByCreated[0].id).toBe("1");
-      expect(sortedByCreated[1].id).toBe("3");
+      expect(sortedByCreated[0]!.id).toBe("1");
+      expect(sortedByCreated[1]!.id).toBe("3");
 
       const sortedByRecent = sortWorktrees(worktrees, "recent", pinnedOrder);
-      expect(sortedByRecent[0].id).toBe("1");
-      expect(sortedByRecent[1].id).toBe("3");
+      expect(sortedByRecent[0]!.id).toBe("1");
+      expect(sortedByRecent[1]!.id).toBe("3");
     });
 
     it("returns unchanged order with empty pinnedWorktrees array", () => {
@@ -872,7 +872,7 @@ describe("sortWorktrees manual order", () => {
       createMockWorktree({ id: "3", name: "c" }),
     ];
     const sorted = sortWorktrees(worktrees, "manual", [], ["2"]);
-    expect(sorted[0].id).toBe("2");
+    expect(sorted[0]!.id).toBe("2");
     // remaining items sorted alphabetically as tiebreaker
     expect(sorted.slice(1).map((w) => w.id)).toEqual(["1", "3"]);
   });
@@ -892,7 +892,7 @@ describe("sortWorktrees manual order", () => {
       createMockWorktree({ id: "2", name: "main", isMainWorktree: true }),
     ];
     const sorted = sortWorktrees(worktrees, "manual", [], ["1", "2"]);
-    expect(sorted[0].id).toBe("2"); // main always first
+    expect(sorted[0]!.id).toBe("2"); // main always first
   });
 
   it("respects pinned worktree precedence in manual mode", () => {
@@ -902,7 +902,7 @@ describe("sortWorktrees manual order", () => {
       createMockWorktree({ id: "3", name: "c" }),
     ];
     const sorted = sortWorktrees(worktrees, "manual", ["3"], ["1", "2", "3"]);
-    expect(sorted[0].id).toBe("3"); // pinned first
+    expect(sorted[0]!.id).toBe("3"); // pinned first
     expect(sorted.slice(1).map((w) => w.id)).toEqual(["1", "2"]); // then manual order
   });
 
@@ -940,13 +940,13 @@ describe("groupByType", () => {
       createMockWorktree({ id: "2", branch: "main", isMainWorktree: true }),
     ];
     const groups = groupByType(worktrees, "alpha");
-    expect(groups[0].type).toBe("main");
+    expect(groups[0]!.type).toBe("main");
   });
 
   it("includes displayName for each group", () => {
     const worktrees = [createMockWorktree({ id: "1", branch: "feature/test" })];
     const groups = groupByType(worktrees, "alpha");
-    expect(groups[0].displayName).toBe("Features");
+    expect(groups[0]!.displayName).toBe("Features");
   });
 
   it("sorts worktrees within groups according to orderBy", () => {
@@ -956,7 +956,7 @@ describe("groupByType", () => {
     ];
     const groups = groupByType(worktrees, "alpha");
     const featureGroup = groups.find((g) => g.type === "feature");
-    expect(featureGroup?.worktrees[0].name).toBe("a-feature");
+    expect(featureGroup?.worktrees[0]!.name).toBe("a-feature");
   });
 
   it("excludes empty groups", () => {
@@ -1116,7 +1116,7 @@ describe("filterTriageWorktrees", () => {
     const metaMap = buildMetaMap([["w1", { hasWaitingAgent: true }]]);
     const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "");
     expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("w1");
+    expect(result[0]!.id).toBe("w1");
   });
 
   it("includes worktrees with hasMergeConflict", () => {
@@ -1151,7 +1151,7 @@ describe("filterTriageWorktrees", () => {
     ]);
     const result = filterTriageWorktrees(worktrees, metaMap, "main-id", undefined, "");
     expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("w1");
+    expect(result[0]!.id).toBe("w1");
   });
 
   it("excludes integration worktree even when qualifying", () => {
@@ -1165,7 +1165,7 @@ describe("filterTriageWorktrees", () => {
     ]);
     const result = filterTriageWorktrees(worktrees, metaMap, undefined, "dev-id", "");
     expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("w1");
+    expect(result[0]!.id).toBe("w1");
   });
 
   it("filters by text search query", () => {
@@ -1179,7 +1179,7 @@ describe("filterTriageWorktrees", () => {
     ]);
     const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "auth");
     expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("w1");
+    expect(result[0]!.id).toBe("w1");
   });
 
   it("filters by #number query matching issueNumber", () => {
@@ -1193,7 +1193,7 @@ describe("filterTriageWorktrees", () => {
     ]);
     const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "#42");
     expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("w1");
+    expect(result[0]!.id).toBe("w1");
   });
 
   it("returns all qualifying worktrees when query is empty", () => {

@@ -35,7 +35,7 @@ describe("notify()", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "success", message: "Task done", priority: "high" });
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
-      expect(useNotificationHistoryStore.getState().entries[0].message).toBe("Task done");
+      expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe("Task done");
     });
 
     it("adds string message to history for low priority", () => {
@@ -58,7 +58,7 @@ describe("notify()", () => {
         inboxMessage: "plain text for history",
         priority: "low",
       });
-      expect(useNotificationHistoryStore.getState().entries[0].message).toBe(
+      expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe(
         "plain text for history"
       );
     });
@@ -71,7 +71,7 @@ describe("notify()", () => {
         inboxMessage: "inbox message",
         priority: "high",
       });
-      expect(useNotificationHistoryStore.getState().entries[0].message).toBe("inbox message");
+      expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe("inbox message");
     });
 
     it("skips history entry if no string message and no inboxMessage", () => {
@@ -92,7 +92,7 @@ describe("notify()", () => {
         priority: "high",
         correlationId: "panel-abc",
       });
-      expect(useNotificationHistoryStore.getState().entries[0].correlationId).toBe("panel-abc");
+      expect(useNotificationHistoryStore.getState().entries[0]!.correlationId).toBe("panel-abc");
     });
   });
 
@@ -111,8 +111,8 @@ describe("notify()", () => {
         },
       });
       const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry.actions).toHaveLength(1);
-      expect(entry.actions![0]).toEqual({
+      expect(entry!.actions).toHaveLength(1);
+      expect(entry!.actions![0]).toEqual({
         label: "Go to terminal",
         actionId: "panel.focus",
         actionArgs: { panelId: "p1" },
@@ -129,7 +129,7 @@ describe("notify()", () => {
         action: { label: "Click me", onClick: () => {} },
       });
       const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry.actions).toBeUndefined();
+      expect(entry!.actions).toBeUndefined();
     });
 
     it("filters mixed actions array to only descriptor-backed ones", () => {
@@ -149,8 +149,8 @@ describe("notify()", () => {
         ],
       });
       const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry.actions).toHaveLength(1);
-      expect(entry.actions![0].label).toBe("Has ID");
+      expect(entry!.actions).toHaveLength(1);
+      expect(entry!.actions![0]!.label).toBe("Has ID");
     });
 
     it("forwards actions to history in grid-bar path", () => {
@@ -167,8 +167,8 @@ describe("notify()", () => {
         },
       });
       const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry.actions).toHaveLength(1);
-      expect(entry.actions![0].actionId).toBe("panel.focus");
+      expect(entry!.actions).toHaveLength(1);
+      expect(entry!.actions![0]!.actionId).toBe("panel.focus");
     });
 
     it("preserves variant in history action", () => {
@@ -185,7 +185,7 @@ describe("notify()", () => {
         },
       });
       const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry.actions![0].variant).toBe("secondary");
+      expect(entry!.actions![0]!.variant).toBe("secondary");
     });
 
     it("combines actions from both action and actions fields", () => {
@@ -210,9 +210,9 @@ describe("notify()", () => {
         ],
       });
       const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry.actions).toHaveLength(2);
-      expect(entry.actions![0].actionArgs).toEqual({ panelId: "p2" });
-      expect(entry.actions![1].actionArgs).toEqual({ panelId: "p1" });
+      expect(entry!.actions).toHaveLength(2);
+      expect(entry!.actions![0]!.actionArgs).toEqual({ panelId: "p2" });
+      expect(entry!.actions![1]!.actionArgs).toEqual({ panelId: "p1" });
     });
   });
 
@@ -280,7 +280,7 @@ describe("notify()", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(false);
       notify({ type: "info", message: "Inline bar", priority: "low", placement: "grid-bar" });
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
-      expect(useNotificationStore.getState().notifications[0].placement).toBe("grid-bar");
+      expect(useNotificationStore.getState().notifications[0]!.placement).toBe("grid-bar");
     });
   });
 
@@ -289,7 +289,7 @@ describe("notify()", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "success", message: "Default" });
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification.priority).toBe("high");
+      expect(notification!.priority).toBe("high");
     });
   });
 
@@ -312,31 +312,31 @@ describe("notify()", () => {
     it("seenAsToast is true when focused + high (toast was shown)", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "success", message: "Done", priority: "high" });
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(true);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(true);
     });
 
     it("seenAsToast is false when blurred + high (toast not shown)", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(false);
       notify({ type: "error", message: "Failed", priority: "high" });
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(false);
     });
 
     it("seenAsToast is false for low priority regardless of focus (never toasts)", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "info", message: "Silent", priority: "low" });
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(false);
     });
 
     it("seenAsToast is true for watch priority (always toasts)", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(false);
       notify({ type: "warning", message: "Agent waiting", priority: "watch" });
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(true);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(true);
     });
 
     it("seenAsToast is true for grid-bar placement (shown inline)", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(false);
       notify({ type: "info", message: "Inline", priority: "low", placement: "grid-bar" });
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(true);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(true);
     });
   });
 
@@ -409,7 +409,7 @@ describe("notify()", () => {
       notify({ type: "info", message: "toast-1", priority: "high" });
 
       const firstEntry = useNotificationHistoryStore.getState().entries[0];
-      expect(firstEntry.seenAsToast).toBe(true);
+      expect(firstEntry!.seenAsToast).toBe(true);
 
       notify({ type: "info", message: "toast-2", priority: "high" });
       notify({ type: "info", message: "toast-3", priority: "high" });
@@ -417,7 +417,7 @@ describe("notify()", () => {
 
       const updatedEntry = useNotificationHistoryStore
         .getState()
-        .entries.find((e) => e.id === firstEntry.id);
+        .entries.find((e) => e.id === firstEntry!.id);
       expect(updatedEntry?.seenAsToast).toBe(false);
     });
 
@@ -451,7 +451,7 @@ describe("notify()", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "success", message: "Task done", priority: "high" });
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
-      expect(useNotificationHistoryStore.getState().entries[0].message).toBe("Task done");
+      expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe("Task done");
     });
 
     it("does not create toast when disabled and focused + high", () => {
@@ -485,7 +485,7 @@ describe("notify()", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "success", message: "Task done", priority: "high" });
       const entry = useNotificationHistoryStore.getState().entries[0];
-      expect(entry.seenAsToast).toBe(false);
+      expect(entry!.seenAsToast).toBe(false);
       expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
     });
 
@@ -535,8 +535,8 @@ describe("notify()", () => {
 
       const entries = useNotificationHistoryStore.getState().entries;
       expect(entries).toHaveLength(2);
-      expect(entries[0].message).toBe("Agent 2 done");
-      expect(entries[1].message).toBe("Agent 1 done");
+      expect(entries[0]!.message).toBe("Agent 2 done");
+      expect(entries[1]!.message).toBe("Agent 1 done");
     });
 
     it("updates toast message and title on coalesce", () => {
@@ -545,8 +545,8 @@ describe("notify()", () => {
       notify(makeCoalescePayload());
 
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification.message).toBe("2 agents finished");
-      expect(notification.title).toBe("Agent tasks completed");
+      expect(notification!.message).toBe("2 agents finished");
+      expect(notification!.title).toBe("Agent tasks completed");
     });
 
     it("updates action to multi-agent on coalesce", () => {
@@ -555,7 +555,7 @@ describe("notify()", () => {
       notify(makeCoalescePayload());
 
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification.action?.label).toBe("View all");
+      expect(notification!.action?.label).toBe("View all");
     });
 
     it("clears stale per-item actions on coalesce when buildAction is provided", () => {
@@ -602,8 +602,8 @@ describe("notify()", () => {
       });
 
       const notification = useNotificationStore.getState().notifications[0];
-      expect(notification.actions).toBeUndefined();
-      expect(notification.action?.label).toBe("View");
+      expect(notification!.actions).toBeUndefined();
+      expect(notification!.action?.label).toBe("View");
     });
 
     it("creates fresh toast after coalescing window expires", () => {
@@ -678,10 +678,10 @@ describe("notify()", () => {
     it("sets updatedAt on coalesced notification", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify(makeCoalescePayload());
-      const firstUpdatedAt = useNotificationStore.getState().notifications[0].updatedAt;
+      const firstUpdatedAt = useNotificationStore.getState().notifications[0]!.updatedAt;
 
       notify(makeCoalescePayload());
-      const secondUpdatedAt = useNotificationStore.getState().notifications[0].updatedAt;
+      const secondUpdatedAt = useNotificationStore.getState().notifications[0]!.updatedAt;
 
       expect(secondUpdatedAt).toBeDefined();
       expect(secondUpdatedAt).toBeGreaterThanOrEqual(firstUpdatedAt!);
@@ -724,7 +724,7 @@ describe("notify()", () => {
       notify({ type: "success", message: "Quiet entry", priority: "high" });
 
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
-      expect(useNotificationHistoryStore.getState().entries[0].message).toBe("Quiet entry");
+      expect(useNotificationHistoryStore.getState().entries[0]!.message).toBe("Quiet entry");
       Date.now = realDateNow;
     });
 
@@ -736,7 +736,7 @@ describe("notify()", () => {
 
       notify({ type: "success", message: "Unseen", priority: "high" });
 
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(false);
       Date.now = realDateNow;
     });
 
@@ -802,7 +802,7 @@ describe("notify()", () => {
 
       expect(useNotificationStore.getState().notifications).toHaveLength(0);
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(false);
       Date.now = realDateNow;
     });
 
@@ -863,7 +863,7 @@ describe("notify()", () => {
       });
 
       expect(useNotificationStore.getState().notifications).toHaveLength(1);
-      expect(useNotificationStore.getState().notifications[0].message).toBe("After quiet");
+      expect(useNotificationStore.getState().notifications[0]!.message).toBe("After quiet");
       expect(id.length).toBeGreaterThan(0);
       Date.now = realDateNow;
     });
@@ -877,7 +877,7 @@ describe("notify()", () => {
       notify({ type: "info", message: "Low quiet", priority: "low" });
 
       expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
-      expect(useNotificationHistoryStore.getState().entries[0].seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(false);
       Date.now = realDateNow;
     });
   });
@@ -899,7 +899,7 @@ describe("notify()", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify(comboPayload());
       const n = useNotificationStore.getState().notifications[0];
-      expect(n.message).toBe("Agent spawned");
+      expect(n!.message).toBe("Agent spawned");
     });
 
     it("second call within window uses tier 1", () => {
@@ -908,7 +908,7 @@ describe("notify()", () => {
       notify(comboPayload());
       const notifications = useNotificationStore.getState().notifications;
       expect(notifications).toHaveLength(2);
-      expect(notifications[1].message).toBe("Double agent");
+      expect(notifications[1]!.message).toBe("Double agent");
     });
 
     it("third call within window uses tier 2", () => {
@@ -917,16 +917,16 @@ describe("notify()", () => {
       notify(comboPayload());
       notify(comboPayload());
       const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[2].message).toBe("Triple agent");
+      expect(notifications[2]!.message).toBe("Triple agent");
     });
 
     it("calls beyond last tier loop on final tier", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       for (let i = 0; i < 6; i++) notify(comboPayload());
       const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[3].message).toBe("Sleeper cell activated");
-      expect(notifications[4].message).toBe("Sleeper cell activated");
-      expect(notifications[5].message).toBe("Sleeper cell activated");
+      expect(notifications[3]!.message).toBe("Sleeper cell activated");
+      expect(notifications[4]!.message).toBe("Sleeper cell activated");
+      expect(notifications[5]!.message).toBe("Sleeper cell activated");
     });
 
     it("resets to tier 0 after window expires", () => {
@@ -943,8 +943,8 @@ describe("notify()", () => {
       notify(comboPayload());
 
       const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[1].message).toBe("Double agent");
-      expect(notifications[2].message).toBe("Agent spawned"); // reset
+      expect(notifications[1]!.message).toBe("Double agent");
+      expect(notifications[2]!.message).toBe("Agent spawned"); // reset
 
       Date.now = realDateNow;
     });
@@ -965,7 +965,7 @@ describe("notify()", () => {
 
       const notifications = useNotificationStore.getState().notifications;
       expect(notifications).toHaveLength(1);
-      expect(notifications[0].message).toBe("Agent spawned"); // tier 0, not escalated
+      expect(notifications[0]!.message).toBe("Agent spawned"); // tier 0, not escalated
 
       Date.now = realDateNow;
     });
@@ -982,7 +982,7 @@ describe("notify()", () => {
 
       const notifications = useNotificationStore.getState().notifications;
       expect(notifications).toHaveLength(1);
-      expect(notifications[0].message).toBe("Agent spawned"); // tier 0
+      expect(notifications[0]!.message).toBe("Agent spawned"); // tier 0
     });
 
     it("does not increment when blurred + high (shouldToast false)", () => {
@@ -996,7 +996,7 @@ describe("notify()", () => {
 
       const notifications = useNotificationStore.getState().notifications;
       expect(notifications).toHaveLength(1);
-      expect(notifications[0].message).toBe("Agent spawned"); // tier 0
+      expect(notifications[0]!.message).toBe("Agent spawned"); // tier 0
     });
 
     it("each combo call creates a separate toast (not coalesced)", () => {
@@ -1015,11 +1015,11 @@ describe("notify()", () => {
 
       const entries = useNotificationHistoryStore.getState().entries;
       expect(entries).toHaveLength(2);
-      expect(entries[0].message).toBe("Agent spawned");
-      expect(entries[1].message).toBe("Agent spawned");
+      expect(entries[0]!.message).toBe("Agent spawned");
+      expect(entries[1]!.message).toBe("Agent spawned");
 
       const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[1].message).toBe("Double agent");
+      expect(notifications[1]!.message).toBe("Double agent");
     });
 
     it("works with watch priority and fires native notification", () => {
@@ -1035,8 +1035,8 @@ describe("notify()", () => {
 
       const notifications = useNotificationStore.getState().notifications;
       expect(notifications).toHaveLength(2);
-      expect(notifications[0].message).toBe("Agent spawned");
-      expect(notifications[1].message).toBe("Double agent");
+      expect(notifications[0]!.message).toBe("Agent spawned");
+      expect(notifications[1]!.message).toBe("Double agent");
       expect(mockShowNative).toHaveBeenCalledTimes(2);
     });
 
@@ -1057,8 +1057,8 @@ describe("notify()", () => {
       });
 
       const notifications = useNotificationStore.getState().notifications;
-      expect(notifications[1].message).toBe("Double agent");
-      expect(notifications[2].message).toBe("Worktree created"); // tier 0 for different key
+      expect(notifications[1]!.message).toBe("Double agent");
+      expect(notifications[2]!.message).toBe("Worktree created"); // tier 0 for different key
     });
   });
 });

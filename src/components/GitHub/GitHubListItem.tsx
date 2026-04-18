@@ -322,9 +322,9 @@ export function GitHubListItem({
 
             {!isItemPR && item.assignees.length > 0 && (
               <Avatar
-                src={item.assignees[0].avatarUrl}
-                alt={item.assignees[0].login}
-                title={`Assigned to ${item.assignees[0].login}`}
+                src={item.assignees[0]!.avatarUrl}
+                alt={item.assignees[0]!.login}
+                title={`Assigned to ${item.assignees[0]!.login}`}
                 className="w-4 h-4 shrink-0"
               />
             )}

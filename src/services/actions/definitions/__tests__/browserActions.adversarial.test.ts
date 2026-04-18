@@ -61,7 +61,7 @@ describe("browserActions adversarial", () => {
     const run = setupActions();
     await run("browser.navigate", { url: "https://a.example" });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
       detail: { id: string; url: string };
     };
@@ -74,7 +74,7 @@ describe("browserActions adversarial", () => {
     const run = setupActions();
     await run("browser.navigate", { url: "https://a.example", terminalId: "b2" });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       detail: { id: string };
     };
     expect(event.detail.id).toBe("b2");
@@ -144,7 +144,7 @@ describe("browserActions adversarial", () => {
     const run = setupActions();
     await run("browser.setZoomLevel", { zoomFactor: 1.5 });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
       detail: { id: string; zoomFactor: number };
     };
@@ -164,7 +164,7 @@ describe("browserActions adversarial", () => {
     const run = setupActions();
     await run("browser.reload", { terminalId: "other" });
 
-    const event = dispatchSpy.mock.calls[0][0] as unknown as {
+    const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       detail: { id: string };
     };
     expect(event.detail.id).toBe("other");

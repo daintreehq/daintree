@@ -160,7 +160,7 @@ export function BrowserToolbar({
         }
         if (e.key === "Enter" && highlightedIndex >= 0) {
           e.preventDefault();
-          const selected = suggestions[highlightedIndex];
+          const selected = suggestions[highlightedIndex]!;
           setIsEditing(false);
           setIsDropdownOpen(false);
           setHighlightedIndex(-1);
@@ -203,8 +203,8 @@ export function BrowserToolbar({
   const handleZoomStep = useCallback(
     (direction: "in" | "out") => {
       if (!onZoomChange) return;
-      const minZoom = ZOOM_VALUES[0];
-      const maxZoom = ZOOM_VALUES[ZOOM_VALUES.length - 1];
+      const minZoom = ZOOM_VALUES[0]!;
+      const maxZoom = ZOOM_VALUES[ZOOM_VALUES.length - 1]!;
       const clampedZoom = Math.max(minZoom, Math.min(maxZoom, zoomFactor));
       const exactIndex = ZOOM_VALUES.findIndex((value) => Math.abs(value - clampedZoom) < 0.01);
       let nextZoom = clampedZoom;
@@ -214,12 +214,12 @@ export function BrowserToolbar({
           direction === "in"
             ? Math.min(exactIndex + 1, ZOOM_VALUES.length - 1)
             : Math.max(exactIndex - 1, 0);
-        nextZoom = ZOOM_VALUES[nextIndex];
+        nextZoom = ZOOM_VALUES[nextIndex]!;
       } else if (direction === "in") {
         nextZoom = ZOOM_VALUES.find((value) => value > clampedZoom) ?? maxZoom;
       } else {
         const lowerValues = ZOOM_VALUES.filter((value) => value < clampedZoom);
-        nextZoom = lowerValues.length > 0 ? lowerValues[lowerValues.length - 1] : minZoom;
+        nextZoom = lowerValues.length > 0 ? lowerValues[lowerValues.length - 1]! : minZoom;
       }
 
       if (Math.abs(nextZoom - zoomFactor) >= 0.001) {
@@ -239,8 +239,8 @@ export function BrowserToolbar({
   const currentZoomLabel =
     ZOOM_PRESETS.find((p) => Math.abs(p.value - zoomFactor) < 0.01)?.label ??
     `${Math.round(zoomFactor * 100)}%`;
-  const minZoom = ZOOM_VALUES[0];
-  const maxZoom = ZOOM_VALUES[ZOOM_VALUES.length - 1];
+  const minZoom = ZOOM_VALUES[0]!;
+  const maxZoom = ZOOM_VALUES[ZOOM_VALUES.length - 1]!;
   const canZoomOut = zoomFactor > minZoom + 0.001;
   const canZoomIn = zoomFactor < maxZoom - 0.001;
 

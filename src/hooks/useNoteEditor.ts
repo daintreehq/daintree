@@ -294,7 +294,7 @@ export function useNoteEditor({
         handleAddTag(tagInput);
         setTagInput("");
       } else if (e.key === "Backspace" && !tagInput && latestMetadataRef.current?.tags?.length) {
-        handleRemoveTag(latestMetadataRef.current.tags[latestMetadataRef.current.tags.length - 1]);
+        handleRemoveTag(latestMetadataRef.current.tags[latestMetadataRef.current.tags.length - 1]!);
       }
     },
     [tagInput, handleAddTag, handleRemoveTag]

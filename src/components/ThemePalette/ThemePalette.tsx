@@ -142,7 +142,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       return;
     }
     if (selectedIndex < 0 || selectedIndex >= results.length) return;
-    injectSchemeToDOM(results[selectedIndex]);
+    injectSchemeToDOM(results[selectedIndex]!);
   }, [isOpen, results, selectedIndex]);
 
   const commit = useCallback(
@@ -168,7 +168,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
       onClose();
       return;
     }
-    commit(results[selectedIndex]);
+    commit(results[selectedIndex]!);
   }, [results, selectedIndex, commit, onClose]);
 
   return (

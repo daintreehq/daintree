@@ -1084,8 +1084,8 @@ describe("worktree cycling respects sidebar order", () => {
 
     // Visible list: [main, wt-working]. Both actions must pick the same entry
     // (last visible → wt-working) so cycle and directional navigation agree.
-    expect(select.mock.calls[0][0]).toBe("wt-working");
-    expect(select.mock.calls[1][0]).toBe("wt-working");
+    expect(select.mock.calls[0]![0]).toBe("wt-working");
+    expect(select.mock.calls[1]![0]).toBe("wt-working");
   });
 
   it("up/down use first/last visible when active is filtered out", async () => {

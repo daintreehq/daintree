@@ -40,7 +40,7 @@ describe("SettingsInput", () => {
     const describedBy = input.getAttribute("aria-describedby")!;
     const ids = describedBy.split(" ");
     expect(ids).toHaveLength(1);
-    expect(document.getElementById(ids[0])?.textContent).toBe("Required");
+    expect(document.getElementById(ids[0]!)?.textContent).toBe("Required");
   });
 
   it("shows modified indicator when isModified", () => {

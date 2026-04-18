@@ -393,7 +393,7 @@ describe("useNoteEditor", () => {
 
     const writeCalls = vi.mocked(notesClient.write).mock.calls;
     expect(writeCalls).toHaveLength(1);
-    expect(writeCalls[0][2]).toEqual(expect.objectContaining({ tags: ["urgent"] }));
+    expect(writeCalls[0]![2]).toEqual(expect.objectContaining({ tags: ["urgent"] }));
 
     // Advance past the save debounce - should not fire again since it was cleared
     await act(async () => {

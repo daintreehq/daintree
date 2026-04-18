@@ -42,12 +42,12 @@ export const createOrderingActions = (
 
       const reorderedScoped = [...scopedIds];
       reorderedScoped.splice(fromIndex, 1);
-      reorderedScoped.splice(toIndex, 0, scopedIds[fromIndex]);
+      reorderedScoped.splice(toIndex, 0, scopedIds[fromIndex]!);
 
       // Build a mapping from old scoped position to new ID
       const scopedMapping = new Map<string, string>();
       for (let i = 0; i < scopedIds.length; i++) {
-        scopedMapping.set(scopedIds[i], reorderedScoped[i]);
+        scopedMapping.set(scopedIds[i]!, reorderedScoped[i]!);
       }
 
       // Rebuild panelIds with the reordered scoped IDs in place
@@ -87,7 +87,7 @@ export const createOrderingActions = (
       // Find scoped indices within the target location
       const scopedIndices: number[] = [];
       for (let i = 0; i < filteredIds.length; i++) {
-        const t = state.panelsById[filteredIds[i]];
+        const t = state.panelsById[filteredIds[i]!];
         if (t && matchesLocation(t) && matchesWorktree(t)) {
           scopedIndices.push(i);
         }
@@ -100,10 +100,10 @@ export const createOrderingActions = (
         scopedCount === 0
           ? filteredIds.length
           : clampedIndex <= 0
-            ? scopedIndices[0]
+            ? scopedIndices[0]!
             : clampedIndex >= scopedCount
-              ? scopedIndices[scopedCount - 1] + 1
-              : scopedIndices[clampedIndex];
+              ? scopedIndices[scopedCount - 1]! + 1
+              : scopedIndices[clampedIndex]!;
 
       // Update terminal location
       const updatedTerminal: TerminalInstance = { ...terminal, location };

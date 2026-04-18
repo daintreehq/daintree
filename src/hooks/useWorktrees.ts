@@ -63,7 +63,7 @@ export function useWorktrees(): UseWorktreesReturn {
   return {
     worktrees,
     worktreeMap: normalizedMap,
-    activeId: worktrees.length > 0 ? worktrees[0].id : null,
+    activeId: worktrees.length > 0 ? worktrees[0]!.id : null,
     isLoading,
     isInitialized,
     isReconnecting,

@@ -64,7 +64,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
         const blocks = getInstallBlocksForCurrentOS(config);
         if (!blocks || blocks.length === 0) continue;
         const methodIdx = selectedMethodIndex[agentId] ?? 0;
-        const block = blocks[methodIdx] ?? blocks[0];
+        const block = blocks[methodIdx] ?? blocks[0]!;
 
         const desiredStatus: CardStatus = !isBlockExecutable(block) ? "manual" : "idle";
 
@@ -91,7 +91,7 @@ export function AgentCliStep({ availability, selections, onInstallComplete }: Ag
       if (!blocks || blocks.length === 0) return;
 
       const methodIdx = selectedMethodIndex[agentId] ?? 0;
-      const block = blocks[methodIdx] ?? blocks[0];
+      const block = blocks[methodIdx] ?? blocks[0]!;
       if (!isBlockExecutable(block)) return;
 
       installingRef.current.add(agentId);

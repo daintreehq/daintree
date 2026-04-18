@@ -87,7 +87,7 @@ function CommandList({
     const target = index + direction;
     if (target < 0 || target >= commands.length) return;
     const updated = [...commands];
-    [updated[index], updated[target]] = [updated[target], updated[index]];
+    [updated[index], updated[target]] = [updated[target]!, updated[index]!];
     onChange(updated);
   };
 
@@ -294,7 +294,7 @@ export function ResourceEnvironmentsSection({
       onResourceEnvironmentsChange(envs);
       const remaining = Object.keys(envs);
       if (remaining.length > 0) {
-        const next = remaining[0];
+        const next = remaining[0]!;
         setSelectedEnvName(next);
         onActiveResourceEnvironmentChange(next);
       }

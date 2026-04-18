@@ -316,7 +316,7 @@ export function Toolbar({
         e.preventDefault();
         activeToolbarIndexRef.current = newIdx;
         syncToolbarTabStops(items, newIdx);
-        items[newIdx].focus();
+        items[newIdx]!.focus();
       }
     },
     [getToolbarItems, syncToolbarTabStops]
@@ -668,7 +668,7 @@ export function Toolbar({
           )}
           aria-hidden={visibleSet.has(id) ? undefined : true}
         >
-          {buttonRegistry[id].render()}
+          {buttonRegistry[id]!.render()}
         </div>
       ));
   };
@@ -691,7 +691,7 @@ export function Toolbar({
           className={cn("app-no-drag", !isVisible && "invisible absolute pointer-events-none")}
           aria-hidden={isVisible ? undefined : true}
         >
-          {buttonRegistry[id].render()}
+          {buttonRegistry[id]!.render()}
         </div>
       );
     }
@@ -881,7 +881,7 @@ export function Toolbar({
               )}
             />
           )}
-          <div className="app-no-drag">{buttonRegistry["sidebar-toggle"].render()}</div>
+          <div className="app-no-drag">{buttonRegistry["sidebar-toggle"]!.render()}</div>
 
           <div className={toolbarDividerClass} />
 
@@ -980,7 +980,7 @@ export function Toolbar({
 
           <div className={toolbarDividerClass} />
 
-          <div className="app-no-drag">{buttonRegistry["portal-toggle"].render()}</div>
+          <div className="app-no-drag">{buttonRegistry["portal-toggle"]!.render()}</div>
         </div>
       </div>
     </>

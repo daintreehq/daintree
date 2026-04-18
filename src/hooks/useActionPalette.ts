@@ -168,7 +168,7 @@ export function useActionPalette(): UseActionPaletteReturn {
 
   const confirmSelection = useCallback(() => {
     if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-      executeAction(results[selectedIndex]);
+      executeAction(results[selectedIndex]!);
     }
   }, [results, selectedIndex, executeAction]);
 

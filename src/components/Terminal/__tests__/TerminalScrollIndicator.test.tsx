@@ -71,7 +71,7 @@ describe("TerminalScrollIndicator", () => {
     fireEvent.click(screen.getByRole("button"));
 
     expect(rafCallbacks.length).toBeGreaterThan(0);
-    rafCallbacks[rafCallbacks.length - 1](0);
+    rafCallbacks[rafCallbacks.length - 1]!(0);
     expect(terminalInstanceService.focus).toHaveBeenCalledWith("t1");
 
     rafSpy.mockRestore();

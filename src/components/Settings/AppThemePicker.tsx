@@ -23,7 +23,7 @@ function shuffleArray<T>(arr: T[]): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
+    [a[i], a[j]] = [a[j]!, a[i]!];
   }
   return a;
 }
@@ -165,7 +165,7 @@ export function AppThemePicker() {
   const darkSchemes = useMemo(() => allSchemes.filter((s) => s.type !== "light"), [allSchemes]);
   const lightSchemes = useMemo(() => allSchemes.filter((s) => s.type === "light"), [allSchemes]);
   const selectedScheme = useMemo(
-    () => allSchemes.find((s) => s.id === selectedSchemeId) ?? allSchemes[0],
+    () => allSchemes.find((s) => s.id === selectedSchemeId) ?? allSchemes[0]!,
     [allSchemes, selectedSchemeId]
   );
 
