@@ -26,11 +26,60 @@ export interface SystemWakePayload {
   timestamp: number;
 }
 
-/** Three-state availability for an individual agent CLI */
-export type AgentAvailabilityState = "missing" | "installed" | "ready";
+/**
+ * Availability for an individual agent CLI.
+ *
+ * - `missing`: binary not found via any probe (PATH, native installer path, npx fallback).
+ * - `installed`: binary found but no auth credential detected (or auth inconclusive).
+ * - `ready`: binary found AND auth credential detected — ready to use.
+ * - `blocked`: binary exists but execution was denied (security software like Santa,
+ *   CrowdStrike, SentinelOne, or Windows Defender, or missing execute permission).
+ *   Distinct from `missing` because the fix is a permissions/allowlist change, not
+ *   a reinstall.
+ */
+export type AgentAvailabilityState = "missing" | "installed" | "ready" | "blocked";
 
 /** CLI availability status for AI agents */
 export type CliAvailability = Record<AgentId, AgentAvailabilityState>;
+
+/**
+ * Which probe layer located the CLI binary. Populated alongside
+ * {@link AgentCliDetail.resolvedPath} for the Settings diagnostics surface.
+ */
+export type AgentCliProbeSource = "which" | "native" | "npx" | "wsl";
+
+/**
+ * Reason a binary exists but cannot be executed. Only set when
+ * {@link AgentCliDetail.state} is `"blocked"`.
+ */
+export type AgentCliBlockReason = "security" | "permissions";
+
+/**
+ * Detailed CLI detection info surfaced for diagnostics. Kept as a parallel
+ * type so the existing {@link CliAvailability} IPC surface stays unchanged.
+ *
+ * `resolvedPath` contract:
+ * - For `which`/`native` probes: absolute filesystem path to the binary.
+ * - For `npx`: synthetic `npx:<package-name>` (no real filesystem path —
+ *   npx resolves the bin on each invocation).
+ * - For `wsl`: synthetic `wsl:<distro>` (execution target, not a Windows path).
+ * - `null` when the binary was not found or execution was blocked before
+ *   a path could be resolved.
+ */
+export interface AgentCliDetail {
+  state: AgentAvailabilityState;
+  resolvedPath: string | null;
+  via: AgentCliProbeSource | null;
+  /** Human-readable diagnostic message for UI (e.g. blocked-by-security reason). */
+  message?: string;
+  /** Reason when `state === "blocked"`. */
+  blockReason?: AgentCliBlockReason;
+  /** WSL distribution used when `via === "wsl"`. */
+  wslDistro?: string;
+}
+
+/** Map of agent ID → detailed detection result. */
+export type AgentCliDetails = Partial<Record<AgentId, AgentCliDetail>>;
 
 /** Version information for an agent */
 export interface AgentVersionInfo {

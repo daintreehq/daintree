@@ -2,6 +2,7 @@ import { CHANNELS } from "../channels.js";
 import { getAgentIds } from "../../../shared/config/agentRegistry.js";
 import type {
   AgentAvailabilityState,
+  AgentCliDetails,
   AgentInstallPayload,
 } from "../../../shared/types/ipc/system.js";
 import { sendToRenderer, typedHandle, typedHandleWithContext } from "../utils.js";
@@ -42,6 +43,24 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
   handlers.push(
     typedHandle(CHANNELS.SYSTEM_REFRESH_CLI_AVAILABILITY, handleSystemRefreshCliAvailability)
   );
+
+  const handleSystemGetAgentCliDetails = async (): Promise<AgentCliDetails> => {
+    if (!cliAvailabilityService) {
+      console.warn("[IPC] CliAvailabilityService not available");
+      return {};
+    }
+
+    let details = cliAvailabilityService.getDetails();
+    if (!details) {
+      // Details are populated by the same cycle as availability. If nothing
+      // is cached yet, kick off the check so renderers can lazy-load the
+      // diagnostics surface without a second probe pass.
+      await cliAvailabilityService.checkAvailability();
+      details = cliAvailabilityService.getDetails();
+    }
+    return details ?? {};
+  };
+  handlers.push(typedHandle(CHANNELS.SYSTEM_GET_AGENT_CLI_DETAILS, handleSystemGetAgentCliDetails));
 
   const handleSystemGetAgentVersions = async () => {
     if (!agentVersionService) {

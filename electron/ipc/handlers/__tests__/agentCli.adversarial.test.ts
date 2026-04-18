@@ -131,6 +131,65 @@ describe("agentCli IPC adversarial", () => {
     expect(checkAvailability).not.toHaveBeenCalled();
   });
 
+  it("SYSTEM_GET_AGENT_CLI_DETAILS returns {} when the service is absent", async () => {
+    register({ cliAvailabilityService: undefined });
+
+    const result = await getHandler(CHANNELS.SYSTEM_GET_AGENT_CLI_DETAILS)(fakeEvent());
+    expect(result).toEqual({});
+  });
+
+  it("SYSTEM_GET_AGENT_CLI_DETAILS returns cached details without re-probing", async () => {
+    const cached = {
+      claude: {
+        state: "ready" as const,
+        resolvedPath: "/usr/local/bin/claude",
+        via: "which" as const,
+      },
+    };
+    const checkAvailability = vi.fn();
+    register({
+      cliAvailabilityService: {
+        getAvailability: vi.fn().mockReturnValue({ claude: "ready" }),
+        getDetails: vi.fn().mockReturnValue(cached),
+        checkAvailability,
+        refresh: vi.fn(),
+      } as unknown as HandlerDependencies["cliAvailabilityService"],
+    });
+
+    const result = await getHandler(CHANNELS.SYSTEM_GET_AGENT_CLI_DETAILS)(fakeEvent());
+
+    expect(result).toEqual(cached);
+    expect(checkAvailability).not.toHaveBeenCalled();
+  });
+
+  it("SYSTEM_GET_AGENT_CLI_DETAILS lazy-loads via checkAvailability when no cache exists", async () => {
+    // First call to getDetails returns null (cold), second call (post-check)
+    // returns populated details — mirrors the real service's populate-on-
+    // check semantics.
+    const details = {
+      claude: {
+        state: "installed" as const,
+        resolvedPath: "/home/user/.local/bin/claude",
+        via: "native" as const,
+      },
+    };
+    const getDetails = vi.fn().mockReturnValueOnce(null).mockReturnValueOnce(details);
+    const checkAvailability = vi.fn().mockResolvedValue({ claude: "installed" });
+    register({
+      cliAvailabilityService: {
+        getAvailability: vi.fn().mockReturnValue(null),
+        getDetails,
+        checkAvailability,
+        refresh: vi.fn(),
+      } as unknown as HandlerDependencies["cliAvailabilityService"],
+    });
+
+    const result = await getHandler(CHANNELS.SYSTEM_GET_AGENT_CLI_DETAILS)(fakeEvent());
+
+    expect(checkAvailability).toHaveBeenCalledOnce();
+    expect(result).toEqual(details);
+  });
+
   it("SYSTEM_SET_AGENT_UPDATE_SETTINGS rejects invalid settings before persistence", async () => {
     register();
     const handler = getHandler(CHANNELS.SYSTEM_SET_AGENT_UPDATE_SETTINGS);

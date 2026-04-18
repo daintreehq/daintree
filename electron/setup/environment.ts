@@ -329,7 +329,12 @@ if (process.platform === "win32") {
   }
 }
 
-const REFRESH_TIMEOUT_MS = 5_000;
+// Bumped from 5s to 8s to tolerate slow corporate shells (VPN-delayed NFS
+// home dirs, heavy .zshrc). The common case is ~50ms; the timeout exists
+// purely to bound worst-case hangs. If the shell call still times out,
+// refreshPath() falls back to getUnixFallbackPaths() so CLIs installed via
+// mise/asdf/Volta are still discoverable.
+const REFRESH_TIMEOUT_MS = 8_000;
 
 function deduplicatePath(pathStr: string, caseInsensitive: boolean): string {
   const entries = pathStr.split(path.delimiter).filter(Boolean);
@@ -345,8 +350,61 @@ function deduplicatePath(pathStr: string, caseInsensitive: boolean): string {
   return unique.join(path.delimiter);
 }
 
-function expandWindowsEnvVars(str: string): string {
+export function expandWindowsEnvVars(str: string): string {
   return str.replace(/%([^%]+)%/g, (match, name: string) => process.env[name] ?? match);
+}
+
+/**
+ * Fallback shim/bin directories to add to PATH on macOS/Linux when the
+ * shell-env probe fails or times out. Each candidate is gated by
+ * `existsSync` so we never prepend nonexistent directories.
+ *
+ * Rationale: Electron apps launched from Finder/dock inherit a minimal
+ * PATH that excludes user-level version managers (mise/asdf/Volta) and the
+ * native Claude installer bin dir. The shell-env probe covers the common
+ * case, but corporate `.zshrc` files can hang shell-env past the timeout.
+ * Without this fallback those users would see every CLI as "missing".
+ */
+export function getUnixFallbackPaths(): string[] {
+  const home = os.homedir();
+  const candidates: string[] = [];
+
+  // mise — env var override, then the standard location.
+  const miseData = process.env["MISE_DATA_DIR"];
+  candidates.push(
+    miseData ? path.join(miseData, "shims") : path.join(home, ".local/share/mise/shims")
+  );
+
+  // asdf — env var override, then the standard location.
+  const asdfData = process.env["ASDF_DATA_DIR"];
+  candidates.push(asdfData ? path.join(asdfData, "shims") : path.join(home, ".asdf/shims"));
+
+  // Volta — env var override, then the standard location.
+  const voltaHome = process.env["VOLTA_HOME"];
+  candidates.push(voltaHome ? path.join(voltaHome, "bin") : path.join(home, ".volta/bin"));
+
+  // Homebrew — Apple Silicon (ARM64) default prefix. Intel Homebrew lives
+  // at /usr/local/bin which is usually already on PATH.
+  candidates.push("/opt/homebrew/bin");
+
+  // User-local bin — catches Anthropic's native installer for Claude
+  // (~/.local/bin/claude) and other user-level installs.
+  candidates.push(path.join(home, ".local/bin"));
+
+  return candidates.filter((p) => {
+    try {
+      return existsSync(p);
+    } catch {
+      return false;
+    }
+  });
+}
+
+function applyUnixFallbackPaths(currentPath: string): string {
+  const extraPaths = getUnixFallbackPaths();
+  const existingEntries = currentPath.split(path.delimiter);
+  const missing = extraPaths.filter((p) => !existingEntries.includes(p));
+  return missing.length ? [...missing, currentPath].join(path.delimiter) : currentPath;
 }
 
 function getWindowsExtraPaths(): string[] {
@@ -421,6 +479,7 @@ function applyWindowsExtraPaths(currentPath: string): string {
 
 export async function refreshPath(): Promise<void> {
   let timeoutId: NodeJS.Timeout | undefined;
+  let shellEnvFailed = false;
   try {
     const result = await Promise.race([
       (async () => {
@@ -430,12 +489,25 @@ export async function refreshPath(): Promise<void> {
           const withExtras = applyWindowsExtraPaths(registryPath);
           process.env.PATH = deduplicatePath(withExtras, true);
         } else {
-          const { shellEnv } = (await import("shell-env")) as {
-            shellEnv: () => Promise<Record<string, string>>;
-          };
-          const env = await shellEnv();
-          if (env.PATH) {
-            process.env.PATH = deduplicatePath(env.PATH, false);
+          try {
+            const { shellEnv } = (await import("shell-env")) as {
+              shellEnv: () => Promise<Record<string, string>>;
+            };
+            const env = await shellEnv();
+            if (env.PATH) {
+              process.env.PATH = deduplicatePath(env.PATH, false);
+            }
+          } catch (err) {
+            // shell-env can throw when the user's shell profile errors out
+            // (e.g. broken .zshrc, missing sourced file). Previously this
+            // was swallowed silently, leaving the Electron process with an
+            // unexpanded PATH and no diagnostic. Log the failure so the
+            // fallback path below is correlated with the root cause.
+            shellEnvFailed = true;
+            console.warn(
+              "[refreshPath] shell-env failed:",
+              err instanceof Error ? err.message : err
+            );
           }
         }
       })(),
@@ -446,6 +518,24 @@ export async function refreshPath(): Promise<void> {
 
     if (result === "timeout") {
       console.warn("[refreshPath] Timed out after", REFRESH_TIMEOUT_MS, "ms — using existing PATH");
+    }
+
+    // On macOS/Linux, when shell-env fails or times out we still want the
+    // native installer bin dir (~/.local/bin) and common version-manager
+    // shims (mise/asdf/Volta) on PATH so downstream CLI probes can find
+    // binaries installed via those tools. The common case (shell-env
+    // succeeded) also benefits — shell profile may have been activated
+    // but the user's version manager shim dirs may not be in the PATH
+    // it exported.
+    if (
+      process.platform !== "win32" &&
+      (result === "timeout" || shellEnvFailed || process.env.PATH)
+    ) {
+      const current = process.env.PATH || "";
+      const augmented = applyUnixFallbackPaths(current);
+      if (augmented !== current) {
+        process.env.PATH = deduplicatePath(augmented, false);
+      }
     }
   } catch {
     // Fallback to current PATH silently

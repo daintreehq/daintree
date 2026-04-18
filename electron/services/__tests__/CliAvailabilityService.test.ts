@@ -6,27 +6,50 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { homedir } from "os";
 import { join } from "path";
 import { CliAvailabilityService } from "../CliAvailabilityService.js";
-import { execFileSync } from "child_process";
+import { execFile, execFileSync } from "child_process";
 import { refreshPath } from "../../setup/environment.js";
 
-// Mock child_process execFileSync
+// Mock child_process. Both `execFileSync` (sync shell probe) and `execFile`
+// (async npx / WSL probes) are used by the service — mock both or the async
+// probes will call `undefined(...)` and throw TypeErrors at runtime.
+//
+// `execFile` has an overloaded signature: (file, args, callback) or
+// (file, args, options, callback). The default mock invokes whichever
+// callback was passed with an ENOENT error so unmocked tests see the probe
+// as "binary not found" rather than hanging on an un-invoked callback.
+// `vi.hoisted` guarantees this runs before `vi.mock` factories despite the
+// auto-hoisting that normally blocks reference to local bindings.
+const { defaultExecFileImpl } = vi.hoisted(() => ({
+  defaultExecFileImpl: (...args: unknown[]) => {
+    const callback = args.find((a): a is (err: unknown) => void => typeof a === "function");
+    const err = Object.assign(new Error("not found"), { code: "ENOENT" });
+    queueMicrotask(() => callback?.(err));
+    return {} as never;
+  },
+}));
+
 vi.mock("child_process", () => ({
   execFileSync: vi.fn(),
+  execFile: vi.fn(defaultExecFileImpl),
 }));
 
 vi.mock("../../setup/environment.js", () => ({
   refreshPath: vi.fn().mockResolvedValue(undefined),
+  expandWindowsEnvVars: vi.fn((s: string) =>
+    s.replace(/%([^%]+)%/g, (match, name: string) => process.env[name] ?? match)
+  ),
 }));
 
 // Mock fs/promises for auth checks
 vi.mock("fs/promises", () => ({
   access: vi.fn().mockRejectedValue(new Error("ENOENT")),
-  constants: { R_OK: 4 },
+  constants: { R_OK: 4, X_OK: 1 },
 }));
 
 describe("CliAvailabilityService", () => {
   let service: CliAvailabilityService;
   const mockedExecFileSync = vi.mocked(execFileSync);
+  const mockedExecFile = vi.mocked(execFile);
   let consoleLogSpy: ReturnType<typeof vi.spyOn>;
   const savedEnv: Record<string, string | undefined> = {};
   // Auth env vars consulted by AgentAuthCheck.envVar across the built-in
@@ -56,6 +79,9 @@ describe("CliAvailabilityService", () => {
     // clearAllMocks() clears call history but NOT implementations.
     const fs = await import("fs/promises");
     vi.mocked(fs.access).mockRejectedValue(new Error("ENOENT"));
+    // Default async execFile (npx / WSL probes) to "not found" — clearAllMocks
+    // wipes mock impls, so we reapply the factory default after each clear.
+    mockedExecFile.mockImplementation(defaultExecFileImpl as never);
     // Silence the diagnostic fallback log emitted by checkAuth() so
     // the test runner output stays clean. Individual tests re-access
     // the spy via `consoleLogSpy` to assert on log calls.
@@ -86,14 +112,19 @@ describe("CliAvailabilityService", () => {
         expect(state).toBe("installed");
       }
 
-      // Should have called execFileSync 7 times (once for each CLI)
+      // Should have called execFileSync 7 times (once for each CLI).
+      // Fallback probes (native paths, npx, WSL) run via async execFile and
+      // only fire when the which/where probe returns missing — in this test
+      // every agent succeeds on the first probe, so execFileSync count
+      // matches the registry size exactly.
       expect(mockedExecFileSync).toHaveBeenCalledTimes(7);
 
-      // Verify stdio: "ignore" is passed to avoid hanging on TTY
+      // stdio is now [ignore, pipe, ignore] so we can capture the resolved
+      // path from stdout while still suppressing any TTY output on stderr.
       expect(mockedExecFileSync).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(Array),
-        expect.objectContaining({ stdio: "ignore" })
+        expect.objectContaining({ stdio: ["ignore", "pipe", "ignore"] })
       );
     });
 
@@ -561,8 +592,18 @@ describe("CliAvailabilityService", () => {
           if (args?.[0] === "copilot") return Buffer.from("");
           throw new Error("not found");
         });
-        // Make fs.access hang forever so only the timeout can resolve the race.
-        mockedAccess.mockImplementation(() => new Promise(() => {}));
+        // Make fs.access hang forever ONLY for copilot's auth config path so
+        // the Copilot auth check race is decided by the timeout branch. Other
+        // agents' fs.access probes (e.g. Claude's native-path probe) must
+        // resolve quickly with ENOENT; otherwise they'd hang forever too and
+        // the outer check timeout would never be reached under fake timers.
+        const copilotConfig = join(homedir(), ".copilot/config.json");
+        mockedAccess.mockImplementation(async (p) => {
+          if (String(p) === copilotConfig) {
+            return new Promise(() => {});
+          }
+          throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        });
 
         const checkPromise = service.checkAvailability();
         // Advance past AUTH_CHECK_TIMEOUT_MS (3s) to resolve the timeout branch.
@@ -611,6 +652,345 @@ describe("CliAvailabilityService", () => {
         const command = args[0];
         expect(command).toMatch(/^[a-zA-Z0-9._-]+$/);
       });
+    });
+  });
+
+  describe("blocked state (security software / permissions)", () => {
+    it("reports 'blocked' when which throws EPERM (Santa / CrowdStrike / Defender)", async () => {
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+      });
+
+      const result = await service.checkAvailability();
+
+      // Every agent surfaces as blocked — the shell probe couldn't tell
+      // them apart, but "blocked" is the common, actionable verdict.
+      for (const state of Object.values(result)) {
+        expect(state).toBe("blocked");
+      }
+
+      const details = service.getDetails();
+      expect(details).not.toBeNull();
+      expect(details!.claude?.state).toBe("blocked");
+      expect(details!.claude?.blockReason).toBe("security");
+      expect(details!.claude?.message).toMatch(/EPERM/);
+    });
+
+    it("reports 'blocked' when which throws EACCES", async () => {
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("access denied"), { code: "EACCES" });
+      });
+
+      const result = await service.checkAvailability();
+
+      for (const state of Object.values(result)) {
+        expect(state).toBe("blocked");
+      }
+
+      const details = service.getDetails();
+      expect(details!.claude?.blockReason).toBe("security");
+    });
+
+    it("reports 'blocked' when a native-path binary exists but fs.access returns EACCES", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      // Force the shell probe to miss Claude so the native path fallback runs.
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (args?.[0] === "claude") {
+          throw Object.assign(new Error("not found"), { code: "ENOENT" });
+        }
+        return Buffer.from("");
+      });
+
+      // The home-relative claude path is probed — return EACCES for it.
+      const claudeNative = join(homedir(), ".local/bin/claude");
+      mockedAccess.mockImplementation(async (p) => {
+        if (String(p) === claudeNative) {
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        }
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.claude).toBe("blocked");
+
+      const details = service.getDetails();
+      expect(details!.claude?.state).toBe("blocked");
+      expect(details!.claude?.resolvedPath).toBe(claudeNative);
+      expect(details!.claude?.blockReason).toBe("permissions");
+      expect(details!.claude?.via).toBe("native");
+    });
+  });
+
+  describe("native path fallback", () => {
+    it("detects Claude via ~/.local/bin/claude when PATH lookup fails", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      // Shell probe fails for claude.
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (args?.[0] === "claude") {
+          throw Object.assign(new Error("not found"), { code: "ENOENT" });
+        }
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+
+      // Native Claude path exists and is executable.
+      const claudeNative = join(homedir(), ".local/bin/claude");
+      mockedAccess.mockImplementation(async (p) => {
+        if (String(p) === claudeNative) return;
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+
+      const result = await service.checkAvailability();
+      // No auth file found, but binary discovered via native path → "installed".
+      expect(result.claude).toBe("installed");
+
+      const details = service.getDetails();
+      expect(details!.claude?.resolvedPath).toBe(claudeNative);
+      expect(details!.claude?.via).toBe("native");
+    });
+
+    it("captures the resolved path from `which` stdout", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (args?.[0] === "claude") {
+          return Buffer.from("/opt/homebrew/bin/claude\n");
+        }
+        return Buffer.from("");
+      });
+
+      await service.checkAvailability();
+
+      const details = service.getDetails();
+      expect(details!.claude?.resolvedPath).toBe("/opt/homebrew/bin/claude");
+      expect(details!.claude?.via).toBe("which");
+    });
+
+    it("only probes native paths after which/where returns ENOENT", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      mockedExecFileSync.mockImplementation(() => Buffer.from("/usr/local/bin/claude"));
+
+      await service.checkAvailability();
+
+      // No agent ever needs the native fallback because `which` succeeded
+      // for every agent — fs.access must not be called for the Claude
+      // native path probe. (Auth-file probes still run via fs.access, so
+      // filter to Claude-specific executable probes.)
+      const nativeProbes = mockedAccess.mock.calls.filter(
+        (call) =>
+          String(call[0]).includes(".local/bin/claude") ||
+          String(call[0]).includes("claude-code\\bin\\claude.exe")
+      );
+      expect(nativeProbes).toHaveLength(0);
+    });
+  });
+
+  describe("getDetails()", () => {
+    it("returns null before any check runs", () => {
+      expect(service.getDetails()).toBeNull();
+    });
+
+    it("returns populated details after checkAvailability()", async () => {
+      mockedExecFileSync.mockImplementation(() => Buffer.from("/usr/local/bin/example"));
+
+      await service.checkAvailability();
+      const details = service.getDetails();
+
+      expect(details).not.toBeNull();
+      expect(Object.keys(details!)).toContain("claude");
+      expect(details!.claude?.resolvedPath).toBe("/usr/local/bin/example");
+      expect(details!.claude?.via).toBe("which");
+    });
+
+    it("refreshes details when checkAvailability() reruns with different results", async () => {
+      mockedExecFileSync.mockImplementation(() => Buffer.from("/usr/local/bin/claude"));
+      await service.checkAvailability();
+      expect(service.getDetails()!.claude?.state).not.toBe("missing");
+
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      await service.refresh();
+
+      // With shell + native + npx all missing, state is "missing".
+      expect(service.getDetails()!.claude?.state).toBe("missing");
+      expect(service.getDetails()!.claude?.resolvedPath).toBeNull();
+    });
+  });
+
+  describe("npx fallback probe", () => {
+    it("detects agent via npx --prefer-offline --no <pkg> --version on cache hit", async () => {
+      // Shell probe misses for Gemini (no native paths either, so npx is the
+      // only remaining layer). Mock execFile to succeed only for Gemini's pkg.
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+
+      mockedExecFile.mockImplementation(((...args: unknown[]) => {
+        const argv = args[1] as string[];
+        const callback = args.find(
+          (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
+        );
+        // Only @google/gemini-cli succeeds; everything else ENOENTs.
+        if (argv?.includes("@google/gemini-cli")) {
+          queueMicrotask(() => callback?.(null, "1.2.3"));
+        } else {
+          const err = Object.assign(new Error("not found"), { code: "ENOENT" });
+          queueMicrotask(() => callback?.(err));
+        }
+        return {} as never;
+      }) as never);
+
+      const result = await service.checkAvailability();
+      expect(result.gemini).toBe("installed");
+
+      const details = service.getDetails();
+      expect(details!.gemini?.via).toBe("npx");
+      expect(details!.gemini?.resolvedPath).toBe("npx:@google/gemini-cli");
+
+      // Verify the exact probe args used — guards against regressions in the
+      // deprecation-safe `--prefer-offline --no` invocation form.
+      const geminiCall = mockedExecFile.mock.calls.find((c) =>
+        (c[1] as string[])?.includes("@google/gemini-cli")
+      );
+      expect(geminiCall?.[1]).toEqual([
+        "--prefer-offline",
+        "--no",
+        "@google/gemini-cli",
+        "--version",
+      ]);
+    });
+
+    it("classifies npx EPERM as 'blocked' (endpoint security blocks npx itself)", async () => {
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+
+      mockedExecFile.mockImplementation(((...args: unknown[]) => {
+        const callback = args.find((a): a is (err: unknown) => void => typeof a === "function");
+        const err = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+        queueMicrotask(() => callback?.(err));
+        return {} as never;
+      }) as never);
+
+      const result = await service.checkAvailability();
+      // Every agent with an npxPackage hits EPERM at the npx layer → blocked.
+      // Agents without npxPackage (cursor, kiro, opencode, copilot) still
+      // report missing since they have no fallback.
+      expect(result.claude).toBe("blocked");
+      expect(result.gemini).toBe("blocked");
+      expect(result.codex).toBe("blocked");
+
+      const details = service.getDetails();
+      expect(details!.claude?.blockReason).toBe("security");
+      expect(details!.claude?.via).toBe("npx");
+    });
+
+    it("skips npx probe for agents without npxPackage in the registry", async () => {
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+
+      await service.checkAvailability();
+
+      // Agents with npxPackage: claude, gemini, codex → 3 npx probes.
+      // Cursor/Kiro/Opencode/Copilot must NOT appear in execFile calls.
+      const npxPackages = mockedExecFile.mock.calls
+        .map((c) => c[1] as string[])
+        .map((args) => args?.find((a) => a.startsWith("@") || a === "opencode-ai"))
+        .filter(Boolean);
+      expect(npxPackages).toEqual(
+        expect.arrayContaining(["@anthropic-ai/claude-code", "@google/gemini-cli", "@openai/codex"])
+      );
+      expect(npxPackages).toHaveLength(3);
+    });
+  });
+
+  describe("WSL fallback probe (Windows)", () => {
+    const originalPlatform = process.platform;
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+    });
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    });
+
+    it("detects Codex via WSL when shell, native, and npx all miss", async () => {
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+
+      mockedExecFile.mockImplementation(((...args: unknown[]) => {
+        const argv = args[1] as string[];
+        const callback = args.find(
+          (a): a is (err: unknown, stdout?: unknown) => void => typeof a === "function"
+        );
+
+        // wsl.exe --list --quiet: return a UTF-16LE-encoded distro list
+        // with a BOM, simulating older Windows builds that don't honor
+        // WSL_UTF8=1.
+        if (argv?.[0] === "--list") {
+          const utf16 = Buffer.concat([
+            Buffer.from([0xff, 0xfe]), // BOM
+            Buffer.from("Ubuntu\r\nDebian\r\n", "utf16le"),
+          ]);
+          queueMicrotask(() => callback?.(null, utf16));
+          return {} as never;
+        }
+
+        // wsl.exe -d Ubuntu -e codex --version: succeed for codex.
+        if (argv?.[0] === "-d" && argv?.[3] === "codex") {
+          queueMicrotask(() => callback?.(null, "codex 1.0.0"));
+          return {} as never;
+        }
+
+        const err = Object.assign(new Error("not found"), { code: "ENOENT" });
+        queueMicrotask(() => callback?.(err));
+        return {} as never;
+      }) as never);
+
+      const result = await service.checkAvailability();
+      // WSL-detected agents are capped at "installed" — launching through
+      // wsl.exe from the PTY host isn't wired up yet, so surfacing them as
+      // "ready" would lead to silent-ENOENT clicks.
+      expect(result.codex).toBe("installed");
+
+      const details = service.getDetails();
+      expect(details!.codex?.via).toBe("wsl");
+      expect(details!.codex?.wslDistro).toBe("Ubuntu");
+      expect(details!.codex?.resolvedPath).toBe("wsl:Ubuntu");
+      expect(details!.codex?.message).toMatch(/WSL/);
+    });
+
+    it("skips WSL probe for agents without supportsWsl flag", async () => {
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+
+      await service.checkAvailability();
+
+      // wsl.exe should never appear in execFile calls — only Codex has
+      // supportsWsl: true, and Codex's npx probe fails first under the
+      // default mock, but WSL probing requires reaching the WSL layer.
+      // Even for Codex, the WSL probe fires only if npx misses — default
+      // execFile returns ENOENT, so WSL *is* reached for Codex. Verify
+      // via the file arg that no NON-Codex agent triggered wsl.exe.
+      const wslCalls = mockedExecFile.mock.calls.filter((c) => c[0] === "wsl.exe");
+      // Two expected calls: --list (to enumerate distros) + one -d probe.
+      // Those fire because Codex has supportsWsl. No agent besides Codex
+      // should produce wsl.exe invocations.
+      for (const call of wslCalls) {
+        const argv = call[1] as string[];
+        if (argv?.includes("-e")) {
+          // Command arg sits after `-e`.
+          const cmdIdx = argv.indexOf("-e");
+          expect(argv[cmdIdx + 1]).toBe("codex");
+        }
+      }
     });
   });
 });

@@ -1,8 +1,8 @@
 import type { ComponentType, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { AGENT_DESCRIPTIONS, getAgentConfig, type AgentIconProps } from "@/config/agents";
-import { isAgentInstalled } from "@shared/utils/agentAvailability";
-import type { AgentAvailabilityState } from "@shared/types";
+import { isAgentInstalled, isAgentBlocked } from "@shared/utils/agentAvailability";
+import type { AgentAvailabilityState, AgentCliDetail } from "@shared/types";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, ExternalLink } from "lucide-react";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
@@ -166,6 +166,7 @@ export function AgentInstallSection({
   agentId,
   agentName,
   availability,
+  detail,
   isCliLoading,
   isRefreshingCli,
   cliError,
@@ -174,6 +175,8 @@ export function AgentInstallSection({
   agentId: string;
   agentName: string;
   availability: AgentAvailabilityState | undefined;
+  /** Optional diagnostic detail from `cliAvailabilityClient.getDetails()`. */
+  detail?: AgentCliDetail;
   isCliLoading: boolean;
   isRefreshingCli: boolean;
   cliError: string | null;
@@ -183,6 +186,10 @@ export function AgentInstallSection({
   const installBlocks = agentConfig ? getInstallBlocksForCurrentOS(agentConfig) : null;
   const hasInstallConfig = agentConfig?.install;
 
+  // "ready" hides the whole install section. "blocked" keeps it visible so
+  // the user gets actionable info (allowlist guidance, resolved path) — the
+  // binary exists, reinstall instructions would be misleading, but we do
+  // want to show why it isn't runnable and where it was found.
   if (availability === "ready") return null;
 
   if (isCliLoading) {
@@ -193,17 +200,21 @@ export function AgentInstallSection({
     );
   }
 
+  const blocked = isAgentBlocked(availability);
+
   return (
     <div id="agents-installation" className="space-y-3 pt-4 border-t border-daintree-border">
       <div className="flex items-center justify-between">
         <div>
           <h5 className="text-sm font-medium text-daintree-text">
-            {availability === "installed" ? "Authentication" : "Installation"}
+            {blocked ? "Blocked" : availability === "installed" ? "Authentication" : "Installation"}
           </h5>
           <p className="text-xs text-daintree-text/50 select-text">
-            {availability === "installed"
-              ? `${agentName} CLI found but not authenticated`
-              : `${agentName} CLI not found`}
+            {blocked
+              ? `${agentName} CLI was found but couldn't run — check your security software or file permissions`
+              : availability === "installed"
+                ? `${agentName} CLI found but not authenticated`
+                : `${agentName} CLI not found`}
           </p>
         </div>
         <Button
@@ -223,6 +234,30 @@ export function AgentInstallSection({
           <p className="text-xs text-status-error">
             Re-check failed. Try again or restart the app.
           </p>
+        </div>
+      )}
+
+      {detail && (detail.resolvedPath || detail.message) && (
+        <div
+          className={cn(
+            "px-3 py-2 rounded-[var(--radius-md)] border",
+            blocked
+              ? "bg-status-warning/10 border-status-warning/20"
+              : "bg-daintree-bg/50 border-daintree-border/50"
+          )}
+        >
+          {detail.resolvedPath && (
+            <div className="text-xs font-mono break-all text-daintree-text/70 select-text">
+              {detail.via === "npx"
+                ? "Available via npx cache"
+                : detail.via === "wsl"
+                  ? `Available via WSL (${detail.wslDistro ?? "distro"})`
+                  : `Resolved path: ${detail.resolvedPath}`}
+            </div>
+          )}
+          {detail.message && (
+            <div className="text-xs text-status-warning mt-1 select-text">{detail.message}</div>
+          )}
         </div>
       )}
 

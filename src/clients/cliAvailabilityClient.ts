@@ -1,4 +1,4 @@
-import type { CliAvailability } from "@shared/types";
+import type { CliAvailability, AgentCliDetails } from "@shared/types";
 
 /**
  * @example
@@ -25,5 +25,15 @@ export const cliAvailabilityClient = {
    */
   refresh: (): Promise<CliAvailability> => {
     return window.electron.system.refreshCliAvailability();
+  },
+
+  /**
+   * Fetch the detailed per-agent detection info (resolved path, probe source,
+   * block reason, WSL distro). Populated alongside the availability map by
+   * `checkAvailability()`/`refresh()` — this call returns the cached details
+   * and only triggers a probe if nothing has been cached yet.
+   */
+  getDetails: (): Promise<AgentCliDetails> => {
+    return window.electron.system.getAgentCliDetails();
   },
 } as const;

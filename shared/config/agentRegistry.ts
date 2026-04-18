@@ -248,6 +248,37 @@ export interface AgentConfig {
    * Used by CliAvailabilityService to distinguish "installed" from "ready".
    */
   authCheck?: AgentAuthCheck;
+  /**
+   * Absolute filesystem paths to probe when PATH-based lookup (`which`/`where`)
+   * fails. Used to detect agents installed by native installers into locations
+   * the Electron process may not inherit in PATH — notably `~/.local/bin/claude`
+   * for Anthropic's native installer on macOS/Linux, and
+   * `%LOCALAPPDATA%\claude-code\bin\claude.exe` on Windows.
+   *
+   * Tilde (`~`) is expanded to `os.homedir()` and Windows `%VAR%` tokens are
+   * expanded against `process.env` by CliAvailabilityService before probing
+   * (see `expandWindowsEnvVars()` in electron/setup/environment.ts). Paths are
+   * tried in listed order; first accessible file wins.
+   */
+  nativePaths?: string[];
+  /**
+   * npm package name to use as a last-resort detection probe via
+   * `npx --prefer-offline --no <package> --version`. Only triggered when both
+   * PATH and native path probes return missing, to detect CLIs that exist in
+   * the npx cache but have no globally installed bin shim.
+   *
+   * Omit this field to opt out of the npx probe for agents where it's
+   * inappropriate (e.g. not distributed via npm).
+   */
+  npxPackage?: string;
+  /**
+   * When `true`, CliAvailabilityService will additionally probe WSL on Windows
+   * if all other probes fail. Used for agents (e.g. Codex) that may only be
+   * available via a WSL distribution on Windows hosts. WSL detection is
+   * exposed through `AgentCliDetail.via === "wsl"` for diagnostics; actual
+   * launch routing via `wsl.exe` is out of scope for the detection service.
+   */
+  supportsWsl?: boolean;
 }
 
 export const AGENT_REGISTRY: Record<string, AgentConfig> = {
@@ -257,6 +288,14 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     id: "claude",
     name: "Claude",
     command: "claude",
+    // Anthropic's native installer places the symlink at ~/.local/bin/claude
+    // on macOS/Linux and a versioned binary under ~/.local/share/claude.
+    // Windows native installer places the binary under
+    // %LOCALAPPDATA%\claude-code\bin\claude.exe. Detect both so users who
+    // install via the native installer are not mis-reported as "missing"
+    // when ~/.local/bin isn't inherited by the Electron process PATH.
+    nativePaths: ["~/.local/bin/claude", "%LOCALAPPDATA%\\claude-code\\bin\\claude.exe"],
+    npxPackage: "@anthropic-ai/claude-code",
     color: "#CC785C",
     iconId: "claude",
     supportsContextInjection: true,
@@ -406,6 +445,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     id: "gemini",
     name: "Gemini",
     command: "gemini",
+    npxPackage: "@google/gemini-cli",
     color: "#4285F4",
     iconId: "gemini",
     supportsContextInjection: true,
@@ -556,6 +596,11 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     id: "codex",
     name: "Codex",
     command: "codex",
+    npxPackage: "@openai/codex",
+    // Codex Windows packaging lags behind Linux — Windows users commonly
+    // install via WSL. WSL probing surfaces the availability in diagnostics
+    // even when no native Windows binary exists.
+    supportsWsl: true,
     color: "#10a37f",
     iconId: "codex",
     supportsContextInjection: true,

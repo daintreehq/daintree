@@ -64,6 +64,7 @@ import type {
   SystemOpenInEditorPayload,
   SystemWakePayload,
   CliAvailability,
+  AgentCliDetails,
   AgentVersionInfo,
   AgentUpdateSettings,
   StartAgentUpdatePayload,
@@ -485,6 +486,10 @@ export interface IpcInvokeMap {
   "system:refresh-cli-availability": {
     args: [];
     result: CliAvailability;
+  };
+  "system:get-agent-cli-details": {
+    args: [];
+    result: AgentCliDetails;
   };
   "system:get-agent-versions": {
     args: [];

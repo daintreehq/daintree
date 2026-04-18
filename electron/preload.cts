@@ -594,6 +594,7 @@ const CHANNELS = {
   SYSTEM_GET_TMP_DIR: "system:get-tmp-dir",
   SYSTEM_GET_CLI_AVAILABILITY: "system:get-cli-availability",
   SYSTEM_REFRESH_CLI_AVAILABILITY: "system:refresh-cli-availability",
+  SYSTEM_GET_AGENT_CLI_DETAILS: "system:get-agent-cli-details",
   SYSTEM_GET_AGENT_VERSIONS: "system:get-agent-versions",
   SYSTEM_REFRESH_AGENT_VERSIONS: "system:refresh-agent-versions",
   SYSTEM_GET_AGENT_UPDATE_SETTINGS: "system:get-agent-update-settings",
@@ -1469,6 +1470,8 @@ const api: ElectronAPI = {
     getCliAvailability: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_CLI_AVAILABILITY),
 
     refreshCliAvailability: () => _unwrappingInvoke(CHANNELS.SYSTEM_REFRESH_CLI_AVAILABILITY),
+
+    getAgentCliDetails: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_AGENT_CLI_DETAILS),
 
     getAgentVersions: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_AGENT_VERSIONS),
 

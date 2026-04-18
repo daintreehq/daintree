@@ -51,6 +51,7 @@ const VALID_STATES: ReadonlySet<AgentAvailabilityState> = new Set<AgentAvailabil
   "ready",
   "installed",
   "missing",
+  "blocked",
 ]);
 
 interface PersistedCache {
