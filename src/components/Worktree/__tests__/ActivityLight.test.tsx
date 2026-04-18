@@ -2,22 +2,46 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, cleanup } from "@testing-library/react";
+import { act, render, cleanup } from "@testing-library/react";
 import { ActivityLight } from "../ActivityLight";
 import { DECAY_DURATION } from "@/utils/colorInterpolation";
 
-vi.mock("@/hooks/useGlobalSecondTicker", () => ({
-  useGlobalSecondTicker: () => 0,
-}));
+let tickValue = 0;
+const tickListeners = new Set<(tick: number) => void>();
+
+vi.mock("@/hooks/useGlobalSecondTicker", async () => {
+  const { useState, useEffect } = await import("react");
+  return {
+    useGlobalSecondTicker: () => {
+      const [tick, setTick] = useState(tickValue);
+      useEffect(() => {
+        tickListeners.add(setTick);
+        return () => {
+          tickListeners.delete(setTick);
+        };
+      }, []);
+      return tick;
+    },
+  };
+});
+
+function advanceTicker() {
+  tickValue += 1;
+  act(() => {
+    tickListeners.forEach((listener) => listener(tickValue));
+  });
+}
 
 describe("ActivityLight", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    tickValue = 0;
   });
 
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    tickListeners.clear();
   });
 
   function getDot(container: HTMLElement): HTMLElement {
@@ -37,9 +61,11 @@ describe("ActivityLight", () => {
     expect(getDot(container).getAttribute("aria-hidden")).toBe("true");
   });
 
-  it("does not render a tooltip subtree", () => {
+  it("does not render a tooltip subtree or live region", () => {
     const { container } = render(<ActivityLight lastActivityTimestamp={Date.now()} />);
-    expect(container.querySelectorAll("div").length).toBe(1);
+    expect(container.querySelector('[role="tooltip"]')).toBeNull();
+    expect(container.querySelector("[aria-live]")).toBeNull();
+    expect(container.querySelector("[aria-label]")).toBeNull();
   });
 
   it("renders a filled dot when actively working", () => {
@@ -82,5 +108,39 @@ describe("ActivityLight", () => {
     );
     expect(getDot(container).className).toContain("w-1.5");
     expect(getDot(container).className).toContain("h-1.5");
+  });
+
+  it.each([
+    ["just before boundary", -1, "active"],
+    ["at boundary", 0, "idle"],
+    ["just past boundary", 1, "idle"],
+  ] as const)("%s: elapsed=DECAY_DURATION+(%sms) → %s", (_label, offsetMs, expectedState) => {
+    const now = Date.now();
+    vi.setSystemTime(now);
+    const timestamp = now - DECAY_DURATION - offsetMs;
+    const { container } = render(<ActivityLight lastActivityTimestamp={timestamp} />);
+    const dot = getDot(container);
+    if (expectedState === "active") {
+      expect(dot.className).not.toMatch(/\bborder\b/);
+    } else {
+      expect(dot.className).toMatch(/\bborder\b/);
+    }
+  });
+
+  it("transitions from filled dot to hollow ring when time advances past DECAY_DURATION", () => {
+    const now = Date.now();
+    vi.setSystemTime(now);
+    const { container } = render(<ActivityLight lastActivityTimestamp={now} />);
+
+    // Starts active (filled).
+    expect(getDot(container).className).not.toMatch(/\bborder\b/);
+
+    // Advance past the decay window and drive the ticker.
+    vi.setSystemTime(now + DECAY_DURATION + 1);
+    advanceTicker();
+
+    // Now idle (hollow ring).
+    expect(getDot(container).className).toMatch(/\bborder\b/);
+    expect(getDot(container).className).toMatch(/bg-transparent/);
   });
 });
