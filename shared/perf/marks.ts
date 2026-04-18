@@ -29,6 +29,10 @@ export const PERF_MARKS = {
   WORKTREE_SWITCH_START: "worktree_switch_start",
   WORKTREE_SWITCH_END: "worktree_switch_end",
 
+  PROJECT_STATE_WRITE: "project_state_write",
+  PROJECT_STATE_READ: "project_state_read",
+  PROJECT_STATE_QUARANTINE: "project_state_quarantine",
+
   DEVPREVIEW_ENSURE_START: "devpreview_ensure_start",
   DEVPREVIEW_TERMINAL_SPAWNED: "devpreview_terminal_spawned",
   DEVPREVIEW_URL_DETECTED: "devpreview_url_detected",

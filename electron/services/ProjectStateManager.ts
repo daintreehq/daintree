@@ -4,6 +4,8 @@ import { existsSync } from "fs";
 import { resilientAtomicWriteFile, resilientRename, resilientUnlink } from "../utils/fs.js";
 import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
 import { getProjectStateDir, stateFilePath } from "./projectStorePaths.js";
+import { PERF_MARKS } from "../../shared/perf/marks.js";
+import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
 
 const PROJECT_STATE_CACHE_TTL_MS = 60_000;
 
@@ -69,11 +71,18 @@ export class ProjectStateManager {
       ),
     };
 
+    const jsonString = JSON.stringify(validatedState, null, 2);
+    const bytes = Buffer.byteLength(jsonString, "utf-8");
+
     const attemptSave = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {
         await fs.mkdir(stateDir, { recursive: true });
       }
-      await resilientAtomicWriteFile(filePath, JSON.stringify(validatedState, null, 2), "utf-8");
+      await withPerformanceSpan(
+        PERF_MARKS.PROJECT_STATE_WRITE,
+        () => resilientAtomicWriteFile(filePath, jsonString, "utf-8"),
+        { projectId, bytes }
+      );
     };
 
     try {
@@ -115,7 +124,11 @@ export class ProjectStateManager {
     }
 
     try {
-      const content = await fs.readFile(filePath, "utf-8");
+      const content = await withPerformanceSpan(
+        PERF_MARKS.PROJECT_STATE_READ,
+        () => fs.readFile(filePath, "utf-8"),
+        { projectId }
+      );
       const parsed = JSON.parse(content);
 
       const rawTerminals = Array.isArray(parsed.terminals) ? parsed.terminals : [];
@@ -162,6 +175,7 @@ export class ProjectStateManager {
       console.error(`[ProjectStateManager] Failed to load state for project ${projectId}:`, error);
       try {
         const quarantinePath = `${filePath}.corrupted`;
+        markPerformance(PERF_MARKS.PROJECT_STATE_QUARANTINE, { projectId });
         await resilientRename(filePath, quarantinePath);
         console.warn(`[ProjectStateManager] Corrupted state file moved to ${quarantinePath}`);
       } catch {

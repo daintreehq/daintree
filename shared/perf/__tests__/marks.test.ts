@@ -27,6 +27,10 @@ describe("PERF_MARKS", () => {
     expect(PERF_MARKS.HYDRATE_RESTORE_SNAPSHOTS_CRITICAL).toBe(
       "hydrate_restore_snapshots_critical"
     );
+
+    expect(PERF_MARKS.PROJECT_STATE_WRITE).toBe("project_state_write");
+    expect(PERF_MARKS.PROJECT_STATE_READ).toBe("project_state_read");
+    expect(PERF_MARKS.PROJECT_STATE_QUARANTINE).toBe("project_state_quarantine");
   });
 
   it("has unique values", () => {
