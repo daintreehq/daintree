@@ -6,7 +6,7 @@ import { spawn, type ChildProcess } from "child_process";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
-import { typedHandle, typedHandleWithContext } from "../utils.js";
+import { typedHandle } from "../utils.js";
 import type {
   DemoMoveToPayload,
   DemoMoveToSelectorPayload,
@@ -18,9 +18,6 @@ import type {
   DemoStartCaptureResult,
   DemoStopCaptureResult,
   DemoCaptureStatus,
-  DemoEncodePayload,
-  DemoEncodeProgressEvent,
-  DemoEncodeResult,
   DemoEncodePreset,
   DemoScrollPayload,
   DemoDragPayload,
@@ -454,185 +451,6 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     },
   };
 
-  // --- Encode presets for offline re-encode (PNG files from disk) ---
-
-  const ENCODE_PRESETS = {
-    "youtube-4k": {
-      outputOptions: [
-        "-vf",
-        "scale=3840:2160:flags=lanczos",
-        "-c:v",
-        "libx264",
-        "-profile:v",
-        "high444",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv444p",
-        "-preset",
-        "slow",
-        "-g",
-        "15",
-        "-bf",
-        "2",
-        "-movflags",
-        "+faststart",
-        "-an",
-      ],
-    },
-    "youtube-1080p": {
-      outputOptions: [
-        "-vf",
-        "scale=1920:1080:flags=lanczos",
-        "-c:v",
-        "libx264",
-        "-profile:v",
-        "high444",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv444p",
-        "-preset",
-        "slow",
-        "-g",
-        "15",
-        "-bf",
-        "2",
-        "-movflags",
-        "+faststart",
-        "-an",
-      ],
-    },
-    "web-webm": {
-      outputOptions: [
-        "-c:v",
-        "libvpx-vp9",
-        "-crf",
-        "20",
-        "-b:v",
-        "0",
-        "-deadline",
-        "good",
-        "-cpu-used",
-        "1",
-        "-row-mt",
-        "1",
-        "-pix_fmt",
-        "yuv444p",
-        "-an",
-      ],
-    },
-  } as const;
-
-  let activeEncode: { kill: () => void } | null = null;
-
-  const handleEncode = async (
-    ctx: import("../types.js").IpcContext,
-    payload: DemoEncodePayload
-  ): Promise<DemoEncodeResult> => {
-    if (activeEncode) {
-      throw new Error("An encode is already in progress");
-    }
-
-    const ffmpegBin = resolveFfmpegPath();
-    const { framesDir, outputPath, preset, fps = 30 } = payload;
-    const presetConfig = ENCODE_PRESETS[preset];
-
-    const framePattern = /^frame-\d{6}\.png$/;
-    const pngFiles = fs
-      .readdirSync(framesDir)
-      .filter((f) => framePattern.test(f))
-      .sort();
-    if (pngFiles.length === 0) {
-      throw new Error(`No PNG frames matching frame-NNNNNN.png found in ${framesDir}`);
-    }
-    const totalFrames = pngFiles.length;
-
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-
-    const startTime = Date.now();
-    const inputPattern = path.join(framesDir, "frame-%06d.png");
-
-    const args = [
-      "-y",
-      "-framerate",
-      String(fps),
-      "-i",
-      inputPattern,
-      ...presetConfig.outputOptions,
-      "-progress",
-      "pipe:1",
-      "-nostats",
-      outputPath,
-    ];
-
-    return new Promise<DemoEncodeResult>((resolve, reject) => {
-      const proc: ChildProcess = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
-
-      activeEncode = {
-        kill: () => {
-          proc.kill("SIGKILL");
-        },
-      };
-
-      let stdoutBuffer = "";
-      let currentFrame = 0;
-      let currentFps = 0;
-
-      proc.stdout?.on("data", (chunk: Buffer) => {
-        stdoutBuffer += chunk.toString();
-        const lines = stdoutBuffer.split("\n");
-        stdoutBuffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          const eqIdx = line.indexOf("=");
-          if (eqIdx === -1) continue;
-          const key = line.slice(0, eqIdx).trim();
-          const value = line.slice(eqIdx + 1).trim();
-
-          if (key === "frame") {
-            currentFrame = parseInt(value, 10) || 0;
-          } else if (key === "fps") {
-            currentFps = parseFloat(value) || 0;
-          } else if (key === "progress") {
-            if (currentFrame > 0 && !ctx.event.sender.isDestroyed()) {
-              const percentComplete = Math.min((currentFrame / totalFrames) * 100, 100);
-              const etaSeconds = currentFps > 0 ? (totalFrames - currentFrame) / currentFps : 0;
-
-              const progressEvent: DemoEncodeProgressEvent = {
-                frame: currentFrame,
-                fps: currentFps,
-                percentComplete: Math.round(percentComplete * 100) / 100,
-                etaSeconds: Math.round(etaSeconds * 10) / 10,
-              };
-              ctx.event.sender.send(CHANNELS.DEMO_ENCODE_PROGRESS, progressEvent);
-            }
-          }
-        }
-      });
-
-      let stderrOutput = "";
-      proc.stderr?.on("data", (chunk: Buffer) => {
-        stderrOutput += chunk.toString();
-      });
-
-      proc.on("error", (err: Error) => {
-        activeEncode = null;
-        reject(new Error(`Encode failed: ${err.message}`));
-      });
-
-      proc.on("close", (code) => {
-        activeEncode = null;
-        if (code === 0) {
-          resolve({ outputPath, durationMs: Date.now() - startTime });
-        } else {
-          const lastLines = stderrOutput.trim().split("\n").slice(-3).join("\n");
-          reject(new Error(`ffmpeg exited with code ${code}: ${lastLines}`));
-        }
-      });
-    });
-  };
-
   const cleanups: Array<() => void> = [
     typedHandle(CHANNELS.DEMO_MOVE_TO, handleMoveTo),
     typedHandle(CHANNELS.DEMO_MOVE_TO_SELECTOR, handleMoveToSelector),
@@ -654,7 +472,6 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     typedHandle(CHANNELS.DEMO_START_CAPTURE, handleStartCapture),
     typedHandle(CHANNELS.DEMO_STOP_CAPTURE, handleStopCapture),
     typedHandle(CHANNELS.DEMO_GET_CAPTURE_STATUS, handleGetCaptureStatus),
-    typedHandleWithContext(CHANNELS.DEMO_ENCODE, handleEncode),
   ];
 
   return () => {
@@ -664,10 +481,6 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     }
     for (const cleanup of cleanups) {
       cleanup();
-    }
-    if (activeEncode) {
-      activeEncode.kill();
-      activeEncode = null;
     }
   };
 }

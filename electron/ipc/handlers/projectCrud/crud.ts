@@ -1,9 +1,9 @@
-import { ipcMain, dialog } from "electron";
+import { dialog } from "electron";
 import path from "path";
 import { CHANNELS } from "../../channels.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { projectStore } from "../../../services/ProjectStore.js";
-import { broadcastToRenderer } from "../../utils.js";
+import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../utils.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { Project } from "../../../types/index.js";
 
@@ -13,29 +13,26 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
   const handleProjectGetAll = async () => {
     return projectStore.getAllProjects();
   };
-  ipcMain.handle(CHANNELS.PROJECT_GET_ALL, handleProjectGetAll);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_ALL));
+  handlers.push(typedHandle(CHANNELS.PROJECT_GET_ALL, handleProjectGetAll));
 
-  const handleProjectGetCurrent = async (event: Electron.IpcMainInvokeEvent) => {
-    // Multi-view: resolve the project from the sender's view
-    const senderWinForPvm = getWindowForWebContents(event.sender);
+  const handleProjectGetCurrent = async (ctx: import("../../types.js").IpcContext) => {
+    const senderWinForPvm = getWindowForWebContents(ctx.event.sender);
     const pvmCtx = senderWinForPvm
       ? deps.windowRegistry?.getByWindowId(senderWinForPvm.id)
       : undefined;
     const pvm = pvmCtx?.services?.projectViewManager ?? deps.projectViewManager;
     if (pvm) {
-      const viewProjectId = pvm.getProjectIdForWebContents(event.sender.id);
+      const viewProjectId = pvm.getProjectIdForWebContents(ctx.event.sender.id);
       if (viewProjectId) {
         const project = projectStore.getProjectById(viewProjectId);
         if (project) return project;
       }
     }
 
-    // Fallback: global current project
     const currentProject = projectStore.getCurrentProject();
 
     if (currentProject && deps.worktreeService) {
-      const senderWindow = getWindowForWebContents(event.sender);
+      const senderWindow = getWindowForWebContents(ctx.event.sender);
       const windowId = senderWindow?.id ?? deps.mainWindow?.id;
       try {
         if (windowId !== undefined) {
@@ -48,10 +45,9 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
 
     return currentProject;
   };
-  ipcMain.handle(CHANNELS.PROJECT_GET_CURRENT, handleProjectGetCurrent);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_CURRENT));
+  handlers.push(typedHandleWithContext(CHANNELS.PROJECT_GET_CURRENT, handleProjectGetCurrent));
 
-  const handleProjectAdd = async (_event: Electron.IpcMainInvokeEvent, projectPath: string) => {
+  const handleProjectAdd = async (projectPath: string) => {
     if (typeof projectPath !== "string" || !projectPath) {
       throw new Error("Invalid project path");
     }
@@ -59,14 +55,12 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       throw new Error("Project path must be absolute");
     }
     const project = await projectStore.addProject(projectPath);
-    // Notify all renderers so the project list stays in sync across views.
     broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
     return project;
   };
-  ipcMain.handle(CHANNELS.PROJECT_ADD, handleProjectAdd);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_ADD));
+  handlers.push(typedHandle(CHANNELS.PROJECT_ADD, handleProjectAdd));
 
-  const handleProjectRemove = async (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
+  const handleProjectRemove = async (projectId: string) => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
@@ -78,24 +72,17 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     }
 
     await projectStore.removeProject(projectId);
-    // Notify all renderers so the project list stays in sync across views.
     broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
   };
-  ipcMain.handle(CHANNELS.PROJECT_REMOVE, handleProjectRemove);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_REMOVE));
+  handlers.push(typedHandle(CHANNELS.PROJECT_REMOVE, handleProjectRemove));
 
-  const handleProjectUpdate = async (
-    _event: Electron.IpcMainInvokeEvent,
-    projectId: string,
-    updates: Partial<Project>
-  ) => {
+  const handleProjectUpdate = async (projectId: string, updates: Partial<Project>) => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
     if (typeof updates !== "object" || updates === null) {
       throw new Error("Invalid updates object");
     }
-    // Strip control-plane and internal scoring fields
     const {
       inRepoSettings: _inRepo,
       frecencyScore: _fs,
@@ -103,9 +90,6 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       ...safeUpdates
     } = updates;
     const updated = projectStore.updateProject(projectId, safeUpdates);
-    // Notify all renderers so other project views (e.g., a newly-created
-    // project view while the onboarding wizard is still running in the
-    // originating welcome view) refresh their cached project data.
     broadcastToRenderer(CHANNELS.PROJECT_UPDATED, updated);
     if (
       updated.inRepoSettings &&
@@ -126,11 +110,10 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     }
     return updated;
   };
-  ipcMain.handle(CHANNELS.PROJECT_UPDATE, handleProjectUpdate);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_UPDATE));
+  handlers.push(typedHandle(CHANNELS.PROJECT_UPDATE, handleProjectUpdate));
 
-  const handleProjectOpenDialog = async (event: Electron.IpcMainInvokeEvent) => {
-    const senderWindow = getWindowForWebContents(event.sender);
+  const handleProjectOpenDialog = async (ctx: import("../../types.js").IpcContext) => {
+    const senderWindow = getWindowForWebContents(ctx.event.sender);
     const dialogOpts = {
       properties: ["openDirectory" as const, "createDirectory" as const],
       title: "Open Git Repository",
@@ -145,14 +128,9 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
 
     return result.filePaths[0];
   };
-  ipcMain.handle(CHANNELS.PROJECT_OPEN_DIALOG, handleProjectOpenDialog);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_OPEN_DIALOG));
+  handlers.push(typedHandleWithContext(CHANNELS.PROJECT_OPEN_DIALOG, handleProjectOpenDialog));
 
-  const handleProjectClose = async (
-    _event: Electron.IpcMainInvokeEvent,
-    projectId: string,
-    options?: { killTerminals?: boolean }
-  ) => {
+  const handleProjectClose = async (projectId: string, options?: { killTerminals?: boolean }) => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
@@ -224,19 +202,15 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       };
     }
   };
-  ipcMain.handle(CHANNELS.PROJECT_CLOSE, handleProjectClose);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CLOSE));
+  handlers.push(typedHandle(CHANNELS.PROJECT_CLOSE, handleProjectClose));
 
-  const handleProjectCheckMissing = async (
-    _event: Electron.IpcMainInvokeEvent
-  ): Promise<string[]> => {
+  const handleProjectCheckMissing = async (): Promise<string[]> => {
     return projectStore.checkMissingProjects();
   };
-  ipcMain.handle(CHANNELS.PROJECT_CHECK_MISSING, handleProjectCheckMissing);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CHECK_MISSING));
+  handlers.push(typedHandle(CHANNELS.PROJECT_CHECK_MISSING, handleProjectCheckMissing));
 
   const handleProjectLocate = async (
-    _event: Electron.IpcMainInvokeEvent,
+    ctx: import("../../types.js").IpcContext,
     projectId: string
   ): Promise<Project | null> => {
     if (typeof projectId !== "string" || !projectId) {
@@ -247,7 +221,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    const senderWindow = getWindowForWebContents(_event.sender);
+    const senderWindow = getWindowForWebContents(ctx.event.sender);
     const openOpts: Electron.OpenDialogOptions = {
       title: `Locate "${project.name}"`,
       properties: ["openDirectory"],
@@ -264,8 +238,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     const newPath = result.filePaths[0];
     return projectStore.relocateProject(projectId, newPath);
   };
-  ipcMain.handle(CHANNELS.PROJECT_LOCATE, handleProjectLocate);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_LOCATE));
+  handlers.push(typedHandleWithContext(CHANNELS.PROJECT_LOCATE, handleProjectLocate));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

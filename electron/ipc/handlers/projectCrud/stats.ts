@@ -1,6 +1,5 @@
-import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
-import { checkRateLimit } from "../../utils.js";
+import { checkRateLimit, typedHandle } from "../../utils.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { BulkProjectStats } from "../../../../shared/types/ipc/project.js";
 import { ProjectStatsService } from "../../../services/ProjectStatsService.js";
@@ -22,7 +21,7 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     projectStatsServiceInstance = null;
   });
 
-  const handleProjectGetStats = async (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
+  const handleProjectGetStats = async (projectId: string) => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
     }
@@ -41,13 +40,9 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       processIds: ptyStats.processIds,
     };
   };
-  ipcMain.handle(CHANNELS.PROJECT_GET_STATS, handleProjectGetStats);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_STATS));
+  handlers.push(typedHandle(CHANNELS.PROJECT_GET_STATS, handleProjectGetStats));
 
-  const handleProjectGetBulkStats = async (
-    _event: Electron.IpcMainInvokeEvent,
-    projectIds: string[]
-  ): Promise<BulkProjectStats> => {
+  const handleProjectGetBulkStats = async (projectIds: string[]): Promise<BulkProjectStats> => {
     checkRateLimit(CHANNELS.PROJECT_GET_BULK_STATS, 10, 10_000);
     if (!Array.isArray(projectIds)) {
       throw new Error("Invalid projectIds: must be an array");
@@ -103,8 +98,7 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     }
     return result;
   };
-  ipcMain.handle(CHANNELS.PROJECT_GET_BULK_STATS, handleProjectGetBulkStats);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_BULK_STATS));
+  handlers.push(typedHandle(CHANNELS.PROJECT_GET_BULK_STATS, handleProjectGetBulkStats));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

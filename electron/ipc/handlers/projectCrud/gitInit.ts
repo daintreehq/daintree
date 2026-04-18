@@ -1,8 +1,12 @@
-import { ipcMain } from "electron";
 import path from "path";
 import { CHANNELS } from "../../channels.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
-import { broadcastToRenderer, sendToRenderer } from "../../utils.js";
+import {
+  broadcastToRenderer,
+  sendToRenderer,
+  typedHandle,
+  typedHandleWithContext,
+} from "../../utils.js";
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
 import type {
   GitInitOptions,
@@ -13,10 +17,7 @@ import type {
 export function registerGitInitHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleProjectInitGit = async (
-    _event: Electron.IpcMainInvokeEvent,
-    directoryPath: string
-  ): Promise<void> => {
+  const handleProjectInitGit = async (directoryPath: string): Promise<void> => {
     if (typeof directoryPath !== "string" || !directoryPath) {
       throw new Error("Invalid directory path");
     }
@@ -33,18 +34,17 @@ export function registerGitInitHandlers(): () => void {
     const git = createHardenedGit(directoryPath);
     await git.init();
   };
-  ipcMain.handle(CHANNELS.PROJECT_INIT_GIT, handleProjectInitGit);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_INIT_GIT));
+  handlers.push(typedHandle(CHANNELS.PROJECT_INIT_GIT, handleProjectInitGit));
 
   const handleProjectInitGitGuided = async (
-    event: Electron.IpcMainInvokeEvent,
+    ctx: import("../../types.js").IpcContext,
     options: GitInitOptions
   ): Promise<GitInitResult> => {
     if (!options || typeof options !== "object") {
       throw new Error("Invalid options object");
     }
 
-    const senderWindow = getWindowForWebContents(event.sender);
+    const senderWindow = getWindowForWebContents(ctx.event.sender);
 
     const {
       directoryPath,
@@ -166,8 +166,9 @@ export function registerGitInitHandlers(): () => void {
       };
     }
   };
-  ipcMain.handle(CHANNELS.PROJECT_INIT_GIT_GUIDED, handleProjectInitGitGuided);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_INIT_GIT_GUIDED));
+  handlers.push(
+    typedHandleWithContext(CHANNELS.PROJECT_INIT_GIT_GUIDED, handleProjectInitGitGuided)
+  );
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

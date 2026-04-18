@@ -1,8 +1,12 @@
-import { ipcMain } from "electron";
 import path from "path";
 import { CHANNELS } from "../../channels.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
-import { broadcastToRenderer, sendToRenderer } from "../../utils.js";
+import {
+  broadcastToRenderer,
+  sendToRenderer,
+  typedHandle,
+  typedHandleWithContext,
+} from "../../utils.js";
 import { createAuthenticatedGit } from "../../../utils/hardenedGit.js";
 import type {
   CloneRepoOptions,
@@ -16,14 +20,14 @@ export function registerGitCloneHandlers(): () => void {
   let cloneAbortController: AbortController | null = null;
 
   const handleProjectCloneRepo = async (
-    event: Electron.IpcMainInvokeEvent,
+    ctx: import("../../types.js").IpcContext,
     options: CloneRepoOptions
   ): Promise<CloneRepoResult> => {
     if (!options || typeof options !== "object") {
       throw new Error("Invalid options object");
     }
 
-    const senderWindow = getWindowForWebContents(event.sender);
+    const senderWindow = getWindowForWebContents(ctx.event.sender);
 
     const { url, parentPath, folderName, shallowClone } = options;
 
@@ -142,16 +146,14 @@ export function registerGitCloneHandlers(): () => void {
       cloneAbortController = null;
     }
   };
-  ipcMain.handle(CHANNELS.PROJECT_CLONE_REPO, handleProjectCloneRepo);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CLONE_REPO));
+  handlers.push(typedHandleWithContext(CHANNELS.PROJECT_CLONE_REPO, handleProjectCloneRepo));
 
-  const handleProjectCloneCancel = async (_event: Electron.IpcMainInvokeEvent): Promise<void> => {
+  const handleProjectCloneCancel = async (): Promise<void> => {
     if (cloneAbortController) {
       cloneAbortController.abort();
     }
   };
-  ipcMain.handle(CHANNELS.PROJECT_CLONE_CANCEL, handleProjectCloneCancel);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CLONE_CANCEL));
+  handlers.push(typedHandle(CHANNELS.PROJECT_CLONE_CANCEL, handleProjectCloneCancel));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

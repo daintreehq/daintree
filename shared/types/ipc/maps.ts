@@ -152,9 +152,6 @@ import type {
   DemoStartCaptureResult,
   DemoStopCaptureResult,
   DemoCaptureStatus,
-  DemoEncodePayload,
-  DemoEncodeProgressEvent,
-  DemoEncodeResult,
   DemoAnnotatePayload,
   DemoAnnotateResult,
   DemoDismissAnnotationPayload,
@@ -1830,10 +1827,6 @@ export interface IpcInvokeMap {
   "demo:get-capture-status": {
     args: [];
     result: DemoCaptureStatus;
-  };
-  "demo:encode": {
-    args: [payload: DemoEncodePayload];
-    result: DemoEncodeResult;
   };
   "demo:scroll": {
     args: [payload: DemoScrollPayload];
